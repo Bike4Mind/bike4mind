@@ -28,7 +28,7 @@ jobs:
       github.actor != 'dependabot[bot]' &&
       !startsWith(github.head_ref, 'changeset-release/') &&
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Skip body-only edits
         if: github.event.action == 'edited' && !github.event.changes.title

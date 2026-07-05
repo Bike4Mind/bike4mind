@@ -59,7 +59,7 @@ jobs:
     # 8 vCPU / 32 GB) instead of the GitHub-hosted ubuntu-latest-m larger-runner pool,
     # which is capped at 10 concurrent org-wide. 32 GB comfortably covers the deploy
     # step's 12 GB Node heap (NODE_OPTIONS below). Matches polaris's deploy runner.
-    runs-on: ${{ fromJSON(vars.RUNNER_LABEL_HEAVY || '["self-hosted","linux","x64"]') }}
+    runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
     name: Deploy
     # 45 (was 30): must hold pre-steps (hydrate/install/build/image) + the 30-min
     # deploy step below + the unlock cleanup path. 2026-07-05: drift-heavy heals
