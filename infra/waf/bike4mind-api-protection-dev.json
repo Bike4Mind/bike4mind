@@ -37,7 +37,7 @@
       "Priority": 1,
       "Statement": {
         "ByteMatchStatement": {
-          "SearchString": "04d32a16-a6b5-4697-b813-8e227394b13e",
+          "SearchString": "f9fd8990-82df-4184-b72f-0c10dc61805a",
           "FieldToMatch": {
             "SingleHeader": {
               "Name": "x-zap-scanner"

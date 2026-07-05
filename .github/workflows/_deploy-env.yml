@@ -612,7 +612,6 @@ jobs:
             git rev-parse "HEAD:${p}"; done | sha256sum | cut -c1-16)
           IMAGE_URI="${REGISTRY}/${REPO_NAME}:${IMAGE_HASH}"
           CACHE_TAG="${REGISTRY}/${REPO_NAME}:cache"
-          echo "Quest-processor image: ${IMAGE_URI}"
 
           # Ensure the ECR repo exists (idempotent — created on first deploy to a fresh account).
           aws ecr describe-repositories --repository-names "${REPO_NAME}" >/dev/null 2>&1 \
@@ -763,8 +762,7 @@ jobs:
           ENABLE_MONITORING: ${{ env.ENABLE_MONITORING || '' }}
           ENABLE_WAF: ${{ vars.ENABLE_WAF || 'false' }}
         run: |
-          echo "Using subscriber image: $SUBSCRIBER_FANOUT_IMAGE"
-          pnpm sst deploy --stage ${{ steps.cfg.outputs.stage }} --print-logs
+          pnpm sst deploy --stage ${{ steps.cfg.outputs.stage }}
 
       - name: Sync and seed additional data
         if: steps.cfg.outputs.stage != 'production' && (vars.SYNC_RAPID_REPLY_MAPPINGS == 'true' || steps.cfg.outputs.is_preview == 'true')
