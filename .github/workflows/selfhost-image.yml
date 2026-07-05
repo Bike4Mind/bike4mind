@@ -44,14 +44,17 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    # Runner labels are variable-driven so runner policy changes (e.g. moving
+    # amd64 to a larger paid pool) need no workflow edit. arm64 must stay on a
+    # native arm runner or the build falls back to emulation speed.
+    runs-on: ${{ matrix.arch == 'arm64' && fromJSON(vars.RUNNER_LABEL_ARM || '["ubuntu-24.04-arm"]') || fromJSON(vars.RUNNER_LABEL_HEAVY || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       # PR validation stays amd64-only (build-only, no secrets needed);
       # main/dispatch builds both architectures natively in parallel.
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64"},{"arch":"arm64","platform":"linux/arm64"}]') }}
     steps:
       - name: Derive lowercase image name
         env:
