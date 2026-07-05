@@ -38,8 +38,8 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/bike4mind-selfhost
+# Docker refs must be lowercase and github.repository_owner is not
+# (Bike4Mind); each job derives env.IMAGE via its first step.
 
 jobs:
   build:
@@ -53,6 +53,11 @@ jobs:
       matrix:
         include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     steps:
+      - name: Derive lowercase image name
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE=ghcr.io/${OWNER,,}/bike4mind-selfhost" >> "$GITHUB_ENV"
+
       - name: Checkout
         uses: actions/checkout@v4
 
@@ -117,6 +122,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Derive lowercase image name
+        env:
+          OWNER: ${{ github.repository_owner }}
+        run: echo "IMAGE=ghcr.io/${OWNER,,}/bike4mind-selfhost" >> "$GITHUB_ENV"
+
       - name: Download digests
         uses: actions/download-artifact@v4
         with:
