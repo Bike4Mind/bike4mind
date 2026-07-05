@@ -15,7 +15,7 @@ on:
 
 jobs:
   check-repository:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       should-run: ${{ steps.check.outputs.should-run }}
     steps:

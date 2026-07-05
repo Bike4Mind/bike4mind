@@ -43,7 +43,7 @@ jobs:
   # required checks always have a status to report. Logic + the default
   # exclude list live in the local composite action. Fails open on both.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
@@ -187,7 +187,7 @@ jobs:
   open-core-fork-build:
     name: Open Core (fork simulation)
     needs: core-build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -296,7 +296,7 @@ jobs:
     # Standard runner: tsgo (native TS) is fast and low-memory and runs against
     # the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
     # Keeping it off the capped ubuntu-latest-m pool frees a slot per PR.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Type Check
     timeout-minutes: 15
     permissions:
@@ -370,7 +370,7 @@ jobs:
     needs: core-build
     # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
     # ubuntu-latest-m pool to free a slot per PR.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -445,7 +445,7 @@ jobs:
     # which is capped at 10 concurrent org-wide. The shard fan-out (client/rest) was a
     # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
     # Matches polaris's test runner (_test.yml).
-    runs-on: ${{ fromJSON(vars.RUNNER_LABEL_HEAVY || '["self-hosted","linux","x64"]') }}
+    runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     timeout-minutes: 20
     permissions:
@@ -541,7 +541,7 @@ jobs:
     # shards were skipped, so this aggregator skips too — a skipped required
     # check counts as passing, instead of failing on skipped shards.
     if: always() && needs.changes.outputs.deployable == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -567,7 +567,7 @@ jobs:
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -644,7 +644,7 @@ jobs:
   # in the deploy job's SUBSCRIBER_FANOUT_IMAGE env var below.
 
   plan:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     needs: [core-build, typecheck, lint, test, cli-e2e, open-core-fork-build]
     if: |
       always() &&
@@ -675,6 +675,7 @@ jobs:
           PR_NUMBER: ${{ github.event.number }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_USER: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           ACTOR: ${{ github.actor }}
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
@@ -709,6 +710,7 @@ jobs:
           pr_number = os.environ['PR_NUMBER']
           pr_labels = json.loads(os.environ['PR_LABELS']) if os.environ['PR_LABELS'] not in ('', 'null') else []
           pr_user = os.environ['PR_USER']
+          pr_author_association = os.environ['PR_AUTHOR_ASSOCIATION']
           actor = os.environ['ACTOR']
           head_ref = os.environ['HEAD_REF']
           base_ref = os.environ['BASE_REF']
@@ -723,8 +725,14 @@ jobs:
           is_push_main = event == 'push' and ref == 'refs/heads/main'
           is_push_prod = event == 'push' and ref == 'refs/heads/prod'
           is_pr = event == 'pull_request'
+          # Anyone with read access can open a PR between two existing branches
+          # of this repo. Such a PR is same-repo (not a fork), so it lands in the
+          # trusted lane; without this check it would spawn a real preview stack.
+          # Only PR authors with write-level association get preview deploys.
+          # Tests and the rest of CI still run for everyone.
+          is_trusted_author = pr_author_association in ('OWNER', 'MEMBER', 'COLLABORATOR')
 
-          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr
+          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr or (is_pr and not is_trusted_author)
 
           for tenant, tc in config['tenants'].items():
               label = tc.get('preview_label')
@@ -738,6 +746,9 @@ jobs:
                   if label is None or label in pr_labels:
                       deploy.append({"tenant": tenant, "tier": "preview", "pr_number": str(pr_number)})
               # merge_group and skipped PRs => no deploy (test still runs)
+
+          if is_pr and not is_trusted_author:
+              print(f"::notice::No preview deploy: PR author association '{pr_author_association}' is not OWNER/MEMBER/COLLABORATOR.")
 
           deploy_json = json.dumps(deploy)
           print(f"Deploy matrix ({len(deploy)}): {deploy_json}")
@@ -811,7 +822,7 @@ jobs:
     name: Deploy
     needs: [changes, core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, deploy, open-core-fork-build]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Report deploy result
         env:

@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   cla:
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     # Only run in the canonical public repo; never in the private monorepo or forks.
     if: >
       github.repository == (vars.OPEN_CORE_REPO || 'Bike4Mind/bike4mind') &&

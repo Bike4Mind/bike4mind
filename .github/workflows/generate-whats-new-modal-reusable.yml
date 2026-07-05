@@ -34,7 +34,7 @@ env:
 
 jobs:
   generate-modal:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
 
     steps:
       - name: Checkout repository
