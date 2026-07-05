@@ -31,9 +31,20 @@ services:
     command: ['mongod', '--replSet', 'rs0', '--bind_ip_all']
     volumes:
       - mongo-data:/data/db
+    # MongoDB/WiredTiger opens a file per collection + index. Docker's default
+    # soft nofile limit (1024) is far below MongoDB's documented minimum (64000):
+    # the server fatally panics with a WiredTiger "Too many open files" (EMFILE)
+    # error the moment the app creates its collections. Raise it here.
+    ulimits:
+      nofile:
+        soft: 64000
+        hard: 64000
     # Bound to loopback — reachable by the app over the compose network, not off-host.
+    # The app connects over the compose network (mongo:27017); this published port
+    # is only for host-side tooling. Override MONGO_HOST_PORT if 27017 is already
+    # taken on your host (e.g. a local mongod). The internal port never changes.
     ports:
-      - '127.0.0.1:27017:27017'
+      - '127.0.0.1:${MONGO_HOST_PORT:-27017}:27017'
     # Single-node replica set (the app requires a replica set for transactions).
     # The healthcheck initiates rs0 on first run, then reports healthy once up.
     healthcheck:
@@ -63,9 +74,10 @@ services:
     volumes:
       - minio-data:/data
     # Loopback-only. Override MINIO_ROOT_USER/PASSWORD for anything but local eval.
+    # Override MINIO_HOST_PORT / MINIO_CONSOLE_HOST_PORT if those ports are taken.
     ports:
-      - '127.0.0.1:9000:9000'
-      - '127.0.0.1:9001:9001'
+      - '127.0.0.1:${MINIO_HOST_PORT:-9000}:9000'
+      - '127.0.0.1:${MINIO_CONSOLE_HOST_PORT:-9001}:9001'
     healthcheck:
       test: ['CMD-SHELL', 'curl -sf http://localhost:9000/minio/health/live || exit 1']
       interval: 10s
@@ -96,17 +108,19 @@ services:
     volumes:
       - ./elasticmq.conf:/opt/elasticmq.conf:ro
     # Loopback-only — ElasticMQ has no auth; never expose it off-host.
+    # Override SQS_HOST_PORT / SQS_UI_HOST_PORT if those ports are taken.
     ports:
-      - '127.0.0.1:9324:9324'
-      - '127.0.0.1:9325:9325'
+      - '127.0.0.1:${SQS_HOST_PORT:-9324}:9324'
+      - '127.0.0.1:${SQS_UI_HOST_PORT:-9325}:9325'
 
   # Local mail catcher: all outgoing mail (including sign-in codes) lands here.
   # Read it at http://localhost:8025. Point MAIL_* at a real SMTP provider instead
   # for anything beyond local use.
   mail:
     image: axllent/mailpit
+    # Override MAIL_UI_HOST_PORT if 8025 is taken on your host.
     ports:
-      - '127.0.0.1:8025:8025'
+      - '127.0.0.1:${MAIL_UI_HOST_PORT:-8025}:8025'
 
   app:
     # Default: pull the CI-published multi-arch image (linux/amd64 + linux/arm64).
@@ -127,8 +141,9 @@ services:
         condition: service_started
       mail:
         condition: service_started
+    # Override APP_HOST_PORT to serve the app on a different host port.
     ports:
-      - '3000:3000'
+      - '${APP_HOST_PORT:-3000}:3000'
     # NOTE: the realtime websocket gateway is not in this stack yet. The app
     # serves HTTP without it; live streaming updates degrade.
 
