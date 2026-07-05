@@ -67,7 +67,7 @@ jobs:
   # Manual version bump: creates a changeset file on a new branch and opens a PR
   manual-version-bump:
     if: github.event_name == 'workflow_dispatch' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       # Use b4m-release-bot App token (not GITHUB_TOKEN) so the manual bump PR
       # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
