@@ -175,8 +175,19 @@ const formatContextWindow = (size: number): string => {
   return formatNumber(size);
 };
 
+// Section label for models running on the operator's own hardware (self-host).
+const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
+
 // Function to determine backend from model name/ID
 const getModelBackend = (model: ModelInfo): string => {
+  // Self-host: Ollama models run locally on the operator's hardware, so group
+  // them in a dedicated "Local / Self-Hosted" section rather than "Other". In
+  // the hosted product the same backend is remote, so this only applies when
+  // the bundle was built with B4M_SELF_HOST (inlined by next.config.mjs).
+  if (model.backend === ModelBackend.Ollama && process.env.B4M_SELF_HOST === 'true') {
+    return SELF_HOSTED_BACKEND;
+  }
+
   const modelName = model.name.toLowerCase();
   const modelId = model.id.toLowerCase();
   const modelDescription = model.description?.toLowerCase();
@@ -700,7 +711,17 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     });
 
     // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)
-    const backendPriority = ['OPEN AI', 'Anthropic', 'Google', 'Meta', 'xAI', 'Mistral', 'Black Forest Labs', 'Cohere'];
+    const backendPriority = [
+      SELF_HOSTED_BACKEND,
+      'OPEN AI',
+      'Anthropic',
+      'Google',
+      'Meta',
+      'xAI',
+      'Mistral',
+      'Black Forest Labs',
+      'Cohere',
+    ];
     const sortedBackends = Object.keys(grouped).sort((a, b) => {
       const aIndex = backendPriority.indexOf(a);
       const bIndex = backendPriority.indexOf(b);
@@ -835,7 +856,17 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   if (error) return <div>Error loading models: {error.message}</div>;
 
   // Group models by backend for display
-  const backendPriority = ['OPEN AI', 'Anthropic', 'Google', 'Meta', 'xAI', 'Mistral', 'Black Forest Labs', 'Cohere'];
+  const backendPriority = [
+    SELF_HOSTED_BACKEND,
+    'OPEN AI',
+    'Anthropic',
+    'Google',
+    'Meta',
+    'xAI',
+    'Mistral',
+    'Black Forest Labs',
+    'Cohere',
+  ];
   const sortedBackends = Object.keys(modelsByBackend).sort((a, b) => {
     const aIndex = backendPriority.indexOf(a);
     const bIndex = backendPriority.indexOf(b);

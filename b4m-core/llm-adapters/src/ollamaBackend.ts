@@ -38,29 +38,39 @@ export class OllamaBackend implements ICompletionBackend {
     try {
       const models = await this._api.list();
 
+      // In self-host, Ollama runs on the operator's own hardware, so describe
+      // it as local; otherwise it is served remotely by the hosted platform.
+      const isSelfHost = process.env.B4M_SELF_HOST === 'true';
+      // TODO: This is a placeholder value. We need to get the actual context window from the model
+      const contextWindow = 8192;
+
       return models.models.map(model => {
         const modelInfo = {
           id: model.name,
           type: 'text',
           name: model.name,
           backend: ModelBackend.Ollama,
-          // TODO: This is a placeholder value. We need to get the actual context window from the model
-          contextWindow: 8192,
+          contextWindow,
           // TODO: This is a placeholder value. We need to get the actual max tokens from the model
-          max_tokens: 8192,
+          max_tokens: contextWindow,
           supportsImageVariation: false,
+          // Local models are free. pricing is a tier map keyed by a token
+          // threshold (consumed by getTextModelCost), not a flat {input,output}
+          // object; a flat shape resolves to an undefined tier and crashes cost
+          // accounting in post-processing.
           pricing: {
-            input: 0,
-            output: 0,
+            [contextWindow]: { input: 0, output: 0 },
           },
           supportsVision: false,
           can_stream: true,
           logoFile: 'Ollama_Logo.svg',
           rank: 1,
-          // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
-          description: `This model is served from ${
-            process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
-          } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
+          description: isSelfHost
+            ? 'Runs locally on your own hardware via Ollama. No API key required, and nothing leaves your machine. Performance and capabilities vary by model.'
+            : // Brand externalized for open-core; generic phrasing when APP_NAME is unset.
+              `This model is served from ${
+                process.env.APP_NAME ? `${process.env.APP_NAME}'s` : 'the platform'
+              } Ollama servers using publicly available open-source models. Performance and capabilities vary by model.`,
         } as ModelInfo;
         return modelInfo;
       });
@@ -99,6 +109,7 @@ export class OllamaBackend implements ICompletionBackend {
 
         let inputTokens = 0;
         let outputTokens = 0;
+        let startedThinking = false;
         let stoppedThinking = false;
         const accumulatedToolCalls: ToolCall[] = [];
 
@@ -109,10 +120,14 @@ export class OllamaBackend implements ICompletionBackend {
           }
 
           let content = chunk.message.content || '';
+          startedThinking = startedThinking || content.includes('<think>');
           stoppedThinking = stoppedThinking || content.includes('</think>');
 
-          // Close the thinking tag if ollama did not provide the closing tag
-          if (chunk.done && !stoppedThinking) {
+          // Close a thinking block only if the model actually opened one but
+          // never closed it. Non-reasoning models (e.g. qwen2.5-coder) emit no
+          // <think> at all, so appending </think> unconditionally left a stray
+          // closing tag on every reply.
+          if (chunk.done && startedThinking && !stoppedThinking) {
             content = `${content}</think>`;
           }
 

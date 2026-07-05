@@ -144,9 +144,61 @@ services:
     # Override APP_HOST_PORT to serve the app on a different host port.
     ports:
       - '${APP_HOST_PORT:-3000}:3000'
+    # Lets the app reach an Ollama running on the *host* (native install, e.g.
+    # for GPU) via OLLAMA_BASE_URL=http://host.docker.internal:11434. Harmless
+    # when unused. The bundled `ollama` service below is reached as `ollama`.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     # NOTE: the realtime websocket gateway is not in this stack yet. The app
     # serves HTTP without it; live streaming updates degrade.
+
+  # Local LLMs via Ollama (optional).
+  # Run local open-weight models (e.g. Qwen) with NO provider API keys and, once
+  # the models are pulled, NO internet. Opt in with the `ollama` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d
+  # Then set OLLAMA_BASE_URL=http://ollama:11434 in .env.selfhost (see the file).
+  # CPU-only by default so it runs on any host; for NVIDIA GPU acceleration add
+  # the override file: `-f compose.ollama-gpu.yaml` (needs nvidia-container-toolkit).
+  ollama:
+    image: ollama/ollama
+    profiles: ['ollama']
+    volumes:
+      - ollama-data:/root/.ollama
+    # Loopback-only, like the other backing services. Override OLLAMA_HOST_PORT
+    # if 11434 is taken (e.g. by a host Ollama).
+    ports:
+      - '127.0.0.1:${OLLAMA_HOST_PORT:-11434}:11434'
+    healthcheck:
+      test: ['CMD-SHELL', 'ollama list >/dev/null 2>&1 || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # One-shot: pull the model(s) named in OLLAMA_PULL_MODELS (space-separated) so
+  # they're ready in the app's model picker. Safe to re-run; an already-present
+  # model is a no-op. Pick your model(s) in .env.selfhost (menu + GPU/RAM specs there).
+  ollama-pull:
+    image: ollama/ollama
+    profiles: ['ollama']
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen2.5-coder:7b}
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        echo "Pulling: $$OLLAMA_PULL_MODELS" &&
+        for m in $$OLLAMA_PULL_MODELS; do
+          echo "==> ollama pull $$m" && ollama pull "$$m" || echo "WARN: failed to pull $$m";
+        done &&
+        echo "Done. Pulled models are now available in the app model picker."
+    restart: 'no'
 
 volumes:
   mongo-data:
   minio-data:
+  ollama-data:

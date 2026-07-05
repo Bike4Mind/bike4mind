@@ -59,6 +59,8 @@ XAI_API_KEY=            # Grok
 # ...plus optional GitHub/Google OAuth, Stripe, Slack - see the template
 ```
 
+**No API keys? Run local models instead.** You can skip every provider key and run open-weight models (Qwen, Llama, etc.) locally via Ollama, with nothing leaving your machine. See [Local models with Ollama](#local-models-with-ollama-no-api-keys) below.
+
 ## 3. Bring up the stack
 
 ```bash
@@ -110,6 +112,83 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+## Local models with Ollama (no API keys)
+
+Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
+
+The stack bundles an optional `ollama` service. To enable it:
+
+1. In `.env.selfhost`, uncomment `OLLAMA_BASE_URL` and pick your model(s) in `OLLAMA_PULL_MODELS`:
+
+   ```bash
+   OLLAMA_BASE_URL=http://ollama:11434
+   OLLAMA_PULL_MODELS=qwen2.5-coder:7b
+   ```
+
+2. Bring the stack up with the `ollama` profile (this also downloads the model on first run):
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d
+   ```
+
+That's it - open the model picker and select your model under **Local / Self-Hosted**. No keys, no admin settings to flip.
+
+### Choosing a model (Qwen menu + hardware)
+
+Pick by the hardware you have. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all. Qwen2.5-Coder is tuned for coding; qwen3 is a newer general model.
+
+| Model tag | Download | Min GPU VRAM | CPU-only RAM | Notes |
+|-----------|---------:|-------------:|-------------:|-------|
+| `qwen2.5-coder:1.5b` | ~1.0 GB | ~2 GB | ~8 GB | Tiny; fast even on CPU |
+| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Good on small / laptop GPUs |
+| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Recommended default |
+| `qwen2.5-coder:14b` | ~9 GB | ~12 GB | ~32 GB | Stronger; needs a real GPU |
+| `qwen2.5-coder:32b` | ~20 GB | ~24 GB | ~64 GB | Best local coder |
+| `qwen3:8b` | ~5 GB | ~8 GB | ~16 GB | General-purpose alternative |
+
+Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen2.5-coder:3b qwen2.5-coder:7b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:14b`. No GPU? Everything runs on CPU - start with a 1.5b or 3b model.
+
+### GPU acceleration (NVIDIA)
+
+The bundled `ollama` service runs on CPU by default so it works on any host. To use an NVIDIA GPU, install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) so Docker can pass the GPU into containers, then add the GPU override file.
+
+Install the toolkit (Debian/Ubuntu; needs sudo and internet). This adds NVIDIA's apt repo first, which is why a plain `apt-get install nvidia-container-toolkit` fails with "Unable to locate package" on a machine that hasn't set it up:
+
+```bash
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+  | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+  | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+  | sudo tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+sudo apt-get update
+sudo apt-get install -y nvidia-container-toolkit
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Verify Docker can see the GPU:
+
+```bash
+docker info | grep -i Runtimes                    # should list "nvidia"
+docker run --rm --gpus all ubuntu nvidia-smi -L   # should print your GPU
+```
+
+Then bring the stack up with the GPU override added as a second `-f`:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml --env-file .env.selfhost --profile ollama up -d
+```
+
+The GPU needs enough free VRAM for your chosen model (see the table above); Ollama offloads as many layers as fit and runs the rest on CPU.
+
+### Using an Ollama you already run
+
+Already run Ollama on the host (e.g. a native GPU install)? Skip the `ollama` profile entirely and point the app at it:
+
+```bash
+OLLAMA_BASE_URL=http://host.docker.internal:11434
+```
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -118,7 +197,11 @@ The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate l
 - **App can't reach Mongo / "no primary" errors** - MongoDB must run as a replica set (`--replSet rs0`) for transactions; the bundled `mongo` service is configured for this. Give it a few seconds to elect a primary on first boot.
 - **No sign-in email arrives** - check Mailpit at `http://localhost:8025`; if it's empty, check `docker compose -f compose.selfhost.yaml logs app` for mail errors and verify the `MAIL_*` values.
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
-- **The model picker is empty / "no models" warning** - no provider key is configured. Set at least one provider key in `.env.selfhost` and restart (`docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`), or add a key in the app under Settings > API Keys.
+- **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
+- **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
+- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen2.5-coder:1.5b` or `:3b`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
+- **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
+- **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **Chat replies only appear after a refresh** - expected for now: the realtime websocket gateway is not part of the compose stack yet, so live streaming updates degrade to fetch-on-refresh.
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 
