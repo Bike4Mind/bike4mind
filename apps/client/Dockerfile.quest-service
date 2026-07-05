@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1.7-labs
+#
+# QuestProcessorService image — always-on quest processor that replaces the
+# EventBridge → questProcessor Lambda. Runs apps/client/server/quest/server.ts
+# via tsx with the full workspace installed (no cold start, no 15-min timeout).
+#
+# Built & pushed to ECR by the deploy workflow (.github/workflows/_deploy-env.yml) with a
+# plain `docker build`, NOT by `sst deploy` — infra/questProcessorService.ts references the
+# pushed URI via QUEST_PROCESSOR_IMAGE. The build context is the monorepo root (`docker build
+# … .`). The root .dockerignore excludes node_modules / dist / .turbo / .sst / .env* / .git /
+# .next / ios / android / tests / docs-site.
+#
+# Layer ordering is deliberate (manifests → install → source → build): the install layer's
+# cache key is the lockfile + workspace package.json files, NOT app source, so editing
+# server source does not invalidate the expensive native-compile install layer. The deploy
+# workflow primes this via an inline registry cache (--cache-from …:cache). Base image is
+# pinned by digest so a silent upstream bump changes the image content-hash and forces a
+# rebuild rather than being masked by an unchanged source hash.
+
+FROM public.ecr.aws/docker/library/node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS base
+
+# Toolchain for any native addons in the dependency graph (node-gyp et al).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable
+WORKDIR /app
+
+# 1) Manifests only. This layer's cache key is the lockfile + every workspace package.json
+#    (+ .npmrc), NOT app source. `COPY --parents` (BuildKit 1.7-labs) preserves each
+#    manifest's path so the workspace graph resolves; node_modules/dist are excluded via
+#    .dockerignore, so nested/built manifests aren't swept in.
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY --parents **/package.json ./
+
+# 1a) pnpm runs lifecycle hooks during install, and apps/client's `postinstall`
+#     (scripts/copy-pdfjs-assets.mjs) needs its script file present or install fails with
+#     MODULE_NOT_FOUND. It's the only install-time script in the client closure (cli is out
+#     of scope; the root `prepare` is `|| true`-guarded), and it's self-contained — it reads
+#     from node_modules and ensureDir's its output — so the script file is all it needs.
+#     Copied here (not with source) so it's available before the install step below.
+COPY apps/client/scripts ./apps/client/scripts
+
+# 2) Install the client workspace + all its workspace dependencies, INCLUDING devDeps
+#    (tsx lives in devDependencies). Do not pass --prod here for that reason. The native
+#    compiles happen here; this layer is reused until the lockfile/manifests change.
+RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
+
+# 3) Source — the only layer a normal (source-only) commit invalidates.
+COPY . .
+
+# 4) Build the client's upstream @bike4mind/* packages (TS -> dist). The `^...` selector
+#    builds the dependencies of the client without building the Next.js app itself.
+RUN pnpm turbo build --filter=@bike4mind/client^...
+
+ENV NODE_ENV=production
+ENV PORT=8080
+EXPOSE 8080
+WORKDIR /app/apps/client
+
+# tsx resolves the @server/* and @/* path aliases from apps/client/tsconfig.json (cwd here).
+CMD ["pnpm", "exec", "tsx", "server/quest/server.ts"]

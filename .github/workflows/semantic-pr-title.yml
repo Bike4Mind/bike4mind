@@ -1,0 +1,44 @@
+name: Semantic PR Title
+
+# Validates that PR titles follow the Conventional Commits format.
+# This is a blocking check — PRs cannot merge without a valid title.
+# All Claude Code sessions already produce the right format via CLAUDE.md + /create-pr skill.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+    branches: [main]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  validate:
+    # Skip forks, dependabot, and Version Packages PRs
+    if: >-
+      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') &&
+      github.actor != 'dependabot[bot]' &&
+      !startsWith(github.head_ref, 'changeset-release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Allowed conventional commit types
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+          # Require a scope in parentheses (optional — set to false to allow scopeless)
+          requireScope: false
+          # Allow ! for breaking changes: feat!: or feat(scope)!:
+          subjectPattern: ^.+$
+          subjectPatternError: 'PR title must have a description after the colon.'

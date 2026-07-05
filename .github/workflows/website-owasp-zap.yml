@@ -1,0 +1,151 @@
+name: Website OWASP ZAP Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * 0'  # Sundays at 2AM UTC
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this scan is being run'
+        required: true
+        default: 'manual'
+        type: string
+      target:
+        description: 'Target URL to scan'
+        required: false
+        type: string
+      stage:
+        description: 'SST stage name (e.g. dev, production, pr1234)'
+        required: false
+        type: string
+
+env:
+  DEFAULT_ZAP_TARGET_URL: ${{ vars.OWASP_ZAP_TARGET }}
+  DEFAULT_ZAP_STAGE: dev
+
+jobs:
+  zap-website-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # Optional overrides passed from workflow_dispatch
+      ZAP_TARGET_URL: ${{ github.event.inputs.target }}
+      ZAP_STAGE: ${{ github.event.inputs.stage }}
+      ZAP_REASON: ${{ github.event.inputs.reason }}
+      # Where to send summarized results
+      # production stage → production ingest URL
+      # PR stage (e.g. "pr5853") → PR preview host
+      # Everything else (dev/staging/main) → shared ingest URL secret (staging)
+      LUMINA5_INGEST_URL: ${{ (github.event.inputs.stage == 'production' && format('{0}/api/admin/security-dashboard/web-owasp-ingest', vars.OWASP_ZAP_TARGET_PROD)) || (github.event.inputs.stage && startsWith(github.event.inputs.stage, 'pr') && format('https://app.{0}.{1}/api/admin/security-dashboard/web-owasp-ingest', github.event.inputs.stage, vars.PREVIEW_SERVER_DOMAIN)) || secrets.SECOPS_ZAP_INGEST_URL }}
+      LUMINA5_INGEST_TOKEN: ${{ secrets.SECOPS_ZAP_INGEST_TOKEN }}
+      # Optional: override report path if needed
+      ZAP_JSON_REPORT_PATH: report_json.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Verify target is reachable (2xx/3xx only)
+        id: pre-check
+        env:
+          ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
+        run: |
+          TARGET="${{ env.ZAP_TARGET_URL || env.DEFAULT_ZAP_TARGET_URL }}"
+          echo "Target URL: $TARGET"
+          REACHABLE=false
+          for attempt in 1 2 3; do
+            HTTP_STATUS=$(curl --silent --max-time 30 --output /dev/null --write-out "%{http_code}" \
+              -H "X-ZAP-Scanner:$ZAP_BYPASS_TOKEN" "$TARGET" || echo "000")
+            echo "Attempt $attempt: HTTP status = $HTTP_STATUS"
+            # Only accept 2xx/3xx — a 403 means WAF blocked the runner IP,
+            # which causes ZAP to scan WAF error pages and file false positives.
+            if [[ "$HTTP_STATUS" =~ ^[23][0-9][0-9]$ ]]; then
+              REACHABLE=true
+              break
+            elif [[ "$HTTP_STATUS" == "403" ]]; then
+              echo "::warning::Got 403 — runner IP may be blocked by WAF (IP reputation list)."
+              echo "ZAP scan would produce false positives. Aborting to prevent noise."
+            fi
+            [ $attempt -lt 3 ] && sleep 10
+          done
+          if [ "$REACHABLE" = "true" ]; then
+            echo "✓ Target is reachable"
+          else
+            echo "::error::Target did not return 2xx/3xx after 3 attempts: $TARGET"
+            echo "ZAP scan skipped — WAF may be blocking the runner IP, or the service is down."
+            exit 1
+          fi
+
+      - name: Run OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.15.0
+        id: zap-scan
+        # ZAP scan itself succeeds; artifact upload may fail with 400 on some backends.
+        # We don't rely on the GitHub artifact, only on the JSON report for our ingest step,
+        # so mark this step as non-fatal so the summarizer still runs.
+        continue-on-error: true
+        env:
+          ZAP_BYPASS_TOKEN: ${{ secrets.ZAP_WAF_BYPASS_TOKEN }}
+        with:
+          target: ${{ env.ZAP_TARGET_URL || env.DEFAULT_ZAP_TARGET_URL }}
+          # -H injects the bypass header into every ZAP request so the WAF allow
+          # rule (Allow-ZAP-Scanner, priority 1) lets the scanner through the IP
+          # reputation list and ZAP tests the actual app, not WAF error pages.
+          cmd_options: '-a -T 180 -H "X-ZAP-Scanner:${{ env.ZAP_BYPASS_TOKEN }}"'
+          artifact_name: 'zap-scan'
+          allow_issue_writing: false
+          fail_action: false
+
+      - name: Debug - Check ZAP scan results
+        if: always()
+        run: |
+          echo "=== ZAP Scan Step Outcome ==="
+          echo "Outcome: ${{ steps.zap-scan.outcome }}"
+          echo "Conclusion: ${{ steps.zap-scan.conclusion }}"
+          echo ""
+          echo "=== Current Directory Contents ==="
+          ls -lah
+          echo ""
+          echo "=== Checking for ZAP reports ==="
+          for file in report_json.json report_md.md report_html.html; do
+            if [ -f "$file" ]; then
+              SIZE=$(stat -c%s "$file" 2>/dev/null || echo "unknown")
+              echo "Found: $file ($SIZE bytes)"
+            fi
+          done
+
+      - name: Check if ZAP report was generated
+        id: check-report
+        run: |
+          if [ -f "report_json.json" ]; then
+            echo "✓ Report found: report_json.json"
+            echo "report_exists=true" >> $GITHUB_OUTPUT
+            ls -lh report_json.json
+            echo ""
+            echo "Report preview (first 100 lines):"
+            head -100 report_json.json
+          else
+            echo "✗ Warning: ZAP report not found at report_json.json"
+            echo "report_exists=false" >> $GITHUB_OUTPUT
+            echo ""
+            echo "This usually means:"
+            echo "  1. ZAP scan failed to connect to the target"
+            echo "  2. Docker container exited before writing reports"
+            echo "  3. Target URL is unreachable from GitHub Actions"
+            echo ""
+            echo "Check the 'Run OWASP ZAP Baseline Scan' step logs above for errors."
+          fi
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Summarize ZAP results and send to Security Dashboard
+        if: steps.check-report.outputs.report_exists == 'true'
+        run: node scripts/zap-summarize-and-ingest.mjs
+      
+      - name: Fail job when ZAP scan produced no report
+        if: steps.check-report.outputs.report_exists == 'false'
+        run: |
+          echo "::error::ZAP scan did not produce a report. Check the 'Run OWASP ZAP Baseline Scan' step for details."
+          exit 1

@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Mga Setting ng AI",
+    "session": "Notebook",
+    "session_plural": "Mga Notebook",
+    "favorite": "Paborito",
+    "unfavorite": "Hindi Paborito",
+    "favorites": "Mga Paborito",
+    "favorites_count_one": "{{count}} Paborito",
+    "favorites_count_other": "{{count}} Mga Paborito",
+    "currentSession": "Kasalukuyan",
+    "other": "Ibang mga Tag",
+    "text_model": "Modelo ng Teksto",
+    "image_model": "Modelo ng Imahe",
+    "ai_image": "Larawang AI",
+    "switch_to": "Lumipat sa {{ name }}"
+  },
+  "guide": {
+    "title": "Gabay"
+  },
+  "intro": {
+    "title": "Panimula"
+  },
+  "developers": {
+    "title": "Mga Developer",
+    "technical_docs": "Teknikal na Dokumentasyon"
+  },
+  "changelog": {
+    "title": "Tala ng Pagbabago"
+  },
+  "feedback": {
+    "send": "Magpadala ng Feedback"
+  },
+  "terms_policies": "Mga Tuntunin at Patakaran",
+  "login": "Mag-login",
+  "file": "Kaalamang",
+  "forgotPassword": "Nakalimutan ang Password",
+  "signup": "Mag-sign Up",
+  "help": "Tulong",
+  "manual": "Manwal",
+  "inviteLong": "Mag-imbita ng Kaibigan",
+  "inviteShort": "Imbita",
+  "tools": {
+    "title": "Mga Kasangkapan"
+  },
+  "sidenav": {
+    "pin": "I-pin ang sidebar",
+    "unpin": "I-unpin ang sidebar",
+    "sessions": {
+      "sort": {
+        "label": "Ayusin Ayon Sa",
+        "tags": "Ayon sa mga Tag",
+        "date": "Ayon sa Petsa"
+      },
+      "new": "Bagong Usapan",
+      "item": {
+        "genTags": "Bumuo ng listahan ng mga tag ng Notebook"
+      }
+    }
+  },
+  "referral": {
+    "title": "Mag-refer ng kaibigan sa",
+    "email_title_default": "Maligayang pagdating sa GrokTool!",
+    "email_body_default": "Iniimbitahan ka ni USER_NAME sa GrokTool! LINK NG PAGPAPAREHISTRO: Gamitin ang sumusunod na code ng imbitasyon para mag-sign up: INVITE_CODE",
+    "friend_email": "Email ng Kaibigan",
+    "num_referrals_available": "Mga referral na magagamit:",
+    "no_valid_emails_error": "Mangyaring magpasok ng wastong mga email address",
+    "send_referral": "Ipadala ang Referral",
+    "send_referral_success": "Matagumpay na naipadala ang referral!",
+    "send_referral_skipped": "{{count}} paanyaya ang nilaktawan — ang mga email address na iyon ay may account na.",
+    "send_referral_failed": "Hindi maipadala ang {{count}} paanyaya. Pakisubukang muli.",
+    "send_referral_error": "Error sa pagpapadala ng referral. Pakisubukang muli.",
+    "slack_notification_default": "Referral na ipinadala ng user USER_NAME:USER_ID sa FRIEND_EMAIL"
+  },
+  "activateVoice": "I-activate ang boses na ito",
+  "liveVoice": "Live na boses",
+  "whatsNew": "Ano'ng Bago",
+  "welcome": "Maligayang pagdating sa {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Kumokonekta",
+      "1": "Nakakonekta",
+      "2": "Nagdidiskonekta",
+      "3": "Diskonektado",
+      "-1": "Naghihintay"
+    },
+    "networkStatus": "Network: {{ status }}"
+  },
+  "deleteVoice": "Burahin ang boses na ito",
+  "deleteVoiceConfirm": "Sigurado ka bang gusto mong burahin ang boses na ito?",
+  "organization": {
+    "organizations": "Mga Koponan",
+    "defaultName": "Ang aking organisasyon",
+    "shared": "Ibinahagi sa Akin",
+    "create": "Lumikha ng Koponan",
+    "search": "Maghanap ng mga koponan...",
+    "no_organizations": "Walang matagpuang mga koponan",
+    "view_details": "Tingnan ang mga Detalye",
+    "x_seats": "{{count}} upuan",
+    "active_subscription": "Aktibong Subskripsyon",
+    "no_subscription": "Walang Subskripsyon",
+    "x_members": "{{count}} mga miyembro",
+    "x_credits": "{{count}} mga kredito",
+    "owner": "May-ari"
+  },
+  "session": {
+    "typeYourMessage": "I-type ang iyong mensahe dito",
+    "switchedSession": "Lumipat sa: {{ sessionName }}",
+    "send": "Ipadala",
+    "sendMessage": "Magpadala ng mensahe",
+    "preparingQuest": "Inihahanda ang pakikipagsapalaran...",
+    "rephrasePrompt": "I-optimize ang iyong input",
+    "promptRephrased": "Matagumpay na naayos ang prompt",
+    "rephraseFailed": "Nabigong ayusin ang prompt",
+    "errors": {
+      "notebookDeleted": "Ang notebook na ito ay tinanggal na. Mangyaring gumawa ng bago.",
+      "noPermission": "Wala kang pahintulot na ma-access ang notebook na ito.",
+      "invalidRequest": "Hindi wastong kahilingan. Pakisubukang muli.",
+      "tooManyRequests": "Sobrang dami ng kahilingan. Mangyaring maghintay sandali at subukang muli.",
+      "serverError": "Error sa server. Pakisubukang muli mamaya.",
+      "networkError": "Nabigong magpadala ng mensahe. Pakisuri ang iyong koneksyon.",
+      "sendFailed": "Nabigong magpadala ng mensahe. Pakisubukang muli."
+    }
+  },
+  "projects": {
+    "title": "Proyek",
+    "projects": "Mga Proyekto",
+    "joined_projects": "Mga Nakasamang Proyekto",
+    "no_joined_projects": "Walang mga nakasamang proyekto pa",
+    "add_to_project": "Idagdag sa Proyekto",
+    "modals": {
+      "files": {
+        "title": "Magdagdag ng Mga File sa Proyekto",
+        "subtitle": "Pumili ng mga file upang idagdag sa iyong proyekto",
+        "button_label": "Magdagdag ng Mga File",
+        "search_placeholder": "Maghanap ng mga file",
+        "no_files": "Walang matagpuang mga file."
+      },
+      "members": {
+        "title": "Magdagdag ng Mga Miyembro sa Proyekto",
+        "subtitle": "Maghanap at pumili ng mga user upang idagdag sa iyong proyekto",
+        "button_label": "Magdagdag ng Mga Miyembro",
+        "search_placeholder": "Maghanap ng mga user",
+        "no_members": "Subukan ang paghahanap para sa isang user."
+      },
+      "sessions": {
+        "title": "Magdagdag ng Notebook sa isang Proyekto",
+        "subtitle": "Pumili ng mga notebook upang idagdag sa iyong proyekto o lumikha ng bago",
+        "button_label": "Magdagdag ng Mga Notebook",
+        "search_placeholder": "Maghanap",
+        "create_button": "Lumikha",
+        "no_notebooks": "Walang matagpuang mga notebook. Subukan ang paglikha ng bago."
+      },
+      "generic": {
+        "select_all": "Pumili ng Lahat",
+        "unselect_all": "Huwag Pumili ng Lahat",
+        "add_items_one": "Magdagdag ng {{count}} item",
+        "add_items_other": "Magdagdag ng {{count}} mga item",
+        "delete_items": "Tanggalin ang {{count}} mga item"
+      }
+    }
+  },
+  "logout": "Mag-logout",
+  "inbox": {
+    "title": "Inbox",
+    "messages": "Mga mensahe",
+    "invites": "Mga imbitasyon",
+    "sendMessage": "Magpadala ng mensahe",
+    "noMessages": "Walang mga mensahe"
+  },
+  "addSomething": "Idagdag ang {{ name }}",
+  "deleteAllSomething": "Burahin lahat ng {{ name }}",
+  "exportAllSomething": "I-export lahat ng {{ name }}",
+  "importLLMHistory": "I-import ang LLM Kasaysayan",
+  "downloadAllSomething": "I-download lahat ng {{ name }}",
+  "language": {
+    "language_settings": "Mga Setting ng Wika",
+    "change-language": "Palitan ang Wika"
+  },
+  "theme": {
+    "turn-dark": "Gawing Madilim",
+    "turn-light": "Gawing Maliwanag"
+  },
+  "auth": {
+    "usernameOrEmail": "Username o Email",
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Kumpirmahin ang Password",
+    "fullName": "Buong Pangalan",
+    "inviteCode": "Invite Code",
+    "needCode": "Kailangan ng Code?",
+    "noAccount": "Walang Account?",
+    "haveAccount": "May account na?",
+    "loginWithProvider": "Mag-login gamit ang {{ provider }}",
+    "checking": "Tinitingnan...",
+    "continue": "Magpatuloy",
+    "troubleSigningIn": "May problema sa pag-sign in?",
+    "signingInAs": "Nag-sign in bilang",
+    "signingIn": "Nag-sign in...",
+    "backToEmail": "Bumalik sa email",
+    "redirectingToProvider": "Nireredirekta sa pag-login ng iyong organisasyon...",
+    "resetInstructions": "Pakilagay ang iyong email address. Magpapadala kami ng email upang i-reset ang iyong password.",
+    "sendResetEmail": "Magpadala ng email para i-reset ang password",
+    "email": "Email",
+    "resetEmailSentMessage": "Naipadala na ang email! Pakicheck ang iyong email para sa karagdagang mga tagubilin",
+    "createAccountDesc": "Gumawa ng Account",
+    "createBtn": "Gumawa ng Account",
+    "loginBtn": "Mag-login",
+    "passwordStrength": {
+      "label": "Lakas ng password",
+      "weak": "Mahina",
+      "fair": "Katamtaman",
+      "strong": "Malakas"
+    },
+    "passwordRequirements": {
+      "title": "Mga kinakailangan sa password",
+      "minLength": "Hindi bababa sa {{count}} na mga karakter",
+      "uppercase": "Isang malaking titik",
+      "lowercase": "Isang maliit na titik",
+      "number": "Isang numero",
+      "specialChar": "Isang espesyal na karakter",
+      "met": "natugunan",
+      "notMet": "hindi pa natutugunan"
+    },
+    "errors": {
+      "usernameExists": "Ang username '{{username}}' ay kinuha na. Mangyaring pumili ng ibang username.",
+      "emailExists": "Mayroong account na may email '{{email}}' na umiiral na. Mangyaring gumamit ng ibang email o mag-login sa iyong umiiral na account.",
+      "accountExists": "Mayroong account na may mga kredensyal na ito na umiiral na. Mangyaring subukang mag-login o gumamit ng ibang kredensyal.",
+      "invalidInviteCode": "Ang code ng imbitasyon na iyong inilagay ay hindi wasto o nag-expire na. Mangyaring suriin at subukang muli.",
+      "registrationFailed": "Nabigo ang pagpaparehistro. Mangyaring subukang muli mamaya.",
+      "validation": {
+        "generic": "Hindi wastong input",
+        "invalidUsername": "Ang username ay maaari lamang maglaman ng mga titik, numero, underscore, tuldok, at gitling",
+        "passwordMismatch": "Hindi magkatugma ang mga password",
+        "passwordRequirements": "Ang password ay dapat hindi bababa sa 8 karakter, na may malalaki at maliliit na titik, isang numero, at isang espesyal na karakter"
+      }
+    }
+  },
+  "search": "Maghanap",
+  "share": "Ibahagi",
+  "rename": "Palitan ang Pangalan",
+  "favorite": "Paborito",
+  "unfavorite": "Hindi Paborito",
+  "delete": "Tanggalin",
+  "files": {
+    "showAttachedFiles": "Ipakita ang Mga Nakalakip na File",
+    "hideAttachedFiles": "Itago ang Mga Nakalakip na File",
+    "title": "Mga File",
+    "upload": "Mag-upload ng mga File",
+    "long_title": "Tagabrowse ng File"
+  },
+  "view": "Tumingin",
+  "info": "Impormasyon",
+  "clone": "Klon",
+  "download": "I-download",
+  "summarize": "Ibuod",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Koleksyon",
+    "collections": {
+      "all_types": "Lahat ng Uri"
+    },
+    "users_profile": "Profile ni {{ name }}",
+    "storage_used": "Nagamit na Imbakan",
+    "credits": "Kredito",
+    "subscription": "Subskripsyon",
+    "edit": "I-edit ang Profile",
+    "manage_subscription": "Pamahalaan ang Subskripsyon",
+    "upgrade": "I-upgrade",
+    "credit_analytics": "Pagsusuri ng Kredito",
+    "pricing": "Pagpepresyo ng mga Kredito",
+    "show_purchases": "Ipakita ang mga Binili",
+    "show_usage": "Ipakita ang Paggamit",
+    "show_combined": "Ipakita ang Pinagsama",
+    "buy_credits": "Bumili ng Kredito"
+  },
+  "community": {
+    "title": "Komunidad",
+    "tooltip": "Komunidad",
+    "feed": "Daluyan ng Komunidad"
+  },
+  "subscriptions": {
+    "title": "Mga Subskripsyon",
+    "expires_on": "Magwawakas sa {{ date }}",
+    "renews_on": "Magpapatuloy sa {{ date }}"
+  },
+  "billing": {
+    "title": "Pagsingil"
+  },
+  "credits": {
+    "title": "Mga Kredito",
+    "usage": "Paggamit ng Kredito",
+    "analytics": "Pagsusuri ng Kredito",
+    "analytics_tooltip": "Tingnan ang iyong paggamit ng kredito sa paglipas ng panahon",
+    "current_balance": "Kasalukuyang Balanse ng Kredito",
+    "credits": "mga kredito",
+    "usage_by_model": "Paggamit ayon sa Modelo",
+    "no_transactions": "Walang matagpuang mga transaksyon ng kredito sa panahong ito",
+    "model_pricing": "Pagpepresyo ng Modelo",
+    "text_models": "Mga Modelong Teksto",
+    "image_models": "Mga Modelong Imahe",
+    "pricing_per_1k_tokens": "Pagpepresyo na ipinapakita sa mga kredito bawat 1,000 tokens",
+    "pricing_per_generation": "Pagpepresyo na ipinapakita sa mga kredito bawat henerasyon ng imahe",
+    "model_name": "Pangalan ng Modelo",
+    "price_tier": "Antas ng Presyo",
+    "input_cost": "Gastos sa Input",
+    "output_cost": "Gastos sa Output",
+    "generation_cost": "Gastos sa Henerasyon",
+    "no_models_available": "Walang available na mga modelo",
+    "pricing_note": "Tandaan: Ang mga presyo ay tinatayang at maaaring magbago batay sa mga parameter ng modelo. Mga antas ng presyo: $ (mababa), $$ (katamtaman), $$$ (premium).",
+    "burn_rate": "Araw-araw na paggamit (burn rate)",
+    "days_remaining": "Tinatayang natitirang mga araw",
+    "usage_pattern": "Batay sa iyong pattern ng paggamit mula sa nakaraang {{days}} araw",
+    "credits_used": "Ginamit na mga Kredito",
+    "credits_purchased": "Biniling mga Kredito",
+    "net_credits": "Netong Kredito"
+  },
+  "time": {
+    "last_7_days": "Huling 7 araw",
+    "last_30_days": "Huling 30 araw",
+    "last_90_days": "Huling 90 araw",
+    "last_180_days": "Huling 180 araw",
+    "last_365_days": "Huling 365 araw"
+  },
+  "common": {
+    "date": "Petsa",
+    "refresh": "I-refresh",
+    "days": "mga araw",
+    "cancel": "Kanselahin",
+    "save": "I-save",
+    "delete": "Tanggalin",
+    "edit": "I-edit",
+    "close": "Isara",
+    "submit": "I-submit",
+    "loading": "Naglo-load...",
+    "error": "Error",
+    "success": "Tagumpay"
+  },
+  "errors": {
+    "failed_to_load_data": "Nabigo ang pag-load ng data. Mangyaring subukan muli sa ibang pagkakataon."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Nag-expire ang iyong koneksyon sa Atlassian. Mangyaring ikonekta muli ang iyong account."
+    }
+  },
+  "credits_modal": {
+    "title": "Karagdagang Kredito",
+    "description": "Bumili ng karagdagang kredito upang ipagpatuloy ang paggamit ng aming mga advanced na modelo at tampok ng AI. Ang mga kredito ay ginagamit para sa inferensiya ng modelo at mga espesyal na tampok, kung saan ang iba't ibang mga modelo ay kumokonsumo ng iba't ibang halaga batay sa kumplikado.",
+    "current_credits": "Kasalukuyang halaga ng kredito",
+    "best_value": "Pinakamahusay na Halaga",
+    "purchase_success": "Nabili ang {{credits}} na kredito",
+    "history_title": "Kasaysayan ng Pagbili ng Kredito",
+    "purchase": "Bumili",
+    "no_transactions": "Walang mga transaksyon pa",
+    "low_credits": "Mababang mga kredito",
+    "low_credits_sub": "Bumili ng higit pang mga kredito upang ipagpatuloy ang iyong trabaho.",
+    "no_credits": "Walang mga kredito",
+    "no_credits_sub": "Bumili ng mga kredito upang ipagpatuloy ang iyong trabaho.",
+    "status": {
+      "completed": "Kumpleto",
+      "pending": "Naghihintay",
+      "failed": "Nabigo"
+    }
+  },
+  "settings": {
+    "title": "Mga Setting",
+    "tooltip": "Mga Setting",
+    "main": "Pangunahing Mga Setting",
+    "account": "Account",
+    "ai_features": "Mga Tampok ng AI",
+    "connected_apps": {
+      "title": "Mga Konektadong App",
+      "link": "Link",
+      "unlink": "I-unlink"
+    },
+    "developer_tools": "Mga Kasangkapan ng Nag-develop",
+    "experimental_features": {
+      "title": "Mga Eksperimental na Tampok",
+      "tooltip": "Eksperimentong Mga Tampok",
+      "header": "Eksperimentong Mga Tampok",
+      "beta_features": {
+        "title": "Beta na Mga Tampok",
+        "subtitle": "Ang mga tampok na ito ay nasa proseso pa rin at maaaring magdulot ng mga hindi inaasahang resulta. Ang pagpili upang buhayin ang mga ito ay nangangahulugang sumasang-ayon kang gamitin ang mga ito sa kanilang kasalukuyang estado."
+      }
+    },
+    "ui_preferences": "Mga Kagustuhan ng UI"
+  },
+  "mementos": {
+    "title": "Mga Alaala",
+    "tooltip": "Mga Alaala"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Mga Setting ng Admin"
+  },
+  "speech": {
+    "title": "Sasalita",
+    "tooltip": "Speech to Text & Text to Speech"
+  },
+  "instructions": {
+    "title": "Mga Tagubilin",
+    "tooltip": "Mga Tagubilin"
+  },
+  "friends": {
+    "add_friend": "Idagdag sa Mga Kaibigan",
+    "unfriend": "Tanggalin sa Mga Kaibigan",
+    "pending_request": "Nakahintay na Kahilingan sa Kaibigan",
+    "all": "Lahat ng Kaibigan",
+    "pending": "Nakahintay"
+  },
+  "notebooks": {
+    "view_info": "Tingnan ang Impormasyon ng Notebook",
+    "clone": "Kopyahin ang Notebook",
+    "download": "I-download ang Notebook",
+    "summarize": "Lagumin ang Notebook",
+    "delete": "Burahin ang Notebook",
+    "delete_confirm": "Sigurado ka bang nais mong permanenteng burahin ang \"{{ name }}\"? Ang aksyon na ito ay hindi maibabalik.",
+    "auto_rename": "Pangalanan muli gamit ang AI"
+  },
+  "add_friend": {
+    "title": "Magdagdag ng Kaibigan",
+    "friend_email": "Email ng Kaibigan",
+    "message": "Mensahe",
+    "cancel": "Kanselahin",
+    "send": "Ipadala",
+    "email_placeholder": "Ilagay ang email ng iyong kaibigan",
+    "message_placeholder": "Ilagay ang iyong mensahe"
+  },
+  "file_browser": {
+    "my_files": "Aking Mga File",
+    "shared_with_me": "Ibinahagi sa Akin",
+    "total_files": "Kabuuang Kaalamang Item",
+    "search_placeholder": "Maghanap sa pamamagitan ng pangalan o tag...",
+    "file_type": "Uri ng File",
+    "all_files": "Lahat ng Mga File",
+    "text": "Teksto",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Larawan",
+    "excel": "Excel",
+    "word": "Salita",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Petsa ng Paglikha",
+    "size": "Laki",
+    "name": "Pangalan",
+    "sort_z_to_a": "Ayusin mula Z hanggang A",
+    "sort_a_to_z": "Ayusin mula A hanggang Z",
+    "grid_view": "Grid View",
+    "list_view": "List View",
+    "select_file_hint": "Sa pamamagitan ng pag-tap, pumili ng file o maramihang file at idagdag ang mga ito sa iyong notebook session!",
+    "session_one": "Aklatan",
+    "session_other": "Mga Aklatan",
+    "no_files_available": "Walang mga file na available",
+    "count_file_selected_one": "{{count}} file na napili",
+    "count_file_selected_other": "{{count}} mga file na napili",
+    "add_count_file_one": "Magdagdag ng {{count}} file",
+    "add_count_file_other": "Magdagdag ng {{count}} mga file",
+    "delete_count_file_one": "Tanggalin ang {{count}} file",
+    "delete_count_file_other": "Tanggalin ang {{count}} mga file",
+    "share_count_file_one": "Ibahagi ang {{count}} File",
+    "share_count_file_other": "Ibahagi ang {{count}} Mga File",
+    "count_file_one": "{{count}} file",
+    "count_file_other": "{{count}} mga file",
+    "add_to_session_success": "Idinadagdag ang file: {{fileNames}} sa {{sessionName}}",
+    "add_file_success": "Idinadagdag ang file: {{fileNames}}",
+    "browse_files": "Mag-browse ng mga File",
+    "create_new_knowledge": "Lumikha",
+    "create_new_knowledge_from_url": "I-scrape ang URL",
+    "enter_url": "Ipasok ang URL",
+    "create_file": "Lumikha ng File",
+    "create_file_from_url": "Lumikha ng File",
+    "create_from_url": "Mabilis na I-scrape",
+    "research": "Pananaliksik",
+    "open_research": "Buksan ang Pananaliksik",
+    "url_success": "Matagumpay na nilikha ang kaalaman mula sa URL: {{url}}",
+    "url_error": "Nabigo ang paglikha ng kaalaman mula sa URL: {{url}}",
+    "url_required": "Mangyaring magpasok ng URL",
+    "previous": "Nakaraan",
+    "next": "Susunod",
+    "page_of": "Pahina {{current}} ng {{total}}",
+    "drop_files_here": "Ihulog ang mga file dito",
+    "tagging": "Nagtatag...",
+    "tag_files": "Itag ang mga File",
+    "select_all": "Piliin Lahat",
+    "unselect_all": "Alisin ang Lahat",
+    "add_files": "Magdagdag ng mga File",
+    "add_files_to_notebook_one": "Magdagdag ng {{count}} File sa Notebook",
+    "add_files_to_notebook_other": "Magdagdag ng {{count}} Mga File sa Notebook",
+    "in_project": "Sa Proyekto"
+  },
+  "file_properties": {
+    "title": "Mga Katangian ng File",
+    "make_instructions": "Gawin itong Mga Tagubilin?",
+    "instruction_priority": "Prayoridad ng Instruksyon (0–999)",
+    "priority_levels": {
+      "global": "0-100: Pandaigdigang Mga Tagubilin",
+      "group": "101-300: Mga Tagubilin ng Grupo/Kompanya",
+      "project": "301-500: Mga Tagubilin ng Proyekto",
+      "user": "501-999: Mga Tagubilin ng Gumagamit"
+    },
+    "save": "I-save",
+    "update_success": "Na-update ang sistema ng prayoridad para sa \"{{fileName}}\".",
+    "update_error": "Nabigong i-update ang sistema ng prayoridad."
+  },
+  "file_actions": {
+    "notes": "Mga Tala",
+    "notes_placeholder": "Magdagdag ng mga tala tungkol sa file na ito...",
+    "add_notes": "Magdagdag ng mga Tala",
+    "add_note": "Magdagdag ng Tala",
+    "edit_notes": "I-edit ang mga Tala",
+    "notes_save_error": "Nabigo ang pag-save ng mga tala",
+    "manage_tags": "Pamahalaan ang mga Tag",
+    "tags": "Pamahalaan ang Mga Tag",
+    "tags_placeholder": "Ilagay ang mga pangalan ng tag na pinaghiwalay ng kuwit...",
+    "add_tag_one": "Na-update ang tag para sa {{count}} file",
+    "add_tag_other": "Na-update ang tag para sa {{count}} files",
+    "failed_to_add_tag_one": "Nabigong i-update ang tag sa file",
+    "failed_to_add_tag_other": "Nabigong i-update ang tag sa files",
+    "cancel": "Kanselahin",
+    "save": "I-save",
+    "download": "I-download",
+    "vectorize": "I-vectorize",
+    "instruction": "Instruksyon {{priority}}",
+    "chunked": "Nakamay-may",
+    "not_chunked": "Hindi Nakamay-may"
+  },
+  "subscription_modal": {
+    "title": "Pag-subscribe",
+    "description": "Magkaroon ng access sa bawat pangunahing modelo ng AI sa pamamagitan ng isang pinagsama-samang interface. Patakbuhin ang mga advanced na modelo tulad ng Deepseek R1 nang pribado.",
+    "no_free_tier": "WALANG LIBRENG ANTAS - NAKATUTOK SA MGA PROPESYONAL.",
+    "credits_rollover": "Ang hindi nagamit na mga kredito ay maaring gamitin sa loob ng 3 buwan.",
+    "monthly_billing": "Buwanang Pagbabayad",
+    "annual_billing": "Taunang Pagbabayad",
+    "most_popular": "Pinakapopular",
+    "current": "Kasalukuyan",
+    "credits_per_month": "{{credits}} na kredito bawat buwan",
+    "subscription_renewal": "Ang iyong subscription ay nag-renew sa {{date}}",
+    "personal": "Personal",
+    "business": "Negosyo",
+    "team": "Koponan",
+    "enterprise": "Negosyo"
+  },
+  "agents": {
+    "title": "Mga Ahente",
+    "new_agent": "Bagong Ahente",
+    "manage_agents": "Pamahalaan ang mga Ahente",
+    "search_placeholder": "Maghanap ng mga ahente...",
+    "your_agents": "Iyong mga Ahente",
+    "loading": "Naglo-load ng mga ahente...",
+    "no_agents": "Walang matagpuang mga ahente",
+    "create_first": "Lumikha ng iyong unang ahente upang magsimula",
+    "agents_found": "{{count}} ahente na natagpuan",
+    "agents_found_plural": "{{count}} mga ahente na natagpuan",
+    "attached_agents": "Nakalakip na mga Ahente",
+    "listening_description": "Ang mga ahenteng ito ay nakikinig sa lahat ng mensahe sa pag-uusap na ito",
+    "no_search_results": "Walang mga ahente na tumutugma sa \"{{search}}\"",
+    "search_help": "Subukan ang ibang terminong paghahanap",
+    "no_agents_description": "Lumikha ng iyong unang ahente upang magsimula",
+    "create_agent": "Lumikha ng Ahente",
+    "click_to_attach": "I-click upang ikabit sa kasalukuyang session",
+    "click_to_detach": "I-click upang tanggalin mula sa kasalukuyang session",
+    "show_attached_agents": "Ipakita ang Nakalakip na mga Ahente",
+    "hide_attached_agents": "Itago ang Nakalakip na mga Ahente",
+    "toggle_attached_agents": "I-toggle ang Nakalakip na mga Ahente",
+    "agent_listening_tooltip": "{{name}} ay nakikinig at handang tumulong"
+  },
+  "skills": {
+    "title": "Mga Kasanayan",
+    "command_palette_description": "Pamahalaan ang mga reusable na template ng instruksyon"
+  }
+}

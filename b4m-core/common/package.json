@@ -1,0 +1,88 @@
+{
+  "name": "@bike4mind/common",
+  "version": "2.120.0",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./atlassian/config": {
+      "import": {
+        "types": "./dist/atlassian/config.d.mts",
+        "default": "./dist/atlassian/config.mjs"
+      },
+      "require": {
+        "types": "./dist/atlassian/config.d.cts",
+        "default": "./dist/atlassian/config.cjs"
+      }
+    },
+    "./jira/api": {
+      "import": {
+        "types": "./dist/jira/api.d.mts",
+        "default": "./dist/jira/api.mjs"
+      },
+      "require": {
+        "types": "./dist/jira/api.d.cts",
+        "default": "./dist/jira/api.cjs"
+      }
+    },
+    "./types/entities/RapidReplyTypes": {
+      "import": {
+        "types": "./dist/types/entities/RapidReplyTypes.d.mts",
+        "default": "./dist/types/entities/RapidReplyTypes.mjs"
+      },
+      "require": {
+        "types": "./dist/types/entities/RapidReplyTypes.d.cts",
+        "default": "./dist/types/entities/RapidReplyTypes.cjs"
+      }
+    },
+    "./types/entities/UserTypes": {
+      "import": {
+        "types": "./dist/types/entities/UserTypes.d.mts",
+        "default": "./dist/types/entities/UserTypes.mjs"
+      },
+      "require": {
+        "types": "./dist/types/entities/UserTypes.d.cts",
+        "default": "./dist/types/entities/UserTypes.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.15",
+    "react": "^19.2.6",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "dayjs": "^1.11.20",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,205 @@
+{
+  "category": "jobs",
+  "title": "Jobs & Careers z",
+  "description": "Tech company career pages and job openings",
+  "targets": [
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://careers.microsoft.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://jobs.apple.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon",
+      "ticker": "AMZN",
+      "url": "https://www.amazon.jobs/",
+      "category": "tech"
+    },
+    {
+      "company": "Alphabet (Google)",
+      "ticker": "GOOG",
+      "url": "https://careers.google.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Meta Platforms (Facebook)",
+      "ticker": "META",
+      "url": "https://www.metacareers.com/",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://www.nvidia.com/en-us/about-nvidia/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Tesla",
+      "ticker": "TSLA",
+      "url": "https://www.tesla.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://www.sap.com/about/careers.html",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://www.oracle.com/corporate/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://www.salesforce.com/company/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "IBM",
+      "ticker": "IBM",
+      "url": "https://www.ibm.com/employment/",
+      "category": "tech"
+    },
+    {
+      "company": "ServiceNow",
+      "ticker": "NOW",
+      "url": "https://www.servicenow.com/careers.html",
+      "category": "tech"
+    },
+    {
+      "company": "Palantir",
+      "ticker": "PLTR",
+      "url": "https://www.palantir.com/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Adobe",
+      "ticker": "ADBE",
+      "url": "https://www.adobe.com/careers.html",
+      "category": "tech"
+    },
+    {
+      "company": "Uber",
+      "ticker": "UBER",
+      "url": "https://www.uber.com/global/en/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "AMD",
+      "ticker": "AMD",
+      "url": "https://www.amd.com/en/corporate/careers",
+      "category": "tech"
+    },
+    {
+      "company": "CrowdStrike",
+      "ticker": "CRWD",
+      "url": "https://www.crowdstrike.com/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Palo Alto Networks",
+      "ticker": "PANW",
+      "url": "https://jobs.paloaltonetworks.com/",
+      "category": "tech"
+    },
+    {
+      "company": "Snowflake",
+      "ticker": "SNOW",
+      "url": "https://www.snowflake.com/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Zoom",
+      "ticker": "ZM",
+      "url": "https://careers.zoom.us/",
+      "category": "tech"
+    },
+    {
+      "company": "Dropbox",
+      "ticker": "DBX",
+      "url": "https://www.dropbox.com/jobs",
+      "category": "tech"
+    },
+    {
+      "company": "OpenAI",
+      "ticker": "OPENAI",
+      "url": "https://openai.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Anthropic",
+      "ticker": "ANTHROPIC",
+      "url": "https://www.anthropic.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Databricks",
+      "ticker": "DATABRICKS",
+      "url": "https://databricks.com/company/careers",
+      "category": "tech"
+    },
+    {
+      "company": "DeepMind",
+      "ticker": "DEEPMIND",
+      "url": "https://deepmind.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Scale AI",
+      "ticker": "SCALE",
+      "url": "https://scale.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Hugging Face",
+      "ticker": "HF",
+      "url": "https://huggingface.co/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Runway",
+      "ticker": "RUNWAY",
+      "url": "https://runwayml.com/careers",
+      "category": "tech"
+    },
+    {
+      "company": "UiPath",
+      "ticker": "PATH",
+      "url": "https://www.uipath.com/company/careers",
+      "category": "tech"
+    },
+    {
+      "company": "C3.ai",
+      "ticker": "AI",
+      "url": "https://c3.ai/company/careers/",
+      "category": "tech"
+    },
+    {
+      "company": "Stripe",
+      "ticker": "STRIPE",
+      "url": "https://stripe.com/jobs",
+      "category": "tech"
+    },
+    {
+      "company": "Atlassian",
+      "ticker": "TEAM",
+      "url": "https://www.atlassian.com/company/careers",
+      "category": "tech"
+    },
+    {
+      "company": "Arm",
+      "ticker": "ARM",
+      "url": "https://www.arm.com/company/careers",
+      "category": "tech"
+    }
+  ]
+}

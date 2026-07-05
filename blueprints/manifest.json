@@ -1,0 +1,89 @@
+{
+  "product": "lumina5",
+  "applied": [
+    {
+      "blueprint": "data-lake",
+      "entry": "base",
+      "blueprintHash": "5120e1e3f621",
+      "appliedAt": "2026-05-29T00:00:00.000Z",
+      "generatedFiles": [],
+      "notes": "Pre-existing reference implementation (this repo is the source the blueprint was extracted from). Recorded retroactively. Conformance fixes tracked on branch fix/data-lake-blueprint-conformance: P1 batch-correlation + manifest-population bugs, shared assertLakeAccess gate with org enforcement, feature-flag gate, two-phase delete, transitional states, atomic file claim, read-time reconciler, stat recompute."
+    },
+    {
+      "blueprint": "briefcase",
+      "entry": "base",
+      "blueprintHash": "e2846c8b7201",
+      "appliedAt": "2026-06-02T00:00:00.000Z",
+      "generatedFiles": [
+        "b4m-core/common/src/types/entities/BriefcasePromptTypes.ts",
+        "b4m-core/common/src/schemas/briefcasePrompt.ts",
+        "b4m-core/common/src/schemas/analytics/events/briefcase.ts",
+        "packages/database/src/models/BriefcasePromptModel.ts",
+        "packages/scripts/migrate/migrations/20260602000000_briefcase-indexes-and-seed.ts",
+        "b4m-core/services/src/briefcaseService/ports.ts",
+        "b4m-core/services/src/briefcaseService/briefcaseAccess.ts",
+        "b4m-core/services/src/briefcaseService/getPersonalPrompts.ts",
+        "b4m-core/services/src/briefcaseService/getCatalog.ts",
+        "b4m-core/services/src/briefcaseService/index.ts",
+        "b4m-core/services/src/briefcaseService/briefcaseService.test.ts",
+        "apps/client/pages/api/briefcase/catalog.ts",
+        "apps/client/pages/api/briefcase/prompts/index.ts",
+        "apps/client/pages/api/briefcase/prompts/[id].ts",
+        "apps/client/pages/api/briefcase/__tests__/catalog.api.test.ts",
+        "apps/client/app/utils/briefcase/promptResolution.ts",
+        "apps/client/app/utils/briefcase/referenceGuard.ts",
+        "apps/client/app/utils/briefcase/dispatchDedup.ts",
+        "apps/client/app/hooks/data/briefcase.ts",
+        "apps/client/app/components/Briefcase/useLaunchPrompt.ts",
+        "apps/client/app/components/Briefcase/BriefcaseLauncher.tsx",
+        "apps/client/app/components/Briefcase/BriefcasePanel.tsx"
+      ],
+      "notes": "Adapted to lumina5 conventions after a principal-level plan review. Key deviations from a naive apply: (1) dispatch reuses the existing useChatInput.programmaticSubmit Zustand channel (added a sibling programmaticLaunch payload) instead of a new CustomEvent module — DOM-free, race-hardened, far less invasive; (2) required-tools are passed PER-MESSAGE via a new toolsOverride on handleSendClick (no sticky LLMContext save/restore race), and an unsupported tool refuses the send with a structured toast rather than degrading; (3) visibilityScopes maps to the existing user.tags entitlement model; (4) 'hidden' execution mode is DESCOPED (reserved in the enum, treated as auto-fire) — the host send path has no server-side hidden-message support yet; follow-up needed; (5) dead display flags (suppressAuxiliaryPanels/stripIntroductoryProse) omitted — no render surface; (6) compound indexes {userId,deletedAt}/{userId,type,deletedAt}/{userId,tags,deletedAt} with type+tags in separate indexes (multikey rule); (7) API-key callers are denied personal prompts (confused-deputy) and admin bypass is isAdmin && !apiKey; (8) seed migration ships starter system prompts + minimal personal-prompt CRUD API (authoring UI deferred). Feature-gated behind EnableBriefcase (default off). Module-singleton nonce dedup + single-flight with watchdog. Guard hardening: zero-width/bidi strip, role-delimiter denylist, id-shape rejection, length cap, signal-on-trigger. Substitution is single-pass with the function-form replace."
+    },
+    {
+      "blueprint": "social-share",
+      "entry": "base",
+      "blueprintHash": "4e195c6c3317",
+      "appliedAt": "2026-06-04T17:35:05Z",
+      "generatedFiles": [
+        "apps/client/app/components/common/ShareActions.tsx",
+        "apps/client/app/components/common/PublishShareModal.tsx",
+        "apps/client/app/hooks/usePublishShare.tsx",
+        "apps/client/pages/api/publish/serve/[...path].ts"
+      ],
+      "notes": "Source of the social-share blueprint (extracted from B4M create-and-share). ShareActions in MUI Joy + sonner; renderViewerPage = the strict-CSP snapshot viewer."
+    },
+    {
+      "blueprint": "llm-citations",
+      "entry": "base",
+      "blueprintHash": "6223d09887d9",
+      "appliedAt": "2026-06-10T00:00:00.000Z",
+      "generatedFiles": [
+        "apps/client/app/components/libreoncology/citationUtils.ts",
+        "apps/client/app/components/libreoncology/citationUtils.test.ts",
+        "apps/client/app/components/libreoncology/CitedMarkdown.tsx",
+        "apps/client/app/components/libreoncology/CitedMarkdown.test.tsx"
+      ],
+      "notes": "Pattern transfer for LibreOncology pathway pages (rehypeRaw-FREE variant — the libonc boundary guard forbids rehype-raw; markers are split out of mdast text nodes so code is structurally exempt). Manifest construction adapted to the existing engine: a new generic session field citationStyle (named|indexed, EXTRACTION.md §3 procedure: SessionTypes doc-comment + zod + mongoose enum) makes KnowledgeRetrievalFeature number each distinct retrieved document in the injected context and emit the index-only prompt fragment; quest.promptMeta.citables order IS the manifest order ([N] ⇒ citables[N-1]) and the existing quest persistence + poll is the ManifestTransport seam (no version field — pre-existing wire shape). Layer-1 index verification + cited-only first-appearance reindex run CLIENT-side (prepareCitedReply) before parsing, with a graceful no-marker fallback for legacy v1 sessions; pathway surface key bumped to v2 so modules regenerate indexed. invalidIndices is surfaced for the Phase F fabrication-flag pipeline (REVIEW_PIPELINE §7) but no hot-path server post-processing step (would wedge libonc logic into the core reply path). DESCOPED as inert for this consumer: layer-2 URL liveness + the whole SSRF UrlLivenessClient (manifest sources are internal lake documents; web tools disabled on website sessions; render-time URL-scheme allowlist IS implemented in isSafeExternalHref), stripReferenceSections (prompt structure + indexed addendum forbid reference sections), mid-turn tool-source index merging (tool-retrieved citables append unnumbered — model cannot cite them, reindex hides them; known v1 limit)."
+    },
+    {
+      "blueprint": "audience-variants",
+      "entry": "base",
+      "blueprintHash": "a83401e0a616",
+      "appliedAt": "2026-06-26T00:00:00.000Z",
+      "generatedFiles": [
+        "b4m-core/common/src/types/entities/AudienceVariantTypes.ts",
+        "b4m-core/services/src/audienceVariants/variantRegistry.ts",
+        "b4m-core/services/src/audienceVariants/extractVariantForViewer.ts",
+        "b4m-core/services/src/audienceVariants/viewerClassifier.ts",
+        "b4m-core/services/src/audienceVariants/generationScoping.ts",
+        "b4m-core/services/src/audienceVariants/index.ts",
+        "b4m-core/services/src/audienceVariants/audienceVariants.test.ts",
+        "b4m-core/services/src/audienceVariants/generationScoping.test.ts",
+        "apps/client/pages/api/admin/modals/variants.ts"
+      ],
+      "notes": "Integrated into ModalModel as the primary content type for audience-personalized What's New modals. Key adaptations: (1) lumina5 has no org model — classifier uses user.tags.includes('internal') rather than an org-level isInternal DB flag; no TTL cache / index needed since the tag is already loaded by the auth middleware with no additional DB round-trip (the blueprint's cache-invalidation / TTL-downgrade / classifier-index hardening is therefore N/A here); (2) ILuminaViewerContext extends IViewerContext with userTags: string[] — classify is synchronous; (3) IModal and ModalSchema add variants: Partial<Record<string, VariantContent>> | null using Schema.Types.Mixed; (4) /api/modals/index.ts: classify viewer → extractVariantForViewer on every doc → filter nulls; fail-open to 'customer' at the call site, now logged (fail-open observability); (5) generationMetadata pre-existed on ModalModel — stripped by extractVariantForViewer without schema changes. Second pass (un-descopes earlier 6 & 7, adds the generation expansion from blueprint PR #52): (6) admin raw-variants authoring endpoint added at apps/client/pages/api/admin/modals/variants.ts — admin-gated (ensureAdmin), never applies the leak guard (GET returns the raw variants map, PUT replaces it, DELETE clears it); (7) generation-time per-variant scoping wired into the existing What's New worker — one scoped LLM call per AUDIENCE_VARIANTS key (buildVariantGuidance), NO_USER_FACING_CHANGES empty-result sentinel reused, per-variant outcome metering (VariantSuccess/NoChanges/Failed), and all variants persisted in one atomic ModalModel.create. The customer (least-privileged) variant gates the modal and is the scrubbed top-level base; internal falls back to the customer floor when absent. (8) ScrubInternalReferences seam added to AudienceVariantTypes.ts; scrubInternalReferences/scrubVariantContent applied to customer output as the write-side leak defense — DEFAULT_INTERNAL_REFERENCE_RULES seeded with repo/org tokens and PUBLIC_PRODUCT_NAME='Bike4Mind' (TODO: confirm against brand config; scrub-verification test enforces the denylist). NOTE: @bike4mind/services is consumed via built dist — rerun its build after touching the audienceVariants source. blueprintHash still reflects the first apply; bump to the merged hash once blueprint PR #52 lands."
+    }
+  ],
+  "skipped": []
+}

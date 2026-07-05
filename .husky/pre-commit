@@ -1,0 +1,66 @@
+# Block direct commits to main — all changes must go through PRs
+BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$BRANCH" = "main" ]; then
+  echo ""
+  echo "🚫 Direct commits to main are not allowed!"
+  echo "   Create a feature branch first: git checkout -b feat/my-feature"
+  echo ""
+  exit 1
+fi
+
+# Run lint-staged for code quality checks
+npx lint-staged
+
+# Initialize exit code
+FINAL_EXIT_CODE=0
+
+# Check for pnpm links in package.json
+echo "Running pnpm link check..."
+if ! . "$(dirname -- "$0")/check-pnpm-links.sh"; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Check if help articles changed without regenerating index/embeddings
+if ! . "$(dirname -- "$0")/check-help-content.sh"; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Validate help content (links, anchors, images, frontmatter) when help articles
+# or the help scripts are staged. Skipped otherwise to keep unrelated commits fast.
+HELP_STAGED=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '^(docs-site/docs/(features|admin)/.*\.md|packages/scripts/help/.*\.ts)$' || true)
+if [ -n "$HELP_STAGED" ]; then
+  echo "Running help content validation..."
+  if ! pnpm --filter @bike4mind/scripts help:validate; then
+    FINAL_EXIT_CODE=1
+  fi
+fi
+
+# Check staged files for hardcoded deprecated model IDs
+echo "Running deprecated model usage check on staged files..."
+if ! git diff --cached --name-only --diff-filter=ACM -- '*.ts' '*.tsx' '*.js' '*.mjs' '*.cjs' '*.json' | xargs -r npx tsx packages/scripts/src/checkDeprecatedModelUsage.ts --files; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Check for API files missing baseApi()
+echo "Running no-baseapi check..."
+if ! bash scripts/check-no-baseapi.sh; then
+  FINAL_EXIT_CODE=1
+fi
+
+
+
+
+# Check for account-tied IDs in shippable code (open-core readiness)
+echo "Running account-tied ID check..."
+if ! bash scripts/check-no-account-ids.sh; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Run gitleaks to check for secrets
+echo "Running gitleaks check..."
+if ! . "$(dirname -- "$0")/gitleaks-pre-commit.sh"; then
+  FINAL_EXIT_CODE=1
+fi
+
+# Exit with the final code
+exit $FINAL_EXIT_CODE

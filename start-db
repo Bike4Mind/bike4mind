@@ -1,0 +1,34 @@
+#!/bin/bash
+
+# Start the Docker Compose services
+docker compose up -d
+
+# Wait for MongoDB to start
+echo "Waiting for MongoDB to start..."
+sleep 10
+
+# Initialize the replica set
+echo "Initializing replica set..."
+docker compose exec db mongosh --eval '
+  try {
+    rs.initiate({ _id: "rs0", members: [{ _id: 0, host: "localhost:27017" }] });
+  } catch (e) {
+    if (e.codeName === "AlreadyInitialized") {
+      print("Already initialized, reconfiguring host...");
+      var cfg = rs.conf();
+      if (cfg.members[0].host !== "localhost:27017") {
+        cfg.members[0].host = "localhost:27017";
+        cfg.version = cfg.version + 1;
+        rs.reconfig(cfg, { force: true });
+        print("Reconfigured to localhost:27017");
+      } else {
+        print("Host already correct");
+      }
+    } else {
+      throw e;
+    }
+  }
+'
+
+# Verify the replica set status
+docker compose exec db mongosh --eval 'rs.status()'

@@ -1,0 +1,104 @@
+{
+  "name": "@bike4mind/utils",
+  "version": "2.28.0",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./artifactParser": {
+      "import": {
+        "types": "./dist/artifactParser.d.mts",
+        "default": "./dist/artifactParser.mjs"
+      },
+      "require": {
+        "types": "./dist/artifactParser.d.cts",
+        "default": "./dist/artifactParser.cjs"
+      }
+    },
+    "./llm/backend": {
+      "import": {
+        "types": "./dist/llm/backend.d.mts",
+        "default": "./dist/llm/backend.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/backend.d.cts",
+        "default": "./dist/llm/backend.cjs"
+      }
+    },
+    "./escapeRegex": {
+      "import": {
+        "types": "./dist/escapeRegex.d.mts",
+        "default": "./dist/escapeRegex.mjs"
+      },
+      "require": {
+        "types": "./dist/escapeRegex.d.cts",
+        "default": "./dist/escapeRegex.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "dev": "tsdown --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.1069.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1069.0",
+    "@aws-sdk/client-lambda": "^3.1069.0",
+    "@aws-sdk/client-rekognition": "^3.1069.0",
+    "@aws-sdk/client-s3": "^3.1069.0",
+    "@aws-sdk/client-sqs": "^3.1069.0",
+    "@aws-sdk/s3-request-presigner": "^3.1069.0",
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
+    "@casl/ability": "^6.8.1",
+    "@google/genai": "^1.46.0",
+    "axios": "1.16.1",
+    "cheerio": "1.2.0",
+    "csv-parse": "^6.2.1",
+    "dayjs": "^1.11.20",
+    "dotenv": "^17.4.2",
+    "file-type": "^22.0.1",
+    "jimp": "^1.6.1",
+    "lodash": "^4.18.1",
+    "mammoth": "^1.12.0",
+    "mime-types": "^3.0.2",
+    "openai": "^6.38.0",
+    "tiktoken": "^1.0.22",
+    "unpdf": "^1.6.2",
+    "uuid": "^13.0.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/aws-lambda": "^8.10.161",
+    "@types/lodash": "^4.17.24",
+    "@types/mime-types": "^3.0.1",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3"
+  }
+}

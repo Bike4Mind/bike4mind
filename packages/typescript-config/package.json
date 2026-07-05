@@ -1,0 +1,15 @@
+{
+  "name": "@bike4mind/typescript-config",
+  "version": "1.0.0",
+  "description": "Shared TypeScript configurations for Bike4Mind monorepo",
+  "private": true,
+  "files": [
+    "base.json",
+    "next.json",
+    "node.json",
+    "library.json"
+  ],
+  "publishConfig": {
+    "access": "public"
+  }
+}

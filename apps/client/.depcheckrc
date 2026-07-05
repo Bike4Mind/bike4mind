@@ -1,0 +1,8 @@
+ignores: [
+  "sharp",
+  "pdfjs-dist",
+  "eslint-plugin-next",
+  "@client/app",
+  "@public/images",
+  "tailwindcss"
+]

@@ -1,0 +1,130 @@
+name: Cloud Security Scan (Prowler Only)
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target AWS environment to scan (dev = staging account, production = prod account)'
+        required: false
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - production
+      stage:
+        description: 'PR stage for ingest target (e.g. pr1234). Results go to that PR preview URL. Leave blank to use the environment default.'
+        required: false
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  prowler:
+    name: Prowler AWS Audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Resolve environment config
+        id: env
+        env:
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_STAGE: ${{ inputs.stage }}
+        run: |
+          if [[ -n "$INPUT_STAGE" && ! "$INPUT_STAGE" =~ ^[a-z0-9]+$ ]]; then
+            echo "::error::Invalid stage input '${INPUT_STAGE}': must be lowercase alphanumeric (e.g. pr1234)"
+            exit 1
+          fi
+
+          if [ "$INPUT_ENVIRONMENT" = "production" ]; then
+            echo "role_arn=${{ vars.PROWLER_AUDIT_ROLE_ARN_PRODUCTION }}" >> $GITHUB_OUTPUT
+            DEFAULT_INGEST_URL="${{ vars.OWASP_ZAP_TARGET_PROD }}"
+          else
+            echo "role_arn=${{ vars.PROWLER_AUDIT_ROLE_ARN_STAGING }}" >> $GITHUB_OUTPUT
+            DEFAULT_INGEST_URL="${{ vars.OWASP_ZAP_TARGET }}"
+          fi
+
+          # If a PR stage is provided (e.g. "pr1234"), route ingest to that PR's preview host
+          if [[ "$INPUT_STAGE" == pr* ]]; then
+            PREVIEW_DOMAIN="${{ vars.PREVIEW_SERVER_DOMAIN }}"
+            echo "ingest_url=https://app.${INPUT_STAGE}.${PREVIEW_DOMAIN}" >> $GITHUB_OUTPUT
+            echo "ingest_stage=${INPUT_STAGE}" >> $GITHUB_OUTPUT
+          else
+            echo "ingest_url=${DEFAULT_INGEST_URL}" >> $GITHUB_OUTPUT
+            # SST stage names: dev = staging, production = production
+            if [ "$INPUT_ENVIRONMENT" = "production" ]; then
+              echo "ingest_stage=production" >> $GITHUB_OUTPUT
+            else
+              echo "ingest_stage=dev" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Configure AWS Credentials for Prowler
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.env.outputs.role_arn }}
+          aws-region: us-east-2
+
+      - name: AWS Config Audit (Prowler)
+        env:
+          AWS_DEFAULT_REGION: 'us-east-2'
+        run: |
+          mkdir -p security-reports/compliance
+          chmod o+w security-reports
+          docker run --rm \
+            -e AWS_ACCESS_KEY_ID \
+            -e AWS_SECRET_ACCESS_KEY \
+            -e AWS_SESSION_TOKEN \
+            -e AWS_DEFAULT_REGION \
+            -v "$PWD/security-reports:/home/prowler/output" \
+            prowlercloud/prowler:5.24.4 \
+            aws --severity critical high --services iam s3 apigateway dynamodb -M json-ocsf --ignore-exit-code-3
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Configure npm authentication
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+          pnpm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+
+      - name: Install Dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Ingest Prowler findings into Security Dashboard
+        continue-on-error: true
+        env:
+          INGEST_BASE_URL: ${{ steps.env.outputs.ingest_url }}
+          PROWLER_STAGE: ${{ steps.env.outputs.ingest_stage }}
+          SECOPS_PROWLER_INGEST_TOKEN: ${{ secrets.SECOPS_PROWLER_INGEST_TOKEN }}
+        run: |
+          echo "Ingest target: $INGEST_BASE_URL (stage: $PROWLER_STAGE)"
+          PROWLER_JSON=$(find security-reports -maxdepth 2 -name "*.json" \
+            -not -name "gitleaks*" \
+            -not -name "*.asff.json" \
+            2>/dev/null | head -1)
+          if [ -z "$PROWLER_JSON" ]; then
+            echo "No Prowler output found — skipping ingest"
+            exit 0
+          fi
+          echo "Ingesting Prowler findings from: $PROWLER_JSON"
+          node scripts/prowler-summarize-and-ingest.mjs "$PROWLER_JSON"
+
+      - name: Upload Prowler Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: prowler-report-${{ inputs.environment }}
+          path: security-reports/

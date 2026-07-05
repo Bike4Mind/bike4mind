@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Налаштування ШІ",
+    "session": "Нотатник",
+    "session_plural": "Нотатники",
+    "favorite": "Улюблене",
+    "unfavorite": "Не улюблене",
+    "favorites": "Улюблені",
+    "favorites_count_one": "{{count}} Улюблений",
+    "favorites_count_other": "{{count}} Улюблені",
+    "currentSession": "Поточний",
+    "other": "Інші теги",
+    "text_model": "Текстова модель",
+    "image_model": "Модель зображення",
+    "ai_image": "AI Зображення",
+    "switch_to": "Переключитися на {{ name }}"
+  },
+  "guide": {
+    "title": "Guide"
+  },
+  "intro": {
+    "title": "Úvod"
+  },
+  "developers": {
+    "title": "Vývojáři",
+    "technical_docs": "Технічна документація"
+  },
+  "changelog": {
+    "title": "Změny"
+  },
+  "feedback": {
+    "send": "Odeslat zpětnou vazbu"
+  },
+  "terms_policies": "Podmínky a zásady",
+  "login": "Увійти",
+  "file": "Знання",
+  "forgotPassword": "Забули пароль",
+  "signup": "Зареєструватися",
+  "help": "Допомога",
+  "manual": "Посібник",
+  "inviteLong": "Запросити друга",
+  "inviteShort": "Запросити",
+  "tools": {
+    "title": "Інструменти"
+  },
+  "sidenav": {
+    "pin": "Закріпити бокову панель",
+    "unpin": "Відкріпити бокову панель",
+    "sessions": {
+      "sort": {
+        "label": "Сортувати за",
+        "tags": "За тегами",
+        "date": "За датою"
+      },
+      "new": "Новий чат",
+      "item": {
+        "genTags": "Сгенерувати список тегів для блокноту"
+      }
+    }
+  },
+  "referral": {
+    "title": "Запросіть друга до",
+    "email_title_default": "Ласкаво просимо до GrokTool!",
+    "email_body_default": "Вас запрошено USER_NAME до GrokTool! ПОСИЛАННЯ ДЛЯ РЕЄСТРАЦІЇ: Використовуйте наступний код запрошення для реєстрації: INVITE_CODE",
+    "friend_email": "Електронна пошта друга",
+    "num_referrals_available": "Доступно рефералів:",
+    "no_valid_emails_error": "Будь ласка, введіть дійсну електронну адресу",
+    "send_referral": "Надіслати реферал",
+    "send_referral_success": "Реферал успішно надіслано!",
+    "send_referral_skipped": "{{count}} запрошення пропущено — ці електронні адреси вже мають обліковий запис.",
+    "send_referral_failed": "Не вдалося надіслати {{count}} запрошення(нь). Будь ласка, спробуйте ще раз.",
+    "send_referral_error": "Помилка при відправленні реферала. Будь ласка, спробуйте знову.",
+    "slack_notification_default": "Реферал відправлений користувачем USER_NAME:USER_ID до FRIEND_EMAIL"
+  },
+  "activateVoice": "Активувати цей голос",
+  "liveVoice": "Прямий звук",
+  "whatsNew": "Що нового",
+  "welcome": "Ласкаво просимо до {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Підключення",
+      "1": "Підключено",
+      "2": "Відключення",
+      "3": "Відключено",
+      "-1": "В очікуванні"
+    },
+    "networkStatus": "Мережа: {{ status }}"
+  },
+  "deleteVoice": "Видалити цей голос",
+  "deleteVoiceConfirm": "Ви впевнені, що хочете видалити цей голос?",
+  "organization": {
+    "organizations": "Команди",
+    "defaultName": "Моя організація",
+    "shared": "Спільно зі мною",
+    "create": "Створити команду",
+    "search": "Пошук команд...",
+    "no_organizations": "Команд не знайдено",
+    "view_details": "Переглянути деталі",
+    "x_seats": "{{count}} місць",
+    "active_subscription": "Активна підписка",
+    "no_subscription": "Немає підписки",
+    "x_members": "{{count}} учасників",
+    "x_credits": "{{count}} кредитів",
+    "owner": "Власник"
+  },
+  "session": {
+    "typeYourMessage": "Введіть ваше повідомлення тут",
+    "switchedSession": "Перемкнуто на: {{ sessionName }}",
+    "send": "Надіслати",
+    "sendMessage": "Надіслати повідомлення",
+    "preparingQuest": "Підготовка квесту...",
+    "rephrasePrompt": "Оптимізуйте свій запит",
+    "promptRephrased": "Запит успішно перефразовано",
+    "rephraseFailed": "Не вдалося перефразувати запит",
+    "errors": {
+      "notebookDeleted": "Цей блокнот було видалено. Будь ласка, створіть новий.",
+      "noPermission": "У вас немає дозволу на доступ до цього блокнота.",
+      "invalidRequest": "Невірний запит. Будь ласка, спробуйте ще раз.",
+      "tooManyRequests": "Забагато запитів. Будь ласка, зачекайте хвилину і спробуйте ще раз.",
+      "serverError": "Помилка сервера. Будь ласка, спробуйте пізніше.",
+      "networkError": "Не вдалося відправити повідомлення. Будь ласка, перевірте з’єднання.",
+      "sendFailed": "Не вдалося відправити повідомлення. Будь ласка, спробуйте ще раз."
+    }
+  },
+  "projects": {
+    "title": "Проєкт",
+    "projects": "Проекти",
+    "joined_projects": "Приєднані Проєкти",
+    "no_joined_projects": "Ще немає приєднаних проєктів",
+    "add_to_project": "Add to Project",
+    "modals": {
+      "files": {
+        "title": "Add Files to Project",
+        "subtitle": "Select files to add to your project",
+        "button_label": "Add Files",
+        "search_placeholder": "Search files",
+        "no_files": "No files found."
+      },
+      "members": {
+        "title": "Add Members to Project",
+        "subtitle": "Search and select users to add to your project",
+        "button_label": "Add Members",
+        "search_placeholder": "Search users",
+        "no_members": "Try searching for a user."
+      },
+      "sessions": {
+        "title": "Add Notebook to a Project",
+        "subtitle": "Select notebooks to add to your project or create a new one",
+        "button_label": "Add Notebooks",
+        "search_placeholder": "Search",
+        "create_button": "Create",
+        "no_notebooks": "No notebooks found. Try creating a new one."
+      },
+      "generic": {
+        "select_all": "Select All",
+        "unselect_all": "Unselect All",
+        "add_items_one": "Додати {{count}} елемент",
+        "add_items_other": "Додати {{count}} елементи",
+        "delete_items": "Delete {{count}} items"
+      }
+    }
+  },
+  "logout": "Вийти",
+  "inbox": {
+    "title": "Вхідні",
+    "messages": "Повідомлення",
+    "invites": "Запрошення",
+    "sendMessage": "Надіслати повідомлення",
+    "noMessages": "Немає повідомлень"
+  },
+  "addSomething": "Додати {{ name }}",
+  "deleteAllSomething": "Видалити всі {{ name }}",
+  "exportAllSomething": "Експортувати всі {{ name }}",
+  "importLLMHistory": "Імпортувати історію LLM",
+  "downloadAllSomething": "Завантажити всі {{ name }}",
+  "language": {
+    "language_settings": "Language Settings",
+    "change-language": "Змінити мову"
+  },
+  "theme": {
+    "turn-dark": "Увімкнути темний режим",
+    "turn-light": "Увімкнути світлий режим"
+  },
+  "auth": {
+    "usernameOrEmail": "Ім'я користувача або електронна пошта",
+    "username": "Ім'я користувача",
+    "password": "Пароль",
+    "confirmPassword": "Підтвердити пароль",
+    "fullName": "Повне ім'я",
+    "inviteCode": "Код запрошення",
+    "needCode": "Потрібен код?",
+    "noAccount": "Немає облікового запису?",
+    "haveAccount": "Вже маєте обліковий запис?",
+    "loginWithProvider": "Увійти за допомогою {{ provider }}",
+    "checking": "Перевірка...",
+    "continue": "Продовжити",
+    "troubleSigningIn": "Проблеми з входом?",
+    "signingInAs": "Вхід як",
+    "signingIn": "Вхід...",
+    "backToEmail": "Повернутися до електронної пошти",
+    "redirectingToProvider": "Перенаправлення до входу вашої організації...",
+    "resetInstructions": "Будь ласка, введіть свою електронну адресу. Ми надішлемо вам електронний лист для скидання пароля.",
+    "sendResetEmail": "Надіслати електронний лист для скидання пароля",
+    "email": "Електронна пошта",
+    "resetEmailSentMessage": "Електронний лист відправлено! Будь ласка, перевірте свою електронну пошту для подальших інструкцій",
+    "createAccountDesc": "Створити обліковий запис",
+    "createBtn": "Створити обліковий запис",
+    "loginBtn": "Увійти",
+    "passwordStrength": {
+      "label": "Надійність пароля",
+      "weak": "Слабкий",
+      "fair": "Задовільний",
+      "strong": "Сильний"
+    },
+    "passwordRequirements": {
+      "title": "Вимоги до пароля",
+      "minLength": "Не менше {{count}} символів",
+      "uppercase": "Одна велика літера",
+      "lowercase": "Одна мала літера",
+      "number": "Одна цифра",
+      "specialChar": "Один спеціальний символ",
+      "met": "виконано",
+      "notMet": "ще не виконано"
+    },
+    "errors": {
+      "usernameExists": "Ім'я користувача '{{username}}' вже зайнято. Будь ласка, виберіть інше ім'я користувача.",
+      "emailExists": "Обліковий запис з електронною адресою '{{email}}' вже існує. Будь ласка, використайте іншу електронну адресу або увійдіть у свій існуючий обліковий запис.",
+      "accountExists": "Обліковий запис з цими даними вже існує. Будь ласка, спробуйте увійти або використайте інші дані.",
+      "invalidInviteCode": "Запрошувальний код, який ви ввели, є недійсним або термін дії його закінчився. Будь ласка, перевірте та спробуйте ще раз.",
+      "registrationFailed": "Реєстрація не вдалася. Будь ласка, спробуйте ще раз пізніше.",
+      "validation": {
+        "generic": "Недійсний ввід",
+        "invalidUsername": "Ім'я користувача може містити лише літери, цифри, підкреслення, крапки та дефіси",
+        "passwordMismatch": "Паролі не співпадають",
+        "passwordRequirements": "Пароль повинен містити не менше 8 символів, включаючи великі та малі літери, цифру та спеціальний символ"
+      }
+    }
+  },
+  "search": "Пошук",
+  "share": "Поділитися",
+  "rename": "Перейменувати",
+  "favorite": "Улюблене",
+  "unfavorite": "Не улюблене",
+  "delete": "Видалити",
+  "files": {
+    "showAttachedFiles": "Показати вкладені файли",
+    "hideAttachedFiles": "Сховати вкладені файли",
+    "title": "Файли",
+    "upload": "Завантажити файли",
+    "long_title": "Браузер файлів"
+  },
+  "view": "Перегляд",
+  "info": "Інформація",
+  "clone": "Клонувати",
+  "download": "Завантажити",
+  "summarize": "Підсумувати",
+  "profile": {
+    "title": "Профіль",
+    "tooltip": "Профіль",
+    "collection": "Колекція",
+    "collections": {
+      "all_types": "Усі типи"
+    },
+    "users_profile": "Профіль {{ name }}",
+    "storage_used": "Використане Місце",
+    "credits": "Кредити",
+    "subscription": "Subscription",
+    "edit": "Редагувати профіль",
+    "manage_subscription": "Manage Subscription",
+    "upgrade": "Оновити",
+    "credit_analytics": "Аналітика кредитів",
+    "pricing": "Ціни на кредити",
+    "show_purchases": "Показати покупки",
+    "show_usage": "Показати використання",
+    "show_combined": "Показати комбіновані",
+    "buy_credits": "Buy Credits"
+  },
+  "community": {
+    "title": "Спільнота",
+    "tooltip": "Спільнота",
+    "feed": "Спільнотовий потік"
+  },
+  "subscriptions": {
+    "title": "Підписки",
+    "expires_on": "Expires on {{ date }}",
+    "renews_on": "Renews on {{ date }}"
+  },
+  "billing": {
+    "title": "Billing"
+  },
+  "credits": {
+    "title": "Кредити",
+    "usage": "Використання кредитів",
+    "analytics": "Аналітика кредитів",
+    "analytics_tooltip": "Перегляньте використання кредитів з часом",
+    "current_balance": "Поточний залишок кредитів",
+    "credits": "кредитів",
+    "usage_by_model": "Використання за моделлю",
+    "no_transactions": "У цьому періоді немає кредитних транзакцій",
+    "model_pricing": "Ціни на моделі",
+    "text_models": "Текстові моделі",
+    "image_models": "Зображення моделі",
+    "pricing_per_1k_tokens": "Ціни вказані у кредитах за 1,000 токенів",
+    "pricing_per_generation": "Ціни вказані у кредитах за генерацію зображення",
+    "model_name": "Назва моделі",
+    "price_tier": "Цінова категорія",
+    "input_cost": "Вартість вводу",
+    "output_cost": "Вартість виводу",
+    "generation_cost": "Вартість генерації",
+    "no_models_available": "Моделі недоступні",
+    "pricing_note": "Примітка: Ціни є приблизними і можуть варіюватися в залежності від параметрів моделі. Цінові категорії: $ (найнижча), $$ (середня), $$$ (преміум).",
+    "burn_rate": "Щоденне використання (темп споживання)",
+    "days_remaining": "Оцінка залишених днів",
+    "usage_pattern": "Виходячи з вашого шаблону використання за останні {{days}} днів",
+    "credits_used": "Використані кредити",
+    "credits_purchased": "Кредити придбані",
+    "net_credits": "Чисті кредити"
+  },
+  "time": {
+    "last_7_days": "Останні 7 днів",
+    "last_30_days": "Останні 30 днів",
+    "last_90_days": "Останні 90 днів",
+    "last_180_days": "Останні 180 днів",
+    "last_365_days": "Останні 365 днів"
+  },
+  "common": {
+    "date": "Дата",
+    "refresh": "Оновити",
+    "days": "дні",
+    "cancel": "Скасувати",
+    "save": "Зберегти",
+    "delete": "Видалити",
+    "edit": "Редагувати",
+    "close": "Закрити",
+    "submit": "Відправити",
+    "loading": "Завантаження...",
+    "error": "Помилка",
+    "success": "Успіх"
+  },
+  "errors": {
+    "failed_to_load_data": "Не вдалося завантажити дані. Спробуйте ще раз пізніше."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Ваше підключення Atlassian минуло. Будь ласка, підключіть обліковий запис знову."
+    }
+  },
+  "credits_modal": {
+    "title": "Дополнительные кредиты",
+    "description": "Purchase additional credits to continue using our advanced AI models and features. Credits are used for model inference and special features, with different models consuming varying amounts based on complexity.",
+    "current_credits": "Текущая сумма кредитов",
+    "best_value": "Лучшее значение",
+    "purchase_success": "Куплено {{credits}} кредитов",
+    "history_title": "История покупок кредитов",
+    "purchase": "Покупка",
+    "no_transactions": "Нет транзакций",
+    "low_credits": "Ваші кредити низькі",
+    "low_credits_sub": "Купіть більше кредитів, щоб продовжити роботу.",
+    "no_credits": "Немає кредитів",
+    "no_credits_sub": "Купіть кредити, щоб продовжити роботу.",
+    "status": {
+      "completed": "Завершено",
+      "pending": "В ожидании",
+      "failed": "Не удалось"
+    }
+  },
+  "settings": {
+    "title": "Налаштування",
+    "tooltip": "Налаштування",
+    "main": "Основні налаштування",
+    "account": "Account",
+    "ai_features": "AI Features",
+    "connected_apps": {
+      "title": "Підключені програми",
+      "link": "Посилання",
+      "unlink": "Відключити"
+    },
+    "developer_tools": "Developer Tools",
+    "experimental_features": {
+      "title": "Experimental Features",
+      "tooltip": "Експериментальні функції",
+      "header": "Експериментальні функції",
+      "beta_features": {
+        "title": "Бета-функції",
+        "subtitle": "Ці функції ще знаходяться у розробці і можуть призвести до непередбачуваних результатів. Вибір їх активації означає, що ви погоджуєтеся використовувати їх у їх поточному стані."
+      }
+    },
+    "ui_preferences": "UI Preferences"
+  },
+  "mementos": {
+    "title": "Спогади",
+    "tooltip": "Спогади"
+  },
+  "admin": {
+    "title": "Адміністратор",
+    "tooltip": "Налаштування адміністратора"
+  },
+  "speech": {
+    "title": "Мова",
+    "tooltip": "Мова в текст та текст у мову"
+  },
+  "instructions": {
+    "title": "Інструкції",
+    "tooltip": "Інструкції"
+  },
+  "friends": {
+    "add_friend": "Додати до Друзів",
+    "unfriend": "Прибрати з Друзів",
+    "pending_request": "Очікує Запит Дружби",
+    "all": "Усі Друзі",
+    "pending": "В очікуванні"
+  },
+  "notebooks": {
+    "view_info": "View Notebook Information",
+    "clone": "Clone Notebook",
+    "download": "Download Notebook",
+    "summarize": "Summarise Notebook",
+    "delete": "Delete Notebook",
+    "delete_confirm": "Are you sure you want to permanently delete \"{{ name }}\"? This action cannot be undone.",
+    "auto_rename": "Перейменувати за допомогою AI"
+  },
+  "add_friend": {
+    "title": "Add a Friend",
+    "friend_email": "Friend's Email Address",
+    "message": "Message",
+    "cancel": "Cancel",
+    "send": "Send",
+    "email_placeholder": "Enter your friend's email address",
+    "message_placeholder": "Enter your message"
+  },
+  "file_browser": {
+    "my_files": "My Files",
+    "shared_with_me": "Shared with Me",
+    "total_files": "Total Knowledge Items",
+    "search_placeholder": "Search by name or tag...",
+    "file_type": "File Type",
+    "all_files": "All Files",
+    "text": "Text",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Image",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Date Created",
+    "size": "Size",
+    "name": "Name",
+    "sort_z_to_a": "Sort Z to A",
+    "sort_a_to_z": "Sort A to Z",
+    "grid_view": "Grid View",
+    "list_view": "List View",
+    "select_file_hint": "By tapping, select file or multiple files and add them to your notebook session!",
+    "session_one": "Notebook",
+    "session_other": "Notebooks",
+    "no_files_available": "No files available",
+    "count_file_selected_one": "{{count}} файл обрано",
+    "count_file_selected_other": "{{count}} файлів обрано",
+    "add_count_file_one": "Додати {{count}} файл",
+    "add_count_file_other": "Додати {{count}} файлів",
+    "delete_count_file_one": "Видалити {{count}} файл",
+    "delete_count_file_other": "Видалити {{count}} файлів",
+    "share_count_file_one": "Поділитися {{count}} файлом",
+    "share_count_file_other": "Поділитися {{count}} файлами",
+    "count_file_one": "{{count}} файл",
+    "count_file_other": "{{count}} файлів",
+    "add_to_session_success": "Adding file: {{fileNames}} to {{sessionName}}",
+    "add_file_success": "Adding file: {{fileNames}}",
+    "browse_files": "Brouse Fyles",
+    "create_new_knowledge": "Створити",
+    "create_new_knowledge_from_url": "Скористатися URL",
+    "enter_url": "Введіть URL",
+    "create_file": "Створити файл",
+    "create_file_from_url": "Створити файл",
+    "create_from_url": "Швидке збирання",
+    "research": "Дослідження",
+    "open_research": "Відкрити дослідження",
+    "url_success": "Успішно створено знання з URL: {{url}}",
+    "url_error": "Не вдалося створити знання з URL: {{url}}",
+    "url_required": "Будь ласка, введіть URL",
+    "previous": "Попередня",
+    "next": "Наступна",
+    "page_of": "Сторінка {{current}} з {{total}}",
+    "drop_files_here": "Перетягніть файли сюди",
+    "tagging": "Позначення...",
+    "tag_files": "Позначити файли",
+    "select_all": "Вибрати все",
+    "unselect_all": "Скасувати вибір",
+    "add_files": "Додати файли",
+    "add_files_to_notebook_one": "Додати {{count}} файл до блокнота",
+    "add_files_to_notebook_other": "Додати {{count}} файлів до блокнота",
+    "in_project": "У проєкті"
+  },
+  "file_properties": {
+    "title": "File Properties",
+    "make_instructions": "Make into Instructions?",
+    "instruction_priority": "Instruction Priority (0–999)",
+    "priority_levels": {
+      "global": "0-100: Global Instructions",
+      "group": "101-300: Group/Company Instructions",
+      "project": "301-500: Project Instructions",
+      "user": "501-999: User Instructions"
+    },
+    "save": "Save",
+    "update_success": "Updated system priority for \"{{fileName}}\".",
+    "update_error": "Failed to update system priority."
+  },
+  "file_actions": {
+    "notes": "Примітки",
+    "notes_placeholder": "Додайте примітки про цей файл...",
+    "add_notes": "Додати примітки",
+    "add_note": "Додати примітку",
+    "edit_notes": "Редагувати примітки",
+    "notes_save_error": "Не вдалося зберегти примітки",
+    "manage_tags": "Керувати тегами",
+    "tags": "Manage Tags",
+    "tags_placeholder": "Введіть назви тегів через кому...",
+    "add_tag_one": "Updated tag for {{count}} файл",
+    "add_tag_other": "Updated tag for {{count}} файлів",
+    "failed_to_add_tag_one": "Не вдалося оновити тег для файлу",
+    "failed_to_add_tag_other": "Не вдалося оновити тег для файлів",
+    "cancel": "Скасувати",
+    "save": "Зберегти",
+    "download": "Завантажити",
+    "vectorize": "Vectorize",
+    "instruction": "Instructshun {{priority}}",
+    "chunked": "Chunked",
+    "not_chunked": "Not Chunked"
+  },
+  "subscription_modal": {
+    "title": "Abonnement",
+    "description": "Accédez à tous les principaux modèles d'IA via une interface unifiée. Exécutez des modèles avancés comme Deepseek R1 en toute confidentialité.",
+    "no_free_tier": "AUCUN NIVEAU GRATUIT - CONCENTRÉ SUR LES PROFESSIONNELS.",
+    "credits_rollover": "Les crédits non utilisés se reportent pendant 3 mois.",
+    "monthly_billing": "Facturation Mensuelle",
+    "annual_billing": "Facturation Annuelle",
+    "most_popular": "Le Plus Populaire",
+    "current": "Actuel",
+    "credits_per_month": "{{credits}} crédits par mois",
+    "subscription_renewal": "Votre abonnement se renouvelle le {{date}}",
+    "personal": "Особистий",
+    "business": "Бізнес",
+    "team": "Команда",
+    "enterprise": "Підприємство"
+  },
+  "agents": {
+    "title": "Агенти",
+    "new_agent": "Новий агент",
+    "manage_agents": "Керувати агентами",
+    "search_placeholder": "Пошук агентів...",
+    "your_agents": "Ваші агенти",
+    "loading": "Завантаження агентів...",
+    "no_agents": "Агентів не знайдено",
+    "create_first": "Створіть свого першого агента, щоб почати",
+    "agents_found": "{{count}} агент знайдено",
+    "agents_found_plural": "{{count}} агентів знайдено",
+    "attached_agents": "Прикріплені агенти",
+    "listening_description": "Ці агенти слухають усі повідомлення в цій розмові",
+    "no_search_results": "Немає агентів, які відповідають \"{{search}}\"",
+    "search_help": "Спробуйте інший пошуковий запит",
+    "no_agents_description": "Створіть свого першого агента, щоб почати",
+    "create_agent": "Створити агента",
+    "click_to_attach": "Натисніть, щоб прикріпити до поточної сесії",
+    "click_to_detach": "Натисніть, щоб від'єднати від поточної сесії",
+    "show_attached_agents": "Показати прикріплених агентів",
+    "hide_attached_agents": "Сховати прикріплених агентів",
+    "toggle_attached_agents": "Перемикати прикріплених агентів",
+    "agent_listening_tooltip": "{{name}} слухає та готовий допомогти"
+  },
+  "skills": {
+    "title": "Навички",
+    "command_palette_description": "Керування шаблонами інструкцій для повторного використання"
+  }
+}

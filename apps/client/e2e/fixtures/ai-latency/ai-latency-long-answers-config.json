@@ -1,0 +1,101 @@
+{
+  "thresholdSec": 60,
+  "prompts": [
+    {
+      "id": "seoul-itinerary",
+      "prompt": "Plan a 3 day itinerary for Seoul, South Korea",
+      "expectedKeywords": ["Day 1", "Day 2", "Day 3", "Seoul"]
+    },
+    {
+      "id": "narita-transport",
+      "prompt": "List the options to get to Tokyo from Narita Airport",
+      "expectedKeywords": ["Narita Express", "train", "bus", "limousine", "Skyliner"]
+    },
+    {
+      "id": "pork-sinigang",
+      "prompt": "Give me a recipe on how to cook pork sinigang",
+      "expectedKeywords": ["tamarind", "pork", "onion", "tomato", "kangkong"]
+    },
+    {
+      "id": "mount-fuji-climb",
+      "prompt": "Explain how to climb Mount Fuji as a first-time visitor",
+      "expectedKeywords": ["trail", "station", "summit", "season", "Yoshida"]
+    },
+    {
+      "id": "bali-travel-guide",
+      "prompt": "Write a travel guide for first-time visitors to Bali, Indonesia",
+      "expectedKeywords": ["temple", "Ubud", "Seminyak", "beach", "Kuta"]
+    },
+    {
+      "id": "home-workout-plan",
+      "prompt": "Create a 5-day beginner home workout plan with no equipment",
+      "expectedKeywords": ["Day 1", "pushup", "squat", "cardio", "rest"]
+    },
+    {
+      "id": "new-york-city-guide",
+      "prompt": "Write a guide for first-time visitors to New York City, USA",
+      "expectedKeywords": [
+        "central park",
+        "empire state building",
+        "statue of liberty",
+        "grand central station",
+        "Times Square"
+      ]
+    },
+    {
+      "id": "italian-pasta-recipe",
+      "prompt": "Provide a recipe for making authentic Italian pasta from scratch",
+      "expectedKeywords": [
+        "flour",
+        "eggs",
+        "salt",
+        "olive oil",
+        "dough"
+      ]
+    },
+    {
+      "id": "japanese-sushi-recipe",
+      "prompt": "Provide a recipe for making authentic Japanese sushi from scratch",
+      "expectedKeywords": [
+        "rice",
+        "nori",
+        "vinegar",
+        "fish",
+        "sushi rolls"
+      ]
+    },
+    {
+      "id": "healthy-lifestyle-guide",
+      "prompt": "Explain how to build and maintain a healthy lifestyle, including diet, exercise, sleep, and mental well-being",
+      "expectedKeywords": [
+        "nutrition",
+        "exercise",
+        "sleep",
+        "hydration",
+        "balance"
+      ]
+    },
+    {
+      "id": "learn-programming-beginner",
+      "prompt": "Describe how a complete beginner can start learning programming and eventually become job-ready",
+      "expectedKeywords": [
+        "basics",
+        "practice",
+        "projects",
+        "languages",
+        "consistency"
+      ]
+    },
+    {
+      "id": "financial-planning-basics",
+      "prompt": "Provide a detailed guide on personal financial planning, including budgeting, saving, and investing strategies",
+      "expectedKeywords": [
+        "budget",
+        "savings",
+        "investment",
+        "expenses",
+        "goals"
+      ]
+    }
+  ]
+}

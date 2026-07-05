@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Cài đặt AI",
+    "session": "Sổ tay",
+    "session_plural": "Sổ tay",
+    "favorite": "Yêu thích",
+    "unfavorite": "Bỏ yêu thích",
+    "favorites": "Danh sách yêu thích",
+    "favorites_count_one": "{{count}} Yêu thích",
+    "favorites_count_other": "{{count}} Lượt yêu thích",
+    "currentSession": "Hiện tại",
+    "other": "Thẻ khác",
+    "text_model": "Mô hình văn bản",
+    "image_model": "Mô hình hình ảnh",
+    "ai_image": "Hình ảnh AI",
+    "switch_to": "Chuyển đến {{ name }}"
+  },
+  "guide": {
+    "title": "Hướng dẫn"
+  },
+  "intro": {
+    "title": "Giới thiệu"
+  },
+  "developers": {
+    "title": "Nhà phát triển",
+    "technical_docs": "Tài liệu kỹ thuật"
+  },
+  "changelog": {
+    "title": "Nhật ký thay đổi"
+  },
+  "feedback": {
+    "send": "Gửi phản hồi"
+  },
+  "terms_policies": "Điều khoản & Chính sách",
+  "login": "Đăng nhập",
+  "file": "Kiến thức",
+  "forgotPassword": "Quên mật khẩu",
+  "signup": "Đăng ký",
+  "help": "Trợ giúp",
+  "manual": "Hướng dẫn sử dụng",
+  "inviteLong": "Mời bạn bè",
+  "inviteShort": "Mời",
+  "tools": {
+    "title": "Công cụ"
+  },
+  "sidenav": {
+    "pin": "Ghim thanh bên",
+    "unpin": "Bỏ ghim thanh bên",
+    "sessions": {
+      "sort": {
+        "label": "Sắp xếp theo",
+        "tags": "Theo thẻ",
+        "date": "Theo ngày"
+      },
+      "new": "Trò chuyện mới",
+      "item": {
+        "genTags": "Tạo danh sách thẻ Notebook"
+      }
+    }
+  },
+  "referral": {
+    "title": "Giới thiệu bạn bè đến",
+    "email_title_default": "Chào mừng đến với GrokTool!",
+    "email_body_default": "Bạn đã được USER_NAME mời đến GrokTool! LINK ĐĂNG KÝ: Sử dụng mã mời sau để đăng ký: INVITE_CODE",
+    "friend_email": "Email của bạn bè",
+    "num_referrals_available": "Số lượng giới thiệu có sẵn:",
+    "no_valid_emails_error": "Vui lòng nhập địa chỉ email hợp lệ",
+    "send_referral": "Gửi giới thiệu",
+    "send_referral_success": "Gửi giới thiệu thành công!",
+    "send_referral_skipped": "{{count}} lời mời bị bỏ qua — những địa chỉ email đó đã có tài khoản.",
+    "send_referral_failed": "{{count}} lời mời không thể gửi. Vui lòng thử lại.",
+    "send_referral_error": "Lỗi khi gửi giới thiệu. Vui lòng thử lại.",
+    "slack_notification_default": "Giới thiệu gửi bởi người dùng USER_NAME:USER_ID đến FRIEND_EMAIL"
+  },
+  "activateVoice": "Kích hoạt giọng này",
+  "liveVoice": "Giọng trực tiếp",
+  "whatsNew": "Có gì mới",
+  "welcome": "Chào mừng đến với {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Đang kết nối",
+      "1": "Đã kết nối",
+      "2": "Đang ngắt kết nối",
+      "3": "Đã ngắt kết nối",
+      "-1": "Đang chờ"
+    },
+    "networkStatus": "Mạng: {{ status }}"
+  },
+  "deleteVoice": "Xóa giọng này",
+  "deleteVoiceConfirm": "Bạn có chắc chắn muốn xóa giọng này không?",
+  "organization": {
+    "organizations": "Nhóm",
+    "defaultName": "Tổ chức của tôi",
+    "shared": "Chia sẻ với tôi",
+    "create": "Tạo nhóm",
+    "search": "Tìm kiếm nhóm...",
+    "no_organizations": "Không tìm thấy nhóm",
+    "view_details": "Xem chi tiết",
+    "x_seats": "{{count}} chỗ ngồi",
+    "active_subscription": "Đăng ký đang hoạt động",
+    "no_subscription": "Không có đăng ký",
+    "x_members": "{{count}} thành viên",
+    "x_credits": "{{count}} tín dụng",
+    "owner": "Chủ sở hữu"
+  },
+  "session": {
+    "typeYourMessage": "Nhập tin nhắn của bạn ở đây",
+    "switchedSession": "Đã chuyển sang: {{ sessionName }}",
+    "send": "Gửi",
+    "sendMessage": "Gửi tin nhắn",
+    "preparingQuest": "Đang chuẩn bị nhiệm vụ...",
+    "rephrasePrompt": "Tối ưu hóa đầu vào của bạn",
+    "promptRephrased": "Đã viết lại câu hỏi thành công",
+    "rephraseFailed": "Không thể viết lại câu hỏi",
+    "errors": {
+      "notebookDeleted": "Sổ tay này đã bị xóa. Vui lòng tạo một sổ tay mới.",
+      "noPermission": "Bạn không có quyền truy cập sổ tay này.",
+      "invalidRequest": "Yêu cầu không hợp lệ. Vui lòng thử lại.",
+      "tooManyRequests": "Quá nhiều yêu cầu. Vui lòng đợi một lúc và thử lại.",
+      "serverError": "Lỗi máy chủ. Vui lòng thử lại sau.",
+      "networkError": "Không gửi được tin nhắn. Vui lòng kiểm tra kết nối của bạn.",
+      "sendFailed": "Không gửi được tin nhắn. Vui lòng thử lại."
+    }
+  },
+  "projects": {
+    "title": "Dự án",
+    "projects": "Dự án",
+    "joined_projects": "Dự án đã tham gia",
+    "no_joined_projects": "Chưa có dự án nào tham gia",
+    "add_to_project": "Thêm vào Dự án",
+    "modals": {
+      "files": {
+        "title": "Thêm tệp vào dự án",
+        "subtitle": "Chọn tệp để thêm vào dự án của bạn",
+        "button_label": "Thêm tệp",
+        "search_placeholder": "Tìm kiếm tệp",
+        "no_files": "Không tìm thấy tệp nào."
+      },
+      "members": {
+        "title": "Thêm thành viên vào dự án",
+        "subtitle": "Tìm kiếm và chọn người dùng để thêm vào dự án của bạn",
+        "button_label": "Thêm thành viên",
+        "search_placeholder": "Tìm kiếm người dùng",
+        "no_members": "Hãy thử tìm kiếm một người dùng."
+      },
+      "sessions": {
+        "title": "Thêm sổ tay vào dự án",
+        "subtitle": "Chọn sổ tay để thêm vào dự án của bạn hoặc tạo một cái mới",
+        "button_label": "Thêm sổ tay",
+        "search_placeholder": "Tìm kiếm",
+        "create_button": "Tạo",
+        "no_notebooks": "Không tìm thấy sổ tay. Hãy thử tạo một cái mới."
+      },
+      "generic": {
+        "select_all": "Chọn tất cả",
+        "unselect_all": "Bỏ chọn tất cả",
+        "add_items_one": "Thêm {{count}} mục",
+        "add_items_other": "Thêm {{count}} mục",
+        "delete_items": "Xóa {{count}} mục"
+      }
+    }
+  },
+  "logout": "Đăng xuất",
+  "inbox": {
+    "title": "Hộp thư đến",
+    "messages": "Tin nhắn",
+    "invites": "Lời mời",
+    "sendMessage": "Gửi một tin nhắn",
+    "noMessages": "Không có tin nhắn"
+  },
+  "addSomething": "Thêm {{ name }}",
+  "deleteAllSomething": "Xóa tất cả {{ name }}",
+  "exportAllSomething": "Xuất khẩu tất cả {{ name }}",
+  "importLLMHistory": "Nhập lịch sử LLM",
+  "downloadAllSomething": "Tải xuống tất cả {{ name }}",
+  "language": {
+    "language_settings": "Cài đặt ngôn ngữ",
+    "change-language": "Thay đổi ngôn ngữ"
+  },
+  "theme": {
+    "turn-dark": "Bật chế độ tối",
+    "turn-light": "Bật chế độ sáng"
+  },
+  "auth": {
+    "usernameOrEmail": "Tên người dùng hoặc Email",
+    "username": "Tên người dùng",
+    "password": "Mật khẩu",
+    "confirmPassword": "Xác nhận mật khẩu",
+    "fullName": "Họ và tên",
+    "inviteCode": "Mã mời",
+    "needCode": "Cần mã?",
+    "noAccount": "Không có tài khoản?",
+    "haveAccount": "Đã có tài khoản?",
+    "loginWithProvider": "Đăng nhập bằng {{ provider }}",
+    "checking": "Đang kiểm tra...",
+    "continue": "Tiếp tục",
+    "troubleSigningIn": "Gặp khó khăn khi đăng nhập?",
+    "signingInAs": "Đang đăng nhập với tư cách",
+    "signingIn": "Đang đăng nhập...",
+    "backToEmail": "Quay lại email",
+    "redirectingToProvider": "Chuyển hướng đến trang đăng nhập của tổ chức bạn...",
+    "resetInstructions": "Vui lòng nhập địa chỉ email của bạn. Chúng tôi sẽ gửi cho bạn một email để đặt lại mật khẩu.",
+    "sendResetEmail": "Gửi email đặt lại mật khẩu",
+    "email": "Email",
+    "resetEmailSentMessage": "Email đã được gửi! Vui lòng kiểm tra email của bạn để biết thêm hướng dẫn",
+    "createAccountDesc": "Tạo tài khoản",
+    "createBtn": "Tạo tài khoản",
+    "loginBtn": "Đăng nhập",
+    "passwordStrength": {
+      "label": "Độ mạnh của mật khẩu",
+      "weak": "Yếu",
+      "fair": "Trung bình",
+      "strong": "Mạnh"
+    },
+    "passwordRequirements": {
+      "title": "Yêu cầu mật khẩu",
+      "minLength": "Tối thiểu {{count}} ký tự",
+      "uppercase": "Một chữ cái in hoa",
+      "lowercase": "Một chữ cái thường",
+      "number": "Một số",
+      "specialChar": "Một ký tự đặc biệt",
+      "met": "đã đáp ứng",
+      "notMet": "chưa đáp ứng"
+    },
+    "errors": {
+      "usernameExists": "Tên người dùng '{{username}}' đã được sử dụng. Vui lòng chọn một tên khác.",
+      "emailExists": "Một tài khoản với email '{{email}}' đã tồn tại. Vui lòng sử dụng email khác hoặc đăng nhập vào tài khoản hiện có.",
+      "accountExists": "Một tài khoản với các thông tin này đã tồn tại. Vui lòng thử đăng nhập hoặc sử dụng thông tin khác.",
+      "invalidInviteCode": "Mã mời bạn đã nhập không hợp lệ hoặc đã hết hạn. Vui lòng kiểm tra và thử lại.",
+      "registrationFailed": "Đăng ký thất bại. Vui lòng thử lại sau.",
+      "validation": {
+        "generic": "Dữ liệu không hợp lệ",
+        "invalidUsername": "Tên người dùng chỉ có thể chứa chữ cái, số, dấu gạch dưới, dấu chấm và dấu gạch ngang",
+        "passwordMismatch": "Mật khẩu không khớp",
+        "passwordRequirements": "Mật khẩu phải có ít nhất 8 ký tự, bao gồm chữ hoa và chữ thường, một số và một ký tự đặc biệt"
+      }
+    }
+  },
+  "search": "Tìm kiếm",
+  "share": "Chia sẻ",
+  "rename": "Đổi tên",
+  "favorite": "Yêu thích",
+  "unfavorite": "Bỏ yêu thích",
+  "delete": "Xóa",
+  "files": {
+    "showAttachedFiles": "Hiển thị tệp đính kèm",
+    "hideAttachedFiles": "Ẩn tệp đính kèm",
+    "title": "Tập tin",
+    "upload": "Tải lên tệp",
+    "long_title": "Trình duyệt tệp"
+  },
+  "view": "Xem",
+  "info": "Thông tin",
+  "clone": "Nhân bản",
+  "download": "Tải xuống",
+  "summarize": "Tóm tắt",
+  "profile": {
+    "title": "Hồ sơ",
+    "tooltip": "Hồ sơ",
+    "collection": "Bộ sưu tập",
+    "collections": {
+      "all_types": "Tất cả các loại"
+    },
+    "users_profile": "Hồ sơ của {{ name }}",
+    "storage_used": "Dung lượng đã sử dụng",
+    "credits": "Tín dụng",
+    "subscription": "Đăng ký",
+    "edit": "Chỉnh sửa Hồ sơ",
+    "manage_subscription": "Quản lý đăng ký",
+    "upgrade": "Nâng cấp",
+    "credit_analytics": "Phân tích tín dụng",
+    "pricing": "Giá tín dụng",
+    "show_purchases": "Hiển thị mua hàng",
+    "show_usage": "Hiển thị sử dụng",
+    "show_combined": "Hiển thị tổng hợp",
+    "buy_credits": "Mua tín dụng"
+  },
+  "community": {
+    "title": "Cộng đồng",
+    "tooltip": "Cộng đồng",
+    "feed": "Tin tức Cộng đồng"
+  },
+  "subscriptions": {
+    "title": "Đăng ký",
+    "expires_on": "Hết hạn vào {{ date }}",
+    "renews_on": "Tự động gia hạn vào {{ date }}"
+  },
+  "billing": {
+    "title": "Hóa đơn"
+  },
+  "credits": {
+    "title": "Tín dụng",
+    "usage": "Sử dụng tín dụng",
+    "analytics": "Phân tích tín dụng",
+    "analytics_tooltip": "Xem mức sử dụng tín dụng của bạn theo thời gian",
+    "current_balance": "Số dư tín dụng hiện tại",
+    "credits": "tín dụng",
+    "usage_by_model": "Sử dụng theo mô hình",
+    "no_transactions": "Không tìm thấy giao dịch tín dụng nào trong thời gian này",
+    "model_pricing": "Giá mô hình",
+    "text_models": "Mô hình văn bản",
+    "image_models": "Mô hình hình ảnh",
+    "pricing_per_1k_tokens": "Giá được hiển thị bằng tín dụng cho mỗi 1.000 mã thông báo",
+    "pricing_per_generation": "Giá được hiển thị bằng tín dụng cho mỗi lần tạo hình ảnh",
+    "model_name": "Tên mô hình",
+    "price_tier": "Bậc giá",
+    "input_cost": "Chi phí đầu vào",
+    "output_cost": "Chi phí đầu ra",
+    "generation_cost": "Chi phí tạo ra",
+    "no_models_available": "Không có mô hình nào có sẵn",
+    "pricing_note": "Lưu ý: Giá cả là ước tính và có thể thay đổi dựa trên các tham số của mô hình. Bậc giá: $ (thấp nhất), $$ (trung bình), $$$ (cao cấp).",
+    "burn_rate": "Tốc độ sử dụng hàng ngày (tỷ lệ tiêu hao)",
+    "days_remaining": "Số ngày còn lại ước tính",
+    "usage_pattern": "Dựa trên mẫu sử dụng của bạn trong {{days}} ngày qua",
+    "credits_used": "Tín dụng đã sử dụng",
+    "credits_purchased": "Tín dụng đã mua",
+    "net_credits": "Tín dụng ròng"
+  },
+  "time": {
+    "last_7_days": "7 ngày qua",
+    "last_30_days": "30 ngày qua",
+    "last_90_days": "90 ngày qua",
+    "last_180_days": "180 ngày qua",
+    "last_365_days": "365 ngày qua"
+  },
+  "common": {
+    "date": "Ngày",
+    "refresh": "Làm mới",
+    "days": "ngày",
+    "cancel": "Hủy",
+    "save": "Lưu",
+    "delete": "Xóa",
+    "edit": "Chỉnh sửa",
+    "close": "Đóng",
+    "submit": "Gửi",
+    "loading": "Đang tải...",
+    "error": "Lỗi",
+    "success": "Thành công"
+  },
+  "errors": {
+    "failed_to_load_data": "Không thể tải dữ liệu. Vui lòng thử lại sau."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Kết nối Atlassian của bạn đã hết hạn. Vui lòng kết nối lại tài khoản."
+    }
+  },
+  "credits_modal": {
+    "title": "Tín dụng bổ sung",
+    "description": "Mua thêm tín dụng để tiếp tục sử dụng các mô hình và tính năng AI tiên tiến của chúng tôi. Tín dụng được sử dụng cho việc suy diễn mô hình và các tính năng đặc biệt, với các mô hình khác nhau tiêu tốn các mức độ khác nhau tùy thuộc vào độ phức tạp.",
+    "current_credits": "Số lượng tín dụng hiện tại",
+    "best_value": "Giá trị tốt nhất",
+    "purchase_success": "Đã mua {{credits}} tín dụng",
+    "history_title": "Lịch sử mua tín dụng",
+    "purchase": "Mua",
+    "no_transactions": "Chưa có giao dịch nào",
+    "low_credits": "Tín dụng của bạn đang thấp",
+    "low_credits_sub": "Mua thêm tín dụng để tiếp tục công việc của bạn.",
+    "no_credits": "Không có tín dụng",
+    "no_credits_sub": "Mua tín dụng để tiếp tục công việc của bạn.",
+    "status": {
+      "completed": "Đã hoàn thành",
+      "pending": "Đang chờ",
+      "failed": "Thất bại"
+    }
+  },
+  "settings": {
+    "title": "Cài đặt",
+    "tooltip": "Cài đặt",
+    "main": "Cài đặt Chính",
+    "account": "Tài khoản",
+    "ai_features": "Tính năng AI",
+    "connected_apps": {
+      "title": "Ứng dụng Kết nối",
+      "link": "Liên kết",
+      "unlink": "Hủy liên kết"
+    },
+    "developer_tools": "Công cụ phát triển",
+    "experimental_features": {
+      "title": "Tính năng thử nghiệm",
+      "tooltip": "Tính năng thử nghiệm",
+      "header": "Tính năng thử nghiệm",
+      "beta_features": {
+        "title": "Tính năng beta",
+        "subtitle": "Những tính năng này vẫn đang trong quá trình phát triển và có thể gây ra kết quả không mong muốn. Việc chọn kích hoạt chúng có nghĩa là bạn đồng ý sử dụng chúng trong trạng thái hiện tại."
+      }
+    },
+    "ui_preferences": "Sở thích UI"
+  },
+  "mementos": {
+    "title": "Kỷ niệm",
+    "tooltip": "Kỷ niệm"
+  },
+  "admin": {
+    "title": "Quản trị",
+    "tooltip": "Cài đặt quản trị"
+  },
+  "speech": {
+    "title": "Giọng nói",
+    "tooltip": "Giọng nói thành văn bản & Văn bản thành giọng nói"
+  },
+  "instructions": {
+    "title": "Hướng dẫn",
+    "tooltip": "Hướng dẫn"
+  },
+  "friends": {
+    "add_friend": "Thêm vào bạn bè",
+    "unfriend": "Gỡ bỏ bạn bè",
+    "pending_request": "Yêu cầu kết bạn đang chờ",
+    "all": "Tất cả bạn bè",
+    "pending": "Đang chờ"
+  },
+  "notebooks": {
+    "view_info": "Xem Thông tin Sổ tay",
+    "clone": "Nhân bản Sổ tay",
+    "download": "Tải xuống Sổ tay",
+    "summarize": "Tóm tắt Sổ tay",
+    "delete": "Xóa Sổ tay",
+    "delete_confirm": "Bạn có chắc chắn muốn xóa vĩnh viễn \"{{ name }}\"? Hành động này không thể hoàn tác.",
+    "auto_rename": "Đổi tên bằng AI"
+  },
+  "add_friend": {
+    "title": "Thêm bạn",
+    "friend_email": "Email của bạn",
+    "message": "Tin nhắn",
+    "cancel": "Hủy",
+    "send": "Gửi",
+    "email_placeholder": "Nhập email của bạn",
+    "message_placeholder": "Nhập tin nhắn của bạn"
+  },
+  "file_browser": {
+    "my_files": "Tệp của tôi",
+    "shared_with_me": "Chia sẻ với tôi",
+    "total_files": "Tổng số mục kiến thức",
+    "search_placeholder": "Tìm kiếm theo tên hoặc thẻ...",
+    "file_type": "Loại tệp",
+    "all_files": "Tất cả tệp",
+    "text": "Văn bản",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Hình ảnh",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Mã",
+    "date_created": "Ngày tạo",
+    "size": "Kích thước",
+    "name": "Tên",
+    "sort_z_to_a": "Sắp xếp từ Z đến A",
+    "sort_a_to_z": "Sắp xếp từ A đến Z",
+    "grid_view": "Chế độ lưới",
+    "list_view": "Chế độ danh sách",
+    "select_file_hint": "Bằng cách chạm, chọn tệp hoặc nhiều tệp và thêm chúng vào phiên ghi chú của bạn!",
+    "session_one": "Sổ tay",
+    "session_other": "Sổ tay",
+    "no_files_available": "Không có tệp nào khả dụng",
+    "count_file_selected_one": "{{count}} tệp được chọn",
+    "count_file_selected_other": "{{count}} tệp được chọn",
+    "add_count_file_one": "Thêm {{count}} tệp",
+    "add_count_file_other": "Thêm {{count}} tệp",
+    "delete_count_file_one": "Xóa {{count}} tệp",
+    "delete_count_file_other": "Xóa {{count}} tệp",
+    "share_count_file_one": "Chia sẻ {{count}} Tệp",
+    "share_count_file_other": "Chia sẻ {{count}} Tệp",
+    "count_file_one": "{{count}} tệp",
+    "count_file_other": "{{count}} tệp",
+    "add_to_session_success": "Đang thêm tệp: {{fileNames}} vào {{sessionName}}",
+    "add_file_success": "Đang thêm tệp: {{fileNames}}",
+    "browse_files": "Duyệt tệp",
+    "create_new_knowledge": "Tạo",
+    "create_new_knowledge_from_url": "Tạo từ URL",
+    "enter_url": "Nhập URL",
+    "create_file": "Tạo tệp",
+    "create_file_from_url": "Tạo tệp",
+    "create_from_url": "Lấy nhanh từ URL",
+    "research": "Nghiên cứu",
+    "open_research": "Mở Nghiên cứu",
+    "url_success": "Đã tạo kiến thức từ URL thành công: {{url}}",
+    "url_error": "Không thể tạo kiến thức từ URL: {{url}}",
+    "url_required": "Vui lòng nhập một URL",
+    "previous": "Trước",
+    "next": "Tiếp",
+    "page_of": "Trang {{current}} trên {{total}}",
+    "drop_files_here": "Thả tệp tại đây",
+    "tagging": "Đang gắn thẻ...",
+    "tag_files": "Gắn thẻ Tệp",
+    "select_all": "Chọn Tất cả",
+    "unselect_all": "Bỏ chọn Tất cả",
+    "add_files": "Thêm Tệp",
+    "add_files_to_notebook_one": "Thêm {{count}} Tệp vào Sổ tay",
+    "add_files_to_notebook_other": "Thêm {{count}} Tệp vào Sổ tay",
+    "in_project": "Trong Dự án"
+  },
+  "file_properties": {
+    "title": "Thuộc tính tệp",
+    "make_instructions": "Làm thành hướng dẫn?",
+    "instruction_priority": "Độ ưu tiên của hướng dẫn (0–999)",
+    "priority_levels": {
+      "global": "0-100: Hướng dẫn toàn cầu",
+      "group": "101-300: Hướng dẫn nhóm/Công ty",
+      "project": "301-500: Hướng dẫn dự án",
+      "user": "501-999: Hướng dẫn người dùng"
+    },
+    "save": "Lưu",
+    "update_success": "Đã cập nhật độ ưu tiên hệ thống cho \"{{fileName}}\".",
+    "update_error": "Cập nhật độ ưu tiên hệ thống không thành công."
+  },
+  "file_actions": {
+    "notes": "Ghi chú",
+    "notes_placeholder": "Thêm ghi chú về tệp này...",
+    "add_notes": "Thêm ghi chú",
+    "add_note": "Thêm ghi chú",
+    "edit_notes": "Chỉnh sửa ghi chú",
+    "notes_save_error": "Không thể lưu ghi chú",
+    "manage_tags": "Quản lý Thẻ",
+    "tags": "Quản lý thẻ",
+    "tags_placeholder": "Nhập tên thẻ, ngăn cách bằng dấu phẩy...",
+    "add_tag_one": "Đã cập nhật thẻ cho {{count}} tệp",
+    "add_tag_other": "Đã cập nhật thẻ cho {{count}} tệp",
+    "failed_to_add_tag_one": "Đã thất bại trong việc cập nhật thẻ cho tệp",
+    "failed_to_add_tag_other": "Đã thất bại trong việc cập nhật thẻ cho các tệp",
+    "cancel": "Hủy",
+    "save": "Lưu",
+    "download": "Tải xuống",
+    "vectorize": "Chuyển đổi thành vector",
+    "instruction": "Hướng dẫn {{priority}}",
+    "chunked": "Phân đoạn",
+    "not_chunked": "Không phân đoạn"
+  },
+  "subscription_modal": {
+    "title": "Đăng ký",
+    "description": "Truy cập mọi mô hình AI lớn qua một giao diện thống nhất. Chạy các mô hình nâng cao như Deepseek R1 một cách riêng tư.",
+    "no_free_tier": "KHÔNG CÓ CẤP MIỄN PHÍ - TẬP TRUNG VÀO CÁC CHUYÊN GIA.",
+    "credits_rollover": "Tín dụng không sử dụng sẽ chuyển sang tháng tiếp theo trong 3 tháng.",
+    "monthly_billing": "Thanh toán hàng tháng",
+    "annual_billing": "Thanh toán hàng năm",
+    "most_popular": "Phổ biến nhất",
+    "current": "Hiện tại",
+    "credits_per_month": "{{credits}} tín dụng mỗi tháng",
+    "subscription_renewal": "Đăng ký của bạn sẽ được gia hạn vào {{date}}",
+    "personal": "Cá nhân",
+    "business": "Doanh nghiệp",
+    "team": "Nhóm",
+    "enterprise": "Doanh nghiệp"
+  },
+  "agents": {
+    "title": "Đại lý",
+    "new_agent": "Đại lý mới",
+    "manage_agents": "Quản lý đại lý",
+    "search_placeholder": "Tìm kiếm đại lý...",
+    "your_agents": "Đại lý của bạn",
+    "loading": "Đang tải đại lý...",
+    "no_agents": "Không tìm thấy đại lý nào",
+    "create_first": "Tạo đại lý đầu tiên của bạn để bắt đầu",
+    "agents_found": "{{count}} đại lý được tìm thấy",
+    "agents_found_plural": "{{count}} đại lý được tìm thấy",
+    "attached_agents": "Đại lý đính kèm",
+    "listening_description": "Những đại lý này đang lắng nghe tất cả các tin nhắn trong cuộc trò chuyện này",
+    "no_search_results": "Không có đại lý nào khớp với \"{{search}}\"",
+    "search_help": "Hãy thử một thuật ngữ tìm kiếm khác",
+    "no_agents_description": "Tạo đại lý đầu tiên của bạn để bắt đầu",
+    "create_agent": "Tạo đại lý",
+    "click_to_attach": "Nhấp để đính kèm vào phiên hiện tại",
+    "click_to_detach": "Nhấp để tách ra khỏi phiên hiện tại",
+    "show_attached_agents": "Hiển thị đại lý đính kèm",
+    "hide_attached_agents": "Ẩn đại lý đính kèm",
+    "toggle_attached_agents": "Chuyển đổi đại lý đính kèm",
+    "agent_listening_tooltip": "{{name}} đang lắng nghe và sẵn sàng giúp đỡ"
+  },
+  "skills": {
+    "title": "Kỹ năng",
+    "command_palette_description": "Quản lý mẫu hướng dẫn có thể tái sử dụng"
+  }
+}

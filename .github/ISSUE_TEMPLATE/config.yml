@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions, usage & self-hosting help
+    url: https://github.com/bike4mind/bike4mind/discussions
+    about: Ask questions, get self-hosting help, and share ideas in Discussions. Please do not open an issue for support questions.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/bike4mind/bike4mind/security/advisories/new
+    about: Report vulnerabilities privately here (or email security@bike4mind.com). Never file a public issue for a security problem.
+  - name: 📜 Licensing question
+    url: mailto:licensing@bike4mind.com
+    about: Questions about the BUSL-1.1 license or alternative/commercial licensing arrangements.

@@ -1,0 +1,67 @@
+name: Code Analysis (Semgrep)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this scan is being run'
+        required: true
+        default: 'manual'
+        type: string
+      stage:
+        description: 'Logical stage name (e.g. dev, pr5853, staging)'
+        required: false
+        type: string
+
+env:
+  DEFAULT_CODE_STAGE: dev
+
+jobs:
+  semgrep-code-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Optional override passed from workflow_dispatch
+      CODE_STAGE: ${{ github.event.inputs.stage }}
+      # Where to send summarized results (Semgrep/code analysis).
+      # If a PR stage is provided (e.g. "pr6015"), send to that PR's preview host.
+      # Otherwise (dev/staging/main), fall back to the shared ingest URL secret.
+      LUMINA5_INGEST_URL: ${{ github.event.inputs.stage && startsWith(github.event.inputs.stage, 'pr') && format('https://app.{0}.{1}/api/admin/security-dashboard/code-semgrep-ingest', github.event.inputs.stage, vars.PREVIEW_SERVER_DOMAIN) || secrets.SECOPS_CODE_INGEST_URL }}
+      LUMINA5_INGEST_TOKEN: ${{ secrets.SECOPS_CODE_INGEST_TOKEN }}
+      # Optional: override report path if needed
+      SEMGREP_JSON_REPORT_PATH: ${{ github.workspace }}/semgrep-report.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install Semgrep CLI
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install semgrep
+
+      - name: Install client dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: apps/client
+
+      - name: Run Semgrep scan
+        run: |
+          cd apps/client
+          pnpm security:scan --json --output "$SEMGREP_JSON_REPORT_PATH"
+
+      - name: Summarize Semgrep results and send to Security Dashboard
+        run: node scripts/semgrep-summarize-and-ingest.mjs
+
+

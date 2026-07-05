@@ -1,0 +1,73 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2 }} variant="outlined">
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          Bike4mind Notebooks
+        </Typography>
+        <List>
+          <ListItem> At the heart of GrokTool™ lies our innovative Notebook interface, a dynamic canvas where curiosity meets technology. Each Notebook represents more than just a chat-like session; it's a portal to limitless creative explorations, powered by our cutting-edge chat bot technology.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Features
+        </Typography>
+        <List>
+          <ListItem> Have as many notebook sessions as you like, continuously stored server side, sorted by date last modified</ListItem>
+          <ListItem> Rename - click the 3 dots next to the name of the notebook</ListItem>
+          <ListItem> Tap on the name of a notebook on the left hand navigation area to change notebooks</ListItem>
+          <ListItem> Download individual notebooks by clicking the 3 dots next to the name of the notebook</ListItem>
+          <ListItem> Toggle on / off the automatic code formatter</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 0 }}>
+        <Typography level="h3" sx={{ m: 0 }}>
+          How are prompts processed
+        </Typography>
+        <Typography level="h5" sx={{ m: 2 }}>
+          For every prompt sent to our server here is the process:
+        </Typography>
+          <List>
+            <ListItem> 1. Use the maximum token limit for the context window for the model</ListItem>
+            <ListItem> 2. unless the user has a specific overide, if so use that</ListItem>
+            <ListItem> 3. Take the users' prompt as the highest priority</ListItem>
+            <ListItem> 4. Next filter up all of the system messages up to context buffer limit</ListItem>
+            <ListItem> 5. Next determine if the user has infinite history set for the LLM settings</ListItem>
+            <ListItem> 6. If inifinite history then do a cosine search on all Knowledge context and fill up the remaining buffer other than just the previous response</ListItem>
+            <ListItem> 7. If on the other hand the user has set a specific number of history responses, use that, and then fill in with cosine searched context</ListItem>
+          </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2, maxWidth: '100%' }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Notebook Settings
+        </Typography>
+        <Typography level="h5" sx={{ m: 2 }}>
+          Let's take a look at Notebook settings, and see all the options you can do!
+        </Typography>
+        <List>
+          <ListItem> Branch a notebook from a given response</ListItem>
+          <ListItem> Prune a response from the notebook</ListItem>
+          <ListItem> Repeat a prompt and generate N more replies</ListItem>
+        </List>
+      </Card>
+
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Coming soon
+        </Typography>
+        <List>
+          <ListItem> Branch a notebook from a given response</ListItem>
+          <ListItem> Prune a response from the notebook</ListItem>
+          <ListItem> Repeat a prompt and generate N more replies</ListItem>
+        </List>
+      </Card>
+
+    </Sheet>
+  );
+}

@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI-indstillinger",
+    "session": "Notesbog",
+    "session_plural": "Notesbøger",
+    "favorite": "Favorit",
+    "unfavorite": "Favoritér ikke",
+    "favorites": "Favoritter",
+    "favorites_count_one": "{{count}} favorit",
+    "favorites_count_other": "{{count}} favoritter",
+    "currentSession": "Aktuel",
+    "other": "Andre tags",
+    "text_model": "Tekstmodel",
+    "image_model": "Billede model",
+    "ai_image": "AI-billede",
+    "switch_to": "Skift til {{ name }}"
+  },
+  "guide": {
+    "title": "Guide"
+  },
+  "intro": {
+    "title": "Introduktion"
+  },
+  "developers": {
+    "title": "Udviklere",
+    "technical_docs": "Teknisk dokumentation"
+  },
+  "changelog": {
+    "title": "Ændringslog"
+  },
+  "feedback": {
+    "send": "Send Feedback"
+  },
+  "terms_policies": "Vilkår og politikker",
+  "login": "Log ind",
+  "file": "Viden",
+  "forgotPassword": "Glemt adgangskode",
+  "signup": "Tilmeld dig",
+  "help": "Hjælp",
+  "manual": "Manual",
+  "inviteLong": "Inviter en ven",
+  "inviteShort": "Inviter",
+  "tools": {
+    "title": "Værktøjer"
+  },
+  "sidenav": {
+    "pin": "Fastgør sidepanelet",
+    "unpin": "Fjern fastgørelse fra sidepanelet",
+    "sessions": {
+      "sort": {
+        "label": "Sortér efter",
+        "tags": "Efter tags",
+        "date": "Efter dato"
+      },
+      "new": "Ny chat",
+      "item": {
+        "genTags": "Generer notesbog tagliste"
+      }
+    }
+  },
+  "referral": {
+    "title": "Henvis en ven til",
+    "email_title_default": "Velkommen til GrokTool!",
+    "email_body_default": "Du er blevet inviteret af USER_NAME til GrokTool! REGISTRERINGSLINK: Brug følgende invitationskode til at tilmelde dig: INVITE_CODE",
+    "friend_email": "Vennens email",
+    "num_referrals_available": "Henvisninger tilgængelige:",
+    "no_valid_emails_error": "Indtast venligst gyldige e-mailadresser",
+    "send_referral": "Send henvisning",
+    "send_referral_success": "Henvisning sendt succesfuldt!",
+    "send_referral_skipped": "{{count}} invitation(er) sprunget over — de pågældende e-mailadresser har allerede en konto.",
+    "send_referral_failed": "{{count}} invitation(er) kunne ikke sendes. Prøv venligst igen.",
+    "send_referral_error": "Fejl ved sending af henvisning. Prøv venligst igen.",
+    "slack_notification_default": "Henvisning sendt af bruger USER_NAME:USER_ID til FRIEND_EMAIL"
+  },
+  "activateVoice": "Aktivér denne stemme",
+  "liveVoice": "Live stemme",
+  "whatsNew": "Hvad er nyt",
+  "welcome": "Velkommen til {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Opretter forbindelse",
+      "1": "Forbundet",
+      "2": "Afbryder forbindelse",
+      "3": "Frakoblet",
+      "-1": "Afventer"
+    },
+    "networkStatus": "Netværk: {{ status }}"
+  },
+  "deleteVoice": "Slet denne stemme",
+  "deleteVoiceConfirm": "Er du sikker på, at du vil slette denne stemme?",
+  "organization": {
+    "organizations": "Teams",
+    "defaultName": "Min organisation",
+    "shared": "Delt med mig",
+    "create": "Opret team",
+    "search": "Søg efter teams...",
+    "no_organizations": "Ingen teams fundet",
+    "view_details": "Vis detaljer",
+    "x_seats": "{{count}} pladser",
+    "active_subscription": "Aktivt abonnement",
+    "no_subscription": "Ingen abonnement",
+    "x_members": "{{count}} medlemmer",
+    "x_credits": "{{count}} credits",
+    "owner": "Ejer"
+  },
+  "session": {
+    "typeYourMessage": "Skriv din besked her",
+    "switchedSession": "Skiftet til: {{ sessionName }}",
+    "send": "Send",
+    "sendMessage": "Send besked",
+    "preparingQuest": "Forbereder opgave...",
+    "rephrasePrompt": "Optimer din input",
+    "promptRephrased": "Prompt omformuleret med succes",
+    "rephraseFailed": "Kunne ikke omformulere prompt",
+    "errors": {
+      "notebookDeleted": "Denne notesbog blev slettet. Opret venligst en ny.",
+      "noPermission": "Du har ikke tilladelse til at få adgang til denne notesbog.",
+      "invalidRequest": "Ugyldig anmodning. Prøv venligst igen.",
+      "tooManyRequests": "For mange anmodninger. Vent et øjeblik og prøv igen.",
+      "serverError": "Serverfejl. Prøv igen senere.",
+      "networkError": "Kunne ikke sende besked. Tjek venligst din forbindelse.",
+      "sendFailed": "Kunne ikke sende besked. Prøv venligst igen."
+    }
+  },
+  "projects": {
+    "title": "Projekt",
+    "projects": "Projekter",
+    "joined_projects": "Deltagede Projekter",
+    "no_joined_projects": "Ingen tilsluttede projekter endnu",
+    "add_to_project": "Tilføj til projekt",
+    "modals": {
+      "files": {
+        "title": "Tilføj filer til projekt",
+        "subtitle": "Vælg filer der skal tilføjes til dit projekt",
+        "button_label": "Tilføj filer",
+        "search_placeholder": "Søg filer",
+        "no_files": "Ingen filer fundet."
+      },
+      "members": {
+        "title": "Tilføj medlemmer til projekt",
+        "subtitle": "Søg og vælg brugere der skal tilføjes til dit projekt",
+        "button_label": "Tilføj medlemmer",
+        "search_placeholder": "Søg brugere",
+        "no_members": "Prøv at søge efter en bruger."
+      },
+      "sessions": {
+        "title": "Tilføj notesbog til et projekt",
+        "subtitle": "Vælg notesbøger der skal tilføjes til dit projekt, eller opret en ny",
+        "button_label": "Tilføj notesbøger",
+        "search_placeholder": "Søg",
+        "create_button": "Opret",
+        "no_notebooks": "Ingen notesbøger fundet. Prøv at oprette en ny."
+      },
+      "generic": {
+        "select_all": "Vælg alle",
+        "unselect_all": "Fravælg alle",
+        "add_items_one": "Tilføj {{count}} element",
+        "add_items_other": "Tilføj {{count}} elementer",
+        "delete_items": "Slet {{count}} elementer"
+      }
+    }
+  },
+  "logout": "Log ud",
+  "inbox": {
+    "title": "Indbakke",
+    "messages": "Beskeder",
+    "invites": "Invitationer",
+    "sendMessage": "Send en besked",
+    "noMessages": "Ingen beskeder"
+  },
+  "addSomething": "Tilføj {{ name }}",
+  "deleteAllSomething": "Slet alle {{ name }}",
+  "exportAllSomething": "Eksporter alle {{ name }}",
+  "importLLMHistory": "Importer LLM-historik",
+  "downloadAllSomething": "Download alle {{ name }}",
+  "language": {
+    "language_settings": "Sprogindstillinger",
+    "change-language": "Skift sprog"
+  },
+  "theme": {
+    "turn-dark": "Skift til mørk",
+    "turn-light": "Skift til lys"
+  },
+  "auth": {
+    "usernameOrEmail": "Brugernavn eller Email",
+    "username": "Brugernavn",
+    "password": "Adgangskode",
+    "confirmPassword": "Bekræft Adgangskode",
+    "fullName": "Fuldt Navn",
+    "inviteCode": "Invitation Kode",
+    "needCode": "Brug for en kode?",
+    "noAccount": "Ingen konto?",
+    "haveAccount": "Har du allerede en konto?",
+    "loginWithProvider": "Log ind med {{ provider }}",
+    "checking": "Tjekker...",
+    "continue": "Fortsæt",
+    "troubleSigningIn": "Problemer med at logge ind?",
+    "signingInAs": "Logger ind som",
+    "signingIn": "Logger ind...",
+    "backToEmail": "Tilbage til e-mail",
+    "redirectingToProvider": "Omdirigerer til din organisations login...",
+    "resetInstructions": "Indtast din emailadresse. Vi sender dig en email for at nulstille din adgangskode.",
+    "sendResetEmail": "Send email til nulstilling af adgangskode",
+    "email": "Email",
+    "resetEmailSentMessage": "Email er sendt! Tjek din email for yderligere instruktioner",
+    "createAccountDesc": "Opret en konto",
+    "createBtn": "Opret konto",
+    "loginBtn": "Log ind",
+    "passwordStrength": {
+      "label": "Adgangskodestyrke",
+      "weak": "Svæk",
+      "fair": "Middel",
+      "strong": "Stærk"
+    },
+    "passwordRequirements": {
+      "title": "Adgangskodekrav",
+      "minLength": "Mindst {{count}} tegn",
+      "uppercase": "Ét stort bogstav",
+      "lowercase": "Ét lille bogstav",
+      "number": "Ét tal",
+      "specialChar": "Ét specialtegn",
+      "met": "opfyldt",
+      "notMet": "ikke opfyldt endnu"
+    },
+    "errors": {
+      "usernameExists": "Brugernavnet '{{username}}' er allerede taget. Vælg venligst et andet brugernavn.",
+      "emailExists": "Der findes allerede en konto med e-mail '{{email}}'. Brug venligst en anden e-mail eller log ind på din eksisterende konto.",
+      "accountExists": "Der findes allerede en konto med disse oplysninger. Prøv venligst at logge ind eller brug andre oplysninger.",
+      "invalidInviteCode": "Den inviteringskode, du indtastede, er ugyldig eller er udløbet. Kontroller venligst og prøv igen.",
+      "registrationFailed": "Registreringen mislykkedes. Prøv venligst igen senere.",
+      "validation": {
+        "generic": "Ugyldigt input",
+        "invalidUsername": "Brugernavnet må kun indeholde bogstaver, tal, understregninger, punktummer og bindestreger",
+        "passwordMismatch": "Adgangskoderne stemmer ikke overens",
+        "passwordRequirements": "Adgangskoden skal være mindst 8 tegn lang, med store og små bogstaver, et tal og et specialtegn"
+      }
+    }
+  },
+  "search": "Søg",
+  "share": "Del",
+  "rename": "Omdøb",
+  "favorite": "Favorit",
+  "unfavorite": "Favoritér ikke",
+  "delete": "Slet",
+  "files": {
+    "showAttachedFiles": "Vis vedhæftede filer",
+    "hideAttachedFiles": "Skjul vedhæftede filer",
+    "title": "Filer",
+    "upload": "Upload filer",
+    "long_title": "Fil-browser"
+  },
+  "view": "Vis",
+  "info": "Info",
+  "clone": "Klon",
+  "download": "Download",
+  "summarize": "Opsummer",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Samling",
+    "collections": {
+      "all_types": "Alle typer"
+    },
+    "users_profile": "{{ name }}'s Profil",
+    "storage_used": "Brugt Lagerplads",
+    "credits": "Kreditter",
+    "subscription": "Abonnement",
+    "edit": "Rediger profil",
+    "manage_subscription": "Administrer Abonnement",
+    "upgrade": "Opgrader",
+    "credit_analytics": "Kreditanalyse",
+    "pricing": "Kreditpriser",
+    "show_purchases": "Vis køb",
+    "show_usage": "Vis brug",
+    "show_combined": "Vis kombineret",
+    "buy_credits": "Køb Kreditter"
+  },
+  "community": {
+    "title": "Fællesskab",
+    "tooltip": "Fællesskab",
+    "feed": "Fællesskabsfeed"
+  },
+  "subscriptions": {
+    "title": "Abonnementer",
+    "expires_on": "Udløber den {{ date }}",
+    "renews_on": "Fornys den {{ date }}"
+  },
+  "billing": {
+    "title": "Fakturering"
+  },
+  "credits": {
+    "title": "Kreditter",
+    "usage": "Kreditbrug",
+    "analytics": "Kreditanalyse",
+    "analytics_tooltip": "Vis din kreditbrug over tid",
+    "current_balance": "Aktuel kreditbalance",
+    "credits": "credits",
+    "usage_by_model": "Brug efter model",
+    "no_transactions": "Ingen kredittransaktioner fundet i denne periode",
+    "model_pricing": "Modelpriser",
+    "text_models": "Tekstmodeller",
+    "image_models": "Billedmodeller",
+    "pricing_per_1k_tokens": "Priser vist i credits per 1.000 tokens",
+    "pricing_per_generation": "Priser vist i credits per billedgenerering",
+    "model_name": "Modelnavn",
+    "price_tier": "Priskategori",
+    "input_cost": "Inputomkostninger",
+    "output_cost": "Outputomkostninger",
+    "generation_cost": "Genereringsomkostninger",
+    "no_models_available": "Ingen modeller tilgængelige",
+    "pricing_note": "Bemærk: Priser er omtrentlige og kan variere afhængigt af modelparametre. Priskategorier: $ (lavest), $$ (medium), $$$ (premium).",
+    "burn_rate": "Daglig brug (forbrugsrate)",
+    "days_remaining": "Estimerede resterende dage",
+    "usage_pattern": "Baseret på din brugsmønster fra de sidste {{days}} dage",
+    "credits_used": "Brugte credits",
+    "credits_purchased": "Købte credits",
+    "net_credits": "Nettocredits"
+  },
+  "time": {
+    "last_7_days": "Sidste 7 dage",
+    "last_30_days": "Sidste 30 dage",
+    "last_90_days": "Sidste 90 dage",
+    "last_180_days": "Sidste 180 dage",
+    "last_365_days": "Sidste 365 dage"
+  },
+  "common": {
+    "date": "Dato",
+    "refresh": "Opdater",
+    "days": "dage",
+    "cancel": "Annuller",
+    "save": "Gem",
+    "delete": "Slet",
+    "edit": "Rediger",
+    "close": "Luk",
+    "submit": "Indsend",
+    "loading": "Indlæser...",
+    "error": "Fejl",
+    "success": "Succes"
+  },
+  "errors": {
+    "failed_to_load_data": "Fejl ved indlæsning af data. Prøv venligst igen senere."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Din Atlassian-forbindelse er udløbet. Forbind venligst din konto igen."
+    }
+  },
+  "credits_modal": {
+    "title": "Yderligere Kreditter",
+    "description": "Køb ekstra kreditter for at fortsætte med at bruge vores avancerede AI-modeller og funktioner. Kreditter bruges til modelinference og særlige funktioner, hvor forskellige modeller forbruger varierende mængder baseret på kompleksitet.",
+    "current_credits": "Nuværende kreditbeløb",
+    "best_value": "Bedste Værdi",
+    "purchase_success": "Købt {{credits}} kreditter",
+    "history_title": "Historik for kreditkøb",
+    "purchase": "Køb",
+    "no_transactions": "Ingen transaktioner endnu",
+    "low_credits": "Dine credits er lave",
+    "low_credits_sub": "Køb flere credits for at fortsætte dit arbejde.",
+    "no_credits": "Ingen credits",
+    "no_credits_sub": "Køb credits for at fortsætte dit arbejde.",
+    "status": {
+      "completed": "Afsluttet",
+      "pending": "Afventer",
+      "failed": "Fejlet"
+    }
+  },
+  "settings": {
+    "title": "Indstillinger",
+    "tooltip": "Indstillinger",
+    "main": "Hovedindstillinger",
+    "account": "Konto",
+    "ai_features": "AI-funktioner",
+    "connected_apps": {
+      "title": "Forbundne apps",
+      "link": "Link",
+      "unlink": "Afkobl"
+    },
+    "developer_tools": "Udviklerværktøjer",
+    "experimental_features": {
+      "title": "Eksperimentelle funktioner",
+      "tooltip": "Eksperimentelle funktioner",
+      "header": "Eksperimentelle funktioner",
+      "beta_features": {
+        "title": "Beta-funktioner",
+        "subtitle": "Disse funktioner er stadig under udvikling og kan forårsage uventede resultater. Hvis du vælger at aktivere dem, accepterer du at bruge dem i deres nuværende tilstand."
+      }
+    },
+    "ui_preferences": "UI-præferencer"
+  },
+  "mementos": {
+    "title": "Mementoer",
+    "tooltip": "Mementoer"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Adminindstillinger"
+  },
+  "speech": {
+    "title": "Tale",
+    "tooltip": "Tale til tekst & tekst til tale"
+  },
+  "instructions": {
+    "title": "Instruktioner",
+    "tooltip": "Instruktioner"
+  },
+  "friends": {
+    "add_friend": "Tilføj til Venner",
+    "unfriend": "Fjern fra Venner",
+    "pending_request": "Afventende Venneanmodning",
+    "all": "Alle Venner",
+    "pending": "Afventende"
+  },
+  "notebooks": {
+    "view_info": "Se notebook-info",
+    "clone": "Klon notebook",
+    "download": "Download notebook",
+    "summarize": "Opsummer notebook",
+    "delete": "Slet notebook",
+    "delete_confirm": "Er du sikker på, at du vil permanent slette \"{{ name }}\"? Denne handling kan ikke fortrydes.",
+    "auto_rename": "Omdøb med AI"
+  },
+  "add_friend": {
+    "title": "Tilføj en ven",
+    "friend_email": "Vens email",
+    "message": "Besked",
+    "cancel": "Annuller",
+    "send": "Send",
+    "email_placeholder": "Indtast din vens email",
+    "message_placeholder": "Indtast din besked"
+  },
+  "file_browser": {
+    "my_files": "Mine filer",
+    "shared_with_me": "Delt med mig",
+    "total_files": "Samlede vidensobjekter",
+    "search_placeholder": "Søg efter navn eller tag...",
+    "file_type": "Filtype",
+    "all_files": "Alle filer",
+    "text": "Tekst",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Billede",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Kode",
+    "date_created": "Oprettelsesdato",
+    "size": "Størrelse",
+    "name": "Navn",
+    "sort_z_to_a": "Sorter Z til A",
+    "sort_a_to_z": "Sorter A til Z",
+    "grid_view": "Rutenetvisning",
+    "list_view": "Listevisning",
+    "select_file_hint": "Ved at trykke, vælg fil eller flere filer og tilføj dem til din notesession!",
+    "session_one": "Notatbog",
+    "session_other": "Notatbøger",
+    "no_files_available": "Ingen filer tilgængelige",
+    "count_file_selected_one": "{{count}} fil valgt",
+    "count_file_selected_other": "{{count}} filer valgt",
+    "add_count_file_one": "Tilføj {{count}} fil",
+    "add_count_file_other": "Tilføj {{count}} filer",
+    "delete_count_file_one": "Slet {{count}} fil",
+    "delete_count_file_other": "Slet {{count}} filer",
+    "share_count_file_one": "Del {{count}} fil",
+    "share_count_file_other": "Del {{count}} filer",
+    "count_file_one": "{{count}} fil",
+    "count_file_other": "{{count}} filer",
+    "add_to_session_success": "Tilføjer fil: {{fileNames}} til {{sessionName}}",
+    "add_file_success": "Tilføjer fil: {{fileNames}}",
+    "browse_files": "Gennemse filer",
+    "create_new_knowledge": "Opret",
+    "create_new_knowledge_from_url": "Scrap URL",
+    "enter_url": "Indtast URL",
+    "create_file": "Opret fil",
+    "create_file_from_url": "Opret fil",
+    "create_from_url": "Hurtig scrap",
+    "research": "Forskning",
+    "open_research": "Åbn forskning",
+    "url_success": "Succesfuldt oprettet viden fra URL: {{url}}",
+    "url_error": "Mislykkedes med at oprette viden fra URL: {{url}}",
+    "url_required": "Indtast venligst en URL",
+    "previous": "Forrige",
+    "next": "Næste",
+    "page_of": "Side {{current}} af {{total}}",
+    "drop_files_here": "Slip filer her",
+    "tagging": "Mærker...",
+    "tag_files": "Mærk filer",
+    "select_all": "Vælg alle",
+    "unselect_all": "Fravælg alle",
+    "add_files": "Tilføj filer",
+    "add_files_to_notebook_one": "Tilføj {{count}} fil til notesbog",
+    "add_files_to_notebook_other": "Tilføj {{count}} filer til notesbog",
+    "in_project": "I projekt"
+  },
+  "file_properties": {
+    "title": "Filegenskaber",
+    "make_instructions": "Gøre til instruktioner?",
+    "instruction_priority": "Instruktionsprioritet (0–999)",
+    "priority_levels": {
+      "global": "0-100: Globale instruktioner",
+      "group": "101-300: Gruppe/virksomhed instruktioner",
+      "project": "301-500: Projektinstruktioner",
+      "user": "501-999: Brugerinstruktioner"
+    },
+    "save": "Gem",
+    "update_success": "Opdateret systemprioritet for \"{{fileName}}\".",
+    "update_error": "Kunne ikke opdatere systemprioritet."
+  },
+  "file_actions": {
+    "notes": "Noter",
+    "notes_placeholder": "Tilføj noter om denne fil...",
+    "add_notes": "Tilføj noter",
+    "add_note": "Tilføj note",
+    "edit_notes": "Rediger noter",
+    "notes_save_error": "Fejl ved gemning af noter",
+    "manage_tags": "Administrer mærker",
+    "tags": "Administrer tags",
+    "tags_placeholder": "Indtast mærkenavne adskilt af kommaer...",
+    "add_tag_one": "Opdateret tag for {{count}} fil",
+    "add_tag_other": "Opdateret tag for {{count}} filer",
+    "failed_to_add_tag_one": "Mislykkedes at opdatere tag til fil",
+    "failed_to_add_tag_other": "Mislykkedes at opdatere tag til filer",
+    "cancel": "Annuller",
+    "save": "Gem",
+    "download": "Download",
+    "vectorize": "Vektorisere",
+    "instruction": "Instruktion {{priority}}",
+    "chunked": "Chunked",
+    "not_chunked": "Ikke chunked"
+  },
+  "subscription_modal": {
+    "title": "Abonnement",
+    "description": "Få adgang til hver større AI-model gennem én samlet grænseflade. Kør avancerede modeller som Deepseek R1 privat.",
+    "no_free_tier": "INGEN GRATIS PLAN - FOKUSERET PÅ PROFESSIONELLE.",
+    "credits_rollover": "Ubrugte kreditter overføres i 3 måneder.",
+    "monthly_billing": "Månedlig fakturering",
+    "annual_billing": "Årlig fakturering",
+    "most_popular": "Mest populær",
+    "current": "Nuværende",
+    "credits_per_month": "{{credits}} kreditter pr. måned",
+    "subscription_renewal": "Dit abonnement fornyes den {{date}}",
+    "personal": "Personlig",
+    "business": "Virksomhed",
+    "team": "Team",
+    "enterprise": "Virksomhed"
+  },
+  "agents": {
+    "title": "Agenter",
+    "new_agent": "Ny agent",
+    "manage_agents": "Administrer agenter",
+    "search_placeholder": "Søg efter agenter...",
+    "your_agents": "Dine agenter",
+    "loading": "Indlæser agenter...",
+    "no_agents": "Ingen agenter fundet",
+    "create_first": "Opret din første agent for at komme i gang",
+    "agents_found": "{{count}} agent fundet",
+    "agents_found_plural": "{{count}} agenter fundet",
+    "attached_agents": "Vedhæftede agenter",
+    "listening_description": "Disse agenter lytter til alle beskeder i denne samtale",
+    "no_search_results": "Ingen agenter matcher \"{{search}}\"",
+    "search_help": "Prøv et andet søgeord",
+    "no_agents_description": "Opret din første agent for at komme i gang",
+    "create_agent": "Opret agent",
+    "click_to_attach": "Klik for at vedhæfte til nuværende session",
+    "click_to_detach": "Klik for at løsne fra nuværende session",
+    "show_attached_agents": "Vis vedhæftede agenter",
+    "hide_attached_agents": "Skjul vedhæftede agenter",
+    "toggle_attached_agents": "Skift vedhæftede agenter",
+    "agent_listening_tooltip": "{{name}} lytter og er ivrig efter at hjælpe"
+  },
+  "skills": {
+    "title": "Færdigheder",
+    "command_palette_description": "Administrer genanvendelige instruktion skabeloner"
+  }
+}

@@ -1,0 +1,670 @@
+name: E2E AI Latency Tests
+
+on:
+  schedule:
+    - cron: '0 1 * * *'   # 1am UTC, 9am SGT
+    - cron: '0 11 * * *'  # 11am UTC, 7pm SGT
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Target environment'
+        type: choice
+        options:
+          - dev
+        default: dev
+      pr_number:
+        description: 'PR number for preview env (overrides stage, e.g. 123)'
+        type: string
+        required: false
+      spec_file:
+        description: 'Test spec to run'
+        type: choice
+        options:
+          - ai-latency-short-answers
+          - ai-latency-long-answers
+          - ai-latency-tool-prompts
+          - ai-latency-intermediate-tools
+        default: ai-latency-short-answers
+      ai_model:
+        description: 'AI model to test'
+        type: choice
+        options:
+          - Claude 4.8 Opus
+          - Claude 4.7 Opus
+          - Claude 4.6 Opus
+          - Claude 4.6 Sonnet
+          - Claude 4.5 Haiku
+          - GPT-5.5
+          - GPT-5.4
+          - GPT-5.4 Mini
+          - GPT-5.4 Nano
+          - GPT-5.2 Chat Latest
+          - GPT-5.2
+          - GPT-5 Nano
+          - GPT-4.1 Mini
+        default: Claude 4.6 Opus
+      run_full_matrix:
+        description: 'Run the full matrix (all specs × the latest GPT and latest Claude available in the AI settings modal) instead of a single cell'
+        type: boolean
+        required: false
+        default: false
+      run_all_specs:
+        description: 'Run all spec files on the selected AI model only (ignored when the full matrix box is checked)'
+        type: boolean
+        required: false
+        default: false
+      e2e_test_id:
+        description: 'Tester ID for user isolation (e.g. alice)'
+        type: string
+        required: false
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+jobs:
+  # Full-matrix runs (schedule + run_full_matrix dispatch) pin to whatever the target
+  # environment actually offers, read live from the AI Settings modal. Skipped for the
+  # single-cell and all-specs dispatch modes — those use the dispatch-selected model.
+  discover-models:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix)
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      latest_gpt: ${{ steps.discover.outputs.latest_gpt }}
+      latest_claude: ${{ steps.discover.outputs.latest_claude }}
+    steps:
+      - name: Resolve configuration
+        id: config
+        run: |
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            STAGE="pr${{ inputs.pr_number }}"
+            API_URL="https://app.pr${{ inputs.pr_number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
+          else
+            STAGE="${{ inputs.stage || 'dev' }}"
+            API_URL="https://app.${{ vars.STAGING_SERVER_DOMAIN }}"
+          fi
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build core packages
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        run: npx playwright install chromium --with-deps
+
+      - name: Wait for deployment to be healthy
+        env:
+          TARGET_URL: ${{ steps.config.outputs.api_url }}
+        run: |
+          echo "Waiting for $TARGET_URL to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ] || [ "$STATUS" = "307" ]; then
+              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Deployment did not become healthy within 300s"
+          exit 1
+
+      - name: Discover latest models from AI settings modal
+        id: discover
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
+          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          E2E_TEST_ID: discover-models
+          AI_LATENCY_RUN: 'true'
+          PW_WORKERS: '1'
+          CI: 'true'
+        run: |
+          set -o pipefail
+          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- \
+            pnpm --filter client exec playwright test --project=ai-latency-discover e2e/ai-latency-discover.spec.ts \
+            2>&1 | tee apps/client/playwright-output.txt
+
+          RESULT_FILE=apps/client/e2e/test-results/ai-latency/discovered-models.json
+          if [ ! -f "$RESULT_FILE" ]; then
+            echo "Discovery did not produce $RESULT_FILE"
+            exit 1
+          fi
+          GPT="$(jq -r '.gpt // empty' "$RESULT_FILE")"
+          CLAUDE="$(jq -r '.claude // empty' "$RESULT_FILE")"
+          echo "Discovered latest GPT='$GPT', latest Claude='$CLAUDE'"
+          if [ -z "$GPT" ] || [ -z "$CLAUDE" ]; then
+            echo "Discovery incomplete — both a GPT and a Claude model are required for the full matrix."
+            exit 1
+          fi
+          echo "latest_gpt=$GPT" >> $GITHUB_OUTPUT
+          echo "latest_claude=$CLAUDE" >> $GITHUB_OUTPUT
+
+  setup-matrix:
+    needs: [discover-models]
+    # Run even when discover-models is skipped (single-cell / all-specs modes don't need it).
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      spec_files: ${{ steps.matrix.outputs.spec_files }}
+      ai_models: ${{ steps.matrix.outputs.ai_models }}
+    steps:
+      - name: Determine matrix
+        id: matrix
+        env:
+          DISCOVERED_GPT: ${{ needs.discover-models.outputs.latest_gpt }}
+          DISCOVERED_CLAUDE: ${{ needs.discover-models.outputs.latest_claude }}
+        run: |
+          ALL_SPECS='["ai-latency-short-answers","ai-latency-long-answers","ai-latency-tool-prompts","ai-latency-intermediate-tools"]'
+
+          # Full matrix: all specs × the latest GPT and latest Claude discovered live from
+          # the target environment's AI Settings modal (see the discover-models job).
+          build_full_matrix() {
+            if [ -z "$DISCOVERED_GPT" ] || [ -z "$DISCOVERED_CLAUDE" ]; then
+              echo "Full matrix requested but model discovery did not return both models (gpt='$DISCOVERED_GPT', claude='$DISCOVERED_CLAUDE')."
+              exit 1
+            fi
+            echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
+            echo "ai_models=$(jq -cn --arg c "$DISCOVERED_CLAUDE" --arg g "$DISCOVERED_GPT" '[$c, $g]')" >> $GITHUB_OUTPUT
+          }
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_full_matrix }}" = "true" ]; then
+            build_full_matrix
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.run_all_specs }}" = "true" ]; then
+            # All specs on the single selected model.
+            echo "spec_files=$ALL_SPECS" >> $GITHUB_OUTPUT
+            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # Single cell: selected spec × selected model.
+            echo "spec_files=[\"${{ inputs.spec_file }}\"]" >> $GITHUB_OUTPUT
+            echo "ai_models=[\"${{ inputs.ai_model }}\"]" >> $GITHUB_OUTPUT
+          else
+            # Scheduled run: full matrix.
+            build_full_matrix
+          fi
+
+  e2e-ai-latency:
+    needs: setup-matrix
+    # discover-models is skipped in single-cell and all-specs modes; setup-matrix rescues
+    # itself with `if: always()`, but a skipped ancestor still propagates through and would
+    # skip this job under the default `success()` condition. Gate explicitly on setup-matrix
+    # succeeding so the matrix runs whenever it produced a valid spec/model list.
+    if: ${{ always() && needs.setup-matrix.result == 'success' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      id-token: write
+    # Serialize per stage+spec+model cell so an overlapping scheduled + manual
+    # run (or a re-dispatch) can't stomp the same cell's global-setup data
+    # cleanup. Keyed per cell (not per stage) so distinct cells still parallelize.
+    concurrency:
+      group: e2e-ai-latency-${{ inputs.pr_number || inputs.stage || 'dev' }}-${{ matrix.spec_file }}-${{ matrix.ai_model }}
+      cancel-in-progress: false
+
+    strategy:
+      fail-fast: false
+      matrix:
+        spec_file: ${{ fromJSON(needs.setup-matrix.outputs.spec_files) }}
+        ai_model: ${{ fromJSON(needs.setup-matrix.outputs.ai_models) }}
+
+    steps:
+      - name: Sanitize names for artifact labels
+        id: sanitize
+        run: |
+          MODEL_SAFE="${{ matrix.ai_model }}"
+          MODEL_SAFE="${MODEL_SAFE// /-}"
+          MODEL_SAFE="${MODEL_SAFE//./-}"
+          echo "model_safe=$MODEL_SAFE" >> $GITHUB_OUTPUT
+
+      - name: Compute per-cell E2E test ID
+        id: testid
+        run: |
+          # Derive a unique-per-cell ID so concurrent matrix cells isolate their test data.
+          # Without this, the cleanup endpoint (no testId) deletes ALL e2e users globally,
+          # causing the first-finishing cell to wipe data for the rest.
+          USER_PREFIX="${{ inputs.e2e_test_id }}"
+          CELL_ID="${{ steps.sanitize.outputs.model_safe }}-${{ matrix.spec_file }}"
+          if [ -n "$USER_PREFIX" ]; then
+            TEST_ID="${USER_PREFIX}-${CELL_ID}"
+          else
+            TEST_ID="$CELL_ID"
+          fi
+          echo "test_id=$TEST_ID" >> $GITHUB_OUTPUT
+
+      - name: Resolve configuration
+        id: config
+        env:
+          # Dispatch inputs via env (never interpolate attacker-influenceable
+          # values into the shell). pr_number flows into the SST stage and
+          # `sst shell --stage`, so it must be digits-only.
+          PR_NUMBER: ${{ inputs.pr_number }}
+          STAGE_INPUT: ${{ inputs.stage }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
+              echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
+              exit 1
+            fi
+            STAGE="pr${PR_NUMBER}"
+            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
+          else
+            STAGE="${STAGE_INPUT:-dev}"
+            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
+          fi
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "Stage: $STAGE"
+          echo "API URL: $API_URL"
+          echo "Spec: ${{ matrix.spec_file }}"
+          echo "AI Model: ${{ matrix.ai_model }}"
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build core packages
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        # Cap the install: the yauzl/Node>=24.16 extraction wedge
+        # (playwright#40724) can hang this step indefinitely, idling to the job
+        # cap. Fail fast instead.
+        timeout-minutes: 8
+        run: npx playwright install chromium --with-deps
+
+      - name: Wait for deployment to be healthy
+        env:
+          # Probe /api/ping (a real Lambda route) rather than the bare origin:
+          # CloudFront can answer the apex with 200/302 before the function is
+          # warm, so a bare-origin check passes against a not-yet-ready deploy.
+          TARGET_URL: ${{ steps.config.outputs.api_url }}/api/ping
+        run: |
+          echo "Waiting for $TARGET_URL to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Deployment did not become healthy within 300s"
+          exit 1
+
+      - name: Run AI latency benchmark
+        id: e2e
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
+          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          E2E_TEST_ID: ${{ steps.testid.outputs.test_id }}
+          AI_MODEL: ${{ matrix.ai_model }}
+          AI_LATENCY_RUN: 'true'
+          PW_WORKERS: '3'
+          CI: 'true'
+        run: |
+          set -o pipefail
+          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- \
+            pnpm --filter client exec playwright test e2e/${{ matrix.spec_file }}.spec.ts \
+            2>&1 | tee apps/client/playwright-output.txt
+
+      - name: Persist test results
+        if: always()
+        run: |
+          mkdir -p apps/client/playwright-report
+          # Prefer the deterministic path from `apps/client/playwright.config.ts`.
+          if [ -f apps/client/playwright-report/pw-results.json ]; then
+            cp apps/client/playwright-report/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+          elif [ -f apps/client/pw-results.json ]; then
+            # Backwards-compat fallback.
+            cp apps/client/pw-results.json apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+          else
+            # Last-resort: Playwright may have written relative to a different CWD or config resolution.
+            FOUND="$(find . -type f -name 'pw-results.json' 2>/dev/null | head -1 || true)"
+            if [ -n "$FOUND" ]; then
+              cp "$FOUND" apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json
+            fi
+          fi
+
+          echo "=== pw-results debug ==="
+          echo "Spec file: ${{ matrix.spec_file }}"
+          echo "Copied summary exists? $(test -f apps/client/playwright-report/${{ matrix.spec_file }}-pw-results.json && echo yes || echo no)"
+          echo "Found pw-results.json candidates:"
+          find . -type f -name 'pw-results.json' 2>/dev/null | head -20 || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: ai-latency-${{ matrix.spec_file }}-${{ steps.sanitize.outputs.model_safe }}-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
+          path: |
+            apps/client/playwright-report/
+            apps/client/e2e/test-results/ai-latency/
+          retention-days: 7
+
+      - name: Fail if tests failed
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
+
+  notify:
+    needs: [setup-matrix, e2e-ai-latency]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Resolve environment URL
+        id: config
+        run: |
+          if [ -n "${{ inputs.pr_number }}" ]; then
+            API_URL="https://app.pr${{ inputs.pr_number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
+            ENV_LABEL="preview-${{ inputs.pr_number }}"
+          else
+            API_URL="https://app.${{ vars.STAGING_SERVER_DOMAIN }}"
+            ENV_LABEL="Staging"
+          fi
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "env_label=$ENV_LABEL" >> $GITHUB_OUTPUT
+
+      - name: Set trigger label
+        id: trigger
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
+          else
+            echo "label=Run via Schedule" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all ai-latency artifacts
+        uses: actions/download-artifact@v6
+        continue-on-error: true
+        with:
+          pattern: ai-latency-*
+          path: downloaded-results
+
+      - name: Debug downloaded artifacts
+        if: always()
+        run: |
+          echo "=== Downloaded artifact structure ==="
+          find downloaded-results -type f 2>/dev/null | sort | head -60 || echo "No files found in downloaded-results"
+
+      - name: Aggregate results
+        id: aggregate
+        if: always()
+        env:
+          AI_MODELS_JSON: ${{ needs.setup-matrix.outputs.ai_models }}
+          SPEC_FILES_JSON: ${{ needs.setup-matrix.outputs.spec_files }}
+        run: |
+          mapfile -t ALL_PW_RESULTS < <(find downloaded-results -type f -name '*-pw-results.json' 2>/dev/null | sort)
+          mapfile -t ALL_LATENCY_JSONS < <(find downloaded-results -type f -name '*-results.json' ! -name '*-pw-results.json' 2>/dev/null | sort)
+
+          NL=$'\n'
+
+          if [ -z "$AI_MODELS_JSON" ] || [ "$AI_MODELS_JSON" = "null" ]; then
+            echo "AI_MODELS_JSON from setup-matrix is empty; cannot build table."
+            exit 1
+          fi
+          if [ -z "$SPEC_FILES_JSON" ] || [ "$SPEC_FILES_JSON" = "null" ]; then
+            echo "SPEC_FILES_JSON from setup-matrix is empty; cannot build table."
+            exit 1
+          fi
+
+          mapfile -t AI_MODELS < <(echo "$AI_MODELS_JSON" | jq -r '.[]')
+          mapfile -t SPEC_FILES < <(echo "$SPEC_FILES_JSON" | jq -r '.[]')
+
+          if [ "${#ALL_PW_RESULTS[@]}" -gt 0 ]; then
+            PASSED=$(jq -rs '[.[].stats.expected] | add // 0' "${ALL_PW_RESULTS[@]}")
+            FAILED=$(jq -rs '[.[].stats.unexpected] | add // 0' "${ALL_PW_RESULTS[@]}")
+            OVERALL_STATUS=":white_check_mark: Passed"
+            [ "$FAILED" -gt 0 ] && OVERALL_STATUS=":x: Failed"
+          else
+            OVERALL_STATUS=":fast_forward: No quality data"
+          fi
+
+          echo "overall_status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+
+          sanitize() {
+            local s="$1"
+            s="${s// /-}"
+            s="${s//./-}"
+            echo "$s"
+          }
+
+          echo "Total pw-results files: ${#ALL_PW_RESULTS[@]}"
+          echo "Total latency json files: ${#ALL_LATENCY_JSONS[@]}"
+          if [ "${#ALL_LATENCY_JSONS[@]}" -gt 0 ]; then
+            echo "Latency files (model field):"
+            for JSON_FILE in "${ALL_LATENCY_JSONS[@]}"; do
+              JSON_MODEL="$(jq -r '.model // "unknown"' "$JSON_FILE" 2>/dev/null || echo unknown)"
+              echo "  - $JSON_MODEL :: $JSON_FILE"
+            done
+          fi
+
+          # -------------------------
+          # Build Normal Prompts table (spec × model)
+          # -------------------------
+          LATENCY_WITHIN=0
+          LATENCY_EXCEEDED_COUNT=0
+          LATENCY_NO_DATA=0
+          EXCEEDED=false
+          HAS_NO_DATA=false
+
+          SUITE_W=32
+          MODEL_W=20
+          QUAL_W=8
+
+          TABLE_HDR="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" 'Suite' 'Model' 'Quality' 'Average Latency')"
+          TABLE_SEP="$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" \
+            '--------------------------------' \
+            '--------------------' \
+            '--------' \
+            '---------------')"
+          TABLE_ROWS=""
+
+          for SPEC in "${SPEC_FILES[@]}"; do
+            for AI_MODEL in "${AI_MODELS[@]}"; do
+              MODEL_SAFE="$(sanitize "$AI_MODEL")"
+
+              # Find latency JSON: match by spec basename AND .model field
+              LATENCY_JSON=""
+              for JSON_FILE in "${ALL_LATENCY_JSONS[@]}"; do
+                JSON_SPEC="$(basename "$JSON_FILE" -results.json)"
+                JSON_MODEL="$(jq -r '.model // empty' "$JSON_FILE" 2>/dev/null || true)"
+                if [ "$JSON_SPEC" = "$SPEC" ] && [ "$JSON_MODEL" = "$AI_MODEL" ]; then
+                  LATENCY_JSON="$JSON_FILE"
+                  break
+                fi
+              done
+
+              # Find pw-results co-located in the same artifact as the latency JSON.
+              # Construct the path from the artifact root rather than grepping the path for
+              # the model name — avoids false misses caused by artifact download layout differences.
+              PW_JSON=""
+              if [ -n "$LATENCY_JSON" ]; then
+                # upload-artifact strips the common prefix (apps/client/) when all uploaded
+                # paths share it, so files land as playwright-report/... and e2e/... inside
+                # the artifact — without the apps/client/ segment.
+                ARTIFACT_ROOT="${LATENCY_JSON%%/e2e/*}"
+                CANDIDATE="${ARTIFACT_ROOT}/playwright-report/${SPEC}-pw-results.json"
+                [ -f "$CANDIDATE" ] && PW_JSON="$CANDIDATE"
+              fi
+
+              # Quality column
+              if [ -n "$PW_JSON" ]; then
+                UNEXPECTED="$(jq -r '.stats.unexpected // 0' "$PW_JSON" 2>/dev/null || echo 0)"
+                [ "$UNEXPECTED" -gt 0 ] && QUALITY="Fail" || QUALITY="Pass"
+              else
+                QUALITY="---"
+              fi
+
+              # Latency column
+              if [ -n "$LATENCY_JSON" ]; then
+                THRESHOLD="$(jq -r '.thresholdSec // empty' "$LATENCY_JSON")"
+                AVG="$(jq -r '.averageResponseTimeSec // 0' "$LATENCY_JSON")"
+
+                if [ -z "$THRESHOLD" ] || [ "$THRESHOLD" = "null" ]; then
+                  LATENCY_STR="$(printf '%.2fs' "$AVG") / <=N/A FAIL"
+                  LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
+                  EXCEEDED=true
+                else
+                  IS_ZERO="$(echo "$AVG == 0" | bc -l 2>/dev/null || echo 0)"
+                  IS_OVER="$(echo "$AVG > $THRESHOLD" | bc -l 2>/dev/null || echo 0)"
+                  if [ "$IS_ZERO" = "1" ]; then
+                    LATENCY_STR="No Data"
+                    LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
+                    HAS_NO_DATA=true
+                  elif [ "$IS_OVER" = "1" ]; then
+                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s FAIL"
+                    LATENCY_EXCEEDED_COUNT=$((LATENCY_EXCEEDED_COUNT + 1))
+                    EXCEEDED=true
+                  else
+                    LATENCY_STR="$(printf '%.2fs' "$AVG") / <=${THRESHOLD}s"
+                    LATENCY_WITHIN=$((LATENCY_WITHIN + 1))
+                  fi
+                fi
+              else
+                LATENCY_STR="No Data"
+                LATENCY_NO_DATA=$((LATENCY_NO_DATA + 1))
+                HAS_NO_DATA=true
+              fi
+
+              TABLE_ROWS="${TABLE_ROWS}$(printf "%-${SUITE_W}s %-${MODEL_W}s %-${QUAL_W}s %s" \
+                "$SPEC" "$AI_MODEL" "$QUALITY" "$LATENCY_STR")${NL}"
+            done
+          done
+
+          # Average latency exceeding threshold is a real failure — downgrade overall status.
+          if [ "$EXCEEDED" = "true" ]; then
+            OVERALL_STATUS=":x: Failed"
+          fi
+
+          echo "exceeded=$EXCEEDED" >> $GITHUB_OUTPUT
+          echo "has_no_data=$HAS_NO_DATA" >> $GITHUB_OUTPUT
+          echo "overall_status=$OVERALL_STATUS" >> $GITHUB_OUTPUT
+
+          LATENCY_SUMMARY=":white_check_mark: ${LATENCY_WITHIN} Within  :x: ${LATENCY_EXCEEDED_COUNT} Exceeded  :fast_forward: ${LATENCY_NO_DATA} No Data"
+
+          FOOTNOTE_1="--- = No quality data: Playwright crashed, timed out, or failed before results were collected"
+          FOOTNOTE_2="No Data = Latency results unavailable: an error was encountered prior to latency data collection"
+          NORMAL_PROMPTS_TEXT="*Normal Prompts*${NL}\`\`\`${TABLE_HDR}${NL}${TABLE_SEP}${NL}${TABLE_ROWS}\`\`\`${NL}${FOOTNOTE_1}${NL}${FOOTNOTE_2}"
+
+          jq -n \
+            --arg overall_status "$OVERALL_STATUS" \
+            --arg trigger_label "${{ steps.trigger.outputs.label }}" \
+            --arg branch "${{ github.ref_name }}" \
+            --arg api_url "${{ steps.config.outputs.api_url }}" \
+            --arg env_label "${{ steps.config.outputs.env_label }}" \
+            --arg latency_summary "$LATENCY_SUMMARY" \
+            --arg normal_prompts "$NORMAL_PROMPTS_TEXT" \
+            --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts" \
+            '{
+              "text": ("AI Latency — " + $overall_status),
+              "blocks": [
+                {"type": "header", "text": {"type": "plain_text", "text": ("AI Latency (" + $trigger_label + ")")}},
+                {"type": "section", "fields": [
+                  {"type": "mrkdwn", "text": ("*Status*\n" + $overall_status)},
+                  {"type": "mrkdwn", "text": ("*Branch*\n`" + $branch + "`")}
+                ]},
+                {"type": "section", "fields": [
+                  {"type": "mrkdwn", "text": ("*Environment*\n<" + $api_url + "|" + $env_label + ">")},
+                  {"type": "mrkdwn", "text": ("*Latency*\n" + $latency_summary)}
+                ]},
+                {"type": "section", "text": {"type": "mrkdwn", "text": $normal_prompts}},
+                {"type": "actions", "elements": [
+                  {"type": "button", "text": {"type": "plain_text", "text": "View Report"}, "url": $run_url}
+                ]}
+              ]
+            }' > /tmp/slack-payload.json
+
+      - name: Send Slack notification
+        if: always()
+        uses: slackapi/slack-github-action@v2.1.0
+        with:
+          webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload-file-path: /tmp/slack-payload.json
+
+      - name: Send Slack alert for latency threshold breach
+        if: steps.aggregate.outputs.exceeded == 'true' || steps.aggregate.outputs.has_no_data == 'true'
+        uses: slackapi/slack-github-action@v2.1.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":warning: One or more Bike4Mind AI responses exceeded latency thresholds or encountered failures! Please investigate. <#C08QZ42L9KM|b4m-automation-results>."
+            }

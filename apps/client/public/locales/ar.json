@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "إعدادات الذكاء الاصطناعي",
+    "session": "دفتر",
+    "session_plural": "دفاتر",
+    "favorite": "مفضل",
+    "unfavorite": "غير مفضل",
+    "favorites": "المفضلات",
+    "favorites_count_one": "{{count}} مفضل",
+    "favorites_count_other": "{{count}} مفضلين",
+    "currentSession": "الحالية",
+    "other": "علامات أخرى",
+    "text_model": "نموذج النص",
+    "image_model": "نموذج الصورة",
+    "ai_image": "صورة الذكاء الاصطناعي",
+    "switch_to": "التبديل إلى {{ name }}"
+  },
+  "guide": {
+    "title": "دليل"
+  },
+  "intro": {
+    "title": "مقدمة"
+  },
+  "developers": {
+    "title": "المطورون",
+    "technical_docs": "وثائق فنية"
+  },
+  "changelog": {
+    "title": "سجل التغييرات"
+  },
+  "feedback": {
+    "send": "إرسال ملاحظات"
+  },
+  "terms_policies": "الشروط والسياسات",
+  "login": "تسجيل الدخول",
+  "file": "المعرفة",
+  "forgotPassword": "نسيت كلمة المرور",
+  "signup": "إنشاء حساب",
+  "help": "المساعدة",
+  "manual": "الدليل",
+  "inviteLong": "دعوة صديق",
+  "inviteShort": "دعوة",
+  "tools": {
+    "title": "الأدوات"
+  },
+  "sidenav": {
+    "pin": "تثبيت الشريط الجانبي",
+    "unpin": "إلغاء تثبيت الشريط الجانبي",
+    "sessions": {
+      "sort": {
+        "label": "ترتيب بواسطة",
+        "tags": "حسب العلامات",
+        "date": "حسب التاريخ"
+      },
+      "new": "دردشة جديدة",
+      "item": {
+        "genTags": "إنشاء قائمة علامات الدفتر"
+      }
+    }
+  },
+  "referral": {
+    "title": "إحالة صديق إلى",
+    "email_title_default": "مرحبًا بك في GrokTool!",
+    "email_body_default": "لقد تمت دعوتك بواسطة USER_NAME إلى GrokTool! رابط التسجيل: استخدم الرمز التالي للدعوة للتسجيل: INVITE_CODE",
+    "friend_email": "البريد الإلكتروني للصديق",
+    "num_referrals_available": "الإحالات المتاحة:",
+    "no_valid_emails_error": "يرجى إدخال عناوين بريد إلكتروني صالحة",
+    "send_referral": "إرسال الإحالة",
+    "send_referral_success": "تم إرسال الإحالة بنجاح!",
+    "send_referral_skipped": "{{count}} دعوة مجدولة - هذه العناوين البريدية لديها حساب بالفعل.",
+    "send_referral_failed": "لم تتمكن من إرسال {{count}} دعوة. يرجى المحاولة مرة أخرى.",
+    "send_referral_error": "خطأ في إرسال الإحالة. يرجى المحاولة مرة أخرى.",
+    "slack_notification_default": "تم إرسال الإحالة بواسطة المستخدم USER_NAME:USER_ID إلى FRIEND_EMAIL"
+  },
+  "activateVoice": "تفعيل هذا الصوت",
+  "liveVoice": "الصوت المباشر",
+  "whatsNew": "ما الجديد",
+  "welcome": "مرحبًا بك في {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "جارٍ الاتصال",
+      "1": "متصل",
+      "2": "جارٍ قطع الاتصال",
+      "3": "غير متصل",
+      "-1": "قيد الانتظار"
+    },
+    "networkStatus": "الشبكة: {{ status }}"
+  },
+  "deleteVoice": "حذف هذا الصوت",
+  "deleteVoiceConfirm": "هل أنت متأكد أنك تريد حذف هذا الصوت؟",
+  "organization": {
+    "organizations": "فرق",
+    "defaultName": "منظمتي",
+    "shared": "مشاركة معي",
+    "create": "إنشاء فريق",
+    "search": "ابحث عن الفرق...",
+    "no_organizations": "لم يتم العثور على فرق",
+    "view_details": "عرض التفاصيل",
+    "x_seats": "{{count}} مقعد",
+    "active_subscription": "اشتراك نشط",
+    "no_subscription": "لا يوجد اشتراك",
+    "x_members": "{{count}} أعضاء",
+    "x_credits": "{{count}} رصيد",
+    "owner": "مالك"
+  },
+  "session": {
+    "typeYourMessage": "اكتب رسالتك هنا",
+    "switchedSession": "تم التبديل إلى: {{ sessionName }}",
+    "send": "إرسال",
+    "sendMessage": "إرسال رسالة",
+    "preparingQuest": "جارٍ التحضير للبحث...",
+    "rephrasePrompt": "تحسين المدخل الخاص بك",
+    "promptRephrased": "تم إعادة صياغة الطلب بنجاح",
+    "rephraseFailed": "فشل في إعادة صياغة الطلب",
+    "errors": {
+      "notebookDeleted": "تم حذف هذا الدفتر. يرجى إنشاء واحد جديد.",
+      "noPermission": "ليس لديك إذن للوصول إلى هذا الدفتر.",
+      "invalidRequest": "طلب غير صالح. يرجى المحاولة مرة أخرى.",
+      "tooManyRequests": "طلبات كثيرة جدًا. يرجى الانتظار لحظة والمحاولة مرة أخرى.",
+      "serverError": "خطأ في الخادم. يرجى المحاولة مرة أخرى لاحقًا.",
+      "networkError": "فشل في إرسال الرسالة. يرجى التحقق من اتصالك.",
+      "sendFailed": "فشل في إرسال الرسالة. يرجى المحاولة مرة أخرى."
+    }
+  },
+  "projects": {
+    "title": "مشروع",
+    "projects": "المشاريع",
+    "joined_projects": "المشاريع المنضمة",
+    "no_joined_projects": "لا توجد مشاريع انضم إليها بعد",
+    "add_to_project": "إضافة إلى المشروع",
+    "modals": {
+      "files": {
+        "title": "إضافة ملفات إلى المشروع",
+        "subtitle": "اختر الملفات لإضافتها إلى مشروعك",
+        "button_label": "إضافة ملفات",
+        "search_placeholder": "البحث عن الملفات",
+        "no_files": "لم يتم العثور على ملفات."
+      },
+      "members": {
+        "title": "إضافة أعضاء إلى المشروع",
+        "subtitle": "ابحث واختر المستخدمين لإضافتهم إلى مشروعك",
+        "button_label": "إضافة الأعضاء",
+        "search_placeholder": "البحث عن المستخدمين",
+        "no_members": "حاول البحث عن مستخدم."
+      },
+      "sessions": {
+        "title": "إضافة دفتر ملاحظات إلى مشروع",
+        "subtitle": "اختر دفاتر الملاحظات لإضافتها إلى مشروعك أو إنشاء واحد جديد",
+        "button_label": "إضافة دفاتر الملاحظات",
+        "search_placeholder": "بحث",
+        "create_button": "إنشاء",
+        "no_notebooks": "لم يتم العثور على دفاتر ملاحظات. حاول إنشاء واحدة جديدة."
+      },
+      "generic": {
+        "select_all": "حدد الكل",
+        "unselect_all": "إلغاء تحديد الكل",
+        "add_items_one": "إضافة {{count}} عنصر",
+        "add_items_other": "إضافة {{count}} عناصر",
+        "delete_items": "حذف {{count}} عنصر"
+      }
+    }
+  },
+  "logout": "تسجيل الخروج",
+  "inbox": {
+    "title": "البريد الوارد",
+    "messages": "الرسائل",
+    "invites": "الدعوات",
+    "sendMessage": "إرسال رسالة",
+    "noMessages": "لا توجد رسائل"
+  },
+  "addSomething": "إضافة {{ name }}",
+  "deleteAllSomething": "حذف جميع {{ name }}",
+  "exportAllSomething": "تصدير جميع {{ name }}",
+  "importLLMHistory": "استيراد تاريخ LLM",
+  "downloadAllSomething": "تحميل جميع {{ name }}",
+  "language": {
+    "language_settings": "إعدادات اللغة",
+    "change-language": "تغيير اللغة"
+  },
+  "theme": {
+    "turn-dark": "تشغيل الوضع الداكن",
+    "turn-light": "تشغيل الوضع الفاتح"
+  },
+  "auth": {
+    "usernameOrEmail": "اسم المستخدم أو البريد الإلكتروني",
+    "username": "اسم المستخدم",
+    "password": "كلمة المرور",
+    "confirmPassword": "تأكيد كلمة المرور",
+    "fullName": "الاسم الكامل",
+    "inviteCode": "رمز الدعوة",
+    "needCode": "هل تحتاج إلى رمز؟",
+    "noAccount": "ليس لديك حساب؟",
+    "haveAccount": "هل لديك حساب بالفعل؟",
+    "loginWithProvider": "تسجيل الدخول باستخدام {{ provider }}",
+    "checking": "جارٍ التحقق...",
+    "continue": "استمر",
+    "troubleSigningIn": "مشكلة في تسجيل الدخول؟",
+    "signingInAs": "تسجيل الدخول كـ",
+    "signingIn": "جارٍ تسجيل الدخول...",
+    "backToEmail": "العودة إلى البريد الإلكتروني",
+    "redirectingToProvider": "جارٍ تحويلك إلى تسجيل دخول منظمتك...",
+    "resetInstructions": "يرجى إدخال عنوان بريدك الإلكتروني. سنرسل لك رسالة إلكترونية لإعادة تعيين كلمة المرور الخاصة بك.",
+    "sendResetEmail": "إرسال بريد إلكتروني لإعادة تعيين كلمة المرور",
+    "email": "البريد الإلكتروني",
+    "resetEmailSentMessage": "تم إرسال البريد الإلكتروني! يرجى التحقق من بريدك الإلكتروني للحصول على تعليمات إضافية",
+    "createAccountDesc": "إنشاء حساب",
+    "createBtn": "إنشاء حساب",
+    "loginBtn": "تسجيل الدخول",
+    "passwordStrength": {
+      "label": "قوة كلمة المرور",
+      "weak": "ضعيف",
+      "fair": "مقبول",
+      "strong": "قوي"
+    },
+    "passwordRequirements": {
+      "title": "متطلبات كلمة المرور",
+      "minLength": "على الأقل {{count}} أحرف",
+      "uppercase": "حرف واحد كبير",
+      "lowercase": "حرف واحد صغير",
+      "number": "رقم واحد",
+      "specialChar": "رمز خاص واحد",
+      "met": "تم تلبية",
+      "notMet": "لم يتم تلبية"
+    },
+    "errors": {
+      "usernameExists": "اسم المستخدم '{{username}}' محجوز بالفعل. الرجاء اختيار اسم مستخدم آخر.",
+      "emailExists": "يوجد حساب بعنوان البريد الإلكتروني '{{email}}' بالفعل. الرجاء استخدام بريد إلكتروني مختلف أو تسجيل الدخول إلى حسابك الحالي.",
+      "accountExists": "يوجد حساب بهذه البيانات بالفعل. الرجاء محاولة تسجيل الدخول أو استخدام بيانات مختلفة.",
+      "invalidInviteCode": "رمز الدعوة الذي أدخلته غير صالح أو انتهت صلاحيته. الرجاء التحقق والمحاولة مرة أخرى.",
+      "registrationFailed": "فشل التسجيل. الرجاء المحاولة مرة أخرى لاحقاً.",
+      "validation": {
+        "generic": "إدخال غير صالح",
+        "invalidUsername": "يمكن أن يحتوي اسم المستخدم على أحرف وأرقام وشرطات سفلية ونقاط وشرطات فقط",
+        "passwordMismatch": "كلمات المرور لا تتطابق",
+        "passwordRequirements": "يجب أن تكون كلمة المرور مكونة من 8 أحرف على الأقل، مع أحرف كبيرة وصغيرة، ورقم، ورمز خاص"
+      }
+    }
+  },
+  "search": "بحث",
+  "share": "مشاركة",
+  "rename": "إعادة تسمية",
+  "favorite": "مفضل",
+  "unfavorite": "غير مفضل",
+  "delete": "حذف",
+  "files": {
+    "showAttachedFiles": "عرض الملفات المرفقة",
+    "hideAttachedFiles": "إخفاء الملفات المرفقة",
+    "title": "ملفات",
+    "upload": "تحميل الملفات",
+    "long_title": "متصفح الملفات"
+  },
+  "view": "عرض",
+  "info": "معلومات",
+  "clone": "استنساخ",
+  "download": "تحميل",
+  "summarize": "تلخيص",
+  "profile": {
+    "title": "الملف الشخصي",
+    "tooltip": "الملف الشخصي",
+    "collection": "المجموعة",
+    "collections": {
+      "all_types": "جميع الأنواع"
+    },
+    "users_profile": "ملف {{ name }} الشخصي",
+    "storage_used": "التخزين المستخدم",
+    "credits": "الرصيد",
+    "subscription": "الاشتراك",
+    "edit": "تعديل الملف الشخصي",
+    "manage_subscription": "إدارة الاشتراك",
+    "upgrade": "ترقية",
+    "credit_analytics": "تحليلات الرصيد",
+    "pricing": "أسعار الرصيد",
+    "show_purchases": "عرض المشتريات",
+    "show_usage": "عرض الاستخدام",
+    "show_combined": "عرض المجموع",
+    "buy_credits": "شراء أرصدة"
+  },
+  "community": {
+    "title": "المجتمع",
+    "tooltip": "المجتمع",
+    "feed": "خلاصة المجتمع"
+  },
+  "subscriptions": {
+    "title": "الاشتراكات",
+    "expires_on": "تنتهي في {{ date }}",
+    "renews_on": "تجدد في {{ date }}"
+  },
+  "billing": {
+    "title": "الفوترة"
+  },
+  "credits": {
+    "title": "الرصيد",
+    "usage": "استخدام الرصيد",
+    "analytics": "تحليلات الرصيد",
+    "analytics_tooltip": "عرض استخدام الرصيد على مر الزمن",
+    "current_balance": "الرصيد الحالي",
+    "credits": "رصيد",
+    "usage_by_model": "الاستخدام حسب النموذج",
+    "no_transactions": "لم يتم العثور على معاملات رصيد في هذه الفترة الزمنية",
+    "model_pricing": "أسعار النموذج",
+    "text_models": "نماذج نصية",
+    "image_models": "نماذج صور",
+    "pricing_per_1k_tokens": "الأسعار المعروضة بالرصيد لكل 1,000 توكن",
+    "pricing_per_generation": "الأسعار المعروضة بالرصيد لكل توليد صورة",
+    "model_name": "اسم النموذج",
+    "price_tier": "فئة السعر",
+    "input_cost": "تكلفة الإدخال",
+    "output_cost": "تكلفة الإخراج",
+    "generation_cost": "تكلفة التوليد",
+    "no_models_available": "لا توجد نماذج متاحة",
+    "pricing_note": "ملاحظة: الأسعار تقريبية وقد تختلف بناءً على معلمات النموذج. فئات الأسعار: $ (الأدنى)، $$ (متوسط)، $$$ (ممتاز).",
+    "burn_rate": "استخدام يومي (نسبة الحرق)",
+    "days_remaining": "الأيام المتبقية المقدرة",
+    "usage_pattern": "استنادًا إلى نمط استخدامك من آخر {{days}} يومًا",
+    "credits_used": "الرصيد المستخدم",
+    "credits_purchased": "الرصيد المشتري",
+    "net_credits": "الرصيد الصافي"
+  },
+  "time": {
+    "last_7_days": "آخر 7 أيام",
+    "last_30_days": "آخر 30 يومًا",
+    "last_90_days": "آخر 90 يومًا",
+    "last_180_days": "آخر 180 يومًا",
+    "last_365_days": "آخر 365 يومًا"
+  },
+  "common": {
+    "date": "تاريخ",
+    "refresh": "تحديث",
+    "days": "أيام",
+    "cancel": "إلغاء",
+    "save": "حفظ",
+    "delete": "حذف",
+    "edit": "تحرير",
+    "close": "إغلاق",
+    "submit": "إرسال",
+    "loading": "جارٍ التحميل...",
+    "error": "خطأ",
+    "success": "نجاح"
+  },
+  "errors": {
+    "failed_to_load_data": "فشل في تحميل البيانات. يرجى المحاولة مرة أخرى لاحقًا."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "انتهت صلاحية اتصالك بـ Atlassian. يرجى إعادة الاتصال بحسابك."
+    }
+  },
+  "credits_modal": {
+    "title": "رصيد إضافي",
+    "description": "اشترِ أرصدة إضافية للاستمرار في استخدام نماذج الذكاء الاصطناعي المتقدمة والميزات. يتم استخدام الأرصدة لاستنتاج النماذج والميزات الخاصة، حيث تستهلك نماذج مختلفة مبالغ متفاوتة بناءً على التعقيد.",
+    "current_credits": "مبلغ الرصيد الحالي",
+    "best_value": "أفضل قيمة",
+    "purchase_success": "تم شراء {{credits}} رصيد",
+    "history_title": "تاريخ شراء الرصيد",
+    "purchase": "شراء",
+    "no_transactions": "لا توجد معاملات حتى الآن",
+    "low_credits": "رصيدك منخفض",
+    "low_credits_sub": "اشتري المزيد من الرصيد لمتابعة عملك.",
+    "no_credits": "لا يوجد رصيد",
+    "no_credits_sub": "اشتري رصيدًا لمتابعة عملك.",
+    "status": {
+      "completed": "مكتمل",
+      "pending": "معلق",
+      "failed": "فشل"
+    }
+  },
+  "settings": {
+    "title": "الإعدادات",
+    "tooltip": "الإعدادات",
+    "main": "الإعدادات الرئيسية",
+    "account": "الحساب",
+    "ai_features": "ميزات الذكاء الاصطناعي",
+    "connected_apps": {
+      "title": "التطبيقات المتصلة",
+      "link": "رابط",
+      "unlink": "فصل الارتباط"
+    },
+    "developer_tools": "أدوات المطور",
+    "experimental_features": {
+      "title": "ميزات تجريبية",
+      "tooltip": "ميزات تجريبية",
+      "header": "ميزات تجريبية",
+      "beta_features": {
+        "title": "ميزات بيتا",
+        "subtitle": "هذه الميزات لا تزال قيد التطوير وقد تتسبب في نتائج غير متوقعة. يعني اختيار تمكينها أنك توافق على استخدامها بحالتها الحالية."
+      }
+    },
+    "ui_preferences": "تفضيلات واجهة المستخدم"
+  },
+  "mementos": {
+    "title": "الذكريات",
+    "tooltip": "الذكريات"
+  },
+  "admin": {
+    "title": "الإدارة",
+    "tooltip": "إعدادات الإدارة"
+  },
+  "speech": {
+    "title": "الكلام",
+    "tooltip": "الكلام إلى نص والنص إلى كلام"
+  },
+  "instructions": {
+    "title": "التعليمات",
+    "tooltip": "التعليمات"
+  },
+  "friends": {
+    "add_friend": "إضافة إلى الأصدقاء",
+    "unfriend": "إزالة من الأصدقاء",
+    "pending_request": "طلب صداقة معلق",
+    "all": "جميع الأصدقاء",
+    "pending": "معلق"
+  },
+  "notebooks": {
+    "view_info": "عرض معلومات الدفتر",
+    "clone": "استنساخ الدفتر",
+    "download": "تنزيل الدفتر",
+    "summarize": "تلخيص الدفتر",
+    "delete": "حذف الدفتر",
+    "delete_confirm": "هل أنت متأكد أنك تريد حذف \"{{ name }}\" بشكل دائم؟ لا يمكن التراجع عن هذا الإجراء.",
+    "auto_rename": "إعادة التسمية بواسطة الذكاء الاصطناعي"
+  },
+  "add_friend": {
+    "title": "إضافة صديق",
+    "friend_email": "البريد الإلكتروني للصديق",
+    "message": "رسالة",
+    "cancel": "إلغاء",
+    "send": "إرسال",
+    "email_placeholder": "أدخل بريد صديقك الإلكتروني",
+    "message_placeholder": "أدخل رسالتك"
+  },
+  "file_browser": {
+    "my_files": "ملفاتي",
+    "shared_with_me": "مشاركتي",
+    "total_files": "إجمالي عناصر المعرفة",
+    "search_placeholder": "ابحث بالاسم أو الوسم...",
+    "file_type": "نوع الملف",
+    "all_files": "جميع الملفات",
+    "text": "نص",
+    "pdf": "PDF",
+    "url": "رابط",
+    "image": "صورة",
+    "excel": "إكسل",
+    "word": "ورد",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "كود",
+    "date_created": "تاريخ الإنشاء",
+    "size": "الحجم",
+    "name": "الاسم",
+    "sort_z_to_a": "ترتيب من Z إلى A",
+    "sort_a_to_z": "ترتيب من A إلى Z",
+    "grid_view": "عرض الشبكة",
+    "list_view": "عرض القائمة",
+    "select_file_hint": "بالنقر، اختر ملفًا أو عدة ملفات وأضفها إلى جلسة دفتر ملاحظاتك!",
+    "session_one": "دفتر الملاحظات",
+    "session_other": "دفاتر الملاحظات",
+    "no_files_available": "لا توجد ملفات متاحة",
+    "count_file_selected_one": "{{count}} ملف محدد",
+    "count_file_selected_other": "{{count}} ملفات محددة",
+    "add_count_file_one": "أضف {{count}} ملف",
+    "add_count_file_other": "أضف {{count}} ملفات",
+    "delete_count_file_one": "احذف {{count}} ملف",
+    "delete_count_file_other": "احذف {{count}} ملفات",
+    "share_count_file_one": "مشاركة {{count}} ملف",
+    "share_count_file_other": "مشاركة {{count}} ملفات",
+    "count_file_one": "{{count}} ملف",
+    "count_file_other": "{{count}} ملفات",
+    "add_to_session_success": "إضافة الملف: {{fileNames}} إلى {{sessionName}}",
+    "add_file_success": "إضافة الملف: {{fileNames}}",
+    "browse_files": "تصفح الملفات",
+    "create_new_knowledge": "إنشاء",
+    "create_new_knowledge_from_url": "جمع من عنوان URL",
+    "enter_url": "أدخل عنوان URL",
+    "create_file": "إنشاء ملف",
+    "create_file_from_url": "إنشاء ملف",
+    "create_from_url": "تجميع سريع",
+    "research": "بحث",
+    "open_research": "فتح البحث",
+    "url_success": "تم إنشاء المعرفة بنجاح من عنوان URL: {{url}}",
+    "url_error": "فشل في إنشاء المعرفة من عنوان URL: {{url}}",
+    "url_required": "يرجى إدخال عنوان URL",
+    "previous": "السابق",
+    "next": "التالي",
+    "page_of": "الصفحة {{current}} من {{total}}",
+    "drop_files_here": "اسحب الملفات هنا",
+    "tagging": "جارٍ وضع العلامات...",
+    "tag_files": "وضع علامات على الملفات",
+    "select_all": "تحديد الكل",
+    "unselect_all": "إلغاء تحديد الكل",
+    "add_files": "إضافة ملفات",
+    "add_files_to_notebook_one": "إضافة {{count}} ملف إلى دفتر",
+    "add_files_to_notebook_other": "إضافة {{count}} ملفات إلى دفتر",
+    "in_project": "في المشروع"
+  },
+  "file_properties": {
+    "title": "خصائص الملف",
+    "make_instructions": "تحويل إلى تعليمات؟",
+    "instruction_priority": "أولوية التعليمات (0–999)",
+    "priority_levels": {
+      "global": "0-100: تعليمات عامة",
+      "group": "101-300: تعليمات مجموعة/شركة",
+      "project": "301-500: تعليمات المشروع",
+      "user": "501-999: تعليمات المستخدم"
+    },
+    "save": "حفظ",
+    "update_success": "تم تحديث أولوية النظام لـ \"{{fileName}}\".",
+    "update_error": "فشل في تحديث أولوية النظام."
+  },
+  "file_actions": {
+    "notes": "ملاحظات",
+    "notes_placeholder": "أضف ملاحظات حول هذا الملف...",
+    "add_notes": "إضافة ملاحظات",
+    "add_note": "إضافة ملاحظة",
+    "edit_notes": "تحرير الملاحظات",
+    "notes_save_error": "فشل في حفظ الملاحظات",
+    "manage_tags": "إدارة العلامات",
+    "tags": "إدارة الوسوم",
+    "tags_placeholder": "ادخل أسماء العلامات مفصولة بفواصل...",
+    "add_tag_one": "تم تحديث العلامة لـ {{count}} ملف",
+    "add_tag_other": "تم تحديث العلامة لـ {{count}} ملفات",
+    "failed_to_add_tag_one": "فشل في تحديث العلامة للملف",
+    "failed_to_add_tag_other": "فشل في تحديث العلامة للملفات",
+    "cancel": "إلغاء",
+    "save": "حفظ",
+    "download": "تحميل",
+    "vectorize": "تحويل إلى متجه",
+    "instruction": "تعليمات {{priority}}",
+    "chunked": "مجزأة",
+    "not_chunked": "غير مجزأة"
+  },
+  "subscription_modal": {
+    "title": "الاشتراك",
+    "description": "الوصول إلى كل نموذج رئيسي للذكاء الاصطناعي من خلال واجهة موحدة واحدة. تشغيل نماذج متقدمة مثل Deepseek R1 بشكل خاص.",
+    "no_free_tier": "لا توجد طبقة مجانية - موجهة نحو المحترفين.",
+    "credits_rollover": "تتراكم الاعتمادات غير المستخدمة لمدة 3 أشهر.",
+    "monthly_billing": "الفوترة الشهرية",
+    "annual_billing": "الفوترة السنوية",
+    "most_popular": "الأكثر شعبية",
+    "current": "الحالي",
+    "credits_per_month": "{{credits}} اعتمادات في الشهر",
+    "subscription_renewal": "تتجدد اشتراكك في {{date}}",
+    "personal": "شخصي",
+    "business": "عمل",
+    "team": "فريق",
+    "enterprise": "مؤسسة"
+  },
+  "agents": {
+    "title": "الوكلاء",
+    "new_agent": "وكيل جديد",
+    "manage_agents": "إدارة الوكلاء",
+    "search_placeholder": "ابحث عن الوكلاء...",
+    "your_agents": "وكلائك",
+    "loading": "جارٍ تحميل الوكلاء...",
+    "no_agents": "لم يتم العثور على وكلاء",
+    "create_first": "أنشئ وكيلك الأول للبدء",
+    "agents_found": "{{count}} وكيل وجد",
+    "agents_found_plural": "{{count}} وكلاء وجدوا",
+    "attached_agents": "الوكلاء المتصلين",
+    "listening_description": "هؤلاء الوكلاء يستمعون لجميع الرسائل في هذه المحادثة",
+    "no_search_results": "لا توجد وكلاء تطابق \"{{search}}\"",
+    "search_help": "حاول مصطلح بحث مختلف",
+    "no_agents_description": "أنشئ وكيلك الأول للبدء",
+    "create_agent": "إنشاء وكيل",
+    "click_to_attach": "انقر للإرفاق بجلسة الحالية",
+    "click_to_detach": "انقر للفصل عن الجلسة الحالية",
+    "show_attached_agents": "عرض الوكلاء المتصلين",
+    "hide_attached_agents": "إخفاء الوكلاء المتصلين",
+    "toggle_attached_agents": "تبديل الوكلاء المتصلين",
+    "agent_listening_tooltip": "{{name}} يستمع ويتطلع للمساعدة"
+  },
+  "skills": {
+    "title": "المهارات",
+    "command_palette_description": "إدارة قوالب التعليمات القابلة لإعادة الاستخدام"
+  }
+}

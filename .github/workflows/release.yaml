@@ -1,0 +1,256 @@
+# Changesets Release Workflow
+#
+# This workflow handles the entire release lifecycle:
+# 1. When changeset files are pending: creates/updates a "Version Packages" PR
+# 2. When the "Version Packages" PR is merged: publishes to npm and creates GitHub releases
+# 3. Manual version bump via workflow_dispatch
+#
+# Replaces: release-please.yaml + post-release.yaml
+
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'b4m-core/**'
+      - 'packages/cli/**'
+      - '.changeset/**'
+      - '.github/workflows/release.yaml'
+  workflow_dispatch:
+    inputs:
+      package:
+        description: 'Package to bump (e.g., common, services, utils, mcp, cli, or all)'
+        required: true
+        type: choice
+        options:
+          - all
+          - agents
+          - auth
+          - common
+          - core
+          - db-core
+          - fab-pipeline
+          - infra
+          - llm-adapters
+          - observability
+          - services
+          - utils
+          - mcp
+          - cli
+      version-type:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: changesets-release-${{ github.event_name }}
+  cancel-in-progress: false
+
+# Disable Husky git hooks in CI. The changesets action does git push
+# to create/update the Version Packages PR branch, which would trigger
+# the pre-push hook (pnpm -w typecheck && pnpm -r typecheck) and timeout.
+# https://typicode.github.io/husky/how-to.html
+env:
+  HUSKY: "0"
+
+jobs:
+  # Manual version bump: creates a changeset file on a new branch and opens a PR
+  manual-version-bump:
+    if: github.event_name == 'workflow_dispatch' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ubuntu-latest
+    steps:
+      # Use b4m-release-bot App token (not GITHUB_TOKEN) so the manual bump PR
+      # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
+      # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
+      # NOTE: cleanup.yml uses the same App with different secret names (GH_APP_ID / GH_APP_PRIVATE_KEY).
+      # Consider consolidating to one naming convention in a follow-up.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify App token is non-empty
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty — check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY. Aborting before fallback to GITHUB_TOKEN (which would create PRs that skip CI)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      - name: Configure Git
+        run: |
+          git config user.name "b4m-release-bot[bot]"
+          git config user.email "b4m-release-bot[bot]@users.noreply.github.com"
+
+      - name: Create changeset and PR
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          PACKAGE: ${{ github.event.inputs.package }}
+          BUMP: ${{ github.event.inputs.version-type }}
+        run: |
+          # Map short names to full package names
+          declare -A PKG_NAMES=(
+            [agents]="@bike4mind/agents"
+            [auth]="@bike4mind/auth"
+            [common]="@bike4mind/common"
+            [core]="@bike4mind/core"
+            [db-core]="@bike4mind/db-core"
+            [fab-pipeline]="@bike4mind/fab-pipeline"
+            [infra]="@bike4mind/infra"
+            [llm-adapters]="@bike4mind/llm-adapters"
+            [observability]="@bike4mind/observability"
+            [services]="@bike4mind/services"
+            [utils]="@bike4mind/utils"
+            [mcp]="@bike4mind/mcp"
+            [cli]="@bike4mind/cli"
+          )
+
+          BRANCH_NAME="changeset/manual-bump-$(date +%s)"
+          git checkout -b "$BRANCH_NAME"
+
+          mkdir -p .changeset
+          CHANGESET_FILE=".changeset/manual-bump-$(date +%s).md"
+
+          if [ "$PACKAGE" = "all" ]; then
+            {
+              echo "---"
+              echo "\"@bike4mind/agents\": $BUMP"
+              echo "\"@bike4mind/auth\": $BUMP"
+              echo "\"@bike4mind/common\": $BUMP"
+              echo "\"@bike4mind/core\": $BUMP"
+              echo "\"@bike4mind/db-core\": $BUMP"
+              echo "\"@bike4mind/fab-pipeline\": $BUMP"
+              echo "\"@bike4mind/infra\": $BUMP"
+              echo "\"@bike4mind/llm-adapters\": $BUMP"
+              echo "\"@bike4mind/observability\": $BUMP"
+              echo "\"@bike4mind/services\": $BUMP"
+              echo "\"@bike4mind/utils\": $BUMP"
+              echo "\"@bike4mind/mcp\": $BUMP"
+              echo "\"@bike4mind/cli\": $BUMP"
+              echo "---"
+              echo ""
+              echo "Manual version bump for all packages"
+            } > "$CHANGESET_FILE"
+          else
+            PKG_FULL="${PKG_NAMES[$PACKAGE]}"
+            if [ -z "$PKG_FULL" ]; then
+              echo "Error: unknown package '$PACKAGE'"
+              exit 1
+            fi
+            {
+              echo "---"
+              echo "\"$PKG_FULL\": $BUMP"
+              echo "---"
+              echo ""
+              echo "Manual $BUMP version bump for $PKG_FULL"
+            } > "$CHANGESET_FILE"
+          fi
+
+          git add .changeset/
+          git commit -m "chore(release): manual $BUMP bump for $PACKAGE"
+          git push origin "$BRANCH_NAME"
+
+          gh pr create \
+            --title "chore(release): manual $BUMP version bump for $PACKAGE" \
+            --body "Automated manual version bump for **$PACKAGE** package(s) with **$BUMP** bump type." \
+            --base main \
+            --head "$BRANCH_NAME"
+
+  # Automated release: creates Version Packages PR or publishes when that PR is merged
+  release:
+    if: github.event_name == 'push' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 20
+    steps:
+      # Use b4m-release-bot App token (not GITHUB_TOKEN) so the Version Packages PR
+      # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
+      # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify App token is non-empty
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty — check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY. Aborting before fallback to GITHUB_TOKEN (which would create PRs that skip CI)."
+            exit 1
+          fi
+
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        # Brand defaults baked into the published @bike4mind/cli at build time.
+        # Source has NO brand fallback (open-core invariant, #9306/#9392); the
+        # hosted publish injects them here from repo variables. Unset on a fork ⇒
+        # empty default (the fork sets its own var). See packages/cli/tsdown.config.ts.
+        env:
+          B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+          B4M_CREDITS_URL: ${{ vars.B4M_CREDITS_URL }}
+        run: |
+          pnpm core:build
+          pnpm --filter "@bike4mind/cli" build
+
+      - name: Create Release PR or Publish
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          version: pnpm changeset:version
+          publish: pnpm changeset:publish
+          commit: "chore(release): version packages"
+          title: "chore(release): version packages"
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN_PUBLISH }}

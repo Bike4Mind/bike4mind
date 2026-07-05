@@ -1,0 +1,42 @@
+name: Generate What's New Modal (Production)
+
+# This workflow runs daily to batch all production deploys from the last 24 hours
+# into a single What's New modal announcement for end users.
+#
+# NOTE: This workflow only runs on the canonical repository (see the CANONICAL_REPO guard).
+# Forks will sync this file but execution is prevented via repository check.
+# To enable in your fork: Update the repository check and configure AWS/GitHub secrets.
+
+on:
+  schedule:
+    # Run daily at 7am UTC (1am CST / 2am EST) - optimized for CST team
+    # Fork sync runs at 9am UTC giving 2-hour buffer
+    - cron: '0 7 * * *'
+
+  workflow_dispatch:  # Allow manual trigger for testing
+    inputs:
+      dry_run:
+        description: "Preview mode (don't send to SQS)"
+        type: boolean
+        default: false
+
+# Minimal permissions (principle of least privilege)
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read  # Required for github.rest.pulls.list() in reusable workflow
+
+jobs:
+  call-generate-modal:
+    # DISABLED: Replaced by server-side cron (apps/client/server/cron/whatsNewGeneration.ts)
+    # Re-enable by changing `if: false` back to `if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')`
+    if: false
+    uses: ./.github/workflows/generate-whats-new-modal-reusable.yml
+    with:
+      environment: production
+      target_branch: prod
+      dry_run: ${{ github.event.inputs.dry_run == 'true' }}
+    secrets:
+      WHATS_NEW_AWS_ACCESS_KEY_ID: ${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID_PROD }}
+      WHATS_NEW_AWS_SECRET_ACCESS_KEY: ${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY_PROD }}
+      WHATS_NEW_QUEUE_URL: ${{ secrets.WHATS_NEW_QUEUE_URL_PROD }}

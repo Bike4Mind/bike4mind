@@ -1,0 +1,38 @@
+# Allowlist for scripts/check-no-account-ids.sh (issue #9306).
+# Each non-comment line is an extended-regex (grep -E) pattern. A finding whose
+# "file:line:matchline" matches ANY pattern here is treated as acceptable.
+#
+# Add an entry only for genuinely legitimate references, with a comment explaining
+# why. Examples of legitimate matches: RFC-6761 .invalid placeholder domains,
+# documentation links inside code comments, test fixtures using example domains.
+#
+# Keep this list short — the goal is zero account-tied identifiers in shippable
+# code. Prefer moving the value to config/env over allowlisting it.
+
+# Test-environment seeds in vitest.setup.ts (not shipped, not account-tied config): dummy
+# real-format Stripe price ids, and a SERVER_DOMAIN value so modules that derive hosts from
+# it resolve to the bike4mind hosts the existing tests assert. The price pattern is narrowed
+# to the test/prod placeholder naming so real price_1… ids are never allowed through.
+vitest\.setup\.ts.*price_(test|prod)_
+vitest\.setup\.ts.*SERVER_DOMAIN
+# Test-env seed of the internal staff domains for the domain-grant path (#9743). Not
+# shipped runtime config — mirrors the SERVER_DOMAIN seed above so registry/verify tests
+# resolve the internal-domain rows. Real config is sourced from the NEXT_PUBLIC_INTERNAL_
+# STAFF_DOMAINS repo/org variable at deploy, never hardcoded in shippable code.
+vitest\.setup\.ts.*NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+
+# Developer/test tooling — example & seed emails in usage docs and DB-seed helpers, not
+# shippable runtime that couples a fork to B4M infra. PII sanitization (example.com persona)
+# is tracked under the separate PII-sanitization effort, not this functional-couplings P0.
+packages/scripts/create-test-email\.ts
+packages/scripts/setupTestEmailUser\.ts
+apps/client/server/scripts/setupTestEmailUser\.ts
+
+# Deferred brand genericization (milestone-level "product-metaphor genericize" decision):
+# a hardcoded brand reference in marketing copy, NOT a config fallback that routes a fork to
+# B4M infra. (The publish-host allowlist and docs-domain filter that used to live here were
+# genericized to SERVER_DOMAIN-derived config in this PR — no longer hardcoded.)
+#  - LibreOncology marketing "contribute" contact mailto (marketing copy).
+#    Path updated for the M1 carve — HomePage.tsx moved from apps/client into
+#    packages/premium/libreoncology/src/components/marketing/.
+premium/libreoncology/src/components/marketing/HomePage\.tsx.*mailto

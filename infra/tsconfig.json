@@ -1,0 +1,16 @@
+{
+  "extends": "@tsconfig/node24/tsconfig.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true
+  },
+  "include": [
+    "../sst-env.d.ts",
+    "../.sst/platform/config.d.ts",
+    "../sst.config.ts",
+    "./premium-generated/overwatch-infra.generated.ts",
+    "./premium-generated/pi-infra.generated.ts",
+    "./**/*.ts"
+  ]
+}

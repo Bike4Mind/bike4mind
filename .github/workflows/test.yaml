@@ -1,0 +1,102 @@
+name: Branch Tests
+
+on:
+  push:
+    branches-ignore:
+      - main
+      - test-main
+      - integration
+    paths:
+      - 'b4m-core/**'
+      - 'packages/cli/**'
+      # Bucket-route / SPA-route collision guard lives in b4m-core/infra but parses
+      # these files, so changes to them must re-run the suite (see issue #9133).
+      - 'infra/**'
+      - 'apps/client/app/router.tsx'
+      # Forward-looking: the guard only reads router.tsx today, but re-run on route-component
+      # changes too so the filter stays correct if the project ever moves to file-based routing.
+      - 'apps/client/app/routes/**'
+
+jobs:
+  check-repository:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - name: Check repository
+        id: check
+        run: |
+          if [ "${{ github.repository }}" = "${{ vars.CANONICAL_REPO || 'MillionOnMars/lumina5' }}" ]; then
+            echo "should-run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            echo "Skipping workflow - not running on the canonical repository"
+          fi
+
+  test:
+    needs: check-repository
+    if: ${{ needs.check-repository.outputs.should-run == 'true' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Authenticate with private NPM package
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+
+      - name: Install Dependencies
+        run: pnpm i --frozen-lockfile --filter "./b4m-core/*" --filter "@bike4mind/cli"
+
+      - name: Download ripgrep binary (for grep_search tests)
+        run: |
+          POSTINSTALL_PATH=$(find node_modules/.pnpm -name "postinstall.js" -path "*/@vscode/ripgrep/lib/postinstall.js" -type f | head -1)
+          if [ -n "$POSTINSTALL_PATH" ]; then
+            node "$POSTINSTALL_PATH"
+          fi
+        continue-on-error: true
+
+      - name: Build Packages
+        run: pnpm --filter "./b4m-core/*" build
+
+      # Fast typecheck: tsgo (TypeScript 7.0 native) runs first; on any failure it
+      # falls back to classic tsc, which remains the authoritative gate. When tsgo
+      # is green (the common case) tsc never runs. See typecheck-report.md.
+      - name: Run Typecheck (tsgo, tsc fallback)
+        run: pnpm --filter "./b4m-core/*" typecheck:fast
+
+      - name: Run Tests
+        run: pnpm --filter "./b4m-core/*" test
+        env:
+          CI: true
+
+      - name: Build CLI
+        run: pnpm --filter "@bike4mind/cli" build
+
+      - name: Run CLI Typecheck (tsgo, tsc fallback)
+        run: pnpm --filter "@bike4mind/cli" typecheck:fast
+
+  publish:
+    needs: [check-repository, test]
+    if: ${{ needs.check-repository.outputs.should-run == 'true' }}
+    uses: ./.github/workflows/snapshot-publish.yaml
+    secrets:
+      NPM_TOKEN_PUBLISH: ${{ secrets.NPM_TOKEN_PUBLISH }}

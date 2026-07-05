@@ -1,0 +1,73 @@
+{
+  "name": "@bike4mind/llm-adapters",
+  "version": "0.9.1",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MillionOnMars/lumina5.git",
+    "directory": "b4m-core/llm-adapters"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./backend": {
+      "import": {
+        "types": "./dist/backend.d.mts",
+        "default": "./dist/backend.mjs"
+      },
+      "require": {
+        "types": "./dist/backend.d.cts",
+        "default": "./dist/backend.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.97.1",
+    "@aws-sdk/client-bedrock-runtime": "^3.1069.0",
+    "@aws-sdk/client-cloudwatch": "^3.1069.0",
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
+    "@google/genai": "^1.46.0",
+    "axios": "1.16.1",
+    "lodash": "^4.18.1",
+    "ollama": "^0.6.3",
+    "openai": "^6.38.0",
+    "undici": "^7.28.0",
+    "uuid": "^13.0.2"
+  },
+  "devDependencies": {
+    "@types/lodash": "^4.17.24",
+    "dotenv": "^17.4.2",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}

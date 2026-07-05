@@ -1,0 +1,18 @@
+packages:
+  - apps/*
+  - packages/*
+  # Premium overlay: private packages composed in by official CI; omitted from the fork's
+  # workspace.yaml. An empty packages/premium/ dir at clone time leaves the lockfile unchanged.
+  - packages/premium/*
+  # cc-bridge ships nested inside the tavern overlay; surface it as a workspace
+  # member so its workspace:* deps link whenever the overlay is present.
+  - packages/premium/*/cc-bridge
+  # OptiHashi solver engine + its compute container ship nested inside the OptiHashi
+  # overlay (M-engine); surface them as workspace members so @bike4mind/optihashi-engine and
+  # @bike4mind/optihashi-engine-container link whenever the overlay is present. Absent in the
+  # open-core fork (no overlay), where nothing references them.
+  - packages/premium/*/engine
+  - packages/premium/*/engine-container
+  - b4m-core/*
+  - '!docs-site'
+

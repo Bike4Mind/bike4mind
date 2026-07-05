@@ -1,0 +1,77 @@
+{
+  "name": "Bike4Mind",
+  "short_name": "Bike4Mind",
+  "icons": [
+    {
+      "src": "/icons/logo/b4m-72x72.png",
+      "sizes": "72x72",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-96x96.png",
+      "sizes": "96x96",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-128x128.png",
+      "sizes": "128x128",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-144x144.png",
+      "sizes": "144x144",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-152x152.png",
+      "sizes": "152x152",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-384x384.png",
+      "sizes": "384x384",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-ios-120x120.png",
+      "sizes": "120x120",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/logo/b4m-ios-180x180.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ],
+   "screenshots": [
+    {
+      "src": "/icons/logo/b4m-ios-180x180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "Mobile view of the home screen"
+    },
+    {
+      "src": "/icons/logo/b4m-ios-180x180.png",
+      "sizes": "180x180",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Desktop view of the dashboard"
+    }
+  ],
+  "theme_color": "#FFFFFF",
+  "background_color": "#FFFFFF",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait"
+}

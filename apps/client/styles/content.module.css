@@ -1,0 +1,22 @@
+/* content.module.css */
+
+.code-snippet {
+  background-color: black;
+  border: 1px solid lightgrey;
+  color: #009955;
+  padding: 0.25rem;
+  border-radius: 0.3em;
+  white-space: pre-wrap; /* To preserve line breaks and spaces */
+  font-family: monospace; /* To give it a code-like appearance */
+}
+
+.external-link::after {
+  content: ''; /* Empty content */
+  display: inline-block;
+  width: 0.75em; /* Set the width */
+  height: 0.75em; /* Set the height (you can adjust these dimensions) */
+  background: url('/public/icons/external-link-svgrepo-com.svg') no-repeat center center;
+  /* Use background */
+  background-size: contain; /* Scale the image */
+  margin-left: 5px; /* Adjust spacing as needed */
+}

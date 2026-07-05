@@ -1,0 +1,78 @@
+name: Self-host image
+
+# Open-core #9313 (Path B): build the self-host Docker image on a CI runner
+# (which has the memory a Next monorepo build needs) and publish it to GHCR, so
+# self-hosters `docker pull` + `docker compose up` instead of building a ~12GB
+# monorepo locally. On PRs the image is built but NOT pushed — a build-only
+# validation gate that needs no secrets (public/fork-PR safe, per b4m-infra#510).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/client/**'
+      - 'b4m-core/**'
+      - 'packages/**'
+      - 'Dockerfile'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/selfhost-image.yml'
+  pull_request:
+    paths:
+      - 'apps/client/**'
+      - 'b4m-core/**'
+      - 'packages/**'
+      - 'Dockerfile'
+      - 'pnpm-lock.yaml'
+      - '.github/workflows/selfhost-image.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: selfhost-image-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    name: Build (and publish on main)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Publish only on push/dispatch (same-repo). Fork PRs get a read-only token
+      # and never reach this — they run the build-only validation below.
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          # Portable to the new org: resolves to ghcr.io/<owner>/bike4mind-selfhost
+          images: ghcr.io/${{ github.repository_owner }}/bike4mind-selfhost
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,format=short
+            type=ref,event=tag
+
+      - name: Build (push only on main / dispatch)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,168 @@
+name: E2E Tests (on label)
+
+on:
+  pull_request:
+    types: [labeled]
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+jobs:
+  e2e:
+    # Same-repo head only: a fork PR has no preview env and no AWS secret, so the
+    # AWS-credentials step would soft-fail. Skip on forks (label is maintainer-added).
+    if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: E2E Tests
+    timeout-minutes: 20
+    continue-on-error: true
+    concurrency:
+      group: e2e-label-${{ github.event.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Resolve configuration
+        id: config
+        run: |
+          STAGE="pr${{ github.event.number }}"
+          API_URL="https://app.pr${{ github.event.number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}"
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "Stage: $STAGE"
+          echo "API URL: $API_URL"
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build core packages
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        run: npx playwright install chromium --with-deps
+
+      - name: Wait for deployment to be healthy
+        env:
+          TARGET_URL: ${{ steps.config.outputs.api_url }}
+        run: |
+          echo "Waiting for $TARGET_URL to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            if [ "$STATUS" = "200" ] || [ "$STATUS" = "302" ] || [ "$STATUS" = "307" ]; then
+              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Deployment did not become healthy within 300s"
+          exit 1
+
+      - name: Run E2E tests
+        id: e2e
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
+          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          AI_LATENCY_RUN: 'false'
+          PW_WORKERS: '1'
+          CI: 'true'
+        run: |
+          set -o pipefail
+          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report-${{ steps.config.outputs.stage }}-label
+          path: apps/client/playwright-report/
+          retention-days: 7
+
+      - name: Comment PR with E2E results
+        if: always()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            let output = '';
+            try {
+              output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
+            } catch { }
+
+            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
+            const summary = summaryMatch ? summaryMatch[0].trim() : 'See report for details';
+
+            const passed = '${{ steps.e2e.outcome }}' === 'success';
+            const icon = passed ? '✅' : '❌';
+            const status = passed ? 'Passed' : 'Failed';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const body = `${icon} **E2E Tests ${status}**
+
+            **Results:** ${summary}
+            **Preview:** \`${process.env.API_URL}\`
+            **Report:** [Download from artifacts](${runUrl})
+
+            <sub>Tested against preview deployment for PR #${context.issue.number} (triggered by run-e2e label)</sub>`;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const existing = comments.find(c => c.body.includes('**E2E Tests'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            }
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}

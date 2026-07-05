@@ -1,0 +1,172 @@
+name: 'Changes Filter'
+description: >-
+  Decide whether a workflow run touched deployable paths, and (separately)
+  whether it touched the Docusaurus docs site. Evaluates the whole-PR diff vs
+  its merge-base with the target branch on every pull_request event (the
+  "Files changed" three-dot semantics), and the push range on push. Returns
+  deployable=false only when every changed file matches the non-deployable
+  pathspec list; returns docs-changed=true when any changed file is under
+  docs-site/. Fails open (deployable=true) when the diff range can't be
+  resolved.
+
+  PR events use the merge-base (not the per-push before..after range) so a
+  docs-only PR stays non-deployable even on a push that also merges/rebases
+  the base branch in - that range would otherwise carry all of main's
+  deployable files and force a spurious deploy.
+
+  Requires the repo to be checked out first with fetch-depth: 0.
+
+inputs:
+  exclude-paths:
+    description: >-
+      Newline-separated git pathspecs. If every changed file in the run's
+      changeset matches one of these, the run is non-deployable. Blank lines
+      and lines starting with '#' are ignored. Use ':(glob)' magic so '**'
+      means "any depth" and '*' stops at '/' (default pathspec magic does NOT
+      exclude a root README.md via '**/*.md').
+
+      Default note: markdown is excluded ONLY in docs locations (READMEs,
+      docs-site/, agents/, repo root). Do not blanket-exclude '**/*.md' if any
+      markdown is a runtime build input (e.g. @next/mdx, app/prompts/*.md,
+      app/content/*.md) - that would silently skip a real deploy. lumina5
+      serves docs from docs-site/ (Docusaurus) and uses .changeset/ for
+      version bumps; both are non-deployable to the app.
+    required: false
+    default: |
+      :(exclude,glob)docs-site/**
+      :(exclude,glob)agents/**
+      :(exclude,glob)**/README.md
+      :(exclude,glob)**/CHANGELOG.md
+      :(exclude,glob)*.md
+      :(exclude)LICENSE
+      :(exclude,glob)**/.env.example
+      :(exclude,glob).vscode/**
+      :(exclude,glob).idea/**
+      :(exclude).editorconfig
+      :(exclude,glob).husky/**
+      :(exclude).gitignore
+      :(exclude).gitattributes
+      :(exclude,glob).github/ISSUE_TEMPLATE/**
+      :(exclude).github/CODEOWNERS
+      :(exclude).github/dependabot.yml
+      :(exclude,glob).changeset/**
+  docs-paths:
+    description: >-
+      Newline-separated git pathspecs (INCLUDE form) defining the docs site.
+      docs-changed=true when the run's changeset touches any of these. Used to
+      gate the docs build-verification job independently of the deploy gate.
+    required: false
+    default: |
+      docs-site/**
+
+outputs:
+  deployable:
+    description: "'true' if the run touched deployable paths (or the range was unresolved); 'false' to skip test + deploy."
+    value: ${{ steps.filter.outputs.deployable }}
+  docs-changed:
+    description: "'true' if the run touched docs-site/ paths (or the range was unresolved); 'false' otherwise. Gates verify-docs-build."
+    value: ${{ steps.filter.outputs.docs-changed }}
+
+runs:
+  using: composite
+  steps:
+    - id: filter
+      shell: bash
+      env:
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        PUSH_BEFORE: ${{ github.event.before }}
+        PUSH_AFTER: ${{ github.event.after }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
+        DOCS_PATHS: ${{ inputs.docs-paths }}
+      run: |
+        set -euo pipefail
+
+        # Parse a newline pathspec list: trim whitespace, drop blanks and # comments.
+        # Portable read loop (works on bash 3.2; avoids mapfile / bash 4+).
+        parse_specs() {
+          local raw="$1"
+          printf '%s\n' "$raw" \
+            | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' \
+            | grep -vE '^(#|$)' || true
+        }
+
+        EXCLUDES=()
+        while IFS= read -r line; do EXCLUDES+=("$line"); done < <(parse_specs "$EXCLUDE_PATHS")
+
+        DOCS=()
+        while IFS= read -r line; do DOCS+=("$line"); done < <(parse_specs "$DOCS_PATHS")
+
+        # Pick the diff range from the trigger that fired THIS run.
+        case "$EVENT_NAME" in
+          push)
+            # Direct push to main/prod: per-push range. No PR to scope to,
+            # and each push is one deploy unit.
+            BASE="$PUSH_BEFORE"; HEAD="$PUSH_AFTER" ;;
+          pull_request)
+            # Scope to the WHOLE PR vs its merge-base with the target branch
+            # (three-dot / "Files changed" semantics) for EVERY action,
+            # including synchronize. Per-push diffing made a docs-only PR
+            # deploy whenever a push also merged/rebased the base branch in:
+            # the before..after range then carried all of main's deployable
+            # files even though the PR itself only touched docs. Merge-base
+            # scoping keeps "docs is docs" true regardless of base syncs.
+            # An empty BASE (merge-base failed) trips the fail-open guard below.
+            HEAD="$PR_HEAD_SHA"
+            BASE="$(git merge-base "$PR_BASE_SHA" "$PR_HEAD_SHA" 2>/dev/null || true)" ;;
+          *)
+            BASE=""; HEAD="" ;;
+        esac
+
+        # Fail open: if we can't resolve a real diff range, deploy AND build docs.
+        if [ -z "$BASE" ] || [ -z "$HEAD" ] \
+           || echo "$BASE" | grep -qE '^0+$' \
+           || ! git cat-file -e "$BASE" 2>/dev/null \
+           || ! git cat-file -e "$HEAD" 2>/dev/null; then
+          echo "Could not resolve a clean diff range ($BASE..$HEAD); deploying + building docs."
+          echo "deployable=true" >> "$GITHUB_OUTPUT"
+          echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
+
+        echo "Diffing $BASE..$HEAD"
+        echo "--- all changed files ---"
+        git diff --name-only "$BASE" "$HEAD" || true
+        echo "-------------------------"
+
+        # Fail open on transient git failures here too: if this capture errors
+        # under `set -e`, the step aborts without writing to GITHUB_OUTPUT and
+        # every downstream job would interpret missing output as "skip". Force
+        # an explicit deployable=true on error so a transient diff failure on a
+        # prod push doesn't silently drop a release.
+        NON_DOC=$(git diff --name-only "$BASE" "$HEAD" -- . "${EXCLUDES[@]}") || {
+          echo "git diff (deployable) failed unexpectedly after range validation; failing open."
+          echo "deployable=true" >> "$GITHUB_OUTPUT"
+          echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        if [ -z "$NON_DOC" ]; then
+          echo "All changed files match the non-deployable list; skipping test + deploy."
+          echo "deployable=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "Deployable changes detected:"
+          echo "$NON_DOC"
+          echo "deployable=true" >> "$GITHUB_OUTPUT"
+        fi
+
+        # Independent docs-site signal (same range). Fail open to true on error.
+        DOCS_HIT=$(git diff --name-only "$BASE" "$HEAD" -- "${DOCS[@]}") || {
+          echo "git diff (docs) failed unexpectedly; failing open (docs-changed=true)."
+          echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+        if [ -n "$DOCS_HIT" ]; then
+          echo "Docs-site changes detected:"
+          echo "$DOCS_HIT"
+          echo "docs-changed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "No docs-site changes."
+          echo "docs-changed=false" >> "$GITHUB_OUTPUT"
+        fi

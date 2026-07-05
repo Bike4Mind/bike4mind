@@ -1,0 +1,384 @@
+name: E2E Tests (Manual)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 2am UTC, 10am SGT
+    - cron: '0 12 * * *'  # 12pm UTC, 8pm SGT
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Target environment'
+        type: choice
+        options:
+          - dev
+        default: dev
+      test_project:
+        description: 'Specific test to run (leave as "All tests" to run the full suite)'
+        type: choice
+        options:
+          - All tests
+          - Auth
+          - Signup
+          - Admin
+          - Notebook
+          - Prompts
+          - Notebook Files
+          - Projects
+          - Agents
+          - Image Generation
+          - Profile
+          - Tavern
+          - Search
+        default: All tests
+      pr_number:
+        description: 'PR number for preview env (overrides stage, e.g. 123)'
+        type: string
+        required: false
+      e2e_test_id:
+        description: 'Tester ID for user isolation (e.g. alice)'
+        type: string
+        required: false
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+jobs:
+  e2e:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: E2E Tests
+    timeout-minutes: 35
+    permissions:
+      contents: read
+      id-token: write
+    # Serialize per-stage so an overlapping scheduled + manual run (or two
+    # manual runs) can't stomp each other's global-setup data cleanup.
+    concurrency:
+      group: e2e-manual-${{ inputs.pr_number || inputs.stage || 'dev' }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Resolve configuration
+        id: config
+        env:
+          # Pass dispatch inputs through env (never interpolate attacker-
+          # influenceable values straight into the shell). pr_number flows into
+          # the SST stage and `sst shell --stage`, so it must be digits-only.
+          PR_NUMBER: ${{ inputs.pr_number }}
+          STAGE_INPUT: ${{ inputs.stage }}
+          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
+          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+        run: |
+          if [ -n "$PR_NUMBER" ]; then
+            if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
+              echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
+              exit 1
+            fi
+            STAGE="pr${PR_NUMBER}"
+            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
+            ENV_LABEL="preview-${PR_NUMBER}"
+          else
+            STAGE="${STAGE_INPUT:-dev}"
+            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
+            ENV_LABEL="Staging"
+          fi
+          echo "stage=$STAGE" >> $GITHUB_OUTPUT
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "env_label=$ENV_LABEL" >> $GITHUB_OUTPUT
+          echo "Stage: $STAGE"
+          echo "API URL: $API_URL"
+
+      - name: Set trigger label
+        id: trigger
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
+          else
+            echo "label=Run via Schedule" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build core packages
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        # Cap the install: the yauzl/Node>=24.16 extraction wedge
+        # (playwright#40724) can hang this step indefinitely, idling to the job
+        # cap. Fail fast instead.
+        timeout-minutes: 8
+        run: npx playwright install chromium --with-deps
+
+      - name: Wait for deployment to be healthy
+        env:
+          # Probe /api/ping (a real Lambda route) rather than the bare origin:
+          # CloudFront can answer the apex with 200/302 before the function is
+          # warm, so a bare-origin check passes against a not-yet-ready deploy.
+          TARGET_URL: ${{ steps.config.outputs.api_url }}/api/ping
+        run: |
+          echo "Waiting for $TARGET_URL to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Deployment did not become healthy within 300s"
+          exit 1
+
+      - name: Run E2E tests
+        id: e2e
+        env:
+          API_URL: ${{ steps.config.outputs.api_url }}
+          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
+          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          E2E_TEST_ID: ${{ inputs.e2e_test_id }}
+          SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
+          AI_LATENCY_RUN: 'false'
+          PW_WORKERS: '3'
+          CI: 'true'
+          TEST_PROJECT: ${{ inputs.test_project }}
+        run: |
+          set -o pipefail
+          # Scheduled runs (no input) and "All tests" run the full suite. Otherwise scope
+          # to a single test. Each option maps to a Playwright --project (whose setup
+          # dependency chain is pulled in automatically, so the isolated test user/auth
+          # is still created). Auth and Signup share the "unauthenticated" project, so
+          # they additionally pass a spec-file filter to run just that one file.
+          PW_ARGS=""
+          case "$TEST_PROJECT" in
+            ""|"All tests")    PW_ARGS="" ;;
+            "Auth")            PW_ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
+            "Signup")          PW_ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "Admin")           PW_ARGS="--project=admin" ;;
+            "Notebook")        PW_ARGS="--project=notebook" ;;
+            "Prompts")         PW_ARGS="--project=prompts" ;;
+            "Notebook Files")  PW_ARGS="--project=notebook-files" ;;
+            "Projects")        PW_ARGS="--project=projects" ;;
+            "Agents")          PW_ARGS="--project=agents" ;;
+            "Image Generation") PW_ARGS="--project=image-gen" ;;
+            "Profile")         PW_ARGS="--project=profile" ;;
+            "Tavern")          PW_ARGS="--project=tavern" ;;
+            "Search")          PW_ARGS="--project=search" ;;
+            *)                 echo "Unknown test selection: '$TEST_PROJECT' — running full suite" ;;
+          esac
+          [ -n "$PW_ARGS" ] && echo "Running specific test: $TEST_PROJECT ($PW_ARGS)"
+          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PW_ARGS 2>&1 | tee apps/client/playwright-output.txt
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
+          path: apps/client/playwright-report/
+          retention-days: 7
+
+      - name: Parse test results
+        id: results
+        if: always()
+        run: |
+          JSON_FILE="apps/client/pw-results.json"
+
+          if [ ! -f "$JSON_FILE" ]; then
+            echo "passed=0" >> $GITHUB_OUTPUT
+            echo "failed=0" >> $GITHUB_OUTPUT
+            echo "skipped=0" >> $GITHUB_OUTPUT
+            echo "not_started=0" >> $GITHUB_OUTPUT
+            echo "total=0" >> $GITHUB_OUTPUT
+            echo "spec_summary=_No results available_" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          FAILED=$(jq '.stats.unexpected' "$JSON_FILE")
+          echo "failed=$FAILED" >> $GITHUB_OUTPUT
+
+          # A spec "ran" if at least one of its test entries has non-empty results.
+          # Tests that were registered but never started (global timeout / worker killed)
+          # appear in pw-results.json with ok:true but results:[] — the old .ok? logic
+          # incorrectly counted those as passed. We now gate on actual execution evidence.
+          SPEC_LINES=$(jq -r '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$") | not) |
+            . as $suite |
+            ($suite.title | gsub("e2e/"; "") | gsub("\\.spec\\.ts$"; "")) as $raw |
+            ([$raw | split("-")[] | split("_")[] | (.[0:1] | ascii_upcase) + .[1:]] | join(" ")) as $name |
+            ([.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0))] | length) as $ran |
+            ([.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0)) |
+              select(.ok == true)] | length) as $passed |
+            ([.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
+              select(all(.tests[]?; (.results? // []) | length == 0))] | length) as $not_run |
+            (if $ran == 0 and $not_run > 0 then ":no_entry_sign:"
+             elif $ran > 0 and $ran - $passed > 0 then ":red_circle:"
+             else ":large_green_circle:" end) +
+            " " + $name + ": " + ($passed|tostring) + "/" + ($ran|tostring) +
+            (if $not_run > 0 then " (" + ($not_run|tostring) + " did not run)" else "" end)
+          ] | join("\\n")' "$JSON_FILE")
+          echo "spec_summary=$SPEC_LINES" >> $GITHUB_OUTPUT
+
+          # Count only specs that actually executed (results non-empty) — excludes
+          # unstarted tests that pw-results.json still records with ok:true.
+          PASSED=$(jq '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$") | not) |
+            [.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0)) |
+              select(.ok == true)] | length
+          ] | add // 0' "$JSON_FILE")
+          TOTAL_WITH_OK=$(jq '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$") | not) |
+            [.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0))] | length
+          ] | add // 0' "$JSON_FILE")
+          SKIPPED=$(( TOTAL_WITH_OK - PASSED - FAILED ))
+          # Clamp to 0 — FAILED includes setup failures not in TOTAL_WITH_OK
+          [ "$SKIPPED" -lt 0 ] && SKIPPED=0
+          NOT_STARTED=$(jq '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$") | not) |
+            [.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
+              select(all(.tests[]?; (.results? // []) | length == 0))] | length
+          ] | add // 0' "$JSON_FILE")
+          TOTAL=$((PASSED + SKIPPED + FAILED))
+          echo "passed=$PASSED" >> $GITHUB_OUTPUT
+          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
+          echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Parse credits data
+        id: credits
+        if: always()
+        env:
+          TEST_PROJECT: ${{ inputs.test_project }}
+        run: |
+          # Credits data is produced only by the notebook spec. Show the AI Credits
+          # block only when the notebook spec ran: the full suite (scheduled run or
+          # "All tests") or an explicit "Notebook" selection. Hide it for any other
+          # single-test run (an empty credits_block omits the block from the payload).
+          case "$TEST_PROJECT" in
+            ""|"All tests"|"Notebook") SHOW_CREDITS=1 ;;
+            *) SHOW_CREDITS=0 ;;
+          esac
+          if [ "$SHOW_CREDITS" != "1" ]; then
+            echo "credits_block=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CREDITS_FILE="apps/client/e2e/fixtures/credits.json"
+          if [ ! -f "$CREDITS_FILE" ]; then
+            CREDITS_LINES="_No credits data available_"
+          else
+            CREDITS_LINES=$(jq -r '[.[] |
+              (.avgCredits == null) as $missing |
+              (.avgCredits != null and .avgCredits > 30) as $exceeded |
+              "• " + .model + " — credits: " + ((.avgCredits // "Credit Used data unavailable (chip missing or prior failure).") | tostring) + " " + (if $missing then ":x:" elif $exceeded then ":x: _(exceeds threshold of 30)_" else ":white_check_mark:" end)
+            ] | join("\\n")' "$CREDITS_FILE")
+          fi
+          # Emit the AI Credits Slack block as a JSON fragment with a leading comma so it
+          # slots into the blocks array between the summary and actions blocks.
+          echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
+
+      - name: Notify Slack
+        if: always()
+        uses: slackapi/slack-github-action@v2
+        with:
+          webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "Playwright E2E Tests (${{ steps.trigger.outputs.label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: All tests passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Tests failed' }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "Playwright E2E Tests (${{ steps.trigger.outputs.label }})"
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Status*\n${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch*\n`${{ github.ref_name }}`"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment*\n<${{ steps.config.outputs.api_url }}|${{ steps.config.outputs.env_label }}>"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Results*\n:white_check_mark: ${{ steps.results.outputs.passed }} passed  :x: ${{ steps.results.outputs.failed }} failed  :fast_forward: ${{ steps.results.outputs.skipped }} skipped  :no_entry_sign: ${{ steps.results.outputs.not_started }} not started  Total: ${{ steps.results.outputs.total }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Test Run Summary*\n${{ steps.results.outputs.spec_summary }}"
+                  }
+                }${{ steps.credits.outputs.credits_block }},
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": { "type": "plain_text", "text": "View Report" },
+                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+                    }
+                  ]
+                }
+              ]
+            }
+
+      - name: Fail if E2E tests failed
+        if: steps.results.outputs.failed != '0'
+        run: exit 1

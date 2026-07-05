@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "KI-Einstellungen",
+    "session": "Notizbuch",
+    "session_plural": "Notizbücher",
+    "favorite": "Favorit",
+    "unfavorite": "Nicht-Favorit",
+    "favorites": "Favoriten",
+    "favorites_count_one": "{{count}} Favorit",
+    "favorites_count_other": "{{count}} Favoriten",
+    "currentSession": "Aktuell",
+    "other": "Andere Tags",
+    "text_model": "Textmodell",
+    "image_model": "Bildmodell",
+    "ai_image": "KI-Bild",
+    "switch_to": "Wechsel zu {{ name }}"
+  },
+  "guide": {
+    "title": "Leitfaden"
+  },
+  "intro": {
+    "title": "Einführung"
+  },
+  "developers": {
+    "title": "Entwickler",
+    "technical_docs": "Technische Dokumentation"
+  },
+  "changelog": {
+    "title": "Änderungsprotokoll"
+  },
+  "feedback": {
+    "send": "Feedback senden"
+  },
+  "terms_policies": "Bedingungen & Richtlinien",
+  "login": "Anmelden",
+  "file": "Wissen",
+  "forgotPassword": "Passwort vergessen",
+  "signup": "Registrieren",
+  "help": "Hilfe",
+  "manual": "Handbuch",
+  "inviteLong": "Einen Freund einladen",
+  "inviteShort": "Einladen",
+  "tools": {
+    "title": "Werkzeuge"
+  },
+  "sidenav": {
+    "pin": "Seitenleiste anheften",
+    "unpin": "Seitenleiste lösen",
+    "sessions": {
+      "sort": {
+        "label": "Sortieren nach",
+        "tags": "Nach Tags",
+        "date": "Nach Datum"
+      },
+      "new": "Neuer Chat",
+      "item": {
+        "genTags": "Notizbuch-Tag-Liste generieren"
+      }
+    }
+  },
+  "referral": {
+    "title": "Einen Freund zu",
+    "email_title_default": "Willkommen bei GrokTool!",
+    "email_body_default": "Du wurdest von USER_NAME zu GrokTool eingeladen! REGISTRIERUNGSLINK: Verwende den folgenden Einladungscode, um dich anzumelden: INVITE_CODE",
+    "friend_email": "E-Mail des Freundes",
+    "num_referrals_available": "Verfügbare Empfehlungen:",
+    "no_valid_emails_error": "Bitte gültige E-Mail-Adressen eingeben",
+    "send_referral": "Empfehlung senden",
+    "send_referral_success": "Empfehlung erfolgreich gesendet!",
+    "send_referral_skipped": "{{count}} Einladung(en) übersprungen – diese E-Mail-Adressen haben bereits ein Konto.",
+    "send_referral_failed": "{{count}} Einladung(en) konnten nicht gesendet werden. Bitte versuche es erneut.",
+    "send_referral_error": "Fehler beim Senden der Empfehlung. Bitte versuche es erneut.",
+    "slack_notification_default": "Empfehlung gesendet von Benutzer USER_NAME:USER_ID an FRIEND_EMAIL"
+  },
+  "activateVoice": "Diese Stimme aktivieren",
+  "liveVoice": "Live-Stimme",
+  "whatsNew": "Was gibt's Neues",
+  "welcome": "Willkommen bei {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Verbindet",
+      "1": "Verbunden",
+      "2": "Verbindung wird getrennt",
+      "3": "Getrennt",
+      "-1": "Ausstehend"
+    },
+    "networkStatus": "Netzwerk: {{ status }}"
+  },
+  "deleteVoice": "Diese Stimme löschen",
+  "deleteVoiceConfirm": "Sind Sie sicher, dass Sie diese Stimme löschen möchten?",
+  "organization": {
+    "organizations": "Teams",
+    "defaultName": "Meine Organisation",
+    "shared": "Mit mir geteilt",
+    "create": "Team erstellen",
+    "search": "Teams suchen...",
+    "no_organizations": "Keine Teams gefunden",
+    "view_details": "Details anzeigen",
+    "x_seats": "{{count}} Sitze",
+    "active_subscription": "Aktives Abonnement",
+    "no_subscription": "Kein Abonnement",
+    "x_members": "{{count}} Mitglieder",
+    "x_credits": "{{count}} Credits",
+    "owner": "Besitzer"
+  },
+  "session": {
+    "typeYourMessage": "Geben Sie hier Ihre Nachricht ein",
+    "switchedSession": "Gewechselt zu: {{ sessionName }}",
+    "send": "Senden",
+    "sendMessage": "Nachricht senden",
+    "preparingQuest": "Quest wird vorbereitet...",
+    "rephrasePrompt": "Optimieren Sie Ihre Eingabe",
+    "promptRephrased": "Eingabe erfolgreich umformuliert",
+    "rephraseFailed": "Fehler beim Umformulieren der Eingabe",
+    "errors": {
+      "notebookDeleted": "Dieses Notizbuch wurde gelöscht. Bitte erstellen Sie ein neues.",
+      "noPermission": "Sie haben keine Berechtigung, auf dieses Notizbuch zuzugreifen.",
+      "invalidRequest": "Ungültige Anfrage. Bitte versuchen Sie es erneut.",
+      "tooManyRequests": "Zu viele Anfragen. Bitte warten Sie einen Moment und versuchen Sie es erneut.",
+      "serverError": "Serverfehler. Bitte versuchen Sie es später erneut.",
+      "networkError": "Nachricht konnte nicht gesendet werden. Bitte prüfen Sie Ihre Verbindung.",
+      "sendFailed": "Nachricht konnte nicht gesendet werden. Bitte versuchen Sie es erneut."
+    }
+  },
+  "projects": {
+    "title": "Projekt",
+    "projects": "Projekte",
+    "joined_projects": "Beigetretene Projekte",
+    "no_joined_projects": "Noch keine beigetretenen Projekte",
+    "add_to_project": "Zum Projekt hinzufügen",
+    "modals": {
+      "files": {
+        "title": "Dateien zum Projekt hinzufügen",
+        "subtitle": "Wählen Sie Dateien aus, die Sie zu Ihrem Projekt hinzufügen möchten",
+        "button_label": "Dateien hinzufügen",
+        "search_placeholder": "Dateien suchen",
+        "no_files": "Keine Dateien gefunden."
+      },
+      "members": {
+        "title": "Mitglieder zum Projekt hinzufügen",
+        "subtitle": "Benutzer suchen und auswählen, die Sie zu Ihrem Projekt hinzufügen möchten",
+        "button_label": "Mitglieder hinzufügen",
+        "search_placeholder": "Benutzer suchen",
+        "no_members": "Versuchen Sie, nach einem Benutzer zu suchen."
+      },
+      "sessions": {
+        "title": "Notizbuch zu einem Projekt hinzufügen",
+        "subtitle": "Wählen Sie Notizbücher aus, die Sie zu Ihrem Projekt hinzufügen möchten, oder erstellen Sie ein neues",
+        "button_label": "Notizbücher hinzufügen",
+        "search_placeholder": "Suchen",
+        "create_button": "Erstellen",
+        "no_notebooks": "Keine Notizbücher gefunden. Versuchen Sie, ein neues zu erstellen."
+      },
+      "generic": {
+        "select_all": "Alle auswählen",
+        "unselect_all": "Alle abwählen",
+        "add_items_one": "{{count}} Element hinzufügen",
+        "add_items_other": "{{count}} Elemente hinzufügen",
+        "delete_items": "Lösche {{count}} Elemente"
+      }
+    }
+  },
+  "logout": "Abmelden",
+  "inbox": {
+    "title": "Posteingang",
+    "messages": "Nachrichten",
+    "invites": "Einladungen",
+    "sendMessage": "Eine Nachricht senden",
+    "noMessages": "Keine Nachrichten"
+  },
+  "addSomething": "{{ name }} hinzufügen",
+  "deleteAllSomething": "Alle {{ name }} löschen",
+  "exportAllSomething": "Alle {{ name }} exportieren",
+  "importLLMHistory": "LLM-Verlauf importieren",
+  "downloadAllSomething": "Alle {{ name }} herunterladen",
+  "language": {
+    "language_settings": "Spracheinstellungen",
+    "change-language": "Sprache ändern"
+  },
+  "theme": {
+    "turn-dark": "Dunkelmodus aktivieren",
+    "turn-light": "Hellmodus aktivieren"
+  },
+  "auth": {
+    "usernameOrEmail": "Benutzername oder Email",
+    "username": "Benutzername",
+    "password": "Passwort",
+    "confirmPassword": "Passwort bestätigen",
+    "fullName": "Vollständiger Name",
+    "inviteCode": "Einladungscode",
+    "needCode": "Code erforderlich?",
+    "noAccount": "Kein Konto?",
+    "haveAccount": "Haben Sie schon ein Konto?",
+    "loginWithProvider": "Mit {{ provider }} anmelden",
+    "checking": "Überprüfe...",
+    "continue": "Fortfahren",
+    "troubleSigningIn": "Probleme bei der Anmeldung?",
+    "signingInAs": "Anmelden als",
+    "signingIn": "Anmeldung läuft...",
+    "backToEmail": "Zurück zur E-Mail",
+    "redirectingToProvider": "Weiterleitung zur Anmeldung Ihrer Organisation...",
+    "resetInstructions": "Bitte geben Sie Ihre E-Mail-Adresse ein. Wir senden Ihnen eine E-Mail zum Zurücksetzen Ihres Passworts.",
+    "sendResetEmail": "E-Mail zum Zurücksetzen des Passworts senden",
+    "email": "Email",
+    "resetEmailSentMessage": "E-Mail wurde gesendet! Bitte überprüfen Sie Ihre E-Mail für weitere Anweisungen",
+    "createAccountDesc": "Ein Konto erstellen",
+    "createBtn": "Konto erstellen",
+    "loginBtn": "Anmelden",
+    "passwordStrength": {
+      "label": "Passwortstärke",
+      "weak": "Schwach",
+      "fair": "Mittel",
+      "strong": "Stark"
+    },
+    "passwordRequirements": {
+      "title": "Passwortanforderungen",
+      "minLength": "Mindestens {{count}} Zeichen",
+      "uppercase": "Ein Großbuchstabe",
+      "lowercase": "Ein Kleinbuchstabe",
+      "number": "Eine Zahl",
+      "specialChar": "Ein Sonderzeichen",
+      "met": "erfüllt",
+      "notMet": "noch nicht erfüllt"
+    },
+    "errors": {
+      "usernameExists": "Benutzername '{{username}}' ist bereits vergeben. Bitte wählen Sie einen anderen Benutzernamen.",
+      "emailExists": "Ein Konto mit der E-Mail '{{email}}' existiert bereits. Bitte verwenden Sie eine andere E-Mail oder melden Sie sich bei Ihrem bestehenden Konto an.",
+      "accountExists": "Ein Konto mit diesen Anmeldeinformationen existiert bereits. Bitte versuchen Sie, sich anzumelden oder verwenden Sie andere Anmeldeinformationen.",
+      "invalidInviteCode": "Der von Ihnen eingegebene Einladungscode ist ungültig oder abgelaufen. Bitte überprüfen Sie und versuchen Sie es erneut.",
+      "registrationFailed": "Registrierung fehlgeschlagen. Bitte versuchen Sie es später erneut.",
+      "validation": {
+        "generic": "Ungültige Eingabe",
+        "invalidUsername": "Der Benutzername darf nur aus Buchstaben, Zahlen, Unterstrichen, Punkten und Bindestrichen bestehen",
+        "passwordMismatch": "Passwörter stimmen nicht überein",
+        "passwordRequirements": "Das Passwort muss mindestens 8 Zeichen lang sein und Groß- und Kleinbuchstaben, eine Zahl und ein Sonderzeichen enthalten"
+      }
+    }
+  },
+  "search": "Suche",
+  "share": "Teilen",
+  "rename": "Umbenennen",
+  "favorite": "Favorit",
+  "unfavorite": "Nicht-Favorit",
+  "delete": "Löschen",
+  "files": {
+    "showAttachedFiles": "Angehängte Dateien anzeigen",
+    "hideAttachedFiles": "Angehängte Dateien ausblenden",
+    "title": "Dateien",
+    "upload": "Dateien hochladen",
+    "long_title": "Dateibrowser"
+  },
+  "view": "Ansicht",
+  "info": "Informationen",
+  "clone": "Klonen",
+  "download": "Herunterladen",
+  "summarize": "Zusammenfassen",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Sammlung",
+    "collections": {
+      "all_types": "Alle Typen"
+    },
+    "users_profile": "{{ name }}'s Profil",
+    "storage_used": "Genutzter Speicher",
+    "credits": "Guthaben",
+    "subscription": "Abonnement",
+    "edit": "Profil bearbeiten",
+    "manage_subscription": "Abonnement verwalten",
+    "upgrade": "Aktualisieren",
+    "credit_analytics": "Kreditanalytik",
+    "pricing": "Preise für Credits",
+    "show_purchases": "Käufe anzeigen",
+    "show_usage": "Nutzung anzeigen",
+    "show_combined": "Kombinierte anzeigen",
+    "buy_credits": "Credits kaufen"
+  },
+  "community": {
+    "title": "Gemeinschaft",
+    "tooltip": "Gemeinschaft",
+    "feed": "Community-Feed"
+  },
+  "subscriptions": {
+    "title": "Abonnements",
+    "expires_on": "Läuft ab am {{ date }}",
+    "renews_on": "Wird erneuert am {{ date }}"
+  },
+  "billing": {
+    "title": "Abrechnung"
+  },
+  "credits": {
+    "title": "Guthaben",
+    "usage": "Kreditnutzung",
+    "analytics": "Kreditanalytik",
+    "analytics_tooltip": "Sehen Sie sich Ihre Kreditnutzung über die Zeit an",
+    "current_balance": "Aktueller Kreditstand",
+    "credits": "Credits",
+    "usage_by_model": "Nutzung nach Modell",
+    "no_transactions": "Keine Kredittransaktionen in diesem Zeitraum gefunden",
+    "model_pricing": "Modellpreise",
+    "text_models": "Textmodelle",
+    "image_models": "Bildmodelle",
+    "pricing_per_1k_tokens": "Preise in Credits pro 1.000 Tokens angezeigt",
+    "pricing_per_generation": "Preise in Credits pro Bilderzeugung angezeigt",
+    "model_name": "Modellname",
+    "price_tier": "Preisklasse",
+    "input_cost": "Eingabekosten",
+    "output_cost": "Ausgabekosten",
+    "generation_cost": "Erzeugungskosten",
+    "no_models_available": "Keine Modelle verfügbar",
+    "pricing_note": "Hinweis: Preise sind ungefähre Angaben und können je nach Modellparametern variieren. Preisklassen: $ (niedrig), $$ (mittel), $$$ (premium).",
+    "burn_rate": "Tägliche Nutzung (Burn Rate)",
+    "days_remaining": "Geschätzte verbleibende Tage",
+    "usage_pattern": "Basierend auf Ihrem Nutzungsverhalten der letzten {{days}} Tage",
+    "credits_used": "Verwendete Credits",
+    "credits_purchased": "Gekaufte Credits",
+    "net_credits": "Netto-Credits"
+  },
+  "time": {
+    "last_7_days": "Letzte 7 Tage",
+    "last_30_days": "Letzte 30 Tage",
+    "last_90_days": "Letzte 90 Tage",
+    "last_180_days": "Letzte 180 Tage",
+    "last_365_days": "Letzte 365 Tage"
+  },
+  "common": {
+    "date": "Datum",
+    "refresh": "Aktualisieren",
+    "days": "Tage",
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "delete": "Löschen",
+    "edit": "Bearbeiten",
+    "close": "Schließen",
+    "submit": "Einreichen",
+    "loading": "Lade...",
+    "error": "Fehler",
+    "success": "Erfolg"
+  },
+  "errors": {
+    "failed_to_load_data": "Daten konnten nicht geladen werden. Bitte versuchen Sie es später erneut."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Ihre Atlassian-Verbindung ist abgelaufen. Bitte verbinden Sie Ihr Konto erneut."
+    }
+  },
+  "credits_modal": {
+    "title": "Zusätzliche Credits",
+    "description": "Kaufen Sie zusätzliche Credits, um unsere fortschrittlichen KI-Modelle und Funktionen weiterhin nutzen zu können. Credits werden für die Modellauswertung und spezielle Funktionen verwendet, wobei verschiedene Modelle je nach Komplexität unterschiedliche Mengen verbrauchen.",
+    "current_credits": "Aktueller Credits-Betrag",
+    "best_value": "Bester Wert",
+    "purchase_success": "{{credits}} Credits gekauft",
+    "history_title": "Credits-Kaufverlauf",
+    "purchase": "Kaufen",
+    "no_transactions": "Noch keine Transaktionen",
+    "low_credits": "Ihre Credits sind niedrig",
+    "low_credits_sub": "Kaufen Sie weitere Credits, um Ihre Arbeit fortzusetzen.",
+    "no_credits": "Keine Credits",
+    "no_credits_sub": "Kaufen Sie Credits, um Ihre Arbeit fortzusetzen.",
+    "status": {
+      "completed": "Abgeschlossen",
+      "pending": "Ausstehend",
+      "failed": "Gescheitert"
+    }
+  },
+  "settings": {
+    "title": "Einstellungen",
+    "tooltip": "Einstellungen",
+    "main": "Haupteinstellungen",
+    "account": "Konto",
+    "ai_features": "KI-Funktionen",
+    "connected_apps": {
+      "title": "Verbundenen Apps",
+      "link": "Link",
+      "unlink": "Trennen"
+    },
+    "developer_tools": "Entwicklertools",
+    "experimental_features": {
+      "title": "Experimentelle Funktionen",
+      "tooltip": "Experimentelle Funktionen",
+      "header": "Experimentelle Funktionen",
+      "beta_features": {
+        "title": "Beta-Funktionen",
+        "subtitle": "Diese Funktionen sind noch nicht abgeschlossen und könnten unerwartete Ergebnisse liefern. Wenn Sie sich entscheiden, sie zu aktivieren, stimmen Sie zu, sie in ihrem aktuellen Zustand zu verwenden."
+      }
+    },
+    "ui_preferences": "UI-Präferenzen"
+  },
+  "mementos": {
+    "title": "Andenken",
+    "tooltip": "Andenken"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Admin-Einstellungen"
+  },
+  "speech": {
+    "title": "Sprache",
+    "tooltip": "Sprache in Text & Text in Sprache"
+  },
+  "instructions": {
+    "title": "Anleitungen",
+    "tooltip": "Anleitungen"
+  },
+  "friends": {
+    "add_friend": "Zu Freunden hinzufügen",
+    "unfriend": "Von Freunden entfernen",
+    "pending_request": "Ausstehende Freundschaftsanfrage",
+    "all": "Alle Freunde",
+    "pending": "Ausstehend"
+  },
+  "notebooks": {
+    "view_info": "Notizbuchinformationen anzeigen",
+    "clone": "Notizbuch klonen",
+    "download": "Notizbuch herunterladen",
+    "summarize": "Notizbuch zusammenfassen",
+    "delete": "Notizbuch löschen",
+    "delete_confirm": "Sind Sie sicher, dass Sie \"{{ name }}\" dauerhaft löschen möchten? Dieser Vorgang kann nicht rückgängig gemacht werden.",
+    "auto_rename": "Automatisch mit KI umbenennen"
+  },
+  "add_friend": {
+    "title": "Einen Freund hinzufügen",
+    "friend_email": "E-Mail des Freundes",
+    "message": "Nachricht",
+    "cancel": "Abbrechen",
+    "send": "Senden",
+    "email_placeholder": "Geben Sie die E-Mail Ihres Freundes ein",
+    "message_placeholder": "Geben Sie Ihre Nachricht ein"
+  },
+  "file_browser": {
+    "my_files": "Meine Dateien",
+    "shared_with_me": "Mit mir geteilt",
+    "total_files": "Gesamte Wissensartikel",
+    "search_placeholder": "Nach Name oder Tag suchen...",
+    "file_type": "Dateityp",
+    "all_files": "Alle Dateien",
+    "text": "Text",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Bild",
+    "excel": "Excel",
+    "word": "Wort",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Erstellungsdatum",
+    "size": "Größe",
+    "name": "Name",
+    "sort_z_to_a": "Sortiere Z nach A",
+    "sort_a_to_z": "Sortiere A nach Z",
+    "grid_view": "Rasteransicht",
+    "list_view": "Listenansicht",
+    "select_file_hint": "Tippen Sie, um eine Datei oder mehrere Dateien auszuwählen und sie zu Ihrer Notizbuchsitzung hinzuzufügen!",
+    "session_one": "Notizbuch",
+    "session_other": "Notizbücher",
+    "no_files_available": "Keine Dateien verfügbar",
+    "count_file_selected_one": "{{count}} Datei ausgewählt",
+    "count_file_selected_other": "{{count}} Dateien ausgewählt",
+    "add_count_file_one": "Fügen Sie {{count}} Datei hinzu",
+    "add_count_file_other": "Fügen Sie {{count}} Dateien hinzu",
+    "delete_count_file_one": "Löschen Sie {{count}} Datei",
+    "delete_count_file_other": "Löschen Sie {{count}} Dateien",
+    "share_count_file_one": "{{count}} Datei teilen",
+    "share_count_file_other": "{{count}} Dateien teilen",
+    "count_file_one": "{{count}} Datei",
+    "count_file_other": "{{count}} Dateien",
+    "add_to_session_success": "Füge Datei: {{fileNames}} zu {{sessionName}} hinzu",
+    "add_file_success": "Füge Datei: {{fileNames}} hinzu",
+    "browse_files": "Dateien durchsuchen",
+    "create_new_knowledge": "Erstellen",
+    "create_new_knowledge_from_url": "URL scrapen",
+    "enter_url": "URL eingeben",
+    "create_file": "Datei erstellen",
+    "create_file_from_url": "Datei erstellen",
+    "create_from_url": "Schnelles Scrapen",
+    "research": "Forschung",
+    "open_research": "Forschung öffnen",
+    "url_success": "Wissen erfolgreich aus der URL erstellt: {{url}}",
+    "url_error": "Fehler beim Erstellen von Wissen aus der URL: {{url}}",
+    "url_required": "Bitte geben Sie eine URL ein",
+    "previous": "Zurück",
+    "next": "Weiter",
+    "page_of": "Seite {{current}} von {{total}}",
+    "drop_files_here": "Dateien hier ablegen",
+    "tagging": "Markierung...",
+    "tag_files": "Dateien markieren",
+    "select_all": "Alle auswählen",
+    "unselect_all": "Alle abwählen",
+    "add_files": "Dateien hinzufügen",
+    "add_files_to_notebook_one": "{{count}} Datei zum Notizbuch hinzufügen",
+    "add_files_to_notebook_other": "{{count}} Dateien zum Notizbuch hinzufügen",
+    "in_project": "Im Projekt"
+  },
+  "file_properties": {
+    "title": "Dateieigenschaften",
+    "make_instructions": "In Anweisungen umwandeln?",
+    "instruction_priority": "Anweisungspriorität (0–999)",
+    "priority_levels": {
+      "global": "0-100: Globale Anweisungen",
+      "group": "101-300: Gruppen- / Unternehmensanweisungen",
+      "project": "301-500: Projektanweisungen",
+      "user": "501-999: Benutzeranweisungen"
+    },
+    "save": "Speichern",
+    "update_success": "Systempriorität für \"{{fileName}}\" aktualisiert.",
+    "update_error": "Fehler beim Aktualisieren der Systempriorität."
+  },
+  "file_actions": {
+    "notes": "Notizen",
+    "notes_placeholder": "Notizen zu dieser Datei hinzufügen...",
+    "add_notes": "Notizen hinzufügen",
+    "add_note": "Notiz hinzufügen",
+    "edit_notes": "Notizen bearbeiten",
+    "notes_save_error": "Fehler beim Speichern der Notizen",
+    "manage_tags": "Tags verwalten",
+    "tags": "Tags verwalten",
+    "tags_placeholder": "Geben Sie Tag-Namen ein, getrennt durch Kommas...",
+    "add_tag_one": "Tag für {{count}} Datei aktualisiert",
+    "add_tag_other": "Tag für {{count}} Dateien aktualisiert",
+    "failed_to_add_tag_one": "Fehler beim Aktualisieren des Tags für die Datei",
+    "failed_to_add_tag_other": "Fehler beim Aktualisieren des Tags für die Dateien",
+    "cancel": "Abbrechen",
+    "save": "Speichern",
+    "download": "Herunterladen",
+    "vectorize": "Vektorisieren",
+    "instruction": "Anweisung {{priority}}",
+    "chunked": "Chunked",
+    "not_chunked": "Nicht Chunked"
+  },
+  "subscription_modal": {
+    "title": "Abonnement",
+    "description": "Zugriff auf jedes wichtige KI-Modell über eine einheitliche Schnittstelle. Führen Sie fortschrittliche Modelle wie Deepseek R1 privat aus.",
+    "no_free_tier": "KEIN MÖGLICHES KOSTENLOSES ABONNEMENT - FOKUSSIERT AUF PROFIS.",
+    "credits_rollover": "Nicht verwendete Credits rollen für 3 Monate weiter.",
+    "monthly_billing": "Monatliche Abrechnung",
+    "annual_billing": "Jährliche Abrechnung",
+    "most_popular": "Am beliebtesten",
+    "current": "Aktuell",
+    "credits_per_month": "{{credits}} Credits pro Monat",
+    "subscription_renewal": "Ihr Abonnement wird am {{date}} erneuert",
+    "personal": "Persönlich",
+    "business": "Geschäftlich",
+    "team": "Team",
+    "enterprise": "Unternehmen"
+  },
+  "agents": {
+    "title": "Agenten",
+    "new_agent": "Neuer Agent",
+    "manage_agents": "Agenten verwalten",
+    "search_placeholder": "Agenten suchen...",
+    "your_agents": "Ihre Agenten",
+    "loading": "Lade Agenten...",
+    "no_agents": "Keine Agenten gefunden",
+    "create_first": "Erstellen Sie Ihren ersten Agenten, um zu beginnen",
+    "agents_found": "{{count}} Agent gefunden",
+    "agents_found_plural": "{{count}} Agenten gefunden",
+    "attached_agents": "Angehängte Agenten",
+    "listening_description": "Diese Agenten hören alle Nachrichten in diesem Gespräch",
+    "no_search_results": "Keine Agenten entsprechen \"{{search}}\"",
+    "search_help": "Versuchen Sie es mit einem anderen Suchbegriff",
+    "no_agents_description": "Erstellen Sie Ihren ersten Agenten, um zu beginnen",
+    "create_agent": "Agent erstellen",
+    "click_to_attach": "Klicken Sie, um sich an die aktuelle Sitzung anzuhängen",
+    "click_to_detach": "Klicken Sie, um sich von der aktuellen Sitzung zu trennen",
+    "show_attached_agents": "Angehängte Agenten anzeigen",
+    "hide_attached_agents": "Angehängte Agenten ausblenden",
+    "toggle_attached_agents": "Angehängte Agenten umschalten",
+    "agent_listening_tooltip": "{{name}} hört zu und ist bereit zu helfen"
+  },
+  "skills": {
+    "title": "Fähigkeiten",
+    "command_palette_description": "Verwalten Sie wiederverwendbare Anweisungsvorlagen"
+  }
+}

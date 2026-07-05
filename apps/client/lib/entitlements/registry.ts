@@ -1,0 +1,336 @@
+/**
+ * Generic subscription -> entitlement registry (ACCESS_MODEL.md §3).
+ *
+ * Pure config + pure helpers - the single source of truth for how Stripe
+ * prices and user tags resolve to entitlement keys. A new product onboards by
+ * adding rows here (no code): one PRICE row per Stripe price, optionally one
+ * TAG_GRANTS row to remap its comp tag to the paid key.
+ *
+ * Boundary note: product-specific rows below (LibreOncology; OptiHashi) are
+ * sanctioned cross-boundary data - this file is allowlisted in
+ * scripts/libreoncology-core-allowlist.txt. External customer domain grants are
+ * env-sourced (no customer identity in code). Rows marked
+ * [DELETION-FOOTPRINT] are removed when their product is extracted. Do NOT
+ * import constants from a product namespace into this file (wrong dependency
+ * direction); keep the literals inline.
+ */
+import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
+import { isTestMode } from '@client/lib/subscriptions/constants';
+
+/**
+ * Canonical tag/key normalization - the ONE comparison rule for the
+ * entitlement layer (tags are assumed ASCII; matches the existing
+ * `requireFeatureTag` / `userHasLibreOncologyAccess` lowercase semantics).
+ */
+export function normalizeTag(tag: string): string {
+  return tag.trim().toLowerCase();
+}
+
+/**
+ * A product's Stripe price ids, authored per-stage and captured BEFORE the
+ * `isTestMode` resolution. The ternary resolves to ONE id at module load
+ * (test-mode in CI), which would hide the inactive stage's id from the
+ * registry test - so a one-sided fill-in (real test id, placeholder prod id)
+ * would ship a broken checkout to production. Keeping both sides on the row
+ * lets the test assert BOTH stages are real (see registry.test.ts).
+ */
+type StagedPriceId = { readonly test: string; readonly prod: string };
+const resolveStagePriceId = (staged: StagedPriceId): string => (isTestMode ? staged.test : staged.prod);
+
+/**
+ * [DELETION-FOOTPRINT] LibreOncology Stripe price (test + live modes), $19/mo
+ * recurring. Single source of truth - also consumed by the SUBSCRIPTION_PLANS row
+ * in apps/client/lib/userSubscriptions/constants.ts (keep them in sync via this
+ * export, not by re-typing the ids).
+ *
+ * Account-tied price ids are sourced per-stage from NEXT_PUBLIC_* env vars with no
+ * brand fallback - empty when unconfigured == this product's checkout
+ * is inactive. The env reads stay inline here to respect the module boundary (do
+ * not import ids from a product namespace). If the amount ever changes, Stripe mints
+ * a NEW price id - set the new id in the env and keep the old one mapped (below) so
+ * existing subscribers retain access.
+ */
+const LIBREONCOLOGY_PRO_PRICE_IDS: StagedPriceId = {
+  test: process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_TEST ?? '',
+  prod: process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD ?? '',
+};
+
+/** Resolved (stage-correct) LibreOncology Pro Stripe price id. */
+export const LIBREONCOLOGY_PRO_PRICE_ID = resolveStagePriceId(LIBREONCOLOGY_PRO_PRICE_IDS);
+
+/**
+ * Stripe price -> entitlement key(s), authored per-stage. The runtime
+ * `PRICE_ENTITLEMENT_ROWS` below resolves each to the deployed stage's id.
+ */
+const PRICE_STAGED_ROWS: ReadonlyArray<{ priceIds: StagedPriceId; entitlements: EntitlementKey[] }> = [
+  // [DELETION-FOOTPRINT] LibreOncology Pro.
+  { priceIds: LIBREONCOLOGY_PRO_PRICE_IDS, entitlements: ['libreoncology:pro'] },
+];
+
+const PRICE_ENTITLEMENT_ROWS: PriceEntitlementRow[] = PRICE_STAGED_ROWS.map(row => ({
+  priceId: resolveStagePriceId(row.priceIds),
+  entitlements: row.entitlements,
+}));
+
+/**
+ * Comp-tag -> paid-key remap, applied ON TOP of the 1:1 tag->key passthrough.
+ * Back-compat: an admin/comp-granted product tag confers the product's paid
+ * entitlement without a subscription (ACCESS_MODEL §3.1 piece 4).
+ */
+const TAG_GRANT_ROWS: TagGrantRow[] = [
+  // [DELETION-FOOTPRINT] LibreOncology comp grant - RETIRED (tag-retirement, Q3b follow-on).
+  // The `libreoncology` access tag is no longer an entitlement input: comp/internal accounts
+  // now hold `libreoncology:pro` via `source:'admin_grant'` subscriptions (the priceId path,
+  // identical to a real subscriber), so the bare tag confers no access. The LibreOncology
+  // PRICE_STAGED_ROWS entry below STAYS - subscriptions (admin_grant and Stripe) are how the
+  // entitlement is granted now. Re-adding a row here would resurrect the retired tag key.
+  // [DELETION-FOOTPRINT] OptiHashi comp grant: the existing `opti` access tag
+  // bridges to `optihashi:pro`, so every Opti-tagged user keeps access through
+  // the tag->entitlement cutover with no subscription (zero regression). The
+  // matching PRICE_ENTITLEMENTS row is deferred to the subscriptions phase (no
+  // OptiHashi Stripe price minted yet); the email-domain grant lives in
+  // DOMAIN_GRANT_ROWS below.
+  // The `opti` tag confers all OptiHashi access via the single `optihashi:pro`
+  // entitlement, including the external-compute (hardware-bridge) surfaces - there
+  // is one product tier, so no second entitlement key or comp tag to bridge.
+  { tag: 'opti', entitlements: ['optihashi:pro'] },
+  // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
+  // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
+  // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed
+  // when the Overwatch package is extracted to Bike4Mind/overwatch.
+  { tag: 'overwatch', entitlements: ['overwatch:pro'] },
+  // [DELETION-FOOTPRINT] Pi (Project Intelligence) comp grant: the `pi` tag
+  // bridges to `pi:pro`. No gate existed previously (Open Core M0 adds it).
+  // No Stripe price yet; granted-only initially. Removed when Pi is extracted.
+  { tag: 'pi', entitlements: ['pi:pro'] },
+  // [DELETION-FOOTPRINT] Tavern comp grant: the `tavern` tag bridges to
+  // `tavern:pro`, preserving access for all existing tavern-tagged users through
+  // the tag->entitlement cutover (M3.5 migration). Call sites still use the legacy
+  // tag predicates until M3.5 migrates them to `requestHasTavernAccess`.
+  { tag: 'tavern', entitlements: ['tavern:pro'] },
+];
+
+/**
+ * Verified-email-domain -> entitlement key(s). Anyone signing up with an
+ * email in one of these domains auto-gets the keys FREE on signup, gated on a
+ * VERIFIED email (`entitlementsForEmail`) - derive-on-read, no Stripe row and
+ * no signup-time write, so existing users in the domain are covered and access
+ * auto-revokes if the email changes.
+ *
+ * Domains are normalized lowercase (matched against the substring after the
+ * last `@`). All grant rows are env-sourced (no customer/partner identity in
+ * open-core code) - see the two env blocks below.
+ */
+/**
+ * External customer domain-grant rows, sourced from env as JSON (open-core guard):
+ * naming a real customer domain + the entitlements it confers is
+ * customer-specific config, not shippable code - hardcoding it would leak the
+ * customer and couple a fork to our deals. Empty/unset (a fork, or CI type-check)
+ * -> no external grant, the correct default. Set the NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS
+ * repo/org variable per stage - a JSON array of `{ domain, entitlements }` - to
+ * activate; the value flows in via _deploy-env.yml.
+ *
+ * Every domain granted here confers paid entitlements AND a one-time signup
+ * credit allotment (see below) to any verified email on that domain. NEVER list a
+ * public mail provider (gmail.com, etc.).
+ */
+const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
+  const raw = process.env.NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as Array<{ domain?: unknown; entitlements?: unknown }>;
+    return parsed
+      .map(row => ({
+        domain: normalizeTag(String(row.domain ?? '')),
+        entitlements: (Array.isArray(row.entitlements) ? row.entitlements : []) as EntitlementKey[],
+      }))
+      .filter(row => row.domain && row.entitlements.length > 0);
+  } catch {
+    // Malformed value -> no external grant (fail closed); never throw at module load.
+    return [];
+  }
+})();
+
+/**
+ * Internal staff domains (comma-separated) that get the same grant as external
+ * customer staff - used to retest the customer onboarding flow (access + the
+ * one-time signup credits below) on B4M infra without a real customer mailbox.
+ *
+ * Sourced from env with NO brand fallback (open-core guard): these
+ * are B4M-account-tied domains, so hardcoding them in shippable code would
+ * couple a fork to our infrastructure. Empty/unset (a fork, or CI type-check)
+ * -> no internal-domain grant, which is the correct default. Set the
+ * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
+ * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ */
+const INTERNAL_STAFF_DOMAINS: readonly string[] = [
+  ...new Set(
+    (process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ?? '')
+      .split(',')
+      .map(d => normalizeTag(d))
+      .filter(Boolean)
+  ),
+];
+
+/** Domains already covered by an external row (derived - no brand literals to keep in sync). */
+const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row.domain));
+
+/** Entitlements internal staff domains confer - mirrors the external customer grant set. */
+const INTERNAL_STAFF_ENTITLEMENTS: EntitlementKey[] = ['optihashi:pro'];
+
+const DOMAIN_GRANT_ROWS: DomainGrantRow[] = [
+  ...EXTERNAL_DOMAIN_GRANT_ROWS,
+  // Internal staff domains -> same grant as external customer staff, sourced from
+  // env (above) so no B4M-account-tied literal ships in open-core code. De-duplicated
+  // against the external rows (structurally, via EXTERNAL_GRANT_DOMAINS) so an env
+  // value that overlaps one can't create a duplicate Map key - which would silently
+  // last-win and trip the registry invariant test.
+  ...INTERNAL_STAFF_DOMAINS.filter(domain => !EXTERNAL_GRANT_DOMAINS.has(domain)).map(domain => ({
+    domain,
+    entitlements: INTERNAL_STAFF_ENTITLEMENTS,
+  })),
+];
+
+/**
+ * Per-entitlement one-time signup credit grant. A domain-grant user (see
+ * DOMAIN_GRANT_ROWS) receives the SUM of these amounts for every entitlement
+ * key their verified email confers, granted ONCE at email verification
+ * (apps/client/pages/api/email/verify.ts) - ADDITIVE on top of the flat
+ * `defaultFreeCredits` open-registration grant, and with NO cap.
+ *
+ * Keyed on the entitlement, not the domain: any domain (external customer or
+ * internal staff) that confers `optihashi:pro` grants the matching credits
+ * (250,000, ~$250 at the ~$0.001/credit package rate). Future product rows
+ * inherit this automatically by adding a key here.
+ *
+ * [DELETION-FOOTPRINT] The entry leaves with its product on extraction.
+ */
+const SIGNUP_CREDIT_ROWS: ReadonlyArray<{ key: EntitlementKey; credits: number }> = [
+  { key: 'optihashi:pro', credits: 250_000 },
+];
+
+export const SIGNUP_CREDITS: ReadonlyMap<EntitlementKey, number> = new Map(
+  SIGNUP_CREDIT_ROWS.map(row => [normalizeTag(row.key), row.credits])
+);
+
+export const PRICE_ENTITLEMENTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
+  PRICE_ENTITLEMENT_ROWS.map(row => [row.priceId, row.entitlements])
+);
+
+export const TAG_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
+  TAG_GRANT_ROWS.map(row => [normalizeTag(row.tag), row.entitlements])
+);
+
+export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
+  DOMAIN_GRANT_ROWS.map(row => [normalizeTag(row.domain), row.entitlements])
+);
+
+/** Entitlement keys granted by the given Stripe priceIds. */
+export function entitlementsForPriceIds(priceIds: readonly string[]): Set<EntitlementKey> {
+  const keys = new Set<EntitlementKey>();
+  for (const priceId of priceIds) {
+    for (const key of PRICE_ENTITLEMENTS.get(priceId) ?? []) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Entitlement keys granted by the given user tags: every tag passes through
+ * as its own key (1:1, normalized - the briefcase `ICaller.entitlements`
+ * precedent), plus any TAG_GRANTS remap rows.
+ */
+export function entitlementsForTags(tags: readonly string[]): Set<EntitlementKey> {
+  const keys = new Set<EntitlementKey>();
+  for (const tag of tags) {
+    const normalized = normalizeTag(tag);
+    if (!normalized) continue;
+    keys.add(normalized);
+    for (const key of TAG_GRANTS.get(normalized) ?? []) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+/**
+ * Entitlement keys granted by the user's email domain, gated on a VERIFIED
+ * email. Returns the DOMAIN_GRANTS keys for the email's domain (the substring
+ * after the last `@`, normalized lowercase) ONLY when `emailVerified === true`;
+ * an empty set otherwise - unverified email, missing/empty email, an OAuth
+ * private relay address with no matching domain, or a domain not in the map. No
+ * grant is ever derived from an unverified address.
+ */
+export function entitlementsForEmail(
+  email: string | null | undefined,
+  emailVerified: boolean | null | undefined
+): Set<EntitlementKey> {
+  const keys = new Set<EntitlementKey>();
+  if (emailVerified !== true || !email) return keys;
+  const at = email.lastIndexOf('@');
+  if (at < 0) return keys;
+  const domain = normalizeTag(email.slice(at + 1));
+  if (!domain) return keys;
+  for (const key of DOMAIN_GRANTS.get(domain) ?? []) {
+    keys.add(key);
+  }
+  return keys;
+}
+
+/**
+ * One-time signup credit total for the given email, gated on a VERIFIED email.
+ * Sums SIGNUP_CREDITS over the domain-grant entitlement keys the email confers
+ * (reusing `entitlementsForEmail` as the resolver), so a two-product domain
+ * user gets 500,000 and a single-product user gets 250,000. Returns 0 for an
+ * unverified/missing email, a non-domain-grant email, or keys with no credit
+ * amount configured. ADDITIVE and uncapped by design.
+ */
+export function signupCreditsForEmail(
+  email: string | null | undefined,
+  emailVerified: boolean | null | undefined
+): number {
+  return signupCreditsForKeys(entitlementsForEmail(email, emailVerified));
+}
+
+/**
+ * Sum of the one-time signup credits for an already-resolved set of entitlement
+ * keys (keys with no configured amount contribute 0). Lets a caller that already
+ * holds the resolved keys (e.g. the email-verify handler, which also needs the
+ * key set for cache invalidation) avoid re-resolving the email a second time.
+ */
+export function signupCreditsForKeys(keys: Iterable<EntitlementKey>): number {
+  let total = 0;
+  for (const key of keys) {
+    total += SIGNUP_CREDITS.get(key) ?? 0;
+  }
+  return total;
+}
+
+/** Union of price-derived, tag-derived, and verified-email-domain entitlement keys. */
+export function resolveEntitlements(input: {
+  tags: readonly string[];
+  activePriceIds: readonly string[];
+  email?: string | null;
+  emailVerified?: boolean | null;
+}): EntitlementKey[] {
+  const keys = entitlementsForPriceIds(input.activePriceIds);
+  for (const key of entitlementsForTags(input.tags)) {
+    keys.add(key);
+  }
+  for (const key of entitlementsForEmail(input.email, input.emailVerified)) {
+    keys.add(key);
+  }
+  return [...keys];
+}
+
+/** Exposed for the registry invariant tests (not for feature code). */
+export const __registryRows = {
+  priceRows: PRICE_ENTITLEMENT_ROWS as readonly PriceEntitlementRow[],
+  // Per-stage rows let the tripwire validate BOTH stages, not just the one the
+  // isTestMode ternary resolves to at import time.
+  stagedPriceRows: PRICE_STAGED_ROWS,
+  tagGrantRows: TAG_GRANT_ROWS as readonly TagGrantRow[],
+  domainGrantRows: DOMAIN_GRANT_ROWS as readonly DomainGrantRow[],
+  signupCreditRows: SIGNUP_CREDIT_ROWS,
+};

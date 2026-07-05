@@ -1,0 +1,109 @@
+import type { ReactNode } from 'react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
+import { getThemeConfig } from '@client/app/utils/themes';
+import { DataLakeSettingsModal } from './DataLakeListPanel';
+
+const updateMutate = vi.fn();
+const warn = vi.fn();
+
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
+  useSetLakeVisibility: () => ({ mutate: vi.fn(), isPending: false }),
+}));
+
+// The settings modal derives org-visibility state from the account switcher (useAccounts),
+// which internally uses react-query - stub it so these clear-tag tests don't need a
+// QueryClientProvider. No org / no selection -> the Organization toggle is simply disabled,
+// which is irrelevant to the access-gate assertions below.
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useAccounts: () => ({ accounts: [], selectedAccount: null }),
+}));
+
+vi.mock('sonner', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), warning: (...a: unknown[]) => warn(...a) },
+}));
+
+// Keep the sibling viewer import light - it isn't rendered by the settings modal.
+vi.mock('./DataLakeViewer', () => ({ default: () => null }));
+
+const appTheme = extendTheme({ ...getThemeConfig() });
+const Wrapper = ({ children }: { children: ReactNode }) => (
+  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+);
+
+const gatedLake = {
+  id: 'lake-1',
+  name: 'Test Lake',
+  description: 'desc',
+  requiredUserTag: 'Opti',
+  requiredEntitlement: '',
+  organizationId: '',
+};
+
+describe('DataLakeSettingsModal — clearing an access gate', () => {
+  beforeEach(() => {
+    updateMutate.mockReset();
+    warn.mockReset();
+  });
+
+  it('warns and skips the no-op update when blanking the tag is the only change', async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={gatedLake} onClose={onClose} />
+      </Wrapper>
+    );
+
+    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    // Explicit message surfaced (the fix), not a silent success.
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/cleared/i);
+    expect(warn.mock.calls[0][0]).toMatch(/tag was kept/i);
+    // Clearing is the only change -> skip the no-op update (avoids a contradictory success toast).
+    expect(updateMutate).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('warns but still saves when the tag is blanked alongside another change', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.clear(screen.getByPlaceholderText('e.g. Opti'));
+    const nameInput = screen.getByTestId('datalake-settings-name').querySelector('input')!;
+    await user.clear(nameInput);
+    await user.type(nameInput, 'Renamed Lake');
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    // Real change persists; the blanked gate is omitted so the backend keeps it.
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ name: 'Renamed Lake' });
+    expect(updateMutate.mock.calls[0][0]).not.toHaveProperty('requiredUserTag');
+  });
+
+  it('does not warn when the access tag is unchanged', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByTestId('datalake-settings-save-btn'));
+
+    expect(warn).not.toHaveBeenCalled();
+    expect(updateMutate).toHaveBeenCalledTimes(1);
+    // Unchanged gate is still sent so it's preserved.
+    expect(updateMutate.mock.calls[0][0]).toMatchObject({ requiredUserTag: 'Opti' });
+  });
+});

@@ -1,0 +1,252 @@
+{
+  "name": "@bike4mind/services",
+  "description": "This packages contains all the core business logic",
+  "version": "2.104.0",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./apiKeyService": {
+      "import": {
+        "types": "./dist/apiKeyService/index.d.mts",
+        "default": "./dist/apiKeyService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/apiKeyService/index.d.cts",
+        "default": "./dist/apiKeyService/index.cjs"
+      }
+    },
+    "./creditService": {
+      "import": {
+        "types": "./dist/creditService/index.d.mts",
+        "default": "./dist/creditService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/creditService/index.d.cts",
+        "default": "./dist/creditService/index.cjs"
+      }
+    },
+    "./llm/StatusManager": {
+      "import": {
+        "types": "./dist/llm/StatusManager.d.mts",
+        "default": "./dist/llm/StatusManager.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/StatusManager.d.cts",
+        "default": "./dist/llm/StatusManager.cjs"
+      }
+    },
+    "./llm/tools": {
+      "import": {
+        "types": "./dist/llm/tools/index.d.mts",
+        "default": "./dist/llm/tools/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/tools/index.d.cts",
+        "default": "./dist/llm/tools/index.cjs"
+      }
+    },
+    "./llm/tools/cliTools": {
+      "import": {
+        "types": "./dist/llm/tools/cliTools.d.mts",
+        "default": "./dist/llm/tools/cliTools.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/tools/cliTools.d.cts",
+        "default": "./dist/llm/tools/cliTools.cjs"
+      }
+    },
+    "./llm/tools/implementation/webfetch": {
+      "import": {
+        "types": "./dist/llm/tools/implementation/webfetch/index.d.mts",
+        "default": "./dist/llm/tools/implementation/webfetch/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/tools/implementation/webfetch/index.d.cts",
+        "default": "./dist/llm/tools/implementation/webfetch/index.cjs"
+      }
+    },
+    "./llm/tools/implementation/webfetch/scrapeWithRetry": {
+      "import": {
+        "types": "./dist/llm/tools/implementation/webfetch/scrapeWithRetry.d.mts",
+        "default": "./dist/llm/tools/implementation/webfetch/scrapeWithRetry.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/tools/implementation/webfetch/scrapeWithRetry.d.cts",
+        "default": "./dist/llm/tools/implementation/webfetch/scrapeWithRetry.cjs"
+      }
+    },
+    "./llm/tools/implementation/websearch": {
+      "import": {
+        "types": "./dist/llm/tools/implementation/websearch/index.d.mts",
+        "default": "./dist/llm/tools/implementation/websearch/index.mjs"
+      },
+      "require": {
+        "types": "./dist/llm/tools/implementation/websearch/index.d.cts",
+        "default": "./dist/llm/tools/implementation/websearch/index.cjs"
+      }
+    },
+    "./mfaService/utils": {
+      "import": {
+        "types": "./dist/mfaService/utils.d.mts",
+        "default": "./dist/mfaService/utils.mjs"
+      },
+      "require": {
+        "types": "./dist/mfaService/utils.d.cts",
+        "default": "./dist/mfaService/utils.cjs"
+      }
+    },
+    "./organizationService/create": {
+      "import": {
+        "types": "./dist/organizationService/create.d.mts",
+        "default": "./dist/organizationService/create.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/create.d.cts",
+        "default": "./dist/organizationService/create.cjs"
+      }
+    },
+    "./organizationService/revokeAccess": {
+      "import": {
+        "types": "./dist/organizationService/revokeAccess.d.mts",
+        "default": "./dist/organizationService/revokeAccess.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/revokeAccess.d.cts",
+        "default": "./dist/organizationService/revokeAccess.cjs"
+      }
+    },
+    "./organizationService/update": {
+      "import": {
+        "types": "./dist/organizationService/update.d.mts",
+        "default": "./dist/organizationService/update.mjs"
+      },
+      "require": {
+        "types": "./dist/organizationService/update.d.cts",
+        "default": "./dist/organizationService/update.cjs"
+      }
+    },
+    "./sreAgentService": {
+      "import": {
+        "types": "./dist/sreAgentService/index.d.mts",
+        "default": "./dist/sreAgentService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/sreAgentService/index.d.cts",
+        "default": "./dist/sreAgentService/index.cjs"
+      }
+    },
+    "./sreAgentService/tools": {
+      "import": {
+        "types": "./dist/sreAgentService/tools.d.mts",
+        "default": "./dist/sreAgentService/tools.mjs"
+      },
+      "require": {
+        "types": "./dist/sreAgentService/tools.d.cts",
+        "default": "./dist/sreAgentService/tools.cjs"
+      }
+    },
+    "./utils/crypto": {
+      "import": {
+        "types": "./dist/utils/crypto.d.mts",
+        "default": "./dist/utils/crypto.mjs"
+      },
+      "require": {
+        "types": "./dist/utils/crypto.d.cts",
+        "default": "./dist/utils/crypto.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "dev": "tsdown --watch",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.97.1",
+    "@aws-sdk/client-bedrock-runtime": "^3.1069.0",
+    "@aws-sdk/client-s3": "^3.1069.0",
+    "@aws-sdk/client-transcribe": "^3.1069.0",
+    "@aws-sdk/credential-provider-node": "^3.972.56",
+    "@bike4mind/agents": "workspace:*",
+    "@bike4mind/auth": "workspace:*",
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/mcp": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
+    "@bike4mind/utils": "workspace:*",
+    "@casl/ability": "^6.8.1",
+    "@google/genai": "^1.46.0",
+    "@joplin/turndown-plugin-gfm": "^1.0.67",
+    "@mendable/firecrawl-js": "^1.29.3",
+    "@opensearch-project/opensearch": "2.11.0",
+    "async-mutex": "^0.5.0",
+    "axios": "1.16.1",
+    "bcryptjs": "^3.0.2",
+    "cheerio": "1.2.0",
+    "chess.js": "^1.0.0-beta.8",
+    "dayjs": "^1.11.20",
+    "diff": "^9.0.0",
+    "disposable-email-domains": "^1.0.62",
+    "exceljs": "^4.4.0",
+    "file-type": "^22.0.1",
+    "glob": "^13.0.0",
+    "lodash": "^4.18.1",
+    "marked": "^15.0.11",
+    "mathjs": "^15.2.0",
+    "mime-types": "^3.0.2",
+    "mongoose": "^8.24.1",
+    "openai": "^6.38.0",
+    "p-limit": "^7.3.0",
+    "sharp": "^0.34.5",
+    "tiktoken": "^1.0.22",
+    "turndown": "^7.2.4",
+    "uuid": "^13.0.2",
+    "yauzl": "^3.3.0",
+    "zod": "^4.4.3",
+    "zod-validation-error": "^5.0.0"
+  },
+  "devDependencies": {
+    "@types/disposable-email-domains": "^1.0.6",
+    "@types/lodash": "^4.17.24",
+    "@types/mailparser": "^3.4.6",
+    "@types/mime-types": "^3.0.1",
+    "@types/turndown": "^5.0.6",
+    "@types/yauzl": "^2.10.3",
+    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/ui": "^4.1.9",
+    "mailparser": "^3.9.12",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.9"
+  },
+  "optionalDependencies": {
+    "@vscode/ripgrep": "^1.18.0"
+  }
+}

@@ -1,0 +1,108 @@
+rules:
+  - id: express-session-secure
+    pattern: |
+      app.use(session({
+        ...,
+        cookie: {
+          secure: $X
+        }
+      }))
+    message: Express session cookie should have secure flag set to true in production
+    severity: WARNING
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/server/**/*.ts
+
+  - id: jwt-secret-hardcoded
+    pattern: |
+      const secret = $SECRET
+    message: JWT secret should not be hardcoded, use environment variables
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/server/**/*.ts
+
+  - id: s3-bucket-public
+    pattern: |
+      new Bucket($STACK, $NAME, {
+        ...,
+        public: true
+      })
+    message: S3 bucket should not be public unless explicitly required
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include:
+        - sst.config.ts
+
+  - id: sensitive-data-logging
+    pattern: |
+      console.log($SENSITIVE)
+    message: Avoid logging sensitive data
+    severity: WARNING
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/server/**/*.ts
+
+  - id: no-eval
+    pattern: |
+      eval($X)
+    message: Avoid using eval() as it can lead to code injection
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/**/*.ts
+
+  - id: no-inner-html
+    pattern: |
+      dangerouslySetInnerHTML={$X}
+    message: Avoid using dangerouslySetInnerHTML unless absolutely necessary
+    severity: WARNING
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/**/*.tsx
+
+  - id: no-unsafe-regex
+    pattern: |
+      new RegExp($PATTERN)
+    message: Avoid using potentially unsafe regular expressions
+    severity: WARNING
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/**/*.ts
+
+  - id: no-hardcoded-credentials
+    pattern: |
+      const $VAR = "password" | "secret" | "key" | "token"
+    message: Avoid hardcoding credentials in source code
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/**/*.ts
+
+  - id: no-unsafe-redirect
+    pattern: |
+      res.redirect($URL)
+    message: Ensure redirect URLs are validated
+    severity: WARNING
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/server/**/*.ts
+
+  - id: no-unsafe-crypto
+    pattern: |
+      crypto.createHash("md5" | "sha1")
+    message: Avoid using weak cryptographic algorithms
+    severity: ERROR
+    languages: [typescript]
+    paths:
+      include:
+        - packages/client/**/*.ts 

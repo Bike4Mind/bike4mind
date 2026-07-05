@@ -1,0 +1,210 @@
+[
+  {
+    "name": "Parsnip",
+    "amount_needed": 2,
+    "season": "Spring",
+    "growth_time": "4 Days",
+    "notes": "",
+    "required_for": ["Parsnip Soup", "Farmer's Lunch"]
+  },
+  {
+    "name": "Kale",
+    "amount_needed": 2,
+    "season": "Spring",
+    "growth_time": "6 Days",
+    "notes": "Harvest with Scythe",
+    "required_for": ["Salmon Dinner", "Stir Fry"]
+  },
+  {
+    "name": "Potato",
+    "amount_needed": 2,
+    "season": "Spring",
+    "growth_time": "6 Days",
+    "notes": "Has a 20% chance to yield extra potatoes",
+    "required_for": ["Hashbrowns"]
+  },
+  {
+    "name": "Blue Jazz",
+    "amount_needed": 1,
+    "season": "Spring",
+    "growth_time": "7 Days",
+    "notes": "",
+    "required_for": ["Lucky Lunch"]
+  },
+  {
+    "name": "Green Bean",
+    "amount_needed": 2,
+    "season": "Spring",
+    "growth_time": "10 Days",
+    "notes": "Grows on Trellis. Continues to produce every 3 days.",
+    "required_for": ["Bean Hotpot"]
+  },
+  {
+    "name": "Cauliflower",
+    "amount_needed": 1,
+    "season": "Spring",
+    "growth_time": "12 Days",
+    "notes": "Can become a Giant Crop",
+    "required_for": ["Cheese Cauliflower"]
+  },
+  {
+    "name": "Rhubarb",
+    "amount_needed": 1,
+    "season": "Spring",
+    "growth_time": "13 Days",
+    "notes": "Seeds available in the Oasis",
+    "required_for": ["Rhubarb Pie"]
+  },
+  {
+    "name": "Garlic",
+    "amount_needed": 2,
+    "season": "Spring",
+    "growth_time": "4 Days",
+    "notes": "Available from Year 2",
+    "required_for": ["Fiddlehead Risotto", "Escargot"]
+  },
+  {
+    "name": "Hot Pepper",
+    "amount_needed": 3,
+    "season": "Summer",
+    "growth_time": "5 Days",
+    "notes": "Continues to produce every 3 days.",
+    "required_for": ["Pepper Poppers", "Spicy Eel", "Tropical Curry"]
+  },
+  {
+    "name": "Radish",
+    "amount_needed": 2,
+    "season": "Summer",
+    "growth_time": "6 Days",
+    "notes": "",
+    "required_for": ["Red Plate", "Radish Salad"]
+  },
+  {
+    "name": "Poppy",
+    "amount_needed": 1,
+    "season": "Summer",
+    "growth_time": "7 Days",
+    "notes": "",
+    "required_for": ["Poppyseed Muffin"]
+  },
+  {
+    "name": "Tomato",
+    "amount_needed": 8,
+    "season": "Summer",
+    "growth_time": "11 Days",
+    "notes": "Continues to produce every 4 days.",
+    "required_for": ["Vegetable Medley", "Pizza", "Spaghetti", "Eggplant Parmesan", "Bruschetta", "Fish Stew", "Shrimp Cocktail", "Squid Ink Ravioli"]
+  },
+  {
+    "name": "Melon",
+    "amount_needed": 2,
+    "season": "Summer",
+    "growth_time": "12 Days",
+    "notes": "Can become a Giant Crop",
+    "required_for": ["Pink Cake", "Fruit Salad"]
+  },
+  {
+    "name": "Blueberry",
+    "amount_needed": 2,
+    "season": "Summer",
+    "growth_time": "13 Days",
+    "notes": "Produces multiple blueberries each harvest. Continues to produce every 4 days.",
+    "required_for": ["Blueberry Tart", "Fruit Salad"]
+  },
+  {
+    "name": "Corn",
+    "amount_needed": 2,
+    "season": "Summer/Fall",
+    "growth_time": "14 Days",
+    "notes": "Continues to produce every 4 days.",
+    "required_for": ["Tortilla"]
+  },
+  {
+    "name": "Red Cabbage",
+    "amount_needed": 3,
+    "season": "Summer",
+    "growth_time": "9 Days",
+    "notes": "Available from Year 2",
+    "required_for": ["Fish Taco", "Red Plate", "Coleslaw"]
+  },
+  {
+    "name": "Bok Choy",
+    "amount_needed": 1,
+    "season": "Fall",
+    "growth_time": "4 Days",
+    "notes": "",
+    "required_for": ["Super Meal"]
+  },
+  {
+    "name": "Eggplant",
+    "amount_needed": 2,
+    "season": "Fall",
+    "growth_time": "5 Days",
+    "notes": "Continues to produce every 5 days.",
+    "required_for": ["Eggplant Parmesan", "Survival Burger"]
+  },
+  {
+    "name": "Amaranth",
+    "amount_needed": 1,
+    "season": "Fall",
+    "growth_time": "7 Days",
+    "notes": "Harvested with Scythe",
+    "required_for": ["Salmon Dinner"]
+  },
+  {
+    "name": "Cranberries",
+    "amount_needed": 4,
+    "season": "Fall",
+    "growth_time": "7 Days",
+    "notes": "Produces 2 Cranberries at harvest. Continues to produce every 5 days.",
+    "required_for": ["Super Meal", "Cranberry Sauce", "Stuffing", "Cranberry Candy"]
+  },
+  {
+    "name": "Yam",
+    "amount_needed": 2,
+    "season": "Fall",
+    "growth_time": "10 Days",
+    "notes": "",
+    "required_for": ["Glazed Yams", "Autumn's Bounty"]
+  },
+  {
+    "name": "Pumpkin",
+    "amount_needed": 3,
+    "season": "Fall",
+    "growth_time": "13 Days",
+    "notes": "Can become a Giant Crop",
+    "required_for": ["Autumn's Bounty", "Pumpkin Soup", "Pumpkin Pie"]
+  },
+  {
+    "name": "Beet",
+    "amount_needed": 1,
+    "season": "Fall",
+    "growth_time": "6 Days",
+    "notes": "Seeds available at the Oasis",
+    "required_for": ["Vegetable Medley"]
+  },
+  {
+    "name": "Artichoke",
+    "amount_needed": 2,
+    "season": "Fall",
+    "growth_time": "8 Days",
+    "notes": "Available from Year 2",
+    "required_for": ["Super Meal", "Artichoke Dip"]
+  },
+  {
+    "name": "Pineapple",
+    "amount_needed": 1,
+    "season": "Summer",
+    "growth_time": "14 Days",
+    "notes": "",
+    "required_for": ["Tropical Curry"]
+  },
+  {
+    "name": "Taro Root",
+    "amount_needed": 4,
+    "season": "Summer",
+    "growth_time": "10 Days",
+    "notes": "",
+    "required_for": ["Poi"]
+  }
+]

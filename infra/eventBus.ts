@@ -1,0 +1,303 @@
+import { allSecrets } from './secrets';
+import { websocketApi } from './websocket';
+import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { lambdaVpc } from './vpc';
+import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
+import { eventBus } from './bus';
+import { notebookCurationQueue } from './queues';
+
+// Stripe events
+const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
+  'stripe-invoice-payment-succeeded',
+  {
+    handler: 'apps/client/server/events/stripe/invoicePaymentSucceeded.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Lumina5/Entitlements skip metrics (emitMetric in the handler + plan-lookup miss
+    // in handleUserSubscriptionInvoice).
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['stripe.invoice.payment_succeeded'],
+    },
+  }
+);
+
+const stripeCustomerSubscriptionUpdatedSubscription = eventBus.subscribe(
+  'stripe-customer-subscription-updated',
+  {
+    handler: 'apps/client/server/events/stripe/customerSubscriptionUpdated.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Lumina5/Entitlements reconcile metrics (emitMetric in the handler).
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['stripe.cus.sub.updated'],
+    },
+  }
+);
+
+// Email events
+eventBus.subscribe(
+  'email-send',
+  {
+    handler: 'apps/client/server/events/sendEmail.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  {
+    pattern: {
+      detailType: ['email.send'],
+    },
+  }
+);
+
+// Session events
+const sessionAutoNamingSubscription = eventBus.subscribe(
+  'session-auto-name',
+  {
+    handler: 'apps/client/server/events/sessionAutoNaming.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['session.auto_name'],
+    },
+  }
+);
+
+const sessionSummarizationSubscription = eventBus.subscribe(
+  'session-summarize',
+  {
+    handler: 'apps/client/server/events/sessionSummarization.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['session.summarize'],
+    },
+  }
+);
+
+const sessionContextSummarizationSubscription = eventBus.subscribe(
+  'session-context-summarize',
+  {
+    handler: 'apps/client/server/events/sessionContextSummarization.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    permissions: [{ actions: ['bedrock:*'], resources: ['*'] }],
+  },
+  { pattern: { detailType: ['session.context_summarize'] } }
+);
+
+const sessionTaggingSubscription = eventBus.subscribe(
+  'session-tag',
+  {
+    handler: 'apps/client/server/events/sessionTagging.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus],
+    vpc: lambdaVpc,
+    timeout: '2 minutes',
+    logging: {
+      retention: '1 day',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['session.tag'],
+    },
+  }
+);
+
+// Notebook Curation events
+eventBus.subscribe(
+  'notebook-curation-start',
+  {
+    handler: 'apps/client/server/events/notebookCuration.handler',
+    runtime: 'nodejs24.x',
+    link: [
+      ...allSecrets,
+      websocketApi,
+      eventBus,
+      fabFileBucket,
+      generatedImagesBucket,
+      appFilesBucket,
+      notebookCurationQueue,
+    ],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['notebook.curation.start'],
+    },
+  }
+);
+
+// Notebook Curation Analytics - logs analytics when curation completes
+eventBus.subscribe(
+  'notebook-curation-complete-analytics',
+  {
+    handler: 'apps/client/server/events/notebookCurationAnalytics.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, eventBus],
+    vpc: lambdaVpc,
+    timeout: '1 minute',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  {
+    pattern: {
+      detailType: ['notebook.curation.complete'],
+    },
+  }
+);
+
+// [DELETION-FOOTPRINT] Pi + Jira history-analysis EventBridge subscriptions
+// ('pi-history-analysis-start', 'jira-history-analysis-start') moved to
+// @bike4mind/premium-pi (contributeInfra in packages/premium/pi/src/infra.ts)
+// during the Pi open-core carve. They attach to this same shared eventBus by
+// reference (passed into contributeInfra), with byte-identical logical names for
+// URN continuity. The `pi.*` event DEFINITIONS remain in
+// apps/client/server/utils/eventBus.ts (referenced via the @server/* alias) —
+// re-home'd at M2. The detailType wire strings are unchanged.
+
+// Telemetry Alert events - sends Slack alerts and creates GitHub issues for context telemetry anomalies
+// Processes alerts asynchronously so main Lambda can terminate without blocking
+// Includes fingerprinting, deduplication, regression detection, and LLM priority determination
+const telemetryAlertSubscription = eventBus.subscribe(
+  'telemetry-alert',
+  {
+    handler: 'apps/client/server/events/telemetryAlert.handler',
+    runtime: 'nodejs24.x',
+    link: [...allSecrets, websocketApi, eventBus],
+    vpc: lambdaVpc,
+    timeout: '60 seconds', // Increased from 30s to handle GitHub + LLM + Slack operations
+    memory: '512 MB', // Increased memory for LLM operations
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['telemetry.alert'],
+    },
+  }
+);
+
+// Spider events - comprehensive notebook grooming
+const spiderSubscription = eventBus.subscribe(
+  'spider-start',
+  {
+    handler: 'apps/client/server/events/spider.handler',
+    link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    vpc: lambdaVpc,
+    timeout: '15 minutes', // Longer timeout for processing many notebooks
+    memory: '1024 MB',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  {
+    pattern: {
+      detailType: ['spider.start'],
+    },
+  }
+);
+
+export {
+  eventBus,
+  sessionAutoNamingSubscription,
+  sessionSummarizationSubscription,
+  sessionContextSummarizationSubscription,
+  sessionTaggingSubscription,
+  stripeInvoicePaymentSucceededSubscription,
+  stripeCustomerSubscriptionUpdatedSubscription,
+  spiderSubscription,
+  telemetryAlertSubscription,
+};

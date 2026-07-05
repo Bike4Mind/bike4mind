@@ -1,0 +1,74 @@
+export {
+  // chunk
+  SmartChunker,
+  ChunkSchema,
+  type Chunk,
+  // ingest
+  URL_REGEX,
+  detectURLs,
+  hasURLs,
+  urlExists,
+  fetchAndParseURL,
+  // ssrfProtection
+  validateUrlForFetch,
+  isPrivateIP,
+  isPrivateOrInternalHostname,
+  // embeddings
+  EmbeddingFactory,
+  type EmbeddingConfig,
+  EmbeddingService,
+  EmbeddingModelProvider,
+  type EmbeddingModelInfo,
+  getProviderFromModel,
+  BedrockEmbeddingService,
+  type BedrockCredentials,
+  BEDROCK_EMBEDDING_MODEL_MAP,
+  OpenAIEmbeddingService,
+  OPENAI_EMBEDDING_MODEL_MAP,
+  VoyageAIEmbeddingProvider,
+  VOYAGEAI_EMBEDDING_MODEL_MAP,
+  // storage
+  BaseStorage,
+  S3Storage,
+} from '@bike4mind/fab-pipeline';
+export { Logger, type ILogger, type LogLevel } from '@bike4mind/observability';
+export * from './config';
+export * from './apikey';
+export * from './llm';
+export * from './errors';
+export * from './extractErrorMessage';
+// Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
+// prefer that in server modules covered by client vitest suites.
+export * from './escapeRegex';
+export * from './validation';
+export * from './slack';
+export * from './cacheKeys';
+export * from './pagination';
+export * from './settings';
+export * from './cache/AdminSettingsCache';
+export * from './cache/RapidReplyMappingsCache';
+export * from './queue';
+export * from './ws';
+export * from './promptModeration';
+export * from './imageModeration';
+export * from './file';
+export * from './questMaster';
+export * from './questMasterToolSchema';
+export * from './imageGeneration';
+export type { ImageEditResponse } from './imageGeneration';
+export * from './videoGeneration';
+export * from './analytics';
+export * from './user';
+export * from './pricing';
+export * from './functionQueueRunner';
+export * from './fabfile';
+export * from './artifactParser';
+export * from './adminSettings';
+export * from './notificationDeduplicator';
+export * from './tokenCounting';
+export * from './url';
+export * from './retry';
+export * from './circuitBreaker';
+export * from './rateLimitHeaders';
+export * from './voiceHistory';
+export * from './lambdaErrorHandler';

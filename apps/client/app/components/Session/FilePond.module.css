@@ -1,0 +1,36 @@
+/* FilePond.module.css */
+
+.groktool .filepondRoot {
+  max-height: 100em;
+  color: green;
+}
+
+/* The text color of the drop label */
+.filepondDropLabel {
+  color: #55f;
+}
+
+/* Underline color for "Browse" button (corrected class name) */
+.filepondLabelAction {
+  text-decoration-color: #aaa;
+}
+
+.filepond--root {
+  background-color: transparent !important;
+  /* Ensures the FilePond background is transparent */
+}
+
+.filepond--drop-label {
+  background-color: 'red';
+  /* Ensures the FilePond background is transparent */
+}
+
+.filepond--panel-root {
+  background-color: 'transparent !important';
+  /* Additional selector for ensuring transparency */
+}
+
+.groktool .filepond--item {
+  border-radius: 10px;
+  background-color: 'red';
+}

@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Mga Setting sa AI",
+    "session": "Notebook",
+    "session_plural": "Mga Notebook",
+    "favorite": "Paborito",
+    "unfavorite": "Dili paborito",
+    "favorites": "Mga Paborito",
+    "favorites_count_one": "{{count}} Paborito",
+    "favorites_count_other": "{{count}} Mga Paborito",
+    "currentSession": "Karon",
+    "other": "Ubang mga Tags",
+    "text_model": "Teksto Modelo",
+    "image_model": "Larawan Modelo",
+    "ai_image": "AI Imahe",
+    "switch_to": "Ibalhin sa {{ name }}"
+  },
+  "guide": {
+    "title": "Giya"
+  },
+  "intro": {
+    "title": "Panimulang"
+  },
+  "developers": {
+    "title": "Mga Tiggama",
+    "technical_docs": "Teknikal nga Dokumentasyon"
+  },
+  "changelog": {
+    "title": "Mga Pagbag-o"
+  },
+  "feedback": {
+    "send": "Ipadala ang Feedback"
+  },
+  "terms_policies": "Mga Termino ug Palisiya",
+  "login": "Pag-log in",
+  "file": "Kahibalo",
+  "forgotPassword": "Nakalimtan ang Password",
+  "signup": "Mag-sign up",
+  "help": "Tabang",
+  "manual": "Manwal",
+  "inviteLong": "Imbitaha ang usa ka Higala",
+  "inviteShort": "Imbita",
+  "tools": {
+    "title": "Mga Himan"
+  },
+  "sidenav": {
+    "pin": "Ipin ang sidebar",
+    "unpin": "I-unpin ang sidebar",
+    "sessions": {
+      "sort": {
+        "label": "Pag-sort Pinaagi sa",
+        "tags": "Pinaagi sa Tags",
+        "date": "Pinaagi sa Petsa"
+      },
+      "new": "Bag-o nga Chat",
+      "item": {
+        "genTags": "Mugna og lista sa Notebook tag"
+      }
+    }
+  },
+  "referral": {
+    "title": "I-refer ang usa ka higala sa",
+    "email_title_default": "Malipayong Pag-abot sa GrokTool!",
+    "email_body_default": "Gidapit ka ni USER_NAME sa GrokTool! LINK SA PAGPAREHISTRO: Gamita ang mosunod nga code sa imbitasyon para magparehistro: INVITE_CODE",
+    "friend_email": "Email sa Higala",
+    "num_referrals_available": "Mga referral nga magamit:",
+    "no_valid_emails_error": "Palihug isulod ang balido nga mga email address",
+    "send_referral": "Ipadala ang Referral",
+    "send_referral_success": "Malampusong napadala ang referral!",
+    "send_referral_skipped": "{{count}} nga imbitasyon gipakyas — ang mga email address anaa nay account.",
+    "send_referral_failed": "{{count}} nga imbitasyon dili mapadala. Palihug sulayi pag-usab.",
+    "send_referral_error": "Sayup sa pagpadala sa referral. Palihug sulayi pag-usab.",
+    "slack_notification_default": "Referral gipadala sa user USER_NAME:USER_ID ngadto sa FRIEND_EMAIL"
+  },
+  "activateVoice": "I-activate kini nga tingog",
+  "liveVoice": "Buhi nga tingog",
+  "whatsNew": "Unsa'y Bago",
+  "welcome": "Welcome sa {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Nagkonektar",
+      "1": "Nakakonektar",
+      "2": "Nagputol sa koneksyon",
+      "3": "Naputol ang koneksyon",
+      "-1": "Nagpaabot"
+    },
+    "networkStatus": "Network: {{ status }}"
+  },
+  "deleteVoice": "I-delete kini nga tingog",
+  "deleteVoiceConfirm": "Sigurado ka ba nga gusto nimo i-delete kini nga tingog?",
+  "organization": {
+    "organizations": "Mga Team",
+    "defaultName": "Akong Organisasyon",
+    "shared": "Gipangbahin sa Akon",
+    "create": "Himoa ang Team",
+    "search": "Pagpangita sa mga team...",
+    "no_organizations": "Walay nakuha nga mga team",
+    "view_details": "Tan-awa ang Detalye",
+    "x_seats": "{{count}} nga lingkuranan",
+    "active_subscription": "Aktibong Subscription",
+    "no_subscription": "Walay Subscription",
+    "x_members": "{{count}} nga mga miyembro",
+    "x_credits": "{{count}} nga mga kredito",
+    "owner": "Tag-iya"
+  },
+  "session": {
+    "typeYourMessage": "I-type ang imong mensahe dinhi",
+    "switchedSession": "Gibalhin ngadto sa: {{ sessionName }}",
+    "send": "Ipadala",
+    "sendMessage": "Ipadala ang Mensahe",
+    "preparingQuest": "Nagaandam sa misyon...",
+    "rephrasePrompt": "I-optimize ang imong input",
+    "promptRephrased": "Malampuson nga nausab ang prompt",
+    "rephraseFailed": "Napakyas ang pag-usab sa prompt",
+    "errors": {
+      "notebookDeleted": "Kini nga notebook gitangtang na. Palihug paghimo ug bag-o.",
+      "noPermission": "Wala kay permiso nga maka-access niini nga notebook.",
+      "invalidRequest": "Dili balido nga hangyo. Palihug sulayi pag-usab.",
+      "tooManyRequests": "Daghang mga hangyo. Palihug paghulat ug gamay dayon sulayi pag-usab.",
+      "serverError": "Sayop sa server. Palihug sulayi pag-usab unya.",
+      "networkError": "Napakyas ang pagpadala sa mensahe. Palihug susiha ang imong koneksyon.",
+      "sendFailed": "Napakyas ang pagpadala sa mensahe. Palihug sulayi pag-usab."
+    }
+  },
+  "projects": {
+    "title": "Proyekto",
+    "projects": "Mga Proyekto",
+    "joined_projects": "Nagsalmot nga mga Proyekto",
+    "no_joined_projects": "Walay na-apil nga mga proyekto hangtod karon",
+    "add_to_project": "Idugang sa Proyekto",
+    "modals": {
+      "files": {
+        "title": "Idugang ang mga File sa Proyekto",
+        "subtitle": "Pilia ang mga file aron idugang sa imong proyekto",
+        "button_label": "Idugang ang mga File",
+        "search_placeholder": "Pagpangita og mga file",
+        "no_files": "Walay nakuha nga mga file."
+      },
+      "members": {
+        "title": "Idugang ang mga Miyembro sa Proyekto",
+        "subtitle": "Pagpangita ug pagpili sa mga tiggamit aron idugang sa imong proyekto",
+        "button_label": "Idugang ang mga Miyembro",
+        "search_placeholder": "Pagpangita og mga tiggamit",
+        "no_members": "Sulayi ang pag-search para sa usa ka user."
+      },
+      "sessions": {
+        "title": "Idugang ang Notebook sa Proyekto",
+        "subtitle": "Pilia ang mga notebook aron idugang sa imong proyekto o maghimo og bag-o",
+        "button_label": "Idugang ang mga Notebook",
+        "search_placeholder": "Pagpangita",
+        "create_button": "Pagmugna",
+        "no_notebooks": "Walay nakuha nga notebooks. Sulayi ang paghimo og bag-o."
+      },
+      "generic": {
+        "select_all": "Pilia ang Tanan",
+        "unselect_all": "Walay Pilion ang Tanan",
+        "add_items_one": "Idugang ang {{count}} nga butang",
+        "add_items_other": "Idugang ang {{count}} ka mga butang",
+        "delete_items": "Pagtangtang {{count}} nga mga item"
+      }
+    }
+  },
+  "logout": "Pag-logout",
+  "inbox": {
+    "title": "Inbox",
+    "messages": "Mga Mensahe",
+    "invites": "Mga Imbitasyon",
+    "sendMessage": "Magpadala ug mensahe",
+    "noMessages": "Walay mga mensahe"
+  },
+  "addSomething": "Idugang {{ name }}",
+  "deleteAllSomething": "I-delete Tanan {{ name }}",
+  "exportAllSomething": "I-export Tanan {{ name }}",
+  "importLLMHistory": "I-import ang LLM Kasaysayan",
+  "downloadAllSomething": "I-download Tanan {{ name }}",
+  "language": {
+    "language_settings": "Mga Setting sa Wika",
+    "change-language": "Usba ang Wika"
+  },
+  "theme": {
+    "turn-dark": "Pag-ilis ngadto sa Ngitngit",
+    "turn-light": "Pag-ilis ngadto sa Hayag"
+  },
+  "auth": {
+    "usernameOrEmail": "Username o Email",
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Kumpirmaha ang Password",
+    "fullName": "Tibuok Ngalan",
+    "inviteCode": "Invite Code",
+    "needCode": "Kinahanglan ug Code?",
+    "noAccount": "Walay Account?",
+    "haveAccount": "Naa na kay account?",
+    "loginWithProvider": "Login gamit ang {{ provider }}",
+    "checking": "Gisusi...",
+    "continue": "Padayon",
+    "troubleSigningIn": "Nalisang sa pagsulod?",
+    "signingInAs": "Nagasulod isip",
+    "signingIn": "Nagasulod...",
+    "backToEmail": "Balik sa email",
+    "redirectingToProvider": "Gidirekta sa pag-login sa imong organisasyon...",
+    "resetInstructions": "Palihug isulod ang imong email address. Magpadala mi ug email para i-reset ang imong password.",
+    "sendResetEmail": "Ipadala ang email para i-reset ang password",
+    "email": "Email",
+    "resetEmailSentMessage": "Naipadala na ang email! Palihug i-check ang imong email para sa dugang nga mga instruksyon",
+    "createAccountDesc": "Mugna ug Account",
+    "createBtn": "Mugna ug Account",
+    "loginBtn": "Login",
+    "passwordStrength": {
+      "label": "Kusog sa password",
+      "weak": "Huyang",
+      "fair": "Sakto ra",
+      "strong": "Ligon"
+    },
+    "passwordRequirements": {
+      "title": "Mga kinahanglanon sa password",
+      "minLength": "Labaw sa {{count}} ka mga karakter",
+      "uppercase": "Usa ka dagkong letra",
+      "lowercase": "Usa ka gamay nga letra",
+      "number": "Usa ka numero",
+      "specialChar": "Usa ka espesyal nga karakter",
+      "met": "napun-an",
+      "notMet": "wala pa matuman"
+    },
+    "errors": {
+      "usernameExists": "Ang Username '{{username}}' kay gikuha na. Palihug pili ug lain nga username.",
+      "emailExists": "Ang usa ka account nga may email '{{email}}' kay anaa na. Palihug gamita ang lain nga email o mag-login sa imong kasamtangang account.",
+      "accountExists": "Ang usa ka account nga adunay niini nga mga kredensyal kay anaa na. Palihug sulayi ang pag-login o gamita ang lain nga kredensyal.",
+      "invalidInviteCode": "Ang invite code nga imong gisulod kay dili balido o mos expired na. Palihug susiha ug sulayi pag-usab.",
+      "registrationFailed": "Napakyas ang rehistro. Palihug sulayi pag-usab sa ulahi.",
+      "validation": {
+        "generic": "Dili balido nga input",
+        "invalidUsername": "Ang Username mahimong maglangkob lamang sa mga letra, numero, underscores, mga tuldok, ug mga gitik.",
+        "passwordMismatch": "Dili magkatugma ang mga password",
+        "passwordRequirements": "Ang Password kinahanglan adunay labing menos 8 ka karakter, uban ang mga uppercase ug lowercase nga letra, usa ka numero, ug usa ka espesyal nga karakter."
+      }
+    }
+  },
+  "search": "Pangita",
+  "share": "Ipakigbahin",
+  "rename": "Usba ang ngalan",
+  "favorite": "Paborito",
+  "unfavorite": "Unpaborito",
+  "delete": "Papasa",
+  "files": {
+    "showAttachedFiles": "Ipakita ang Naka-attach nga mga File",
+    "hideAttachedFiles": "Tago ang Naka-attach nga mga File",
+    "title": "Mga File",
+    "upload": "I-upload ang mga File",
+    "long_title": "File Browser"
+  },
+  "view": "Tan-awa",
+  "info": "Impormasyon",
+  "clone": "Kopyaha",
+  "download": "I-download",
+  "summarize": "I-summarize",
+  "profile": {
+    "title": "Profile",
+    "tooltip": "Profile",
+    "collection": "Koleksyon",
+    "collections": {
+      "all_types": "Tanang Klase"
+    },
+    "users_profile": "Profile ni {{ name }}",
+    "storage_used": "Gigamit nga Imbakan",
+    "credits": "Mga Kredito",
+    "subscription": "Suskrisyon",
+    "edit": "Usba ang Profile",
+    "manage_subscription": "Dumala sa Suskrisyon",
+    "upgrade": "I-upgrade",
+    "credit_analytics": "Analytics sa Kredito",
+    "pricing": "Presyo sa Kredito",
+    "show_purchases": "Ipakita ang mga Pagpalit",
+    "show_usage": "Ipakita ang Paggamit",
+    "show_combined": "Ipakita ang Gipundok",
+    "buy_credits": "Palit og Kredito"
+  },
+  "community": {
+    "title": "Komunidad",
+    "tooltip": "Komunidad",
+    "feed": "Feed sa Komunidad"
+  },
+  "subscriptions": {
+    "title": "Mga Subscription",
+    "expires_on": "Mawagtang sa {{ date }}",
+    "renews_on": "Mabag-o sa {{ date }}"
+  },
+  "billing": {
+    "title": "Pagbayad"
+  },
+  "credits": {
+    "title": "Mga Kredito",
+    "usage": "Paggamit sa Kredito",
+    "analytics": "Analytics sa Kredito",
+    "analytics_tooltip": "Tan-awa ang imong paggamit sa kredito sa panahon",
+    "current_balance": "Karon nga Balansi sa Kredito",
+    "credits": "kredito",
+    "usage_by_model": "Paggamit pinaagi sa Modelo",
+    "no_transactions": "Walay nakuha nga transaksyon sa kredito sa kini nga panahon",
+    "model_pricing": "Presyo sa Modelo",
+    "text_models": "Text nga mga Modelo",
+    "image_models": "Image nga mga Modelo",
+    "pricing_per_1k_tokens": "Presyo nga gipakita sa kredito kada 1,000 nga tokens",
+    "pricing_per_generation": "Presyo nga gipakita sa kredito kada henerasyon sa imahe",
+    "model_name": "Ngalan sa Modelo",
+    "price_tier": "Tier sa Presyo",
+    "input_cost": "Gasto sa Input",
+    "output_cost": "Gasto sa Output",
+    "generation_cost": "Gasto sa Henerasyon",
+    "no_models_available": "Walay magamit nga mga modelo",
+    "pricing_note": "Nota: Ang mga presyo kay hapit lamang ug mahimong magkalainlain base sa mga parametro sa modelo. Ang mga tier sa presyo: $ (pinakalow), $$ (medium), $$$ (premium).",
+    "burn_rate": "Adlaw-adlaw nga paggamit (burn rate)",
+    "days_remaining": "Gipanghubit nga mga adlaw nga nahibilin",
+    "usage_pattern": "Base sa imong pattern sa paggamit gikan sa miaging {{days}} nga mga adlaw",
+    "credits_used": "Nagamit nga mga Kredito",
+    "credits_purchased": "Mga Kredito nga Napalit",
+    "net_credits": "Net nga Kredito"
+  },
+  "time": {
+    "last_7_days": "Sa Miaging 7 ka mga adlaw",
+    "last_30_days": "Sa Miaging 30 ka mga adlaw",
+    "last_90_days": "Sa Miaging 90 ka mga adlaw",
+    "last_180_days": "Sa Miaging 180 ka mga adlaw",
+    "last_365_days": "Sa Miaging 365 ka mga adlaw"
+  },
+  "common": {
+    "date": "Petsa",
+    "refresh": "I-refresh",
+    "days": "mga adlaw",
+    "cancel": "Kanselahin",
+    "save": "I-save",
+    "delete": "Pagtangtang",
+    "edit": "I-edit",
+    "close": "Isira",
+    "submit": "Isumite",
+    "loading": "Naga-load...",
+    "error": "Sayop",
+    "success": "Kalampusan"
+  },
+  "errors": {
+    "failed_to_load_data": "Napakyas sa pag-load sa datos. Palihug sulayi pag-usab sa ulahi."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Ang imong koneksyon sa Atlassian na-expire na. Palihug i-reconnect ang imong account."
+    }
+  },
+  "credits_modal": {
+    "title": "Dugang nga mga Kredito",
+    "description": "Mopalit og dugang nga mga kredito aron magpadayon sa paggamit sa among mga advanced AI models ug mga feature. Ang mga kredito gigamit para sa model inference ug espesyal nga mga feature, nga ang lain-laing mga modelo nagkonsumo og lain-laing kantidad depende sa komplikado.",
+    "current_credits": "Karon nga kantidad sa mga kredito",
+    "best_value": "Pinakamaayo nga Bili",
+    "purchase_success": "Napalit {{credits}} nga mga kredito",
+    "history_title": "Kasaysayan sa Pagpalit sa mga Kredito",
+    "purchase": "Palit",
+    "no_transactions": "Walay mga transaksyon pa",
+    "low_credits": "Mubo ang imong mga kredito",
+    "low_credits_sub": "Palita ug dugang nga mga kredito aron magpadayon sa imong trabaho.",
+    "no_credits": "Walay kredito",
+    "no_credits_sub": "Palita ang mga kredito aron magpadayon sa imong trabaho.",
+    "status": {
+      "completed": "Nahuman",
+      "pending": "Nagahulat",
+      "failed": "Napakyas"
+    }
+  },
+  "settings": {
+    "title": "Mga Setting",
+    "tooltip": "Mga Setting",
+    "main": "Panguna nga Mga Setting",
+    "account": "Akun",
+    "ai_features": "Mga Tampok sa AI",
+    "connected_apps": {
+      "title": "Mga Nakonektang Apps",
+      "link": "Sumpay",
+      "unlink": "Tangtangon ang Sumpay"
+    },
+    "developer_tools": "Mga Himan sa Tigdumala",
+    "experimental_features": {
+      "title": "Mga Eksperimento nga Tampok",
+      "tooltip": "Eksperimento nga mga Features",
+      "header": "Eksperimento nga mga Features",
+      "beta_features": {
+        "title": "Beta nga mga Features",
+        "subtitle": "Kini nga mga features kay nagpadayon pa og pagtrabaho ug mahimong magdala og dili gipaabot nga mga resulta. Ang pagpili sa pag-enable niini nagpasabot nga mouyon ka sa paggamit niini sa ilang kasamtangan nga estado."
+      }
+    },
+    "ui_preferences": "Mga Prefersensya sa UI"
+  },
+  "mementos": {
+    "title": "Mga Memento",
+    "tooltip": "Mga Memento"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Mga Setting sa Admin"
+  },
+  "speech": {
+    "title": "Nagsulti",
+    "tooltip": "Teksto ngadto sa Nagsulti & Nagsulti ngadto sa Teksto"
+  },
+  "instructions": {
+    "title": "Mga Instruksyon",
+    "tooltip": "Mga Instruksyon"
+  },
+  "friends": {
+    "add_friend": "Idugang sa mga Higala",
+    "unfriend": "Akan sa mga Higala",
+    "pending_request": "Nagpaabot nga Hangyo sa Pagkapareha",
+    "all": "Tanang Higala",
+    "pending": "Nagpaabot"
+  },
+  "notebooks": {
+    "view_info": "Tan-awa ang Impormasyon sa Notebook",
+    "clone": "Iklon ang Notebook",
+    "download": "I-download ang Notebook",
+    "summarize": "I-summarize ang Notebook",
+    "delete": "I-delete ang Notebook",
+    "delete_confirm": "Sigurado ka nga gusto nimo permanenti nga i-delete ang \"{{ name }}\"? Dili na mabawi ang aksyon nga kini.",
+    "auto_rename": "I-rerename gamit ang AI"
+  },
+  "add_friend": {
+    "title": "Magdagdag og Higala",
+    "friend_email": "Email sa Higala",
+    "message": "Mensahe",
+    "cancel": "Ikansela",
+    "send": "Ipadala",
+    "email_placeholder": "Isulod ang email sa imong higala",
+    "message_placeholder": "Isulod ang imong mensahe"
+  },
+  "file_browser": {
+    "my_files": "Akong mga File",
+    "shared_with_me": "Gipaambit kanako",
+    "total_files": "Total nga Kaalam nga mga Item",
+    "search_placeholder": "Pagpangita pinaagi sa ngalan o tatak...",
+    "file_type": "Tipo sa File",
+    "all_files": "Tanang mga File",
+    "text": "Teksto",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Litrato",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Petsa nga Gimugna",
+    "size": "Gidak-on",
+    "name": "Ngalan",
+    "sort_z_to_a": "Ihan-ay Z hangtod A",
+    "sort_a_to_z": "Ihan-ay A hangtod Z",
+    "grid_view": "Grid View",
+    "list_view": "List View",
+    "select_file_hint": "Pinaagi sa pag-tap, pili-a ang file o daghang mga file ug idugang kini sa imong notebook session!",
+    "session_one": "Notebook",
+    "session_other": "Mga Notebook",
+    "no_files_available": "Walay magamit nga mga file",
+    "count_file_selected_one": "{{count}} nga file ang napili",
+    "count_file_selected_other": "{{count}} nga mga file ang napili",
+    "add_count_file_one": "Idugang ang {{count}} nga file",
+    "add_count_file_other": "Idugang ang {{count}} nga mga file",
+    "delete_count_file_one": "I-delete ang {{count}} nga file",
+    "delete_count_file_other": "I-delete ang {{count}} nga mga file",
+    "share_count_file_one": "Ibahin ang {{count}} nga File",
+    "share_count_file_other": "Ibahin ang {{count}} ka mga File",
+    "count_file_one": "{{count}} nga file",
+    "count_file_other": "{{count}} nga mga file",
+    "add_to_session_success": "Pagdugang sa file: {{fileNames}} sa {{sessionName}}",
+    "add_file_success": "Pagdugang sa file: {{fileNames}}",
+    "browse_files": "Susi sa mga File",
+    "create_new_knowledge": "Himoa",
+    "create_new_knowledge_from_url": "Scrape URL",
+    "enter_url": "I-enter ang URL",
+    "create_file": "Himoa ang File",
+    "create_file_from_url": "Himoa ang File",
+    "create_from_url": "Dali nga Scrape",
+    "research": "Panukiduki",
+    "open_research": "Ablihi ang Panukiduki",
+    "url_success": "Mamadali nga nahimo ang kahibalo gikan sa URL: {{url}}",
+    "url_error": "Napakyas sa paghimo og kahibalo gikan sa URL: {{url}}",
+    "url_required": "Palihug i-enter ang URL",
+    "previous": "Nauna",
+    "next": "Sunod",
+    "page_of": "Panid {{current}} sa {{total}}",
+    "drop_files_here": "Ihulog ang mga file dinhi",
+    "tagging": "Nagbutang og tag...",
+    "tag_files": "Ibutang ang mga Tag sa mga File",
+    "select_all": "Pili-a ang Tanan",
+    "unselect_all": "Dili Pili-a ang Tanan",
+    "add_files": "Idugang ang mga File",
+    "add_files_to_notebook_one": "Idugang ang {{count}} nga File sa Notebook",
+    "add_files_to_notebook_other": "Idugang ang {{count}} ka mga File sa Notebook",
+    "in_project": "Sa Proyekto"
+  },
+  "file_properties": {
+    "title": "Mga Propedad sa File",
+    "make_instructions": "Buhaton nga mga Instruksyon?",
+    "instruction_priority": "Prayoridad sa Instruksyon (0–999)",
+    "priority_levels": {
+      "global": "0-100: Global nga mga Instruksyon",
+      "group": "101-300: Grupo/Kompanya nga mga Instruksyon",
+      "project": "301-500: Project nga mga Instruksyon",
+      "user": "501-999: User nga mga Instruksyon"
+    },
+    "save": "I-save",
+    "update_success": "Na-update ang prayoridad sa sistema para sa \"{{fileName}}\".",
+    "update_error": "Napakyas sa pag-update sa prayoridad sa sistema."
+  },
+  "file_actions": {
+    "notes": "Mga Nota",
+    "notes_placeholder": "Idugang ang mga nota bahin sa kini nga file...",
+    "add_notes": "Idugang ang mga Nota",
+    "add_note": "Idugang ang Nota",
+    "edit_notes": "I-edit ang mga Nota",
+    "notes_save_error": "Napakyas sa pag-save sa mga nota",
+    "manage_tags": "Pagdumala sa mga Tag",
+    "tags": "Manage sa Tags",
+    "tags_placeholder": "Isulat ang mga ngalan sa tag nga gibulag sa mga koma...",
+    "add_tag_one": "Gi-update nga tag para sa {{count}} nga file",
+    "add_tag_other": "Gi-update nga tag para sa {{count}} nga mga file",
+    "failed_to_add_tag_one": "Napakyas sa pag-update sa tag sa file",
+    "failed_to_add_tag_other": "Napakyas sa pag-update sa tag sa mga file",
+    "cancel": "Kansela",
+    "save": "Luwasa",
+    "download": "I-download",
+    "vectorize": "Vectorize",
+    "instruction": "Instruksyon {{priority}}",
+    "chunked": "Gibahin",
+    "not_chunked": "Wala Gibahin"
+  },
+  "subscription_modal": {
+    "title": "Magsuskribi",
+    "description": "Ma-access ang tanan nga dagkong AI nga modelo pinaagi sa usa ka nagkahiusa nga interface. Dagani ang mga advanced nga modelo sama sa Deepseek R1 nga pribado.",
+    "no_free_tier": "WALA’Y LIBRE NGA ANTAS - NAKATUTOK SA MGA PROPESYONAL.",
+    "credits_rollover": "Ang wala magamit nga mga kredito magpadayon sulod sa 3 ka bulan.",
+    "monthly_billing": "Buwanang Pagbayad",
+    "annual_billing": "Taunang Pagbayad",
+    "most_popular": "Kinatibuk-ang Popular",
+    "current": "Karon",
+    "credits_per_month": "{{credits}} nga mga kredito matag buwan",
+    "subscription_renewal": "Ang imong subscription magbag-o sa {{date}}",
+    "personal": "Personal",
+    "business": "Negosyo",
+    "team": "Team",
+    "enterprise": "Enterprise"
+  },
+  "agents": {
+    "title": "Mga Ahente",
+    "new_agent": "Bag-ong Ahente",
+    "manage_agents": "I-manage ang mga Ahente",
+    "search_placeholder": "Pagpangita sa mga ahente...",
+    "your_agents": "Imong mga Ahente",
+    "loading": "Naga-load sa mga ahente...",
+    "no_agents": "Walay nakuha nga mga ahente",
+    "create_first": "Himoa ang imong una nga ahente aron magsugod",
+    "agents_found": "{{count}} nga ahente ang nakuha",
+    "agents_found_plural": "{{count}} nga mga ahente ang nakuha",
+    "attached_agents": "Naka-attach nga mga Ahente",
+    "listening_description": "Kini nga mga ahente nagapaminaw sa tanang mensahe sa kini nga pakigpulong",
+    "no_search_results": "Walay mga ahente nga nagtugma sa \"{{search}}\"",
+    "search_help": "Sulayi ang lain nga search term",
+    "no_agents_description": "Himoa ang imong una nga ahente aron magsugod",
+    "create_agent": "Himoa ang Ahente",
+    "click_to_attach": "I-klik aron i-attach sa kasamtangang sesyon",
+    "click_to_detach": "I-klik aron i-detach gikan sa kasamtangang sesyon",
+    "show_attached_agents": "Ipakita ang Naka-attach nga mga Ahente",
+    "hide_attached_agents": "Tago ang Naka-attach nga mga Ahente",
+    "toggle_attached_agents": "Toggle Naka-attach nga mga Ahente",
+    "agent_listening_tooltip": "{{name}} nagapaminaw ug andam sa pagtabang"
+  },
+  "skills": {
+    "title": "Mga Kahanas",
+    "command_palette_description": "Pagdumala sa magamit pag-usab nga mga template sa instruksyon"
+  }
+}

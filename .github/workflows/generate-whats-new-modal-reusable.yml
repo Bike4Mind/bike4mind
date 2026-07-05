@@ -1,0 +1,369 @@
+name: Generate What's New Modal (Reusable)
+
+# Reusable workflow for generating What's New modals
+# Called by staging and production workflows with environment-specific parameters
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: 'Target environment (dev or production)'
+        required: true
+        type: string
+      target_branch:
+        description: 'Branch to collect commits from (main or prod)'
+        required: true
+        type: string
+      dry_run:
+        description: "Preview mode (don't send to SQS)"
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      WHATS_NEW_AWS_ACCESS_KEY_ID:
+        required: true
+      WHATS_NEW_AWS_SECRET_ACCESS_KEY:
+        required: true
+      WHATS_NEW_QUEUE_URL:
+        required: true
+
+# Note: Permissions are inherited from caller workflow
+
+env:
+  AWS_REGION: us-east-2
+
+jobs:
+  generate-modal:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.target_branch }}
+          fetch-depth: 0  # Full history for accurate commit detection
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Get merged PRs from last 24 hours
+        id: prs-initial
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+
+            try {
+              const targetBranch = '${{ inputs.target_branch }}';
+              const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+              // Get all merged PRs to target branch
+              const { data: pullRequests } = await github.rest.pulls.list({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed',
+                base: targetBranch,
+                sort: 'updated',
+                direction: 'desc',
+                per_page: 100,
+              });
+
+              // Filter to merged PRs in last 24 hours
+              const mergedPRs = pullRequests.filter(pr => {
+                if (!pr.merged_at) return false;
+                const mergedAt = new Date(pr.merged_at);
+                return mergedAt > yesterday;
+              });
+
+              console.log(`Found ${mergedPRs.length} merged PRs in last 24 hours to ${targetBranch}`);
+
+              if (mergedPRs.length === 0) {
+                console.log('No merged PRs found, exiting early');
+                core.setOutput('count', 0);
+                return 0;
+              }
+
+              // Smart filtering: exclude noise (deps, typos, merges, CI, docs)
+              const noisePatterns = [
+                /^merge (branch|pull request|pr)/i,
+                /^chore\(deps\)/i,
+                /^bump .+ from .+ to/i,
+                /\btypo\b/i,
+                /^docs?:/i,
+                /^style:/i,
+                /^ci:/i,
+                /^test:/i,
+                /^chore: (clean|format|lint)/i,
+                /^revert:/i,
+              ];
+
+              const filteredPRs = mergedPRs.filter(pr => {
+                const title = pr.title.toLowerCase();
+
+                // Exclude noise patterns
+                if (noisePatterns.some(pattern => pattern.test(title))) {
+                  console.log(`Filtering out noise PR: ${pr.title}`);
+                  return false;
+                }
+
+                return true;
+              });
+
+              console.log(`After filtering: ${filteredPRs.length} user-facing PRs`);
+
+              if (filteredPRs.length === 0) {
+                console.log('No user-facing PRs found after filtering, exiting early');
+                core.setOutput('count', 0);
+                return 0;
+              }
+
+              // Extract PR data
+              const prData = filteredPRs.map(pr => ({
+                number: pr.number,
+                title: pr.title,
+                body: pr.body || '',
+                mergedAt: pr.merged_at,
+                url: pr.html_url,
+                author: pr.user.login,
+                labels: pr.labels ? pr.labels.map(l => l.name) : [],
+              }));
+
+              // Write to file
+              fs.writeFileSync('prs.json', JSON.stringify(prData, null, 2));
+              core.setOutput('count', filteredPRs.length);
+
+              return filteredPRs.length;
+            } catch (error) {
+              core.setFailed(`Failed to fetch PRs: ${error.message}`);
+              throw error;
+            }
+
+      - name: Exit if no PRs
+        if: steps.prs-initial.outputs.count == 0
+        run: |
+          echo "::notice::No user-facing PRs in last 24 hours, skipping modal generation"
+          exit 0
+
+      - name: Get last modal generation date
+        id: last-modal
+        if: steps.prs-initial.outputs.count > 0
+        uses: actions/github-script@v8
+        with:
+          script: |
+            try {
+              // For first run, use yesterday as baseline
+              const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+              core.setOutput('date', yesterday.toISOString());
+
+              // TODO: Query ModalMetadata from database to get actual last generation
+              // For now, we'll collect last 24 hours of data
+              return yesterday.toISOString();
+            } catch (error) {
+              core.setFailed(`Failed to get last modal date: ${error.message}`);
+              throw error;
+            }
+
+      - name: Fetch commits since last modal
+        id: commits
+        if: steps.prs-initial.outputs.count > 0
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+
+            try {
+              const lastDate = '${{ steps.last-modal.outputs.date }}';
+              const targetBranch = '${{ inputs.target_branch }}';
+
+              // Get commits on target branch since last modal date
+              const { data: commits } = await github.rest.repos.listCommits({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: targetBranch,
+                since: lastDate,
+                per_page: 100,
+              });
+
+              const commitList = commits.map(c => ({
+                sha: c.sha.substring(0, 7),
+                message: c.commit.message,
+                author: c.commit.author.name,
+                date: c.commit.author.date,
+              }));
+
+              console.log(`Found ${commitList.length} commits since last modal`);
+
+              fs.writeFileSync('commits.json', JSON.stringify(commitList, null, 2));
+              core.setOutput('count', commitList.length);
+
+              return commitList.length;
+            } catch (error) {
+              core.setFailed(`Failed to fetch commits: ${error.message}`);
+              throw error;
+            }
+
+      - name: Extract CHANGELOG excerpt
+        id: changelog-excerpt
+        if: steps.prs-initial.outputs.count > 0
+        run: |
+          if [ -f "CHANGELOG.md" ]; then
+            excerpt=$(awk '/^## /{if(++count==2) exit} count==1' CHANGELOG.md | head -c 2000)
+            echo "excerpt<<EOF" >> $GITHUB_OUTPUT
+            echo "$excerpt" >> $GITHUB_OUTPUT
+            echo "EOF" >> $GITHUB_OUTPUT
+          else
+            echo "excerpt=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install dependencies
+        if: steps.prs-initial.outputs.count > 0
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate changelog with AI
+        id: changelog
+        if: steps.prs-initial.outputs.count > 0
+        run: |
+          # Build script to call generateChangelog function directly
+          # This does NOT post to Slack, just returns the structured changelog
+          # NOTE: Using .cjs extension because the repository has "type": "module" in package.json,
+          # which would cause Node.js to expect ES module syntax in .js files. The .cjs extension
+          # explicitly marks this as CommonJS to allow the use of require() syntax.
+
+          cat > generate-changelog.cjs << 'EOFJS'
+          const fs = require('fs');
+
+          // Read collected data
+          const commits = JSON.parse(fs.readFileSync('commits.json', 'utf8'));
+          const prs = JSON.parse(fs.readFileSync('prs.json', 'utf8'));
+
+          // Mock changelog generation for now
+          // TODO: Import and call actual generateChangelog() function
+          const changelog = {
+            title: "Latest Updates and Improvements",
+            briefSummary: [
+              `${prs.length} pull requests merged`,
+              `${commits.length} commits deployed`,
+              "Multiple bug fixes and enhancements"
+            ],
+            sections: [
+              {
+                type: "features",
+                items: prs.filter(pr => pr.title.toLowerCase().includes('feat')).map(pr => pr.title)
+              },
+              {
+                type: "fixes",
+                items: prs.filter(pr => pr.title.toLowerCase().includes('fix')).map(pr => pr.title)
+              }
+            ]
+          };
+
+          fs.writeFileSync('changelog.json', JSON.stringify(changelog, null, 2));
+          console.log('Generated changelog:', changelog.title);
+          EOFJS
+
+          node generate-changelog.cjs
+
+          # Output for next step
+          echo "generated=true" >> $GITHUB_OUTPUT
+
+      - name: Validate GitHub Secrets
+        if: steps.prs-initial.outputs.count > 0
+        run: |
+          if [ -z "${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID }}" ]; then
+            echo "::error::WHATS_NEW_AWS_ACCESS_KEY_ID secret is not configured"
+            exit 1
+          fi
+          if [ -z "${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY }}" ]; then
+            echo "::error::WHATS_NEW_AWS_SECRET_ACCESS_KEY secret is not configured"
+            exit 1
+          fi
+          if [ -z "${{ secrets.WHATS_NEW_QUEUE_URL }}" ]; then
+            echo "::error::WHATS_NEW_QUEUE_URL secret is not configured"
+            exit 1
+          fi
+          echo "All required secrets are configured"
+
+      - name: Send to SQS Queue
+        id: sqs-send
+        if: steps.prs-initial.outputs.count > 0 && inputs.dry_run != true
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.WHATS_NEW_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.WHATS_NEW_AWS_SECRET_ACCESS_KEY }}
+          WHATS_NEW_QUEUE_URL: ${{ secrets.WHATS_NEW_QUEUE_URL }}
+        run: |
+          # Read collected data
+          commits=$(cat commits.json)
+          prs=$(cat prs.json)
+          changelog=$(cat changelog.json)
+
+          # Generate correlation ID
+          CORRELATION_ID=$(uuidgen | tr '[:upper:]' '[:lower:]')
+
+          # Get today's date for deduplication
+          GENERATED_DATE=$(date -u +%Y-%m-%d)
+
+          echo "Generated Date: $GENERATED_DATE"
+          echo "Correlation ID: $CORRELATION_ID"
+          echo "Environment: ${{ inputs.environment }}"
+
+          # Build JSON payload (PR-based, no releases)
+          jq -n \
+            --arg correlationId "$CORRELATION_ID" \
+            --arg generatedDate "$GENERATED_DATE" \
+            --arg environment "${{ inputs.environment }}" \
+            --arg repo "${{ github.repositoryUrl }}" \
+            --arg changelogExcerpt "${{ steps.changelog-excerpt.outputs.excerpt }}" \
+            --argjson commits "$commits" \
+            --argjson prs "$prs" \
+            --argjson changelogData "$changelog" \
+            '{
+              correlationId: $correlationId,
+              generatedDate: $generatedDate,
+              environment: $environment,
+              repositoryUrl: $repo,
+              releases: [],
+              commits: $commits,
+              pullRequests: $prs,
+              changelogData: $changelogData,
+              changelogExcerpt: $changelogExcerpt
+            }' > payload.json
+
+          echo "Sending to SQS queue..."
+          cat payload.json | jq '.'
+
+          # Send to SQS (with 30s timeout)
+          timeout 30s aws sqs send-message \
+            --queue-url "$WHATS_NEW_QUEUE_URL" \
+            --message-body file://payload.json
+
+          if [ $? -eq 0 ]; then
+            echo "Message sent to queue successfully"
+            echo "status=success" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Failed to send message to SQS queue"
+            exit 1
+          fi
+
+      - name: Report success
+        if: success() && steps.prs-initial.outputs.count > 0
+        run: |
+          echo "::notice::What's New modal generation queued successfully!"
+          echo "::notice::Date: $(date -u +%Y-%m-%d)"
+          echo "::notice::Environment: ${{ inputs.environment }}"
+          echo "::notice::PRs: ${{ steps.prs-initial.outputs.count }}, Commits: ${{ steps.commits.outputs.count }}"
+
+      - name: Report dry run
+        if: success() && steps.prs-initial.outputs.count > 0 && inputs.dry_run == true
+        run: |
+          echo "::notice::DRY RUN MODE - No message sent to SQS"
+          echo "::notice::Would have processed ${{ steps.prs-initial.outputs.count }} PRs"
+
+      - name: Report failure
+        if: failure()
+        run: |
+          echo "::error::Failed to generate What's New modal"

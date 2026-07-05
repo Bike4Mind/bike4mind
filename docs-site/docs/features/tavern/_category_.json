@@ -1,0 +1,8 @@
+{
+  "label": "Tavern",
+  "position": 30,
+  "link": {
+    "type": "doc",
+    "id": "features/tavern/index"
+  }
+}

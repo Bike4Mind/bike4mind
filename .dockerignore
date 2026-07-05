@@ -1,0 +1,22 @@
+**/node_modules
+**/dist
+**/.turbo
+.env*
+
+# sst
+.sst
+
+# Trim the quest-processor image build context (was ~3 GB → slow/timeout-prone on the
+# deploy runner). These dirs aren't needed to build or run the server. NOTE: do not exclude
+# whole workspace members — pnpm needs every package.json for lockfile resolution. The
+# entries below are VCS metadata, build output, mobile shells, tests, and docs-site (which
+# pnpm-workspace.yaml already excludes via `!docs-site`).
+.git
+**/.next
+**/.open-next
+**/coverage
+apps/client/ios
+apps/client/android
+apps/client/e2e
+docs-site
+.playwright-mcp

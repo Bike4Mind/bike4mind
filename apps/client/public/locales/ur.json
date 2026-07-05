@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI کی ترتیبات",
+    "session": "نوٹ بک",
+    "session_plural": "نوٹ بکس",
+    "favorite": "پسندیدہ",
+    "unfavorite": "ناپسندیدہ",
+    "favorites": "پیارے",
+    "favorites_count_one": "{{count}} پسندیدہ",
+    "favorites_count_other": "{{count}} پسندیدہ",
+    "currentSession": "موجودہ",
+    "other": "دیگر ٹیگ",
+    "text_model": "متن ماڈل",
+    "image_model": "تصویر ماڈل",
+    "ai_image": "AI تصویر",
+    "switch_to": "{{ name }} پر سوئچ کریں"
+  },
+  "guide": {
+    "title": "گائیڈ"
+  },
+  "intro": {
+    "title": "تعارف"
+  },
+  "developers": {
+    "title": "ڈویلپرز",
+    "technical_docs": "تکنیکی دستاویزات"
+  },
+  "changelog": {
+    "title": "تبدیلیوں کا ریکارڈ"
+  },
+  "feedback": {
+    "send": "آراء بھیجیں"
+  },
+  "terms_policies": "شرائط اور پالیسیاں",
+  "login": "لاگ ان",
+  "file": "علم",
+  "forgotPassword": "پاسورڈ بھول گئے",
+  "signup": "سائن اپ",
+  "help": "مدد",
+  "manual": "دستی",
+  "inviteLong": "دوست کو مدعو کریں",
+  "inviteShort": "مدعو کریں",
+  "tools": {
+    "title": "اوزار"
+  },
+  "sidenav": {
+    "pin": "سائیڈبار پن کریں",
+    "unpin": "سائیڈبار کو انپن کریں",
+    "sessions": {
+      "sort": {
+        "label": "ترتیب دیں",
+        "tags": "ٹیگ کے ذریعے",
+        "date": "تاریخ کے ذریعے"
+      },
+      "new": "نیا چیٹ",
+      "item": {
+        "genTags": "نوٹ بک ٹیگ کی فہرست تیار کریں"
+      }
+    }
+  },
+  "referral": {
+    "title": "دوست کو GrokTool میں متعارف کرائیں",
+    "email_title_default": "GrokTool میں خوش آمدید!",
+    "email_body_default": "آپ کو USER_NAME نے GrokTool میں مدعو کیا ہے! REGISTRATION_LINK: سائن اپ کرنے کے لئے درج ذیل دعوت نامہ کوڈ استعمال کریں: INVITE_CODE",
+    "friend_email": "دوست کا ایمیل",
+    "num_referrals_available": "دستیاب حوالہ جات:",
+    "no_valid_emails_error": "براہ کرم درست ایمیل پتہ داخل کریں",
+    "send_referral": "حوالہ بھیجیں",
+    "send_referral_success": "حوالہ کامیابی سے بھیج دیا گیا!",
+    "send_referral_skipped": "{{count}} دعوت نامہ(ں) چھوڑ دیے گئے — ان ای میل پتوں کے لیے پہلے ہی اکاؤنٹ ہے۔",
+    "send_referral_failed": "{{count}} دعوت نامے بھیجے نہیں جا سکے۔ براہ کرم دوبارہ کوشش کریں۔",
+    "send_referral_error": "حوالہ بھیجنے میں خرابی۔ براہ کرم دوبارہ کوشش کریں.",
+    "slack_notification_default": "حوالہ USER_NAME:USER_ID نے FRIEND_EMAIL کو بھیجا"
+  },
+  "activateVoice": "اس آواز کو فعال کریں",
+  "liveVoice": "باہمی آواز",
+  "whatsNew": "کیا نیا ہے",
+  "welcome": "{{ name }} میں خوش آمدید",
+  "network": {
+    "statuses": {
+      "0": "مربوط ہو رہا ہے",
+      "1": "مربوط",
+      "2": "منقطع ہو رہا ہے",
+      "3": "منقطع",
+      "-1": "منتظر"
+    },
+    "networkStatus": "نیٹ ورک: {{ status }}"
+  },
+  "deleteVoice": "اس آواز کو حذف کریں",
+  "deleteVoiceConfirm": "کیا آپ واقعی اس آواز کو حذف کرنا چاہتے ہیں؟",
+  "organization": {
+    "organizations": "ٹیمیں",
+    "defaultName": "میری تنظیم",
+    "shared": "میرے ساتھ مشترکہ",
+    "create": "ٹیم بنائیں",
+    "search": "ٹیمن کی تلاش...",
+    "no_organizations": "کوئی ٹیمیں نہیں ملیں",
+    "view_details": "تفصیلات دیکھیں",
+    "x_seats": "{{count}} نشستیں",
+    "active_subscription": "فعال سبسکرپشن",
+    "no_subscription": "کوئی سبسکرپشن نہیں",
+    "x_members": "{{count}} ممبران",
+    "x_credits": "{{count}} کریڈٹس",
+    "owner": "مالک"
+  },
+  "session": {
+    "typeYourMessage": "اپنا پیغام یہاں لکھیں",
+    "switchedSession": "تبدیل کر دیا گیا ہے: {{ sessionName }}",
+    "send": "بھیجیں",
+    "sendMessage": "پیغام بھیجیں",
+    "preparingQuest": "مشن تیار کیا جا رہا ہے...",
+    "rephrasePrompt": "اپنا ان پٹ بہتر بنائیں",
+    "promptRephrased": "پرامپٹ کامیابی سے دوبارہ ترتیب دیا گیا",
+    "rephraseFailed": "پرامپٹ دوبارہ ترتیب دینے میں ناکامی",
+    "errors": {
+      "notebookDeleted": "یہ نوٹ بُک حذف کر دی گئی ہے۔ براہ کرم نئی بنائیں۔",
+      "noPermission": "آپ کو اس نوٹ بُک تک رسائی کی اجازت نہیں ہے۔",
+      "invalidRequest": "غلط درخواست۔ براہ کرم دوبارہ کوشش کریں۔",
+      "tooManyRequests": "بہت زیادہ درخواستیں۔ براہ کرم کچھ دیر انتظار کریں اور دوبارہ کوشش کریں۔",
+      "serverError": "سرور کی خرابی۔ براہ کرم بعد میں کوشش کریں۔",
+      "networkError": "پیغام بھیجنے میں ناکامی۔ براہ کرم اپنا کنکشن چیک کریں۔",
+      "sendFailed": "پیغام بھیجنے میں ناکامی۔ براہ کرم دوبارہ کوشش کریں۔"
+    }
+  },
+  "projects": {
+    "title": "پروجیکٹ",
+    "projects": "پروجیکٹس",
+    "joined_projects": "شامل کردہ پروجیکٹس",
+    "no_joined_projects": "ابھی تک کوئی شامل کردہ منصوبے نہیں",
+    "add_to_project": "پروجیکٹ میں شامل کریں",
+    "modals": {
+      "files": {
+        "title": "پروجیکٹ میں فائلیں شامل کریں",
+        "subtitle": "اپنے پروجیکٹ میں شامل کرنے کے لیے فائلیں منتخب کریں",
+        "button_label": "فائلیں شامل کریں",
+        "search_placeholder": "فائلیں تلاش کریں",
+        "no_files": "کوئی فائلیں نہیں ملیں۔"
+      },
+      "members": {
+        "title": "پروجیکٹ میں ارکان شامل کریں",
+        "subtitle": "اپنے پروجیکٹ میں شامل کرنے کے لیے صارفین تلاش کریں اور منتخب کریں",
+        "button_label": "ارکان شامل کریں",
+        "search_placeholder": "صارفین تلاش کریں",
+        "no_members": "کسی صارف کی تلاش کرنے کی کوشش کریں۔"
+      },
+      "sessions": {
+        "title": "پروجیکٹ میں نوٹ بک شامل کریں",
+        "subtitle": "اپنے پروجیکٹ میں شامل کرنے کے لیے نوٹ بک منتخب کریں یا نئی بنائیں",
+        "button_label": "نوٹ بک شامل کریں",
+        "search_placeholder": "تلاش کریں",
+        "create_button": "بنائیں",
+        "no_notebooks": "کوئی نوٹ بکیں نہیں ملیں۔ ایک نئی بنانے کی کوشش کریں۔"
+      },
+      "generic": {
+        "select_all": "سب کو منتخب کریں",
+        "unselect_all": "سب کو غیر منتخب کریں",
+        "add_items_one": "{{count}} آئٹم شامل کریں",
+        "add_items_other": "{{count}} آئٹمز شامل کریں",
+        "delete_items": "ڈیلیٹ {{count}} آئٹمز"
+      }
+    }
+  },
+  "logout": "لوگ آؤٹ",
+  "inbox": {
+    "title": "ان باکس",
+    "messages": "پیغامات",
+    "invites": "دعوت نامے",
+    "sendMessage": "ایک پیغام بھیجیں",
+    "noMessages": "کوئی پیغامات نہیں ہیں"
+  },
+  "addSomething": "{{ name }} شامل کریں",
+  "deleteAllSomething": "سب {{ name }} حذف کریں",
+  "exportAllSomething": "سب {{ name }} برآمد کریں",
+  "importLLMHistory": "LLM تاریخ درآمد کریں",
+  "downloadAllSomething": "سب {{ name }} ڈاؤن لوڈ کریں",
+  "language": {
+    "language_settings": "زبان کی ترتیبات",
+    "change-language": "زبان تبدیل کریں"
+  },
+  "theme": {
+    "turn-dark": "ڈارک موڈ فعال کریں",
+    "turn-light": "لائٹ موڈ فعال کریں"
+  },
+  "auth": {
+    "usernameOrEmail": "صارف نام یا ای میل",
+    "username": "صارف نام",
+    "password": "پاس ورڈ",
+    "confirmPassword": "پاس ورڈ کی تصدیق کریں",
+    "fullName": "پورا نام",
+    "inviteCode": "دعوت نامہ کوڈ",
+    "needCode": "کوڈ کی ضرورت ہے؟",
+    "noAccount": "کوئی اکاؤنٹ نہیں؟",
+    "haveAccount": "پہلے سے ہی ایک اکاؤنٹ ہے؟",
+    "loginWithProvider": "{{ provider }} کے ساتھ لاگ ان کریں",
+    "checking": "چیک کیا جا رہا ہے...",
+    "continue": "جاری رکھیں",
+    "troubleSigningIn": "سائن ان کرنے میں مسئلہ؟",
+    "signingInAs": "کے طور پر سائن ان ہو رہا ہے",
+    "signingIn": "سائن ان ہو رہا ہے...",
+    "backToEmail": "ای میل پر واپس جائیں",
+    "redirectingToProvider": "آپ کی تنظیم کے لاگ ان کی طرف ری ڈائریکٹ کیا جا رہا ہے...",
+    "resetInstructions": "براہ کرم اپنا ای میل پتہ درج کریں۔ ہم آپ کو اپنا پاس ورڈ ری سیٹ کرنے کے لئے ای میل بھیجیں گے۔",
+    "sendResetEmail": "پاس ورڈ ری سیٹ ای میل بھیجیں",
+    "email": "ای میل",
+    "resetEmailSentMessage": "ای میل بھیج دی گئی ہے! براہ کرم مزید ہدایات کے لئے اپنا ای میل چیک کریں",
+    "createAccountDesc": "ایک اکاؤنٹ بنائیں",
+    "createBtn": "اکاؤنٹ بنائیں",
+    "loginBtn": "لاگ ان کریں",
+    "passwordStrength": {
+      "label": "پاس ورڈ کی مضبوطی",
+      "weak": "کمزور",
+      "fair": "درمیانہ",
+      "strong": "مضبوط"
+    },
+    "passwordRequirements": {
+      "title": "پاس ورڈ کی شرائط",
+      "minLength": "کم از کم {{count}} حروف",
+      "uppercase": "کم از کم ایک بڑا حرف",
+      "lowercase": "کم از کم ایک چھوٹا حرف",
+      "number": "کم از کم ایک عدد",
+      "specialChar": "کم از کم ایک خاص کردار",
+      "met": "پورا ہوا",
+      "notMet": "ابھی پورا نہیں ہوا"
+    },
+    "errors": {
+      "usernameExists": "صارف نام '{{username}}' پہلے ہی لیا جا چکا ہے۔ براہ کرم ایک مختلف صارف نام منتخب کریں۔",
+      "emailExists": "ای میل '{{email}}' کے ساتھ ایک اکاؤنٹ پہلے ہی موجود ہے۔ براہ کرم ایک مختلف ای میل استعمال کریں یا اپنے موجودہ اکاؤنٹ میں لاگ ان کریں۔",
+      "accountExists": "ان اسناد کے ساتھ پہلے ہی ایک اکاؤنٹ موجود ہے۔ براہ کرم لاگ ان کرنے کی کوشش کریں یا مختلف اسناد استعمال کریں۔",
+      "invalidInviteCode": "جو دعوتی کوڈ آپ نے درج کیا ہے وہ غیر معتبر ہے یا میعاد ختم ہو چکا ہے۔ براہ کرم چیک کریں اور دوبارہ کوشش کریں۔",
+      "registrationFailed": "رجسٹریشن ناکام ہوگئی۔ براہ کرم کچھ دیر بعد دوبارہ کوشش کریں۔",
+      "validation": {
+        "generic": "غلط ان پٹ",
+        "invalidUsername": "صارف نام میں صرف حروف، اعداد، انڈر اسکور، نقطے اور ڈیش شامل ہو سکتے ہیں",
+        "passwordMismatch": "پاس ورڈ ایک جیسے نہیں ہیں",
+        "passwordRequirements": "پاس ورڈ میں کم از کم 8 کردار ہونے چاہئیں، بڑے اور چھوٹے حروف، ایک عدد، اور ایک خاص کردار ہونا ضروری ہے"
+      }
+    }
+  },
+  "search": "تلاش کریں",
+  "share": "شیئر کریں",
+  "rename": "نام تبدیل کریں",
+  "favorite": "پسندیدہ",
+  "unfavorite": "ناپسندیدہ",
+  "delete": "حذف کریں",
+  "files": {
+    "showAttachedFiles": "منسلک فائلیں دکھائیں",
+    "hideAttachedFiles": "منسلک فائلیں چھپائیں",
+    "title": "فائلیں",
+    "upload": "فائلیں اپ لوڈ کریں",
+    "long_title": "فائل براؤزر"
+  },
+  "view": "دیکھیں",
+  "info": "معلومات",
+  "clone": "کلون کریں",
+  "download": "ڈاؤن لوڈ کریں",
+  "summarize": "خلاصہ کریں",
+  "profile": {
+    "title": "پروفائل",
+    "tooltip": "پروفائل",
+    "collection": "اجتماع",
+    "collections": {
+      "all_types": "تمام اقسام"
+    },
+    "users_profile": "{{ name }} کا پروفائل",
+    "storage_used": "استعمال شدہ اسٹوریج",
+    "credits": "کریڈٹس",
+    "subscription": "سبسکرپشن",
+    "edit": "پروفائل کو تبدیل کریں",
+    "manage_subscription": "سبسکرپشن کا نظم",
+    "upgrade": "اپ گریڈ کریں",
+    "credit_analytics": "کریڈٹ تجزیات",
+    "pricing": "کریڈٹس کی قیمت",
+    "show_purchases": "خریداری دکھائیں",
+    "show_usage": "استعمال دکھائیں",
+    "show_combined": "مکمل دکھائیں",
+    "buy_credits": "کریڈٹ خریدیں"
+  },
+  "community": {
+    "title": "کمیونٹی",
+    "tooltip": "کمیونٹی",
+    "feed": "کمیونٹی فیڈ"
+  },
+  "subscriptions": {
+    "title": "سبسکرپشنز",
+    "expires_on": "تاریخ کی معیاد {{ date }}",
+    "renews_on": "تاریخ کی تجدید {{ date }}"
+  },
+  "billing": {
+    "title": "بلنگ"
+  },
+  "credits": {
+    "title": "کریڈٹس",
+    "usage": "کریڈٹ کا استعمال",
+    "analytics": "کریڈٹ تجزیات",
+    "analytics_tooltip": "وقت کے ساتھ اپنے کریڈٹ کے استعمال کو دیکھیں",
+    "current_balance": "موجودہ کریڈٹ بیلنس",
+    "credits": "کریڈٹس",
+    "usage_by_model": "ماڈل کے لحاظ سے استعمال",
+    "no_transactions": "اس وقت کی مدت میں کوئی کریڈٹ لین دین نہیں ملا",
+    "model_pricing": "ماڈل کی قیمت",
+    "text_models": "متنی ماڈل",
+    "image_models": "تصویری ماڈل",
+    "pricing_per_1k_tokens": "1,000 ٹوکنز کے لیے کریڈٹس میں قیمت",
+    "pricing_per_generation": "تصویر کی تخلیق کے لیے کریڈٹس میں قیمت",
+    "model_name": "ماڈل کا نام",
+    "price_tier": "قیمت کی سطح",
+    "input_cost": "ان پٹ لاگت",
+    "output_cost": "آؤٹ پٹ لاگت",
+    "generation_cost": "تخلیق کی لاگت",
+    "no_models_available": "کوئی ماڈل دستیاب نہیں",
+    "pricing_note": "نوٹ: قیمتیں قریب قریب ہیں اور ماڈل کے پیرا میٹرز کی بنیاد پر مختلف ہو سکتی ہیں۔ قیمت کی سطح: $ (سب سے کم)، $$ (درمیانہ)، $$$ (پریمیم)۔",
+    "burn_rate": "روزانہ کا استعمال (جلانے کی شرح)",
+    "days_remaining": "اندازہ شدہ باقی دن",
+    "usage_pattern": "آپ کے استعمال کے پیٹرن کی بنیاد پر پچھلے {{days}} دنوں سے",
+    "credits_used": "استعمال شدہ کریڈٹس",
+    "credits_purchased": "خریدے گئے کریڈٹس",
+    "net_credits": "نیٹ کریڈٹس"
+  },
+  "time": {
+    "last_7_days": "آخری 7 دن",
+    "last_30_days": "آخری 30 دن",
+    "last_90_days": "آخری 90 دن",
+    "last_180_days": "آخری 180 دن",
+    "last_365_days": "آخری 365 دن"
+  },
+  "common": {
+    "date": "تاریخ",
+    "refresh": "تازہ کریں",
+    "days": "دن",
+    "cancel": "منسوخ کریں",
+    "save": "محفوظ کریں",
+    "delete": "حذف کریں",
+    "edit": "ترمیم کریں",
+    "close": "بند کریں",
+    "submit": "جمع کریں",
+    "loading": "لوڈ ہو رہا ہے...",
+    "error": "خرابی",
+    "success": "کامیابی"
+  },
+  "errors": {
+    "failed_to_load_data": "ڈیٹا لوڈ کرنے میں ناکامی۔ براہ کرم بعد میں دوبارہ کوشش کریں۔"
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "آپ کا Atlassian کنکشن ختم ہو چکا ہے۔ براہ کرم اپنا اکاؤنٹ دوبارہ جوڑیں۔"
+    }
+  },
+  "credits_modal": {
+    "title": "اضافی کریڈٹس",
+    "description": "ہماری جدید AI ماڈلز اور خصوصیات کا استعمال جاری رکھنے کے لیے اضافی کریڈٹس خریدیں۔ ماڈلز کی استدعا اور خصوصی خصوصیات کے لیے کریڈٹس استعمال ہوتے ہیں، مختلف ماڈلز مختلف پیچیدگی کی بنیاد پر مختلف مقداریں استعمال کرتے ہیں۔",
+    "current_credits": "موجودہ کریڈٹس کی مقدار",
+    "best_value": "بہترین قیمت",
+    "purchase_success": "خریدا {{credits}} کریڈٹس",
+    "history_title": "کریڈٹس خریداری کی تاریخ",
+    "purchase": "خریداری",
+    "no_transactions": "ابھی تک کوئی لین دین نہیں",
+    "low_credits": "آپ کے کریڈٹس کم ہیں",
+    "low_credits_sub": "اپنے کام کو جاری رکھنے کے لیے مزید کریڈٹس خریدیں۔",
+    "no_credits": "کوئی کریڈٹس نہیں",
+    "no_credits_sub": "اپنے کام کو جاری رکھنے کے لیے کریڈٹس خریدیں۔",
+    "status": {
+      "completed": "مکمل",
+      "pending": "زیر التواء",
+      "failed": "ناکام"
+    }
+  },
+  "settings": {
+    "title": "ترتیبات",
+    "tooltip": "ترتیبات",
+    "main": "اہم ترتیبات",
+    "account": "اکاؤنٹ",
+    "ai_features": "AI خصوصیات",
+    "connected_apps": {
+      "title": "متصل ایپس",
+      "link": "لنک",
+      "unlink": "بلاک کریں"
+    },
+    "developer_tools": "ڈیولپر کے آلات",
+    "experimental_features": {
+      "title": "تجربی خصوصیات",
+      "tooltip": "تجرباتی خصوصیات",
+      "header": "تجرباتی خصوصیات",
+      "beta_features": {
+        "title": "بیٹا خصوصیات",
+        "subtitle": "یہ خصوصیات ابھی ترقی کے مراحل میں ہیں اور غیر متوقع نتائج کا باعث بن سکتی ہیں۔ انہیں فعال کرنے کا انتخاب کرنے کا مطلب ہے کہ آپ کو ان کے موجودہ حالت میں استعمال کرنے پر رضامندی ہے۔"
+      }
+    },
+    "ui_preferences": "UI کی ترجیحات"
+  },
+  "mementos": {
+    "title": "یادگاریں",
+    "tooltip": "یادگاریں"
+  },
+  "admin": {
+    "title": "ایڈمن",
+    "tooltip": "ایڈمن کی ترتیبات"
+  },
+  "speech": {
+    "title": "تقریر",
+    "tooltip": "تقریر سے متن اور متن سے تقریر"
+  },
+  "instructions": {
+    "title": "ہدایات",
+    "tooltip": "ہدایات"
+  },
+  "friends": {
+    "add_friend": "دوستوں میں شامل کریں",
+    "unfriend": "دوستی ختم کریں",
+    "pending_request": "زیر التواء دوست کی درخواست",
+    "all": "تمام دوست",
+    "pending": "زیر التواء"
+  },
+  "notebooks": {
+    "view_info": "نوٹ بک کی معلومات دیکھیں",
+    "clone": "نوٹ بک کلون کریں",
+    "download": "نوٹ بک ڈاؤن لوڈ کریں",
+    "summarize": "نوٹ بک کا خلاصہ بنائیں",
+    "delete": "نوٹ بک حذف کریں",
+    "delete_confirm": "کیا آپ واقعی \"{{ name }}\" کو مستقل طور پر حذف کرنا چاہتے ہیں؟ یہ عمل واپس نہیں کیا جا سکتا۔",
+    "auto_rename": "AI کے ساتھ نیا نام رکھیں"
+  },
+  "add_friend": {
+    "title": "دوست شامل کریں",
+    "friend_email": "دوست کا ای میل",
+    "message": "پیغام",
+    "cancel": "کینسل کریں",
+    "send": "پھیجیں",
+    "email_placeholder": "اپنے دوست کا ای میل درج کریں",
+    "message_placeholder": "اپنا پیغام درج کریں"
+  },
+  "file_browser": {
+    "my_files": "میری فائلیں",
+    "shared_with_me": "میرے ساتھ مشترک",
+    "total_files": "کل علم کی آئٹمز",
+    "search_placeholder": "نام یا ٹیگ سے تلاش کریں...",
+    "file_type": "فائل کی قسم",
+    "all_files": "تمام فائلیں",
+    "text": "متن",
+    "pdf": "پی ڈی ایف",
+    "url": "یو آر ایل",
+    "image": "تصویر",
+    "excel": "ایکسلی",
+    "word": "ورڈ",
+    "json": "جے ایس او این",
+    "csv": "سی ایس وی",
+    "markdown": "مارک ڈاؤن",
+    "code": "کوڈ",
+    "date_created": "تاریخ تخلیق",
+    "size": "سائز",
+    "name": "نام",
+    "sort_z_to_a": "Z سے A تک ترتیب دیں",
+    "sort_a_to_z": "A سے Z تک ترتیب دیں",
+    "grid_view": "گریڈ ویو",
+    "list_view": "لسٹ ویو",
+    "select_file_hint": "ٹچ کرکے، فائل یا متعدد فائلیں منتخب کریں اور انہیں اپنے نوٹ بک سیشن میں شامل کریں!",
+    "session_one": "نوٹ بک",
+    "session_other": "نوٹ بکس",
+    "no_files_available": "کوئی فائلیں دستیاب نہیں",
+    "count_file_selected_one": "{{count}} فائل منتخب کی گئی",
+    "count_file_selected_other": "{{count}} فائلیں منتخب کی گئی",
+    "add_count_file_one": "شامل کریں {{count}} فائل",
+    "add_count_file_other": "شامل کریں {{count}} فائلیں",
+    "delete_count_file_one": "حذف کریں {{count}} فائل",
+    "delete_count_file_other": "حذف کریں {{count}} فائلیں",
+    "share_count_file_one": "{{count}} فائل شیئر کریں",
+    "share_count_file_other": "{{count}} فائلیں شیئر کریں",
+    "count_file_one": "{{count}} فائل",
+    "count_file_other": "{{count}} فائلیں",
+    "add_to_session_success": "فائل: {{fileNames}} کو {{sessionName}} میں شامل کیا جا رہا ہے",
+    "add_file_success": "فائل: {{fileNames}} شامل کی جا رہی ہے",
+    "browse_files": "فائلوں کی براؤزنگ",
+    "create_new_knowledge": "بنائیں",
+    "create_new_knowledge_from_url": "یو آر ایل اسکریپ کریں",
+    "enter_url": "یو آر ایل درج کریں",
+    "create_file": "فائل بنائیں",
+    "create_file_from_url": "فائل بنائیں",
+    "create_from_url": "فوری اسکریپ",
+    "research": "تحقیق",
+    "open_research": "تحقیق کھولیں",
+    "url_success": "یو آر ایل سے علم کامیابی کے ساتھ تخلیق کیا گیا: {{url}}",
+    "url_error": "یو آر ایل سے علم تخلیق کرنے میں ناکامی: {{url}}",
+    "url_required": "براہ کرم ایک یو آر ایل درج کریں",
+    "previous": "پچھلا",
+    "next": "اگلا",
+    "page_of": "صفحہ {{current}} کا {{total}}",
+    "drop_files_here": "فائلیں یہاں ڈراپ کریں",
+    "tagging": "ٹیگ لگایا جا رہا ہے...",
+    "tag_files": "فائلوں پر ٹیگ لگائیں",
+    "select_all": "سب منتخب کریں",
+    "unselect_all": "سب کے انتخاب ختم کریں",
+    "add_files": "فائلیں شامل کریں",
+    "add_files_to_notebook_one": "{{count}} فائل نوٹ بک میں شامل کریں",
+    "add_files_to_notebook_other": "{{count}} فائلیں نوٹ بک میں شامل کریں",
+    "in_project": "پروجیکٹ میں"
+  },
+  "file_properties": {
+    "title": "فائل کی خصوصیات",
+    "make_instructions": "ہدایت میں تبدیل کریں؟",
+    "instruction_priority": "ہدایت کی ترجیح (0–999)",
+    "priority_levels": {
+      "global": "0-100: عالمی ہدایات",
+      "group": "101-300: گروپ/کمپنی کی ہدایات",
+      "project": "301-500: پروجیکٹ کی ہدایات",
+      "user": "501-999: صارف کی ہدایات"
+    },
+    "save": "محفوظ کریں",
+    "update_success": "\"{{fileName}}\" کے لیے نظام کی ترجیح کو اپ ڈیٹ کر دیا گیا ہے۔",
+    "update_error": "نظام کی ترجیح کو اپ ڈیٹ کرنے میں ناکامی."
+  },
+  "file_actions": {
+    "notes": "نوٹس",
+    "notes_placeholder": "اس فائل کے بارے میں نوٹس شامل کریں...",
+    "add_notes": "نوٹس شامل کریں",
+    "add_note": "نوٹ شامل کریں",
+    "edit_notes": "نوٹس میں ترمیم کریں",
+    "notes_save_error": "نوٹس محفوظ کرنے میں ناکامی",
+    "manage_tags": "ٹیگز کا انتظام کریں",
+    "tags": "ٹیگ کا انتظام کریں",
+    "tags_placeholder": "ٹیگ کے نام درج کریں، کاما سے جدا کریں...",
+    "add_tag_one": "{{count}} فائل کے لیے ٹیگ کو اپ ڈیٹ کیا گیا",
+    "add_tag_other": "{{count}} فائلوں کے لیے ٹیگ کو اپ ڈیٹ کیا گیا",
+    "failed_to_add_tag_one": "فائل کے لیے ٹیگ کو اپ ڈیٹ کرنے میں ناکامی",
+    "failed_to_add_tag_other": "فائلوں کے لیے ٹیگ کو اپ ڈیٹ کرنے میں ناکامی",
+    "cancel": "منسوخ کریں",
+    "save": "محفوظ کریں",
+    "download": "ڈاؤن لوڈ کریں",
+    "vectorize": "ویکٹرائز کریں",
+    "instruction": "ہدایات {{priority}}",
+    "chunked": "چنک کیا گیا",
+    "not_chunked": "چنک نہیں کیا گیا"
+  },
+  "subscription_modal": {
+    "title": "سبسکرپشن",
+    "description": "ایک متحدہ انٹرفیس کے ذریعے ہر بڑے AI ماڈل تک رسائی حاصل کریں۔ ڈیپ سیکھ R1 جیسے جدید ماڈل کو نجی طور پر چلائیں۔",
+    "no_free_tier": "کوئی مفت سطح نہیں - پیشہ وروں پر توجہ دی گئی۔",
+    "credits_rollover": "غیر استعمال شدہ کریڈٹ 3 ماہ کے لئے منتقل ہوجاتے ہیں۔",
+    "monthly_billing": "ماہانہ بلنگ",
+    "annual_billing": "سالانہ بلنگ",
+    "most_popular": "سب سے مقبول",
+    "current": "موجودہ",
+    "credits_per_month": "{{credits}} کریڈٹ فی مہینہ",
+    "subscription_renewal": "آپ کا سبسکرپشن {{date}} پر تجدید ہوگا",
+    "personal": "ذاتی",
+    "business": "کاروبار",
+    "team": "ٹیم",
+    "enterprise": "اداری"
+  },
+  "agents": {
+    "title": "ایجنٹس",
+    "new_agent": "نیا ایجنٹ",
+    "manage_agents": "ایجنٹس کا انتظام کریں",
+    "search_placeholder": "ایجنٹس کی تلاش...",
+    "your_agents": "آپ کے ایجنٹس",
+    "loading": "ایجنٹس لوڈ ہو رہے ہیں...",
+    "no_agents": "کوئی ایجنٹس نہیں ملے",
+    "create_first": "شروع کرنے کے لیے اپنا پہلا ایجنٹ بنائیں",
+    "agents_found": "{{count}} ایجنٹ ملا",
+    "agents_found_plural": "{{count}} ایجنٹس ملے",
+    "attached_agents": "منسلک ایجنٹس",
+    "listening_description": "یہ ایجنٹس اس گفتگو میں تمام پیغامات سن رہے ہیں",
+    "no_search_results": "کوئی ایجنٹ \"{{search}}\" سے میل نہیں کھاتا",
+    "search_help": "مختلف تلاش کے اصطلاح کا استعمال کریں",
+    "no_agents_description": "شروع کرنے کے لیے اپنا پہلا ایجنٹ بنائیں",
+    "create_agent": "ایجنٹ بنائیں",
+    "click_to_attach": "موجودہ سیشن سے منسلک کرنے کے لیے کلک کریں",
+    "click_to_detach": "موجودہ سیشن سے الگ کرنے کے لیے کلک کریں",
+    "show_attached_agents": "منسلک ایجنٹس دکھائیں",
+    "hide_attached_agents": "منسلک ایجنٹس چھپائیں",
+    "toggle_attached_agents": "منسلک ایجنٹس کو ٹوگل کریں",
+    "agent_listening_tooltip": "{{name}} سن رہا ہے اور مدد کے لیے بے چین ہے"
+  },
+  "skills": {
+    "title": "مہارتیں",
+    "command_palette_description": "دوبارہ استعمال ہونے والے ہدایت نامہ ٹیمپلیٹس کا انتظام کریں"
+  }
+}

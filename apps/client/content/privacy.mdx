@@ -1,0 +1,116 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2 }} variant="outlined">
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          Bike4mind Privacy Policy
+        </Typography>
+        <List>
+          <ListItem><Link href="/manual">Manual</Link></ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Welcome to Bike4mind's Privacy Policy
+        </Typography>
+        <CustomImage src="/images/privacy1.png" width={500} height={450} />
+        <List>
+          <ListItem> Your privacy is of utmost importance to us. This policy details the information we collect, how we use it, and your rights regarding your personal data.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Collection of Information
+        </Typography>
+        <CustomImage src="/images/privacy2.png" width={500} height={450} />
+        <List>
+          <ListItem> - Bike4mind collects information necessary to provide our services effectively.</ListItem>
+          <ListItem> - Personal data collection is transparent, and user consent is obtained where required.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Use of Data
+        </Typography>
+        <CustomImage src="/images/privacy3.png" width={500} height={450} />
+        <List>
+          <ListItem> - We use the data collected to operate, maintain, and improve our services.</ListItem>
+          <ListItem> - Personal information is not used for training AI models without explicit consent.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Data Protection
+        </Typography>
+        <CustomImage src="/images/Terms4.png" width={500} height={450} />
+        <List>
+          <ListItem> - We employ industry-standard security measures to protect your information.</ListItem>
+          <ListItem> - Data is treated confidentially and is not shared with third parties without your permission.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Performance Telemetry
+        </Typography>
+        <List>
+          <ListItem> - We collect pseudonymized performance telemetry to monitor service reliability, detect anomalies, and optimize costs. Telemetry includes model selection, response times, token counts, and tool execution metrics.</ListItem>
+          <ListItem> - We never collect prompts, responses, or personal information in telemetry. All data uses rotating one-way hashes that cannot be reversed to identify you.</ListItem>
+          <ListItem> - You can choose your telemetry level in Profile Settings under Experimental Features: None (no collection, existing data deleted), Basic (operational metrics only, default), or Enhanced (detailed diagnostics for issue resolution).</ListItem>
+          <ListItem> - Basic telemetry is collected under our legitimate interest in service reliability. Enhanced telemetry requires your explicit opt-in consent.</ListItem>
+          <ListItem> - All telemetry data is automatically deleted after 90 days.</ListItem>
+          <ListItem> - You can export your telemetry data or opt out at any time. When you opt out, all historical telemetry is permanently deleted.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Your Rights
+        </Typography>
+        <CustomImage src="/images/privacy4.png" width={500} height={450} />
+        <List>
+          <ListItem> - Users can access, edit, or request deletion of their personal data at any time.</ListItem>
+          <ListItem> - You have control over your information and how it's used.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Communication Preferences
+        </Typography>
+        <CustomImage src="/images/privacy6.png" width={500} height={450} />
+        <List>
+          <ListItem> - You can opt-out of marketing communications at any time.</ListItem>
+          <ListItem> - We provide clear options to manage your preferences.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Changes to This Policy
+        </Typography>
+        <CustomImage src="/images/privacy5.png" width={500} height={450} />
+        <List>
+          <ListItem> - Bike4mind may update this Privacy Policy to reflect changes to our information practices.</ListItem>
+          <ListItem> - If we make significant changes, we will notify you by email or through a notice on our website.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Contact Us
+        </Typography>
+        <CustomImage src="/images/privacy7.png" width={500} height={450} />
+        <List>
+          <ListItem> - If you have any questions or concerns about this policy or our practices, please contact us.</ListItem>
+        </List>
+      </Card>
+      
+     </Sheet>
+  );
+}

@@ -1,0 +1,144 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2, bgcolor: 'background.dark', width: '100%' }} variant="outlined"> {/*Ensure Sheet is 100% width*/}
+
+      {/* Container for Bike4mind Pricing and Subscriptions */}
+      <Box sx={{ width: '100%', mb: 8 }}> {/* This Box takes up the full width */}
+        {/* Bike4mind Pricing Title */}
+        <Typography level="h2" sx={{ my: 4, textAlign: 'center', color: 'white' }}>
+          Bike4mind Pricing
+        </Typography>
+        
+         {/* Subscription Section - own box */}
+        <Box sx={{ p: 2, borderRadius: 'sm', boxShadow: 1, bgcolor: 'background.paper', width: '100%' }}> {/* Set width to 100% */}
+          <Typography level="h3" sx={{ mb: 4 }}>
+            Subscriptions
+          </Typography>
+          <Box sx={{ display: 'flex', flexDirection: 'row', gap: 2, width: '100%' }}> {/* Flex container takes up 100% width */}
+            {/* Basic Subscription Button */}
+            <Button
+              variant="outlined"
+              sx={{
+                flex: 1,
+                p: 2,
+                minHeight: 140,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                color: 'text.primary',
+                borderColor: 'divider',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              <Typography level="h6" sx={{ mb: 1 }}>
+                $30 / Month
+              </Typography>
+              <Typography level="h4" sx={{ mb: 1 }}>
+                Solo Pro
+              </Typography>
+              <Typography level="body2" sx={{ mb: 2 }}>
+                All of the features of Bike4Mind, plus $30 of credits.
+              </Typography>
+            </Button>
+
+            <Button
+              variant="outlined"
+              sx={{
+                flex: 1,
+                p: 2,
+                minHeight: 140,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                color: 'text.primary',
+                borderColor: 'divider',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              <Typography level="h6" sx={{ mb: 1 }}>
+                $100 / Month
+              </Typography>
+              <Typography level="h4" sx={{ mb: 1 }}>
+                Team Pro
+              </Typography>
+              <Typography level="body2" sx={{ mb: 2 }}>
+                All of the features of Bike4Mind, plus 5 seats and $120 of credits.
+              </Typography>
+            </Button>
+
+
+            <Button
+              variant="outlined"
+              sx={{
+                flex: 1,
+                p: 2,
+                minHeight: 140,
+                display: 'flex',
+                flexDirection: 'column',
+                justifyContent: 'center',
+                color: 'text.primary',
+                borderColor: 'divider',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              <Typography level="h6" sx={{ mb: 1 }}>
+                $1000 / Month
+              </Typography>
+              <Typography level="h4" sx={{ mb: 1 }}>
+                SMB Pro
+              </Typography>
+              <Typography level="body2" sx={{ mb: 2 }}>
+                All of the features of Bike4Mind, plus 20 seats and $1200 of credits.
+              </Typography>
+            </Button>
+
+          </Box>
+        </Box>
+      </Box>
+
+        {/* Separate Box for Credits */}
+      <Box sx={{ width: '100%', borderRadius: 'sm', boxShadow: 1, bgcolor: 'background.paper', p: 2, mt: 8 }}> {/* This Box takes up the full width and adds margin-top */}
+        {/* Credits Section */}
+        <Typography level="h3" sx={{ mb: 4 }}>
+          Credits
+        </Typography>
+        <Typography level="body2" sx={{ mb: 2 }}>
+          Credits are used to run your AI models, no stress, Credits roll over month to month.
+        </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'row', gap: 2, width: '100%' }}> {/* Flex container takes up 100% width */}
+          {/* Credit Option Buttons */}
+          {['$20', '$50', '$100'].map((price, index) => (
+            <Button
+              key={index}
+              variant="outlined"
+              sx={{
+                flex: 1,
+                p: 2,
+                minHeight: 140,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'text.primary',
+                borderColor: 'divider',
+                '&:hover': {
+                  bgcolor: 'action.hover'
+                }
+              }}
+            >
+              {price}
+              <Typography level="body2">Buy Credits</Typography>
+            </Button>
+          ))}
+        </Box>
+      </Box>
+
+    </Sheet>
+  );
+}

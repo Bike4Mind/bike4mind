@@ -1,0 +1,60 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2 }} variant="outlined">
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          Users Guide
+        </Typography>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          What is Users?
+        </Typography>
+        <List>
+          <ListItem> Users is the main funcatioanlity of the admin page, this is where you can view a users data, such as name, email, analytics and so much more. This guide will help you understand the funcatioanlity of the Users page </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          How to head to Users?
+        </Typography>
+        <List>
+          <ListItem> To head to the users page, head to https://app.bike4mind.com/admin, on the side menu on the left you will see a button called Users </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Full View vs Slim View
+        </Typography>
+        <List>
+          <ListItem> when accesing the user page, you have the choice of having two ways to view the page, Full View and Slim view </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h4" sx={{ m: 2 }}>
+          Slim View
+        </Typography>
+        <List>
+          <ListItem> Slim view displays the following name, username, email, # of logins, date when joined and finnaly the profile button.  </ListItem>
+        </List>
+        <CustomImage src="/images/users1.png" width={800} height={450} />
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h4" sx={{ m: 2 }}>
+          Full View
+        </Typography>
+        <List>
+          <ListItem> Slim view displays the following name, username, email, # of logins, date when joined and finnaly the profile button.  </ListItem>
+        </List>
+        <CustomImage src="/images/migration2.png" width={900} height={450} />
+      </Card>
+
+  </Sheet>
+  );
+}

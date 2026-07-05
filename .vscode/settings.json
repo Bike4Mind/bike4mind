@@ -1,0 +1,36 @@
+{
+  "editor.formatOnSave": true,
+  "editor.formatOnSaveMode": "modificationsIfAvailable",
+  "editor.tabSize": 2,
+  "typescript.preferences.quoteStyle": "single",
+  "javascript.preferences.quoteStyle": "single",
+  "eslint.workingDirectories": [
+    { "mode": "auto"}
+  ],
+  "github-actions.workflows.pinned.workflows": [],
+  "github-actions.workflows.pinned.refresh.enabled": true,
+  "github-actions.validation.enabled": true,
+  "github-actions.validation.secrets.enabled": false,
+  "yaml.validate": true,
+  "yaml.schemaStore.enable": true,
+  "yaml.schemas": {
+    "https://json.schemastore.org/github-workflow.json": "/.github/workflows/*"
+  },
+  "problems.decorations.enabled": true,
+  "files.associations": {
+    "*.yml": "yaml",
+    "*.yaml": "yaml"
+  },
+  "markdownlint.config": {
+    "extends": ".markdownlint.json"
+  },
+  "markdownlint.ignore": [
+    "**/node_modules/**",
+    "**/build/**",
+    "**/.docusaurus/**"
+  ],
+  "problems.exclude": {
+    "**/.github/workflows/*.yml": true
+  },
+  "typescript.tsdk": "node_modules/typescript/lib"
+}

@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "এআই সেটিংস",
+    "session": "নোটবুক",
+    "session_plural": "নোটবুকসমূহ",
+    "favorite": "প্রিয়",
+    "unfavorite": "অপ্রিয়",
+    "favorites": "প্রিয়গুলি",
+    "favorites_count_one": "{{count}} পছন্দ",
+    "favorites_count_other": "{{count}} পছন্দসমূহ",
+    "currentSession": "বর্তমান",
+    "other": "অন্যান্য ট্যাগ",
+    "text_model": "টেক্সট মডেল",
+    "image_model": "ইমেজ মডেল",
+    "ai_image": "এআই চিত্র",
+    "switch_to": "{{ name }} এ পরিবর্তন করুন"
+  },
+  "guide": {
+    "title": "গাইড"
+  },
+  "intro": {
+    "title": "পরিচিতি"
+  },
+  "developers": {
+    "title": "ডেভেলপারস",
+    "technical_docs": "প্রযুক্তিগত ডকুমেন্টেশন"
+  },
+  "changelog": {
+    "title": "চেঞ্জলগ"
+  },
+  "feedback": {
+    "send": "প্রতিক্রিয়া পাঠান"
+  },
+  "terms_policies": "শর্তাবলী & নীতিগুলি",
+  "login": "লগইন",
+  "file": "জ্ঞান",
+  "forgotPassword": "পাসওয়ার্ড ভুলে গেছেন",
+  "signup": "সাইন আপ",
+  "help": "সাহায্য",
+  "manual": "ম্যানুয়াল",
+  "inviteLong": "একজন বন্ধুকে আমন্ত্রণ জানান",
+  "inviteShort": "আমন্ত্রণ জানান",
+  "tools": {
+    "title": "টুলস"
+  },
+  "sidenav": {
+    "pin": "সাইডবার পিন করুন",
+    "unpin": "সাইডবার আনপিন করুন",
+    "sessions": {
+      "sort": {
+        "label": "ছক দ্বারা",
+        "tags": "ট্যাগ অনুযায়ী",
+        "date": "তারিখ অনুযায়ী"
+      },
+      "new": "নতুন চ্যাট",
+      "item": {
+        "genTags": "নোটবুক ট্যাগ তালিকা তৈরি করুন"
+      }
+    }
+  },
+  "referral": {
+    "title": "একজন বন্ধুকে GrokTool এ রেফার করুন",
+    "email_title_default": "GrokTool এ স্বাগতম!",
+    "email_body_default": "আপনাকে USER_NAME দ্বারা GrokTool এ আমন্ত্রিত করা হয়েছে! নিবন্ধন লিঙ্ক: সাইন আপ করার জন্য নিম্নলিখিত আমন্ত্রণ কোড ব্যবহার করুন: INVITE_CODE",
+    "friend_email": "বন্ধুর ইমেইল",
+    "num_referrals_available": "উপলব্ধ রেফারাল:",
+    "no_valid_emails_error": "অনুগ্রহ করে বৈধ ইমেইল ঠিকানা প্রবেশ করান",
+    "send_referral": "রেফারাল পাঠান",
+    "send_referral_success": "রেফারাল সফলভাবে পাঠানো হয়েছে!",
+    "send_referral_skipped": "{{count}} আমন্ত্রণ(গুলি) বাদ দেওয়া হয়েছে — এই ইমেল ঠিকানাগুলির ইতিমধ্যে একটি অ্যাকাউন্ট রয়েছে।",
+    "send_referral_failed": "{{count}} আমন্ত্রণ(গুলি) পাঠানো সম্ভব হয়নি। আবার চেষ্টা করুন।",
+    "send_referral_error": "রেফারাল পাঠাতে গিয়ে ত্রুটি হয়েছে। দয়া করে আবার চেষ্টা করুন।",
+    "slack_notification_default": "USER_NAME:USER_ID ব্যবহারকারী দ্বারা FRIEND_EMAIL এ পাঠানো রেফারাল"
+  },
+  "activateVoice": "এই ভয়েস সক্রিয় করুন",
+  "liveVoice": "সরাসরি ভয়েস",
+  "whatsNew": "নতুন কি",
+  "welcome": "{{ name }} তে স্বাগতম",
+  "network": {
+    "statuses": {
+      "0": "সংযোগ হচ্ছে",
+      "1": "সংযুক্ত",
+      "2": "সংযোগ বিচ্ছিন্ন হচ্ছে",
+      "3": "সংযোগ বিচ্ছিন্ন",
+      "-1": "অপেক্ষমাণ"
+    },
+    "networkStatus": "নেটওয়ার্ক: {{ status }}"
+  },
+  "deleteVoice": "এই ভয়েস মুছে ফেলুন",
+  "deleteVoiceConfirm": "আপনি কি নিশ্চিত যে আপনি এই ভয়েসটি মুছে ফেলতে চান?",
+  "organization": {
+    "organizations": "দল",
+    "defaultName": "আমার সংস্থা",
+    "shared": "আমার সাথে শেয়ার করেছেন",
+    "create": "দল তৈরি করুন",
+    "search": "দল খুঁজুন...",
+    "no_organizations": "কোন দল পাওয়া যায়নি",
+    "view_details": "বিস্তারিত দেখুন",
+    "x_seats": "{{count}} সিট",
+    "active_subscription": "সক্রিয় সাবস্ক্রিপশন",
+    "no_subscription": "কোন সাবস্ক্রিপশন নেই",
+    "x_members": "{{count}} সদস্য",
+    "x_credits": "{{count}} ক্রেডিট",
+    "owner": "মালিক"
+  },
+  "session": {
+    "typeYourMessage": "এখানে আপনার বার্তা টাইপ করুন",
+    "switchedSession": "{{ sessionName }} তে পরিবর্তিত হয়েছে",
+    "send": "প্রেরণ",
+    "sendMessage": "বার্তা প্রেরণ",
+    "preparingQuest": "কোয়েস্ট প্রস্তুত করা হচ্ছে...",
+    "rephrasePrompt": "আপনার ইনপুট উন্নত করুন",
+    "promptRephrased": "প্রম্পট সফলভাবে পুনঃবিবৃতি করা হয়েছে",
+    "rephraseFailed": "প্রম্পট পুনঃবিবৃতি করতে ব্যর্থ",
+    "errors": {
+      "notebookDeleted": "এই নোটবুকটি মুছে ফেলা হয়েছে। দয়া করে একটি নতুন তৈরি করুন।",
+      "noPermission": "আপনার এই নোটবুকটি অ্যাক্সেস করার অনুমতি নেই।",
+      "invalidRequest": "অবৈধ অনুরোধ। দয়া করে আবার চেষ্টা করুন।",
+      "tooManyRequests": "অতিরিক্ত অনুরোধ। দয়া করে একটু অপেক্ষা করুন এবং আবার চেষ্টা করুন।",
+      "serverError": "সার্ভার ত্রুটি। দয়া করে পরে আবার চেষ্টা করুন।",
+      "networkError": "সন্দেশ পাঠাতে ব্যর্থ। দয়া করে আপনার সংযোগ পরীক্ষা করুন।",
+      "sendFailed": "সন্দেশ পাঠাতে ব্যর্থ। দয়া করে আবার চেষ্টা করুন।"
+    }
+  },
+  "projects": {
+    "title": "প্রজেক্ট",
+    "projects": "প্রকল্পগুলি",
+    "joined_projects": "যোগদান করা প্রজেক্ট",
+    "no_joined_projects": "এখনো কোনো যুক্ত প্রকল্প নেই",
+    "add_to_project": "প্রকল্পে যোগ করুন",
+    "modals": {
+      "files": {
+        "title": "প্রকল্পে ফাইল যোগ করুন",
+        "subtitle": "আপনার প্রকল্পে যোগ করার জন্য ফাইল বাছাই করুন",
+        "button_label": "ফাইল যোগ করুন",
+        "search_placeholder": "ফাইল খুঁজুন",
+        "no_files": "কোন ফাইল পাওয়া যায়নি।"
+      },
+      "members": {
+        "title": "প্রকল্পে সদস্য যোগ করুন",
+        "subtitle": "আপনার প্রকল্পে যোগ করার জন্য ব্যবহারকারীদের খুঁজুন এবং নির্বাচিত করুন",
+        "button_label": "সদস্য যোগ করুন",
+        "search_placeholder": "ব্যবহারকারী খুঁজুন",
+        "no_members": "একজন ব্যবহারকারী খুঁজে দেখার চেষ্টা করুন।"
+      },
+      "sessions": {
+        "title": "প্রকল্পে নোটবুক যোগ করুন",
+        "subtitle": "আপনার প্রকল্পে যোগ করার জন্য নোটবুক বাছাই করুন অথবা একটি নতুন তৈরি করুন",
+        "button_label": "নোটবুক যোগ করুন",
+        "search_placeholder": "খুঁজুন",
+        "create_button": "তৈরি করুন",
+        "no_notebooks": "কোন নোটবুক পাওয়া যায়নি। একটি নতুন তৈরি করার চেষ্টা করুন।"
+      },
+      "generic": {
+        "select_all": "সব নির্বাচিত করুন",
+        "unselect_all": "সব নির্বাচনের অপসারণ করুন",
+        "add_items_one": "{{count}} আইটেম যুক্ত করুন",
+        "add_items_other": "{{count}} আইটেম যুক্ত করুন",
+        "delete_items": "{{count}}টি আইটেম মুছুন"
+      }
+    }
+  },
+  "logout": "প্রস্থান",
+  "inbox": {
+    "title": "ইনবক্স",
+    "messages": "বার্তা",
+    "invites": "আমন্ত্রণ",
+    "sendMessage": "একটি বার্তা প্রেরণ করুন",
+    "noMessages": "কোন বার্তা নেই"
+  },
+  "addSomething": "{{ name }} যোগ করুন",
+  "deleteAllSomething": "সব {{ name }} মুছে ফেলুন",
+  "exportAllSomething": "সব {{ name }} রপ্তানি করুন",
+  "importLLMHistory": "LLM ইতিহাস আমদানি করুন",
+  "downloadAllSomething": "সব {{ name }} ডাউনলোড করুন",
+  "language": {
+    "language_settings": "ভাষা সেটিংস",
+    "change-language": "ভাষা পরিবর্তন করুন"
+  },
+  "theme": {
+    "turn-dark": "অন্ধকার করুন",
+    "turn-light": "আলো করুন"
+  },
+  "auth": {
+    "usernameOrEmail": "ব্যবহারকারীর নাম বা ইমেল",
+    "username": "ব্যবহারকারীর নাম",
+    "password": "পাসওয়ার্ড",
+    "confirmPassword": "পাসওয়ার্ড নিশ্চিত করুন",
+    "fullName": "পূর্ণ নাম",
+    "inviteCode": "আমন্ত্রণ কোড",
+    "needCode": "কোড দরকার?",
+    "noAccount": "কোন অ্যাকাউন্ট নেই?",
+    "haveAccount": "ইতিমধ্যেই একটি অ্যাকাউন্ট আছে?",
+    "loginWithProvider": "{{ provider }} দিয়ে লগইন করুন",
+    "checking": "চেক করা হচ্ছে...",
+    "continue": "চালিয়ে যান",
+    "troubleSigningIn": "সাইন ইন করতে সমস্যা হচ্ছে?",
+    "signingInAs": "এভাবে সাইন ইন হচ্ছে",
+    "signingIn": "সাইন ইন হচ্ছে...",
+    "backToEmail": "ইমেলে ফিরে যান",
+    "redirectingToProvider": "আপনার সংস্থার লগইনে পুনঃনির্দেশিত করা হচ্ছে...",
+    "resetInstructions": "আপনার ইমেল ঠিকানা লিখুন। আমরা আপনার পাসওয়ার্ড পুনরায় সেট করার জন্য আপনাকে একটি ইমেল পাঠাব।",
+    "sendResetEmail": "পাসওয়ার্ড রিসেট ইমেল পাঠান",
+    "email": "ইমেল",
+    "resetEmailSentMessage": "ইমেল পাঠানো হয়েছে! অতিরিক্ত নির্দেশাবলীর জন্য দয়া করে আপনার ইমেল চেক করুন",
+    "createAccountDesc": "একটি অ্যাকাউন্ট তৈরি করুন",
+    "createBtn": "অ্যাকাউন্ট তৈরি করুন",
+    "loginBtn": "লগইন",
+    "passwordStrength": {
+      "label": "পাসওয়ার্ডের শক্তি",
+      "weak": "দুর্বল",
+      "fair": "মানব",
+      "strong": "শক্তিশালী"
+    },
+    "passwordRequirements": {
+      "title": "পাসওয়ার্ডের প্রয়োজনীয়তা",
+      "minLength": "অন্তত {{count}} অক্ষর",
+      "uppercase": "একটি বড় হাতের অক্ষর",
+      "lowercase": "একটি ছোট হাতের অক্ষর",
+      "number": "একটি সংখ্যা",
+      "specialChar": "একটি বিশেষ চিহ্ন",
+      "met": "মেট",
+      "notMet": "এখনও মেট হয়নি"
+    },
+    "errors": {
+      "usernameExists": "ব্যবহারকারীর নাম '{{username}}' ইতিমধ্যেই নেওয়া হয়েছে। দয়া করে একটি ভিন্ন ব্যবহারকারীর নাম বেছে নিন।",
+      "emailExists": "ইমেল '{{email}}' সহ একটি অ্যাকাউন্ট ইতিমধ্যে বিদ্যমান। দয়া করে একটি ভিন্ন ইমেল ব্যবহার করুন অথবা আপনার বিদ্যমান অ্যাকাউন্টে লগইন করুন।",
+      "accountExists": "এই তথ্য দিয়ে একটি অ্যাকাউন্ট ইতিমধ্যে বিদ্যমান। দয়া করে লগইন করার চেষ্টা করুন অথবা ভিন্ন তথ্য ব্যবহার করুন।",
+      "invalidInviteCode": "আপনার প্রবেশ করা আমন্ত্রণ কোডটি অবৈধ বা মেয়াদোত্তীর্ণ। দয়া করে পরীক্ষা করুন এবং আবার চেষ্টা করুন।",
+      "registrationFailed": "নিবন্ধন ব্যর্থ। দয়া করে পরে আবার চেষ্টা করুন।",
+      "validation": {
+        "generic": "অবৈধ ইনপুট",
+        "invalidUsername": "ব্যবহারকারীর নাম কেবল অক্ষর, সংখ্যা, আন্ডারস্কোর, পিরিয়ড এবং ড্যাশ ধারণ করতে পারে",
+        "passwordMismatch": "পাসওয়ার্ড মিলছে না",
+        "passwordRequirements": "পাসওয়ার্ড অন্তত ৮টি অক্ষর, উচ্চ ও নিম্ন অক্ষর, একটি সংখ্যা, এবং একটি বিশেষ অক্ষর থাকা আবশ্যক"
+      }
+    }
+  },
+  "search": "অনুসন্ধান",
+  "share": "শেয়ার করুন",
+  "rename": "নাম পরিবর্তন করুন",
+  "favorite": "প্রিয়",
+  "unfavorite": "অপ্রিয়",
+  "delete": "মুছে ফেলুন",
+  "files": {
+    "showAttachedFiles": "সংযুক্ত ফাইলগুলি দেখান",
+    "hideAttachedFiles": "সংযুক্ত ফাইলগুলি লুকান",
+    "title": "ফাইল",
+    "upload": "ফাইল আপলোড করুন",
+    "long_title": "ফাইল ব্রাউজার"
+  },
+  "view": "দৃষ্টি",
+  "info": "তথ্য",
+  "clone": "ক্লোন করুন",
+  "download": "ডাউনলোড",
+  "summarize": "সারাংশ তৈরি করুন",
+  "profile": {
+    "title": "প্রোফাইল",
+    "tooltip": "প্রোফাইল",
+    "collection": "সংগৃহীত",
+    "collections": {
+      "all_types": "সমস্ত প্রকার"
+    },
+    "users_profile": "{{ name }}'s প্রোফাইল",
+    "storage_used": "ব্যবহৃত স্টোরেজ",
+    "credits": "ক্রেডিট",
+    "subscription": "সাবস্ক্রিপশন",
+    "edit": "প্রোফাইল সম্পাদনা করুন",
+    "manage_subscription": "সাবস্ক্রিপশন পরিচালনা করুন",
+    "upgrade": "আপগ্রেড করুন",
+    "credit_analytics": "ক্রেডিট বিশ্লেষণ",
+    "pricing": "ক্রেডিটের মূল্য নির্ধারণ",
+    "show_purchases": "ক্রয় দেখান",
+    "show_usage": "ব্যবহার দেখান",
+    "show_combined": "একত্রিত দেখান",
+    "buy_credits": "ক্রেডিট কিনুন"
+  },
+  "community": {
+    "title": "সম্প্রদায়",
+    "tooltip": "কমিউনিটি",
+    "feed": "সম্প্রদায়ের ফিড"
+  },
+  "subscriptions": {
+    "title": "সাবস্ক্রিপশন",
+    "expires_on": "মেয়াদ শেষ হবে {{ date }}",
+    "renews_on": "নবীকরণ হবে {{ date }}"
+  },
+  "billing": {
+    "title": "বিলিং"
+  },
+  "credits": {
+    "title": "ক্রেডিট",
+    "usage": "ক্রেডিট ব্যবহার",
+    "analytics": "ক্রেডিট বিশ্লেষণ",
+    "analytics_tooltip": "আপনার ক্রেডিট ব্যবহারের সময়সীমা দেখুন",
+    "current_balance": "বর্তমান ক্রেডিট ব্যালেন্স",
+    "credits": "ক্রেডিট",
+    "usage_by_model": "মডেল দ্বারা ব্যবহার",
+    "no_transactions": "এই সময়ের মধ্যে কোনো ক্রেডিট লেনদেন পাওয়া যায়নি",
+    "model_pricing": "মডেল মূল্য নির্ধারণ",
+    "text_models": "টেক্সট মডেল",
+    "image_models": "ইমেজ মডেল",
+    "pricing_per_1k_tokens": "১,০০০ টোকেনের জন্য ক্রেডিটে মূল্য নির্ধারণ",
+    "pricing_per_generation": "ছবি উৎপাদনের জন্য ক্রেডিটে মূল্য নির্ধারণ",
+    "model_name": "মডেল নাম",
+    "price_tier": "মূল্য স্তর",
+    "input_cost": "ইনপুট খরচ",
+    "output_cost": "আউটপুট খরচ",
+    "generation_cost": "উৎপাদন খরচ",
+    "no_models_available": "কোন মডেল পাওয়া যায়নি",
+    "pricing_note": "দ্রষ্টব্য: মূল্যগুলি আনুমানিক এবং মডেল প্যারামিটারগুলির উপর ভিত্তি করে পরিবর্তিত হতে পারে। দাম স্তর: $ (সবচেয়ে কম), $$ (মাঝারি), $$$ (প্রিমিয়াম)।",
+    "burn_rate": "প্রতিদিনের ব্যবহার (বার্ন রেট)",
+    "days_remaining": "অন্তর্গত দিনের অনুমানিত সংখ্যা",
+    "usage_pattern": "গত {{days}} দিনের আপনার ব্যবহারের প্যাটার্নের ভিত্তিতে",
+    "credits_used": "ব্যবহৃত ক্রেডিট",
+    "credits_purchased": "ক্রয় করা ক্রেডিট",
+    "net_credits": "নেট ক্রেডিট"
+  },
+  "time": {
+    "last_7_days": "শেষ ৭ দিন",
+    "last_30_days": "শেষ ৩০ দিন",
+    "last_90_days": "শেষ ৯০ দিন",
+    "last_180_days": "শেষ ১৮০ দিন",
+    "last_365_days": "শেষ ৩৬৫ দিন"
+  },
+  "common": {
+    "date": "তারিখ",
+    "refresh": "রিফ্রেশ",
+    "days": "দিন",
+    "cancel": "বাতিল করুন",
+    "save": "সংরক্ষণ করুন",
+    "delete": "মুছুন",
+    "edit": "সম্পাদনা করুন",
+    "close": "বন্ধ করুন",
+    "submit": "সম্প্রদান করুন",
+    "loading": "লোড হচ্ছে...",
+    "error": "ত্রুটি",
+    "success": "সাফল্য"
+  },
+  "errors": {
+    "failed_to_load_data": "ডেটা লোড করতে ব্যর্থ হয়েছে। পরে আবার চেষ্টা করুন।"
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "আপনার Atlassian সংযোগের সময়সীমা শেষ হয়েছে। দয়া করে আপনার অ্যাকাউন্ট পুনঃসংযোগ করুন।"
+    }
+  },
+  "credits_modal": {
+    "title": "অতিরিক্ত ক্রেডিট",
+    "description": "আমাদের উন্নত AI মডেল এবং বৈশিষ্ট্যগুলি ব্যবহার চালিয়ে যেতে অতিরিক্ত ক্রেডিট ক্রয় করুন। মডেল ইনফারেন্স এবং বিশেষ বৈশিষ্ট্যগুলির জন্য ক্রেডিট ব্যবহার করা হয়, বিভিন্ন মডেল জটিলতার উপর ভিত্তি করে বিভিন্ন পরিমাণে ক্রেডিট গ্রহণ করে।",
+    "current_credits": "বর্তমান ক্রেডিটের পরিমাণ",
+    "best_value": "সেরা মূল্য",
+    "purchase_success": "কিনেছেন {{credits}} ক্রেডিট",
+    "history_title": "ক্রেডিট ক্রয়ের ইতিহাস",
+    "purchase": "ক্রয়",
+    "no_transactions": "এখন পর্যন্ত কোনো লেনদেন নেই",
+    "low_credits": "আপনার ক্রেডিট কম",
+    "low_credits_sub": "আপনার কাজ চালিয়ে যেতে আরও ক্রেডিট কিনুন।",
+    "no_credits": "কোন ক্রেডিট নেই",
+    "no_credits_sub": "আপনার কাজ চালিয়ে যেতে ক্রেডিট কিনুন।",
+    "status": {
+      "completed": "সম্পন্ন",
+      "pending": "অপেক্ষমাণ",
+      "failed": "বিফলে গেছে"
+    }
+  },
+  "settings": {
+    "title": "সেটিংস",
+    "tooltip": "সেটিংস",
+    "main": "মূল সেটিংস",
+    "account": "অ্যাকাউন্ট",
+    "ai_features": "এআই বৈশিষ্ট্য",
+    "connected_apps": {
+      "title": "সংযুক্ত অ্যাপস",
+      "link": "লিঙ্ক",
+      "unlink": "অলিঙ্ক"
+    },
+    "developer_tools": "ডেভেলপার টুলস",
+    "experimental_features": {
+      "title": "যন্ত্রীয় বৈশিষ্ট্য",
+      "tooltip": "অভিজ্ঞাত বৈশিষ্ট্য",
+      "header": "অভিজ্ঞাত বৈশিষ্ট্য",
+      "beta_features": {
+        "title": "বিটা বৈশিষ্ট্য",
+        "subtitle": "এই বৈশিষ্ট্যগুলি এখনও অগ্রগতি চালিয়ে যাচ্ছে এবং অপ্রত্যাশিত ফলাফল দিতে পারে। এগুলি সক্ষম করার মানে হল আপনি এগুলির বর্তমান অবস্থায় ব্যবহার করতে সম্মত হন।"
+      }
+    },
+    "ui_preferences": "ইউআই পছন্দ"
+  },
+  "mementos": {
+    "title": "স্মৃতিচিহ্ন",
+    "tooltip": "স্মৃতিচিহ্ন"
+  },
+  "admin": {
+    "title": "অ্যাডমিন",
+    "tooltip": "অ্যাডমিন সেটিংস"
+  },
+  "speech": {
+    "title": "বক্তৃতা",
+    "tooltip": "বক্তৃতা থেকে টেক্সট & টেক্সট থেকে বক্তৃতা"
+  },
+  "instructions": {
+    "title": "নির্দেশাবলী",
+    "tooltip": "নির্দেশাবলী"
+  },
+  "friends": {
+    "add_friend": "বন্ধু হিসেবে যোগ করুন",
+    "unfriend": "বন্ধু হিসেবে বাদ দিন",
+    "pending_request": "অপেক্ষমাণ বন্ধু অনুরোধ",
+    "all": "সমস্ত বন্ধু",
+    "pending": "অপেক্ষমান"
+  },
+  "notebooks": {
+    "view_info": "নোটবুকের তথ্য দেখুন",
+    "clone": "নোটবুক ক্লোন করুন",
+    "download": "নোটবুক ডাউনলোড করুন",
+    "summarize": "নোটবুকের সারসংক্ষেপ করুন",
+    "delete": "নোটবুক মুছুন",
+    "delete_confirm": "আপনি কি নিশ্চিত \"{{ name }}\" চিরতরে মুছে ফেলতে চান? এই কাজটি পূর্বাবস্থায় ফিরিয়ে আনা যাবে না।",
+    "auto_rename": "এআই দিয়ে পুনঃনামকরণ করুন"
+  },
+  "add_friend": {
+    "title": "একজন বন্ধু যোগ করুন",
+    "friend_email": "বন্ধুর ইমেল",
+    "message": "বার্তা",
+    "cancel": "বাতিল করুন",
+    "send": "পাঠান",
+    "email_placeholder": "আপনার বন্ধুর ইমেল লিখুন",
+    "message_placeholder": "আপনার বার্তা লিখুন"
+  },
+  "file_browser": {
+    "my_files": "আমার ফাইল",
+    "shared_with_me": "আমাদের সাথে শেয়ার করা হয়েছে",
+    "total_files": "মোট জ্ঞানের আইটেম",
+    "search_placeholder": "নাম বা ট্যাগ দ্বারা অনুসন্ধান করুন...",
+    "file_type": "ফাইলের ধরন",
+    "all_files": "সমস্ত ফাইল",
+    "text": "পাঠ্য",
+    "pdf": "পিডিএফ",
+    "url": "ইউআরএল",
+    "image": "ছবি",
+    "excel": "এক্সেল",
+    "word": "ওয়ার্ড",
+    "json": "জেসন",
+    "csv": "সিএসভি",
+    "markdown": "মার্কডাউন",
+    "code": "কোড",
+    "date_created": "তৈরির তারিখ",
+    "size": "আকার",
+    "name": "নাম",
+    "sort_z_to_a": "Z থেকে A-তে সাজান",
+    "sort_a_to_z": "A থেকে Z-তে সাজান",
+    "grid_view": "গ্রিড ভিউ",
+    "list_view": "তালিকা ভিউ",
+    "select_file_hint": "ট্যাপ করে, এক বা একাধিক ফাইল নির্বাচন করুন এবং সেগুলি আপনার নোটবুক সেশনে যোগ করুন!",
+    "session_one": "নোটবুক",
+    "session_other": "নোটবুকগুলি",
+    "no_files_available": "কোন ফাইল পাওয়া যায়নি",
+    "count_file_selected_one": "{{count}} ফাইল নির্বাচিত",
+    "count_file_selected_other": "{{count}} ফাইল নির্বাচিত",
+    "add_count_file_one": "যোগ করুন {{count}} ফাইল",
+    "add_count_file_other": "যোগ করুন {{count}} ফাইল",
+    "delete_count_file_one": "মুছুন {{count}} ফাইল",
+    "delete_count_file_other": "মুছুন {{count}} ফাইল",
+    "share_count_file_one": "{{count}} ফাইল শেয়ার করুন",
+    "share_count_file_other": "{{count}} ফাইল শেয়ার করুন",
+    "count_file_one": "{{count}} ফাইল",
+    "count_file_other": "{{count}} ফাইল",
+    "add_to_session_success": "{{sessionName}}-এ ফাইল: {{fileNames}} যোগ করা হচ্ছে",
+    "add_file_success": "ফাইল: {{fileNames}} যোগ করা হচ্ছে",
+    "browse_files": "ফাইল ব্রাউজ করুন",
+    "create_new_knowledge": "তৈরি করুন",
+    "create_new_knowledge_from_url": "URL স্ক্র্যাপ করুন",
+    "enter_url": "URL প্রবেশ করান",
+    "create_file": "ফাইল তৈরি করুন",
+    "create_file_from_url": "ফাইল তৈরি করুন",
+    "create_from_url": "কুইক স্ক্র্যাপ",
+    "research": "গবেষণা",
+    "open_research": "গবেষণা খুলুন",
+    "url_success": "সফলভাবে URL থেকে জ্ঞান তৈরি হয়েছে: {{url}}",
+    "url_error": "URL থেকে জ্ঞান তৈরি করতে ব্যর্থ হয়েছে: {{url}}",
+    "url_required": "একটি URL প্রবেশ করান",
+    "previous": "পূর্ববর্তী",
+    "next": "পরবর্তী",
+    "page_of": "{{current}} পাতার {{total}}",
+    "drop_files_here": "এখানে ফাইলগুলো ফেলুন",
+    "tagging": "ট্যাগিং...",
+    "tag_files": "ফাইলগুলো ট্যাগ করুন",
+    "select_all": "সব সিলেক্ট করুন",
+    "unselect_all": "সব আনসিলেক্ট করুন",
+    "add_files": "ফাইল যোগ করুন",
+    "add_files_to_notebook_one": "নোটবুকে {{count}} ফাইল যোগ করুন",
+    "add_files_to_notebook_other": "নোটবুকে {{count}} ফাইল যোগ করুন",
+    "in_project": "প্রকল্পে"
+  },
+  "file_properties": {
+    "title": "ফাইলের বৈশিষ্ট্য",
+    "make_instructions": "নির্দেশনায় করা হবে?",
+    "instruction_priority": "নির্দেশনার অগ্রাধিকার (0–999)",
+    "priority_levels": {
+      "global": "0-100: গ্লোবাল নির্দেশনা",
+      "group": "101-300: গ্রুপ/প্রতিষ্ঠান নির্দেশনা",
+      "project": "301-500: প্রকল্প নির্দেশনা",
+      "user": "501-999: ব্যবহারকারী নির্দেশনা"
+    },
+    "save": "সংরক্ষণ করুন",
+    "update_success": "\"{{fileName}}\" এর জন্য সিস্টেম অগ্রাধিকার আপডেট করা হয়েছে।",
+    "update_error": "সিস্টেম অগ্রাধিকার আপডেট করতে ব্যর্থ।"
+  },
+  "file_actions": {
+    "notes": "নোট",
+    "notes_placeholder": "এই ফাইল সম্পর্কে নোট যোগ করুন...",
+    "add_notes": "নোট যোগ করুন",
+    "add_note": "নোট যোগ করুন",
+    "edit_notes": "নোট সম্পাদনা করুন",
+    "notes_save_error": "নোট সংরক্ষণ করতে ব্যর্থ হয়েছে",
+    "manage_tags": "ট্যাগ পরিচালনা করুন",
+    "tags": "ট্যাগগুলি পরিচালনা করুন",
+    "tags_placeholder": "কমা দ্বারা পৃথক করে ট্যাগের নাম লিখুন...",
+    "add_tag_one": "{{count}} ফাইলের জন্য ট্যাগ আপডেট করা হয়েছে",
+    "add_tag_other": "{{count}} ফাইলের জন্য ট্যাগ আপডেট করা হয়েছে",
+    "failed_to_add_tag_one": "ফাইলে ট্যাগ আপডেট করতে ব্যর্থ",
+    "failed_to_add_tag_other": "ফাইলগুলোতে ট্যাগ আপডেট করতে ব্যর্থ",
+    "cancel": "বাতিল করুন",
+    "save": "সংরক্ষণ করুন",
+    "download": "ডাউনলোড করুন",
+    "vectorize": "ভেক্টরাইজ করুন",
+    "instruction": "নির্দেশনা {{priority}}",
+    "chunked": "চাঙ্কড",
+    "not_chunked": "চাঙ্কড নয়"
+  },
+  "subscription_modal": {
+    "title": "সাবস্ক্রিপশন",
+    "description": "একটি একক ইন্টারফেসের মাধ্যমে প্রতিটি প্রধান AI মডেলে প্রবেশ করুন। ডিপসিক R1-এর মতো উন্নত মডেলগুলি ব্যক্তিগতভাবে চালান।",
+    "no_free_tier": "কোন ফ্রি টিয়ার নেই - পেশাদারদের জন্য ফোকাসড।",
+    "credits_rollover": "অব্যবহৃত ক্রেডিট ৩ মাস ধরে রোলওভার হয়।",
+    "monthly_billing": "মাসিক বিলিং",
+    "annual_billing": "বার্ষিক বিলিং",
+    "most_popular": "সর্বাধিক জনপ্রিয়",
+    "current": "বর্তমান",
+    "credits_per_month": "{{credits}} ক্রেডিট প্রতি মাসে",
+    "subscription_renewal": "আপনার সাবস্ক্রিপশন {{date}} তারিখে নবায়ন হবে",
+    "personal": "ব্যক্তিগত",
+    "business": "ব্যবসা",
+    "team": "দল",
+    "enterprise": "এন্টারপ্রাইজ"
+  },
+  "agents": {
+    "title": "এজেন্ট",
+    "new_agent": "নতুন এজেন্ট",
+    "manage_agents": "এজেন্টগুলি পরিচালনা করুন",
+    "search_placeholder": "এজেন্ট খুঁজুন...",
+    "your_agents": "আপনার এজেন্ট",
+    "loading": "এজেন্ট লোড হচ্ছে...",
+    "no_agents": "কোন এজেন্ট পাওয়া যায়নি",
+    "create_first": "শুরু করতে আপনার প্রথম এজেন্ট তৈরি করুন",
+    "agents_found": "{{count}} এজেন্ট পাওয়া গেছে",
+    "agents_found_plural": "{{count}} এজেন্ট পাওয়া গেছে",
+    "attached_agents": "সংযুক্ত এজেন্ট",
+    "listening_description": "এই এজেন্টগুলি এই কথোপকথনে সমস্ত বার্তা শোনার জন্য প্রস্তুত",
+    "no_search_results": "কোন এজেন্ট \"{{search}}\" এর সাথে মেলে না",
+    "search_help": "আলাদা অনুসন্ধান শব্দ চেষ্টা করুন",
+    "no_agents_description": "শুরু করতে আপনার প্রথম এজেন্ট তৈরি করুন",
+    "create_agent": "এজেন্ট তৈরি করুন",
+    "click_to_attach": "বর্তমান সেশনের সাথে সংযুক্ত করতে ক্লিক করুন",
+    "click_to_detach": "বর্তমান সেশন থেকে বিচ্ছিন্ন করতে ক্লিক করুন",
+    "show_attached_agents": "সংযুক্ত এজেন্টগুলি দেখান",
+    "hide_attached_agents": "সংযুক্ত এজেন্টগুলি লুকান",
+    "toggle_attached_agents": "সংযুক্ত এজেন্টগুলির অবস্থান পরিবর্তন করুন",
+    "agent_listening_tooltip": "{{name}} শুনছে এবং সাহায্য করতে অপেক্ষা করছে"
+  },
+  "skills": {
+    "title": "দক্ষতা",
+    "command_palette_description": "পুনঃব্যবহারযোগ্য নির্দেশনার টেমপ্লেট পরিচালনা করুন"
+  }
+}

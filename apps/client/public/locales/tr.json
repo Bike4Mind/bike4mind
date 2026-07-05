@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Yapay Zeka Ayarları",
+    "session": "Not Defteri",
+    "session_plural": "Not Defterleri",
+    "favorite": "Favori",
+    "unfavorite": "Favori Değil",
+    "favorites": "Favoriler",
+    "favorites_count_one": "{{count}} Favori",
+    "favorites_count_other": "{{count}} Favoriler",
+    "currentSession": "Geçerli",
+    "other": "Diğer Etiketler",
+    "text_model": "Metin Modeli",
+    "image_model": "Görüntü Modeli",
+    "ai_image": "Yapay Zeka Resmi",
+    "switch_to": "{{ name }}'ye geç"
+  },
+  "guide": {
+    "title": "Kılavuz"
+  },
+  "intro": {
+    "title": "Giriş"
+  },
+  "developers": {
+    "title": "Geliştiriciler",
+    "technical_docs": "Teknik Dokümantasyon"
+  },
+  "changelog": {
+    "title": "Değişiklik Geçmişi"
+  },
+  "feedback": {
+    "send": "Geri Bildirim Gönder"
+  },
+  "terms_policies": "Şartlar ve Politika",
+  "login": "Giriş Yap",
+  "file": "Bilgi",
+  "forgotPassword": "Şifremi Unuttum",
+  "signup": "Kayıt Ol",
+  "help": "Yardım",
+  "manual": "Kılavuz",
+  "inviteLong": "Bir Arkadaşını Davet Et",
+  "inviteShort": "Davet Et",
+  "tools": {
+    "title": "Araçlar"
+  },
+  "sidenav": {
+    "pin": "Yan çubuğu sabitle",
+    "unpin": "Yan çubuğu sabitlemeyi kaldır",
+    "sessions": {
+      "sort": {
+        "label": "Sırala",
+        "tags": "Etiketlere Göre",
+        "date": "Tarihe Göre"
+      },
+      "new": "Yeni Sohbet",
+      "item": {
+        "genTags": "Not defteri etiket listesi oluştur"
+      }
+    }
+  },
+  "referral": {
+    "title": "Arkadaşınıza tavsiye edin",
+    "email_title_default": "GrokTool'a Hoş Geldiniz!",
+    "email_body_default": "USER_NAME tarafından GrokTool'a davet edildiniz! KAYIT_LİNKİ: Kayıt olmak için aşağıdaki davet kodunu kullanın: INVITE_CODE",
+    "friend_email": "Arkadaşın E-postası",
+    "num_referrals_available": "Kullanılabilir yönlendirmeler:",
+    "no_valid_emails_error": "Lütfen geçerli e-posta adres(ler)i girin",
+    "send_referral": "Yönlendirmeyi Gönder",
+    "send_referral_success": "Yönlendirme başarıyla gönderildi!",
+    "send_referral_skipped": "{{count}} davet atlandı — bu e-posta adreslerinde zaten hesap var.",
+    "send_referral_failed": "{{count}} davet gönderilemedi. Lütfen tekrar deneyin.",
+    "send_referral_error": "Yönlendirme gönderilirken bir hata oluştu. Lütfen tekrar deneyin.",
+    "slack_notification_default": "USER_NAME:USER_ID kullanıcısı tarafından FRIEND_EMAIL'e yönlendirme gönderildi"
+  },
+  "activateVoice": "Bu sesi etkinleştir",
+  "liveVoice": "Canlı ses",
+  "whatsNew": "Yenilikler",
+  "welcome": "{{ name }}'ye hoş geldiniz",
+  "network": {
+    "statuses": {
+      "0": "Bağlanıyor",
+      "1": "Bağlı",
+      "2": "Bağlantı kesiliyor",
+      "3": "Bağlantı kesildi",
+      "-1": "Beklemede"
+    },
+    "networkStatus": "Ağ: {{ status }}"
+  },
+  "deleteVoice": "Bu sesi sil",
+  "deleteVoiceConfirm": "Bu sesi silmek istediğinizden emin misiniz?",
+  "organization": {
+    "organizations": "Ekipler",
+    "defaultName": "Benim organizasyonum",
+    "shared": "Benimle Paylaşılan",
+    "create": "Ekip Oluştur",
+    "search": "Ekipleri ara...",
+    "no_organizations": "Hiçbir ekip bulunamadı",
+    "view_details": "Ayrıntıları Görüntüle",
+    "x_seats": "{{count}} koltuk",
+    "active_subscription": "Aktif Abonelik",
+    "no_subscription": "Abonelik Yok",
+    "x_members": "{{count}} üye",
+    "x_credits": "{{count}} kredi",
+    "owner": "Sahip"
+  },
+  "session": {
+    "typeYourMessage": "Mesajınızı buraya girin",
+    "switchedSession": "{{ sessionName }}'e geçildi",
+    "send": "Gönder",
+    "sendMessage": "Mesaj gönder",
+    "preparingQuest": "Görev hazırlanıyor...",
+    "rephrasePrompt": "Girdinizi optimize edin",
+    "promptRephrased": "İstek başarıyla yeniden ifade edildi",
+    "rephraseFailed": "İstek yeniden ifade edilemedi",
+    "errors": {
+      "notebookDeleted": "Bu not defteri silindi. Lütfen yeni bir tane oluşturun.",
+      "noPermission": "Bu not defterine erişim izniniz yok.",
+      "invalidRequest": "Geçersiz istek. Lütfen tekrar deneyin.",
+      "tooManyRequests": "Çok fazla istek. Lütfen biraz bekleyin ve tekrar deneyin.",
+      "serverError": "Sunucu hatası. Lütfen daha sonra tekrar deneyin.",
+      "networkError": "Mesaj gönderilemedi. Lütfen bağlantınızı kontrol edin.",
+      "sendFailed": "Mesaj gönderilemedi. Lütfen tekrar deneyin."
+    }
+  },
+  "projects": {
+    "title": "Proje",
+    "projects": "Projeler",
+    "joined_projects": "Katılan Projeler",
+    "no_joined_projects": "Henüz katılınan proje yok",
+    "add_to_project": "Projeye Ekle",
+    "modals": {
+      "files": {
+        "title": "Projeye Dosya Ekle",
+        "subtitle": "Projeye eklemek için dosyaları seçin",
+        "button_label": "Dosyaları Ekle",
+        "search_placeholder": "Dosyaları Ara",
+        "no_files": "Hiçbir dosya bulunamadı."
+      },
+      "members": {
+        "title": "Projeye Üye Ekle",
+        "subtitle": "Projeye eklemek için kullanıcıları arayın ve seçin",
+        "button_label": "Üyeleri Ekle",
+        "search_placeholder": "Kullanıcıları Ara",
+        "no_members": "Bir kullanıcı aramayı deneyin."
+      },
+      "sessions": {
+        "title": "Projeye Not Defteri Ekle",
+        "subtitle": "Projeye eklemek için not defterlerini seçin veya yenisini oluşturun",
+        "button_label": "Not Defterlerini Ekle",
+        "search_placeholder": "Ara",
+        "create_button": "Oluştur",
+        "no_notebooks": "Hiçbir not defteri bulunamadı. Yeni bir tane oluşturmaya çalışın."
+      },
+      "generic": {
+        "select_all": "Hepsini Seç",
+        "unselect_all": "Tüm Seçimleri Kaldır",
+        "add_items_one": "{{count}} öğe ekle",
+        "add_items_other": "{{count}} öğe ekle",
+        "delete_items": "{{count}} öğeyi sil"
+      }
+    }
+  },
+  "logout": "Çıkış yap",
+  "inbox": {
+    "title": "Gelen kutusu",
+    "messages": "Mesajlar",
+    "invites": "Davetiyeler",
+    "sendMessage": "Bir mesaj gönder",
+    "noMessages": "Mesaj yok"
+  },
+  "addSomething": "{{ name }} ekle",
+  "deleteAllSomething": "Tüm {{ name }}'ları sil",
+  "exportAllSomething": "Tüm {{ name }}'ları dışa aktar",
+  "importLLMHistory": "LLM geçmişini içe aktar",
+  "downloadAllSomething": "Tüm {{ name }}'ları indir",
+  "language": {
+    "language_settings": "Dil Ayarları",
+    "change-language": "Dili değiştir"
+  },
+  "theme": {
+    "turn-dark": "Karanlık modu aç",
+    "turn-light": "Aydınlık modu aç"
+  },
+  "auth": {
+    "usernameOrEmail": "Kullanıcı Adı veya E-posta",
+    "username": "Kullanıcı Adı",
+    "password": "Şifre",
+    "confirmPassword": "Şifreyi Onayla",
+    "fullName": "Tam Adı",
+    "inviteCode": "Davet Kodu",
+    "needCode": "Koda mı ihtiyacınız var?",
+    "noAccount": "Hesabınız yok mu?",
+    "haveAccount": "Zaten hesabınız var mı?",
+    "loginWithProvider": "{{ provider }} ile giriş yap",
+    "checking": "Kontrol ediliyor...",
+    "continue": "Devam et",
+    "troubleSigningIn": "Giriş yaparken sorun mu yaşıyorsunuz?",
+    "signingInAs": "Şu kullanıcı olarak giriş yapılıyor",
+    "signingIn": "Giriş yapılıyor...",
+    "backToEmail": "E-posta adresine geri dön",
+    "redirectingToProvider": "Organizasyonunuzun giriş sayfasına yönlendiriliyorsunuz...",
+    "resetInstructions": "Lütfen e-posta adresinizi girin. Şifrenizi sıfırlamak için size bir e-posta göndereceğiz.",
+    "sendResetEmail": "Şifre sıfırlama e-postası gönder",
+    "email": "E-posta",
+    "resetEmailSentMessage": "E-posta gönderildi! Ek talimatlar için lütfen e-postanızı kontrol edin",
+    "createAccountDesc": "Hesap Oluştur",
+    "createBtn": "Hesap Oluştur",
+    "loginBtn": "Giriş Yap",
+    "passwordStrength": {
+      "label": "Parola gücü",
+      "weak": "Zayıf",
+      "fair": "Orta",
+      "strong": "Güçlü"
+    },
+    "passwordRequirements": {
+      "title": "Parola gereksinimleri",
+      "minLength": "En az {{count}} karakter",
+      "uppercase": "Bir büyük harf",
+      "lowercase": "Bir küçük harf",
+      "number": "Bir sayı",
+      "specialChar": "Bir özel karakter",
+      "met": "karşılandı",
+      "notMet": "henüz karşılanmadı"
+    },
+    "errors": {
+      "usernameExists": "Kullanıcı adı '{{username}}' zaten alınmış. Lütfen farklı bir kullanıcı adı seçin.",
+      "emailExists": "E-posta '{{email}}' ile zaten bir hesap var. Lütfen farklı bir e-posta kullanın veya mevcut hesabınıza giriş yapın.",
+      "accountExists": "Bu kimlik bilgileriyle zaten bir hesap var. Lütfen giriş yapmayı deneyin veya farklı kimlik bilgileri kullanın.",
+      "invalidInviteCode": "Girdiğiniz davet kodu geçersiz veya süresi dolmuş. Lütfen kontrol edin ve tekrar deneyin.",
+      "registrationFailed": "Kayıt başarısız oldu. Lütfen daha sonra tekrar deneyin.",
+      "validation": {
+        "generic": "Geçersiz girdi",
+        "invalidUsername": "Kullanıcı adı yalnızca harfler, rakamlar, alt çizgiler, noktalar ve tireler içerebilir",
+        "passwordMismatch": "Şifreler eşleşmiyor",
+        "passwordRequirements": "Şifre en az 8 karakter olmalı, büyük ve küçük harfler, bir rakam ve bir özel karakter içermelidir"
+      }
+    }
+  },
+  "search": "Ara",
+  "share": "Paylaş",
+  "rename": "Yeniden Adlandır",
+  "favorite": "Favori",
+  "unfavorite": "Favori Değil",
+  "delete": "Sil",
+  "files": {
+    "showAttachedFiles": "Ekli Dosyaları Göster",
+    "hideAttachedFiles": "Ekli Dosyaları Gizle",
+    "title": "Dosyalar",
+    "upload": "Dosyaları Yükle",
+    "long_title": "Dosya Tarayıcı"
+  },
+  "view": "Görünüm",
+  "info": "Bilgi",
+  "clone": "Klonla",
+  "download": "İndir",
+  "summarize": "Özetle",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Koleksiyon",
+    "collections": {
+      "all_types": "Tüm Türler"
+    },
+    "users_profile": "{{ name }}'nin Profili",
+    "storage_used": "Kullanılan Depolama",
+    "credits": "Krediler",
+    "subscription": "Abonelik",
+    "edit": "Profili Düzenle",
+    "manage_subscription": "Aboneliği Yönet",
+    "upgrade": "Yükselt",
+    "credit_analytics": "Kredi Analitiği",
+    "pricing": "Kredi Fiyatlandırması",
+    "show_purchases": "Satın Alma Geçmişini Göster",
+    "show_usage": "Kullanımı Göster",
+    "show_combined": "Birleşik Görüntüle",
+    "buy_credits": "Kredi Satın Al"
+  },
+  "community": {
+    "title": "Topluluk",
+    "tooltip": "Topluluk",
+    "feed": "Topluluk Akışı"
+  },
+  "subscriptions": {
+    "title": "Abonelikler",
+    "expires_on": "{{ date }} tarihinde sona eriyor",
+    "renews_on": "{{ date }} tarihinde yenileniyor"
+  },
+  "billing": {
+    "title": "Faturalandırma"
+  },
+  "credits": {
+    "title": "Krediler",
+    "usage": "Kredi Kullanımı",
+    "analytics": "Kredi Analitiği",
+    "analytics_tooltip": "Kredi kullanımınızı zaman içindeki eğilimlere göre görüntüleyin",
+    "current_balance": "Mevcut Kredi Bakiyesi",
+    "credits": "kredi",
+    "usage_by_model": "Model Başına Kullanım",
+    "no_transactions": "Bu zaman diliminde kredi işlemi bulunamadı",
+    "model_pricing": "Model Fiyatlandırması",
+    "text_models": "Metin Modelleri",
+    "image_models": "Görüntü Modelleri",
+    "pricing_per_1k_tokens": "Fiyatlandırma, 1.000 jeton başına kredi cinsinden gösterilmektedir",
+    "pricing_per_generation": "Fiyatlandırma, görüntü oluşturma başına kredi cinsinden gösterilmektedir",
+    "model_name": "Model Adı",
+    "price_tier": "Fiyat Katmanı",
+    "input_cost": "Girdi Maliyeti",
+    "output_cost": "Çıktı Maliyeti",
+    "generation_cost": "Oluşturma Maliyeti",
+    "no_models_available": "Mevcut model yok",
+    "pricing_note": "Not: Fiyatlar yaklaşık olup model parametrelerine bağlı olarak değişebilir. Fiyat katmanları: $ (en düşük), $$ (orta), $$$ (premium).",
+    "burn_rate": "Günlük kullanım (harcama oranı)",
+    "days_remaining": "Tahmini kalan gün",
+    "usage_pattern": "Son {{days}} gün içindeki kullanım alışkanlığınıza dayanmaktadır",
+    "credits_used": "Kullanılan Krediler",
+    "credits_purchased": "Satın Alınan Krediler",
+    "net_credits": "Net Krediler"
+  },
+  "time": {
+    "last_7_days": "Son 7 gün",
+    "last_30_days": "Son 30 gün",
+    "last_90_days": "Son 90 gün",
+    "last_180_days": "Son 180 gün",
+    "last_365_days": "Son 365 gün"
+  },
+  "common": {
+    "date": "Tarih",
+    "refresh": "Yenile",
+    "days": "gün",
+    "cancel": "İptal",
+    "save": "Kaydet",
+    "delete": "Sil",
+    "edit": "Düzenle",
+    "close": "Kapat",
+    "submit": "Gönder",
+    "loading": "Yükleniyor...",
+    "error": "Hata",
+    "success": "Başarı"
+  },
+  "errors": {
+    "failed_to_load_data": "Veri yüklenemedi. Lütfen daha sonra tekrar deneyin."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Atlassian bağlantınız süresi doldu. Lütfen hesabınızı tekrar bağlayın."
+    }
+  },
+  "credits_modal": {
+    "title": "Ekstra Krediler",
+    "description": "Gelişmiş AI modellerimizi ve özelliklerimizi kullanmaya devam etmek için ek krediler satın alın. Krediler, model çıkarımı ve özel özellikler için kullanılır; farklı modeller, karmaşıklıklarına bağlı olarak farklı miktarlarda tüketir.",
+    "current_credits": "Mevcut kredi miktarı",
+    "best_value": "En İyi Değer",
+    "purchase_success": "{{credits}} kredi satın alındı",
+    "history_title": "Kredi Satın Alma Geçmişi",
+    "purchase": "Satın Al",
+    "no_transactions": "Henüz işlem yok",
+    "low_credits": "Kredileriniz düşük",
+    "low_credits_sub": "Çalışmaya devam etmek için daha fazla kredi satın alın.",
+    "no_credits": "Kredi yok",
+    "no_credits_sub": "Çalışmaya devam etmek için kredi satın alın.",
+    "status": {
+      "completed": "Tamamlandı",
+      "pending": "Beklemede",
+      "failed": "Başarısız"
+    }
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "tooltip": "Ayarlar",
+    "main": "Ana Ayarlar",
+    "account": "Hesap",
+    "ai_features": "Yapay Zeka Özellikleri",
+    "connected_apps": {
+      "title": "Bağlı Uygulamalar",
+      "link": "Bağla",
+      "unlink": "Bağlantıyı Kes"
+    },
+    "developer_tools": "Geliştirici Araçları",
+    "experimental_features": {
+      "title": "Deneysel Özellikler",
+      "tooltip": "Deneysel Özellikler",
+      "header": "Deneysel Özellikler",
+      "beta_features": {
+        "title": "Beta Özellikleri",
+        "subtitle": "Bu özellikler hâlâ gelişim aşamasındadır ve beklenmedik sonuçlar doğurabilir. Bunları etkinleştirmeyi seçmek, güncel halleri ile kullanmayı kabul etmek anlamına gelir."
+      }
+    },
+    "ui_preferences": "Kullanıcı Arayüzü Tercihleri"
+  },
+  "mementos": {
+    "title": "Anı Eşyaları",
+    "tooltip": "Anı Eşyaları"
+  },
+  "admin": {
+    "title": "Yönetici",
+    "tooltip": "Yönetici Ayarları"
+  },
+  "speech": {
+    "title": "Konuşma",
+    "tooltip": "Konuşmadan Metne & Metinden Konuşmaya"
+  },
+  "instructions": {
+    "title": "Talimatlar",
+    "tooltip": "Talimatlar"
+  },
+  "friends": {
+    "add_friend": "Arkadaş Ekle",
+    "unfriend": "Arkadaşlıktan Çıkar",
+    "pending_request": "Bekleyen Arkadaşlık İsteği",
+    "all": "Tüm Arkadaşlar",
+    "pending": "Beklemede"
+  },
+  "notebooks": {
+    "view_info": "Not Defteri Bilgilerini Görüntüle",
+    "clone": "Not Defterini Kopyala",
+    "download": "Not Defterini İndir",
+    "summarize": "Not Defterini Özetle",
+    "delete": "Not Defterini Sil",
+    "delete_confirm": "Gerçekten \"{{ name }}\"'i kalıcı olarak silmek istediğinizden emin misiniz? Bu işlem geri alınamaz.",
+    "auto_rename": "Yapay Zeka ile Yeniden Adlandır"
+  },
+  "add_friend": {
+    "title": "Bir Arkadaş Ekle",
+    "friend_email": "Arkadaşın E-posta",
+    "message": "Mesaj",
+    "cancel": "İptal",
+    "send": "Gönder",
+    "email_placeholder": "Arkadaşının e-postasını gir",
+    "message_placeholder": "Mesajını gir"
+  },
+  "file_browser": {
+    "my_files": "Benim Dosyalarım",
+    "shared_with_me": "Benimle Paylaşılan",
+    "total_files": "Toplam Bilgi Öğeleri",
+    "search_placeholder": "İsim veya etiketle ara...",
+    "file_type": "Dosya Türü",
+    "all_files": "Tüm Dosyalar",
+    "text": "Metin",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Görsel",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Kod",
+    "date_created": "Oluşturulma Tarihi",
+    "size": "Boyut",
+    "name": "İsim",
+    "sort_z_to_a": "Z'den A'ya Sırala",
+    "sort_a_to_z": "A'dan Z'ye Sırala",
+    "grid_view": "Kare Görünüm",
+    "list_view": "Liste Görünümü",
+    "select_file_hint": "Dokunarak, dosyanızı veya birden fazla dosyayı seçin ve not defterinize ekleyin!",
+    "session_one": "Defter",
+    "session_other": "Defterler",
+    "no_files_available": "Mevcut dosya yok",
+    "count_file_selected_one": "{{count}} dosya seçildi",
+    "count_file_selected_other": "{{count}} dosya seçildi",
+    "add_count_file_one": "{{count}} dosya ekle",
+    "add_count_file_other": "{{count}} dosya ekle",
+    "delete_count_file_one": "{{count}} dosyayı sil",
+    "delete_count_file_other": "{{count}} dosyayı sil",
+    "share_count_file_one": "{{count}} Dosya Paylaş",
+    "share_count_file_other": "{{count}} Dosya Paylaş",
+    "count_file_one": "{{count}} dosya",
+    "count_file_other": "{{count}} dosya",
+    "add_to_session_success": "{{fileNames}} dosyasını {{sessionName}}'e ekliyorum",
+    "add_file_success": "{{fileNames}} dosyasını ekliyorum",
+    "browse_files": "Dosyaları Gözat",
+    "create_new_knowledge": "Oluştur",
+    "create_new_knowledge_from_url": "URL'den Tarama",
+    "enter_url": "URL'yi Girin",
+    "create_file": "Dosya Oluştur",
+    "create_file_from_url": "Dosya Oluştur",
+    "create_from_url": "Hızlı Tarama",
+    "research": "Araştırma",
+    "open_research": "Araştırmayı Aç",
+    "url_success": "Başarıyla URL'den bilgi oluşturuldu: {{url}}",
+    "url_error": "URL'den bilgi oluşturulamadı: {{url}}",
+    "url_required": "Lütfen bir URL girin",
+    "previous": "Önceki",
+    "next": "Sonraki",
+    "page_of": "{{current}} / {{total}} Sayfa",
+    "drop_files_here": "Dosyaları buraya bırakın",
+    "tagging": "Etiketleniyor...",
+    "tag_files": "Dosyaları Etiketle",
+    "select_all": "Tümünü Seç",
+    "unselect_all": "Seçimi Kaldır",
+    "add_files": "Dosya Ekle",
+    "add_files_to_notebook_one": "{{count}} Dosya Not Defterine Ekle",
+    "add_files_to_notebook_other": "{{count}} Dosya Not Defterine Ekle",
+    "in_project": "Projede"
+  },
+  "file_properties": {
+    "title": "Dosya Özellikleri",
+    "make_instructions": "Talimat olarak mı yapılacak?",
+    "instruction_priority": "Talimat Önceliği (0–999)",
+    "priority_levels": {
+      "global": "0-100: Küresel Talimatlar",
+      "group": "101-300: Grup/Şirket Talimatları",
+      "project": "301-500: Proje Talimatları",
+      "user": "501-999: Kullanıcı Talimatları"
+    },
+    "save": "Kaydet",
+    "update_success": "\"{{fileName}}\" için sistem önceliği güncellendi.",
+    "update_error": "Sistem önceliği güncellenemedi."
+  },
+  "file_actions": {
+    "notes": "Notlar",
+    "notes_placeholder": "Bu dosya hakkında notlar ekleyin...",
+    "add_notes": "Notlar Ekle",
+    "add_note": "Not Ekle",
+    "edit_notes": "Notları Düzenle",
+    "notes_save_error": "Notları kaydetme başarısız",
+    "manage_tags": "Etiketleri Yönet",
+    "tags": "Etiketleri Yönet",
+    "tags_placeholder": "Virgülle ayrılmış etiket adlarını girin...",
+    "add_tag_one": "{{count}} dosya için etiket güncellendi",
+    "add_tag_other": "{{count}} dosya için etiket güncellendi",
+    "failed_to_add_tag_one": "Dosyaya etiket güncellenemedi",
+    "failed_to_add_tag_other": "Dosyalara etiket güncellenemedi",
+    "cancel": "İptal",
+    "save": "Kaydet",
+    "download": "İndir",
+    "vectorize": "Vektörleştir",
+    "instruction": "Talimat {{priority}}",
+    "chunked": "Parçalı",
+    "not_chunked": "Parçalı Değil"
+  },
+  "subscription_modal": {
+    "title": "Abonelik",
+    "description": "Tek bir birleşik arayüz aracılığıyla her büyük AI modeline erişin. Deepseek R1 gibi gelişmiş modelleri özel olarak çalıştırın.",
+    "no_free_tier": "ÜCRETSİZ SEVİYE YOK - PROFESYONELLERE YÖNELİK.",
+    "credits_rollover": "Kullanılmayan krediler 3 ay boyunca devredilir.",
+    "monthly_billing": "Aylık Faturalama",
+    "annual_billing": "Yıllık Faturalama",
+    "most_popular": "En Popüler",
+    "current": "Şu Anki",
+    "credits_per_month": "{{credits}} kredi ayda",
+    "subscription_renewal": "Aboneliğiniz {{date}} tarihinde yenileniyor.",
+    "personal": "Bireysel",
+    "business": "İş",
+    "team": "Ekip",
+    "enterprise": "Kurumsal"
+  },
+  "agents": {
+    "title": "Ajanlar",
+    "new_agent": "Yeni Ajan",
+    "manage_agents": "Ajanları Yönet",
+    "search_placeholder": "Ajanları ara...",
+    "your_agents": "Ajanlarınız",
+    "loading": "Ajanlar yükleniyor...",
+    "no_agents": "Hiçbir ajan bulunamadı",
+    "create_first": "Başlamak için ilk ajanınızı oluşturun",
+    "agents_found": "{{count}} ajan bulundu",
+    "agents_found_plural": "{{count}} ajan bulundu",
+    "attached_agents": "Bağlı Ajanlar",
+    "listening_description": "Bu ajanlar, bu konuşmadaki tüm mesajları dinliyor",
+    "no_search_results": "\"{{search}}\" ile eşleşen hiçbir ajan bulunamadı",
+    "search_help": "Farklı bir arama terimi deneyin",
+    "no_agents_description": "Başlamak için ilk ajanınızı oluşturun",
+    "create_agent": "Ajan Oluştur",
+    "click_to_attach": "Mevcut oturuma eklemek için tıklayın",
+    "click_to_detach": "Mevcut oturumdan ayırmak için tıklayın",
+    "show_attached_agents": "Bağlı Ajanları Göster",
+    "hide_attached_agents": "Bağlı Ajanları Gizle",
+    "toggle_attached_agents": "Bağlı Ajanları Değiştir",
+    "agent_listening_tooltip": "{{name}} dinliyor ve yardım etmeye istekli"
+  },
+  "skills": {
+    "title": "Beceriler",
+    "command_palette_description": "Yeniden kullanılabilir talimat şablonlarını yönetin"
+  }
+}

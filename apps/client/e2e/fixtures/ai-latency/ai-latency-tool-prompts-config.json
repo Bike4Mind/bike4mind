@@ -1,0 +1,42 @@
+{
+  "thresholdSec": 90,
+  "prompts": [
+    {
+      "id": "city-no-cars-image",
+      "prompt": "Generate a picture of a futuristic city without cars",
+      "expectedKeywords": ["city", "image", "futuristic", "streets", "generated", "here", "picture"]
+    },
+    {
+      "id": "usd-php-exchange",
+      "prompt": "What is the current USD to PHP exchange rate and how does it compare to 1 day and 5 days ago?",
+      "expectedKeywords": ["PHP", "USD", "exchange", "rate", "peso"]
+    },
+    {
+      "id": "wolfram-japan-population",
+      "prompt": "Use Wolfram Alpha to find the current population of Japan and compare it to 10 years ago",
+      "expectedKeywords": ["Japan", "population", "million", "Wolfram"]
+    },
+    {
+      "id": "bitcoin-price-comparison",
+      "prompt": "What is the current Bitcoin price in USD and how does it compare to 7 days ago?",
+      "expectedKeywords": [
+        "Bitcoin",
+        "BTC",
+        "USD",
+        "price",
+        "week"
+      ]
+    },
+    {
+      "id": "weather-forecast-tokyo",
+      "prompt": "What is the current weather and 3-day forecast for Tokyo?",
+      "expectedKeywords": [
+        "Tokyo",
+        "weather",
+        "temperature",
+        "forecast",
+        "humidity"
+      ]
+    }
+  ]
+}

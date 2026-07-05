@@ -1,0 +1,1590 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2 }} variant="outlined">
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          Bike4Mind™ Changelog
+        </Typography>
+      </Card>
+
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+         On Deck
+        </Typography>
+        <List>
+          <ListItem> - Huge code refactor to support customizing Bike4Mind for enterprise clients</ListItem>
+          <ListItem> - Much better daily, weekly and other analytics</ListItem>
+          <ListItem> - Dynamic Charting</ListItem>
+          <ListItem> - QuestMaster to handle longer and more complex operations</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+
+  <Typography level="h3" sx={{ m: 2 }}>
+        Nov 20 - Nov 26
+      </Typography>
+      <List>
+        <ListItem>- Implemented submodule architecture for b4m-core, including SSH support and core component migration.</ListItem>
+        <ListItem>- Moved several components to b4m-core including utils, scripts, and common services.</ListItem>
+        <ListItem>- Fixed notebook operations (clone, fork, and snip functionality) and integrated with session services.</ListItem>
+        <ListItem>- Enhanced authentication system with improved passport login and session management.</ListItem>
+        <ListItem>- Cleaned up legacy code by removing old directories in lumina5 and deprecated tool model.</ListItem>
+        <ListItem>- Fixed preview deployment issues for both lumina and b4m-core projects.</ListItem>
+        <ListItem>- Resolved infinite page load bug for non-dev users and various login-related issues.</ListItem>
+        <ListItem>- Updated documentation including team credits page and readme for submodules.</ListItem>
+      </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+
+  <Typography level="h3" sx={{ m: 2 }}>
+    Nov 18 - Nov 19
+  </Typography>
+  <List>
+    <ListItem>- Fixed image replies taking a long pause before the image is displayed, improving user experience.</ListItem>
+    <ListItem>- Updated the UI for various elements, including the side navigation and chat interface.</ListItem>
+    <ListItem>- Added new admin settings for displaying CTM and CTA header, defaulting to false.</ListItem>
+    <ListItem>- Improved type checking and error handling throughout the application.</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    Nov 15 - Nov 17
+  </Typography>
+  <List>
+    <ListItem>- Enhanced the knowledge viewer, fixing display issues for PIP view.</ListItem>
+    <ListItem>- Implemented real-time updates for user invites in the inbox.</ListItem>
+    <ListItem>- Improved the notebook layout and fixed various UI elements.</ListItem>
+    <ListItem>- Fixed issues with prompt metadata and improved overall UI responsiveness.</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    Nov 13 - Nov 14
+  </Typography>
+  <List>
+    <ListItem>- Enhanced file management capabilities, including improvements to the knowledge viewer.</ListItem>
+    <ListItem>- Updated user interface for better responsiveness and user experience.</ListItem>
+    <ListItem>- Improved data handling and display for enterprise applications.</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    November 2 - November 13, 2024
+  </Typography>
+  <List>
+    <ListItem>- Enhanced image handling in UserPrompt, showing images upon upload to session</ListItem>
+    <ListItem>- Implemented real-time updates for File List and Knowledge Viewer</ListItem>
+    <ListItem>- Improved file sharing capabilities and UI for shared sessions</ListItem>
+    <ListItem>- Implemented refresh token functionality for improved authentication</ListItem>
+    <ListItem>- Added ability to add shared knowledge to own notebooks</ListItem>
+    <ListItem>- Improved side navigation and chat UI</ListItem>
+    <ListItem>- Enhanced file management with separate tabs for owned and shared files</ListItem>
+    <ListItem>- Implemented feature flags for selective functionality deployment</ListItem>
+    <ListItem>- Improved responsive design for mobile devices</ListItem>
+    <ListItem>- Enhanced user activity reporting and analytics</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    October 22 - November 1, 2024
+  </Typography>
+  <List>
+    <ListItem>- Enhanced file sharing capabilities for shared sessions</ListItem>
+    <ListItem>- Added analyst admin settings for better management</ListItem>
+    <ListItem>- Improved UI for AI settings modal and various action buttons</ListItem>
+    <ListItem>- Added support for uploading files via URL (excluding Google Drive for now)</ListItem>
+    <ListItem>- Improved performance of translations loading</ListItem>
+    <ListItem>- Enhanced bulk delete functionality with improved UX</ListItem>
+    <ListItem>- Added new counters for better analytics</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    October 10 - October 19, 2024
+  </Typography>
+  <List>
+    <ListItem>- Implemented side navigation panel improvements for better user experience</ListItem>
+    <ListItem>- Enhanced mobile layout with toggle sidenav icon</ListItem>
+    <ListItem>- Integrated Okta OIDC for improved authentication</ListItem>
+    <ListItem>- Implemented paginated sessions for better performance</ListItem>
+    <ListItem>- Enhanced file browser with multiple file select capability</ListItem>
+    <ListItem>- Added file storage bar to file browser for better storage management</ListItem>
+    <ListItem>- Enhanced splash notebook screen with improved margins</ListItem>
+    <ListItem>- Optimized configuration data fetching for improved performance</ListItem>
+    <ListItem>- Fixed various UI/UX issues and console warnings</ListItem>
+    <ListItem>- Improved error handling and logging for better debugging</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+<Typography level="h3" sx={{ m: 2 }}> October 1 - October 11, 2024 </Typography>
+<List>
+<ListItem>- Implemented new sidenav features, including sorting for knowledge, favorite sessions, and actions for notebook items</ListItem>
+<ListItem>- Enhanced file browser UI with fixed height grid items and improved hover effects</ListItem>
+<ListItem>- Added support for uploading files via URL, including PDF handling</ListItem>
+<ListItem>- Improved session management with paginated sessions and shared notebooks functionality</ListItem>
+<ListItem>- Implemented Okta OIDC integration for enhanced authentication</ListItem>
+<ListItem>- Improved user prompt handling with better line break formatting</ListItem>
+<ListItem>- Added image generation capabilities based on user prompts</ListItem>
+<ListItem>- Implemented smart chunker for improved document processing</ListItem>
+<ListItem>- Various UI/UX improvements, including fixes for mobile layout and responsive design</ListItem>
+<ListItem>- Enhanced error handling and logging for better debugging and user experience</ListItem>
+</List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    September 21 - September 30, 2024
+  </Typography>
+  <List>
+    <ListItem>- Enhanced UI with new logos for login and favicon</ListItem>
+    <ListItem>- Improved file upload functionality with a new FileUploader UI</ListItem>
+    <ListItem>- Added a new file browser prototype with search, filtering, and icon view options</ListItem>
+    <ListItem>- Implemented notebook cloning feature for easier content replication</ListItem>
+    <ListItem>- Introduced a bug report system for improved user feedback</ListItem>
+    <ListItem>- Enhanced user management with fixes for user updates and invite flow improvements</ListItem>
+    <ListItem>- Optimized chat completion for better performance</ListItem>
+    <ListItem>- Added confirmation modals for critical actions to prevent accidental operations</ListItem>
+    <ListItem>- Increased timeout for notebook summarization to improve reliability</ListItem>
+    <ListItem>- Various UI fixes and improvements across the platform</ListItem>
+    <ListItem>- Enhanced error handling with more verbose error codes</ListItem>
+    <ListItem>- Updated branding from GrokTool to Bike4mind throughout the application</ListItem>
+  </List>
+</Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+  <Typography level="h3" sx={{ m: 2 }}>
+    Sep 13 - Sep 20, 2024
+  </Typography>
+  <List>
+    <ListItem>- Improved file upload functionality with a new FileUploader UI and drag-and-drop feature</ListItem>
+    <ListItem>- Enhanced user experience with ability to stop incoming replies</ListItem>
+    <ListItem>- Implemented user lastActiveAt timestamp, updated via websocket</ListItem>
+    <ListItem>- Added "What's New" button functionality</ListItem>
+    <ListItem>- Introduced model rankings by SOTA (State of the Art)</ListItem>
+    <ListItem>- Improved left-hand navigation with tag updates</ListItem>
+    <ListItem>- Implemented auto-tagging for sessions with user settings</ListItem>
+    <ListItem>- Added ability to manually add tags and mark favorites</ListItem>
+    <ListItem>- Introduced user setting for visible lines in the interface</ListItem>
+    <ListItem>- Fixed bug where user prompts and responses were being rendered twice</ListItem>
+    <ListItem>- Implemented collapsing of long replies for better readability</ListItem>
+    <ListItem>- Enhanced search functionality to include searching by summary and tags</ListItem>
+    <ListItem>- Updated default model selection</ListItem>
+  </List>
+</Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 13
+        </Typography>
+        <List>
+          <ListItem> - Fixed an authentication error caused by Google Drive integration, improving user login experience.</ListItem>
+          <ListItem> - Resolved an issue where image generation was not working.</ListItem>
+          <ListItem> - Fixed vectorization on small files that don't require chunking, enhancing processing efficiency.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 12
+        </Typography>
+        <List>
+          <ListItem> - Updated abilities configuration, which also fixes notebook sharing functionality.</ListItem>
+          <ListItem> - Admin Settings some UI enhancements with Chips.</ListItem>
+          <ListItem> - Added chip UI elements to the admin panel for better navigation.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 8
+        </Typography>
+        <List>
+          <ListItem> - Improved initial dashboard page load times, enhancing user experience.</ListItem>
+          <ListItem> - Optimized data fetching by using `isInitialLoading` instead of `isFetching`.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 2
+        </Typography>
+        <List>
+          <ListItem> - Implemented infinite scroll pagination for smoother navigation.</ListItem>
+          <ListItem> - Upgraded banners for improved visual appeal.</ListItem>
+          <ListItem> - Reset Account Overview page number upon organization change to prevent navigation issues.</ListItem>
+        </List>
+      </Card>
+
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 14
+        </Typography>
+        <List>
+          <ListItem> - Updated the admin panel with new chip UI elements for better user experience.</ListItem>
+          <ListItem> - Fixed issues related to vectorizing small files without chunking.</ListItem>
+        </List>
+      </Card>
+
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        July 31
+      </Typography>
+      <List>
+        <ListItem> - Fixed issues with AI IQ North America market data.</ListItem>
+        <ListItem> - Improved "Roll dice" user experience with optimistic UI updates.</ListItem>
+        <ListItem> - Added "Regenerate Response" feature for better usability.</ListItem>
+        <ListItem> - Implemented password safety improvements.</ListItem>
+        <ListItem> - Fixed sidenav width issues for better layout consistency.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        July 30
+      </Typography>
+      <List>
+        <ListItem> - Implemented text search highlight feature for easier content navigation.</ListItem>
+        <ListItem> - Changed terminology from "Tools" to "Projects" in translation files for consistency.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        July 29
+      </Typography>
+      <List>
+        <ListItem> - Improved session auto-renaming for better session management.</ListItem>
+        <ListItem> - Added a close button on the Knowledge viewer for enhanced usability.</ListItem>
+        <ListItem> - Fixed sidenav menu toggle issues to improve navigation.</ListItem>
+        <ListItem> - Fixed mobile sidenav experience for better responsiveness.</ListItem>
+        <ListItem> - Made translations work on MDX pages to support multiple languages.</ListItem>
+        <ListItem> - Rate-limited API endpoints for LLM routes to enhance security.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        July 27
+      </Typography>
+      <List>
+        <ListItem> - Implemented GrokTool UI fixes to enhance user experience.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        July 26
+      </Typography>
+      <List>
+        <ListItem> - Persisted state for pinned sidenav and switched to Zustand for state management.</ListItem>
+      </List>
+    </Card>
+
+<Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        June 30
+      </Typography>
+      <List>
+        <ListItem> - Implemented a possible fix for the CORS error to enhance API reliability.</ListItem>
+        <ListItem> - Fixed and refactored Admin Users Tabs for better user management.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        June 29
+      </Typography>
+      <List>
+        <ListItem> - Refactored LLM processing to speed up streamed completions and moved LLM processes to long-running jobs for better performance.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        June 27
+      </Typography>
+      <List>
+        <ListItem> - Made UI improvements to the Profile Modal for a better user experience.</ListItem>
+        <ListItem> - Minor refactor on the GenAI component for code optimization.</ListItem>
+        <ListItem> - Updated input sizes on the GrokTool login page for better accessibility.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        June 26
+      </Typography>
+      <List>
+        <ListItem> - Changed the GenAI icon for a refreshed look.</ListItem>
+        <ListItem> - Tweaked status messages for clarity.</ListItem>
+        <ListItem> - Cleaned up side navigation styles and fixed tool deletion issues.</ListItem>
+        <ListItem> - Updated Profile and Settings tabs with new features and UI improvements.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        June 25
+      </Typography>
+      <List>
+        <ListItem> - Prepared messages before sending to the Anthropic backend for better processing.</ListItem>
+        <ListItem> - Made minor adjustments to AI Chipsets charts for improved data visualization.</ListItem>
+      </List>
+    </Card>
+
+    <Card variant="outlined" sx={{ mb: 2 }}>
+      <Typography level="h3" sx={{ m: 2 }}>
+        Mar 13
+      </Typography>
+      <CustomImage src="/images/mobileloginpage.png" width={300} height={400} />
+      <List>
+        <ListItem> - Updated the mobile login page for improved readability, as part of an ongoing effort to enhance mobile usability.  </ListItem>
+      </List>
+    </Card>
+
+
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Mar 13
+        </Typography>
+        <CustomImage src="/images/mobileloginpage.png" width={300} height={400} />
+        <List>
+          <ListItem> - Updated the mobile login page for improved readability, as part of an ongoing effort to enhance mobile usability.  </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Mar 6
+        </Typography>
+        <CustomImage src="/images/guidebutton.png" width={450} height={400} />
+        <List>
+          <ListItem> - Added a guide button at the bottom right corner of the page for easy access. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Mar 4
+        </Typography>
+        <CustomImage src="/images/notebookchange.png" width={600} height={450} />
+        <List>
+          <ListItem> - Shifted the "Download Notebook" option to the NotebookItem section. </ListItem>
+          <ListItem> - Eliminated the inert filter option from the session's top dropdown menu. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 29
+        </Typography>
+        <CustomImage src="/images/outofcredits.png" width={450} height={350} />
+        <List>
+          <ListItem> - Added a Pricing page and updated the voices MDX sheet for enhanced information access. </ListItem>
+          <ListItem> - Displays a warning above the input field based on the user's remaining credits: a red warning icon for zero credits and a yellow icon for credits above zero but below a specified threshold. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 26
+        </Typography>
+        <CustomImage src="/images/dotmenu.png" width={900} height={450} />
+        <List>
+          <ListItem> - Introduced a new 3 Dot menu to the top bar and resolved icon-text overlap issues on the top bar during knowledge viewing. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 23
+        </Typography>
+        <CustomImage src="/images/forgetpassword.png" width={700} height={450} />
+        <List>
+          <ListItem> - Introduced a password reset feature, now accessible from the login page for user convenience.  </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 21
+        </Typography>
+        <List>
+          <ListItem> - Updated Manual now Guide  </ListItem>
+          <ListItem> - Updated About now Information </ListItem>
+          <ListItem> - Updated Guide with new UI </ListItem>
+          <ListItem> - Updated Information with new UI </ListItem>
+          <ListItem> - Updated UI for Roadmap FAQ</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 20
+        </Typography>
+        <CustomImage src="/images/toolbarmenu.png" width={350} height={450} />
+        <List>
+          <ListItem> - Moved the hide and show toolbar functionality to a button located to the right of the notebooks. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 15
+        </Typography>
+        <CustomImage src="/images/reducechat.png" width={700} height={450} />
+        <List>
+          <ListItem> - Narrowed chat interface in notebooks and optimized the Game of Life display for a more streamlined page fit.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 8
+        </Typography>
+        <CustomImage src="/images/socialmediabuttons.png" width={650} height={450} />
+        <List>
+          <ListItem> - Social media login options are now conveniently located at the bottom of the login page for enhanced accessibility.</ListItem>
+          <ListItem> - The Manual Page has been redesigned with an improved UI to enhance visibility.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 2
+        </Typography>
+        <CustomImage src="/images/newloginpage.png" width={500} height={450} />
+        <List>
+          <ListItem> - The login page has undergone a significant UI overhaul.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Feb 1
+        </Typography>
+        <CustomImage src="/images/changelogmdx.png" width={500} height={450} />
+        <List>
+          <ListItem> - The changelog now features additional UI enhancements, setting a trend for all MDX files.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 30
+        </Typography>
+        <CustomImage src="/images/calltoactionupdate.png" width={250} height={500} />
+        <List>
+          <ListItem> - Call to Action (CTA) buttons have been updated with new vertical scrolling functionality.</ListItem>
+          <ListItem> - Buttons have been redesigned to be slimmer, allowing them to fit in a single line. </ListItem>
+          <ListItem> - The larger Call to Action buttons can now be dismissed.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 29
+        </Typography>
+        <CustomImage src="/images/creditsettings.png" width={600} height={300} />
+        <List>
+          <ListItem> - Fixed an issue on the login page where some users were encountering a blank screen; this should no longer occur.</ListItem>
+          <ListItem> - OpenAI models have been updated. </ListItem>
+          <ListItem> - You can now view your credit balance in the settings. </ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 27
+        </Typography>
+        <CustomImage src="/images/CSVUI.png" width={700} height={450} />
+        <List>
+          <ListItem> - The KnowledgeViewer, previously hidden due to recent UI updates, has been fixed and is now accessible.</ListItem>
+          <ListItem> - CSV files viewed in the KnowledgeViewer now feature an enhanced UI.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 24
+        </Typography>
+        <List>
+          <ListItem> - An additional color update has been implemented in the advanced settings modal to improve readability.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 23
+        </Typography>
+        <List>
+          <ListItem> - Revamped the user deletion process in the admin tool for enhanced speed and efficiency.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 21
+        </Typography>
+        <List>
+          <ListItem> - Implemented numerous backend optimizations to significantly improve page and prompt loading speeds...</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 19
+        </Typography>
+        <CustomImage src="/images/docx.png" width={600} height={550} />
+        <List>
+          <ListItem> - Introducing DOCX support – a major update for GrokTool...</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 15
+        </Typography>
+        <List>
+          <ListItem> - The admin menu now offers enhanced functionality, allowing for the review and editing of Ban, Moderate, Groups, Tags, Level, Credits, and Subscription dates...</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 10
+        </Typography>
+        <CustomImage src="/images/promptsetting.png" width={300} height={500} />
+        <List>
+          <ListItem> - Inviting now accepts email and username</ListItem>
+          <ListItem> - Prompt Settings are now in their own menu modal...</ListItem>
+        </List>
+      </Card>
+
+       <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 9
+        </Typography>
+        <CustomImage src="/images/Mainpageui2.png" width={200} height={550} />
+        <List>
+          <ListItem> - Revised the default permission settings: 'Read' permission is now applied by default...</ListItem>
+          <ListItem> - Implemented minor UI updates on the main page...</ListItem>
+          <ListItem> - Resolved an issue causing infinite reloading when the KnowledgeViewer was open...</ListItem>
+          <ListItem> - Updated the Policy page and added some new images.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 8
+        </Typography>
+        <CustomImage src="/images/tooldropdown2.png" width={400} height={300} />
+        <List>
+          <ListItem> - Removed the 'Save' button from the bottom of the session interface...</ListItem>
+          <ListItem> - Updated the Terms of Service page and added some new images.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 7
+        </Typography>
+        <List>
+          <ListItem> - Adjusted the Side Bar Navigation UI to ensure all elements are properly aligned...</ListItem>
+          <ListItem> - Modified the Tools accordion button on the Side Navigation...</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 6
+        </Typography>
+        <List>
+          <ListItem> - Tons of small bug/UI fixes for Sharing</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 4
+        </Typography>
+        <List>
+          <ListItem> - Knowledge Viewer now has its own local cache, and updates as it changes</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Jan 2
+        </Typography>
+        <CustomImage src="/images/TextViewer.webp" width={800} height={450} />
+        <List>
+          <ListItem> - TextViewer got a style upgrade</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 29
+        </Typography>
+        <List>
+          <ListItem> - Robust enterprise-level Notebook, Knowledge, and Tool Sharing</ListItem>
+          <ListItem> - Small UI fixes for sharing</ListItem>
+            <ListItem> - Tools Modal is no longer hyper and only pops up if you tap on Tools in the Accordion and you have zero tools</ListItem>
+            <ListItem> - Logout button is now visible</ListItem>
+            <ListItem> - Default expiration is 30 days</ListItem>
+            <ListItem> - Permissions are now checkboxes</ListItem>
+          <ListItem> - Fixed 400 errors with invites</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 27
+        </Typography>
+        <CustomImage src="/images/KnowledgeUI1.webp" width={800} height={450} />
+        <CustomImage src="/images/KnowledgeUI2.webp" width={800} height={450} />
+        <CustomImage src="/images/KnowledgeUI3.webp" width={800} height={450} />
+        <List>
+          <ListItem> - Whole new KnowledgeViewer feature - Vertical, Horizontal and Picture in Picture Modes - includes tabs for each file</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 24
+        </Typography>
+        <CustomImage src="/images/SidebarUI.png" width={200} height={450} />
+        <List>
+          <ListItem> - Side navigational bar has taken on a lot of the UI elements from the top navbar to free up space!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 18 - Dec 22
+        </Typography>
+        <List>
+          <ListItem> - Fixed sticky prompt bug</ListItem>
+          <ListItem> - Make changing temperature easier UX</ListItem>
+          <ListItem> - Cleaned up the frequency and presence penalty UI as well</ListItem>
+          <ListItem> - Tightened up all of the advanced settings design</ListItem>
+          <ListItem> - Game of life is better formatted</ListItem>
+          <ListItem> - Added Toasters for Tool Create, Delete, Update</ListItem>
+          <ListItem> - Added a way to delete bits of a notebooks history, toaster included!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 14 - Dec 15
+        </Typography>
+        <List>
+          <ListItem> - Mega JSON file chunking and vectorizing</ListItem>
+          <ListItem> - Robust enterprise-level Notebook, Knowledge, and Tool Sharing</ListItem>
+          <ListItem> - Organizations and Groups</ListItem>
+          <ListItem> - Added Support for Charting Components</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 14 - Dec 15
+        </Typography>
+        <List>
+          <ListItem> - Mega JSON file chunking and vectorizing</ListItem>
+          <ListItem> - Robust enterprise-level Notebook, Knowledge, and Tool Sharing</ListItem>
+          <ListItem> - Organizations and Groups</ListItem>
+          <ListItem> - Added Support for Charting Components</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 13
+        </Typography>
+        <List>
+          <ListItem> - Implemented a Custom 404 page</ListItem>
+          <ListItem> - Updated message sending functionality to use email instead of username.</ListItem>
+          <ListItem> - Revised and updated the README documentation.</ListItem>
+          <ListItem> - Fixed the UI of the chat field, addressing sizing and color for better balance.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 11
+        </Typography>
+        <List>
+          <ListItem> - Introducing "Game of Life" for entertainment while waiting for prompts to load.</ListItem>
+          <ListItem> - Fixed server-side loading triggers for message sending.</ListItem>
+          <ListItem> - Enhanced loading states for notebooks, knowledge, and tools to improve speed.</ListItem>
+          <ListItem> - Knowledge UI updates:</ListItem>
+            <ListItem> - Save button now enables only if the user has made edits.</ListItem>
+            <ListItem> - Save button is disabled with a spinner during the update request.</ListItem>
+            <ListItem> - A toaster notification now appears upon successful save.</ListItem>
+            <ListItem> - Added spinner and toaster for file deletion.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 10
+        </Typography>
+        <List>
+          <ListItem> - Added a file storage limit system to protect against any storage pirates!</ListItem>
+          <ListItem> - Fixed a client side performance bug that bogged down the client with large notebook sessions</ListItem>
+          <ListItem> - Fixes for TXT files - saving, deleting, and deletions of associated chunks</ListItem>
+          <ListItem> - Terms of Service added</ListItem>
+          <ListItem> - When the user asks in a TXT modal for a prompt that is likely to create an image a detailed image prompt is automatically generated</ListItem>
+          <ListItem> - Million on Mars JSON chunking is supported</ListItem>
+          <ListItem> - Next JS warming has been added to make the site faster</ListItem>
+          <ListItem> - Charting and Graph library has been selected and support starting up</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 8
+        </Typography>
+        <List>
+          <ListItem> - Introducing Our New Terms of Service! 📜</ListItem>
+          <ListItem> - In our continuous efforts to foster trust and transparency, we're excited to announce the launch of our brand spanking new Terms of Service (ToS)!</ListItem>
+          <ListItem> - These ToS outline your rights and responsibilities, and our commitment to your privacy and data. We encourage all users to peruse these terms at your leisure—it's not just legal mumbo jumbo, we promise!</ListItem>
+          <ListItem> - To access the new Terms, we've made it as readable as pie. 🥧</ListItem>
+          <ListItem> - Got questions or feedback about the ToS? We're all ears! Reach out.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 7
+        </Typography>
+        <CustomImage src="/images/imagedownload.webp" width={800} height={450} />
+        <List>
+          <ListItem> - Bug Fixes Galore!</ListItem>
+          <ListItem> - Add copy image and download image button to the image modal.</ListItem>
+          <ListItem> - Fixed Edit Tool UI.</ListItem>
+          <ListItem> - Fixed Text File data to display correctly.</ListItem>
+          <ListItem> - An issue with knowledge files going missing when uploaded is now fixed!</ListItem>
+          <ListItem> - PDF type knowledges now have a content preview/edit!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 6
+        </Typography>
+        <List>
+          <ListItem> - Quality Of Life Changes and Tool Saving!</ListItem>
+          <ListItem> - Hiding the Nav bar will now take you back to your original tab instead of always defaulting to "Notebook".</ListItem>
+          <ListItem> - In the upper right in advanced settings, you will now notice a new button which will save your current "Tools".</ListItem>
+          <ListItem> - General Library cleanup to help speed up GrokTool.</ListItem>
+          <ListItem> - When chunking or vectorizing files, you will now see a loading indicator!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 5
+        </Typography>
+        <List>
+          <ListItem> - Enhanced Image Interaction! 🌟</ListItem>
+          <ListItem> - Download at a Click: Say goodbye to cumbersome processes. Now, with just a simple click, you can download any generated image straight to your device.</ListItem>
+          <ListItem> - Copy with Ease: Need to quickly share an image? We've got you covered! Our new copy feature allows you to instantly copy any generated image to your clipboard.</ListItem>
+          <ListItem> - Enlarge and Admire: Discover the details like never before! Our latest update lets you enlarge any generated image, providing a closer look at the fine details that make each creation unique.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 4
+        </Typography>
+        <List>
+          <ListItem> - PDFs are now viewable inside the Knowledge Modal - woot that shortcoming did not last long!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Dec 1
+        </Typography>
+        <CustomImage src="/images/LargePDFs.png" width={800} height={450} />
+        <List>
+          <ListItem> - File uploading and PDF processing got some love - AND NOW finally you can grok PDFs!</ListItem>
+          <ListItem> - We need to update the Chunking and Vectorizing client side to give some feedback after clicking the button. For now either be patient or spam click, either way it does not hurt.</ListItem>
+          <ListItem> - The viewing of PDFs inside of the Knowledge Modal is just a bare PoC, needs to be replaced with an actual PDF viewer</ListItem>
+          <ListItem> - Loads of non-user facing infrastructure shipped yesterday and today</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 29
+        </Typography>
+        <CustomImage src="/images/MultipleDALLE3.webp" width={1275} height={550} />
+        <CustomImage src="/images/OpenInNewTab.webp" width={600} height={350} />
+        <List>
+          <ListItem> - We now support multiple DALLE3 images</ListItem>
+          <ListItem> - Renaming of Notebooks has been fixed again</ListItem>
+          <ListItem> - Aspect ratio of images is being honored in the chat history, please use the right-click option and open your images in a new tab</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 28
+        </Typography>
+        <CustomImage src="/images/MultipleDALLE2.webp" width={1275} height={812} />
+        <CustomImage src="/images/OptionsDALLE3.png" width={1260} height={200} />
+        <List>
+          <ListItem> - DALLE 2 and DALLE 3 image integration - super fun!</ListItem>
+          <ListItem> - Open the Advanced Settings after choosing DALLE2 or DALLE 3 to get access to sizes, quality and style</ListItem>
+          <ListItem> - Tip: Use GPT 4 to help craft your image prompt and then copy and paste that again and click on DALLE3 or DALLE2 to generate your images</ListItem>
+          <ListItem> - Automatic recognition of requests for image prompts and for historical context - coming soon!</ListItem>
+          <ListItem> - PROGRESS: Even more infrastructure for large files has been completed. Some errors persist and you might need to re-upload</ListItem>
+          <ListItem> - BUG: The prompt subsystem does not quite know how to read the contents of the text part of the PDF - coming very soon</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 27
+        </Typography>
+        <List>
+          <ListItem> - New spinner for giving you status on the servers' thoughts</ListItem>
+          <ListItem> - Updated credits page and credit for packages used</ListItem>
+          <ListItem> - Voice recording got some polish on detecting silence</ListItem>
+          <ListItem> - Behind the scenes work on grooming and normalizing our models</ListItem>
+          <ListItem> - Behind the scenes work on storing large files and images at S3</ListItem>
+          <ListItem> - Bug Fixes: Session Renaming works again, chat replies for history fixed, Tool Help has a proper image now</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 25
+        </Typography>
+        <List>
+          <ListItem> - Mailer Lite integrated and completed for the Subscription page</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 23
+        </Typography>
+        <List>
+          <ListItem> - Auto naming now supported for new files via links</ListItem>
+          <ListItem> - New Admin Users, Admin Page, Users Page</ListItem>
+          <ListItem> - Default to dark mode, and lots of UI fixes</ListItem>
+          <ListItem> - When deleting files, if in workbench - update the workbench</ListItem>
+          <ListItem> - Implemented S3 storage for files, chunks, PDFs and ready for images</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 22
+        </Typography>
+        <CustomImage src="/images/ThreeWays.png" width={419} height={407} />
+        <List>
+          <ListItem> - Ingest from URL links</ListItem>
+          <ListItem> - Create new file and clone</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 21
+        </Typography>
+        <CustomImage src="/images/MultipleFileUploads.png" width={710} height={497} />
+        <List>
+          <ListItem> - Woot! Now Notebooks may be shared globally for read and for writing!</ListItem>
+          <ListItem> - Multiple File Uploads working</ListItem>
+          <ListItem> - Fixed a bug preventing Tool creation</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 20
+        </Typography>
+        <List>
+          <ListItem> - Sidebar UI fixes, fixed a bug on autoname being too manic</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 19
+        </Typography>
+        <List>
+          <ListItem> - Refactored the code base to have an explicit /server /client /common layout</ListItem>
+          <ListItem> - Consolidated all of the AI model facing code to use /common/models.ts</ListItem>
+          <ListItem> - Fixed the grammar in the suggested ideas</ListItem>
+          <ListItem> - Created a Tool Help Modal</ListItem>
+          <ListItem> - Created a Sharing Modal and added Tooltips to the Knowledge Modal</ListItem>
+          <ListItem> - Moar Tooltips</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 18
+        </Typography>
+        <List>
+          <ListItem> - Globally share and globally write are supported for Knowledge, more granular sharing and groups - soon</ListItem>
+          <ListItem> - AutoName for notebooks with the name "New Notebook" get a new name based on their content</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 17
+        </Typography>
+        <List>
+          <ListItem> - Login page gets the nice SVG logo, various UI fixed</ListItem>
+          <ListItem> - Some resilience for clients while losing connectivity</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 16
+        </Typography>
+        <List>
+          <ListItem> - Welcome splash component</ListItem>
+          <ListItem> - Multiple LLM responses supported</ListItem>
+          <ListItem> - Voice to Text prompting polished</ListItem>
+          <ListItem> - Knowledge modal implemented</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 15
+        </Typography>
+        <List>
+          <ListItem> - Fixed bug that renaming sessions cleared prompts</ListItem>
+          <ListItem> - Design colors fixed</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 14
+        </Typography>
+        <List>
+          <ListItem> - More documentation - test plan and FAQ added</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 12
+        </Typography>
+        <List>
+          <ListItem> - CASL Ability tech stood up - foundational for sharing</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 9
+        </Typography>
+        <List>
+          <ListItem> - Chat streaming is working again!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 8
+        </Typography>
+        <List>
+          <ListItem> - Demo key added so all beta users can use GrokTool without needing to add their own API Key</ListItem>
+          <ListItem> - Explicit authentication added so that some pages are behind login and some are public</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 7
+        </Typography>
+        <List>
+          <ListItem> - Disable the Vector and Chunk files if already performed</ListItem>
+          <ListItem> - Top bar styling, removed the hard-coded Erik pic</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 5
+        </Typography>
+        <List>
+          <ListItem> - Updated the Login and Register Screens with style</ListItem>
+          <ListItem> - Implemented a basic invite code system</ListItem>
+          <ListItem> - Created a pop-up for the Help system</ListItem>
+          <ListItem> - Created a user settings context</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 4
+        </Typography>
+        <List>
+          <ListItem> - Documentation catch-up</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 3
+        </Typography>
+        <CustomImage src="/images/JoyCard.png" width={600} height={400} />
+        <List>
+          <ListItem> - Improvements to the Splash Page, trying out the Joy Card component</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 2
+        </Typography>
+        <List>
+          <ListItem> - The Prompt Context is now very well managed between Settings, User Prompt, System, Content, and History</ListItem>
+          <ListItem> - Added MDX, we can now drop in Components on the Mark-up pages - wicked!</ListItem>
+          <ListItem> - Created Conway's Game of Life and check it out as a dropped-in Component here on this markdown page!</ListItem>
+          <ListItem> - Assuming GameOfLife is a visual or interactive element that wouldn't be represented in this static format</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Nov 1
+        </Typography>
+        <List>
+          <ListItem> - Chat input area is an auto-expanding multi-line input control now</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 30
+        </Typography>
+        <List>
+          <ListItem> - Transcribe: Voice to Text to Prompt is working like a boss!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 26
+        </Typography>
+        <List>
+          <ListItem> - Retrieval Augmented Generation (RAG) & Grokking is working!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 25
+        </Typography>
+        <List>
+          <ListItem> - SST Settings tweaked CI/CD working in practice</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 24
+        </Typography>
+        <List>
+          <ListItem> - Downloading of all files, notebooks, knowledge, and tools</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 23
+        </Typography>
+        <List>
+          <ListItem> - File uploading is working again</ListItem>
+          <ListItem> - Collapsing sidebar</ListItem>
+          <ListItem> - Updated the app logo and favicon</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 22
+        </Typography>
+        <List>
+          <ListItem> - Tools are now able to be created, saved, updated, and change their name</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 18
+        </Typography>
+        <List>
+          <ListItem> - Exposed the full set of LLM params from Client to Server</ListItem>
+          <ListItem> - Changed the user-facing Sessions to Notebooks, Files to Knowledge, and Fabrica to GrokTool</ListItem>
+          <ListItem> - Delete all Notebooks (Sessions) and Knowledge (Files) from profile modal</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 17
+        </Typography>
+        <List>
+          <ListItem> - Introduction of Seed for Ci/CD as well as SST orchestration of Lambda functions</ListItem>
+          <ListItem> - Chat box larger, filter on the Knowledge (Files) tab</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 10
+        </Typography>
+        <List>
+          <ListItem> - Profile modal added</ListItem>
+          <ListItem> - Data-driven list of API keys modal</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 3
+        </Typography>
+        <List>
+          <ListItem> - Streamed chat completions</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 2
+        </Typography>
+        <List>
+          <ListItem> - Authentication formally added to the project</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Oct 1
+        </Typography>
+        <List>
+          <ListItem> - Prettier automatic syntax highlighting</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 27
+        </Typography>
+        <List>
+          <ListItem> - Added the random die button</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 26
+        </Typography>
+        <List>
+          <ListItem> - Chat input gets focus by default, Highlander focus</ListItem>
+          <ListItem> - Added an AI button to have the /llm on or off depending on the state of this button so that you do not need to</ListItem>
+          <ListItem> - Added the history slider</ListItem>
+          <ListItem> - Cleaned up many bugs in the logic of assembling the chat history</ListItem>
+          <ListItem> - Fixed the user and roles bugs</ListItem>
+          <ListItem> - Now rendering the replies in markdown if it is not code</ListItem>
+          <ListItem> - Workbench component is alive, and supports files as chips, and uses that to produce prompt templates!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 25
+        </Typography>
+        <List>
+          <ListItem> - Solved the Chat Input Bug! It was because I used a component within a component - no good!</ListItem>
+          <ListItem> - Drove SessionMiddle to be JoyFul</ListItem>
+          <ListItem> - Added a scroll to bottom button</ListItem>
+          <ListItem> - Added Divider between Profile Name and Gear</ListItem>
+          <ListItem> - Loads of styling all over</ListItem>
+          <ListItem> - All issues are now in GitHub issues</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 24
+        </Typography>
+        <List>
+          <ListItem> - Debugging of the Chat Input bug</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 23
+        </Typography>
+        <List>
+          <ListItem> - Implemented light / dark mode</ListItem>
+          <ListItem> - Drive the NavBar to be fully Joy</ListItem>
+          <ListItem> - Drive the SessionList to be fully Joy</ListItem>
+          <ListItem> - Drive the SessionListSessions to be fully Joy</ListItem>
+          <ListItem> - Drive the SessionListFiles to be fully Joy</ListItem>
+          <ListItem> - Drive the SessionTop to be Joy (Typography, IconButton)</ListItem>
+          <ListItem> - USE GRID - SessionBottom</ListItem>
+          <ListItem> - Keep the NavBar icons from shrinking when it gets skinny with some breakpoints</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 22
+        </Typography>
+        <List>
+          <ListItem> - Fun on my birthday</ListItem>
+          <ListItem> - Huge refactor over to Joy well underway:</ListItem>
+          <ListItem> - Re-write the current UI in the Joy Components</ListItem>
+          <ListItem> - Remove unused styles from the NavBar.module.css and SessionLayout.module.css</ListItem>
+          <ListItem> - Created the src/assets/icons folder and moving over all of the icons to there to be consistent</ListItem>
+          <ListItem> - Cleaned up theme colors and all client-side relative imports to use the @style to be much more maintainable</ListItem>
+          <ListItem> - NavBar and SessionLayout adjustments including USER GRID and USE STACK implementations</ListItem>
+          <ListItem> - Use of GRID and TABS for session layout and list</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 20
+        </Typography>
+        <List>
+          <ListItem> - Cleaned up more docs</ListItem>
+          <ListItem> - Finished refactoring the hard-coded "Erik" and "erik" out of various API calls, now using currentUser.name being passed around as userId and user. Tested and fixed some issues with updating sessions and files. All endpoints are now refactored away from using any hardcoded erik or Erik values.</ListItem>
+          <ListItem> - Start the ramp-up for Joy</ListItem>
+          <ListItem> - Got the NavBar all Joy-full</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 19
+        </Typography>
+        <List>
+          <ListItem> - Refactoring to use the User Context everywhere</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 18
+        </Typography>
+        <List>
+          <ListItem> - Researched, evaluated and settled on Joy UI</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 16
+        </Typography>
+        <List>
+          <ListItem> - Added a get Models endpoint & command</ListItem>
+          <ListItem> - Refactored the models choices in the chat UI</ListItem>
+          <ListItem> - Clicking on filenames now inserts at the cursor instead of wiping everything</ListItem>
+          <ListItem> - Cleaned up a bunch of logs</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 15
+        </Typography>
+        <List>
+          <ListItem> - Clicking on a Filename in the Filelist now is populated to the Chat input</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 14
+        </Typography>
+        <List>
+          <ListItem> - Added styling to all of the markdown pages</ListItem>
+          <ListItem> - Added Syntax Highlight and Language detection and a toggle for code view</ListItem>
+          <ListItem> - Added current prompt length and counted the past session character limit</ListItem>
+          <ListItem> - Tapping on a File in the Filelist to populate into the Chat Input Window</ListItem>
+          <ListItem> - Created a grammar system to be able to extract [Context:fileName] [History:-3] from the prompt in order to start getting into the deeper prompt engineering bits!</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 13
+        </Typography>
+        <List>
+          <ListItem> - Added the copy button to the session middle</ListItem>
+          <ListItem> - Adjusted colors to use our blue</ListItem>
+          <ListItem> - Added the download the session JSON button</ListItem>
+          <ListItem> - Setup the changelog tab</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 12
+        </Typography>
+        <List>
+          <ListItem> - Deeply Refactored SessionList to have distinct components for Sessions and Files</ListItem>
+          <ListItem> - Files are fully able to be uploaded and deleted</ListItem>
+          <ListItem> - Files can be added to the chat history via /more</ListItem>
+          <ListItem> - Refactored and created Confirm Action Modal</ListItem>
+          <ListItem> - Refactored to using Contexts for Sessions and Files</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 11
+        </Typography>
+        <List>
+          <ListItem> - File Pond fully working</ListItem>
+          <ListItem> - Fading Session names and the trashcan</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 8
+        </Typography>
+        <List>
+          <ListItem> - Sending of files via CURL working proving the backend</ListItem>
+          <ListItem> - File Pond Modal up and looking good</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 7
+        </Typography>
+        <List>
+          <ListItem> - Refactored the current session</ListItem>
+          <ListItem> - Decided on using File Pond</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Sep 6
+        </Typography>
+        <List>
+          <ListItem> - Research on File Uploading Techniques</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 30
+        </Typography>
+        <List>
+          <ListItem> - Deletion of Sessions</ListItem>
+          <ListItem> - Created a Delete Modal</ListItem>
+          <ListItem> - Updating the current session</ListItem>
+          <ListItem> - Display the current session id</ListItem>
+          <ListItem> - Fixed the routing problems</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 29
+        </Typography>
+        <List>
+          <ListItem> - Storing of Sessions in the Mongo DB</ListItem>
+          <ListItem> - Loads of refactoring to make the client and server talk to each other on Sessions</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 26
+        </Typography>
+        <List>
+          <ListItem> - Switching between sessions</ListItem>
+          <ListItem> - Created a Session context</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 25
+        </Typography>
+        <List>
+          <ListItem> - Editing the Session Name</ListItem>
+          <ListItem> - Loads of notes, issues, added to the markup area</ListItem>
+          <ListItem> - Setup markdown and content system</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 24
+        </Typography>
+        <List>
+          <ListItem> - New Session feature</ListItem>
+          <ListItem> - Multiple Sessions</ListItem>
+          <ListItem> - Switching between Sessions</ListItem>
+          <ListItem> - SessionList comes alive</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 22
+        </Typography>
+        <List>
+          <ListItem> - Inline model choosing between 3.5 and 4 is looking slick</ListItem>
+          <ListItem> - Chat context history is sent and stored in Mongo</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 14
+        </Typography>
+        <List>
+          <ListItem> - Local Mongo DB up and running</ListItem>
+          <ListItem> - Backed off of Auth</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 12
+        </Typography>
+        <List>
+          <ListItem> - Started to add auth</ListItem>
+          <ListItem> - Colored OOB messages</ListItem>
+          <ListItem> - Usage stats added to /llm queries</ListItem>
+          <ListItem> - Lotto and Roll refactored</ListItem>
+          <ListItem> - SessionBottom refactored</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 11
+        </Typography>
+        <List>
+          <ListItem> - Got jest unit tests up and running</ListItem>
+          <ListItem> - A sample unit test</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 10
+        </Typography>
+        <List>
+          <ListItem> - Support OpenAI error codes to the client</ListItem>
+          <ListItem> - Open AI key is obfuscated</ListItem>
+          <ListItem> - Feedback when an LLM query is started</ListItem>
+          <ListItem> - Using GPT 3.5 over Da Vinci</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 9
+        </Typography>
+        <List>
+          <ListItem> - Implemented the basic Q&A feature via the /llm command</ListItem>
+          <ListItem> - Server refactored into API files</ListItem>
+          <ListItem> - Style changing through to Sessions</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 8
+        </Typography>
+        <List>
+          <ListItem> - Implemented /lotto feature</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 4
+        </Typography>
+        <List>
+          <ListItem> - Implemented /roll dice feature</ListItem>
+          <ListItem> - Setup node server</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 3
+        </Typography>
+        <List>
+          <ListItem> - Absolute initial commit</ListItem>
+          <ListItem> - Setup basic Next.js</ListItem>
+          <ListItem> - Setup ci/cd with Amplify</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Aug 2
+        </Typography>
+        <List>
+          <ListItem> - Magic 8 ball feature</ListItem>
+          <ListItem> - Basic Chat UI setup - Chat history and Chat input</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          July 30
+        </Typography>
+        <List>
+          <ListItem> - Initial Navbar</ListItem>
+          <ListItem> - Basic routes</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          July 28
+        </Typography>
+        <List>
+          <ListItem> - Initial React in Lumina</ListItem>
+        </List>
+      </Card>
+
+    </Sheet>
+  );
+}

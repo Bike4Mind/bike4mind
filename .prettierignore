@@ -1,0 +1,7 @@
+node_modules
+.next
+public
+server/node_modules
+/data
+.sst
+**/sst-env.d.ts

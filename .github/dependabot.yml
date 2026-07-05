@@ -1,0 +1,86 @@
+version: 2
+
+registries:
+  npm-private:
+    type: npm-registry
+    url: https://registry.npmjs.org/
+    token: ${{secrets.NPM_TOKEN}}
+
+updates:
+  # NPM dependencies (pnpm monorepo - root lockfile covers all workspaces)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    # Disable scheduled version updates to prioritize security alerts.
+    # Security updates (triggered by alerts) ignore this limit and will still be created.
+    open-pull-requests-limit: 0
+    registries:
+      - npm-private
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      # Pinned to 1.20.1 due to OOM issue in later versions
+      # See: https://github.com/modelcontextprotocol/typescript-sdk/issues/985
+      - dependency-name: "@modelcontextprotocol/sdk"
+        versions: ["> 1.20.1"]
+    groups:
+      dev-dependencies:
+        patterns:
+          - "@types/*"
+          - "eslint*"
+          - "prettier*"
+          - "typescript"
+          - "@typescript-eslint/*"
+      aws-sdk:
+        patterns:
+          - "@aws-sdk/*"
+          - "@aws-cdk/*"
+          - "aws-cdk-lib"
+      mui:
+        patterns:
+          - "@mui/*"
+      next-js:
+        patterns:
+          - "next"
+          - "@next/*"
+      sst:
+        patterns:
+          - "sst"
+          - "constructs"
+      ai-llm:
+        patterns:
+          - "@anthropic-ai/*"
+          - "@google/*"
+          - "openai"
+          - "@langchain/*"
+          - "langchain"
+      tanstack:
+        patterns:
+          - "@tanstack/*"
+      mongoose:
+        patterns:
+          - "mongoose"
+          - "@typegoose/*"
+
+  # GitHub Actions - monthly to keep CI pipeline secure with minimal noise
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    # Disable scheduled version updates to prioritize security alerts.
+    open-pull-requests-limit: 0
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      # Private org repo - Dependabot can't access it without extra PAT config
+      # We manage workflow-templates internally, no need for automated updates
+      - dependency-name: "MillionOnMars/workflow-templates"

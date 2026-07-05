@@ -1,0 +1,38 @@
+# no-baseapi-allowlist.txt
+#
+# API files that legitimately skip baseApi() because they use an alternative
+# authentication mechanism. Every entry must have a comment explaining why.
+#
+# To add a new entry:
+#   1. Confirm the file uses a real alternative auth (HMAC, OAuth state, encrypted token, or intentionally public)
+#   2. Add the path below with a comment explaining the mechanism
+#   3. Get the entry reviewed in the PR
+
+# Public endpoints — intentionally unauthenticated, no user data exposed
+apps/client/pages/api/documentation/docusaurus-meta.ts  # Public docs metadata endpoint
+apps/client/pages/api/sky-greeting/index.ts             # Public moon-phase widget
+apps/client/pages/api/artifact-sandbox.ts               # Static HTML iframe target for client-rendered artifacts; no user data, no DB
+apps/client/pages/api/__tests__/artifact-sandbox.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/react-artifact-sandbox.ts          # Static React iframe target for client-rendered artifacts; no user data, no DB (#9403)
+apps/client/pages/api/__tests__/react-artifact-sandbox.test.ts # Test file for the handler above (script greps by path, not export)
+apps/client/pages/api/__tests__/sessionRedactionGuard.test.ts # Static-analysis guard test (#9405); reads route source via fs, not an API route
+apps/client/pages/api/publish/widget.ts                 # Static first-party comment-overlay JS; intentionally public, no user data, no DB
+
+# Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)
+apps/client/pages/api/slack/commands.ts                 # verifySlackRequest() HMAC check
+apps/client/pages/api/slack/interactive.ts              # verifySlackRequest() HMAC check
+
+# SRE workflow callback — authenticated via encrypted bearer token
+apps/client/pages/api/sre/workflow-callback.ts          # crypto.timingSafeEqual() bearer token
+
+# GitHub webhooks — authenticated via HMAC-SHA256 (GitHub webhook secret)
+apps/client/pages/api/webhooks/github.ts                # GitHub HMAC signature validation
+apps/client/pages/api/webhooks/github/[token].ts        # GitHub HMAC + routing token in URL path
+apps/client/pages/api/webhooks/github/sre.ts            # GitHub HMAC signature validation
+
+# Jira webhook — authenticated via HMAC + replay protection
+apps/client/pages/api/webhooks/jira/[token].ts          # Jira HMAC + routing token + replay protection
+
+# Qwork webhook — authenticated via HMAC-SHA256 (dual-secret rotation + 5-min replay prevention)
+apps/client/pages/api/webhooks/qwork/index.ts           # HMAC-SHA256 over raw body, dual-secret rotation, timestamp replay guard
+apps/client/pages/api/webhooks/qwork/__tests__/index.test.ts # Test file for the handler above (script greps by path, not export)

@@ -1,0 +1,303 @@
+import { describe, it, expect, vi } from 'vitest';
+import type { ICompletionBackend } from '@bike4mind/llm-adapters';
+import type { Logger } from '@bike4mind/observability';
+import { filterToolsByPatterns } from '@bike4mind/agents';
+import { ServerAgentStore } from '../../agents/ServerAgentStore';
+import { MAX_SUBAGENT_DEPTH, PARENT_DEADLINE_BUFFER_MS } from '../../agents/ServerSubagentOrchestrator';
+import type { ServerSubagentTracker, ChildExecutionStatus } from '../../agents/ServerSubagentOrchestrator';
+import { createDelegateToAgentTool } from './delegateToAgent';
+
+function makeLogger(): Logger {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+    updateMetadata: vi.fn(),
+  } as unknown as Logger;
+}
+
+function makeLlm(): ICompletionBackend {
+  return {
+    currentModel: 'claude-sonnet-4-6',
+    complete: vi.fn(),
+    pushToolMessages: vi.fn(),
+    getModelInfo: vi.fn().mockResolvedValue([]),
+  } as unknown as ICompletionBackend;
+}
+
+function makeStore(): ServerAgentStore {
+  // Use the built-in `researcher` agent - exists in ServerAgentStore by default.
+  return new ServerAgentStore({});
+}
+
+function makeTracker(): ServerSubagentTracker {
+  return {
+    onStart: vi.fn().mockResolvedValue('bg-child-id'),
+    onComplete: vi.fn().mockResolvedValue(undefined),
+    onFailure: vi.fn().mockResolvedValue(undefined),
+    onLambdaDispatch: vi.fn().mockResolvedValue(undefined),
+  };
+}
+
+describe('createDelegateToAgentTool — background mode', () => {
+  it('background: true returns structured payload without running the agent in-process', async () => {
+    const tracker = makeTracker();
+    const onTelemetry = vi.fn();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      onTelemetry,
+    });
+
+    const result = await tool.toolFn({
+      task: 'Find weather data for Tokyo',
+      agent: 'researcher',
+      background: true,
+    });
+
+    expect(typeof result).toBe('string');
+    const parsed = JSON.parse(result as string);
+    expect(parsed).toMatchObject({
+      status: 'background_started',
+      childExecutionId: 'bg-child-id',
+      agentName: 'researcher',
+    });
+    expect(parsed.message).toContain('background');
+
+    expect(tracker.onStart).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        isBackground: true,
+        willDispatchToLambda: true,
+      })
+    );
+    expect(tracker.onLambdaDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        childExecutionId: 'bg-child-id',
+        isBackground: true,
+      })
+    );
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        success: true,
+        iterations: 0,
+        totalTokensUsed: 0,
+      })
+    );
+  });
+
+  it('background param appears in tool schema with boolean type', () => {
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+    });
+
+    const props = tool.toolSchema.parameters.properties as Record<string, { type: string; description: string }>;
+    expect(props.background).toBeDefined();
+    expect(props.background.type).toBe('boolean');
+    expect(props.background.description).toMatch(/background/i);
+    // `background` is intentionally NOT required - defaults to false (in-process).
+    expect(tool.toolSchema.parameters.required).toEqual(['task', 'agent']);
+  });
+
+  it('returns a tool_result error string and emits failure telemetry when task is missing', async () => {
+    const onTelemetry = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      onTelemetry,
+    });
+
+    const result = await tool.toolFn({ agent: 'researcher' });
+
+    expect(typeof result).toBe('string');
+    expect(result).toMatch(/task/i);
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        success: false,
+        error: expect.stringContaining('task'),
+      })
+    );
+  });
+
+  it('returns a tool_result error string and emits failure telemetry when agent is missing', async () => {
+    const onTelemetry = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      onTelemetry,
+    });
+
+    const result = await tool.toolFn({ task: 'do something' });
+
+    expect(typeof result).toBe('string');
+    expect(result).toMatch(/agent/i);
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'unknown',
+        success: false,
+        error: expect.stringContaining('agent'),
+      })
+    );
+  });
+
+  it('returns a tool_result error string and emits failure telemetry when agent is unknown', async () => {
+    const onTelemetry = vi.fn();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      onTelemetry,
+    });
+
+    const result = await tool.toolFn({ task: 'do something', agent: 'nonexistent-agent' });
+
+    expect(typeof result).toBe('string');
+    expect(result).toMatch(/unknown agent/i);
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'nonexistent-agent',
+        success: false,
+        error: expect.stringContaining('nonexistent-agent'),
+      })
+    );
+  });
+
+  it('background mode reports telemetry failure when tracker rejects', async () => {
+    const tracker: ServerSubagentTracker = {
+      onStart: vi.fn().mockRejectedValue(new Error('tracker exploded')),
+      onComplete: vi.fn(),
+      onFailure: vi.fn(),
+      onLambdaDispatch: vi.fn(),
+    };
+    const onTelemetry = vi.fn();
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      onTelemetry,
+    });
+
+    await expect(tool.toolFn({ task: 't', agent: 'researcher', background: true })).rejects.toThrow();
+
+    expect(onTelemetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentName: 'researcher',
+        success: false,
+        error: expect.stringContaining('tracker exploded'),
+      })
+    );
+  });
+});
+
+describe('createDelegateToAgentTool — depth cap enforcement (#8577)', () => {
+  it('depth propagates through background dispatch chain: child receives parent depth + 1', async () => {
+    const capturedDepths: Array<number | undefined> = [];
+
+    async function dispatchAtDepth(depth: number | undefined) {
+      const tracker: ServerSubagentTracker = {
+        ...makeTracker(),
+        onLambdaDispatch: vi.fn().mockImplementation(async (info: { depth?: number }) => {
+          capturedDepths.push(info.depth);
+        }),
+      };
+      const tool = createDelegateToAgentTool({
+        userId: 'u1',
+        llm: makeLlm(),
+        logger: makeLogger(),
+        parentTools: [],
+        agentStore: makeStore(),
+        tracker,
+        ...(depth !== undefined ? { depth } : {}),
+      });
+      await tool.toolFn({ task: 't', agent: 'researcher', background: true });
+    }
+
+    await dispatchAtDepth(undefined); // parent depth unset (0) → child depth 1
+    await dispatchAtDepth(1); // parent depth 1 → child depth 2
+    await dispatchAtDepth(2); // parent depth 2 → child depth MAX_SUBAGENT_DEPTH (3)
+
+    expect(capturedDepths).toEqual([1, 2, MAX_SUBAGENT_DEPTH]);
+  });
+
+  it('sync-dispatch (dispatchAndPollSubagent) propagates depth to onLambdaDispatch identically to background dispatch', async () => {
+    // getRemainingTimeMs must be:
+    //   - above PARENT_DEADLINE_BUFFER_MS so the poll-loop deadline check doesn't short-circuit
+    //   - below SUBAGENT_TIMEOUT_BY_THOROUGHNESS['quick'] + PARENT_INPROCESS_SAFETY_MS (not exported; 60s)
+    //     so shouldDispatchToLambda fires and the sync path is taken
+    const remainingMs = PARENT_DEADLINE_BUFFER_MS + 1; // 90_001 ms: just above floor, well below dispatch threshold
+
+    const capturedDepths: Array<number | undefined> = [];
+    const completedStatus: ChildExecutionStatus = { status: 'completed', result: { answer: 'done' } };
+
+    const tracker: ServerSubagentTracker = {
+      onStart: vi.fn().mockResolvedValue('sync-child-id'),
+      onComplete: vi.fn().mockResolvedValue(undefined),
+      onFailure: vi.fn().mockResolvedValue(undefined),
+      onLambdaDispatch: vi.fn().mockImplementation(async (info: { depth?: number }) => {
+        capturedDepths.push(info.depth);
+      }),
+      pollChildStatus: vi.fn().mockResolvedValue(completedStatus),
+    };
+
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      tracker,
+      depth: 1,
+      getRemainingTimeMs: () => remainingMs,
+    });
+
+    await tool.toolFn({ task: 't', agent: 'researcher' }); // background: false (default) → sync dispatch
+
+    expect(tracker.onLambdaDispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ depth: 2 }) // parent depth=1 → child depth=2
+    );
+    expect(capturedDepths).toEqual([2]);
+  });
+
+  it('filterToolsByPatterns strips delegate_to_agent at depth cap, mirroring orchestrator behavior', () => {
+    const delegateTool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+    });
+
+    // Confirm the tool is present before filtering.
+    const allTools = [delegateTool];
+    expect(allTools.some(t => t.toolSchema.name === 'delegate_to_agent')).toBe(true);
+
+    // At depth >= MAX_SUBAGENT_DEPTH, ServerSubagentOrchestrator adds
+    // 'delegate_to_agent' to DEPTH_CAP_DENIED and passes it to filterToolsByPatterns.
+    const capped = filterToolsByPatterns(allTools, undefined, ['delegate_to_agent']);
+    expect(capped.some(t => t.toolSchema.name === 'delegate_to_agent')).toBe(false);
+  });
+});

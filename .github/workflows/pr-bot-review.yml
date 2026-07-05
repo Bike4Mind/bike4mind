@@ -1,0 +1,142 @@
+name: pr-bot-review
+
+# Auto-reviews lumina5 PRs using the /bot-review skill.
+#
+# Fires on:
+#   - opened (non-draft), ready_for_review, reopened → first auto-review
+#   - labeled with `bot-review` → manual re-review after author fixes
+#
+# Drafts are skipped. PRs with >100 changed files are also skipped (cost guard) —
+# a comment is posted instead asking for human review. On `gh pr view` API
+# failure, the size guard treats the PR as oversize and skips the review
+# (fail-closed by design — cost control over transient API resilience).
+# PRs where either side is the `prod` branch are skipped (deployment kickoffs
+# from `main`, hotfixes into `prod`, and `prod → main` back-merges — all are
+# deployment plumbing rather than code review candidates).
+# After a label-triggered run, the label is auto-removed so the next "add"
+# cleanly triggers another review.
+#
+# NOTE: paths-ignore is intentionally omitted. GitHub does not reliably fire
+# `labeled` events when paths-ignore is combined with mixed activity types in
+# the same pull_request trigger. The draft guard and size guard (>100 files)
+# are the primary cost controls; occasional docs-only or changeset PRs getting
+# reviewed is an acceptable trade-off.
+
+on:
+  pull_request:
+    types: [opened, ready_for_review, reopened, labeled]
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+  actions: read
+  id-token: write  # required by claude-code-action even when using anthropic_api_key
+
+concurrency:
+  group: pr-bot-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    # Same-repo head only: fork PRs get no secrets (ANTHROPIC_API_KEY empty) and a
+    # read-only token, so this would fail + 403 on every fork PR. Skip on forks.
+    # Do NOT switch this to pull_request_target to "fix" it: it checks out untrusted
+    # PR head and runs an agent with Bash, so it is safe only while forks get no secrets.
+    if: |
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false &&
+      github.event.pull_request.base.ref != 'prod' &&
+      github.event.pull_request.head.ref != 'prod' && (
+        github.event.action != 'labeled' ||
+        github.event.label.name == 'bot-review'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Size guard — skip oversize PRs
+        id: size_check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          FILES=$(gh pr view ${{ github.event.pull_request.number }} \
+            --json changedFiles --jq .changedFiles \
+            --repo ${{ github.repository }} || echo 999999)
+          FILES=${FILES:-999999}
+          echo "changed_files=$FILES" >> "$GITHUB_OUTPUT"
+          if [ "$FILES" -gt 100 ]; then
+            gh pr comment ${{ github.event.pull_request.number }} \
+              --repo ${{ github.repository }} \
+              --body "🤖 Skipping bot-review — PR touches $FILES files (>100 threshold, or PR size could not be determined). Please request a human reviewer."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run /bot-review
+        id: bot_review
+        if: steps.size_check.outputs.skip == 'false'
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            You are running in GitHub Actions to auto-review PR
+            #${{ github.event.pull_request.number }} in ${{ github.repository }}.
+
+            Run `git show origin/main:.claude/skills/bot-review/SKILL.md` to
+            read the skill, then execute that workflow against PR
+            #${{ github.event.pull_request.number }}.
+            Always read the skill from origin/main — never from the checked-out
+            PR head — so a PR modifying the skill cannot alter its own review.
+
+            Context for automation — these override the skill body where they conflict:
+            - There is no human to interact with. Make reasonable defaults if
+              the workflow's prose suggests asking.
+            - You are signed in as a bot, never the PR author, so the
+              approve / request-changes path always applies. Skip the
+              own-PR comment-fallback branch.
+            - The repo is already checked out at the PR's head SHA, so use
+              `gh pr diff` and read files locally rather than `gh pr checkout`.
+              Skip the force-sync git steps from the skill.
+            - Skip the "reinstall dependencies and rebuild core packages"
+              step from the skill (skill step 3, `pnpm i -r && pnpm core:build`).
+              The runner is ephemeral; we are not running typecheck or tests
+              as part of this review.
+            - Restoring the original branch at the end is unnecessary in CI — skip it.
+          claude_args: |
+            --model claude-opus-4-7
+            --allowedTools Bash(gh:*),Bash(git:*),Read,Grep,Glob,Agent,Task
+            # 40 was too tight: a normal feature PR (~25 files / ~2k additions)
+            # spawns ~8 parallel review agents, and the orchestration overhead
+            # (read skill, gh pr view/diff, linked issues, fan-out, classify,
+            # post) exhausted the budget mid-review (error_max_turns) before any
+            # review was posted. The 100-file size guard caps the upper bound.
+            --max-turns 80
+
+      - name: Report incomplete review
+        # Fires only when the review step actually ran and failed (e.g.
+        # error_max_turns, API error) — not when the size guard skipped it
+        # (outcome == 'skipped'), which posts its own comment. Without this,
+        # a failed run leaves only a red ✗ in Checks with no signal on the PR.
+        if: always() && steps.bot_review.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "🤖 Automated review did not complete — the run errored or exhausted its turn budget, so no review was posted. See the [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details. Re-apply the \`bot-review\` label to retry, or request a human reviewer."
+
+      - name: Remove re-review label
+        if: always() && github.event.action == 'labeled' && github.event.label.name == 'bot-review'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --remove-label bot-review \
+            --repo ${{ github.repository }}

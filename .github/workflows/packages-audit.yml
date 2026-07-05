@@ -1,0 +1,64 @@
+name: Packages Security (Audit)
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: 'Why this packages audit is being run'
+        required: true
+        default: 'manual'
+        type: string
+      stage:
+        description: 'Logical stage name (e.g. dev, pr6015, staging)'
+        required: false
+        type: string
+
+env:
+  DEFAULT_PACKAGES_STAGE: dev
+
+jobs:
+  packages-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      # Optional override passed from workflow_dispatch
+      PACKAGES_STAGE: ${{ github.event.inputs.stage }}
+      # Where to send summarized results (packages/dependency analysis).
+      # If a PR stage is provided (e.g. "pr6015"), send to that PR's preview host.
+      # Otherwise (dev/staging/main), fall back to the shared ingest URL secret.
+      LUMINA5_INGEST_URL: ${{ github.event.inputs.stage && startsWith(github.event.inputs.stage, 'pr') && format('https://app.{0}.{1}/api/admin/security-dashboard/packages-ingest', github.event.inputs.stage, vars.PREVIEW_SERVER_DOMAIN) || secrets.SECOPS_PACKAGES_INGEST_URL }}
+      LUMINA5_INGEST_TOKEN: ${{ secrets.SECOPS_PACKAGES_INGEST_TOKEN }}
+      # Location of the pnpm audit JSON report
+      PACKAGES_JSON_REPORT_PATH: ${{ github.workspace }}/packages-audit-report.json
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install client dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: apps/client
+
+      - name: Run pnpm audit
+        run: |
+          cd apps/client
+          # pnpm audit exits with code 1 when vulnerabilities are found.
+          # We ignore the exit code so the summarize-and-ingest step still runs
+          # and can send results to the Security Dashboard.
+          pnpm audit --json > "$PACKAGES_JSON_REPORT_PATH" || true
+
+      - name: Summarize packages audit and send to Security Dashboard
+        run: node scripts/packages-audit-summarize-and-ingest.mjs
+

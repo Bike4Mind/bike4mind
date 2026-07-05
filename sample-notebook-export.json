@@ -1,0 +1,50 @@
+{
+  "exportVersion": "1.0.0",
+  "exportedAt": "2025-01-19T22:00:00.000Z",
+  "platform": "lumina5",
+  "notebooks": [
+    {
+      "id": "test-notebook-1",
+      "name": "Test Import Notebook",
+      "firstCreated": "2025-01-01T10:00:00.000Z",
+      "lastUpdated": "2025-01-19T20:00:00.000Z",
+      "language": "en",
+      "summary": "A test notebook for import functionality",
+      "tags": [],
+      "isAutoNamed": false,
+      "lastUsedModel": "gpt-4",
+      "chatHistory": [
+        {
+          "id": "msg-1",
+          "timestamp": "2025-01-01T10:00:00.000Z",
+          "type": "message",
+          "prompt": "Hello, this is a test message",
+          "reply": "Hello! This is a test response.",
+          "status": "completed",
+          "creditsUsed": 0,
+          "pinned": false,
+          "images": [],
+          "attachedFiles": [],
+          "agentIds": []
+        },
+        {
+          "id": "msg-2",
+          "timestamp": "2025-01-01T10:01:00.000Z",
+          "type": "message",
+          "prompt": "Can you help me test the import?",
+          "reply": "Of course! This is another test message to verify the import functionality works correctly.",
+          "status": "completed",
+          "creditsUsed": 0,
+          "pinned": false,
+          "images": [],
+          "attachedFiles": [],
+          "agentIds": []
+        }
+      ],
+      "knowledge": [],
+      "artifacts": [],
+      "tools": [],
+      "agents": []
+    }
+  ]
+}

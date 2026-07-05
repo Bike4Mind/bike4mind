@@ -1,0 +1,48 @@
+{
+  "name": "@bike4mind/database",
+  "version": "0.1.56",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "files": [
+    "src"
+  ],
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/models/auth/index.ts",
+    "./content": "./src/models/content/index.ts",
+    "./social": "./src/models/social/index.ts",
+    "./billing": "./src/models/billing/index.ts",
+    "./ai": "./src/models/ai/index.ts",
+    "./infra": "./src/models/infra/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "vitest --ui"
+  },
+  "dependencies": {
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/db-core": "workspace:*",
+    "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/utils": "workspace:*",
+    "@casl/ability": "^6.8.1",
+    "@casl/mongoose": "^8.0.5",
+    "bcryptjs": "^3.0.2",
+    "dayjs": "^1.11.20",
+    "mongoose": "^8.24.1",
+    "mongoose-lean-virtuals": "^2.1.0",
+    "typescript": "^5.9.3"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/ui": "^4.1.9",
+    "mongodb-memory-server": "^11.1.0",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^4.1.9"
+  }
+}

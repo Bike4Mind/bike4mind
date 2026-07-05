@@ -1,0 +1,92 @@
+# CODEOWNERS - Bike4Mind open core
+#
+# Real path-to-team mapping for the public snapshot's first commit. These teams are
+# created in the org-foundation track (lumina5#9809 A3); this file is the source of
+# truth for which teams MUST exist. Until they exist, GitHub shows a cosmetic
+# "unknown owner" annotation - it does NOT block merges until the `main` ruleset
+# turns on "Require review from Code Owners" (see lumina5#9772). Enable that ruleset
+# only after the teams below are created and staffed.
+#
+# Teams:
+#   @bike4mind/core-team           steward (Bike4Mind, Inc.); final say. Default
+#                                  owner + all closed/commercial/infra/governance.
+#   @bike4mind/engine-maintainers  open engine: b4m-core/* + shared packages/*.
+#                                  May include trusted external maintainers.
+#   @bike4mind/client-maintainers  the apps/client app (SPA + Next API routes).
+#                                  To launch with fewer teams, fold this into
+#                                  engine-maintainers (see the apps/client line).
+#   @bike4mind/triage              issue/PR routing ONLY; owns no code paths here
+#                                  (its home is .github/ISSUE_TEMPLATE/config.yml).
+#
+# RULE: last matching pattern wins - order matters. Layout: default first, then
+# broad open surfaces, then closed overrides that live inside them, then infra/CI,
+# then governance files last. Leading "/" anchors to repo root; trailing "/"
+# matches the directory and everything under it.
+#
+# NOTE: export-ignore'd paths (docs-site/**, .claude/**, CLAUDE.md, .cursor/**,
+# internal .github workflows/scripts, infra/waf/*.json, root ops shell scripts) are
+# NOT in the public tree, so they need no entry - they can never match a public PR.
+
+
+# --- 1) Default owner for everything not matched below ---
+*                                           @bike4mind/core-team
+
+
+# --- 2) Open engine: the community-maintainable core ---
+# b4m-core workspace packages (@bike4mind/*: agents, common, services, llm-adapters,
+# mcp, resource, slack, utils, and siblings).
+/b4m-core/                                  @bike4mind/engine-maintainers
+# Shared open libraries: cli, database, scripts, eslint-config, typescript-config.
+/packages/                                  @bike4mind/engine-maintainers
+
+
+# --- 3) Frontend app: one pane of glass ---
+/apps/client/                               @bike4mind/client-maintainers
+# Fold-down option: to launch with fewer teams, set the owner above to
+# @bike4mind/engine-maintainers and drop the client-maintainers team.
+
+
+# --- 4) Closed / commercial overrides INSIDE the open surfaces (must come after 2/3) ---
+# Billing, entitlements, and Stripe gate the commercial model -> core-team only.
+/apps/client/lib/entitlements/              @bike4mind/core-team
+/apps/client/server/entitlements/           @bike4mind/core-team
+/apps/client/server/integrations/stripe/    @bike4mind/core-team
+/apps/client/pages/api/stripe/              @bike4mind/core-team
+/apps/client/pages/api/subscriptions/       @bike4mind/core-team
+/apps/client/pages/api/entitlements/        @bike4mind/core-team
+/packages/database/src/models/billing/      @bike4mind/core-team
+# Credits are a paid-usage unit; the subscription/user-subscription libs are the
+# same commercial primitives as the api/subscriptions + entitlements entries above.
+/apps/client/pages/api/credits/             @bike4mind/core-team
+/apps/client/lib/credits/                   @bike4mind/core-team
+/apps/client/lib/subscriptions/             @bike4mind/core-team
+/apps/client/lib/userSubscriptions/         @bike4mind/core-team
+# Premium overlays are private / hydrated-at-deploy; the in-client tavern seam is
+# the cc-bridge / b4m-tavern integration point. core-team wherever present.
+/apps/client/server/tavern/                 @bike4mind/core-team
+/packages/premium/                          @bike4mind/core-team
+
+
+# --- 5) Legal / policy content: carries the launch claims ---
+/apps/client/content/legal/                 @bike4mind/core-team
+
+
+# --- 6) Infra, deploy, CI, supply-chain: live trust surface -> core-team ---
+/infra/                                     @bike4mind/core-team
+/sst.config.ts                              @bike4mind/core-team
+/.github/                                   @bike4mind/core-team
+/premium-overlay.lock.json                  @bike4mind/core-team
+/pnpm-workspace.yaml                        @bike4mind/core-team
+/turbo.json                                 @bike4mind/core-team
+
+
+# --- 7) Governance / licensing files: steward decisions (LAST, so nothing overrides) ---
+/LICENSE                                    @bike4mind/core-team
+/NOTICE                                     @bike4mind/core-team
+/CONTRIBUTING.md                            @bike4mind/core-team
+/CODE_OF_CONDUCT.md                         @bike4mind/core-team
+/SECURITY.md                                @bike4mind/core-team
+/CLA.md                                     @bike4mind/core-team
+/README.md                                  @bike4mind/core-team
+/SELF_HOST.md                               @bike4mind/core-team
+/.github/CODEOWNERS                         @bike4mind/core-team

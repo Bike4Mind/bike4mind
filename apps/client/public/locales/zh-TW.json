@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "人工智慧設定",
+    "session": "筆記本",
+    "session_plural": "筆記本",
+    "favorite": "最愛",
+    "unfavorite": "取消最愛",
+    "favorites": "最愛項目",
+    "favorites_count_one": "{{count}} 個收藏",
+    "favorites_count_other": "{{count}} 個收藏",
+    "currentSession": "當前",
+    "other": "其他標籤",
+    "text_model": "文本模型",
+    "image_model": "影像模型",
+    "ai_image": "AI 圖像",
+    "switch_to": "切換到 {{ name }}"
+  },
+  "guide": {
+    "title": "指南"
+  },
+  "intro": {
+    "title": "介紹"
+  },
+  "developers": {
+    "title": "開發者",
+    "technical_docs": "技術文檔"
+  },
+  "changelog": {
+    "title": "變更記錄"
+  },
+  "feedback": {
+    "send": "發送反饋"
+  },
+  "terms_policies": "條款與政策",
+  "login": "登入",
+  "file": "知識",
+  "forgotPassword": "忘記密碼",
+  "signup": "註冊",
+  "help": "幫助",
+  "manual": "手冊",
+  "inviteLong": "邀請朋友",
+  "inviteShort": "邀請",
+  "tools": {
+    "title": "工具"
+  },
+  "sidenav": {
+    "pin": "固定側邊欄",
+    "unpin": "取消固定側邊欄",
+    "sessions": {
+      "sort": {
+        "label": "排序依據",
+        "tags": "按標籤排序",
+        "date": "按日期排序"
+      },
+      "new": "新聊天",
+      "item": {
+        "genTags": "生成筆記本標籤列表"
+      }
+    }
+  },
+  "referral": {
+    "title": "推薦朋友到",
+    "email_title_default": "歡迎來到GrokTool！",
+    "email_body_default": "您被USER_NAME邀請到GrokTool！註冊鏈接：使用以下邀請碼註冊：INVITE_CODE",
+    "friend_email": "朋友的電郵",
+    "num_referrals_available": "可用的推薦數量：",
+    "no_valid_emails_error": "請輸入有效的電郵地址",
+    "send_referral": "發送推薦",
+    "send_referral_success": "推薦發送成功！",
+    "send_referral_skipped": "{{count}} 個邀請已跳過 — 這些電子郵件地址已經有帳號。",
+    "send_referral_failed": "{{count}} 個邀請無法發送。請再試一次。",
+    "send_referral_error": "發送推薦出錯。請再試一次。",
+    "slack_notification_default": "用戶USER_NAME:USER_ID向FRIEND_EMAIL發送了推薦"
+  },
+  "activateVoice": "啟用此聲音",
+  "liveVoice": "現場聲音",
+  "whatsNew": "有什麼新內容",
+  "welcome": "歡迎來到{{ name }}",
+  "network": {
+    "statuses": {
+      "0": "連接中",
+      "1": "已連接",
+      "2": "正在斷開連接",
+      "3": "已斷開連接",
+      "-1": "等待中"
+    },
+    "networkStatus": "網絡狀態：{{ status }}"
+  },
+  "deleteVoice": "刪除此聲音",
+  "deleteVoiceConfirm": "您確定要刪除此聲音嗎？",
+  "organization": {
+    "organizations": "團隊",
+    "defaultName": "我的組織",
+    "shared": "與我共享",
+    "create": "創建團隊",
+    "search": "搜索團隊...",
+    "no_organizations": "未找到團隊",
+    "view_details": "查看細節",
+    "x_seats": "{{count}} 個席位",
+    "active_subscription": "有效訂閱",
+    "no_subscription": "無訂閱",
+    "x_members": "{{count}} 名成員",
+    "x_credits": "{{count}} 個點數",
+    "owner": "擁有者"
+  },
+  "session": {
+    "typeYourMessage": "在這裡輸入您的訊息",
+    "switchedSession": "切換到：{{ sessionName }}",
+    "send": "發送",
+    "sendMessage": "發送訊息",
+    "preparingQuest": "準備任務中...",
+    "rephrasePrompt": "優化您的輸入",
+    "promptRephrased": "提示詞重寫成功",
+    "rephraseFailed": "重寫提示詞失敗",
+    "errors": {
+      "notebookDeleted": "此筆記本已被刪除。請建立新的筆記本。",
+      "noPermission": "您無權訪問此筆記本。",
+      "invalidRequest": "無效的請求。請再試一次。",
+      "tooManyRequests": "請求過多。請稍候再試。",
+      "serverError": "伺服器錯誤。請稍後再試。",
+      "networkError": "發送訊息失敗。請檢查您的連線。",
+      "sendFailed": "發送訊息失敗。請再試一次。"
+    }
+  },
+  "projects": {
+    "title": "專案",
+    "projects": "項目",
+    "joined_projects": "已加入的專案",
+    "no_joined_projects": "尚未加入任何專案",
+    "add_to_project": "新增到專案",
+    "modals": {
+      "files": {
+        "title": "將檔案添加到專案",
+        "subtitle": "選擇要添加到您的專案的檔案",
+        "button_label": "添加檔案",
+        "search_placeholder": "搜尋檔案",
+        "no_files": "未找到文件。"
+      },
+      "members": {
+        "title": "將成員添加到專案",
+        "subtitle": "搜尋並選擇要添加到您的專案的使用者",
+        "button_label": "添加成員",
+        "search_placeholder": "搜尋使用者",
+        "no_members": "請嘗試搜尋用戶。"
+      },
+      "sessions": {
+        "title": "將筆記本添加到專案",
+        "subtitle": "選擇要添加到您的專案的筆記本或創建一個新的",
+        "button_label": "添加筆記本",
+        "search_placeholder": "搜尋",
+        "create_button": "創建",
+        "no_notebooks": "未找到筆記本。請嘗試創建新的。"
+      },
+      "generic": {
+        "select_all": "全選",
+        "unselect_all": "取消全選",
+        "add_items_one": "新增 {{count}} 項目",
+        "add_items_other": "新增 {{count}} 項目",
+        "delete_items": "刪除 {{count}} 個項目"
+      }
+    }
+  },
+  "logout": "登出",
+  "inbox": {
+    "title": "收件匣",
+    "messages": "訊息",
+    "invites": "邀請",
+    "sendMessage": "發送訊息",
+    "noMessages": "沒有訊息"
+  },
+  "addSomething": "新增{{ name }}",
+  "deleteAllSomething": "刪除所有{{ name }}",
+  "exportAllSomething": "匯出所有{{ name }}",
+  "importLLMHistory": "匯入 LLM 歷史",
+  "downloadAllSomething": "下載所有{{ name }}",
+  "language": {
+    "language_settings": "語言設定",
+    "change-language": "更改語言"
+  },
+  "theme": {
+    "turn-dark": "切換到深色模式",
+    "turn-light": "切換到淺色模式"
+  },
+  "auth": {
+    "usernameOrEmail": "用戶名或電子郵件",
+    "username": "用戶名",
+    "password": "密碼",
+    "confirmPassword": "確認密碼",
+    "fullName": "全名",
+    "inviteCode": "邀請碼",
+    "needCode": "需要代碼？",
+    "noAccount": "沒有帳戶？",
+    "haveAccount": "已有帳戶？",
+    "loginWithProvider": "使用 {{ provider }} 登錄",
+    "checking": "檢查中...",
+    "continue": "繼續",
+    "troubleSigningIn": "登入遇到問題？",
+    "signingInAs": "以身份登入",
+    "signingIn": "登入中...",
+    "backToEmail": "返回電子郵件",
+    "redirectingToProvider": "正在重新導向至您組織的登入頁面...",
+    "resetInstructions": "請輸入您的電子郵件地址。我們會發送電子郵件來重置您的密碼。",
+    "sendResetEmail": "發送重置密碼的電子郵件",
+    "email": "電子郵件",
+    "resetEmailSentMessage": "電子郵件已發送！請檢查您的電子郵件以獲取更多說明",
+    "createAccountDesc": "創建帳戶",
+    "createBtn": "創建帳戶",
+    "loginBtn": "登錄",
+    "passwordStrength": {
+      "label": "密碼強度",
+      "weak": "弱",
+      "fair": "普通",
+      "strong": "強"
+    },
+    "passwordRequirements": {
+      "title": "密碼要求",
+      "minLength": "至少 {{count}} 字元",
+      "uppercase": "一個大寫字母",
+      "lowercase": "一個小寫字母",
+      "number": "一個數字",
+      "specialChar": "一個特殊字元",
+      "met": "符合",
+      "notMet": "尚未符合"
+    },
+    "errors": {
+      "usernameExists": "用戶名 '{{username}}' 已被佔用。請選擇不同的用戶名。",
+      "emailExists": "電子郵件 '{{email}}' 已有帳戶。請使用不同的電子郵件或登入現有帳戶。",
+      "accountExists": "這些認證已存在帳戶。請嘗試登入或使用不同的認證。",
+      "invalidInviteCode": "您輸入的邀請碼無效或已過期。請檢查後重試。",
+      "registrationFailed": "註冊失敗。請稍後再試。",
+      "validation": {
+        "generic": "無效的輸入",
+        "invalidUsername": "用戶名只能包含字母、數字、底線、句點和連字符",
+        "passwordMismatch": "密碼不匹配",
+        "passwordRequirements": "密碼必須至少 8 個字符，並包含大寫字母、小寫字母、數字和特殊字符"
+      }
+    }
+  },
+  "search": "搜尋",
+  "share": "分享",
+  "rename": "重新命名",
+  "favorite": "最愛",
+  "unfavorite": "取消最愛",
+  "delete": "刪除",
+  "files": {
+    "showAttachedFiles": "顯示附加文件",
+    "hideAttachedFiles": "隱藏附加文件",
+    "title": "檔案",
+    "upload": "上傳文件",
+    "long_title": "文件瀏覽器"
+  },
+  "view": "查看",
+  "info": "資訊",
+  "clone": "複製",
+  "download": "下載",
+  "summarize": "總結",
+  "profile": {
+    "title": "個人檔案",
+    "tooltip": "個人檔案",
+    "collection": "收藏",
+    "collections": {
+      "all_types": "所有類型"
+    },
+    "users_profile": "{{ name }}的個人檔案",
+    "storage_used": "已用儲存空間",
+    "credits": "積分",
+    "subscription": "訂閱",
+    "edit": "編輯檔案",
+    "manage_subscription": "管理訂閱",
+    "upgrade": "升級",
+    "credit_analytics": "信用分析",
+    "pricing": "點數定價",
+    "show_purchases": "顯示購買",
+    "show_usage": "顯示用量",
+    "show_combined": "顯示綜合",
+    "buy_credits": "購買積分"
+  },
+  "community": {
+    "title": "社區",
+    "tooltip": "社區",
+    "feed": "社區動態"
+  },
+  "subscriptions": {
+    "title": "訂閱",
+    "expires_on": "在 {{ date }} 到期",
+    "renews_on": "在 {{ date }} 續訂"
+  },
+  "billing": {
+    "title": "帳單"
+  },
+  "credits": {
+    "title": "積分",
+    "usage": "點數使用",
+    "analytics": "信用分析",
+    "analytics_tooltip": "查看您的點數使用情況",
+    "current_balance": "當前點數餘額",
+    "credits": "點數",
+    "usage_by_model": "按模型使用",
+    "no_transactions": "在此時間段內未找到點數交易",
+    "model_pricing": "模型定價",
+    "text_models": "文本模型",
+    "image_models": "圖像模型",
+    "pricing_per_1k_tokens": "每 1,000 個代幣的定價顯示為點數",
+    "pricing_per_generation": "每次圖像生成的定價顯示為點數",
+    "model_name": "模型名稱",
+    "price_tier": "價格層級",
+    "input_cost": "輸入成本",
+    "output_cost": "輸出成本",
+    "generation_cost": "生成成本",
+    "no_models_available": "無可用模型",
+    "pricing_note": "注意：價格為大約值，可能根據模型參數而有所變動。價格層級：$（最低），$$（中等），$$$（高級）。",
+    "burn_rate": "每日使用量（燃燒率）",
+    "days_remaining": "剩餘預估天數",
+    "usage_pattern": "根據您過去 {{days}} 天的使用模式",
+    "credits_used": "已使用的點數",
+    "credits_purchased": "購買的點數",
+    "net_credits": "淨點數"
+  },
+  "time": {
+    "last_7_days": "過去 7 天",
+    "last_30_days": "過去 30 天",
+    "last_90_days": "過去 90 天",
+    "last_180_days": "過去 180 天",
+    "last_365_days": "過去 365 天"
+  },
+  "common": {
+    "date": "日期",
+    "refresh": "刷新",
+    "days": "天",
+    "cancel": "取消",
+    "save": "保存",
+    "delete": "刪除",
+    "edit": "編輯",
+    "close": "關閉",
+    "submit": "提交",
+    "loading": "加載中...",
+    "error": "錯誤",
+    "success": "成功"
+  },
+  "errors": {
+    "failed_to_load_data": "數據加載失敗。請稍後再試。"
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "您的 Atlassian 連接已過期。請重新連接您的帳戶。"
+    }
+  },
+  "credits_modal": {
+    "title": "額外點數",
+    "description": "購買額外的點數以繼續使用我們的高級 AI 模型和功能。點數用於模型推理和特殊功能，不同的模型根據複雜性消耗不同數量的點數。",
+    "current_credits": "目前點數金額",
+    "best_value": "最佳價值",
+    "purchase_success": "購買了 {{credits}} 點數",
+    "history_title": "點數購買歷史",
+    "purchase": "購買",
+    "no_transactions": "尚無交易",
+    "low_credits": "您的點數不足",
+    "low_credits_sub": "購買更多點數以繼續您的工作。",
+    "no_credits": "無點數",
+    "no_credits_sub": "購買點數以繼續您的工作。",
+    "status": {
+      "completed": "已完成",
+      "pending": "待處理",
+      "failed": "失敗"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "tooltip": "設定",
+    "main": "主要設定",
+    "account": "帳戶",
+    "ai_features": "AI 功能",
+    "connected_apps": {
+      "title": "已連接的應用程式",
+      "link": "連結",
+      "unlink": "解除連結"
+    },
+    "developer_tools": "開發者工具",
+    "experimental_features": {
+      "title": "實驗性功能",
+      "tooltip": "實驗性功能",
+      "header": "實驗性功能",
+      "beta_features": {
+        "title": "Beta 功能",
+        "subtitle": "這些功能仍在開發中，可能會導致意外結果。選擇啟用它們即表示您同意以當前狀態使用它們。"
+      }
+    },
+    "ui_preferences": "UI 偏好"
+  },
+  "mementos": {
+    "title": "紀念品",
+    "tooltip": "紀念品"
+  },
+  "admin": {
+    "title": "管理員",
+    "tooltip": "管理員設定"
+  },
+  "speech": {
+    "title": "語音",
+    "tooltip": "語音轉文字 & 文字轉語音"
+  },
+  "instructions": {
+    "title": "說明",
+    "tooltip": "說明"
+  },
+  "friends": {
+    "add_friend": "新增好友",
+    "unfriend": "移除好友",
+    "pending_request": "待處理的好友請求",
+    "all": "所有好友",
+    "pending": "待處理"
+  },
+  "notebooks": {
+    "view_info": "查看筆記本資訊",
+    "clone": "複製筆記本",
+    "download": "下載筆記本",
+    "summarize": "總結筆記本",
+    "delete": "刪除筆記本",
+    "delete_confirm": "您確定要永久刪除 \"{{ name }}\" 嗎？此操作無法撤銷。",
+    "auto_rename": "使用 AI 重新命名"
+  },
+  "add_friend": {
+    "title": "添加朋友",
+    "friend_email": "朋友的電子郵件",
+    "message": "訊息",
+    "cancel": "取消",
+    "send": "發送",
+    "email_placeholder": "輸入朋友的電子郵件",
+    "message_placeholder": "輸入您的訊息"
+  },
+  "file_browser": {
+    "my_files": "我的檔案",
+    "shared_with_me": "與我分享",
+    "total_files": "總知識項目",
+    "search_placeholder": "按名稱或標籤搜尋...",
+    "file_type": "檔案類型",
+    "all_files": "所有檔案",
+    "text": "文字",
+    "pdf": "PDF",
+    "url": "網址",
+    "image": "圖片",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "代碼",
+    "date_created": "建立日期",
+    "size": "大小",
+    "name": "名稱",
+    "sort_z_to_a": "從 Z 到 A 排序",
+    "sort_a_to_z": "從 A 到 Z 排序",
+    "grid_view": "網格檢視",
+    "list_view": "列表檢視",
+    "select_file_hint": "點擊以選擇檔案或多個檔案並將它們加入到您的筆記本會話中！",
+    "session_one": "筆記本",
+    "session_other": "筆記本",
+    "no_files_available": "沒有可用的檔案",
+    "count_file_selected_one": "選擇了 {{count}} 個文件",
+    "count_file_selected_other": "選擇了 {{count}} 個文件",
+    "add_count_file_one": "添加 {{count}} 個文件",
+    "add_count_file_other": "添加 {{count}} 個文件",
+    "delete_count_file_one": "刪除 {{count}} 個文件",
+    "delete_count_file_other": "刪除 {{count}} 個文件",
+    "share_count_file_one": "分享 {{count}} 個檔案",
+    "share_count_file_other": "分享 {{count}} 個檔案",
+    "count_file_one": "{{count}} 個文件",
+    "count_file_other": "{{count}} 個文件",
+    "add_to_session_success": "將檔案：{{fileNames}} 新增至 {{sessionName}}",
+    "add_file_success": "新增檔案：{{fileNames}}",
+    "browse_files": "瀏覽檔案",
+    "create_new_knowledge": "創建",
+    "create_new_knowledge_from_url": "擷取 URL",
+    "enter_url": "輸入 URL",
+    "create_file": "創建文件",
+    "create_file_from_url": "創建文件",
+    "create_from_url": "快速擷取",
+    "research": "研究",
+    "open_research": "開啟研究",
+    "url_success": "成功從 URL 創建知識：{{url}}",
+    "url_error": "無法從 URL 創建知識：{{url}}",
+    "url_required": "請輸入 URL",
+    "previous": "上一頁",
+    "next": "下一頁",
+    "page_of": "第 {{current}} 頁，共 {{total}} 頁",
+    "drop_files_here": "將檔案拖放至此",
+    "tagging": "標記中...",
+    "tag_files": "標記檔案",
+    "select_all": "全選",
+    "unselect_all": "取消全選",
+    "add_files": "新增檔案",
+    "add_files_to_notebook_one": "新增 {{count}} 個檔案至筆記本",
+    "add_files_to_notebook_other": "新增 {{count}} 個檔案至筆記本",
+    "in_project": "在專案中"
+  },
+  "file_properties": {
+    "title": "檔案屬性",
+    "make_instructions": "製作成指示嗎？",
+    "instruction_priority": "指示優先權 (0–999)",
+    "priority_levels": {
+      "global": "0-100：全域指示",
+      "group": "101-300：群組/公司指示",
+      "project": "301-500：專案指示",
+      "user": "501-999：使用者指示"
+    },
+    "save": "儲存",
+    "update_success": "已更新 \"{{fileName}}\" 的系統優先權。",
+    "update_error": "更新系統優先權失敗。"
+  },
+  "file_actions": {
+    "notes": "備註",
+    "notes_placeholder": "添加有關此文件的備註...",
+    "add_notes": "添加備註",
+    "add_note": "添加備註",
+    "edit_notes": "編輯備註",
+    "notes_save_error": "無法保存備註",
+    "manage_tags": "管理標籤",
+    "tags": "管理標籤",
+    "tags_placeholder": "輸入標籤名稱，以逗號分隔...",
+    "add_tag_one": "已更新 {{count}} 個檔案的標籤",
+    "add_tag_other": "已更新 {{count}} 個檔案的標籤",
+    "failed_to_add_tag_one": "更新檔案標籤失敗",
+    "failed_to_add_tag_other": "更新檔案標籤失敗",
+    "cancel": "取消",
+    "save": "儲存",
+    "download": "下載",
+    "vectorize": "向量化",
+    "instruction": "指令 {{priority}}",
+    "chunked": "分塊",
+    "not_chunked": "未分塊"
+  },
+  "subscription_modal": {
+    "title": "訂閱",
+    "description": "通過一個統一的介面訪問每個主要的 AI 模型。私下運行類似 Deepseek R1 的高級模型。",
+    "no_free_tier": "沒有免費層 - 專注於專業人士。",
+    "credits_rollover": "未使用的點數會延續 3 個月。",
+    "monthly_billing": "每月計費",
+    "annual_billing": "年度計費",
+    "most_popular": "最受歡迎",
+    "current": "當前",
+    "credits_per_month": "{{credits}} 點數每月",
+    "subscription_renewal": "您的訂閱將於 {{date}} 更新",
+    "personal": "個人",
+    "business": "商業",
+    "team": "團隊",
+    "enterprise": "企業"
+  },
+  "agents": {
+    "title": "代理",
+    "new_agent": "新代理",
+    "manage_agents": "管理代理",
+    "search_placeholder": "搜索代理...",
+    "your_agents": "您的代理",
+    "loading": "加載代理中...",
+    "no_agents": "未找到代理",
+    "create_first": "創建您的第一個代理以開始",
+    "agents_found": "找到 {{count}} 個代理",
+    "agents_found_plural": "找到 {{count}} 個代理",
+    "attached_agents": "附加代理",
+    "listening_description": "這些代理正在監聽本次對話中的所有消息",
+    "no_search_results": "沒有代理符合 \"{{search}}\"",
+    "search_help": "嘗試使用不同的搜索詞",
+    "no_agents_description": "創建您的第一個代理以開始",
+    "create_agent": "創建代理",
+    "click_to_attach": "點擊以附加到當前會話",
+    "click_to_detach": "點擊以從當前會話中分離",
+    "show_attached_agents": "顯示附加代理",
+    "hide_attached_agents": "隱藏附加代理",
+    "toggle_attached_agents": "切換附加代理",
+    "agent_listening_tooltip": "{{name}} 正在監聽並渴望提供幫助"
+  },
+  "skills": {
+    "title": "技能",
+    "command_palette_description": "管理可重複使用的指令範本"
+  }
+}

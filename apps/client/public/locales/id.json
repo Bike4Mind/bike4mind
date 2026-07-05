@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Pengaturan AI",
+    "session": "Buku Catatan",
+    "session_plural": "Buku Catatan",
+    "favorite": "Favorit",
+    "unfavorite": "Hapus Favorit",
+    "favorites": "Favorit",
+    "favorites_count_one": "{{count}} Favorit",
+    "favorites_count_other": "{{count}} Favorit",
+    "currentSession": "Saat Ini",
+    "other": "Tag Lain",
+    "text_model": "Model Teks",
+    "image_model": "Model Gambar",
+    "ai_image": "Gambar AI",
+    "switch_to": "Beralih ke {{ name }}"
+  },
+  "guide": {
+    "title": "Panduan"
+  },
+  "intro": {
+    "title": "Pendahuluan"
+  },
+  "developers": {
+    "title": "Pengembang",
+    "technical_docs": "Dokumentasi Teknis"
+  },
+  "changelog": {
+    "title": "Catatan Perubahan"
+  },
+  "feedback": {
+    "send": "Kirim Umpan Balik"
+  },
+  "terms_policies": "Syarat & Kebijakan",
+  "login": "Masuk",
+  "file": "Pengetahuan",
+  "forgotPassword": "Lupa Kata Sandi",
+  "signup": "Daftar",
+  "help": "Bantuan",
+  "manual": "Panduan",
+  "inviteLong": "Undang Teman",
+  "inviteShort": "Undang",
+  "tools": {
+    "title": "Alat"
+  },
+  "sidenav": {
+    "pin": "Pin sisi",
+    "unpin": "Hapus Pin sisi",
+    "sessions": {
+      "sort": {
+        "label": "Urutkan Berdasarkan",
+        "tags": "Berdasarkan Tag",
+        "date": "Berdasarkan Tanggal"
+      },
+      "new": "Obrolan Baru",
+      "item": {
+        "genTags": "Hasilkan daftar tag Buku Catatan"
+      }
+    }
+  },
+  "referral": {
+    "title": "Ajak teman ke",
+    "email_title_default": "Selamat Datang di GrokTool!",
+    "email_body_default": "Anda telah diundang oleh USER_NAME ke GrokTool! LINK PENDAFTARAN: Gunakan kode undangan berikut untuk mendaftar: INVITE_CODE",
+    "friend_email": "Email Teman",
+    "num_referrals_available": "Referal yang tersedia:",
+    "no_valid_emails_error": "Harap masukkan alamat email yang valid",
+    "send_referral": "Kirim Referal",
+    "send_referral_success": "Referal berhasil dikirim!",
+    "send_referral_skipped": "{{count}} undangan dilewati — alamat email tersebut sudah memiliki akun.",
+    "send_referral_failed": "{{count}} undangan gagal dikirim. Silakan coba lagi.",
+    "send_referral_error": "Kesalahan mengirim referal. Silakan coba lagi.",
+    "slack_notification_default": "Referal dikirim oleh pengguna USER_NAME:USER_ID ke FRIEND_EMAIL"
+  },
+  "activateVoice": "Aktifkan suara ini",
+  "liveVoice": "Suara Langsung",
+  "whatsNew": "Apa yang baru",
+  "welcome": "Selamat datang di {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Menghubungkan",
+      "1": "Terhubung",
+      "2": "Memutuskan",
+      "3": "Terputus",
+      "-1": "Menunggu"
+    },
+    "networkStatus": "Jaringan: {{ status }}"
+  },
+  "deleteVoice": "Hapus suara ini",
+  "deleteVoiceConfirm": "Apakah Anda yakin ingin menghapus suara ini?",
+  "organization": {
+    "organizations": "Tim",
+    "defaultName": "Organisasi Saya",
+    "shared": "Dibagikan dengan Saya",
+    "create": "Buat Tim",
+    "search": "Cari tim...",
+    "no_organizations": "Tidak ada tim ditemukan",
+    "view_details": "Lihat Detail",
+    "x_seats": "{{count}} kursi",
+    "active_subscription": "Langganan Aktif",
+    "no_subscription": "Tidak Ada Langganan",
+    "x_members": "{{count}} anggota",
+    "x_credits": "{{count}} kredit",
+    "owner": "Pemilik"
+  },
+  "session": {
+    "typeYourMessage": "Ketik pesan Anda di sini",
+    "switchedSession": "Beralih ke: {{ sessionName }}",
+    "send": "Kirim",
+    "sendMessage": "Kirim Pesan",
+    "preparingQuest": "Mempersiapkan pencarian...",
+    "rephrasePrompt": "Optimalkan masukan Anda",
+    "promptRephrased": "Prompt berhasil diubah",
+    "rephraseFailed": "Gagal mengubah prompt",
+    "errors": {
+      "notebookDeleted": "Buku catatan ini telah dihapus. Silakan buat yang baru.",
+      "noPermission": "Anda tidak memiliki izin untuk mengakses buku catatan ini.",
+      "invalidRequest": "Permintaan tidak valid. Silakan coba lagi.",
+      "tooManyRequests": "Terlalu banyak permintaan. Harap tunggu sebentar dan coba lagi.",
+      "serverError": "Kesalahan server. Silakan coba lagi nanti.",
+      "networkError": "Gagal mengirim pesan. Periksa koneksi Anda.",
+      "sendFailed": "Gagal mengirim pesan. Silakan coba lagi."
+    }
+  },
+  "projects": {
+    "title": "Proyek",
+    "projects": "Proyek",
+    "joined_projects": "Proyek Bergabung",
+    "no_joined_projects": "Belum ada proyek yang bergabung",
+    "add_to_project": "Tambahkan ke Proyek",
+    "modals": {
+      "files": {
+        "title": "Tambahkan Berkas ke Proyek",
+        "subtitle": "Pilih berkas untuk ditambahkan ke proyek Anda",
+        "button_label": "Tambahkan Berkas",
+        "search_placeholder": "Cari berkas",
+        "no_files": "Tidak ada file ditemukan."
+      },
+      "members": {
+        "title": "Tambahkan Anggota ke Proyek",
+        "subtitle": "Cari dan pilih pengguna untuk ditambahkan ke proyek Anda",
+        "button_label": "Tambahkan Anggota",
+        "search_placeholder": "Cari pengguna",
+        "no_members": "Coba cari pengguna."
+      },
+      "sessions": {
+        "title": "Tambahkan Buku Catatan ke Proyek",
+        "subtitle": "Pilih buku catatan untuk ditambahkan ke proyek Anda atau buat yang baru",
+        "button_label": "Tambahkan Buku Catatan",
+        "search_placeholder": "Cari",
+        "create_button": "Buat",
+        "no_notebooks": "Tidak ada notebook ditemukan. Coba buat yang baru."
+      },
+      "generic": {
+        "select_all": "Pilih Semua",
+        "unselect_all": "Batalkan Pilihan Semua",
+        "add_items_one": "Tambahkan {{count}} item",
+        "add_items_other": "Tambahkan {{count}} item",
+        "delete_items": "Hapus {{count}} item"
+      }
+    }
+  },
+  "logout": "Keluar",
+  "inbox": {
+    "title": "Kotak Masuk",
+    "messages": "Pesan",
+    "invites": "Undangan",
+    "sendMessage": "Kirim sebuah pesan",
+    "noMessages": "Tidak ada pesan"
+  },
+  "addSomething": "Tambahkan {{ name }}",
+  "deleteAllSomething": "Hapus Semua {{ name }}",
+  "exportAllSomething": "Ekspor Semua {{ name }}",
+  "importLLMHistory": "Impor Sejarah LLM",
+  "downloadAllSomething": "Unduh Semua {{ name }}",
+  "language": {
+    "language_settings": "Pengaturan Bahasa",
+    "change-language": "Ganti Bahasa"
+  },
+  "theme": {
+    "turn-dark": "Aktifkan Mode Gelap",
+    "turn-light": "Aktifkan Mode Terang"
+  },
+  "auth": {
+    "usernameOrEmail": "Nama Pengguna atau Email",
+    "username": "Nama Pengguna",
+    "password": "Kata Sandi",
+    "confirmPassword": "Konfirmasi Kata Sandi",
+    "fullName": "Nama Lengkap",
+    "inviteCode": "Kode Undangan",
+    "needCode": "Butuh Kode?",
+    "noAccount": "Tidak punya akun?",
+    "haveAccount": "Sudah punya akun?",
+    "loginWithProvider": "Masuk dengan {{ provider }}",
+    "checking": "Memeriksa...",
+    "continue": "Lanjutkan",
+    "troubleSigningIn": "Kesulitan masuk?",
+    "signingInAs": "Masuk sebagai",
+    "signingIn": "Masuk...",
+    "backToEmail": "Kembali ke email",
+    "redirectingToProvider": "Mengalihkan ke login organisasi Anda...",
+    "resetInstructions": "Silakan masukkan alamat email Anda. Kami akan mengirimkan email untuk mengatur ulang kata sandi Anda.",
+    "sendResetEmail": "Kirim email pengaturan ulang kata sandi",
+    "email": "Email",
+    "resetEmailSentMessage": "Email telah dikirim! Silakan periksa email Anda untuk instruksi lebih lanjut",
+    "createAccountDesc": "Buat Akun",
+    "createBtn": "Buat Akun",
+    "loginBtn": "Masuk",
+    "passwordStrength": {
+      "label": "Kekuatan kata sandi",
+      "weak": "Lemah",
+      "fair": "Cukup",
+      "strong": "Kuat"
+    },
+    "passwordRequirements": {
+      "title": "Persyaratan kata sandi",
+      "minLength": "Minimal {{count}} karakter",
+      "uppercase": "Satu huruf kapital",
+      "lowercase": "Satu huruf kecil",
+      "number": "Satu angka",
+      "specialChar": "Satu karakter khusus",
+      "met": "terpenuhi",
+      "notMet": "belum terpenuhi"
+    },
+    "errors": {
+      "usernameExists": "Nama pengguna '{{username}}' sudah digunakan. Silakan pilih nama pengguna yang berbeda.",
+      "emailExists": "Akun dengan email '{{email}}' sudah ada. Silakan gunakan email yang berbeda atau masuk ke akun Anda yang sudah ada.",
+      "accountExists": "Akun dengan kredensial ini sudah ada. Silakan coba masuk atau gunakan kredensial yang berbeda.",
+      "invalidInviteCode": "Kode undangan yang Anda masukkan tidak valid atau telah kedaluwarsa. Silakan periksa dan coba lagi.",
+      "registrationFailed": "Pendaftaran gagal. Silakan coba lagi nanti.",
+      "validation": {
+        "generic": "Input tidak valid",
+        "invalidUsername": "Nama pengguna hanya boleh mengandung huruf, angka, garis bawah, titik, dan tanda hubung",
+        "passwordMismatch": "Kata sandi tidak cocok",
+        "passwordRequirements": "Kata sandi harus memiliki setidaknya 8 karakter, dengan huruf kapital dan kecil, angka, dan karakter khusus"
+      }
+    }
+  },
+  "search": "Cari",
+  "share": "Bagikan",
+  "rename": "Ganti Nama",
+  "favorite": "Favorit",
+  "unfavorite": "Hapus Favorit",
+  "delete": "Hapus",
+  "files": {
+    "showAttachedFiles": "Tampilkan File Terlampir",
+    "hideAttachedFiles": "Sembunyikan File Terlampir",
+    "title": "Berkas",
+    "upload": "Unggah File",
+    "long_title": "Penjelajah File"
+  },
+  "view": "Lihat",
+  "info": "Info",
+  "clone": "Klon",
+  "download": "Unduh",
+  "summarize": "Ringkas",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Koleksi",
+    "collections": {
+      "all_types": "Semua Tipe"
+    },
+    "users_profile": "Profil {{ name }}",
+    "storage_used": "Penyimpanan Digunakan",
+    "credits": "Kredit",
+    "subscription": "Langganan",
+    "edit": "Edit Profil",
+    "manage_subscription": "Kelola Langganan",
+    "upgrade": "Tingkatkan",
+    "credit_analytics": "Analisis Kredit",
+    "pricing": "Harga Kredit",
+    "show_purchases": "Tampilkan Pembelian",
+    "show_usage": "Tampilkan Penggunaan",
+    "show_combined": "Tampilkan Gabungan",
+    "buy_credits": "Beli Kredit"
+  },
+  "community": {
+    "title": "Komunitas",
+    "tooltip": "Komunitas",
+    "feed": "Umpan Komunitas"
+  },
+  "subscriptions": {
+    "title": "Langganan",
+    "expires_on": "Kedaluwarsa pada {{ date }}",
+    "renews_on": "Diperbarui pada {{ date }}"
+  },
+  "billing": {
+    "title": "Tagihan"
+  },
+  "credits": {
+    "title": "Kredit",
+    "usage": "Penggunaan Kredit",
+    "analytics": "Analisis Kredit",
+    "analytics_tooltip": "Lihat penggunaan kredit Anda dari waktu ke waktu",
+    "current_balance": "Saldo Kredit Saat Ini",
+    "credits": "kredit",
+    "usage_by_model": "Penggunaan berdasarkan Model",
+    "no_transactions": "Tidak ada transaksi kredit ditemukan dalam periode waktu ini",
+    "model_pricing": "Harga Model",
+    "text_models": "Model Teks",
+    "image_models": "Model Gambar",
+    "pricing_per_1k_tokens": "Harga yang ditampilkan dalam kredit per 1.000 token",
+    "pricing_per_generation": "Harga yang ditampilkan dalam kredit per generasi gambar",
+    "model_name": "Nama Model",
+    "price_tier": "Tingkat Harga",
+    "input_cost": "Biaya Masukan",
+    "output_cost": "Biaya Keluaran",
+    "generation_cost": "Biaya Generasi",
+    "no_models_available": "Tidak ada model yang tersedia",
+    "pricing_note": "Catatan: Harga bersifat perkiraan dan dapat bervariasi berdasarkan parameter model. Tingkat harga: $ (terendah), $$ (sedang), $$$ (premium).",
+    "burn_rate": "Penggunaan harian (tingkat pembakaran)",
+    "days_remaining": "Perkiraan hari tersisa",
+    "usage_pattern": "Berdasarkan pola penggunaan Anda dari {{days}} hari terakhir",
+    "credits_used": "Kredit Digunakan",
+    "credits_purchased": "Kredit Dibeli",
+    "net_credits": "Kredit Bersih"
+  },
+  "time": {
+    "last_7_days": "7 hari terakhir",
+    "last_30_days": "30 hari terakhir",
+    "last_90_days": "90 hari terakhir",
+    "last_180_days": "180 hari terakhir",
+    "last_365_days": "365 hari terakhir"
+  },
+  "common": {
+    "date": "Tanggal",
+    "refresh": "Segarkan",
+    "days": "hari",
+    "cancel": "Batal",
+    "save": "Simpan",
+    "delete": "Hapus",
+    "edit": "Edit",
+    "close": "Tutup",
+    "submit": "Kirim",
+    "loading": "Memuat...",
+    "error": "Kesalahan",
+    "success": "Sukses"
+  },
+  "errors": {
+    "failed_to_load_data": "Gagal memuat data. Silakan coba lagi nanti."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Koneksi Atlassian Anda telah kedaluwarsa. Silakan sambungkan kembali akun Anda."
+    }
+  },
+  "credits_modal": {
+    "title": "Kredit Tambahan",
+    "description": "Beli kredit tambahan untuk melanjutkan penggunaan model dan fitur AI kami yang canggih. Kredit digunakan untuk inferensi model dan fitur khusus, dengan model yang berbeda mengonsumsi jumlah yang bervariasi berdasarkan kompleksitas.",
+    "current_credits": "Jumlah kredit saat ini",
+    "best_value": "Nilai Terbaik",
+    "purchase_success": "Membeli {{credits}} kredit",
+    "history_title": "Riwayat Pembelian Kredit",
+    "purchase": "Pembelian",
+    "no_transactions": "Belum ada transaksi",
+    "low_credits": "Kredit Anda rendah",
+    "low_credits_sub": "Beli lebih banyak kredit untuk melanjutkan pekerjaan Anda.",
+    "no_credits": "Tidak ada kredit",
+    "no_credits_sub": "Beli kredit untuk melanjutkan pekerjaan Anda.",
+    "status": {
+      "completed": "Selesai",
+      "pending": "Dalam Proses",
+      "failed": "Gagal"
+    }
+  },
+  "settings": {
+    "title": "Pengaturan",
+    "tooltip": "Pengaturan",
+    "main": "Pengaturan Utama",
+    "account": "Akun",
+    "ai_features": "Fitur AI",
+    "connected_apps": {
+      "title": "Aplikasi Terhubung",
+      "link": "Tautan",
+      "unlink": "Putuskan Tautan"
+    },
+    "developer_tools": "Alat Pengembang",
+    "experimental_features": {
+      "title": "Fitur Eksperimental",
+      "tooltip": "Fitur Eksperimental",
+      "header": "Fitur Eksperimental",
+      "beta_features": {
+        "title": "Fitur Beta",
+        "subtitle": "Fitur-fitur ini masih dalam pengembangan dan mungkin menyebabkan hasil yang tidak terduga. Memilih untuk mengaktifkannya berarti Anda setuju untuk menggunakannya dalam keadaan saat ini."
+      }
+    },
+    "ui_preferences": "Preferensi UI"
+  },
+  "mementos": {
+    "title": "Kenangan",
+    "tooltip": "Kenangan"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Pengaturan Admin"
+  },
+  "speech": {
+    "title": "Ucapan",
+    "tooltip": "Ucapan ke Teks & Teks ke Ucapan"
+  },
+  "instructions": {
+    "title": "Instruksi",
+    "tooltip": "Instruksi"
+  },
+  "friends": {
+    "add_friend": "Tambahkan ke Teman",
+    "unfriend": "Hapus dari Teman",
+    "pending_request": "Permintaan Teman Tertunda",
+    "all": "Semua Teman",
+    "pending": "Tertunda"
+  },
+  "notebooks": {
+    "view_info": "Lihat Info Notebook",
+    "clone": "Klon Notebook",
+    "download": "Unduh Notebook",
+    "summarize": "Rangkum Notebook",
+    "delete": "Hapus Notebook",
+    "delete_confirm": "Apakah Anda yakin ingin menghapus \"{{ name }}\" secara permanen? Tindakan ini tidak dapat dibatalkan.",
+    "auto_rename": "Ganti Nama dengan AI"
+  },
+  "add_friend": {
+    "title": "Tambah Teman",
+    "friend_email": "Email Teman",
+    "message": "Pesan",
+    "cancel": "Batal",
+    "send": "Kirim",
+    "email_placeholder": "Masukkan email teman Anda",
+    "message_placeholder": "Masukkan pesan Anda"
+  },
+  "file_browser": {
+    "my_files": "Berkas Saya",
+    "shared_with_me": "Dibagikan kepada Saya",
+    "total_files": "Total Item Pengetahuan",
+    "search_placeholder": "Cari berdasarkan nama atau tag...",
+    "file_type": "Jenis Berkas",
+    "all_files": "Semua Berkas",
+    "text": "Teks",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Gambar",
+    "excel": "Excel",
+    "word": "Kata",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Kode",
+    "date_created": "Tanggal Dibuat",
+    "size": "Ukuran",
+    "name": "Nama",
+    "sort_z_to_a": "Urutkan Z ke A",
+    "sort_a_to_z": "Urutkan A ke Z",
+    "grid_view": "Tampilan Grid",
+    "list_view": "Tampilan Daftar",
+    "select_file_hint": "Dengan mengetuk, pilih berkas atau beberapa berkas dan tambahkan ke sesi buku catatan Anda!",
+    "session_one": "Buku Catatan",
+    "session_other": "Buku Catatan",
+    "no_files_available": "Tidak ada berkas tersedia",
+    "count_file_selected_one": "{{count}} file dipilih",
+    "count_file_selected_other": "{{count}} file dipilih",
+    "add_count_file_one": "Tambahkan {{count}} file",
+    "add_count_file_other": "Tambahkan {{count}} file",
+    "delete_count_file_one": "Hapus {{count}} file",
+    "delete_count_file_other": "Hapus {{count}} file",
+    "share_count_file_one": "Bagikan {{count}} Berkas",
+    "share_count_file_other": "Bagikan {{count}} Berkas",
+    "count_file_one": "{{count}} file",
+    "count_file_other": "{{count}} file",
+    "add_to_session_success": "Menambahkan berkas: {{fileNames}} ke {{sessionName}}",
+    "add_file_success": "Menambahkan berkas: {{fileNames}}",
+    "browse_files": "Jelajahi Berkas",
+    "create_new_knowledge": "Buat",
+    "create_new_knowledge_from_url": "Ambil URL",
+    "enter_url": "Masukkan URL",
+    "create_file": "Buat File",
+    "create_file_from_url": "Buat File",
+    "create_from_url": "Pengambilan Cepat",
+    "research": "Riset",
+    "open_research": "Buka Riset",
+    "url_success": "Berhasil membuat pengetahuan dari URL: {{url}}",
+    "url_error": "Gagal membuat pengetahuan dari URL: {{url}}",
+    "url_required": "Silakan masukkan URL",
+    "previous": "Sebelumnya",
+    "next": "Berikutnya",
+    "page_of": "Halaman {{current}} dari {{total}}",
+    "drop_files_here": "Letakkan berkas di sini",
+    "tagging": "Menandai...",
+    "tag_files": "Tandai Berkas",
+    "select_all": "Pilih Semua",
+    "unselect_all": "Batalkan Pilih Semua",
+    "add_files": "Tambah Berkas",
+    "add_files_to_notebook_one": "Tambahkan {{count}} Berkas ke Buku Catatan",
+    "add_files_to_notebook_other": "Tambahkan {{count}} Berkas ke Buku Catatan",
+    "in_project": "Dalam Proyek"
+  },
+  "file_properties": {
+    "title": "Properti Berkas",
+    "make_instructions": "Jadikan sebagai Instruksi?",
+    "instruction_priority": "Prioritas Instruksi (0–999)",
+    "priority_levels": {
+      "global": "0-100: Instruksi Global",
+      "group": "101-300: Instruksi Grup/Perusahaan",
+      "project": "301-500: Instruksi Proyek",
+      "user": "501-999: Instruksi Pengguna"
+    },
+    "save": "Simpan",
+    "update_success": "Memperbarui prioritas sistem untuk \"{{fileName}}\".",
+    "update_error": "Gagal memperbarui prioritas sistem."
+  },
+  "file_actions": {
+    "notes": "Catatan",
+    "notes_placeholder": "Tambahkan catatan tentang file ini...",
+    "add_notes": "Tambahkan Catatan",
+    "add_note": "Tambahkan Catatan",
+    "edit_notes": "Edit Catatan",
+    "notes_save_error": "Gagal menyimpan catatan",
+    "manage_tags": "Kelola Tag",
+    "tags": "Kelola Tag",
+    "tags_placeholder": "Masukkan nama tag dipisahkan dengan koma...",
+    "add_tag_one": "Diperbarui tag untuk {{count}} file",
+    "add_tag_other": "Diperbarui tag untuk {{count}} file",
+    "failed_to_add_tag_one": "Gagal memperbarui tag untuk file",
+    "failed_to_add_tag_other": "Gagal memperbarui tag untuk file",
+    "cancel": "Batal",
+    "save": "Simpan",
+    "download": "Unduh",
+    "vectorize": "Vektorisasi",
+    "instruction": "Instruksi {{priority}}",
+    "chunked": "Terpecah",
+    "not_chunked": "Tidak Terpecah"
+  },
+  "subscription_modal": {
+    "title": "Langganan",
+    "description": "Akses setiap model AI besar melalui satu antarmuka yang terpadu. Jalankan model lanjutan seperti Deepseek R1 secara pribadi.",
+    "no_free_tier": "TIDAK ADA TINGKAT GRATIS - FOKUS PADA PROFESIONAL.",
+    "credits_rollover": "Kredit yang tidak terpakai dapat digunakan selama 3 bulan.",
+    "monthly_billing": "Tagihan Bulanan",
+    "annual_billing": "Tagihan Tahunan",
+    "most_popular": "Paling Populer",
+    "current": "Saat Ini",
+    "credits_per_month": "{{credits}} kredit per bulan",
+    "subscription_renewal": "Langganan Anda diperbarui pada {{date}}",
+    "personal": "Pribadi",
+    "business": "Bisnis",
+    "team": "Tim",
+    "enterprise": "Perusahaan"
+  },
+  "agents": {
+    "title": "Agen",
+    "new_agent": "Agen Baru",
+    "manage_agents": "Kelola Agen",
+    "search_placeholder": "Cari agen...",
+    "your_agents": "Agen Anda",
+    "loading": "Memuat agen...",
+    "no_agents": "Tidak ada agen ditemukan",
+    "create_first": "Buat agen pertama Anda untuk memulai",
+    "agents_found": "{{count}} agen ditemukan",
+    "agents_found_plural": "{{count}} agen ditemukan",
+    "attached_agents": "Agen Terlampir",
+    "listening_description": "Agen-agennya mendengarkan semua pesan dalam percakapan ini",
+    "no_search_results": "Tidak ada agen yang cocok dengan \"{{search}}\"",
+    "search_help": "Coba istilah pencarian yang berbeda",
+    "no_agents_description": "Buat agen pertama Anda untuk memulai",
+    "create_agent": "Buat Agen",
+    "click_to_attach": "Klik untuk melampirkan ke sesi saat ini",
+    "click_to_detach": "Klik untuk memutuskan dari sesi saat ini",
+    "show_attached_agents": "Tampilkan Agen Terlampir",
+    "hide_attached_agents": "Sembunyikan Agen Terlampir",
+    "toggle_attached_agents": "Ganti Agen Terlampir",
+    "agent_listening_tooltip": "{{name}} sedang mendengarkan dan siap membantu"
+  },
+  "skills": {
+    "title": "Keterampilan",
+    "command_palette_description": "Kelola template instruksi yang dapat digunakan kembali"
+  }
+}

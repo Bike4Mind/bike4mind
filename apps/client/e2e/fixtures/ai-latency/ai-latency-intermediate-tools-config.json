@@ -1,0 +1,36 @@
+{
+  "thresholdSec": 150,
+  "prompts": [
+    {
+      "id": "reuters-top-stories",
+      "prompt": "Summarize the top 3 stories from reuters.com right now",
+      "expectedKeywords": ["Reuters", "story", "headline", "news"]
+    },
+    {
+      "id": "gpu-market-analysis",
+      "prompt": "Create a market analysis on GPU sales between Nvidia, AMD, and Intel",
+      "expectedKeywords": ["Nvidia", "AMD", "Intel", "GPU", "market"]
+    },
+    {
+      "id": "childrens-storybook",
+      "prompt": "Make a 10-page children's story book with a picture for the cover and each page",
+      "expectedKeywords": ["page", "story", "once upon", "illustration", "children"]
+    },
+    {
+      "id": "taipei-night-markets",
+      "prompt": "Create an article about the 3 most popular night markets in Taipei and add images for each market",
+      "expectedKeywords": ["Shilin", "Raohe", "Tonghua", "night market", "Taipei"]
+    },
+    {
+      "id": "smartphone-comparison",
+      "prompt": "Compare the latest iPhone, Samsung Galaxy, and Google Pixel smartphones in a table format",
+      "expectedKeywords": [
+        "iPhone",
+        "Samsung Galaxy",
+        "Google Pixel",
+        "camera",
+        "battery"
+      ]
+    }
+  ]
+}

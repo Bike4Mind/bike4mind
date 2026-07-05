@@ -1,0 +1,120 @@
+/**
+ * Memento retrieval helper for agent_executor (read-side parity).
+ *
+ * The chat-completion flow injects relevant mementos into the prompt via
+ * `MementoFeature.getContextMessages` (`b4m-core/services/src/llm/
+ * ChatCompletionFeatures.ts`). Before this helper, agent-mode runs never saw
+ * the user's prior mementos - so a fact stored in agent mode ("User enjoys
+ * chess on Saturdays") was invisible to the next agent run, even though the
+ * write side was already populating it.
+ *
+ * This helper produces a preamble string the caller appends to the
+ * first-iteration query. It mirrors the guards used by
+ * `publishMementoCompletion`:
+ *
+ * - `enableMementos !== true` -> no retrieval (user/admin disabled).
+ * - `parentExecutionId` set -> no retrieval. Subagent / DAG-child executions
+ *   inherit the parent's materialized context via the existing handoff path
+ *   and must not re-fetch (parity with the publish side).
+ *
+ * The caller (`processExecution` in `agentExecutor.ts`) gates on iteration 0
+ * of a new execution - same gate as `maybeBuildFirstIterationQuery` - so
+ * continuation Lambdas, gate-resumes, and DAG-resumes see the preamble
+ * already persisted inside the checkpointed first user message and do NOT
+ * re-fetch.
+ *
+ * Best-effort: a retrieval failure (Mongo blip, embedding API outage, missing
+ * embedding model setting) does NOT fail the run - the agent still has the
+ * user's query and runs un-personalized. Errors log and return ''.
+ */
+
+import type { Logger } from '@bike4mind/observability';
+import type { IAgentExecution } from '@bike4mind/database';
+import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
+import { mementoService } from '@bike4mind/services';
+
+export type MementoRetrievalExecution = Pick<
+  IAgentExecution,
+  'id' | 'userId' | 'query' | 'enableMementos' | 'parentExecutionId'
+>;
+
+export interface MementoRetrievalAdapters {
+  db: {
+    mementos: IMementoRepository;
+    apiKeys: Pick<IApiKeyRepository, 'findByUserIdAndTypes' | 'findByUserIdAndType'>;
+    adminSettings: IAdminSettingsRepository;
+  };
+}
+
+/**
+ * Strip line-terminator characters from memento summaries before splicing
+ * them into the preamble. Mementos are LLM-generated and stored per-user, so
+ * cross-user injection isn't a concern, but a newline inside a summary would
+ * still break the bullet-list shape the agent reads.
+ */
+function sanitizeSummary(summary: string): string {
+  return summary.replace(/[\r\n\t\v\f\u0085\u2028\u2029]/g, ' ');
+}
+
+/**
+ * Same `topK` / `minSimilarity` as `MementoFeature.getContextMessages` so
+ * agent-mode and chat-mode show the same set of mementos for the same prompt.
+ */
+const MEMENTO_TOP_K = 10;
+const MEMENTO_MIN_SIMILARITY = 0.75;
+
+export interface MementosPreambleResult {
+  preamble: string;
+  mementoIds: string[];
+}
+
+const EMPTY_RESULT: MementosPreambleResult = Object.freeze({ preamble: '', mementoIds: [] as string[] });
+
+export async function getFirstIterationMementosPreamble(
+  execution: MementoRetrievalExecution,
+  adapters: MementoRetrievalAdapters,
+  logger: Logger
+): Promise<MementosPreambleResult> {
+  if (!execution.enableMementos) return EMPTY_RESULT;
+  if (execution.parentExecutionId) return EMPTY_RESULT;
+
+  try {
+    const relevantMementos = await mementoService.getRelevantMementos(
+      execution.userId,
+      execution.query,
+      {
+        topK: MEMENTO_TOP_K,
+        minSimilarity: MEMENTO_MIN_SIMILARITY,
+        logger,
+      },
+      { db: adapters.db }
+    );
+
+    if (relevantMementos.length === 0) {
+      logger.info('[Mementos] No relevant mementos found for first iteration', { executionId: execution.id });
+      return EMPTY_RESULT;
+    }
+
+    const mementoIds = relevantMementos.map(({ memento }) => String(memento.id));
+    const lines = relevantMementos.map(
+      ({ memento, similarity }) => `  - [${Math.round(similarity * 100)}% relevant] ${sanitizeSummary(memento.summary)}`
+    );
+
+    logger.info('[Mementos] Injected mementos into first-iteration context', {
+      executionId: execution.id,
+      count: relevantMementos.length,
+    });
+
+    const preamble =
+      `\n\n[KNOWN FACTS ABOUT THE USER — Use these to personalize your response when relevant. ` +
+      `Do not mention this list explicitly unless asked.]\n${lines.join('\n')}`;
+
+    return { preamble, mementoIds };
+  } catch (err) {
+    logger.warn('[Mementos] Failed to retrieve mementos for first iteration — proceeding without preamble', {
+      executionId: execution.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return EMPTY_RESULT;
+  }
+}

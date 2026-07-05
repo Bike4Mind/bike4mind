@@ -1,0 +1,314 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, prod]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, closed]
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest-m
+    name: Deploy
+    concurrency:
+      group: deploy-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # Required for AWS OIDC authentication
+      issues: write
+      actions: read
+      packages: read
+      pull-requests: write
+    if: github.event_name != 'pull_request' || github.event.action != 'closed'
+
+    steps:
+      - name: Determine deployment configuration
+        id: config
+        run: |
+          # Determine deployment type based on trigger
+          if [ "${{ github.event_name }}" = "push" ]; then
+            if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+              echo "deploy_env=staging" |tee -a "$GITHUB_OUTPUT"
+              echo "stage=dev" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_account=dev" |tee -a "$GITHUB_OUTPUT"
+              echo "server_domain=${{ vars.STAGING_SERVER_DOMAIN || vars.SERVER_DOMAIN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "vpc_id=${{ vars.STAGING_VPC_ID || vars.VPC_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "hosted_zone=${{ vars.STAGING_HOSTED_ZONE || vars.HOSTED_ZONE }}" |tee -a "$GITHUB_OUTPUT"
+              echo "ecr_cache_repo=${{ vars.STAGING_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}" |tee -a "$GITHUB_OUTPUT"
+              echo "cache_policy_id=${{ vars.STAGING_CACHE_POLICY_ID || vars.CACHE_POLICY_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "is_preview=false" |tee -a "$GITHUB_OUTPUT"
+            elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
+              echo "deploy_env=production" |tee -a "$GITHUB_OUTPUT"
+              echo "stage=production" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_account=prod" |tee -a "$GITHUB_OUTPUT"
+              echo "server_domain=${{ vars.PROD_SERVER_DOMAIN || vars.SERVER_DOMAIN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "vpc_id=${{ vars.PROD_VPC_ID || vars.VPC_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "hosted_zone=${{ vars.PROD_HOSTED_ZONE || vars.HOSTED_ZONE }}" |tee -a "$GITHUB_OUTPUT"
+              echo "ecr_cache_repo=${{ vars.PROD_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}" |tee -a "$GITHUB_OUTPUT"
+              echo "cache_policy_id=${{ vars.PROD_CACHE_POLICY_ID || vars.CACHE_POLICY_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "is_preview=false" |tee -a "$GITHUB_OUTPUT"
+            else
+              echo "Unsupported branch for push: ${{ github.ref }}"
+              exit 1
+            fi
+          elif [ "${{ github.event_name }}" = "pull_request" ]; then
+            if [ "${{ github.event.action }}" = "closed" ]; then
+              echo "PR closed, skipping deployment"
+              exit 0
+            else
+              echo "deploy_env=preview" |tee -a "$GITHUB_OUTPUT"
+              echo "stage=pr${{ github.event.number }}" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_account=dev" |tee -a "$GITHUB_OUTPUT"
+              echo "server_domain=pr${{ github.event.number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "vpc_id=${{ vars.STAGING_VPC_ID || vars.VPC_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "hosted_zone=${{ vars.STAGING_HOSTED_ZONE || vars.HOSTED_ZONE }}" |tee -a "$GITHUB_OUTPUT"
+              echo "ecr_cache_repo=${{ vars.STAGING_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}" |tee -a "$GITHUB_OUTPUT"
+              echo "cache_policy_id=${{ vars.STAGING_CACHE_POLICY_ID || vars.CACHE_POLICY_ID }}" |tee -a "$GITHUB_OUTPUT"
+              echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" |tee -a "$GITHUB_OUTPUT"
+              echo "is_preview=true" |tee -a "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Unsupported event: ${{ github.event_name }}"
+            exit 1
+          fi
+
+          # Set app name with fallback to default
+          echo "app_name=${{ vars.SEED_APP_NAME || 'bike4mind' }}" |tee -a "$GITHUB_OUTPUT"
+
+          # Set function VPC with fallback to blank
+          echo "function_vpc=${{ vars.FUNCTION_VPC || '' }}" |tee -a "$GITHUB_OUTPUT"
+
+          # Set DocumentDB compatibility flag with fallback to false
+          echo "use_documentdb_compatibility=${{ vars.USE_DOCUMENTDB_COMPATIBILITY || 'false' }}" |tee -a "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # We arrange for the submodule below, using a dedicated SSH key
+          submodules: false
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '~9.7.0'
+
+      - name: Setup NPM auth
+        run: |
+          grep -q //registry.npmjs.org ~/.npmrc || echo '//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}' >>~/.npmrc
+          pnpm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ steps.config.outputs.aws_role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-${{ github.run_id }}-${{ steps.config.outputs.aws_account }}
+
+      - name: Fix Pulumi PATH conflict
+        run: |
+          # Remove system Pulumi that conflicts with SST's bundled version
+          # GitHub runner image ubuntu24/20260105 introduced this conflict
+          sudo rm -f /usr/local/bin/pulumi*
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}-
+
+      - name: Install dependencies
+        run: |
+          pnpm install --frozen-lockfile --recursive
+
+      - name: Cache Next.js build
+        uses: actions/cache@v4
+        with:
+          path: |
+            packages/client/.next/cache
+          key: ${{ runner.os }}-nextjs-${{ hashFiles('packages/client/**/package-lock.json', 'packages/client/**/pnpm-lock.yaml') }}-${{ hashFiles('packages/client/**/*.js', 'packages/client/**/*.jsx', 'packages/client/**/*.ts', 'packages/client/**/*.tsx') }}
+          restore-keys: |
+            ${{ runner.os }}-nextjs-${{ hashFiles('packages/client/**/package-lock.json', 'packages/client/**/pnpm-lock.yaml') }}-
+
+      - name: Generate SST types
+        # Specify a stage explicitlt to avoid questions during CI:
+        run: pnpm sst types --stage ${{ steps.config.outputs.stage }}
+        env:
+          CI: 'true'
+          SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
+          SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
+          SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}
+          HOSTED_ZONE: ${{ steps.config.outputs.hosted_zone }}
+          VPC_ID: ${{ steps.config.outputs.vpc_id }}
+          ECR_CACHE_REPO: ${{ steps.config.outputs.ecr_cache_repo }}
+          FUNCTION_VPC: ${{ steps.config.outputs.function_vpc }}
+          CACHE_POLICY_ID: ${{ steps.config.outputs.cache_policy_id }}
+          USE_DOCUMENTDB_COMPATIBILITY: ${{ steps.config.outputs.use_documentdb_compatibility }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Account-tied: set these repo/org variables to your own resources (no brand fallback).
+          # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
+          # in CI); GA_MEASUREMENT_ID is an optional GA4 property (empty == analytics disabled).
+          SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
+          GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+
+      - name: Type check (excluding client)
+        run: pnpm --recursive --filter=!client typecheck
+
+      # subscriber-fanout is now consumed as a published image from
+      # MillionOnMars/subscriber-fanout. SUBSCRIBER_FANOUT_IMAGE is set
+      # in the Deploy step's env.
+
+      - name: Deploy to AWS
+        env:
+          CI: 'true'
+          SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
+          SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
+          SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}
+          HOSTED_ZONE: ${{ steps.config.outputs.hosted_zone }}
+          VPC_ID: ${{ steps.config.outputs.vpc_id }}
+          ECR_CACHE_REPO: ${{ steps.config.outputs.ecr_cache_repo }}
+          FUNCTION_VPC: ${{ steps.config.outputs.function_vpc }}
+          CACHE_POLICY_ID: ${{ steps.config.outputs.cache_policy_id }}
+          USE_DOCUMENTDB_COMPATIBILITY: ${{ steps.config.outputs.use_documentdb_compatibility }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # Account-tied: set these repo/org variables to your own resources (no brand fallback).
+          # SUBSCRIBER_FANOUT_IMAGE is your published subscriber-fanout image reference (required
+          # in CI); GA_MEASUREMENT_ID is an optional GA4 property (empty == analytics disabled).
+          SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
+          GA_MEASUREMENT_ID: ${{ vars.GA_MEASUREMENT_ID }}
+        run: |
+          pnpm sst deploy --stage ${{ steps.config.outputs.stage }}
+
+      - name: Comment PR with deployment info
+        if: steps.config.outputs.is_preview == 'true' && github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const deploymentUrl = `https://app.${process.env.SERVER_DOMAIN}`;
+            const comment = `🚀 **Preview Deployment Ready!**
+
+            **Environment:** \`${process.env.STAGE}\`
+            **URL:** ${deploymentUrl}
+            **Stage:** \`${process.env.STAGE}\`
+            **AWS Account:** \`${process.env.AWS_ACCOUNT}\`
+
+            This preview will be automatically cleaned up when the PR is closed.`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+        env:
+          SERVER_DOMAIN: ${{ steps.config.outputs.server_domain }}
+          STAGE: ${{ steps.config.outputs.stage }}
+          AWS_ACCOUNT: ${{ steps.config.outputs.aws_account }}
+
+      - name: Output deployment info
+        run: |
+          echo "Deployment completed for stage: ${{ steps.config.outputs.stage }}"
+          echo "Server Domain: ${{ steps.config.outputs.server_domain }}"
+          echo "AWS Account: ${{ steps.config.outputs.aws_account }}"
+          echo "Is Preview: ${{ steps.config.outputs.is_preview }}"
+          echo "Deployment URL: https://app.${{ steps.config.outputs.server_domain }}"
+
+  cleanup-preview:
+    runs-on: ubuntu-latest-m
+    concurrency:
+      group: cleanup-${{ github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write # Required for AWS OIDC authentication
+      issues: write
+      actions: read
+      packages: read
+      pull-requests: write
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          # We arrange for the submodule below, using a dedicated SSH key
+          submodules: false
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup SSH for submodules
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SUBMODULE_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Init and update submodules
+        run: |
+          git submodule sync
+          git submodule update --init --recursive
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '~9.7.0'
+
+      - name: Configure AWS credentials for dev account
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-${{ github.run_id }}-dev-cleanup
+
+      - name: Fix Pulumi PATH conflict
+        run: |
+          # Remove system Pulumi that conflicts with SST's bundled version
+          # GitHub runner image ubuntu24/20260105 introduced this conflict
+          sudo rm -f /usr/local/bin/pulumi*
+
+      - name: Remove preview environment
+        env:
+          CI: 'true'
+          SEED_APP_NAME: ${{ vars.SEED_APP_NAME || 'bike4mind' }}
+          SEED_STAGE_NAME: pr${{ github.event.number }}
+          SERVER_DOMAIN: pr${{ github.event.number }}.${{ vars.PREVIEW_SERVER_DOMAIN }}
+          HOSTED_ZONE: ${{ vars.STAGING_HOSTED_ZONE || vars.HOSTED_ZONE }}
+          VPC_ID: ${{ vars.STAGING_VPC_ID || vars.VPC_ID }}
+          ECR_CACHE_REPO: ${{ vars.STAGING_ECR_CACHE_REPO || vars.ECR_CACHE_REPO }}
+          FUNCTION_VPC: ${{ vars.FUNCTION_VPC || '' }}
+          CACHE_POLICY_ID: ${{ vars.STAGING_CACHE_POLICY_ID || vars.CACHE_POLICY_ID || '' }}
+          USE_DOCUMENTDB_COMPATIBILITY: ${{ vars.USE_DOCUMENTDB_COMPATIBILITY || 'false' }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          pnpm sst remove --stage pr${{ github.event.number }} --yes

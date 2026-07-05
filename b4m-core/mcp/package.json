@@ -1,0 +1,80 @@
+{
+  "name": "@bike4mind/mcp",
+  "version": "1.40.3",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./atlassian/constants": {
+      "import": {
+        "types": "./dist/atlassian/constants.d.mts",
+        "default": "./dist/atlassian/constants.mjs"
+      },
+      "require": {
+        "types": "./dist/atlassian/constants.d.cts",
+        "default": "./dist/atlassian/constants.cjs"
+      }
+    },
+    "./github/constants": {
+      "import": {
+        "types": "./dist/github/constants.d.mts",
+        "default": "./dist/github/constants.mjs"
+      },
+      "require": {
+        "types": "./dist/github/constants.d.cts",
+        "default": "./dist/github/constants.cjs"
+      }
+    },
+    "./notion/constants": {
+      "import": {
+        "types": "./dist/notion/constants.d.mts",
+        "default": "./dist/notion/constants.mjs"
+      },
+      "require": {
+        "types": "./dist/notion/constants.d.cts",
+        "default": "./dist/notion/constants.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/unzipper": "^0.10.11",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.97.1",
+    "@bike4mind/common": "workspace:*",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@octokit/rest": "^22.0.1",
+    "unzipper": "^0.12.3",
+    "zod": "^4.4.3"
+  }
+}

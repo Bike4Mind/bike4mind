@@ -1,0 +1,130 @@
+import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
+import mongoose from 'mongoose';
+import type { MongoMemoryServer } from 'mongodb-memory-server';
+import { createMongoServer } from '../../__test__/createMongoServer';
+import { UsageEvent, usageEventRepository } from './UsageEventModel';
+import { CreditHolderType, IUsageEventInput } from '@bike4mind/common';
+
+let mongod: MongoMemoryServer;
+
+beforeAll(async () => {
+  mongod = await createMongoServer();
+  await mongoose.connect(mongod.getUri());
+  await UsageEvent.syncIndexes();
+});
+
+afterAll(async () => {
+  await mongoose.disconnect();
+  await mongod.stop();
+});
+
+afterEach(async () => {
+  await UsageEvent.deleteMany({});
+});
+
+const baseEvent: IUsageEventInput = {
+  requestId: 'quest-1',
+  userId: 'user-1',
+  ownerId: 'user-1',
+  ownerType: CreditHolderType.User,
+  sessionId: 'session-1',
+  feature: 'chat',
+  provider: 'bedrock',
+  model: 'claude-sonnet-4-5',
+  inputTokens: 1000,
+  outputTokens: 500,
+  cachedInputTokens: 0,
+  cacheWriteTokens: 0,
+  costUsd: 0.01,
+  creditsCharged: 50,
+  status: 'ok',
+};
+
+const record = (overrides: Partial<IUsageEventInput> = {}) =>
+  usageEventRepository.record({ ...baseEvent, ...overrides });
+
+describe('UsageEventRepository', () => {
+  describe('record', () => {
+    it('persists an event with all quantities and money fields', async () => {
+      const doc = await record({
+        providerInputTokens: 900,
+        providerOutputTokens: 480,
+        latencyMs: 1234,
+      });
+
+      expect(doc).not.toBeNull();
+      expect(doc!.costUsd).toBe(0.01);
+      expect(doc!.creditsCharged).toBe(50);
+      expect(doc!.providerInputTokens).toBe(900);
+      expect(doc!.createdAt).toBeInstanceOf(Date);
+    });
+
+    it('rejects an unknown feature', async () => {
+      await expect(record({ feature: 'nonsense' as IUsageEventInput['feature'] })).rejects.toThrow();
+    });
+  });
+
+  describe('marginByModelDay', () => {
+    it('groups cost and credits per provider/model per UTC day', async () => {
+      await record({ costUsd: 0.01, creditsCharged: 50 });
+      await record({ costUsd: 0.02, creditsCharged: 100 });
+      await record({ model: 'gpt-4o', provider: 'openai', costUsd: 0.05, creditsCharged: 250 });
+
+      const rows = await usageEventRepository.marginByModelDay();
+
+      expect(rows).toHaveLength(2);
+      const sonnet = rows.find(r => r.model === 'claude-sonnet-4-5');
+      expect(sonnet).toMatchObject({ provider: 'bedrock', requests: 2 });
+      expect(sonnet!.cogsUsd).toBeCloseTo(0.03, 10);
+      expect(sonnet!.creditsCharged).toBe(150);
+      expect(sonnet!.day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('excludes events older than the since date', async () => {
+      await record();
+      const rows = await usageEventRepository.marginByModelDay(new Date(Date.now() + 60_000));
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('marginByUser', () => {
+    it('sorts worst margin (lowest credits per USD) first', async () => {
+      // user-cheap pays 10 credits per $0.01 (1000 credits/$); user-rich pays 100 (10000 credits/$)
+      await record({ userId: 'user-cheap', ownerId: 'user-cheap', costUsd: 0.01, creditsCharged: 10 });
+      await record({ userId: 'user-rich', ownerId: 'user-rich', costUsd: 0.01, creditsCharged: 100 });
+
+      const rows = await usageEventRepository.marginByUser();
+
+      expect(rows.map(r => r.userId)).toEqual(['user-cheap', 'user-rich']);
+      expect(rows[0]).toMatchObject({ requests: 1, creditsCharged: 10 });
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await record();
+      // Raw driver update: mongoose timestamps make createdAt immutable via the model.
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+      const rows = await usageEventRepository.marginByUser(30);
+      expect(rows).toHaveLength(0);
+    });
+  });
+
+  describe('monthlyCogsByProvider', () => {
+    it('sums cost and token quantities per provider per month, newest first', async () => {
+      await record({ inputTokens: 1000, outputTokens: 500, cachedInputTokens: 200 });
+      await record({ inputTokens: 2000, outputTokens: 700, cachedInputTokens: 0 });
+      await record({ provider: 'openai', model: 'gpt-4o', inputTokens: 10, outputTokens: 5 });
+
+      const rows = await usageEventRepository.monthlyCogsByProvider();
+
+      expect(rows).toHaveLength(2);
+      const bedrock = rows.find(r => r.provider === 'bedrock');
+      expect(bedrock).toMatchObject({
+        requests: 2,
+        inputTokens: 3000,
+        outputTokens: 1200,
+        cachedInputTokens: 200,
+      });
+      expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
+    });
+  });
+});

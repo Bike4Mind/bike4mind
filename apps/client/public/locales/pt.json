@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Configurações de IA",
+    "session": "Caderno",
+    "session_plural": "Cadernos",
+    "favorite": "Favorito",
+    "unfavorite": "Desfavoritar",
+    "favorites": "Favoritos",
+    "favorites_count_one": "{{count}} Favorito",
+    "favorites_count_other": "{{count}} Favoritos",
+    "currentSession": "Atual",
+    "other": "Outras Tags",
+    "text_model": "Modelo de Texto",
+    "image_model": "Modelo de Imagem",
+    "ai_image": "Imagem de IA",
+    "switch_to": "Mudar para {{ name }}"
+  },
+  "guide": {
+    "title": "Guia"
+  },
+  "intro": {
+    "title": "Introdução"
+  },
+  "developers": {
+    "title": "Desenvolvedores",
+    "technical_docs": "Documentação Técnica"
+  },
+  "changelog": {
+    "title": "Registro de Mudanças"
+  },
+  "feedback": {
+    "send": "Enviar Feedback"
+  },
+  "terms_policies": "Termos e Políticas",
+  "login": "Entrar",
+  "file": "Conhecimento",
+  "forgotPassword": "Esqueceu a senha",
+  "signup": "Inscrever-se",
+  "help": "Ajuda",
+  "manual": "Manual",
+  "inviteLong": "Convidar um amigo",
+  "inviteShort": "Convidar",
+  "tools": {
+    "title": "Ferramentas"
+  },
+  "sidenav": {
+    "pin": "Fixar barra lateral",
+    "unpin": "Desfixar barra lateral",
+    "sessions": {
+      "sort": {
+        "label": "Classificar Por",
+        "tags": "Por Tags",
+        "date": "Por Data"
+      },
+      "new": "Novo Chat",
+      "item": {
+        "genTags": "Gerar lista de tags do Notebook"
+      }
+    }
+  },
+  "referral": {
+    "title": "Indique um amigo para",
+    "email_title_default": "Bem-vindo ao GrokTool!",
+    "email_body_default": "Você foi convidado por USER_NAME para o GrokTool! LINK DE REGISTRO: Use o seguinte código de convite para se inscrever: INVITE_CODE",
+    "friend_email": "E-mail do amigo",
+    "num_referrals_available": "Referências disponíveis:",
+    "no_valid_emails_error": "Por favor, insira endereços de e-mail válidos",
+    "send_referral": "Enviar Referência",
+    "send_referral_success": "Referência enviada com sucesso!",
+    "send_referral_skipped": "{{count}} convite(s) ignorado(s) — esses endereços de email já possuem uma conta.",
+    "send_referral_failed": "{{count}} convite(s) não pôde(ram) ser enviado(s). Por favor, tente novamente.",
+    "send_referral_error": "Erro ao enviar referência. Por favor, tente novamente.",
+    "slack_notification_default": "Referência enviada pelo usuário USER_NAME:USER_ID para FRIEND_EMAIL"
+  },
+  "activateVoice": "Ativar esta voz",
+  "liveVoice": "Voz ao vivo",
+  "whatsNew": "O que há de novo",
+  "welcome": "Bem-vindo ao {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Conectando",
+      "1": "Conectado",
+      "2": "Desconectando",
+      "3": "Desconectado",
+      "-1": "Pendente"
+    },
+    "networkStatus": "Rede: {{ status }}"
+  },
+  "deleteVoice": "Excluir esta voz",
+  "deleteVoiceConfirm": "Tem certeza de que deseja excluir esta voz?",
+  "organization": {
+    "organizations": "Equipes",
+    "defaultName": "Minha organização",
+    "shared": "Compartilhado Comigo",
+    "create": "Criar Equipe",
+    "search": "Pesquisar equipes...",
+    "no_organizations": "Nenhuma equipe encontrada",
+    "view_details": "Ver Detalhes",
+    "x_seats": "{{count}} assentos",
+    "active_subscription": "Assinatura Ativa",
+    "no_subscription": "Sem Assinatura",
+    "x_members": "{{count}} membros",
+    "x_credits": "{{count}} créditos",
+    "owner": "Proprietário"
+  },
+  "session": {
+    "typeYourMessage": "Digite sua mensagem aqui",
+    "switchedSession": "Mudou para: {{ sessionName }}",
+    "send": "Enviar",
+    "sendMessage": "Enviar mensagem",
+    "preparingQuest": "Preparando missão...",
+    "rephrasePrompt": "Otimize sua entrada",
+    "promptRephrased": "Prompt reformulado com sucesso",
+    "rephraseFailed": "Falha ao reformular o prompt",
+    "errors": {
+      "notebookDeleted": "Este notebook foi excluído. Por favor, crie um novo.",
+      "noPermission": "Você não tem permissão para acessar este notebook.",
+      "invalidRequest": "Requisição inválida. Por favor, tente novamente.",
+      "tooManyRequests": "Muitas requisições. Por favor, aguarde um momento e tente novamente.",
+      "serverError": "Erro no servidor. Por favor, tente novamente mais tarde.",
+      "networkError": "Falha ao enviar a mensagem. Por favor, verifique sua conexão.",
+      "sendFailed": "Falha ao enviar a mensagem. Por favor, tente novamente."
+    }
+  },
+  "projects": {
+    "title": "Projeto",
+    "projects": "Projetos",
+    "joined_projects": "Projetos Participados",
+    "no_joined_projects": "Nenhum projeto associado ainda",
+    "add_to_project": "Adicionar ao Projeto",
+    "modals": {
+      "files": {
+        "title": "Adicionar Arquivos ao Projeto",
+        "subtitle": "Selecione arquivos para adicionar ao seu projeto",
+        "button_label": "Adicionar Arquivos",
+        "search_placeholder": "Buscar arquivos",
+        "no_files": "Nenhum arquivo encontrado."
+      },
+      "members": {
+        "title": "Adicionar Membros ao Projeto",
+        "subtitle": "Busque e selecione usuários para adicionar ao seu projeto",
+        "button_label": "Adicionar Membros",
+        "search_placeholder": "Buscar usuários",
+        "no_members": "Tente pesquisar por um usuário."
+      },
+      "sessions": {
+        "title": "Adicionar Caderno a um Projeto",
+        "subtitle": "Selecione cadernos para adicionar ao seu projeto ou crie um novo",
+        "button_label": "Adicionar Cadernos",
+        "search_placeholder": "Buscar",
+        "create_button": "Criar",
+        "no_notebooks": "Nenhum caderno encontrado. Tente criar um novo."
+      },
+      "generic": {
+        "select_all": "Selecionar Todos",
+        "unselect_all": "Desmarcar Todos",
+        "add_items_one": "Adicionar {{count}} item",
+        "add_items_other": "Adicionar {{count}} itens",
+        "delete_items": "Excluir {{count}} itens"
+      }
+    }
+  },
+  "logout": "Sair",
+  "inbox": {
+    "title": "Caixa de entrada",
+    "messages": "Mensagens",
+    "invites": "Convites",
+    "sendMessage": "Enviar uma mensagem",
+    "noMessages": "Sem mensagens"
+  },
+  "addSomething": "Adicionar {{ name }}",
+  "deleteAllSomething": "Excluir todos {{ name }}",
+  "exportAllSomething": "Exportar todos {{ name }}",
+  "importLLMHistory": "Importar histórico do LLM",
+  "downloadAllSomething": "Baixar todos {{ name }}",
+  "language": {
+    "language_settings": "Configurações de Idioma",
+    "change-language": "Mudar idioma"
+  },
+  "theme": {
+    "turn-dark": "Ativar modo escuro",
+    "turn-light": "Ativar modo claro"
+  },
+  "auth": {
+    "usernameOrEmail": "Nome de usuário ou Email",
+    "username": "Nome de usuário",
+    "password": "Senha",
+    "confirmPassword": "Confirmar Senha",
+    "fullName": "Nome Completo",
+    "inviteCode": "Código de Convite",
+    "needCode": "Precisa de um código?",
+    "noAccount": "Não tem uma conta?",
+    "haveAccount": "Já tem uma conta?",
+    "loginWithProvider": "Entrar com {{ provider }}",
+    "checking": "Verificando...",
+    "continue": "Continuar",
+    "troubleSigningIn": "Problemas para entrar?",
+    "signingInAs": "Entrando como",
+    "signingIn": "Entrando...",
+    "backToEmail": "Voltar ao email",
+    "redirectingToProvider": "Redirecionando para o login da sua organização...",
+    "resetInstructions": "Por favor, insira seu endereço de email. Enviaremos um email para redefinir sua senha.",
+    "sendResetEmail": "Enviar email de redefinição de senha",
+    "email": "Email",
+    "resetEmailSentMessage": "Email foi enviado! Por favor, verifique seu email para mais instruções",
+    "createAccountDesc": "Criar uma conta",
+    "createBtn": "Criar conta",
+    "loginBtn": "Entrar",
+    "passwordStrength": {
+      "label": "Força da senha",
+      "weak": "Fraca",
+      "fair": "Razoável",
+      "strong": "Forte"
+    },
+    "passwordRequirements": {
+      "title": "Requisitos da senha",
+      "minLength": "Pelo menos {{count}} caracteres",
+      "uppercase": "Uma letra maiúscula",
+      "lowercase": "Uma letra minúscula",
+      "number": "Um número",
+      "specialChar": "Um caractere especial",
+      "met": "atendido",
+      "notMet": "ainda não atendido"
+    },
+    "errors": {
+      "usernameExists": "Nome de usuário '{{username}}' já está em uso. Por favor, escolha um nome diferente.",
+      "emailExists": "Uma conta com o email '{{email}}' já existe. Por favor, use um email diferente ou faça login em sua conta existente.",
+      "accountExists": "Uma conta com essas credenciais já existe. Por favor, tente fazer login ou use credenciais diferentes.",
+      "invalidInviteCode": "O código de convite que você inseriu é inválido ou expirou. Por favor, verifique e tente novamente.",
+      "registrationFailed": "Falha no registro. Por favor, tente novamente mais tarde.",
+      "validation": {
+        "generic": "Entrada inválida",
+        "invalidUsername": "O nome de usuário pode conter apenas letras, números, sublinhados, pontos e hifens",
+        "passwordMismatch": "As senhas não coincidem",
+        "passwordRequirements": "A senha deve ter pelo menos 8 caracteres, com letras maiúsculas e minúsculas, um número e um caractere especial"
+      }
+    }
+  },
+  "search": "Pesquisar",
+  "share": "Compartilhar",
+  "rename": "Renomear",
+  "favorite": "Favorito",
+  "unfavorite": "Desfavoritar",
+  "delete": "Excluir",
+  "files": {
+    "showAttachedFiles": "Mostrar Arquivos Anexados",
+    "hideAttachedFiles": "Ocultar Arquivos Anexados",
+    "title": "Arquivos",
+    "upload": "Carregar Arquivos",
+    "long_title": "Navegador de Arquivos"
+  },
+  "view": "Visualizar",
+  "info": "Informações",
+  "clone": "Clonar",
+  "download": "Baixar",
+  "summarize": "Resumir",
+  "profile": {
+    "title": "Perfil",
+    "tooltip": "Perfil",
+    "collection": "Coleção",
+    "collections": {
+      "all_types": "Todos os Tipos"
+    },
+    "users_profile": "Perfil de {{ name }}",
+    "storage_used": "Armazenamento Usado",
+    "credits": "Créditos",
+    "subscription": "Assinatura",
+    "edit": "Editar Perfil",
+    "manage_subscription": "Gerenciar Assinatura",
+    "upgrade": "Atualizar",
+    "credit_analytics": "Análise de Créditos",
+    "pricing": "Preços de Créditos",
+    "show_purchases": "Mostrar Compras",
+    "show_usage": "Mostrar Uso",
+    "show_combined": "Mostrar Combinado",
+    "buy_credits": "Comprar Créditos"
+  },
+  "community": {
+    "title": "Comunidade",
+    "tooltip": "Comunidade",
+    "feed": "Feed da Comunidade"
+  },
+  "subscriptions": {
+    "title": "Assinaturas",
+    "expires_on": "Expira em {{ date }}",
+    "renews_on": "Renova em {{ date }}"
+  },
+  "billing": {
+    "title": "Cobrança"
+  },
+  "credits": {
+    "title": "Créditos",
+    "usage": "Uso de Créditos",
+    "analytics": "Análise de Créditos",
+    "analytics_tooltip": "Veja seu uso de créditos ao longo do tempo",
+    "current_balance": "Saldo Atual de Créditos",
+    "credits": "créditos",
+    "usage_by_model": "Uso por Modelo",
+    "no_transactions": "Nenhuma transação de crédito encontrada neste período",
+    "model_pricing": "Precificação de Modelo",
+    "text_models": "Modelos de Texto",
+    "image_models": "Modelos de Imagem",
+    "pricing_per_1k_tokens": "Preços mostrados em créditos por 1.000 tokens",
+    "pricing_per_generation": "Preços mostrados em créditos por geração de imagem",
+    "model_name": "Nome do Modelo",
+    "price_tier": "Faixa de Preço",
+    "input_cost": "Custo de Entrada",
+    "output_cost": "Custo de Saída",
+    "generation_cost": "Custo de Geração",
+    "no_models_available": "Nenhum modelo disponível",
+    "pricing_note": "Nota: Os preços são aproximados e podem variar com base nos parâmetros do modelo. Faixas de preço: $ (mais baixo), $$ (médio), $$$ (premium).",
+    "burn_rate": "Uso diário (taxa de queima)",
+    "days_remaining": "Dias restantes estimados",
+    "usage_pattern": "Baseado no seu padrão de uso dos últimos {{days}} dias",
+    "credits_used": "Créditos Usados",
+    "credits_purchased": "Créditos Comprados",
+    "net_credits": "Créditos Líquidos"
+  },
+  "time": {
+    "last_7_days": "Últimos 7 dias",
+    "last_30_days": "Últimos 30 dias",
+    "last_90_days": "Últimos 90 dias",
+    "last_180_days": "Últimos 180 dias",
+    "last_365_days": "Últimos 365 dias"
+  },
+  "common": {
+    "date": "Data",
+    "refresh": "Atualizar",
+    "days": "dias",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "delete": "Excluir",
+    "edit": "Editar",
+    "close": "Fechar",
+    "submit": "Enviar",
+    "loading": "Carregando...",
+    "error": "Erro",
+    "success": "Sucesso"
+  },
+  "errors": {
+    "failed_to_load_data": "Falha ao carregar os dados. Tente novamente mais tarde."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Sua conexão Atlassian expirou. Por favor, reconecte sua conta."
+    }
+  },
+  "credits_modal": {
+    "title": "Créditos Adicionais",
+    "description": "Compre créditos adicionais para continuar usando nossos modelos e recursos avançados de IA. Os créditos são usados para inferência de modelos e recursos especiais, com diferentes modelos consumindo quantidades variadas com base na complexidade.",
+    "current_credits": "Quantidade atual de créditos",
+    "best_value": "Melhor Valor",
+    "purchase_success": "Comprados {{credits}} créditos",
+    "history_title": "Histórico de Compras de Créditos",
+    "purchase": "Comprar",
+    "no_transactions": "Nenhuma transação ainda",
+    "low_credits": "Seus créditos estão baixos",
+    "low_credits_sub": "Compre mais créditos para continuar seu trabalho.",
+    "no_credits": "Nenhum crédito",
+    "no_credits_sub": "Compre créditos para continuar seu trabalho.",
+    "status": {
+      "completed": "Concluído",
+      "pending": "Pendente",
+      "failed": "Falhou"
+    }
+  },
+  "settings": {
+    "title": "Configurações",
+    "tooltip": "Configurações",
+    "main": "Configurações Principais",
+    "account": "Conta",
+    "ai_features": "Recursos de IA",
+    "connected_apps": {
+      "title": "Aplicativos Conectados",
+      "link": "Vincular",
+      "unlink": "Desvincular"
+    },
+    "developer_tools": "Ferramentas de Desenvolvedor",
+    "experimental_features": {
+      "title": "Recursos Experimentais",
+      "tooltip": "Recursos Experimentais",
+      "header": "Recursos Experimentais",
+      "beta_features": {
+        "title": "Recursos Beta",
+        "subtitle": "Esses recursos ainda estão em desenvolvimento e podem causar resultados inesperados. Optar por habilitá-los significa que você concorda em usá-los em seu estado atual."
+      }
+    },
+    "ui_preferences": "Preferências de UI"
+  },
+  "mementos": {
+    "title": "Lembranças",
+    "tooltip": "Lembranças"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Configurações de Admin"
+  },
+  "speech": {
+    "title": "Fala",
+    "tooltip": "Fala para Texto & Texto para Fala"
+  },
+  "instructions": {
+    "title": "Instruções",
+    "tooltip": "Instruções"
+  },
+  "friends": {
+    "add_friend": "Adicionar aos Amigos",
+    "unfriend": "Remover dos Amigos",
+    "pending_request": "Solicitação de Amizade Pendente",
+    "all": "Todos os Amigos",
+    "pending": "Pendente"
+  },
+  "notebooks": {
+    "view_info": "Ver Informações do Caderno",
+    "clone": "Clonar Caderno",
+    "download": "Baixar Caderno",
+    "summarize": "Resumir Caderno",
+    "delete": "Excluir Caderno",
+    "delete_confirm": "Você tem certeza de que deseja excluir permanentemente \"{{ name }}\"? Esta ação não pode ser desfeita.",
+    "auto_rename": "Renomear com IA"
+  },
+  "add_friend": {
+    "title": "Adicionar um Amigo",
+    "friend_email": "Email do Amigo",
+    "message": "Mensagem",
+    "cancel": "Cancelar",
+    "send": "Enviar",
+    "email_placeholder": "Digite o email do seu amigo",
+    "message_placeholder": "Digite sua mensagem"
+  },
+  "file_browser": {
+    "my_files": "Meus Arquivos",
+    "shared_with_me": "Compartilhado Comigo",
+    "total_files": "Total de Itens de Conhecimento",
+    "search_placeholder": "Pesquisar por nome ou tag...",
+    "file_type": "Tipo de Arquivo",
+    "all_files": "Todos os Arquivos",
+    "text": "Texto",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Imagem",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Código",
+    "date_created": "Data de Criação",
+    "size": "Tamanho",
+    "name": "Nome",
+    "sort_z_to_a": "Ordenar de Z a A",
+    "sort_a_to_z": "Ordenar de A a Z",
+    "grid_view": "Visualização em Grade",
+    "list_view": "Visualização em Lista",
+    "select_file_hint": "Ao tocar, selecione o arquivo ou vários arquivos e adicione-os à sua sessão de caderno!",
+    "session_one": "Caderno",
+    "session_other": "Cadernos",
+    "no_files_available": "Nenhum arquivo disponível",
+    "count_file_selected_one": "{{count}} arquivo selecionado",
+    "count_file_selected_other": "{{count}} arquivos selecionados",
+    "add_count_file_one": "Adicionar {{count}} arquivo",
+    "add_count_file_other": "Adicionar {{count}} arquivos",
+    "delete_count_file_one": "Excluir {{count}} arquivo",
+    "delete_count_file_other": "Excluir {{count}} arquivos",
+    "share_count_file_one": "Compartilhar {{count}} arquivo",
+    "share_count_file_other": "Compartilhar {{count}} arquivos",
+    "count_file_one": "{{count}} arquivo",
+    "count_file_other": "{{count}} arquivos",
+    "add_to_session_success": "Adicionando arquivo: {{fileNames}} à {{sessionName}}",
+    "add_file_success": "Adicionando arquivo: {{fileNames}}",
+    "browse_files": "Navegar Arquivos",
+    "create_new_knowledge": "Criar",
+    "create_new_knowledge_from_url": "Raspar URL",
+    "enter_url": "Digite a URL",
+    "create_file": "Criar Arquivo",
+    "create_file_from_url": "Criar Arquivo",
+    "create_from_url": "Raspagem Rápida",
+    "research": "Pesquisa",
+    "open_research": "Abrir Pesquisa",
+    "url_success": "Conhecimento criado com sucesso a partir da URL: {{url}}",
+    "url_error": "Falha ao criar conhecimento a partir da URL: {{url}}",
+    "url_required": "Por favor, insira uma URL",
+    "previous": "Anterior",
+    "next": "Próximo",
+    "page_of": "Página {{current}} de {{total}}",
+    "drop_files_here": "Solte os arquivos aqui",
+    "tagging": "Etiquetando...",
+    "tag_files": "Etiquetar Arquivos",
+    "select_all": "Selecionar Tudo",
+    "unselect_all": "Deselecionar Tudo",
+    "add_files": "Adicionar Arquivos",
+    "add_files_to_notebook_one": "Adicionar {{count}} arquivo ao Notebook",
+    "add_files_to_notebook_other": "Adicionar {{count}} arquivos ao Notebook",
+    "in_project": "No Projeto"
+  },
+  "file_properties": {
+    "title": "Propriedades do Arquivo",
+    "make_instructions": "Transformar em Instruções?",
+    "instruction_priority": "Prioridade da Instrução (0–999)",
+    "priority_levels": {
+      "global": "0-100: Instruções Globais",
+      "group": "101-300: Instruções de Grupo/Empresa",
+      "project": "301-500: Instruções do Projeto",
+      "user": "501-999: Instruções do Usuário"
+    },
+    "save": "Salvar",
+    "update_success": "Prioridade do sistema atualizada para \"{{fileName}}\".",
+    "update_error": "Falha ao atualizar a prioridade do sistema."
+  },
+  "file_actions": {
+    "notes": "Notas",
+    "notes_placeholder": "Adicione notas sobre este arquivo...",
+    "add_notes": "Adicionar Notas",
+    "add_note": "Adicionar Nota",
+    "edit_notes": "Editar Notas",
+    "notes_save_error": "Falha ao salvar notas",
+    "manage_tags": "Gerenciar Etiquetas",
+    "tags": "Gerenciar Tags",
+    "tags_placeholder": "Digite nomes de etiquetas separados por vírgulas...",
+    "add_tag_one": "Tag atualizado para {{count}} arquivo",
+    "add_tag_other": "Tag atualizado para {{count}} arquivos",
+    "failed_to_add_tag_one": "Falha ao atualizar a tag do arquivo",
+    "failed_to_add_tag_other": "Falha ao atualizar a tag dos arquivos",
+    "cancel": "Cancelar",
+    "save": "Salvar",
+    "download": "Baixar",
+    "vectorize": "Vetorização",
+    "instruction": "Instrução {{priority}}",
+    "chunked": "Fragmentado",
+    "not_chunked": "Não Fragmentado"
+  },
+  "subscription_modal": {
+    "title": "Assinatura",
+    "description": "Acesse todos os principais modelos de IA através de uma interface unificada. Execute modelos avançados como o Deepseek R1 de forma privada.",
+    "no_free_tier": "SEM CAMADA GRÁTIS - FOCO EM PROFISSIONAIS.",
+    "credits_rollover": "Créditos não utilizados são acumulados por 3 meses.",
+    "monthly_billing": "Faturamento Mensal",
+    "annual_billing": "Faturamento Anual",
+    "most_popular": "Mais Popular",
+    "current": "Atual",
+    "credits_per_month": "{{credits}} créditos por mês",
+    "subscription_renewal": "Sua assinatura será renovada em {{date}}",
+    "personal": "Pessoal",
+    "business": "Negócios",
+    "team": "Equipe",
+    "enterprise": "Empresarial"
+  },
+  "agents": {
+    "title": "Agentes",
+    "new_agent": "Novo Agente",
+    "manage_agents": "Gerenciar Agentes",
+    "search_placeholder": "Pesquisar agentes...",
+    "your_agents": "Seus Agentes",
+    "loading": "Carregando agentes...",
+    "no_agents": "Nenhum agente encontrado",
+    "create_first": "Crie seu primeiro agente para começar",
+    "agents_found": "{{count}} agente encontrado",
+    "agents_found_plural": "{{count}} agentes encontrados",
+    "attached_agents": "Agentes Anexados",
+    "listening_description": "Esses agentes estão ouvindo todas as mensagens nesta conversa",
+    "no_search_results": "Nenhum agente corresponde a \"{{search}}\"",
+    "search_help": "Tente um termo de pesquisa diferente",
+    "no_agents_description": "Crie seu primeiro agente para começar",
+    "create_agent": "Criar Agente",
+    "click_to_attach": "Clique para anexar à sessão atual",
+    "click_to_detach": "Clique para desanexar da sessão atual",
+    "show_attached_agents": "Mostrar Agentes Anexados",
+    "hide_attached_agents": "Ocultar Agentes Anexados",
+    "toggle_attached_agents": "Alternar Agentes Anexados",
+    "agent_listening_tooltip": "{{name}} está ouvindo e ansioso para ajudar"
+  },
+  "skills": {
+    "title": "Habilidades",
+    "command_palette_description": "Gerenciar modelos reutilizáveis de instruções"
+  }
+}

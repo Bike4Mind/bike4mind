@@ -1,0 +1,96 @@
+From: alice@example.com
+To: alice.anderson@app.example.com
+Subject: Test Email - AWS Bedrock Multi-Agent Framework Announcement
+Date: Tue, 15 Oct 2024 10:30:00 -0700
+Message-ID: <test-12345@example.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="----=_Part_1234567890"
+
+------=_Part_1234567890
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+</head>
+<body>
+    <h2>AWS Bedrock Multi-Agent Framework</h2>
+
+    <p>Hi Team,</p>
+
+    <p>I wanted to share some exciting news from AWS. They've just announced the new <strong>Bedrock Multi-Agent Framework</strong>, which enables orchestration of multiple AI agents for complex workflows.</p>
+
+    <h3>Key Features:</h3>
+    <ul>
+        <li>Multi-agent orchestration with dynamic task allocation</li>
+        <li>Built-in conversation memory and context management</li>
+        <li>Integration with existing AWS services (Lambda, S3, DynamoDB)</li>
+        <li>Support for custom agent definitions and tools</li>
+    </ul>
+
+    <p>This could be really valuable for our platform's AI capabilities. The attached whitepaper has technical details, and you can read more on the <a href="https://aws.amazon.com/bedrock/agents/">AWS Bedrock Agents page</a>.</p>
+
+    <p>Let's discuss this in our next AI/ML practice meeting.</p>
+
+    <p>Best regards,<br>
+    Alice Anderson<br>
+    CEO, Example Corp</p>
+
+    <hr>
+    <p style="font-size: 10px; color: #888;">
+        This email was forwarded to your platform address for automatic ingestion.<br>
+        Original sender: aws-announcements@amazon.com
+    </p>
+</body>
+</html>
+
+------=_Part_1234567890
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+AWS Bedrock Multi-Agent Framework
+
+Hi Team,
+
+I wanted to share some exciting news from AWS. They've just announced the new Bedrock Multi-Agent Framework, which enables orchestration of multiple AI agents for complex workflows.
+
+Key Features:
+- Multi-agent orchestration with dynamic task allocation
+- Built-in conversation memory and context management
+- Integration with existing AWS services (Lambda, S3, DynamoDB)
+- Support for custom agent definitions and tools
+
+This could be really valuable for our platform's AI capabilities. The attached whitepaper has technical details, and you can read more on the AWS Bedrock Agents page (https://aws.amazon.com/bedrock/agents/).
+
+Let's discuss this in our next AI/ML practice meeting.
+
+Best regards,
+Alice Anderson
+CEO, Example Corp
+
+---
+This email was forwarded to your platform address for automatic ingestion.
+Original sender: aws-announcements@amazon.com
+
+------=_Part_1234567890
+Content-Type: application/pdf; name="bedrock-whitepaper.pdf"
+Content-Transfer-Encoding: base64
+Content-Disposition: attachment; filename="bedrock-whitepaper.pdf"
+
+JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9GaWx0ZXIvRmxhdGVEZWNvZGUvTGVuZ3RoIDQ5Pj5z
+dHJlYW0KeJwr5HIK4TI2UzA0VzDiMuQyNFYwAEJDBSMuQwtDBQMgUDBQMAJSRoYKZgpGQKECLgCL
+9gyxCmVuZHN0cmVhbQplbmRvYmoKMSAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDQgMCBSL1Jl
+c291cmNlcyAyIDAgUi9NZWRpYUJveFswIDAgNTk1IDg0Ml0vR3JvdXA8PC9TL1RyYW5zcGFyZW5j
+eS9DUy9EZXZpY2VSR0IvSSB0cnVlPj4vQ29udGVudHMgMyAwIFI+PgplbmRvYmoKNCAwIG9iago8
+PC9UeXBlL1BhZ2VzL0NvdW50IDEvS2lkc1sxIDAgUl0+PgplbmRvYmoKNSAwIG9iago8PC9UeXBl
+L0NhdGFsb2cvUGFnZXMgNCAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9Qcm9jU2V0Wy9QREYvVGV4
+dF0vRm9udDw8L0YxIDYgMCBSPj4+PgplbmRvYmoKNiAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlw
+ZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKeHJlZgowIDcKMDAwMDAwMDAwMCA2
+NTUzNSBmIAowMDAwMDAwMTY2IDAwMDAwIG4gCjAwMDAwMDAzNzIgMDAwMDAgbiAKMDAwMDAwMDAx
+NSAwMDAwMCBuIAowMDAwMDAwMzAyIDAwMDAwIG4gCjAwMDAwMDAzNTkgMDAwMDAgbiAKMDAwMDAw
+MDQzMSAwMDAwMCBuIAp0cmFpbGVyCjw8L1NpemUgNy9Sb290IDUgMCBSL0luZm8gOCAwIFI+Pgpz
+dGFydHhyZWYKNTE4CiUlRU9GCg==
+
+------=_Part_1234567890--

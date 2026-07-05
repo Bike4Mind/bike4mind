@@ -1,0 +1,844 @@
+import React, { useState } from 'react';
+import {
+  Box,
+  Typography,
+  Table,
+  Sheet,
+  CircularProgress,
+  Alert,
+  Button,
+  Stack,
+  FormControl,
+  FormLabel,
+  Input,
+  IconButton,
+  Chip,
+  Select,
+  Option,
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
+  Divider,
+  Grid,
+  Card,
+  CardContent,
+  Modal,
+  ModalDialog,
+  ModalClose,
+  Textarea,
+  ButtonGroup,
+  Snackbar,
+} from '@mui/joy';
+import RefreshIcon from '@mui/icons-material/Refresh';
+import SearchIcon from '@mui/icons-material/Search';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import SaveIcon from '@mui/icons-material/Save';
+import RestartAltIcon from '@mui/icons-material/RestartAlt';
+import PriceChangeIcon from '@mui/icons-material/PriceChange';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
+import CreditCardIcon from '@mui/icons-material/CreditCard';
+import { useGetUsers } from '@client/app/hooks/data/user';
+import { api } from '@client/app/contexts/ApiContext';
+import { useMutation } from '@tanstack/react-query';
+import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
+import { ModelInfo } from '@bike4mind/common';
+
+// Create a custom hook for admin user credit update
+function useUpdateUserCredits() {
+  return useMutation({
+    mutationFn: async ({ userId, credits, note }: { userId: string; credits: number; note?: string }) => {
+      const response = await api.put(`/api/users/${userId}/update`, {
+        currentCredits: credits,
+        adminNote: note ? `Credit adjustment: ${note}` : 'Credit adjustment by admin',
+      });
+      return response.data;
+    },
+  });
+}
+
+const CreditAnalyticsTab: React.FC = () => {
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
+  const [pageSize, setPageSize] = useState(50);
+  const [showModelSettings, setShowModelSettings] = useState(false);
+  const [selectedModelType, setSelectedModelType] = useState<string>('all');
+
+  // Fetch the actual model information from the API
+  const { data: modelInfos, isLoading: isLoadingModels, error: modelError } = useModelInfo();
+
+  // State to hold the editable model settings
+  const [modelSettings, setModelSettings] = useState<ModelInfo[]>([]);
+
+  // Notifications state
+  const [notification, setNotification] = useState<{
+    open: boolean;
+    message: string;
+    color: 'success' | 'danger' | 'warning';
+  }>({
+    open: false,
+    message: '',
+    color: 'success',
+  });
+
+  // Credit adjustment modal state
+  const [creditModalOpen, setCreditModalOpen] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<any>(null);
+  const [creditAmount, setCreditAmount] = useState<number>(100);
+  const [creditNote, setCreditNote] = useState('');
+
+  // Get the mutation hook for updating user credits
+  const updateUserCreditsMutation = useUpdateUserCredits();
+
+  // Fetch users with proper pagination parameters
+  const {
+    data: allUsers,
+    isLoading,
+    isError,
+    refetch,
+  } = useGetUsers({
+    page: 1,
+    limit: 1000, // Request a large number to get most/all users
+  });
+
+  // State to track API operation loading state
+  const [isSaving, setIsSaving] = useState(false);
+
+  // Update modelSettings when modelInfos are loaded
+  React.useEffect(() => {
+    if (modelInfos) {
+      // First, create a copy of the model infos from the API
+      const editableModels = modelInfos.map(model => ({ ...model }));
+
+      // Log the GPT-4o Mini pricing for debugging
+      const gpt4oMini = editableModels.find(model => model.id === 'gpt-4o-mini');
+      if (gpt4oMini) {
+        console.log('GPT-4o Mini model before custom pricing:', gpt4oMini);
+        console.log('GPT-4o Mini pricing:', gpt4oMini.pricing);
+
+        // Log the calculated cost
+        const cost = calculateModelCost(gpt4oMini);
+        console.log('Calculated GPT-4o Mini costs:', cost);
+      } else {
+        console.log('GPT-4o Mini model not found in API data');
+      }
+
+      setModelSettings(editableModels);
+
+      // Then fetch any custom pricing that might have been saved previously
+      fetchCustomPricing(editableModels);
+    }
+  }, [modelInfos]);
+
+  // Helper function to calculate model cost in credits
+  const calculateModelCost = (model: ModelInfo): { inputCost: number; outputCost: number } => {
+    if (!model.pricing || Object.keys(model.pricing).length === 0) {
+      return { inputCost: 0, outputCost: 0 };
+    }
+
+    // Special case for specific models we know have very low costs
+    // GPT-4o Mini specifically has very small costs that need special handling
+    if (model.id === 'gpt-4o-mini') {
+      // Hardcode minimum values based on the actual pricing from OpenAI
+      // $0.15/1M input tokens → 0.15 credits per 1K tokens
+      // $0.60/1M output tokens → 0.6 credits per 1K tokens
+      return {
+        inputCost: 0.15,
+        outputCost: 0.6,
+      };
+    }
+
+    // Use the first pricing tier
+    const firstKey = Number(Object.keys(model.pricing)[0]);
+    if (isNaN(firstKey) || !model.pricing[firstKey]) {
+      return { inputCost: 0, outputCost: 0 };
+    }
+
+    if (model.type === 'image') {
+      // Image models: pricing stored in dollars
+      // We convert to credits (1 USD = ~1000 credits for simplicity)
+      // Ensure at least 0.1 credit by using Math.max
+      const inputCredits = Math.max(0.1, parseFloat((model.pricing[firstKey].input * 1000).toFixed(2)));
+      const outputCredits = Math.max(0.1, parseFloat((model.pricing[firstKey].output * 1000).toFixed(2)));
+      return { inputCost: inputCredits, outputCost: outputCredits };
+    } else {
+      // Text models: cost per 1000 tokens
+      // Prices are in dollars per token, we multiply by 1000 to get cost per 1000 tokens
+      // Then convert to credits (1 USD = ~1000 credits for simplicity)
+      const rawInputCredits = model.pricing[firstKey].input * 1000 * 1000;
+      const rawOutputCredits = model.pricing[firstKey].output * 1000 * 1000;
+
+      // For very small values, ensure we display at least 0.1 credits
+      const inputCredits = Math.max(
+        0.1,
+        rawInputCredits < 1 ? parseFloat(rawInputCredits.toFixed(2)) : Math.round(rawInputCredits)
+      );
+
+      const outputCredits = Math.max(
+        0.1,
+        rawOutputCredits < 1 ? parseFloat(rawOutputCredits.toFixed(2)) : Math.round(rawOutputCredits)
+      );
+
+      return { inputCost: inputCredits, outputCost: outputCredits };
+    }
+  };
+
+  // Process and filter users
+  const filteredAndSortedUsers = React.useMemo(() => {
+    if (!allUsers?.users) return [];
+
+    // Using any type to avoid TypeScript errors with the API response shape
+    const users = allUsers.users as any[];
+
+    // Filter users based on search query
+    const filtered = searchQuery
+      ? users.filter(
+          user =>
+            (user.email?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+            (user.fullName?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
+            (user.id?.toLowerCase() || '').includes(searchQuery.toLowerCase())
+        )
+      : users;
+
+    // Sort by credits
+    const sorted = [...filtered].sort((a, b) => {
+      const aCredits = a.currentCredits || 0;
+      const bCredits = b.currentCredits || 0;
+
+      return sortDirection === 'desc' ? bCredits - aCredits : aCredits - bCredits;
+    });
+
+    return sorted;
+  }, [allUsers, searchQuery, sortDirection]);
+
+  const toggleSortDirection = () => {
+    setSortDirection(prev => (prev === 'desc' ? 'asc' : 'desc'));
+  };
+
+  const handleRefresh = () => {
+    refetch();
+  };
+
+  // Format date to relative time in a simple way
+  const formatRelativeTime = (dateString: any) => {
+    if (!dateString) return null;
+
+    try {
+      const date = new Date(dateString);
+      const now = new Date();
+      const diffMs = now.getTime() - date.getTime();
+
+      // Convert to days, hours, minutes
+      const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMinutes = Math.floor(diffMs / (1000 * 60));
+
+      if (diffDays > 30) {
+        // Return formatted date for older dates
+        return `${date.toLocaleDateString()}`;
+      } else if (diffDays > 0) {
+        return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+      } else if (diffHours > 0) {
+        return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+      } else if (diffMinutes > 0) {
+        return `${diffMinutes} minute${diffMinutes > 1 ? 's' : ''} ago`;
+      } else {
+        return 'Just now';
+      }
+    } catch (error) {
+      return 'Invalid date';
+    }
+  };
+
+  // Handle model settings change
+  const handleModelCostChange = (modelId: string, costType: 'inputCost' | 'outputCost', value: string) => {
+    const numValue = parseFloat(value);
+    if (isNaN(numValue)) return;
+
+    setModelSettings(prev =>
+      prev.map(model => {
+        if (model.id === modelId) {
+          // For GPT-4o Mini and other special cases, we need to update the actual pricing data
+          if (model.id === 'gpt-4o-mini' || numValue < 1) {
+            // Get the first pricing tier key
+            const pricingKeys = Object.keys(model.pricing || {});
+            if (pricingKeys.length === 0) return model;
+
+            const firstKey = Number(pricingKeys[0]);
+            if (isNaN(firstKey)) return model;
+
+            // Convert the credit value back to dollars per token
+            const dollarValue =
+              model.type === 'image'
+                ? numValue / 1000 // For image models, credits/1000 = dollars
+                : numValue / 1000 / 1000; // For text models, credits/1000/1000 = dollars per token
+
+            // Create a new pricing structure with updated value
+            const newPricing = { ...model.pricing };
+            newPricing[firstKey] = {
+              ...newPricing[firstKey],
+              [costType === 'inputCost' ? 'input' : 'output']: dollarValue,
+            };
+
+            // Return model with updated pricing
+            return { ...model, pricing: newPricing, [costType]: numValue };
+          }
+
+          // For normal models, just update the display value
+          return { ...model, [costType]: numValue };
+        }
+        return model;
+      })
+    );
+  };
+
+  // Reset model settings to original values
+  const handleResetSettings = async () => {
+    try {
+      if (modelInfos) {
+        // Reset to the original model data from the API
+        const resetModels = modelInfos.map(model => ({ ...model }));
+        setModelSettings(resetModels);
+        showNotification('Settings reset to defaults', 'success');
+      }
+    } catch (error) {
+      console.error('Error resetting settings:', error);
+      showNotification('Error resetting settings', 'danger');
+    }
+  };
+
+  // Save model settings using AdminSettings
+  const handleSaveSettings = async () => {
+    setIsSaving(true);
+    try {
+      // Keep track of all save operations
+      const savePromises = [];
+
+      // Process each model
+      for (const model of modelSettings) {
+        // Get the first pricing tier key
+        const pricingKeys = Object.keys(model.pricing || {});
+        if (pricingKeys.length === 0) continue;
+
+        const firstKey = Number(pricingKeys[0]);
+
+        // Get the current costs in credits
+        const { inputCost, outputCost } = calculateModelCost(model);
+
+        // Prepare the pricing data structure
+        const pricingData: Record<number, { input: number; output: number }> = {};
+
+        if (model.type === 'image') {
+          // For image models, convert credits back to dollars
+          // Ensure small values don't become zero
+          pricingData[firstKey] = {
+            input: Math.max(inputCost / 1000, 0.00001), // Minimum value to prevent zero
+            output: Math.max(outputCost / 1000, 0.00001),
+          };
+        } else {
+          // For text models, convert credits back to dollars per token
+          // Ensure small values don't become zero
+          pricingData[firstKey] = {
+            input: Math.max(inputCost / 1000 / 1000, 0.00000001), // Minimum value to prevent zero
+            output: Math.max(outputCost / 1000 / 1000, 0.00000001),
+          };
+        }
+
+        // Create a setting name for this model
+        const settingName = `modelPricing_${model.id}`;
+
+        // Add this model's save operation to our promises
+        savePromises.push(
+          api.put('/api/settings/update', {
+            key: settingName,
+            value: JSON.stringify(pricingData),
+          })
+        );
+      }
+
+      // Wait for all save operations to complete
+      await Promise.all(savePromises);
+
+      // Show success notification
+      showNotification('Model pricing settings saved successfully!', 'success');
+    } catch (error) {
+      console.error('Error saving model pricing settings:', error);
+      showNotification(`Error saving settings: ${(error as Error)?.message || 'Unknown error'}`, 'danger');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // Open the credit adjustment modal for a user
+  const openCreditModal = (user: any) => {
+    setSelectedUser(user);
+    setCreditAmount(100); // Default amount
+    setCreditNote('');
+    setCreditModalOpen(true);
+  };
+
+  // Show notification
+  const showNotification = (message: string, color: 'success' | 'danger' | 'warning') => {
+    setNotification({
+      open: true,
+      message,
+      color,
+    });
+
+    // Auto-close after 5 seconds
+    setTimeout(() => {
+      setNotification(prev => ({ ...prev, open: false }));
+    }, 5000);
+  };
+
+  // Handle credit adjustment (add or remove)
+  const handleCreditAdjustment = async (isAdd: boolean) => {
+    if (!selectedUser) return;
+
+    const operation = isAdd ? 'adding to' : 'removing from';
+    const effectiveAmount = isAdd ? creditAmount : -creditAmount;
+    const newTotal = (selectedUser.currentCredits || 0) + effectiveAmount;
+
+    try {
+      // Call the API to update the user's credits
+      await updateUserCreditsMutation.mutateAsync({
+        userId: selectedUser.id,
+        credits: newTotal, // Set the new total credits value
+        note: creditNote || `Admin ${isAdd ? 'added' : 'removed'} ${creditAmount} credits`,
+      });
+
+      // Close the modal
+      setCreditModalOpen(false);
+
+      // Show success notification
+      showNotification(
+        `Successfully ${isAdd ? 'added' : 'removed'} ${creditAmount} credits ${isAdd ? 'to' : 'from'} ${selectedUser.fullName || selectedUser.email}`,
+        'success'
+      );
+
+      // Refresh the data to get updated user credits
+      refetch();
+    } catch (error) {
+      console.error('Error adjusting credits:', error);
+      showNotification(`Error ${operation} credits: ${(error as Error)?.message || 'Unknown error'}`, 'danger');
+    }
+  };
+
+  // Filter models by type
+  const filteredModels =
+    selectedModelType === 'all' ? modelSettings : modelSettings.filter(model => model.type === selectedModelType);
+
+  // Fetch any custom pricing from AdminSettings
+  const fetchCustomPricing = async (baseModels: ModelInfo[]) => {
+    try {
+      // Call the API to get all admin settings
+      const response = await api.get('/api/settings');
+
+      if (response.data && Array.isArray(response.data)) {
+        // Create a map to store custom pricing settings
+        const customPricingMap: Record<string, Record<number, { input: number; output: number }>> = {};
+
+        // Filter only model pricing settings and parse them
+        response.data.forEach((setting: any) => {
+          // Check if this is a model pricing setting
+          if (setting.settingName && setting.settingName.startsWith('modelPricing_')) {
+            const modelId = setting.settingName.replace('modelPricing_', '');
+            try {
+              // Parse the JSON value from the setting
+              const pricingData = JSON.parse(setting.settingValue);
+              customPricingMap[modelId] = pricingData;
+            } catch (error) {
+              console.error('Error parsing pricing data for model %s:', modelId, error);
+            }
+          }
+        });
+
+        // Update the models with any custom pricing
+        const updatedModels = baseModels.map(model => {
+          if (customPricingMap[model.id]) {
+            // Replace the pricing with custom pricing
+            return {
+              ...model,
+              pricing: customPricingMap[model.id],
+            };
+          }
+          return model;
+        });
+
+        // Update the state with the customized models
+        setModelSettings(updatedModels);
+      }
+    } catch (error) {
+      console.error('Error fetching custom pricing from admin settings:', error);
+      // Don't show a notification for this error, just log it
+    }
+  };
+
+  return (
+    <Box sx={{ p: 2, height: '100%', overflow: 'auto' }}>
+      <Typography level="h2" sx={{ mb: 3 }}>
+        Credit Analytics
+      </Typography>
+
+      {/* Model Cost Settings */}
+      <Accordion expanded={showModelSettings} onChange={() => setShowModelSettings(!showModelSettings)} sx={{ mb: 3 }}>
+        <AccordionSummary
+          indicator={<ExpandMoreIcon />}
+          sx={{
+            bgcolor: 'primary.softBg',
+            '&:hover': { bgcolor: 'primary.softHoverBg' },
+          }}
+        >
+          <Stack direction="row" spacing={1} alignItems="center">
+            <PriceChangeIcon />
+            <Typography level="title-md">Model Cost Settings</Typography>
+          </Stack>
+        </AccordionSummary>
+        <AccordionDetails>
+          <Box sx={{ p: 2 }}>
+            <Stack direction="row" spacing={2} alignItems="center" sx={{ mb: 2 }}>
+              <Typography level="title-md">Configure Credit Costs Per Model</Typography>
+              <FormControl size="sm" sx={{ minWidth: 150 }}>
+                <FormLabel>Filter by Type</FormLabel>
+                <Select
+                  value={selectedModelType}
+                  onChange={(_, value) => setSelectedModelType(value as string)}
+                  size="sm"
+                >
+                  <Option value="all">All Models</Option>
+                  <Option value="text">Text Models</Option>
+                  <Option value="image">Image Models</Option>
+                </Select>
+              </FormControl>
+            </Stack>
+
+            <Alert color="warning" sx={{ mb: 2 }}>
+              Note: These settings control how many credits are charged for each model. Changes will affect all new
+              requests immediately.
+            </Alert>
+
+            {isLoadingModels ? (
+              <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+                <CircularProgress />
+              </Box>
+            ) : modelError ? (
+              <Alert color="danger" sx={{ mb: 2 }}>
+                Error loading model data. Please try refreshing.
+              </Alert>
+            ) : (
+              <Grid container spacing={2}>
+                {filteredModels.map(model => {
+                  const { inputCost, outputCost } = calculateModelCost(model);
+
+                  return (
+                    <Grid xs={12} sm={6} md={4} key={model.id}>
+                      <Card variant="outlined">
+                        <CardContent>
+                          <Stack spacing={2}>
+                            <Typography level="title-sm">
+                              {model.name}
+                              <Chip
+                                size="sm"
+                                variant="soft"
+                                color={model.type === 'text' ? 'primary' : 'success'}
+                                sx={{ ml: 1 }}
+                              >
+                                {model.type === 'text' ? 'Text' : 'Image'}
+                              </Chip>
+                            </Typography>
+
+                            <FormControl size="sm">
+                              <FormLabel>Input Cost (per 1K tokens)</FormLabel>
+                              <Input
+                                type="number"
+                                value={inputCost}
+                                onChange={e => handleModelCostChange(model.id, 'inputCost', e.target.value)}
+                                startDecorator=""
+                                endDecorator="credits"
+                                slotProps={{ input: { min: 0, step: 0.1 } }}
+                              />
+                            </FormControl>
+
+                            <FormControl size="sm">
+                              <FormLabel>Output Cost (per 1K tokens)</FormLabel>
+                              <Input
+                                type="number"
+                                value={outputCost}
+                                onChange={e => handleModelCostChange(model.id, 'outputCost', e.target.value)}
+                                startDecorator=""
+                                endDecorator="credits"
+                                slotProps={{ input: { min: 0, step: 0.1 } }}
+                              />
+                            </FormControl>
+                          </Stack>
+                        </CardContent>
+                      </Card>
+                    </Grid>
+                  );
+                })}
+              </Grid>
+            )}
+
+            <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
+              <Button
+                variant="outlined"
+                color="neutral"
+                startDecorator={<RestartAltIcon />}
+                onClick={handleResetSettings}
+                disabled={isSaving}
+              >
+                Reset to Defaults
+              </Button>
+              <Button
+                variant="solid"
+                color="primary"
+                startDecorator={<SaveIcon />}
+                onClick={handleSaveSettings}
+                loading={isSaving}
+                disabled={isSaving}
+              >
+                Save Changes
+              </Button>
+            </Stack>
+          </Box>
+        </AccordionDetails>
+      </Accordion>
+
+      <Divider sx={{ my: 3 }} />
+
+      {/* Users List Header */}
+      <Typography level="title-lg" sx={{ mb: 2 }}>
+        User Credits Overview
+      </Typography>
+
+      {/* Controls */}
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2} sx={{ mb: 3 }} alignItems="flex-end">
+        <FormControl sx={{ minWidth: 200 }}>
+          <FormLabel>Search Users</FormLabel>
+          <Input
+            startDecorator={<SearchIcon />}
+            placeholder="Search by name or email"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+          />
+        </FormControl>
+
+        <FormControl sx={{ minWidth: 120 }}>
+          <FormLabel>Results Per Page</FormLabel>
+          <Select value={pageSize} onChange={(_, value) => setPageSize(value as number)} size="sm">
+            <Option value={10}>10</Option>
+            <Option value={25}>25</Option>
+            <Option value={50}>50</Option>
+            <Option value={100}>100</Option>
+            <Option value={1000}>All</Option>
+          </Select>
+        </FormControl>
+
+        <Button
+          variant="outlined"
+          color="neutral"
+          onClick={toggleSortDirection}
+          startDecorator={sortDirection === 'desc' ? '↓' : '↑'}
+        >
+          Sort by Credits: {sortDirection === 'desc' ? 'Highest First' : 'Lowest First'}
+        </Button>
+
+        <IconButton onClick={handleRefresh} color="primary">
+          <RefreshIcon />
+        </IconButton>
+      </Stack>
+
+      {/* Results Count */}
+      <Typography level="body-sm" sx={{ mb: 2 }}>
+        Showing {Math.min(filteredAndSortedUsers.length, pageSize)} of {filteredAndSortedUsers.length} users
+        {searchQuery && ` (filtered by "${searchQuery}")`}
+      </Typography>
+
+      {/* Users Table */}
+      {isLoading ? (
+        <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+          <CircularProgress />
+        </Box>
+      ) : isError ? (
+        <Alert color="danger" sx={{ mb: 2 }}>
+          Error loading user data. Please try refreshing.
+        </Alert>
+      ) : filteredAndSortedUsers.length === 0 ? (
+        <Alert color="neutral" sx={{ mb: 2 }}>
+          No users found. {searchQuery && 'Try adjusting your search.'}
+        </Alert>
+      ) : (
+        <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'auto' }}>
+          <Table stickyHeader hoverRow>
+            <thead>
+              <tr>
+                <th style={{ width: '20%' }}>User</th>
+                <th style={{ width: '15%' }}>Credits</th>
+                <th style={{ width: '15%' }}>Last Login</th>
+                <th style={{ width: '15%' }}>Status</th>
+                <th style={{ width: '15%' }}>Created</th>
+                <th style={{ width: '20%' }}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAndSortedUsers.slice(0, pageSize).map((user: any) => (
+                <tr key={user.id}>
+                  <td>
+                    <Stack>
+                      <Typography level="body-sm" fontWeight="lg">
+                        {user.fullName || 'No Name'}
+                      </Typography>
+                      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                        {user.email || 'No Email'}
+                      </Typography>
+                    </Stack>
+                  </td>
+                  <td>
+                    <Typography fontWeight="lg">{user.currentCredits?.toLocaleString() || 0}</Typography>
+                  </td>
+                  <td>
+                    {user.lastLoginAt ? (
+                      <Typography level="body-sm">{formatRelativeTime(user.lastLoginAt)}</Typography>
+                    ) : (
+                      <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                        Never
+                      </Typography>
+                    )}
+                  </td>
+                  <td>
+                    <Chip size="sm" variant="soft" color={user.isActive ? 'success' : 'neutral'}>
+                      {user.isActive ? 'Active' : 'Inactive'}
+                    </Chip>
+                    {user.isAdmin && (
+                      <Chip size="sm" variant="soft" color="primary" sx={{ ml: 0.5 }}>
+                        Admin
+                      </Chip>
+                    )}
+                  </td>
+                  <td>
+                    {user.createdAt ? (
+                      <Typography level="body-sm">{formatRelativeTime(user.createdAt)}</Typography>
+                    ) : (
+                      <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                        Unknown
+                      </Typography>
+                    )}
+                  </td>
+                  <td>
+                    <Stack direction="row" spacing={1}>
+                      <Button
+                        size="sm"
+                        variant="plain"
+                        color="primary"
+                        onClick={() => {
+                          // View user profile or details logic here
+                        }}
+                      >
+                        View
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="soft"
+                        color="primary"
+                        startDecorator={<CreditCardIcon />}
+                        onClick={() => openCreditModal(user)}
+                      >
+                        Credits
+                      </Button>
+                    </Stack>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        </Sheet>
+      )}
+
+      {/* Credit Adjustment Modal */}
+      <Modal open={creditModalOpen} onClose={() => setCreditModalOpen(false)}>
+        <ModalDialog aria-labelledby="credit-adjustment-modal" size="md">
+          <ModalClose />
+          <Typography id="credit-adjustment-modal" level="h4" mb={2}>
+            Adjust Credits
+          </Typography>
+
+          {selectedUser && (
+            <>
+              <Typography level="body-md" mb={2}>
+                User: <strong>{selectedUser.fullName || selectedUser.email}</strong>
+              </Typography>
+
+              <Typography level="body-md" mb={1}>
+                Current Balance: <strong>{selectedUser.currentCredits?.toLocaleString() || 0} credits</strong>
+              </Typography>
+
+              <FormControl sx={{ mb: 2 }}>
+                <FormLabel>Amount</FormLabel>
+                <Input
+                  type="number"
+                  value={creditAmount}
+                  onChange={e => {
+                    const value = parseInt(e.target.value);
+                    if (!isNaN(value) && value > 0) {
+                      setCreditAmount(value);
+                    }
+                  }}
+                  endDecorator="credits"
+                  slotProps={{ input: { min: 1 } }}
+                />
+              </FormControl>
+
+              <FormControl sx={{ mb: 3 }}>
+                <FormLabel>Note (optional)</FormLabel>
+                <Textarea
+                  minRows={2}
+                  maxRows={4}
+                  placeholder="Reason for adjustment (e.g., 'Promotional bonus', 'Compensation for issue')"
+                  value={creditNote}
+                  onChange={e => setCreditNote(e.target.value)}
+                />
+              </FormControl>
+
+              <ButtonGroup sx={{ justifyContent: 'flex-end' }}>
+                <Button
+                  variant="soft"
+                  color="success"
+                  startDecorator={<AddIcon />}
+                  onClick={() => handleCreditAdjustment(true)}
+                  loading={updateUserCreditsMutation.isPending}
+                  disabled={updateUserCreditsMutation.isPending}
+                >
+                  Add Credits
+                </Button>
+                <Button
+                  variant="soft"
+                  color="danger"
+                  startDecorator={<RemoveIcon />}
+                  onClick={() => handleCreditAdjustment(false)}
+                  loading={updateUserCreditsMutation.isPending}
+                  disabled={updateUserCreditsMutation.isPending}
+                >
+                  Remove Credits
+                </Button>
+              </ButtonGroup>
+            </>
+          )}
+        </ModalDialog>
+      </Modal>
+
+      {/* Notifications */}
+      <Snackbar
+        open={notification.open}
+        color={notification.color}
+        onClose={() => setNotification(prev => ({ ...prev, open: false }))}
+        autoHideDuration={5000}
+        variant="soft"
+        sx={{ maxWidth: 400 }}
+      >
+        {notification.message}
+      </Snackbar>
+    </Box>
+  );
+};
+
+export default CreditAnalyticsTab;

@@ -1,0 +1,28 @@
+You are implementing a utility from the Bike4Mind codebase that repairs chat history before it is sent to the Anthropic API. Anthropic rejects requests where a `tool_use` block has no matching `tool_result`, or a `tool_result` references a `tool_use` that does not exist.
+
+Implement the function `ensureToolPairingIntegrity(messages)` in plain JavaScript (CommonJS).
+
+## Data shapes
+
+A message is: `{ role: 'user' | 'assistant' | 'system', content: string | Block[] }`
+
+A Block is one of:
+- `{ type: 'text', text: string }`
+- `{ type: 'tool_use', id: string, name: string, input: object }`   (only appears in assistant messages)
+- `{ type: 'tool_result', tool_use_id: string, content: any }`      (only appears in user messages)
+
+## Rules (apply in this exact order, considering the WHOLE array)
+
+1. A `tool_use` block is VALID iff some message in the array contains a `tool_result` whose `tool_use_id` equals that block's `id`. Otherwise it is ORPHANED.
+2. A `tool_result` block is VALID iff some message in the array contains a `tool_use` whose `id` equals that block's `tool_use_id`. Otherwise it is ORPHANED.
+3. Remove every ORPHANED `tool_use` block from assistant messages and every ORPHANED `tool_result` block from user messages. Keep all other blocks (e.g. `text`) untouched and in their original order.
+4. If a message's content was an array and becomes EMPTY after removal, drop that whole message from the result.
+5. Messages whose `content` is a string, or an array containing no tool blocks, pass through UNCHANGED.
+6. Preserve the original order of messages and of blocks within each message. Return a NEW array; do not mutate the input.
+7. An empty input array returns an empty array.
+
+## Output format
+
+Return ONLY one JavaScript code block. No explanation before or after. End the module with:
+
+module.exports = { ensureToolPairingIntegrity };

@@ -1,0 +1,73 @@
+{
+  "category": "m_and_a",
+  "title": "M&A & Investments",
+  "description": "Mergers, acquisitions, investments, and strategic partnerships",
+  "targets": [
+    {
+      "company": "All Tech & AI (Global)",
+      "ticker": "GLOBAL",
+      "url": "https://www.crunchbase.com/hub/top-ai-acquisitions",
+      "category": "tech"
+    },
+    {
+      "company": "Microsoft",
+      "ticker": "MSFT",
+      "url": "https://news.microsoft.com/press-releases/category/investments-acquisitions/",
+      "category": "tech"
+    },
+    {
+      "company": "Amazon",
+      "ticker": "AMZN",
+      "url": "https://press.aboutamazon.com/press-releases/investments",
+      "category": "tech"
+    },
+    {
+      "company": "Google/Alphabet",
+      "ticker": "GOOG",
+      "url": "https://blog.google/inside-google/company-announcements/",
+      "category": "tech"
+    },
+    {
+      "company": "Meta Platforms",
+      "ticker": "META",
+      "url": "https://about.fb.com/news/category/business/",
+      "category": "tech"
+    },
+    {
+      "company": "NVIDIA",
+      "ticker": "NVDA",
+      "url": "https://nvidianews.nvidia.com/news",
+      "category": "tech"
+    },
+    {
+      "company": "Salesforce",
+      "ticker": "CRM",
+      "url": "https://www.salesforce.com/news/press-releases/",
+      "category": "tech"
+    },
+    {
+      "company": "Oracle",
+      "ticker": "ORCL",
+      "url": "https://www.oracle.com/news/announcement/",
+      "category": "tech"
+    },
+    {
+      "company": "IBM",
+      "ticker": "IBM",
+      "url": "https://newsroom.ibm.com/announcements",
+      "category": "tech"
+    },
+    {
+      "company": "SAP",
+      "ticker": "SAP",
+      "url": "https://news.sap.com/investor-relations/",
+      "category": "tech"
+    },
+    {
+      "company": "Apple",
+      "ticker": "AAPL",
+      "url": "https://www.apple.com/newsroom/",
+      "category": "tech"
+    }
+  ]
+}

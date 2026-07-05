@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "Configuraciones de IA",
+    "session": "Quaderno",
+    "session_plural": "Quaderni",
+    "favorite": "Favorito",
+    "unfavorite": "Desfavorito",
+    "favorites": "Favoritos",
+    "favorites_count_one": "{{count}} Preferito",
+    "favorites_count_other": "{{count}} Preferiti",
+    "currentSession": "Atual",
+    "other": "Outras Etiquetas",
+    "text_model": "Modelo de Texto",
+    "image_model": "Modelo de Imagen",
+    "ai_image": "Imagen AI",
+    "switch_to": "Cambiar a {{ name }}"
+  },
+  "guide": {
+    "title": "Guía"
+  },
+  "intro": {
+    "title": "Introducción"
+  },
+  "developers": {
+    "title": "Desarrolladores",
+    "technical_docs": "Documentación técnica"
+  },
+  "changelog": {
+    "title": "Registro de cambios"
+  },
+  "feedback": {
+    "send": "Enviar comentarios"
+  },
+  "terms_policies": "Términos y políticas",
+  "login": "Accedi",
+  "file": "Conoscenza",
+  "forgotPassword": "Password dimenticata",
+  "signup": "Registrati",
+  "help": "Aiuto",
+  "manual": "Manuale",
+  "inviteLong": "Invita un amico",
+  "inviteShort": "Invita",
+  "tools": {
+    "title": "Strumenti"
+  },
+  "sidenav": {
+    "pin": "Fixar barra lateral",
+    "unpin": "Desafixar barra lateral",
+    "sessions": {
+      "sort": {
+        "label": "Ordenar por",
+        "tags": "Por Etiquetas",
+        "date": "Por Data"
+      },
+      "new": "Nova Conversa",
+      "item": {
+        "genTags": "Gerar lista de etiquetas do Caderno"
+      }
+    }
+  },
+  "referral": {
+    "title": "Riferisci un amico a",
+    "email_title_default": "Benvenuto su GrokTool!",
+    "email_body_default": "Sei stato invitato da USER_NAME su GrokTool! LINK DI REGISTRAZIONE: Usa il seguente codice invito per iscriverti: INVITE_CODE",
+    "friend_email": "Email dell'amico",
+    "num_referrals_available": "Referimenti disponibili:",
+    "no_valid_emails_error": "Inserisci indirizzi email validi",
+    "send_referral": "Invia Referimento",
+    "send_referral_success": "Referimento inviato con successo!",
+    "send_referral_skipped": "{{count}} invito/i saltato/i — quegli indirizzi email hanno già un account.",
+    "send_referral_failed": "Impossibile inviare {{count}} invito/i. Riprova.",
+    "send_referral_error": "Errore nell'invio del referimento. Per favore, riprova.",
+    "slack_notification_default": "Referimento inviato dall'utente USER_NAME:USER_ID a FRIEND_EMAIL"
+  },
+  "activateVoice": "Attiva questa voce",
+  "liveVoice": "Voce dal vivo",
+  "whatsNew": "Cosa c'è di nuovo",
+  "welcome": "Benvenuto su {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Connessione in corso",
+      "1": "Connesso",
+      "2": "Disconnessione in corso",
+      "3": "Disconnesso",
+      "-1": "In attesa"
+    },
+    "networkStatus": "Rete: {{ status }}"
+  },
+  "deleteVoice": "Elimina questa voce",
+  "deleteVoiceConfirm": "Sei sicuro di voler eliminare questa voce?",
+  "organization": {
+    "organizations": "Equipos",
+    "defaultName": "La mia organizzazione",
+    "shared": "Compartilhado Comigo",
+    "create": "Crear equipo",
+    "search": "Buscar equipos...",
+    "no_organizations": "No se encontraron equipos",
+    "view_details": "Ver detalles",
+    "x_seats": "{{count}} asientos",
+    "active_subscription": "Suscripción activa",
+    "no_subscription": "Sin suscripción",
+    "x_members": "{{count}} miembros",
+    "x_credits": "{{count}} créditos",
+    "owner": "Propietario"
+  },
+  "session": {
+    "typeYourMessage": "Digita il tuo messaggio qui",
+    "switchedSession": "Passato a: {{ sessionName }}",
+    "send": "Invia",
+    "sendMessage": "Invia messaggio",
+    "preparingQuest": "Preparazione della missione...",
+    "rephrasePrompt": "Ottimizza il tuo input",
+    "promptRephrased": "Prompt riformulato con successo",
+    "rephraseFailed": "Riformulazione del prompt non riuscita",
+    "errors": {
+      "notebookDeleted": "Questo taccuino è stato eliminato. Creane uno nuovo.",
+      "noPermission": "Non hai il permesso di accedere a questo taccuino.",
+      "invalidRequest": "Richiesta non valida. Riprova.",
+      "tooManyRequests": "Troppi tentativi. Attendi un momento e riprova.",
+      "serverError": "Errore del server. Riprova più tardi.",
+      "networkError": "Invio del messaggio non riuscito. Controlla la tua connessione.",
+      "sendFailed": "Invio del messaggio non riuscito. Riprova."
+    }
+  },
+  "projects": {
+    "title": "Proyecto",
+    "projects": "Projetos",
+    "joined_projects": "Proyectos Unidos",
+    "no_joined_projects": "Aún no hay proyectos unidos",
+    "add_to_project": "Agregar al Proyecto",
+    "modals": {
+      "files": {
+        "title": "Aggiungi file al progetto",
+        "subtitle": "Seleziona i file da aggiungere al tuo progetto",
+        "button_label": "Aggiungi file",
+        "search_placeholder": "Cerca file",
+        "no_files": "No se encontraron archivos."
+      },
+      "members": {
+        "title": "Aggiungi membri al progetto",
+        "subtitle": "Cerca e seleziona utenti da aggiungere al tuo progetto",
+        "button_label": "Aggiungi membri",
+        "search_placeholder": "Cerca utenti",
+        "no_members": "Intenta buscar un usuario."
+      },
+      "sessions": {
+        "title": "Aggiungi notebook a un progetto",
+        "subtitle": "Seleziona i notebook da aggiungere al tuo progetto o creane uno nuovo",
+        "button_label": "Aggiungi notebook",
+        "search_placeholder": "Cerca",
+        "create_button": "Crea",
+        "no_notebooks": "No se encontraron cuadernos. Intenta crear uno nuevo."
+      },
+      "generic": {
+        "select_all": "Seleziona tutto",
+        "unselect_all": "Deseleziona tutto",
+        "add_items_one": "Aggiungi {{count}} elemento",
+        "add_items_other": "Aggiungi {{count}} elementi",
+        "delete_items": "Elimina {{count}} articoli"
+      }
+    }
+  },
+  "logout": "Esci",
+  "inbox": {
+    "title": "Posta in arrivo",
+    "messages": "Messaggi",
+    "invites": "Inviti",
+    "sendMessage": "Invia un messaggio",
+    "noMessages": "Nessun messaggio"
+  },
+  "addSomething": "Aggiungi {{ name }}",
+  "deleteAllSomething": "Elimina tutto {{ name }}",
+  "exportAllSomething": "Esporta tutto {{ name }}",
+  "importLLMHistory": "Importa la cronologia di LLM",
+  "downloadAllSomething": "Scarica tutto {{ name }}",
+  "language": {
+    "language_settings": "Impostazioni lingua",
+    "change-language": "Cambia lingua"
+  },
+  "theme": {
+    "turn-dark": "Attiva modalità scura",
+    "turn-light": "Attiva modalità chiara"
+  },
+  "auth": {
+    "usernameOrEmail": "Nome utente o Email",
+    "username": "Nome utente",
+    "password": "Password",
+    "confirmPassword": "Conferma Password",
+    "fullName": "Nome completo",
+    "inviteCode": "Codice di Invito",
+    "needCode": "Hai bisogno di un codice?",
+    "noAccount": "Non hai un account?",
+    "haveAccount": "Hai già un account?",
+    "loginWithProvider": "Accedi con {{ provider }}",
+    "checking": "Verifica in corso...",
+    "continue": "Continua",
+    "troubleSigningIn": "Problemi ad accedere?",
+    "signingInAs": "Accesso come",
+    "signingIn": "Accesso in corso...",
+    "backToEmail": "Torna all'email",
+    "redirectingToProvider": "Reindirizzamento al login della tua organizzazione...",
+    "resetInstructions": "Si prega di inserire il proprio indirizzo email. Ti invieremo un'email per reimpostare la tua password.",
+    "sendResetEmail": "Invia email per reimpostare la password",
+    "email": "Email",
+    "resetEmailSentMessage": "Email inviata! Controlla la tua email per ulteriori istruzioni",
+    "createAccountDesc": "Crea un Account",
+    "createBtn": "Crea Account",
+    "loginBtn": "Accedi",
+    "passwordStrength": {
+      "label": "Forza della password",
+      "weak": "Debole",
+      "fair": "Discreta",
+      "strong": "Forte"
+    },
+    "passwordRequirements": {
+      "title": "Requisiti della password",
+      "minLength": "Almeno {{count}} caratteri",
+      "uppercase": "Una lettera maiuscola",
+      "lowercase": "Una lettera minuscola",
+      "number": "Un numero",
+      "specialChar": "Un carattere speciale",
+      "met": "soddisfatto",
+      "notMet": "non ancora soddisfatto"
+    },
+    "errors": {
+      "usernameExists": "Nome de usuário '{{username}}' já está em uso. Por favor, escolha um nome de usuário diferente.",
+      "emailExists": "Uma conta com o e-mail '{{email}}' já existe. Use um e-mail diferente ou faça login na sua conta existente.",
+      "accountExists": "Uma conta com essas credenciais já existe. Tente fazer login ou use credenciais diferentes.",
+      "invalidInviteCode": "O código de convite que você digitou é inválido ou expirou. Por favor, verifique e tente novamente.",
+      "registrationFailed": "Registro falhou. Por favor, tente novamente mais tarde.",
+      "validation": {
+        "generic": "Entrada no válida",
+        "invalidUsername": "O nome de usuário só pode conter letras, números, sublinhados, pontos e traços",
+        "passwordMismatch": "As senhas não correspondem",
+        "passwordRequirements": "A senha deve ter pelo menos 8 caracteres, com letras maiúsculas e minúsculas, um número e um caractere especial"
+      }
+    }
+  },
+  "search": "Pesquisar",
+  "share": "Compartilhar",
+  "rename": "Renomear",
+  "favorite": "Favorito",
+  "unfavorite": "Desfavorito",
+  "delete": "Excluir",
+  "files": {
+    "showAttachedFiles": "Mostrar archivos adjuntos",
+    "hideAttachedFiles": "Ocultar archivos adjuntos",
+    "title": "Arquivos",
+    "upload": "Subir archivos",
+    "long_title": "Explorador de archivos"
+  },
+  "view": "Ver",
+  "info": "Informações",
+  "clone": "Clonar",
+  "download": "Baixar",
+  "summarize": "Resumir",
+  "profile": {
+    "title": "Perfil",
+    "tooltip": "Perfil",
+    "collection": "Colección",
+    "collections": {
+      "all_types": "Tous les types"
+    },
+    "users_profile": "Perfil de {{ name }}",
+    "storage_used": "Almacenamiento Usado",
+    "credits": "Créditos",
+    "subscription": "Abbonamento",
+    "edit": "Modifier le profil",
+    "manage_subscription": "Gestisci Abbonamento",
+    "upgrade": "Aggiorna",
+    "credit_analytics": "Análisis de créditos",
+    "pricing": "Precios de créditos",
+    "show_purchases": "Mostrar compras",
+    "show_usage": "Mostrar uso",
+    "show_combined": "Mostrar combinado",
+    "buy_credits": "Acquista Crediti"
+  },
+  "community": {
+    "title": "Comunidad",
+    "tooltip": "Comunidad",
+    "feed": "Fil de la communauté"
+  },
+  "subscriptions": {
+    "title": "Abbonamenti",
+    "expires_on": "Expira el {{ date }}",
+    "renews_on": "Se renueva el {{ date }}"
+  },
+  "billing": {
+    "title": "Facturación"
+  },
+  "credits": {
+    "title": "Crediti",
+    "usage": "Uso de créditos",
+    "analytics": "Análisis de créditos",
+    "analytics_tooltip": "Ver tu uso de créditos a lo largo del tiempo",
+    "current_balance": "Saldo actual de créditos",
+    "credits": "créditos",
+    "usage_by_model": "Uso por modelo",
+    "no_transactions": "No se encontraron transacciones de crédito en este período de tiempo",
+    "model_pricing": "Precios de modelos",
+    "text_models": "Modelos de texto",
+    "image_models": "Modelos de imagen",
+    "pricing_per_1k_tokens": "Precios mostrados en créditos por 1,000 tokens",
+    "pricing_per_generation": "Precios mostrados en créditos por generación de imagen",
+    "model_name": "Nombre del modelo",
+    "price_tier": "Nivel de precio",
+    "input_cost": "Costo de entrada",
+    "output_cost": "Costo de salida",
+    "generation_cost": "Costo de generación",
+    "no_models_available": "No hay modelos disponibles",
+    "pricing_note": "Nota: Los precios son aproximados y pueden variar según los parámetros del modelo. Niveles de precio: $ (más bajo), $$ (medio), $$$ (premium).",
+    "burn_rate": "Uso diario (tasa de quema)",
+    "days_remaining": "Días restantes estimados",
+    "usage_pattern": "Basado en tu patrón de uso de los últimos {{days}} días",
+    "credits_used": "Créditos utilizados",
+    "credits_purchased": "Créditos comprados",
+    "net_credits": "Créditos netos"
+  },
+  "time": {
+    "last_7_days": "Últimos 7 días",
+    "last_30_days": "Últimos 30 días",
+    "last_90_days": "Últimos 90 días",
+    "last_180_days": "Últimos 180 días",
+    "last_365_days": "Últimos 365 días"
+  },
+  "common": {
+    "date": "Fecha",
+    "refresh": "Actualizar",
+    "days": "días",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "close": "Cerrar",
+    "submit": "Enviar",
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito"
+  },
+  "errors": {
+    "failed_to_load_data": "Error al cargar datos. Por favor, inténtalo de nuevo más tarde."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "La tua connessione Atlassian è scaduta. Riconnetti il tuo account."
+    }
+  },
+  "credits_modal": {
+    "title": "Dibødo Credits",
+    "description": "Acquista crediti aggiuntivi per continuare a utilizzare i nostri modelli e funzionalità avanzati di intelligenza artificiale. I crediti vengono utilizzati per l'inferenza dei modelli e per le funzionalità speciali, con modelli diversi che consumano quantità variabili in base alla complessità.",
+    "current_credits": "Aktuelle kreditter sum",
+    "best_value": "Bedste værdi",
+    "purchase_success": "Købt {{credits}} kreditter",
+    "history_title": "Kreditter købs historie",
+    "purchase": "Køb",
+    "no_transactions": "Ingen transaktioner endnu",
+    "low_credits": "Tus créditos son bajos",
+    "low_credits_sub": "Compra más créditos para continuar tu trabajo.",
+    "no_credits": "Sin créditos",
+    "no_credits_sub": "Compra créditos para continuar tu trabajo.",
+    "status": {
+      "completed": "Færdig",
+      "pending": "Ventende",
+      "failed": "Fejlet"
+    }
+  },
+  "settings": {
+    "title": "Configuraciones",
+    "tooltip": "Configuraciones",
+    "main": "Paramètres principaux",
+    "account": "Account",
+    "ai_features": "Funzionalità AI",
+    "connected_apps": {
+      "title": "Applications connectées",
+      "link": "Lier",
+      "unlink": "Délier"
+    },
+    "developer_tools": "Strumenti per sviluppatori",
+    "experimental_features": {
+      "title": "Funzionalità sperimentali",
+      "tooltip": "Características experimentales",
+      "header": "Características experimentales",
+      "beta_features": {
+        "title": "Características beta",
+        "subtitle": "Estas características aún están en desarrollo y pueden causar resultados inesperados. Optar por habilitarlas significa que estás de acuerdo en usarlas en su estado actual."
+      }
+    },
+    "ui_preferences": "Preferenze UI"
+  },
+  "mementos": {
+    "title": "Recuerdos",
+    "tooltip": "Recuerdos"
+  },
+  "admin": {
+    "title": "Administrador",
+    "tooltip": "Configuraciones de administrador"
+  },
+  "speech": {
+    "title": "Discurso",
+    "tooltip": "Discurso a texto y texto a discurso"
+  },
+  "instructions": {
+    "title": "Instrucciones",
+    "tooltip": "Instrucciones"
+  },
+  "friends": {
+    "add_friend": "Agregar a Amigos",
+    "unfriend": "Eliminar de Amigos",
+    "pending_request": "Solicitud de Amistad Pendiente",
+    "all": "Todos los Amigos",
+    "pending": "Pendiente"
+  },
+  "notebooks": {
+    "view_info": "Ver Información del Cuaderno",
+    "clone": "Clonar Cuaderno",
+    "download": "Descargar Cuaderno",
+    "summarize": "Resumir Cuaderno",
+    "delete": "Eliminar Cuaderno",
+    "delete_confirm": "¿Está seguro de que desea eliminar permanentemente \"{{ name }}\"? Esta acción no se puede deshacer.",
+    "auto_rename": "Renombrar con AI"
+  },
+  "add_friend": {
+    "title": "Agregar un amigo",
+    "friend_email": "Correo electrónico del amigo",
+    "message": "Mensaje",
+    "cancel": "Cancelar",
+    "send": "Enviar",
+    "email_placeholder": "Introduce el correo electrónico de tu amigo",
+    "message_placeholder": "Introduce tu mensaje"
+  },
+  "file_browser": {
+    "my_files": "I miei file",
+    "shared_with_me": "Condivisi con me",
+    "total_files": "Totale articoli conoscenza",
+    "search_placeholder": "Cerca per nome o tag...",
+    "file_type": "Tipo di file",
+    "all_files": "Tutti i file",
+    "text": "Testo",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Immagine",
+    "excel": "Excel",
+    "word": "Parola",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Codice",
+    "date_created": "Data di creazione",
+    "size": "Dimensione",
+    "name": "Nome",
+    "sort_z_to_a": "Ordina da Z a A",
+    "sort_a_to_z": "Ordina da A a Z",
+    "grid_view": "Visualizzazione a griglia",
+    "list_view": "Visualizzazione elenco",
+    "select_file_hint": "Toccando, seleziona il file o più file e aggiungili alla tua sessione di quaderno!",
+    "session_one": "Quaderno",
+    "session_other": "Quaderni",
+    "no_files_available": "Nessun file disponibile",
+    "count_file_selected_one": "{{count}} archivo seleccionado",
+    "count_file_selected_other": "{{count}} archivos seleccionados",
+    "add_count_file_one": "Agregar {{count}} archivo",
+    "add_count_file_other": "Agregar {{count}} archivos",
+    "delete_count_file_one": "Eliminar {{count}} archivo",
+    "delete_count_file_other": "Eliminar {{count}} archivos",
+    "share_count_file_one": "Condividi {{count}} file",
+    "share_count_file_other": "Condividi {{count}} file",
+    "count_file_one": "{{count}} archivo",
+    "count_file_other": "{{count}} archivos",
+    "add_to_session_success": "Aggiunta file: {{fileNames}} a {{sessionName}}",
+    "add_file_success": "Aggiunta file: {{fileNames}}",
+    "browse_files": "Esplora file",
+    "create_new_knowledge": "Crear",
+    "create_new_knowledge_from_url": "Raspelar URL",
+    "enter_url": "Ingresar URL",
+    "create_file": "Crear archivo",
+    "create_file_from_url": "Crear archivo",
+    "create_from_url": "Raspelado rápido",
+    "research": "Ricerca",
+    "open_research": "Apri Ricerca",
+    "url_success": "Conocimiento creado exitosamente desde la URL: {{url}}",
+    "url_error": "Error al crear conocimiento desde la URL: {{url}}",
+    "url_required": "Por favor, ingresa una URL",
+    "previous": "Precedente",
+    "next": "Successivo",
+    "page_of": "Pagina {{current}} di {{total}}",
+    "drop_files_here": "Trascina i file qui",
+    "tagging": "Etichettatura...",
+    "tag_files": "Etichetta File",
+    "select_all": "Seleziona Tutto",
+    "unselect_all": "Deseleziona Tutto",
+    "add_files": "Aggiungi File",
+    "add_files_to_notebook_one": "Aggiungi {{count}} file al Taccuino",
+    "add_files_to_notebook_other": "Aggiungi {{count}} file al Taccuino",
+    "in_project": "Nel Progetto"
+  },
+  "file_properties": {
+    "title": "Proprietà del file",
+    "make_instructions": "Convertire in istruzioni?",
+    "instruction_priority": "Priorità delle istruzioni (0–999)",
+    "priority_levels": {
+      "global": "0-100: Istruzioni globali",
+      "group": "101-300: Istruzioni di gruppo/azienda",
+      "project": "301-500: Istruzioni di progetto",
+      "user": "501-999: Istruzioni utente"
+    },
+    "save": "Salva",
+    "update_success": "Priorità di sistema aggiornata per \"{{fileName}}\".",
+    "update_error": "Aggiornamento della priorità di sistema non riuscito."
+  },
+  "file_actions": {
+    "notes": "Notas",
+    "notes_placeholder": "Agregar notas sobre este archivo...",
+    "add_notes": "Agregar notas",
+    "add_note": "Agregar nota",
+    "edit_notes": "Editar notas",
+    "notes_save_error": "Error al guardar notas",
+    "manage_tags": "Gestisci Etichette",
+    "tags": "Gestisci tag",
+    "tags_placeholder": "Inserisci i nomi delle etichette separati da virgole...",
+    "add_tag_one": "Etiqueta actualizada para {{count}} archivo",
+    "add_tag_other": "Etiqueta actualizada para {{count}} archivos",
+    "failed_to_add_tag_one": "Error al actualizar la etiqueta del archivo",
+    "failed_to_add_tag_other": "Error al actualizar la etiqueta de los archivos",
+    "cancel": "Annulla",
+    "save": "Salva",
+    "download": "Scarica",
+    "vectorize": "Vettorizza",
+    "instruction": "Istruzione {{priority}}",
+    "chunked": "Spezzato",
+    "not_chunked": "Non spezzato"
+  },
+  "subscription_modal": {
+    "title": "Abbonamento",
+    "description": "Accedi a ogni modello AI principale attraverso un'interfaccia unificata. Esegui modelli avanzati come Deepseek R1 in modo privato.",
+    "no_free_tier": "NESSUN LIVELLO GRATUITO - FOCALIZZATO SUI PROFESSIONISTI.",
+    "credits_rollover": "I crediti non utilizzati vengono trasferiti per 3 mesi.",
+    "monthly_billing": "Fatturazione Mensile",
+    "annual_billing": "Fatturazione Annuale",
+    "most_popular": "Più Popolare",
+    "current": "Attuale",
+    "credits_per_month": "{{credits}} crediti al mese",
+    "subscription_renewal": "Il tuo abbonamento si rinnova il {{date}}",
+    "personal": "Personal",
+    "business": "Negocios",
+    "team": "Equipo",
+    "enterprise": "Empresa"
+  },
+  "agents": {
+    "title": "Agentes",
+    "new_agent": "Nuevo agente",
+    "manage_agents": "Gestionar agentes",
+    "search_placeholder": "Buscar agentes...",
+    "your_agents": "Tus agentes",
+    "loading": "Cargando agentes...",
+    "no_agents": "No se encontraron agentes",
+    "create_first": "Crea tu primer agente para comenzar",
+    "agents_found": "{{count}} agente encontrado",
+    "agents_found_plural": "{{count}} agentes encontrados",
+    "attached_agents": "Agentes adjuntos",
+    "listening_description": "Estos agentes están escuchando todos los mensajes en esta conversación",
+    "no_search_results": "No hay agentes que coincidan con \"{{search}}\"",
+    "search_help": "Intenta un término de búsqueda diferente",
+    "no_agents_description": "Crea tu primer agente para comenzar",
+    "create_agent": "Crear agente",
+    "click_to_attach": "Clic para adjuntar a la sesión actual",
+    "click_to_detach": "Clic para desadjuntar de la sesión actual",
+    "show_attached_agents": "Mostrar agentes adjuntos",
+    "hide_attached_agents": "Ocultar agentes adjuntos",
+    "toggle_attached_agents": "Alternar agentes adjuntos",
+    "agent_listening_tooltip": "{{name}} está escuchando y deseando ayudar"
+  },
+  "skills": {
+    "title": "Competenze",
+    "command_palette_description": "Gestisci modelli di istruzioni riutilizzabili"
+  }
+}

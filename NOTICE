@@ -1,0 +1,126 @@
+NOTICE
+
+Bike4Mind
+Copyright (c) 2026 Bike4Mind, Inc.
+https://bike4mind.com
+
+This product is built on Bike4Mind. Portions of this software are derived from
+the Bike4Mind source, made available by Bike4Mind, Inc. under the Business Source
+License 1.1 (see LICENSE) and converting to the Apache License, Version 2.0 no
+later than two years after each version's public release (Bike4Mind, Inc. may
+designate an earlier Change Date). Whether you distribute this software or run it
+as a service, you are encouraged to keep this NOTICE and to state that your
+product is built on or derived from Bike4Mind. When you distribute a version on
+or after its Change Date, retaining this NOTICE is required by the Apache License,
+Version 2.0 (Section 4(d)) — that obligation attaches to distribution, not to
+hosted use.
+
+================================================================================
+
+This product also includes or depends on third-party software and assets that
+are subject to their respective licenses and copyright notices.
+
+================================================================================
+
+1. CraftPix Assets (Tavern Icons)
+   Location: apps/client/public/assets/tavern/
+   License: CraftPix Limited License
+   Website: https://craftpix.net/file-licenses/
+
+   Attribution: These assets are licensed under the CraftPix Limited License.
+   The license permits use in unlimited commercial and personal projects but
+   prohibits redistribution of source files.
+
+   NOTICE: These assets are NOT tracked in this repository and do not ship in
+   the public open-core snapshot, because the CraftPix Limited License prohibits
+   source-file redistribution. They are hydrated at postinstall from the private
+   b4m-tavern premium overlay (pinned in premium-overlay.lock.json) via
+   apps/client/scripts/copy-tavern-assets.mjs, which no-ops for open-core forks
+   without overlay access. Users who wish to use these assets must obtain their
+   own license from CraftPix.net.
+
+================================================================================
+
+2. libvips (via sharp image processing library)
+   Package: @img/sharp-libvips-*
+   License: LGPL-2.1-or-later (GNU Lesser General Public License v2.1+)
+   Website: https://github.com/libvips/libvips
+
+   This product uses libvips, a fast image processing library with low memory
+   needs, which is licensed under the LGPL-2.1-or-later.
+
+   Copyright (c) 1990-present, John Cupitt and contributors
+
+   The sharp npm package dynamically links to precompiled libvips binaries.
+   Under LGPL-2.1, dynamic linking is permitted without requiring the dependent
+   work to be released under LGPL, provided that:
+   - Users can replace the LGPL library with a modified version
+   - This NOTICE provides attribution and license information
+
+   Full license text: https://github.com/libvips/libvips/blob/master/LICENSE
+   sharp-libvips license: https://github.com/lovell/sharp-libvips/blob/main/LICENSE
+
+================================================================================
+
+3. Mozilla Public License (MPL) Dependencies
+
+   This project may include dependencies licensed under the Mozilla Public
+   License 2.0 (MPL-2.0). MPL-2.0 is a weak copyleft license that requires:
+   - Modifications to MPL-licensed files must be released under MPL-2.0
+   - Files under MPL-2.0 can be combined with files under other licenses
+   - Source code of MPL-licensed components must remain available
+
+   Note: As of the time of this NOTICE file creation, no MPL-licensed
+   dependencies were identified in the direct dependency tree. This section
+   is included for completeness and future-proofing.
+
+   Full MPL-2.0 license text: https://www.mozilla.org/en-US/MPL/2.0/
+
+================================================================================
+
+4. Other Open Source Dependencies
+
+   This product includes numerous open-source software packages and libraries,
+   each governed by their respective licenses. These include but are not limited
+   to packages licensed under:
+
+   - MIT License
+   - Apache License 2.0
+   - BSD Licenses (2-Clause, 3-Clause)
+   - ISC License
+
+   For a complete list of dependencies and their licenses, please refer to:
+   - Root package.json and pnpm-lock.yaml
+   - Individual package.json files in apps/, packages/, and b4m-core/ directories
+
+   Each dependency's license can be found in its respective node_modules
+   subdirectory or npm package page.
+
+================================================================================
+
+5. PDF.js (pdfjs-dist)
+   Package: pdfjs-dist
+   License: Apache License 2.0
+   Website: https://mozilla.github.io/pdf.js/
+
+   This product uses Mozilla's PDF.js library for in-browser PDF rendering.
+
+   Copyright (c) Mozilla Foundation and contributors
+
+   Full license text: https://github.com/mozilla/pdf.js/blob/master/LICENSE
+
+================================================================================
+
+TRADEMARK NOTICE
+
+All trademarks, logos, and brand elements remain the exclusive property of
+Bike4Mind, Inc. As a limited exception granted in the LICENSE, you may use the
+name "Bike4Mind" solely to state accurately that your product or service is built
+on, forked from, or derived from Bike4Mind — not as the name of your own product
+or service, and not in any manner that implies sponsorship or endorsement by
+Bike4Mind, Inc. No right to any Bike4Mind logo or other brand element is granted.
+
+================================================================================
+
+For questions about third-party licenses or attributions, please contact:
+Bike4Mind, Inc.

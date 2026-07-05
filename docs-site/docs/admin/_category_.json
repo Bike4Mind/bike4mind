@@ -1,0 +1,10 @@
+{
+  "label": "Admin Guide",
+  "position": 10,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Admin Guide",
+    "description": "Documentation for Bike4Mind platform administration, covering user management, system configuration, security, and operational tools."
+  }
+}

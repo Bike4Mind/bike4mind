@@ -1,0 +1,640 @@
+/* MDEditor styles */
+@import '@uiw/react-md-editor/markdown-editor.css';
+@import '@uiw/react-markdown-preview/markdown.css';
+
+/* KaTeX styles for LaTeX equation rendering */
+@import 'katex/dist/katex.min.css';
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 214, 219, 220;
+  --background-end-rgb: 255, 255, 255;
+
+  --navbar-height: 60px;
+  --notebook-sidenav-width: 345px;
+  --notebook-header-height: 56px;
+  --radio-green: #10b981;
+  --radio-green-opacity: rgba(16, 185, 129, 0.2);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 0, 0, 0;
+    --background-end-rgb: 0, 0, 0;
+  }
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  /* Font family is now managed by next/font/google in layout.tsx for optimal performance */
+}
+
+* {
+  min-width: 0;
+}
+
+
+/* Cursor blink animation */
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+/* Lexical Chat Input Styles */
+.lexical-chat-input-container {
+  position: relative;
+  width: 100%;
+  z-index: 1;
+}
+
+.lexical-chat-input {
+  padding: 7px 16px 9px 8px;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  max-height: 300px;
+  overflow: auto;
+  outline: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  color: var(--joy-palette-chatbox-messageInputColor);
+  caret-color: var(--joy-palette-chatbox-messageInputColor);
+}
+
+.lexical-placeholder {
+  position: absolute;
+  top: 7px;
+  left: 8px;
+  color: var(--joy-palette-chatbox-messageInputColor);
+  opacity: 0.6;
+  font-family: 'Poppins', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1.5;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;  /* Ensure it stays behind content */
+}
+
+/* Inline code styling - matches chat history */
+/* This class is applied via Lexical theme to text nodes with 'code' format */
+.lexical-chat-input .lexical-inline-code {
+  padding: 3px 6px;
+  background-color: var(--joy-palette-background-level2, #374151);
+  border-radius: 0.235rem;
+  color: var(--joy-palette-text-primary, #fafafa);
+  font-family: var(--joy-fontFamily-code, monospace);
+  font-size: 0.9em;
+  display: inline;
+}
+
+/* Code block styling - applied to CodeNode wrapper */
+.lexical-chat-input .lexical-code-block {
+  padding: 12px;
+  background-color: var(--joy-palette-background-level2, #374151);
+  border: 1px solid var(--joy-palette-divider, rgba(255, 255, 255, 0.1));
+  border-radius: 6px;
+  margin: 4px 0;
+  overflow-x: auto;
+  display: block;
+  color: var(--joy-palette-text-primary, #fafafa);
+  font-family: var(--joy-fontFamily-code, 'Monaco', 'Menlo', 'Ubuntu Mono', 'Consolas', 'source-code-pro', monospace);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre;
+  tab-size: 2;
+  /* Fix #5418: Ensure all pointer events work within code block */
+  pointer-events: auto;
+  user-select: text;
+  z-index: 1;  /* Above placeholder */
+}
+
+/* Mentions styling */
+.lexical-chat-input .beautiful-mention {
+  background-color: var(--joy-palette-primary-softBg);
+  color: var(--joy-palette-primary-plainColor);
+  padding: 2px 4px;
+  border-radius: 4px;
+  font-weight: 500;
+}
+
+.lexical-chat-input .beautiful-mention:hover {
+  background-color: var(--joy-palette-primary-solidBg);
+  color: var(--joy-palette-primary-solidColor);
+}
+
+/* Mentions menu anchor - ensures proper positioning context */
+.mentions-menu-anchor {
+  position: relative;
+  display: inline-block;
+}
+
+/* Mentions menu - Styling and positioning to match original design */
+.beautiful-mentions-menu,
+.custom-mentions-menu-upward {
+  background-color: var(--joy-palette-background-surface, #1a1a1a) !important;
+  border: 1px solid var(--joy-palette-divider, transparent) !important;
+  border-radius: 8px !important;
+  box-shadow: var(--joy-shadow-md, 0 4px 12px rgba(0, 0, 0, 0.5)) !important;
+  max-height: 200px !important;
+  overflow-y: auto !important;
+  padding: 8px !important;
+  z-index: 10000 !important;
+  position: fixed !important;
+}
+
+.beautiful-mentions-menu-item,
+.beautiful-mentions-menu li,
+.custom-mentions-menu-upward li {
+  padding: 10px 16px;
+  cursor: pointer;
+  color: var(--joy-palette-text-primary, #e0e0e0);
+  border-radius: 4px;
+  font-size: 14px;
+  transition: background-color 0.15s ease;
+}
+
+/* Highlighted/selected state - keyboard navigation */
+ul.beautiful-mentions-menu > li[aria-selected="true"],
+ul.custom-mentions-menu-upward > li[aria-selected="true"] {
+  background-color: var(--joy-palette-primary-softBg, rgba(255, 255, 255, 0.15)) !important;
+  outline: none;
+}
+
+/* Hover state */
+.beautiful-mentions-menu li:hover,
+.custom-mentions-menu-upward li:hover {
+  background-color: var(--joy-palette-background-level1, rgba(255, 255, 255, 0.1)) !important;
+}
+
+/* Paragraph styling */
+.lexical-paragraph {
+  margin: 0;
+}
+
+/* Prism Syntax Highlighting - Token Colors for Code Blocks */
+/* These classes are applied by Lexical's CodeHighlightPlugin using Prism.js tokenization */
+/* Colors based on VS Code Dark+ theme for dark mode and VS Code Light+ for light mode */
+
+/* Fix #5418: Ensure Prism token spans allow text interaction */
+/* Token spans from Prism.js syntax highlighting must not block cursor/selection */
+.lexical-chat-input .lexical-code-block .token,
+.lexical-chat-input .lexical-code-block .token-atrule,
+.lexical-chat-input .lexical-code-block .token-attr,
+.lexical-chat-input .lexical-code-block .token-boolean,
+.lexical-chat-input .lexical-code-block .token-builtin,
+.lexical-chat-input .lexical-code-block .token-cdata,
+.lexical-chat-input .lexical-code-block .token-char,
+.lexical-chat-input .lexical-code-block .token-class,
+.lexical-chat-input .lexical-code-block .token-class-name,
+.lexical-chat-input .lexical-code-block .token-comment,
+.lexical-chat-input .lexical-code-block .token-constant,
+.lexical-chat-input .lexical-code-block .token-deleted,
+.lexical-chat-input .lexical-code-block .token-doctype,
+.lexical-chat-input .lexical-code-block .token-entity,
+.lexical-chat-input .lexical-code-block .token-function,
+.lexical-chat-input .lexical-code-block .token-important,
+.lexical-chat-input .lexical-code-block .token-inserted,
+.lexical-chat-input .lexical-code-block .token-keyword,
+.lexical-chat-input .lexical-code-block .token-namespace,
+.lexical-chat-input .lexical-code-block .token-number,
+.lexical-chat-input .lexical-code-block .token-operator,
+.lexical-chat-input .lexical-code-block .token-prolog,
+.lexical-chat-input .lexical-code-block .token-property,
+.lexical-chat-input .lexical-code-block .token-punctuation,
+.lexical-chat-input .lexical-code-block .token-regex,
+.lexical-chat-input .lexical-code-block .token-selector,
+.lexical-chat-input .lexical-code-block .token-string,
+.lexical-chat-input .lexical-code-block .token-symbol,
+.lexical-chat-input .lexical-code-block .token-tag,
+.lexical-chat-input .lexical-code-block .token-url,
+.lexical-chat-input .lexical-code-block .token-variable {
+  pointer-events: auto;
+  user-select: text;
+}
+
+/* Comments and Documentation */
+.lexical-chat-input .token-comment,
+.lexical-chat-input .token-prolog,
+.lexical-chat-input .token-doctype,
+.lexical-chat-input .token-cdata {
+  color: var(--token-comment, #6a9955); /* Green for comments */
+  font-style: italic;
+}
+
+/* Keywords and Control Flow */
+.lexical-chat-input .token-keyword,
+.lexical-chat-input .token-important {
+  color: #c586c0; /* Purple for keywords */
+  font-weight: bold;
+}
+
+/* Strings and Character Literals */
+.lexical-chat-input .token-string,
+.lexical-chat-input .token-char {
+  color: #ce9178; /* Orange-brown for strings */
+}
+
+/* Numbers and Booleans */
+.lexical-chat-input .token-number,
+.lexical-chat-input .token-boolean {
+  color: #b5cea8; /* Light green for numbers */
+}
+
+/* Functions and Methods */
+.lexical-chat-input .token-function {
+  color: #dcdcaa; /* Yellow for functions */
+}
+
+/* Classes and Types */
+.lexical-chat-input .token-class-name,
+.lexical-chat-input .token-class {
+  color: #4ec9b0; /* Cyan for class names */
+  font-weight: 500;
+}
+
+/* Operators and Punctuation */
+.lexical-chat-input .token-operator,
+.lexical-chat-input .token-punctuation {
+  color: #d4d4d4; /* Light gray for operators */
+}
+
+/* Variables and Properties */
+.lexical-chat-input .token-variable,
+.lexical-chat-input .token-property {
+  color: #9cdcfe; /* Light blue for variables */
+}
+
+/* Constants and Built-ins */
+.lexical-chat-input .token-constant,
+.lexical-chat-input .token-builtin {
+  color: #4fc1ff; /* Bright blue for constants */
+}
+
+/* Attributes and Selectors */
+.lexical-chat-input .token-attr,
+.lexical-chat-input .token-selector {
+  color: #d7ba7d; /* Gold for attributes */
+}
+
+/* Tags (HTML/JSX) */
+.lexical-chat-input .token-tag {
+  color: #569cd6; /* Blue for tags */
+}
+
+/* Regex and URLs */
+.lexical-chat-input .token-regex,
+.lexical-chat-input .token-url {
+  color: #d16969; /* Red for regex */
+}
+
+/* Atrules (@import, @media, etc.) */
+.lexical-chat-input .token-atrule {
+  color: #c586c0; /* Purple for atrules */
+}
+
+/* Namespaces and Symbols */
+.lexical-chat-input .token-namespace,
+.lexical-chat-input .token-symbol {
+  color: #4ec9b0; /* Cyan for namespaces */
+}
+
+/* Entities (HTML) */
+.lexical-chat-input .token-entity {
+  color: #dcdcaa; /* Yellow for entities */
+}
+
+/* Insertions and Deletions (diff highlighting) */
+.lexical-chat-input .token-inserted {
+  color: #b5cea8; /* Green for insertions */
+}
+
+.lexical-chat-input .token-deleted {
+  color: #d16969; /* Red for deletions */
+}
+
+/* Light Mode Token Colors */
+@media (prefers-color-scheme: light) {
+  .lexical-chat-input .token-comment,
+  .lexical-chat-input .token-prolog,
+  .lexical-chat-input .token-doctype,
+  .lexical-chat-input .token-cdata {
+    color: #008000; /* Darker green for light mode */
+  }
+
+  .lexical-chat-input .token-keyword,
+  .lexical-chat-input .token-important {
+    color: #0000ff; /* Blue for keywords in light mode */
+  }
+
+  .lexical-chat-input .token-string,
+  .lexical-chat-input .token-char {
+    color: #a31515; /* Red for strings in light mode */
+  }
+
+  .lexical-chat-input .token-number,
+  .lexical-chat-input .token-boolean {
+    color: #098658; /* Green for numbers in light mode */
+  }
+
+  .lexical-chat-input .token-function {
+    color: #795e26; /* Brown for functions in light mode */
+  }
+
+  .lexical-chat-input .token-class-name,
+  .lexical-chat-input .token-class {
+    color: #267f99; /* Teal for class names in light mode */
+  }
+
+  .lexical-chat-input .token-operator,
+  .lexical-chat-input .token-punctuation {
+    color: #000000; /* Black for operators in light mode */
+  }
+
+  .lexical-chat-input .token-variable,
+  .lexical-chat-input .token-property {
+    color: #001080; /* Dark blue for variables in light mode */
+  }
+
+  .lexical-chat-input .token-constant,
+  .lexical-chat-input .token-builtin {
+    color: #0070c1; /* Blue for constants in light mode */
+  }
+
+  .lexical-chat-input .token-attr,
+  .lexical-chat-input .token-selector {
+    color: #800000; /* Maroon for attributes in light mode */
+  }
+
+  .lexical-chat-input .token-tag {
+    color: #800000; /* Maroon for tags in light mode */
+  }
+
+  .lexical-chat-input .token-regex,
+  .lexical-chat-input .token-url {
+    color: #e50000; /* Red for regex in light mode */
+  }
+
+  .lexical-chat-input .token-atrule {
+    color: #0000ff; /* Blue for atrules in light mode */
+  }
+
+  .lexical-chat-input .token-namespace,
+  .lexical-chat-input .token-symbol {
+    color: #267f99; /* Teal for namespaces in light mode */
+  }
+
+  .lexical-chat-input .token-entity {
+    color: #795e26; /* Brown for entities in light mode */
+  }
+
+  .lexical-chat-input .token-inserted {
+    color: #098658; /* Green for insertions in light mode */
+  }
+
+  .lexical-chat-input .token-deleted {
+    color: #a31515; /* Red for deletions in light mode */
+  }
+}
+
+/* List styling - Lexical lists */
+.lexical-chat-input .lexical-list-ol {
+  padding-left: 0;
+  margin: 4px 0;
+  list-style-position: inside;
+}
+
+.lexical-chat-input .lexical-list-ul {
+  padding-left: 0;
+  margin: 4px 0;
+  list-style-position: inside;
+}
+
+.lexical-chat-input .lexical-list-listitem {
+  margin: 2px 0;
+  padding-left: 0;
+  list-style-position: inside;
+}
+
+.lexical-chat-input .lexical-list-nested-listitem {
+  list-style-type: none;
+}
+
+/* Nested list indentation - depth 1-5 */
+.lexical-chat-input .lexical-list-ol .lexical-list-ol,
+.lexical-chat-input .lexical-list-ul .lexical-list-ul {
+  padding-left: 20px;
+}
+
+.chat-mentions-input__input::placeholder {
+  color: var(--joy-palette-text-tertiary) !important;
+  opacity: 1 !important;
+}
+
+[class*='JoyIconButton'],
+[class*='JoyButton'] {
+  --joy-focus-thickness: 0px !important;
+  --joy-palette-focusVisible: transparent !important;
+  --focus-outline-offset: 0px !important;
+}
+
+[class*='JoyIconButton']:focus,
+[class*='JoyIconButton']:focus-visible,
+[class*='JoyIconButton'].Mui-focusVisible,
+[class*='JoyButton']:focus,
+[class*='JoyButton']:focus-visible,
+[class*='JoyButton'].Mui-focusVisible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Remove Joy UI focus effect and add custom border transition */
+[class*='JoyInput'],
+[class*='JoyTextarea'] {
+  --Input-focused: 0 !important;
+  --Input-focusedThickness: 0px !important;
+  --Input-focusedHighlight: transparent !important;
+  /* transition: border-color 0.2s ease-in-out !important; */
+}
+
+[class*='JoyInput']::before,
+[class*='JoyTextarea']::before,
+[class*='JoySelect-button']::before,
+[class*='MuiSelect-button']::before,
+[class*='JoySelect-root']::before,
+[class*='MuiSelect-root']::before {
+  opacity: 0 !important;
+}
+
+[class*='JoyInput']:focus-within,
+[class*='JoyTextarea']:focus-within {
+  --Input-focused: 0 !important;
+  --Input-focusedThickness: 0px !important;
+  --Input-focusedHighlight: transparent !important;
+  border-color: var(--joy-palette-primary-500) !important;
+  transition: border-color 0.2s ease-in-out !important;
+}
+
+[class*='JoyInput']:focus,
+[class*='JoyTextarea']:focus {
+  --Input-focused: 0 !important;
+  --Input-focusedThickness: 0px !important;
+  --Input-focusedHighlight: transparent !important;
+  border-color: var(--joy-palette-primary-500) !important;
+  transition: border-color 0.2s ease-in-out !important;
+}
+
+/* Set placeholder color to text.tertiary */
+[class*='JoyInput'] input::placeholder,
+[class*='JoyTextarea'] textarea::placeholder {
+  color: var(--joy-palette-text-tertiary) !important;
+}
+
+/* Remove Joy UI focus effect for Select components */
+[class*='JoySelect'] {
+  --Select-focusedHighlight: transparent !important;
+}
+
+[class*='JoySelect']:focus,
+[class*='JoySelect']:focus-within {
+  --Select-focusedHighlight: transparent !important;
+}
+
+/* Disable focus effects for MuiSelect-button */
+[class*='MuiSelect-button']:focus,
+[class*='MuiSelect-button']:focus-within,
+[class*='MuiSelect-button']:focus-visible,
+[class*='MuiSelect-button'].Mui-focusVisible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+/* Custom green radio button styling */
+[class*='JoyRadio'] {
+  --joy-focus-thickness: 0px !important;
+  --joy-palette-focusVisible: transparent !important;
+}
+
+[class*='MuiRadio-action'] {
+  /* border: 1px solid #1fb84b !important; */
+}
+
+[class*='MuiRadio-input'] {
+  appearance: none !important;
+  width: 20px !important;
+  height: 20px !important;
+  border: 1px solid var(--joy-palette-border-input) !important;
+  border-radius: 50% !important;
+  background-color: transparent !important;
+  cursor: pointer !important;
+  /* transition: all 0.2s ease-in-out !important; */
+}
+
+[class*='MuiRadio-input'].Mui-checked {
+  border-color: #1fb84b !important;
+  background-color: var(--radio-green-opacity) !important;
+}
+
+[class*='MuiRadio-action'].Mui-checked {
+  border: 1px solid #1fb84b !important;
+}
+
+[class*='MuiRadio'] {
+  border-color: var(--joy-palette-border-input) !important;
+}
+
+[class*='MuiRadio-icon'] {
+  width: 8px !important;
+  height: 8px !important;
+  background-color: #1fb84b !important;
+}
+
+[class*='MuiRadio-input']:checked {
+  border-color: #1fb84b !important;
+  background-color: #1fb84b !important;
+  position: relative !important;
+}
+
+[class*='MuiRadio-input']:checked::after {
+  content: '' !important;
+  position: absolute !important;
+  top: 50% !important;
+  left: 50% !important;
+  transform: translate(-50%, -50%) !important;
+  width: 6px !important;
+  height: 6px !important;
+  border-radius: 50% !important;
+  background-color: white !important;
+}
+
+[class*='MuiRadio-input']:hover {
+  border-color: #059669 !important;
+}
+
+[class*='MuiRadio-input']:checked:hover {
+  border-color: #059669 !important;
+  background-color: #059669 !important;
+}
+
+@media (max-width: 600px) {
+  input, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* KaTeX Dark Mode Support */
+/* Override KaTeX default colors for dark mode compatibility */
+@media (prefers-color-scheme: dark) {
+  .katex {
+    color: var(--joy-palette-text-primary, #e0e0e0);
+  }
+
+  .katex .mord,
+  .katex .mop,
+  .katex .mbin,
+  .katex .mrel,
+  .katex .mopen,
+  .katex .mclose,
+  .katex .mpunct,
+  .katex .minner {
+    color: var(--joy-palette-text-primary, #e0e0e0);
+  }
+
+  /* Ensure operators and relations are visible */
+  .katex .mbin,
+  .katex .mrel {
+    color: var(--joy-palette-text-secondary, #b0b0b0);
+  }
+
+  /* Function names and operators */
+  .katex .mop {
+    color: var(--joy-palette-primary-plainColor, #9cdcfe);
+  }
+
+  /* Fractions, roots, and other complex structures */
+  .katex .frac-line,
+  .katex .overline-line,
+  .katex .underline-line,
+  .katex .sqrt-line {
+    border-bottom-color: var(--joy-palette-text-primary, #e0e0e0);
+  }
+
+  /* Ensure proper contrast for display equations */
+  .katex-display {
+    color: var(--joy-palette-text-primary, #e0e0e0);
+  }
+}
+
+/* KaTeX Light Mode (optional refinements) */
+@media (prefers-color-scheme: light) {
+  .katex {
+    color: var(--joy-palette-text-primary, #1a1a1a);
+  }
+
+  .katex-display {
+    color: var(--joy-palette-text-primary, #1a1a1a);
+  }
+}

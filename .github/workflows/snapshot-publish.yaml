@@ -1,0 +1,314 @@
+# Snapshot Publish Workflow
+#
+# Publishes snapshot (prerelease) versions of changed packages on feature branches.
+# Triggered by test.yaml after tests pass, or manually.
+#
+# Replaces: the canary publishing logic in publish-tagged-packages.yaml
+
+name: Snapshot Publish
+
+on:
+  workflow_call:
+    secrets:
+      NPM_TOKEN_PUBLISH:
+        required: true
+  workflow_dispatch:
+
+concurrency:
+  group: snapshot-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  snapshot-publish:
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    timeout-minutes: 20
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && github.ref_name != 'main'
+    outputs:
+      published-packages: ${{ steps.publish.outputs.published-packages }}
+      sanitized-tag: ${{ steps.branch.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch main branch
+        run: git fetch origin main:main 2>/dev/null || git fetch origin main
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+          registry-url: 'https://registry.npmjs.org'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_PUBLISH }}
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check for changes vs main
+        id: changes
+        run: |
+          # Heuristic: skip snapshot publish when the only diff vs main is in
+          # paths unlikely to affect published artifacts (docs, tests, markdown).
+          # Note: this is not a perfect mirror of npm packing — npm always
+          # includes top-level package.json/README/LICENSE — but it's the right
+          # signal for "is there source-level work worth publishing a preview of?"
+          #
+          # `main...HEAD` is the merge-base diff: only changes introduced by this
+          # branch since it diverged from main, so unrelated commits landing on
+          # main after the branch was cut don't trigger a false-positive publish.
+          if git diff --quiet main...HEAD -- \
+              b4m-core/ packages/cli/ \
+              ':(exclude)b4m-core/*/docs' \
+              ':(exclude)packages/cli/docs' \
+              ':(exclude,glob)**/*.md' \
+              ':(exclude,glob)**/test/**' \
+              ':(exclude,glob)**/__tests__/**' \
+              ':(exclude,glob)**/test-utils/**' \
+              ':(exclude,glob)**/*.test.ts' \
+              ':(exclude,glob)**/*.test.tsx' \
+              ':(exclude,glob)**/*.spec.ts' \
+              ':(exclude,glob)**/*.spec.tsx'; then
+            echo "has-changes=false" >> $GITHUB_OUTPUT
+            echo "No publishable changes in b4m-core/ or packages/cli/ vs main"
+          else
+            echo "has-changes=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sanitize branch name for npm tag
+        if: steps.changes.outputs.has-changes == 'true'
+        id: branch
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          # Pass github.ref_name via env to prevent shell injection (backticks/$() in branch names)
+          # See: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
+          SANITIZED=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-50)
+          echo "tag=$SANITIZED" >> $GITHUB_OUTPUT
+          echo "Sanitized branch name: $SANITIZED"
+
+      - name: Generate changeset for changed packages
+        if: steps.changes.outputs.has-changes == 'true'
+        id: generate
+        run: |
+          # Map directories to package names
+          declare -A PKG_MAP=(
+            ["b4m-core/agents"]="@bike4mind/agents"
+            ["b4m-core/auth"]="@bike4mind/auth"
+            ["b4m-core/common"]="@bike4mind/common"
+            ["b4m-core/core"]="@bike4mind/core"
+            ["b4m-core/db-core"]="@bike4mind/db-core"
+            ["b4m-core/fab-pipeline"]="@bike4mind/fab-pipeline"
+            ["b4m-core/infra"]="@bike4mind/infra"
+            ["b4m-core/llm-adapters"]="@bike4mind/llm-adapters"
+            ["b4m-core/observability"]="@bike4mind/observability"
+            ["b4m-core/services"]="@bike4mind/services"
+            ["b4m-core/utils"]="@bike4mind/utils"
+            ["b4m-core/mcp"]="@bike4mind/mcp"
+            ["packages/cli"]="@bike4mind/cli"
+          )
+
+          # Get changed files introduced by this branch (merge-base diff,
+          # consistent with the `Check for changes vs main` step above).
+          CHANGED_FILES=$(git diff --name-only main...HEAD -- b4m-core/ packages/cli/)
+
+          # Determine which packages changed
+          declare -A CHANGED_PKGS
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            for dir in "${!PKG_MAP[@]}"; do
+              if [[ "$file" == "$dir/"* ]]; then
+                CHANGED_PKGS["${PKG_MAP[$dir]}"]=1
+                break
+              fi
+            done
+          done <<< "$CHANGED_FILES"
+
+          # Skip if no publishable packages changed
+          if [ ${#CHANGED_PKGS[@]} -eq 0 ]; then
+            echo "No publishable packages changed"
+            echo "has-publishable-packages=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "has-publishable-packages=true" >> $GITHUB_OUTPUT
+
+          # Build the changeset frontmatter
+          FRONTMATTER="---"
+          for pkg in "${!CHANGED_PKGS[@]}"; do
+            FRONTMATTER="$FRONTMATTER
+          \"$pkg\": patch"
+          done
+          FRONTMATTER="$FRONTMATTER
+          ---
+
+          Snapshot release for feature branch"
+
+          # Write the changeset file (NOT committed, only used in CI)
+          echo "$FRONTMATTER" > .changeset/snapshot-auto.md
+          echo "Created changeset for: ${!CHANGED_PKGS[*]}"
+          cat .changeset/snapshot-auto.md
+
+      - name: Build packages
+        if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'
+        # Brand defaults baked into the snapshot @bike4mind/cli at build time.
+        # Source has NO brand fallback (open-core invariant, #9306/#9392); injected
+        # here from repo variables. See packages/cli/tsdown.config.ts.
+        env:
+          B4M_DEFAULT_API_URL: ${{ vars.B4M_DEFAULT_API_URL }}
+          B4M_CREDITS_URL: ${{ vars.B4M_CREDITS_URL }}
+        run: |
+          pnpm core:build
+          pnpm --filter "@bike4mind/cli" build
+
+      - name: Version with snapshot
+        if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'
+        env:
+          # @changesets/get-github-info hits the GitHub API to enrich changelog
+          # entries with commit/PR/contributor info. Without this token the step
+          # fails with: "Please create a GitHub personal access token..."
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm changeset version --snapshot ${{ steps.branch.outputs.tag }}
+
+      - name: Publish snapshot
+        if: steps.changes.outputs.has-changes == 'true' && steps.generate.outputs.has-publishable-packages != 'false'
+        id: publish
+        run: |
+          set -o pipefail
+          TAG="${{ steps.branch.outputs.tag }}"
+
+          # `changeset publish` publishes the changed packages in quick succession. The npm
+          # registry intermittently returns "E409 Conflict - Failed to save packument" for a
+          # subset of them when sibling packuments are still being processed — a registry-side
+          # race, not a package problem (npm's own error text says so). It flakes repo-wide, not
+          # just on any one branch.
+          #
+          # `changeset publish` is safe to re-run: it queries the registry first and skips any
+          # package already live at this version, only (re)attempting the ones that aren't there
+          # yet. So retry the whole command with backoff until every package is published or we
+          # exhaust attempts — by the retry the registry has settled and the stragglers go
+          # through. Output from every attempt is accumulated (tee -a) so the published-packages
+          # list stays complete across retries for the PR comment.
+          #
+          # Retry is scoped to the transient E409 packument race: only that signature is worth
+          # waiting out. Any other failure (auth, invalid tag, a genuinely broken package) won't
+          # fix itself, so we bail immediately rather than burning the backoff budget — and the
+          # per-attempt output is what we grep, so a stale E409 from an earlier attempt can't keep
+          # a later, different failure looping.
+          : > /tmp/publish-output.txt
+          MAX_ATTEMPTS=4
+          attempt=1
+          published_ok=false
+          while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+            echo "::group::changeset publish (attempt ${attempt}/${MAX_ATTEMPTS})"
+            : > /tmp/publish-attempt.txt
+            if pnpm changeset publish --tag "$TAG" --no-git-tag 2>&1 | tee -a /tmp/publish-output.txt /tmp/publish-attempt.txt; then
+              published_ok=true
+              echo "::endgroup::"
+              break
+            fi
+            echo "::endgroup::"
+
+            # Retry only the transient registry race; surface anything else immediately.
+            if ! grep -qiE 'E409|409 Conflict|packument' /tmp/publish-attempt.txt; then
+              echo "::error::changeset publish failed with a non-transient error (not an npm E409 packument race) — not retrying"
+              break
+            fi
+
+            attempt=$((attempt + 1))
+            if [ "$attempt" -le "$MAX_ATTEMPTS" ]; then
+              backoff=$((attempt * 10))
+              echo "::warning::changeset publish hit a transient npm E409 packument race; retrying in ${backoff}s (attempt ${attempt}/${MAX_ATTEMPTS})"
+              sleep "$backoff"
+            fi
+          done
+
+          OUTPUT=$(cat /tmp/publish-output.txt)
+
+          # Parse published packages from changeset output
+          # Note: @changesets/cli prefixes all output with "🦋 " so lines don't start with @bike4mind/
+          # sort -u deduplicates since the same package@version may appear on multiple lines
+          PUBLISHED=$(echo "$OUTPUT" | grep -oE "@bike4mind/[a-z-]+@[0-9][^ ]*" | sort -u | tr '\n' ',' | sed 's/,$//')
+
+          if [ -n "$PUBLISHED" ]; then
+            echo "published-packages=$PUBLISHED" >> $GITHUB_OUTPUT
+            echo "Published: $PUBLISHED"
+          else
+            echo "published-packages=" >> $GITHUB_OUTPUT
+            echo "No packages were published"
+          fi
+
+          # Fail the step only if publish never fully succeeded after all retries — this keeps
+          # genuine (non-transient) publish failures visible instead of masking them behind the
+          # retry loop.
+          if [ "$published_ok" != "true" ]; then
+            echo "::error::changeset publish did not fully succeed after ${MAX_ATTEMPTS} attempts (last output above)"
+            exit 1
+          fi
+
+  comment-published-versions:
+    needs: snapshot-publish
+    if: success() && needs.snapshot-publish.outputs.published-packages != ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Find associated PR
+        id: pr
+        uses: jwalton/gh-find-current-pr@v1
+        with:
+          state: open
+
+      - name: Comment published versions
+        if: steps.pr.outputs.number
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const publishedStr = '${{ needs.snapshot-publish.outputs.published-packages }}';
+            if (!publishedStr) return;
+
+            const packages = publishedStr.split(',').map(pkg => `- **${pkg.trim()}**`);
+            const tag = '${{ needs.snapshot-publish.outputs.sanitized-tag }}';
+            const marker = '<!-- snapshot-publish -->';
+
+            const body = [
+              marker,
+              '## Published Packages (Snapshot)',
+              '',
+              'The following packages have been published with snapshot versions:',
+              '',
+              ...packages,
+              '',
+              `Install with: \`pnpm add <package>@${tag}\``,
+              '',
+              `_Updated: ${new Date().toISOString()}_`
+            ].join('\n');
+
+            // Update existing comment if found, otherwise create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: ${{ steps.pr.outputs.number }},
+              owner: context.repo.owner,
+              repo: context.repo.repo
+            });
+            const existing = comments.find(c => c.body && c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: ${{ steps.pr.outputs.number }},
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body
+              });
+            }

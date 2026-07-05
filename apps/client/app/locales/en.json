@@ -1,0 +1,614 @@
+{
+  "app_name": "Bike4Mind",
+  "llm": {
+    "ai_settings": "AI Settings",
+    "session": "Notebook",
+    "session_plural": "Notebooks",
+    "favorite": "Add to Favorites",
+    "unfavorite": "Remove from Favorites",
+    "favorites": "Favorites",
+    "favorites_count_one": "{{count}} Favorite",
+    "favorites_count_other": "{{count}} Favorites",
+    "currentSession": "Current",
+    "other": "Other Tags",
+    "text_model": "Text Model",
+    "image_model": "Image Model",
+    "ai_image": "AI Image",
+    "switch_to": "Switch to {{ name }}"
+  },
+  "guide": {
+    "title": "Guide"
+  },
+  "intro": {
+    "title": "Introduction"
+  },
+  "developers": {
+    "title": "Developers",
+    "technical_docs": "Technical Documentation"
+  },
+  "changelog": {
+    "title": "Changelog"
+  },
+  "feedback": {
+    "send": "Send Feedback"
+  },
+  "terms_policies": "Terms & Policies",
+  "login": "Login",
+  "file": "Knowledge",
+  "signup": "Sign Up",
+  "help": "More",
+  "manual": "Manual",
+  "inviteLong": "Invite a Friend",
+  "inviteShort": "Invite",
+  "tools": {
+    "title": "Projects"
+  },
+  "sidenav": {
+    "pin": "Pin sidebar",
+    "unpin": "Unpin sidebar",
+    "help": "Help Center",
+    "dataLakes": "Data Lakes",
+    "sessions": {
+      "sort": {
+        "label": "Sort By",
+        "tags": "Tags",
+        "date": "Date"
+      },
+      "new": "New Chat",
+      "item": {
+        "genTags": "Generate Tags"
+      }
+    }
+  },
+  "referral": {
+    "title": "Refer a friend to",
+    "email_title_default": "Welcome to Bike4Mind!",
+    "email_body_default": "You have been invited by USER_NAME to Bike4Mind! Use the provided invite code to sign up.",
+    "friend_email": "Friend's Email",
+    "num_referrals_available": "Referrals available:",
+    "no_valid_emails_error": "Please enter valid email address(es)",
+    "send_referral": "Send Referral",
+    "send_referral_success": "Referral sent successfully!",
+    "send_referral_skipped": "{{count}} invite(s) skipped — those email addresses already have an account.",
+    "send_referral_failed": "{{count}} invite(s) could not be sent. Please try again.",
+    "send_referral_error": "Error sending referral. Please try again.",
+    "slack_notification_default": "Referral sent by user USER_NAME:USER_ID to FRIEND_EMAIL"
+  },
+  "activateVoice": "Activate this voice",
+  "liveVoice": "Live voice",
+  "whatsNew": "What's New",
+  "welcome": "Welcome to {{ name }}",
+  "network": {
+    "statuses": {
+      "-1": "Pending",
+      "0": "Connecting",
+      "1": "Connected",
+      "2": "Disconnecting",
+      "3": "Disconnected"
+    },
+    "networkStatus": "Network: {{ status }}",
+    "servicesTitle": "Connected services",
+    "services": {
+      "websocket": "Network",
+      "questProcessor": "Quest Processor"
+    }
+  },
+  "questProcessor": {
+    "statuses": {
+      "checking": "Checking…",
+      "connected": "Connected",
+      "disconnected": "Disconnected"
+    }
+  },
+  "deleteVoice": "Delete this voice",
+  "deleteVoiceConfirm": "Are you sure you want to delete this Voice?",
+  "organization": {
+    "organizations": "Teams",
+    "defaultName": "My Organization",
+    "shared": "Shared with Me",
+    "create": "Create Team",
+    "search": "Search teams...",
+    "no_organizations": "No teams found",
+    "view_details": "View Details",
+    "x_seats": "{{count}} seats",
+    "active_subscription": "Active Subscription",
+    "no_subscription": "No Subscription",
+    "x_members": "{{count}} members",
+    "x_credits": "{{count}} credits",
+    "owner": "Owner"
+  },
+  "session": {
+    "typeYourMessage": "Type your message here",
+    "switchedSession": "Switched to: {{ sessionName }}",
+    "send": "Send",
+    "sendMessage": "Send Message",
+    "preparingQuest": "Preparing quest...",
+    "rephrasePrompt": "Optimize your input",
+    "promptRephrased": "Prompt rephrased successfully",
+    "rephraseFailed": "Failed to rephrase prompt",
+    "errors": {
+      "notebookDeleted": "This notebook was deleted. Please create a new one.",
+      "noPermission": "You do not have permission to access this notebook.",
+      "invalidRequest": "Invalid request. Please try again.",
+      "tooManyRequests": "Too many requests. Please wait a moment and try again.",
+      "serverError": "Server error. Please try again later.",
+      "networkError": "Failed to send message. Please check your connection.",
+      "sendFailed": "Failed to send message. Please try again."
+    }
+  },
+  "projects": {
+    "title": "Project",
+    "projects": "Projects",
+    "joined_projects": "Joined Projects",
+    "no_joined_projects": "No joined projects yet",
+    "add_to_project": "Add to Project",
+    "modals": {
+      "files": {
+        "title": "Add Files to Project",
+        "subtitle": "Select files to add to your project",
+        "button_label": "Add Files",
+        "search_placeholder": "Search files",
+        "no_files": "No files found."
+      },
+      "members": {
+        "title": "Add Members to Project",
+        "subtitle": "Search and select users to add to your project",
+        "button_label": "Add Members",
+        "search_placeholder": "Search users",
+        "no_members": "Try searching for a user."
+      },
+      "sessions": {
+        "title": "Add Notebook to a Project",
+        "subtitle": "Select notebooks to add to your project or create a new one",
+        "button_label": "Add Notebooks",
+        "search_placeholder": "Search",
+        "create_button": "Create",
+        "no_notebooks": "No notebooks found. Try creating a new one."
+      },
+      "generic": {
+        "select_all": "Select All",
+        "unselect_all": "Unselect All",
+        "add_items_one": "Add {{count}} item",
+        "add_items_other": "Add {{count}} items",
+        "delete_items": "Delete {{count}} items"
+      }
+    }
+  },
+  "logout": "Logout",
+  "inbox": {
+    "title": "Inbox",
+    "messages": "Messages",
+    "invites": "Invites",
+    "sendMessage": "Send a Message",
+    "noMessages": "No messages"
+  },
+  "addSomething": "Add {{ name }}",
+  "deleteAllSomething": "Delete All {{ name }}",
+  "exportAllSomething": "Export All {{ name }}",
+  "importLLMHistory": "Import LLM History",
+  "downloadAllSomething": "Download All {{ name }}",
+  "language": {
+    "language_settings": "Language Settings",
+    "change-language": "Change Language"
+  },
+  "theme": {
+    "turn-dark": "Turn Dark",
+    "turn-light": "Turn Light"
+  },
+  "auth": {
+    "usernameOrEmail": "Username or Email",
+    "username": "Username",
+    "password": "Password",
+    "confirmPassword": "Confirm Password",
+    "fullName": "Full Name",
+    "inviteCode": "Invite Code",
+    "needCode": "Need Code?",
+    "noAccount": "No Account?",
+    "registerNow": "Register now",
+    "haveAccount": "Already have an account?",
+    "loginWithProvider": "Login with {{ provider }}",
+    "checking": "Checking...",
+    "continue": "Continue",
+    "troubleSigningIn": "Trouble signing in?",
+    "signingInAs": "Signing in as",
+    "signingIn": "Signing in...",
+    "backToEmail": "Back to email",
+    "checkYourEmail": "Check your email",
+    "codeSent": "Verification code sent! Check your email.",
+    "codeSentTo": "We sent a code to {{email}}",
+    "emailRequired": "Email is required",
+    "enterEmail": "Enter your email address",
+    "verifyCode": "Verify Code",
+    "verifying": "Verifying...",
+    "resendCode": "Resend code",
+    "createAccount": "Create Account",
+    "accountExists": "An account with this email already exists. Please sign in.",
+    "registrationClosed": "Sign-ups are currently closed. Contact your administrator to request access.",
+    "back": "Back",
+    "redirectingToProvider": "Redirecting to your organization's login...",
+    "email": "Email",
+    "createAccountDesc": "Create your account to get started",
+    "createBtn": "Create Account",
+    "loginBtn": "Login",
+    "hidePassword": "Hide password",
+    "showPassword": "Show password",
+    "enterEmailOrUsername": "Enter email or username",
+    "enterPassword": "Enter password",
+    "signInOrCreate": "Sign in or create an account to continue",
+    "justAMoment": "Just a moment...",
+    "fieldErrors": {
+      "invalidUsername": "Invalid username",
+      "invalidEmail": "Invalid email",
+      "passwordRequirementsMissing": "Some requirements missing",
+      "inviteCodeRequired": "Invite code required",
+      "usernameTaken": "Username already taken",
+      "emailRegistered": "Email already registered"
+    },
+    "passwordStrength": {
+      "label": "Password strength",
+      "weak": "Weak",
+      "fair": "Fair",
+      "strong": "Strong"
+    },
+    "passwordRequirements": {
+      "title": "Password requirements",
+      "minLength": "At least {{count}} characters",
+      "uppercase": "One uppercase letter",
+      "lowercase": "One lowercase letter",
+      "number": "One number",
+      "specialChar": "One special character",
+      "met": "met",
+      "notMet": "not met yet"
+    },
+    "errors": {
+      "usernameExists": "Username '{{username}}' is already taken. Please choose a different username.",
+      "emailExists": "An account with email '{{email}}' already exists. Please use a different email or login to your existing account.",
+      "accountExists": "An account with these credentials already exists. Please try logging in or use different credentials.",
+      "invalidInviteCode": "The invite code you entered is invalid or has expired. Please check and try again.",
+      "registrationFailed": "Registration failed. Please try again later.",
+      "validation": {
+        "generic": "Invalid input",
+        "invalidUsername": "Username can only contain letters, numbers, underscores, periods, and dashes",
+        "passwordMismatch": "Passwords do not match",
+        "passwordRequirements": "Password must be at least 8 characters, with upper and lower case letters, a number, and a special character"
+      }
+    }
+  },
+  "search": "Search",
+  "share": "Share",
+  "rename": "Rename",
+  "favorite": "Favorite",
+  "unfavorite": "Unfavorite",
+  "delete": "Delete",
+  "files": {
+    "showAttachedFiles": "Show Attached Files",
+    "hideAttachedFiles": "Hide Attached Files",
+    "title": "Files",
+    "upload": "Upload Files",
+    "long_title": "File Browser"
+  },
+  "view": "View",
+  "info": "Info",
+  "clone": "Clone",
+  "download": "Download",
+  "summarize": "Summarize",
+  "profile": {
+    "title": "Profile",
+    "tooltip": "Profile",
+    "collection": "Collection",
+    "collections": {
+      "all_types": "All Types"
+    },
+    "users_profile": "{{ name }}'s Profile",
+    "storage_used": "Storage Used",
+    "credits": "Credits",
+    "subscription": "Subscription",
+    "edit": "Edit Profile",
+    "manage_subscription": "Manage Subscription",
+    "upgrade": "Upgrade",
+    "credit_analytics": "Credit Analytics",
+    "pricing": "Credits Pricing",
+    "show_purchases": "Show Purchases",
+    "show_usage": "Show Usage",
+    "show_combined": "Show Combined",
+    "buy_credits": "Buy Credits"
+  },
+  "community": {
+    "title": "Community",
+    "tooltip": "Community",
+    "feed": "Community Feed"
+  },
+  "subscriptions": {
+    "title": "Subscriptions",
+    "expires_on": "Expires on {{ date }}",
+    "renews_on": "Renews on {{ date }}"
+  },
+  "billing": {
+    "title": "Billing"
+  },
+  "credits": {
+    "title": "Credits",
+    "usage": "Credit Usage",
+    "analytics": "Credit Analytics",
+    "analytics_tooltip": "View your credit usage over time",
+    "current_balance": "Current Credit Balance",
+    "credits": "credits",
+    "usage_by_model": "Usage by Model",
+    "no_transactions": "No credit transactions found in this time period",
+    "model_pricing": "Model Pricing",
+    "text_models": "Text Models",
+    "image_models": "Image Models",
+    "pricing_per_1k_tokens": "Pricing shown in credits per 1,000 tokens",
+    "pricing_per_generation": "Pricing shown in credits per image generation",
+    "model_name": "Model Name",
+    "price_tier": "Price Tier",
+    "input_cost": "Input Cost",
+    "output_cost": "Output Cost",
+    "generation_cost": "Generation Cost",
+    "no_models_available": "No models available",
+    "pricing_note": "Note: Prices are approximate and may vary based on model parameters. Price tiers: $ (lowest), $$ (medium), $$$ (premium).",
+    "burn_rate": "Daily usage (burn rate)",
+    "days_remaining": "Estimated days remaining",
+    "usage_pattern": "Based on your usage pattern from the last {{days}} days",
+    "credits_used": "Credits Used",
+    "credits_purchased": "Credits Purchased",
+    "net_credits": "Net Credits"
+  },
+  "time": {
+    "last_7_days": "Last 7 days",
+    "last_30_days": "Last 30 days",
+    "last_90_days": "Last 90 days",
+    "last_180_days": "Last 180 days",
+    "last_365_days": "Last 365 days"
+  },
+  "common": {
+    "date": "Date",
+    "refresh": "Refresh",
+    "days": "days",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "close": "Close",
+    "submit": "Submit",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success"
+  },
+  "errors": {
+    "failed_to_load_data": "Failed to load data. Please try again later."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Your Atlassian connection has expired. Please reconnect your account."
+    }
+  },
+  "credits_modal": {
+    "title": "Additional Credits",
+    "description": "Purchase additional credits to continue using our advanced AI models and features. Credits are used for model inference and special features, with different models consuming varying amounts based on complexity.",
+    "current_credits": "Current credits amount",
+    "best_value": "Best Value",
+    "purchase_success": "Purchased {{credits}} credits",
+    "history_title": "Credits Purchase History",
+    "purchase": "Purchase",
+    "no_transactions": "No transactions yet",
+    "low_credits": "Your credits are low",
+    "low_credits_sub": "Buy more credits to continue your work.",
+    "no_credits": "No credits",
+    "no_credits_sub": "Buy credits to continue your work.",
+    "status": {
+      "completed": "Completed",
+      "pending": "Pending",
+      "failed": "Failed"
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "tooltip": "Settings",
+    "main": "Main Settings",
+    "account": "Account",
+    "ai_features": "AI Features",
+    "connected_apps": {
+      "title": "Connected Apps",
+      "link": "Link",
+      "unlink": "Unlink"
+    },
+    "developer_tools": "Developer Tools",
+    "experimental_features": {
+      "title": "Experimental Features",
+      "tooltip": "Experimental Features",
+      "header": "Experimental Features",
+      "beta_features": {
+        "title": "Beta Features",
+        "subtitle": "These features are still works in progress and may cause unexpected results. Opting to enable them means you agree to use them in their current state."
+      }
+    },
+    "ui_preferences": "UI Preferences"
+  },
+  "mementos": {
+    "title": "Mementos",
+    "tooltip": "Mementos"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Admin Settings"
+  },
+  "speech": {
+    "title": "Speech",
+    "tooltip": "Speech to Text & Text to Speech"
+  },
+  "instructions": {
+    "title": "System Prompts",
+    "tooltip": "System Prompts"
+  },
+  "friends": {
+    "add_friend": "Add to Friends",
+    "unfriend": "Remove from Friends",
+    "pending_request": "Pending Friend Request",
+    "all": "All Friends",
+    "pending": "Pending"
+  },
+  "notebooks": {
+    "view_info": "View Info",
+    "clone": "Clone",
+    "download": "Download",
+    "summarize": "Summarize",
+    "delete": "Delete",
+    "delete_confirm": "Are you sure you want to permanently delete \"{{ name }}\"? This action cannot be undone.",
+    "auto_rename": "Rename with AI"
+  },
+  "add_friend": {
+    "title": "Add a Friend",
+    "friend_email": "Friend's Email",
+    "message": "Message",
+    "cancel": "Cancel",
+    "send": "Send",
+    "email_placeholder": "Enter your friend's email",
+    "message_placeholder": "Enter your message"
+  },
+  "file_browser": {
+    "my_files": "My Files",
+    "shared_with_me": "Shared with Me",
+    "total_files": "Total Knowledge Items",
+    "search_placeholder": "Search by name or tag...",
+    "file_type": "File Type",
+    "all_files": "All Files",
+    "text": "Text",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Image",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Date Created",
+    "size": "Size",
+    "name": "Name",
+    "sort_z_to_a": "Sort Z to A",
+    "sort_a_to_z": "Sort A to Z",
+    "grid_view": "Grid View",
+    "list_view": "List View",
+    "select_file_hint": "Tap to select one or more files and add them to your notebook session!",
+    "session_one": "Notebook",
+    "session_other": "Notebooks",
+    "no_files_available": "No files available",
+    "count_file_selected_one": "{{count}} file selected",
+    "count_file_selected_other": "{{count}} files selected",
+    "add_count_file_one": "Add {{count}} File",
+    "add_count_file_other": "Add {{count}} Files",
+    "delete_count_file_one": "Delete {{count}} File",
+    "delete_count_file_other": "Delete {{count}} Files",
+    "share_count_file_one": "Share {{count}} File",
+    "share_count_file_other": "Share {{count}} Files",
+    "count_file_one": "{{count}} file",
+    "count_file_other": "{{count}} files",
+    "add_to_session_success": "Adding file: {{fileNames}} to {{sessionName}}",
+    "add_file_success": "Adding file: {{fileNames}}",
+    "browse_files": "Browse Files",
+    "create_new_knowledge": "Create File",
+    "create_new_knowledge_from_url": "Scrape URL",
+    "enter_url": "Enter URL",
+    "create_file": "Create File",
+    "create_file_from_url": "Create File",
+    "create_from_url": "Quick Scrape",
+    "research": "Research",
+    "open_research": "Open Research",
+    "url_success": "Successfully created knowledge from URL: {{url}}",
+    "url_error": "Failed to create knowledge from URL: {{url}}",
+    "url_required": "Please enter a URL",
+    "previous": "Previous",
+    "next": "Next",
+    "page_of": "Page {{current}} of {{total}}",
+    "drop_files_here": "Drop files here",
+    "tagging": "Tagging...",
+    "tag_files": "Tag Files",
+    "select_all": "Select All",
+    "unselect_all": "Unselect All",
+    "add_files": "Add Files",
+    "add_files_to_notebook_one": "Add {{count}} File to Notebook",
+    "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
+    "in_project": "In Project"
+  },
+  "file_properties": {
+    "title": "File Properties",
+    "make_instructions": "Make into Instructions?",
+    "instruction_priority": "Instruction Priority (0–999)",
+    "priority_levels": {
+      "global": "0-100: Global Instructions",
+      "group": "101-300: Group/Company Instructions",
+      "project": "301-500: Project Instructions",
+      "user": "501-999: User Instructions"
+    },
+    "save": "Save",
+    "update_success": "Updated system priority for \"{{fileName}}\".",
+    "update_error": "Failed to update system priority."
+  },
+  "file_actions": {
+    "notes": "Notes",
+    "notes_placeholder": "Add notes about this file...",
+    "add_notes": "Add Notes",
+    "add_note": "Add Note",
+    "edit_notes": "Edit Notes",
+    "notes_save_error": "Failed to save notes",
+    "manage_tags": "Manage Tags",
+    "tags": "Tags",
+    "tags_placeholder": "Enter tag names separated by commas...",
+    "add_tag_one": "Updated tag for {{count}} file",
+    "add_tag_other": "Updated tag for {{count}} files",
+    "failed_to_add_tag_one": "Failed to update tag to file",
+    "failed_to_add_tag_other": "Failed to update tag to files",
+    "cancel": "Cancel",
+    "save": "Save",
+    "download": "Download",
+    "vectorize": "Vectorize",
+    "instruction": "Instruction {{priority}}",
+    "chunked": "Chunked",
+    "not_chunked": "Not Chunked"
+  },
+  "subscription_modal": {
+    "title": "Subscription",
+    "description": "Access every major AI model through one unified interface. Run advanced models like Deepseek R1 privately.",
+    "no_free_tier": "NO FREE TIER - FOCUSED ON PROFESSIONALS.",
+    "credits_rollover": "Unused credits roll over for 3 months.",
+    "monthly_billing": "Monthly Billing",
+    "annual_billing": "Annual Billing",
+    "most_popular": "Most Popular",
+    "current": "Current",
+    "credits_per_month": "{{credits}} credits per month",
+    "subscription_renewal": "Your subscription renews on {{date}}",
+    "personal": "Personal",
+    "business": "Business",
+    "team": "Team",
+    "enterprise": "Enterprise"
+  },
+  "agents": {
+    "title": "Agents",
+    "new_agent": "New Agent",
+    "manage_agents": "Manage Agents",
+    "search_placeholder": "Search agents...",
+    "your_agents": "Your Agents",
+    "loading": "Loading agents...",
+    "no_agents": "No agents found",
+    "create_first": "Create your first agent to get started",
+    "agents_found": "{{count}} agent found",
+    "agents_found_plural": "{{count}} agents found",
+    "attached_agents": "Attached Agents",
+    "listening_description": "These agents are listening to all messages in this conversation",
+    "no_search_results": "No agents match \"{{search}}\"",
+    "search_help": "Try a different search term",
+    "no_agents_description": "Create your first agent to get started",
+    "create_agent": "Create Agent",
+    "click_to_attach": "Click to attach to current session",
+    "click_to_detach": "Click to detach from current session",
+    "show_attached_agents": "Show Attached Agents",
+    "hide_attached_agents": "Hide Attached Agents",
+    "toggle_attached_agents": "Toggle Attached Agents",
+    "agent_listening_tooltip": "{{name}} is listening and eager to help"
+  },
+  "skills": {
+    "title": "Skills",
+    "command_palette_description": "Manage reusable instruction templates"
+  }
+}

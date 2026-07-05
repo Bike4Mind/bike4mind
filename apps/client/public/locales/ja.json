@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI設定",
+    "session": "ノートブック",
+    "session_plural": "ノートブック",
+    "favorite": "お気に入り",
+    "unfavorite": "お気に入り解除",
+    "favorites": "お気に入り",
+    "favorites_count_one": "{{count}} お気に入り",
+    "favorites_count_other": "{{count}} お気に入り",
+    "currentSession": "現在のセッション",
+    "other": "その他のタグ",
+    "text_model": "テキストモデル",
+    "image_model": "画像モデル",
+    "ai_image": "AI画像",
+    "switch_to": "{{ name }} に切り替え"
+  },
+  "guide": {
+    "title": "ガイド"
+  },
+  "intro": {
+    "title": "紹介"
+  },
+  "developers": {
+    "title": "開発者",
+    "technical_docs": "技術ドキュメント"
+  },
+  "changelog": {
+    "title": "変更履歴"
+  },
+  "feedback": {
+    "send": "フィードバックを送信"
+  },
+  "terms_policies": "利用規約とポリシー",
+  "login": "ログイン",
+  "file": "知識",
+  "forgotPassword": "パスワードを忘れた",
+  "signup": "サインアップ",
+  "help": "ヘルプ",
+  "manual": "マニュアル",
+  "inviteLong": "友達を招待",
+  "inviteShort": "招待",
+  "tools": {
+    "title": "ツール"
+  },
+  "sidenav": {
+    "pin": "サイドバーを固定",
+    "unpin": "サイドバーの固定を解除",
+    "sessions": {
+      "sort": {
+        "label": "ソート条件",
+        "tags": "タグ順",
+        "date": "日付順"
+      },
+      "new": "新規チャット",
+      "item": {
+        "genTags": "ノートブックのタグリストを生成"
+      }
+    }
+  },
+  "referral": {
+    "title": "友達をGrokToolに紹介する",
+    "email_title_default": "GrokToolへようこそ！",
+    "email_body_default": "USER_NAMEによってGrokToolに招待されました！登録リンク：次の招待コードを使用してサインアップしてください：INVITE_CODE",
+    "friend_email": "友達のメール",
+    "num_referrals_available": "利用可能な紹介数：",
+    "no_valid_emails_error": "有効なメールアドレスを入力してください",
+    "send_referral": "紹介を送る",
+    "send_referral_success": "紹介が成功しました！",
+    "send_referral_skipped": "{{count}} 招待をスキップしました — そのメールアドレスはすでにアカウントがあります。",
+    "send_referral_failed": "{{count}} 件の招待を送信できませんでした。もう一度お試しください。",
+    "send_referral_error": "紹介の送信に失敗しました。もう一度お試しください。",
+    "slack_notification_default": "USER_NAME:USER_IDユーザーによってFRIEND_EMAILへ送られた紹介"
+  },
+  "activateVoice": "この音声を有効にする",
+  "liveVoice": "ライブ音声",
+  "whatsNew": "新着情報",
+  "welcome": "{{ name }} へようこそ",
+  "network": {
+    "statuses": {
+      "0": "接続中",
+      "1": "接続済み",
+      "2": "切断中",
+      "3": "切断済み",
+      "-1": "保留中"
+    },
+    "networkStatus": "ネットワーク: {{ status }}"
+  },
+  "deleteVoice": "この音声を削除する",
+  "deleteVoiceConfirm": "この音声を削除してもよろしいですか？",
+  "organization": {
+    "organizations": "チーム",
+    "defaultName": "私の組織",
+    "shared": "共有アイテム",
+    "create": "チームを作成",
+    "search": "チームを検索...",
+    "no_organizations": "チームが見つかりません",
+    "view_details": "詳細を表示",
+    "x_seats": "{{count}} 席",
+    "active_subscription": "アクティブなサブスクリプション",
+    "no_subscription": "サブスクリプションがありません",
+    "x_members": "{{count}} メンバー",
+    "x_credits": "{{count}} クレジット",
+    "owner": "オーナー"
+  },
+  "session": {
+    "typeYourMessage": "ここにメッセージを入力してください",
+    "switchedSession": "{{ sessionName }} に切り替えました",
+    "send": "送信",
+    "sendMessage": "メッセージを送信",
+    "preparingQuest": "クエストを準備しています...",
+    "rephrasePrompt": "入力を最適化する",
+    "promptRephrased": "プロンプトが正常に言い換えられました",
+    "rephraseFailed": "プロンプトの言い換えに失敗しました",
+    "errors": {
+      "notebookDeleted": "このノートブックは削除されました。新しいものを作成してください。",
+      "noPermission": "このノートブックにアクセスする権限がありません。",
+      "invalidRequest": "無効なリクエストです。もう一度お試しください。",
+      "tooManyRequests": "リクエストが多すぎます。少し待ってからもう一度お試しください。",
+      "serverError": "サーバーエラーが発生しました。後で再度お試しください。",
+      "networkError": "メッセージの送信に失敗しました。接続を確認してください。",
+      "sendFailed": "メッセージの送信に失敗しました。もう一度お試しください。"
+    }
+  },
+  "projects": {
+    "title": "プロジェクト",
+    "projects": "プロジェクト",
+    "joined_projects": "参加したプロジェクト",
+    "no_joined_projects": "参加しているプロジェクトはありません",
+    "add_to_project": "プロジェクトに追加",
+    "modals": {
+      "files": {
+        "title": "プロジェクトにファイルを追加",
+        "subtitle": "プロジェクトに追加するファイルを選択",
+        "button_label": "ファイルを追加",
+        "search_placeholder": "ファイルを検索",
+        "no_files": "ファイルが見つかりません。"
+      },
+      "members": {
+        "title": "プロジェクトにメンバーを追加",
+        "subtitle": "プロジェクトに追加するユーザーを検索して選択",
+        "button_label": "メンバーを追加",
+        "search_placeholder": "ユーザーを検索",
+        "no_members": "ユーザーを検索してみてください。"
+      },
+      "sessions": {
+        "title": "プロジェクトにノートブックを追加",
+        "subtitle": "プロジェクトに追加するノートブックを選択するか、新しいものを作成",
+        "button_label": "ノートブックを追加",
+        "search_placeholder": "検索",
+        "create_button": "作成",
+        "no_notebooks": "ノートブックが見つかりません。新しいノートブックを作成してみてください。"
+      },
+      "generic": {
+        "select_all": "すべて選択",
+        "unselect_all": "すべて選択解除",
+        "add_items_one": "{{count}} 件のアイテムを追加",
+        "add_items_other": "{{count}} 件のアイテムを追加",
+        "delete_items": "アイテムを{{count}}個削除"
+      }
+    }
+  },
+  "logout": "ログアウト",
+  "inbox": {
+    "title": "受信箱",
+    "messages": "メッセージ",
+    "invites": "招待",
+    "sendMessage": "メッセージを送る",
+    "noMessages": "メッセージはありません"
+  },
+  "addSomething": "{{ name }} を追加",
+  "deleteAllSomething": "すべての {{ name }} を削除",
+  "exportAllSomething": "すべての {{ name }} をエクスポート",
+  "importLLMHistory": "LLM履歴をインポート",
+  "downloadAllSomething": "すべての {{ name }} をダウンロード",
+  "language": {
+    "language_settings": "言語設定",
+    "change-language": "言語を変更"
+  },
+  "theme": {
+    "turn-dark": "ダークモードに切り替え",
+    "turn-light": "ライトモードに切り替え"
+  },
+  "auth": {
+    "usernameOrEmail": "ユーザー名またはメールアドレス",
+    "username": "ユーザー名",
+    "password": "パスワード",
+    "confirmPassword": "パスワードを確認",
+    "fullName": "フルネーム",
+    "inviteCode": "招待コード",
+    "needCode": "コードが必要ですか？",
+    "noAccount": "アカウントがない場合",
+    "haveAccount": "アカウントをお持ちですか？",
+    "loginWithProvider": "{{ provider }} でログイン",
+    "checking": "確認中...",
+    "continue": "続行",
+    "troubleSigningIn": "サインインに問題がありますか？",
+    "signingInAs": "としてサインイン中",
+    "signingIn": "サインイン中...",
+    "backToEmail": "メールに戻る",
+    "redirectingToProvider": "組織のログインにリダイレクトしています...",
+    "resetInstructions": "メールアドレスを入力してください。パスワードをリセットするためのメールを送信します。",
+    "sendResetEmail": "パスワードリセットメールを送信",
+    "email": "メールアドレス",
+    "resetEmailSentMessage": "メールが送信されました！追加の手順についてはメールをご確認ください",
+    "createAccountDesc": "アカウントを作成",
+    "createBtn": "アカウントを作成",
+    "loginBtn": "ログイン",
+    "passwordStrength": {
+      "label": "パスワードの強度",
+      "weak": "弱い",
+      "fair": "普通",
+      "strong": "強い"
+    },
+    "passwordRequirements": {
+      "title": "パスワードの要件",
+      "minLength": "最低 {{count}} 文字",
+      "uppercase": "大文字を1文字",
+      "lowercase": "小文字を1文字",
+      "number": "数字を1文字",
+      "specialChar": "特殊文字を1文字",
+      "met": "満たしています",
+      "notMet": "まだ満たしていません"
+    },
+    "errors": {
+      "usernameExists": "ユーザー名 '{{username}}' はすでに使用されています。他のユーザー名を選択してください。",
+      "emailExists": "メール '{{email}}' のアカウントはすでに存在します。他のメールを使用するか、既存のアカウントにログインしてください。",
+      "accountExists": "これらの資格情報のアカウントはすでに存在します。ログインを試みるか、異なる資格情報を使用してください。",
+      "invalidInviteCode": "入力した招待コードは無効または期限切れです。確認して再試行してください。",
+      "registrationFailed": "登録に失敗しました。また後で試してください。",
+      "validation": {
+        "generic": "無効な入力",
+        "invalidUsername": "ユーザー名は文字、数字、アンダースコア、ピリオド、ハイフンのみを含むことができます",
+        "passwordMismatch": "パスワードが一致しません",
+        "passwordRequirements": "パスワードは8文字以上で、大文字と小文字の英字、数字、特殊文字を含む必要があります"
+      }
+    }
+  },
+  "search": "検索",
+  "share": "共有",
+  "rename": "名前の変更",
+  "favorite": "お気に入り",
+  "unfavorite": "お気に入り解除",
+  "delete": "削除",
+  "files": {
+    "showAttachedFiles": "添付ファイルを表示",
+    "hideAttachedFiles": "添付ファイルを隠す",
+    "title": "ファイル",
+    "upload": "ファイルをアップロード",
+    "long_title": "ファイルブラウザ"
+  },
+  "view": "表示",
+  "info": "情報",
+  "clone": "クローン",
+  "download": "ダウンロード",
+  "summarize": "要約",
+  "profile": {
+    "title": "プロフィール",
+    "tooltip": "プロフィール",
+    "collection": "コレクション",
+    "collections": {
+      "all_types": "すべてのタイプ"
+    },
+    "users_profile": "{{ name }}のプロフィール",
+    "storage_used": "使用済みストレージ",
+    "credits": "クレジット",
+    "subscription": "サブスクリプション",
+    "edit": "プロフィールを編集",
+    "manage_subscription": "サブスクリプションを管理",
+    "upgrade": "アップグレード",
+    "credit_analytics": "クレジット分析",
+    "pricing": "クレジットの価格",
+    "show_purchases": "購入を表示",
+    "show_usage": "使用状況を表示",
+    "show_combined": "合計を表示",
+    "buy_credits": "クレジットを購入"
+  },
+  "community": {
+    "title": "コミュニティ",
+    "tooltip": "コミュニティ",
+    "feed": "コミュニティフィード"
+  },
+  "subscriptions": {
+    "title": "サブスクリプション",
+    "expires_on": "{{ date }} に期限切れ",
+    "renews_on": "{{ date }} に更新"
+  },
+  "billing": {
+    "title": "請求"
+  },
+  "credits": {
+    "title": "クレジット",
+    "usage": "クレジット使用量",
+    "analytics": "クレジット分析",
+    "analytics_tooltip": "時間経過に伴うクレジット使用量を確認",
+    "current_balance": "現在のクレジット残高",
+    "credits": "クレジット",
+    "usage_by_model": "モデル別の使用量",
+    "no_transactions": "この期間中にクレジット取引が見つかりません",
+    "model_pricing": "モデルの価格",
+    "text_models": "テキストモデル",
+    "image_models": "画像モデル",
+    "pricing_per_1k_tokens": "1,000トークンごとのクレジット価格",
+    "pricing_per_generation": "画像生成ごとのクレジット価格",
+    "model_name": "モデル名",
+    "price_tier": "価格帯",
+    "input_cost": "入力コスト",
+    "output_cost": "出力コスト",
+    "generation_cost": "生成コスト",
+    "no_models_available": "利用可能なモデルがありません",
+    "pricing_note": "注：価格は概算であり、モデルパラメータに基づいて変動する可能性があります。価格帯：$（最低）、$$（中）、$$$（プレミアム）。",
+    "burn_rate": "デイリー使用量（バーンレート）",
+    "days_remaining": "残りの日数の見積もり",
+    "usage_pattern": "過去{{days}}日間の使用パターンに基づく",
+    "credits_used": "使用したクレジット",
+    "credits_purchased": "購入したクレジット",
+    "net_credits": "純クレジット"
+  },
+  "time": {
+    "last_7_days": "過去7日間",
+    "last_30_days": "過去30日間",
+    "last_90_days": "過去90日間",
+    "last_180_days": "過去180日間",
+    "last_365_days": "過去365日間"
+  },
+  "common": {
+    "date": "日付",
+    "refresh": "更新",
+    "days": "日",
+    "cancel": "キャンセル",
+    "save": "保存",
+    "delete": "削除",
+    "edit": "編集",
+    "close": "閉じる",
+    "submit": "送信",
+    "loading": "読み込み中...",
+    "error": "エラー",
+    "success": "成功"
+  },
+  "errors": {
+    "failed_to_load_data": "データの読み込みに失敗しました。後でもう一度お試しください。"
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Atlassianの接続が期限切れです。アカウントを再接続してください。"
+    }
+  },
+  "credits_modal": {
+    "title": "追加クレジット",
+    "description": "当社の高度なAIモデルと機能を引き続き使用するために、追加のクレジットを購入してください。クレジットはモデル推論や特別な機能に使用され、異なるモデルは複雑さに応じて異なる量を消費します。",
+    "current_credits": "現在のクレジット額",
+    "best_value": "最良の価値",
+    "purchase_success": "購入した{{credits}}クレジット",
+    "history_title": "クレジット購入履歴",
+    "purchase": "購入",
+    "no_transactions": "まだ取引はありません",
+    "low_credits": "クレジットが不足しています",
+    "low_credits_sub": "作業を続けるために、クレジットを購入してください。",
+    "no_credits": "クレジットがありません",
+    "no_credits_sub": "作業を続けるために、クレジットを購入してください。",
+    "status": {
+      "completed": "完了",
+      "pending": "保留中",
+      "failed": "失敗"
+    }
+  },
+  "settings": {
+    "title": "設定",
+    "tooltip": "設定",
+    "main": "メイン設定",
+    "account": "アカウント",
+    "ai_features": "AI機能",
+    "connected_apps": {
+      "title": "接続されたアプリ",
+      "link": "リンク",
+      "unlink": "リンクを解除"
+    },
+    "developer_tools": "開発者ツール",
+    "experimental_features": {
+      "title": "実験的機能",
+      "tooltip": "実験的機能",
+      "header": "実験的機能",
+      "beta_features": {
+        "title": "ベータ機能",
+        "subtitle": "これらの機能はまだ進行中であり、予期しない結果を引き起こす可能性があります。有効にすることを選択することは、現在の状態で使用することに同意することを意味します。"
+      }
+    },
+    "ui_preferences": "UIの設定"
+  },
+  "mementos": {
+    "title": "思い出",
+    "tooltip": "思い出"
+  },
+  "admin": {
+    "title": "管理者",
+    "tooltip": "管理者設定"
+  },
+  "speech": {
+    "title": "スピーチ",
+    "tooltip": "音声からテキスト & テキストから音声"
+  },
+  "instructions": {
+    "title": "指示",
+    "tooltip": "指示"
+  },
+  "friends": {
+    "add_friend": "友達に追加",
+    "unfriend": "友達から削除",
+    "pending_request": "保留中の友達リクエスト",
+    "all": "すべての友達",
+    "pending": "保留中"
+  },
+  "notebooks": {
+    "view_info": "ノートブック情報を表示",
+    "clone": "ノートブックをクローン",
+    "download": "ノートブックをダウンロード",
+    "summarize": "ノートブックを要約",
+    "delete": "ノートブックを削除",
+    "delete_confirm": "本当に \"{{ name }}\" を永久に削除してもよろしいですか？このアクションは元に戻せません。",
+    "auto_rename": "AIで名前を変更"
+  },
+  "add_friend": {
+    "title": "友達を追加",
+    "friend_email": "友達のメール",
+    "message": "メッセージ",
+    "cancel": "キャンセル",
+    "send": "送信",
+    "email_placeholder": "友達のメールアドレスを入力してください",
+    "message_placeholder": "メッセージを入力してください"
+  },
+  "file_browser": {
+    "my_files": "マイファイル",
+    "shared_with_me": "共有されたファイル",
+    "total_files": "合計ナレッジアイテム",
+    "search_placeholder": "名前またはタグで検索...",
+    "file_type": "ファイルタイプ",
+    "all_files": "すべてのファイル",
+    "text": "テキスト",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "画像",
+    "excel": "エクセル",
+    "word": "ワード",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "マークダウン",
+    "code": "コード",
+    "date_created": "作成日",
+    "size": "サイズ",
+    "name": "名前",
+    "sort_z_to_a": "ZからAにソート",
+    "sort_a_to_z": "AからZにソート",
+    "grid_view": "グリッドビュー",
+    "list_view": "リストビュー",
+    "select_file_hint": "タップしてファイルまたは複数のファイルを選択し、ノートブックセッションに追加してください！",
+    "session_one": "ノートブック",
+    "session_other": "ノートブック",
+    "no_files_available": "利用可能なファイルはありません",
+    "count_file_selected_one": "{{count}} ファイルが選択されました",
+    "count_file_selected_other": "{{count}} ファイルが選択されました",
+    "add_count_file_one": "{{count}} ファイルを追加",
+    "add_count_file_other": "{{count}} ファイルを追加",
+    "delete_count_file_one": "{{count}} ファイルを削除",
+    "delete_count_file_other": "{{count}} ファイルを削除",
+    "share_count_file_one": "{{count}} ファイルを共有",
+    "share_count_file_other": "{{count}} ファイルを共有",
+    "count_file_one": "{{count}} ファイル",
+    "count_file_other": "{{count}} ファイル",
+    "add_to_session_success": "ファイル: {{fileNames}}を{{sessionName}}に追加中",
+    "add_file_success": "ファイル: {{fileNames}}を追加中",
+    "browse_files": "ファイルをブラウズ",
+    "create_new_knowledge": "作成",
+    "create_new_knowledge_from_url": "URLをスクレイプ",
+    "enter_url": "URLを入力",
+    "create_file": "ファイルを作成",
+    "create_file_from_url": "ファイルを作成",
+    "create_from_url": "クイックスクレイプ",
+    "research": "リサーチ",
+    "open_research": "リサーチを開く",
+    "url_success": "URLからの知識を正常に作成しました: {{url}}",
+    "url_error": "URLからの知識の作成に失敗しました: {{url}}",
+    "url_required": "URLを入力してください",
+    "previous": "前へ",
+    "next": "次へ",
+    "page_of": "ページ {{current}} / {{total}}",
+    "drop_files_here": "ここにファイルをドロップ",
+    "tagging": "タグ付け中...",
+    "tag_files": "ファイルにタグを付ける",
+    "select_all": "すべて選択",
+    "unselect_all": "すべて解除",
+    "add_files": "ファイルを追加",
+    "add_files_to_notebook_one": "{{count}} ファイルをノートブックに追加",
+    "add_files_to_notebook_other": "{{count}} ファイルをノートブックに追加",
+    "in_project": "プロジェクト内"
+  },
+  "file_properties": {
+    "title": "ファイルプロパティ",
+    "make_instructions": "指示に変換しますか？",
+    "instruction_priority": "指示の優先順位 (0–999)",
+    "priority_levels": {
+      "global": "0-100: グローバル指示",
+      "group": "101-300: グループ/会社指示",
+      "project": "301-500: プロジェクト指示",
+      "user": "501-999: ユーザー指示"
+    },
+    "save": "保存",
+    "update_success": "「{{fileName}}」のシステム優先順位が更新されました。",
+    "update_error": "システム優先順位の更新に失敗しました。"
+  },
+  "file_actions": {
+    "notes": "メモ",
+    "notes_placeholder": "このファイルに関するメモを追加...",
+    "add_notes": "メモを追加",
+    "add_note": "メモを追加",
+    "edit_notes": "メモを編集",
+    "notes_save_error": "メモの保存に失敗しました",
+    "manage_tags": "タグを管理",
+    "tags": "タグを管理",
+    "tags_placeholder": "タグ名をカンマで区切って入力...",
+    "add_tag_one": "{{count}}ファイルのタグを更新しました",
+    "add_tag_other": "{{count}}ファイルのタグを更新しました",
+    "failed_to_add_tag_one": "ファイルのタグの更新に失敗しました",
+    "failed_to_add_tag_other": "ファイルのタグの更新に失敗しました",
+    "cancel": "キャンセル",
+    "save": "保存",
+    "download": "ダウンロード",
+    "vectorize": "ベクトル化",
+    "instruction": "指示 {{priority}}",
+    "chunked": "チャンク化された",
+    "not_chunked": "チャンク化されていない"
+  },
+  "subscription_modal": {
+    "title": "サブスクリプション",
+    "description": "1つの統一インターフェースを通じて、すべての主要なAIモデルにアクセスできます。Deepseek R1のような高度なモデルをプライベートに実行します。",
+    "no_free_tier": "無料プランはありません - プロフェッショナル向けに特化しています。",
+    "credits_rollover": "未使用のクレジットは3か月間繰り越されます。",
+    "monthly_billing": "月額請求",
+    "annual_billing": "年額請求",
+    "most_popular": "最も人気",
+    "current": "現在",
+    "credits_per_month": "{{credits}} クレジット / 月",
+    "subscription_renewal": "あなたのサブスクリプションは{{date}}に更新されます",
+    "personal": "個人",
+    "business": "ビジネス",
+    "team": "チーム",
+    "enterprise": "エンタープライズ"
+  },
+  "agents": {
+    "title": "エージェント",
+    "new_agent": "新しいエージェント",
+    "manage_agents": "エージェントを管理",
+    "search_placeholder": "エージェントを検索...",
+    "your_agents": "あなたのエージェント",
+    "loading": "エージェントを読み込み中...",
+    "no_agents": "エージェントが見つかりません",
+    "create_first": "最初のエージェントを作成して開始しましょう",
+    "agents_found": "{{count}} エージェントが見つかりました",
+    "agents_found_plural": "{{count}} エージェントが見つかりました",
+    "attached_agents": "添付されたエージェント",
+    "listening_description": "これらのエージェントはこの会話のすべてのメッセージを聞いています",
+    "no_search_results": "\"{{search}}\"に一致するエージェントが見つかりません",
+    "search_help": "別の検索用語を試してください",
+    "no_agents_description": "最初のエージェントを作成して開始しましょう",
+    "create_agent": "エージェントを作成",
+    "click_to_attach": "現在のセッションにアタッチするにはクリック",
+    "click_to_detach": "現在のセッションからデタッチするにはクリック",
+    "show_attached_agents": "添付されたエージェントを表示",
+    "hide_attached_agents": "添付されたエージェントを隠す",
+    "toggle_attached_agents": "添付されたエージェントの表示/非表示を切り替える",
+    "agent_listening_tooltip": "{{name}}は聞いており、手助けする準備ができています"
+  },
+  "skills": {
+    "title": "スキル",
+    "command_palette_description": "再利用可能な指示テンプレートを管理する"
+  }
+}

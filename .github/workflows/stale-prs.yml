@@ -1,0 +1,51 @@
+name: Close Stale PRs
+
+on:
+  schedule:
+    - cron: '30 1 * * *' # Daily at 1:30 AM UTC
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    name: Mark and Close Stale PRs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v10
+        with:
+          # --- Only PRs ---
+          days-before-issue-stale: -1
+          days-before-issue-close: -1
+
+          # --- Timing ---
+          days-before-pr-stale: 30
+          days-before-pr-close: 7
+
+          # --- Labels ---
+          stale-pr-label: 'Stale'
+
+          # --- Messages ---
+          stale-pr-message: >
+            This pull request has been automatically marked as **stale** because
+            it has not had any activity in the last 30 days.
+
+
+            It will be **closed in 7 days** if no further activity occurs.
+
+
+            If this PR is still needed, please push new changes or leave a comment.
+            To keep it open indefinitely, add the `do-not-close` label.
+          close-pr-message: >
+            This pull request has been automatically closed due to inactivity.
+            Feel free to reopen it if the changes are still needed.
+
+          # --- Exemptions ---
+          exempt-pr-labels: 'P0,P1,security,do-not-close,work-in-progress'
+          exempt-draft-pr: true
+
+          # --- Behavior ---
+          remove-stale-when-updated: true
+          delete-branch: false
+          operations-per-run: 100

@@ -1,0 +1,36 @@
+# .gitleaksignore — suppresses rotated/historical credentials from git history
+# Generated after rotating the credentials listed in lumina5 issues #8505, #8506, #8507, #8508.
+# Suppression is by gitleaks fingerprint (commit:file:rule:line hash), NOT by secret value.
+# Do NOT remove entries — they prevent re-filing of already-rotated credentials.
+
+# Rotated Slack webhook (#8505, PR #8564 removed the code)
+# bike4mind-slack-webhook rule — found in historical commits only
+8a76414a9d6338b48c47ff84aeb7c239f047ae5e:packages/client/server/events/logToSlack.ts:bike4mind-slack-webhook:12
+8527c83be5de2cc1f5f8f26bebeb9a4797cf84a6:packages/client/server/utils/slack.ts:bike4mind-slack-webhook:39
+cffad42134f11c63e914a4eba704e5dc288438fe:packages/client/server/cron/weeklyUserActivityReport.ts:bike4mind-slack-webhook:95
+1e166c23bf9abecd110854b9d1babcb0ffc64560:packages/client/server/queueHandlers/emailRetry.ts:bike4mind-slack-webhook:39
+59d7d265840ae4010a65bed823b4f25fad057736:packages/client/server/scripts/generateUserActivity.ts:bike4mind-slack-webhook:75
+8c0eac97095cd6a72e918c8578d8c69ce209068e:packages/client/server/cron/userActivityReport.ts:bike4mind-slack-webhook:83
+52ae4ef2bb97dc8cb50059238e3c3a0f5e260ea8:packages/core/services/countersService.ts:bike4mind-slack-webhook:34
+86b3220820346c17aa062176ffa08ca27e0a97f5:packages/managers/countersManager.ts:bike4mind-slack-webhook:25
+e866080eebb2d1b5bef358d2997b90e512563652:packages/client/server/managers/countersManager.ts:bike4mind-slack-webhook:105
+# Webhook moved from packages/client/server/scripts/ to packages/scripts/ — same rotated credential
+c190202007badd2c2aa18655aee6ea98f7dbfe31:packages/scripts/generateUserActivity.ts:bike4mind-slack-webhook:91
+c190202007badd2c2aa18655aee6ea98f7dbfe31:packages/scripts/generateWeeklyUserActivity.ts:bike4mind-slack-webhook:164
+
+# Rotated MongoDB credentials (#8506, #8507, #8508)
+# bike4mind-mongodb-uri rule — found in historical commits only
+21130b0a73f55bf7f195bf446bb86b174b31b2ea:scripts/check-phishing-click.mjs:bike4mind-mongodb-uri:4
+21130b0a73f55bf7f195bf446bb86b174b31b2ea:scripts/check-phishing-click.mjs:bike4mind-mongodb-uri:5
+21130b0a73f55bf7f195bf446bb86b174b31b2ea:scripts/check-phishing-click.mjs:bike4mind-mongodb-uri:14
+c7409f4982b9755328db189ba463980cf2ac71bf:scripts/test-security-alerts-local.mjs:bike4mind-mongodb-uri:18
+c7409f4982b9755328db189ba463980cf2ac71bf:scripts/test-security-alerts-local.mjs:bike4mind-mongodb-uri:54
+13f6fc92caf4f8fafbf8185bb94726ce70796beb:packages/scripts/test-baseline-cron.ts:bike4mind-mongodb-uri:8
+13f6fc92caf4f8fafbf8185bb94726ce70796beb:packages/scripts/test-phase3-anomaly-detection.ts:bike4mind-mongodb-uri:38
+74870551cfb3dc15b921436cf57aca56b9bf7ea1:packages/scripts/test-baseline-calculation.ts:bike4mind-mongodb-uri:23
+
+# Placeholder MongoDB URIs in deleted markdown docs — suppressed via fingerprint
+# (blanket .*\.md$ allowlist removed to tighten security; these are historical/deleted files)
+baac43b29c16d0f9547d2db6ab8c152d827c1fb2:apps/client/public/help-content/features/system-secrets-management.md:bike4mind-mongodb-uri:52
+baac43b29c16d0f9547d2db6ab8c152d827c1fb2:apps/client/public/help-content/features/system-secrets-management.md:bike4mind-mongodb-uri:123
+51716ceb5a7fa32844f6f4fda65018a26c656486:packages/scripts/API_USAGE_MONITORING_TEST_GUIDE.md:bike4mind-mongodb-uri:151

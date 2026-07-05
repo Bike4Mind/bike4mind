@@ -1,0 +1,150 @@
+name: Production Release
+
+# Trigger only after successful deployment to prod branch
+on:
+  workflow_run:
+    workflows: ["Deploy"]
+    types: [completed]
+    branches:
+      - prod
+  # Allow manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (skip actual release creation)'
+        required: false
+        type: boolean
+        default: true
+      send_slack_notification:
+        description: 'Send Slack notification for this run'
+        required: false
+        type: boolean
+        default: false
+      slack_webhook_url:
+        description: 'Optional Slack webhook URL for release notifications'
+        required: false
+        type: string
+      target_branch:
+        description: 'Branch to compare against for commits (defaults to HEAD for testing)'
+        required: false
+        type: string
+        default: 'HEAD'
+
+# Prevent concurrent releases
+concurrency:
+  group: prod-release
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+jobs:
+  create-release:
+    name: Create Production Release
+    # Only run if Deploy workflow succeeded OR manually triggered
+    if: github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+    permissions:
+      contents: write # Required for creating releases
+      id-token: write # Required for AWS OIDC authentication
+      pull-requests: read # Required for fetching PR details in changelog generation
+
+    steps:
+      - name: Determine configuration
+        id: config
+        run: |
+          # Determine stage based on event and branch
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            # For workflow_run events, the branch is from the triggering workflow
+            # Since we filter by prod branch, this should always be production
+            echo "stage=production" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
+            echo "stage=production" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=${{ secrets.AWS_PROD_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+          else
+            # For manual workflow_dispatch on other branches, use dev
+            echo "stage=dev" | tee -a "$GITHUB_OUTPUT"
+            echo "aws_role_arn=${{ secrets.AWS_DEV_ROLE_ARN }}" | tee -a "$GITHUB_OUTPUT"
+          fi
+
+          echo "app_name=${{ vars.SEED_APP_NAME || 'bike4mind' }}" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Fetch all history for proper commit comparison
+          ref: ${{ github.event_name == 'workflow_run' && 'prod' || github.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path)" >> $GITHUB_OUTPUT
+
+      - name: Setup pnpm cache
+        uses: actions/cache@v5
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build bike4mind core packages
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ steps.config.outputs.aws_role_arn }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-${{ github.run_id }}-prod-release
+
+      - name: Create production release
+        env:
+          CI: 'true'
+          SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
+          SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
+          AWS_REGION: ${{ env.AWS_REGION }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          # For workflow_run events (auto-trigger), always send Slack
+          # For manual runs, send only if the input is true
+          SEND_SLACK_NOTIFICATION: ${{ github.event_name == 'workflow_run' || github.event.inputs.send_slack_notification == 'true' }}
+          # Allow manual override of the webhook; otherwise use the secret
+          SLACK_WEBHOOK_URL: ${{ github.event.inputs.slack_webhook_url || secrets.CHANGELOG_SLACK_WEBHOOK_URL }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          # For workflow_run (auto), explicitly use 'prod'. For manual dispatch, use input (defaults to 'HEAD')
+          TARGET_BRANCH: ${{ github.event_name == 'workflow_run' && 'prod' || github.event.inputs.target_branch || 'HEAD' }}
+        run: |
+          pnpm sst shell --stage ${{ steps.config.outputs.stage }} --print-logs -- pnpm --filter @bike4mind/scripts create-prod-release --target-branch "$TARGET_BRANCH"
+
+      - name: Summary
+        if: success()
+        run: |
+          echo "✅ Production release created successfully!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            echo "**Triggered by**: Deploy workflow completion" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch**: prod" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Triggered by**: Manual workflow dispatch" >> $GITHUB_STEP_SUMMARY
+            echo "**Stage**: ${{ steps.config.outputs.stage }}" >> $GITHUB_STEP_SUMMARY
+          fi

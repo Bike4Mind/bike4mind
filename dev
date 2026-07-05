@@ -1,0 +1,44 @@
+#!/bin/bash
+#
+# dev: a script to start and stop the dev environment
+#
+# General gameplan:
+#
+# - Build core packages
+# - Start SST v3 (handles server, subscriber-fanout, client, and core:dev in multiplexer)
+
+plustrap() {
+	new_trap="$1"
+	shift 1
+	for signal in "$@"
+	do
+		old_traps=$(eval echo $(trap -p $signal) | sed "s/trap -- //; s/ [A-Z]*\$//")
+		trap "${new_trap}; ${old_traps}" $signal
+	done
+}
+
+set -e
+
+# Look through command line arguments for --profile and if found
+# use its following argument as AWS_PROFILE.
+for argv in "$@"
+do
+	if [ X"${capture}" = Xprofile ]; then export AWS_PROFILE="$argv"; capture=''; fi
+	if [ "$argv" = --profile ]; then capture=profile; fi
+done
+
+# Build core packages first
+echo "Building core packages..."
+pnpm core:build
+
+plustrap "echo Exiting..." EXIT
+plustrap "echo Caught SIGINT; exit 0" INT
+plustrap "echo Caught SIGTERM; exit 0" TERM
+
+npx sst dev "$@" &
+sst_pid=$!
+plustrap "echo 'Stopping SST'; kill $sst_pid 2>/dev/null" EXIT
+
+wait
+
+set +e

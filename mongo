@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# Ensure MONGODB_URI is set:
+: ${MONGODB_URI:=$(npx sst secret "$@" get MONGODB_URI | grep -v 'is not set')}
+: ${MONGODB_URI:=$(npx sst secret "$@" get MONGODB_URI --fallback)}
+
+# Substitute the stage name, if needed:
+stage=$(npx sst "$@" bind 'echo $SST_STAGE' |grep -v 'Using local IAM')
+mongodb_uri=${MONGODB_URI/\%STAGE\%/$stage}
+
+exec mongosh "${mongodb_uri}"

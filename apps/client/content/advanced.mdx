@@ -1,0 +1,59 @@
+export default function GrokToolGuide() {
+  return (
+    <Sheet sx={{ p: 2 }} variant="outlined">
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          GrokTool™ Advanced Settings
+        </Typography>
+        <List>
+          <ListItem><Link href="/manual">Manual</Link></ListItem>
+        </List>
+      </Card>
+
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h2" sx={{ m: 2 }}>
+          Advanced Features - OpenAI Chat API
+        </Typography>
+        <CustomImage src="/images/advancedsettings.png" width={600} height={400} />
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Here is an overview of the Advanced AI parameters GrokTool supports:
+        </Typography>
+        <List>
+          <ListItem> model - The model used for generating responses.</ListItem>
+          <ListItem> messages - A list of messages comprising the conversation so far.</ListItem>
+          <ListItem> max_tokens - The max number of tokens to generate in the completion.</ListItem>
+          <ListItem> temperature - Controls the randomness of the response. Lower values are more deterministic.</ListItem>
+          <ListItem> stream - Allows for streaming responses for real-time interaction.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          Coming Soon
+        </Typography>
+        <List>
+          <ListItem> top_p - Nucleus sampling parameter to control the model's output diversity.</ListItem>
+          <ListItem> requency_penalty - Reduces repetition by penalizing tokens based on their frequency.</ListItem>
+          <ListItem> presence_penalty - Encourages the model to introduce new topics by penalizing existing ones.</ListItem>
+          <ListItem> response_format - Specifies the format of the model's output (e.g., JSON).</ListItem>
+          <ListItem> logit_bias - Alters token probabilities to encourage or discourage specific tokens.</ListItem>
+        </List>
+      </Card>
+
+      <Card variant="outlined" sx={{ mb: 2 }}>
+        <Typography level="h3" sx={{ m: 2 }}>
+          For a more comprehensive understanding, check out the detailed documentation:
+        </Typography>
+        <button onClick={() => window.location.href='https://platform.openai.com/docs/api-reference/chat/create'} style={{ margin: '16px' }}>
+           OpenAI Chat API Documentation
+        </button>
+      </Card>
+      
+     </Sheet>
+  );
+}

@@ -1,0 +1,1193 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main, prod]
+  pull_request:
+    # Allow stacked PRs (e.g. PR2 → PR1 → main) to get a preview env. The
+    # preview URL is derived from the PR number, not the base branch, so the
+    # rest of the workflow handles arbitrary base refs correctly. Exclude
+    # prod-targeted PRs — those are the staging→production promotion and
+    # `main` already validates them; a separate preview would be redundant.
+    branches-ignore: [prod]
+    types: [opened, synchronize, reopened, ready_for_review]
+    # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
+    # the per-PR (merge-base) diff and skips test + deploy on non-deployable
+    # changes, while still reporting the required Deploy/Run Tests checks (a
+    # paths-ignore-skipped workflow never reports them and hangs the PR). It
+    # also gates the docs build independently via docs-changed.
+  merge_group:
+    branches: [main]
+
+env:
+  AWS_REGION: us-east-2
+  NODE_VERSION: '24'
+
+# Cancel superseded runs for the same PR so outdated commits stop holding scarce
+# ubuntu-latest-m runner slots — the dominant CI-queue bottleneck under heavy PR
+# concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
+# PR-only: pushes to main/prod and merge_group runs are NEVER cancelled, so
+# in-flight staging/production deploys can't be interrupted.
+# NOTE: a PR push that supersedes a run mid-`sst deploy` is the same hard-cancel
+# scenario the `unlock` job's orphaned-lock backstop already covers (#8633/#8749);
+# net effect is fewer concurrent preview deploys, which reduces lock contention.
+concurrency:
+  group: deploy-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Changes gate: evaluate the changeset that fired this run (whole-PR
+  # merge-base diff on pull_request, push range on push) and emit two
+  # orthogonal signals: `deployable` (run test + deploy) and `docs-changed`
+  # (run the Docusaurus build verification). Cheap, always runs, so the
+  # required checks always have a status to report. Logic + the default
+  # exclude list live in the local composite action. Fails open on both.
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      deployable: ${{ steps.filter.outputs.deployable }}
+      docs-changed: ${{ steps.filter.outputs.docs-changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Detect deployable / docs changes
+        id: filter
+        uses: ./.github/actions/changes-filter
+
+  # Build the core packages once and publish their dist/ as an artifact. The
+  # three gating jobs below (typecheck, lint, test) each restore this artifact
+  # instead of rebuilding, then run in parallel — cutting wall clock from the
+  # old sequential ~14 min (typecheck + lint + test in one runner) to ~max of
+  # the three legs (~10 min). The repo-boundary checks live here because they
+  # only need the checked-out source.
+  core-build:
+    needs: changes
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Core Build
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    outputs:
+      core-content-hash: ${{ steps.core-hash.outputs.content_hash }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Pre-merge gate: a PR may point premium-overlay.lock.json at a b4m-overwatch
+      # BRANCH while preview-testing a premium change, but that must be bumped to a
+      # 40-char SHA before landing on main. This fails the merge queue so a branch
+      # pin can't reach main; the _deploy-env.yml guard is the post-merge backstop
+      # for direct pushes to main/prod.
+      # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
+      # covered without editing this step. Mirrors the post-merge guard in
+      # _deploy-env.yml.
+      - name: Verify premium overlay pins are SHAs (merge-queue gate)
+        if: github.event_name == 'merge_group'
+        run: |
+          python3 - <<'PY'
+          import json, re, sys
+          try:
+              pins = json.load(open('premium-overlay.lock.json'))
+          except Exception as e:
+              print(f"::error::Could not read premium-overlay.lock.json: {e}")
+              sys.exit(1)
+          bad = {k: v for k, v in pins.items() if not re.fullmatch(r'[0-9a-f]{40}', str(v))}
+          for k, v in bad.items():
+              print(f"::error::premium-overlay.lock.json '{k}' must pin a 40-char SHA before merging to main (got: {v}). Bump it to the merged commit SHA.")
+          if bad:
+              sys.exit(1)
+          for k, v in pins.items():
+              print(f"Premium overlay pin verified: {k}={v}")
+          PY
+
+      - name: Check for API files missing baseApi()
+        run: bash scripts/check-no-baseapi.sh
+
+
+
+
+
+      - name: Check for account-tied IDs in shippable code (open-core)
+        run: bash scripts/check-no-account-ids.sh
+        env:
+          # Real account IDs + brand domain live in CI config, not in the shipped
+          # script. Unset on a public fork → those two checks are skipped.
+          DENY_ACCOUNT_IDS: ${{ vars.DENY_ACCOUNT_IDS }}
+          DENY_BRAND_DOMAINS: ${{ vars.DENY_BRAND_DOMAINS }}
+
+      - name: Verify open-core snapshot export-ignore exclusions
+        run: |
+          if [ -f scripts/check-export-ignore.sh ]; then
+            bash scripts/check-export-ignore.sh
+          else
+            echo "check-export-ignore.sh absent (post-cut snapshot) — skipping"
+          fi
+
+      - name: Calculate core packages content hash
+        id: core-hash
+        run: |
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
+          echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
+          echo "Core packages content hash: $CONTENT_HASH"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build bike4mind core packages
+        run: pnpm core:build
+
+      - name: Upload core build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: core-build-${{ steps.core-hash.outputs.content_hash }}
+          path: |
+            b4m-core/*/dist
+          retention-days: 7
+          if-no-files-found: error
+
+  # Open Core invariant: the public-core fork must build with an empty overlay.
+  # Runs alongside standard CI. Simulates the fork by not cloning any
+  # packages/premium/* repos and proves:
+  #   (a) pnpm install --frozen-lockfile passes with an empty overlay
+  #   (b) codegen emits empty-form outputs without errors
+  #   (c) typecheck passes against those empty-form generated files
+  # After M1c this becomes the only job proving the fork still compiles while
+  # premium overlay packages (packages/premium/*) are present in the official build.
+  open-core-fork-build:
+    name: Open Core (fork simulation)
+    needs: core-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      # Simulate an open-core fork checkout: remove the premium overlay package(s)
+      # and patch pnpm-workspace.yaml + apps/client/package.json so pnpm doesn't
+      # error on workspace references that no longer exist. This must run before
+      # the cache step so the install uses the patched workspace.
+      - name: Simulate open-core fork (remove premium overlay)
+        run: |
+          rm -rf packages/premium/*/
+          node -e "
+            const fs = require('fs');
+            // Remove the premium overlay globs from the workspace file (comments are pnpm-inert).
+            // [^\n]* consumes the whole line so nested globs (packages/premium/*/cc-bridge)
+            // don't leave dangling fragments.
+            let ws = fs.readFileSync('pnpm-workspace.yaml', 'utf8');
+            ws = ws.replace(/\n  - packages\/premium\/[^\n]*/g, '');
+            fs.writeFileSync('pnpm-workspace.yaml', ws);
+            // Remove every @bike4mind/premium-* overlay package from the client's
+            // dependencies (overwatch, libreoncology, and any future carve).
+            const pkg = JSON.parse(fs.readFileSync('apps/client/package.json', 'utf8'));
+            for (const dep of Object.keys(pkg.dependencies)) {
+              if (dep.startsWith('@bike4mind/premium-')) delete pkg.dependencies[dep];
+            }
+            fs.writeFileSync('apps/client/package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      # Workspace is patched (no premium packages) so we must suppress frozen-lockfile;
+      # pnpm enables it automatically in CI, but the committed lockfile includes the
+      # @bike4mind/premium-* overlay packages from the full build and would reject
+      # the patched tree.
+      - name: Install dependencies (fork simulation — no premium overlay)
+        run: pnpm install --recursive --no-frozen-lockfile
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: b4m-core
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Run codegen (empty overlay → empty-form outputs)
+        run: pnpm --filter @bike4mind/client run codegen
+
+      # Verify the KEY invariant that caused Path A in the premium-overlay CI clone
+      # work (#9871): sst.config.ts must bundle cleanly with an empty overlay.
+      # Previously, sst.config.ts imported directly from packages/premium/*/src/infra,
+      # so removing the overlay broke ALL non-deploy CI jobs running `pnpm sst install`.
+      # Now sst.config.ts imports from infra/premium-generated/*-infra.generated.ts,
+      # which codegen just emitted as no-op stubs above.
+      - name: Generate SST types (fork build, no-op infra stubs)
+        run: pnpm sst install
+        env:
+          CI: 'true'
+
+      # Only the client needs typechecking here: this job's unique invariant is
+      # "the empty-form generated files (app/premium-generated/*, pages/api/premium-*)
+      # typecheck inside apps/client under an empty overlay." Whole-workspace
+      # typecheck is already covered by the standalone `typecheck` job, so scope
+      # this to the client filter to avoid duplicating it (this job gates plan/deploy).
+      - name: Type check client (fork build, empty overlay)
+        run: pnpm --filter @bike4mind/client run typecheck:fast
+
+      # Infra typecheck: verifies no-op glue files in infra/premium-generated/ compile
+      # correctly against infra/tsconfig.json (which now includes the generated files
+      # instead of the hard-coded overlay source paths). Requires .sst/platform/config.d.ts
+      # which was just generated by `pnpm sst install` above.
+      - name: Type check infra (fork build, no-op infra stubs)
+        run: pnpm typecheck:infra
+
+  typecheck:
+    needs: core-build
+    # Standard runner: tsgo (native TS) is fast and low-memory and runs against
+    # the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
+    # Keeping it off the capped ubuntu-latest-m pool frees a slot per PR.
+    runs-on: ubuntu-latest
+    name: Type Check
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: b4m-core
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Run premium glue codegen
+        run: pnpm --filter @bike4mind/client run codegen
+
+      - name: Generate SST types
+        run: pnpm sst install
+        env:
+          CI: 'true'
+
+      # Fast typecheck: tsgo (TypeScript 7.0 native) runs first per package; on any
+      # failure it falls back to classic tsc, the authoritative gate. All packages
+      # are currently tsgo-clean, so tsc only runs if tsgo regresses or diverges.
+      # See typecheck-report.md.
+      - name: Type check (tsgo, tsc fallback)
+        run: pnpm -w typecheck:fast && pnpm --recursive typecheck:fast
+
+      # The root /infra SST files are excluded from the root tsconfig and have no
+      # package.json, so neither -w nor --recursive covers them. Typecheck them
+      # explicitly here (after SST types are generated above) so infra type errors
+      # gate PRs instead of surfacing at deploy time. See #9155.
+      - name: Type check infra (SST)
+        run: pnpm typecheck:infra
+
+  lint:
+    needs: core-build
+    # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
+    # ubuntu-latest-m pool to free a slot per PR.
+    runs-on: ubuntu-latest
+    name: Lint
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: b4m-core
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Run premium glue codegen
+        run: pnpm --filter @bike4mind/client run codegen
+
+      - name: Generate SST types
+        run: pnpm sst install
+        env:
+          CI: 'true'
+
+      - name: Lint (errors only)
+        run: pnpm exec eslint . --quiet --cache --cache-location node_modules/.cache/eslint/
+
+  # Tests run as a matrix of shards so wall time is the slowest shard, not the
+  # serial sum. The heavy suites are isolated onto their own runners:
+  #   - client: the large apps/client suite (thousands of fast files) — alone so
+  #     it keeps the whole box for file parallelism.
+  #   - rest: every other package, run together with a bounded per-package
+  #     worker pool (VITEST_MAX_WORKERS) so concurrent packages don't
+  #     oversubscribe CPU. See vitest.shared.ts.
+  # The `test` job below aggregates these shards into the required "Run Tests"
+  # status check.
+  test-shards:
+    needs: core-build
+    # Self-hosted org pool (philips-labs/terraform-aws-github-runner, m6a/m6i.2xlarge,
+    # 8 vCPU / 32 GB) instead of the GitHub-hosted ubuntu-latest-m larger-runner pool,
+    # which is capped at 10 concurrent org-wide. The shard fan-out (client/rest) was a
+    # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
+    # Matches polaris's test runner (_test.yml).
+    runs-on: ${{ fromJSON(vars.RUNNER_LABEL_HEAVY || '["self-hosted","linux","x64"]') }}
+    name: Run Tests (${{ matrix.shard.name }})
+    timeout-minutes: 20
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # Single-package shards own the whole runner, so no worker cap.
+          - name: client
+            filter: '--filter @bike4mind/client'
+            workers: ''
+          # Many packages run concurrently here; cap each package's pool so
+          # `workspace-concurrency (4) × workers ≈ cores` — no oversubscription.
+          - name: rest
+            filter: "--filter '!@bike4mind/client'"
+            workers: '25%'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: b4m-core
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Download ripgrep binary (for grep_search tests)
+        run: |
+          POSTINSTALL_PATH=$(find node_modules/.pnpm -name "postinstall.js" -path "*/@vscode/ripgrep/lib/postinstall.js" -type f | head -1)
+          if [ -n "$POSTINSTALL_PATH" ]; then
+            node "$POSTINSTALL_PATH"
+          fi
+        continue-on-error: true
+
+      - name: Run premium glue codegen
+        run: pnpm --filter @bike4mind/client run codegen
+
+      - name: Generate SST types
+        run: pnpm sst install
+        env:
+          CI: 'true'
+
+      - name: Run Tests (${{ matrix.shard.name }})
+        run: pnpm --recursive --workspace-concurrency=4 ${{ matrix.shard.filter }} test
+        env:
+          CI: true
+          VITEST_MAX_WORKERS: ${{ matrix.shard.workers }}
+
+  # Aggregate gate for the sharded test matrix. Branch protection requires a
+  # status check literally named "Run Tests"; the matrix above reports per-shard
+  # names ("Run Tests (client)", …), so this job re-exposes the exact required
+  # context and passes only when every shard succeeded.
+  test:
+    name: Run Tests
+    needs: [changes, test-shards]
+    # Run whenever the gate said deployable (always() within that, so a failed
+    # shard is still caught by the assertion below). On a non-deployable run the
+    # shards were skipped, so this aggregator skips too — a skipped required
+    # check counts as passing, instead of failing on skipped shards.
+    if: always() && needs.changes.outputs.deployable == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Verify all test shards passed
+        run: |
+          result='${{ needs.test-shards.result }}'
+          echo "test-shards result: $result"
+          test "$result" = "success"
+
+  # Dedicated job for the CLI end-to-end harness (packages/cli/test/e2e/). Kept
+  # separate from both the unit `test-shards` matrix and the `test` fan-in gate
+  # so it has its own toolchain setup, its own visible status check, and runs in
+  # parallel with the unit shards (both only need `core-build`).
+  #
+  # The harness lives in a separate `test:e2e` script that `pnpm --recursive
+  # test` does not run, so it must be invoked explicitly. The build step
+  # populates dist/ first: the bundle-size baseline checks read real dist/ and a
+  # guard test fails loudly in CI if dist/ is missing, so a size regression
+  # can't slip through by silently skipping. This is the gate that protects the
+  # packages/cli/src/index.tsx decomposition (#8554).
+  cli-e2e:
+    name: CLI e2e harness
+    needs: core-build
+    # Standard runner: builds the CLI and runs the bundle-baseline harness — a
+    # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
+          path: b4m-core
+        continue-on-error: true
+
+      - name: Build bike4mind core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Run premium glue codegen
+        run: pnpm --filter @bike4mind/client run codegen
+
+      - name: Generate SST types
+        run: pnpm sst install
+        env:
+          CI: 'true'
+
+      # Build the CLI so the e2e bundle-baseline checks run against real dist/.
+      - name: Build CLI (for e2e bundle baseline)
+        run: pnpm --filter @bike4mind/cli build
+
+      - name: Run CLI e2e harness
+        run: pnpm --filter @bike4mind/cli test:e2e
+        env:
+          CI: true
+
+  verify-docs-build:
+    name: Verify Docs Build
+    needs: changes
+    if: needs.changes.outputs.docs-changed == 'true'
+    uses: ./.github/workflows/_verify-docs-build.yml
+    permissions:
+      contents: read
+      pull-requests: write
+
+  # build-subscriber removed 2026-05-30: subscriber-fanout is now built and
+  # published by MillionOnMars/subscriber-fanout. The image URI is pinned
+  # in the deploy job's SUBSCRIBER_FANOUT_IMAGE env var below.
+
+  plan:
+    runs-on: ubuntu-latest
+    needs: [core-build, typecheck, lint, test, cli-e2e, open-core-fork-build]
+    if: |
+      always() &&
+      needs.core-build.result == 'success' &&
+      needs.typecheck.result == 'success' &&
+      needs.lint.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.cli-e2e.result == 'success' &&
+      needs.open-core-fork-build.result == 'success'
+    outputs:
+      deploy-matrix: ${{ steps.plan.outputs.deploy-matrix }}
+      has-deploys: ${{ steps.plan.outputs.has-deploys }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          sparse-checkout: .github/tenants.yml
+          sparse-checkout-cone-mode: false
+
+      - name: Build deployment plan
+        id: plan
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # Tenancy for repos without .github/tenants.yml (the open-core snapshot
+          # excludes it, #507): JSON object of tenant-name -> config, same shape as
+          # tenants.yml's `tenants:` mapping (e.g. {"bike4mind": {}}). #9853.
+          DEPLOY_TENANTS: ${{ vars.DEPLOY_TENANTS }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.number }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          ACTOR: ${{ github.actor }}
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          python3 - <<'PYEOF'
+          import yaml, json, os
+
+          # tenants.yml is internal deploy config and does not ship in the
+          # open-core snapshot (#507). Repos without it define tenancy via the
+          # DEPLOY_TENANTS repo variable instead (#9853): a JSON object of
+          # tenant-name -> config, same shape as tenants.yml's `tenants:`
+          # mapping. With neither source there are no deploy targets: emit an
+          # empty plan so the deploy job skips cleanly instead of the whole
+          # workflow failing.
+          if os.path.exists('.github/tenants.yml'):
+              with open('.github/tenants.yml') as f:
+                  config = yaml.safe_load(f)
+          else:
+              raw = os.environ.get('DEPLOY_TENANTS', '').strip()
+              if raw:
+                  config = {'tenants': json.loads(raw)}
+                  print(f"No tenants.yml; using DEPLOY_TENANTS var ({len(config['tenants'])} tenant(s)).")
+              else:
+                  print("No .github/tenants.yml and no DEPLOY_TENANTS var -> empty deploy plan.")
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write("deploy-matrix=[]\n")
+                      f.write("has-deploys=false\n")
+                  raise SystemExit(0)
+
+          event = os.environ['EVENT_NAME']
+          ref = os.environ['REF']
+          pr_number = os.environ['PR_NUMBER']
+          pr_labels = json.loads(os.environ['PR_LABELS']) if os.environ['PR_LABELS'] not in ('', 'null') else []
+          pr_user = os.environ['PR_USER']
+          actor = os.environ['ACTOR']
+          head_ref = os.environ['HEAD_REF']
+          base_ref = os.environ['BASE_REF']
+
+          deploy = []
+
+          is_dependabot = actor == 'dependabot[bot]' or pr_user == 'dependabot[bot]'
+          is_changeset_release = head_ref.startswith('changeset-release/')
+          # Belt-and-suspenders: prod-targeted PRs are already excluded by the
+          # workflow's branches-ignore:[prod], but skip here too.
+          is_promotion_pr = head_ref == 'main' and base_ref == 'prod'
+          is_push_main = event == 'push' and ref == 'refs/heads/main'
+          is_push_prod = event == 'push' and ref == 'refs/heads/prod'
+          is_pr = event == 'pull_request'
+
+          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr
+
+          for tenant, tc in config['tenants'].items():
+              label = tc.get('preview_label')
+              if is_push_main:
+                  deploy.append({"tenant": tenant, "tier": "dev", "pr_number": ""})
+              elif is_push_prod:
+                  deploy.append({"tenant": tenant, "tier": "production", "pr_number": ""})
+              elif is_pr and not skip_pr:
+                  # Tenants with no preview_label always deploy a preview on PR;
+                  # tenants with one deploy only when that label is present.
+                  if label is None or label in pr_labels:
+                      deploy.append({"tenant": tenant, "tier": "preview", "pr_number": str(pr_number)})
+              # merge_group and skipped PRs => no deploy (test still runs)
+
+          deploy_json = json.dumps(deploy)
+          print(f"Deploy matrix ({len(deploy)}): {deploy_json}")
+
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f"deploy-matrix={deploy_json}\n")
+              f.write(f"has-deploys={'true' if deploy else 'false'}\n")
+          PYEOF
+
+  # ============================================================
+  # Deploy: matrix-driven, one reusable _deploy-env.yml call per tenant/tier.
+  # Single-tenant today (1-element matrix); fail-fast:false keeps future
+  # tenants independent.
+  # ============================================================
+  deploy:
+    needs: [core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, open-core-fork-build]
+    if: |
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.has-deploys == 'true' &&
+      needs.core-build.result == 'success' &&
+      needs.typecheck.result == 'success' &&
+      needs.lint.result == 'success' &&
+      needs.test.result == 'success' &&
+      needs.cli-e2e.result == 'success' &&
+      needs.open-core-fork-build.result == 'success'
+    # Mirror _deploy-env.yml's jobs.deploy.permissions. On the open-core snapshot repo
+    # the default GITHUB_TOKEN is restricted, so a reusable-caller job with no permissions
+    # block would be rejected at workflow-startup when the reusable requests elevated
+    # scopes. No-op on lumina5 (permissive default already grants these).
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+      actions: read
+      packages: read
+      pull-requests: write
+      deployments: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.deploy-matrix) }}
+    uses: ./.github/workflows/_deploy-env.yml
+    with:
+      tenant: ${{ matrix.tenant }}
+      tier: ${{ matrix.tier }}
+      pr_number: ${{ matrix.pr_number }}
+      core_content_hash: ${{ needs.core-build.outputs.core-content-hash }}
+      # Fork PRs have no secret access; same-repo PRs + pushes are trusted.
+      # github.event.pull_request.head.repo.fork is null on non-PR events (→ 'true').
+      is_trusted_context: ${{ github.event.pull_request.head.repo.fork != true && 'true' || 'false' }}
+    secrets: inherit
+
+  # ============================================================
+  # Deploy status aggregation. Branch protection requires a status check named
+  # exactly "Deploy". The matrix reusable-workflow call above reports under
+  # "deploy / Deploy (...)", which would NOT satisfy that required context and
+  # would hang every PR. This always-run job re-exposes a stable "Deploy" check.
+  #
+  # Red when ANY upstream gate (changes/core-build/typecheck/lint/test/cli-e2e/
+  # plan) genuinely FAILED, or the deploy itself failed/cancelled. Green when
+  # everything succeeded OR was legitimately skipped:
+  #   - non-deployable change (docs-only/config) → core-build..plan all skipped
+  #   - empty deploy plan (dependabot / changeset-release / main→prod / merge_group)
+  # A skipped upstream is "passing" here; only an explicit failure flips it red.
+  # This means a typecheck/lint/cli-e2e failure (none of which are individually
+  # required checks) is surfaced through the required Deploy check instead of
+  # silently leaving Deploy green.
+  # ============================================================
+  deploy-status:
+    name: Deploy
+    needs: [changes, core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, deploy, open-core-fork-build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report deploy result
+        env:
+          CHANGES: ${{ needs.changes.result }}
+          CORE_BUILD: ${{ needs.core-build.result }}
+          TYPECHECK: ${{ needs.typecheck.result }}
+          LINT: ${{ needs.lint.result }}
+          TEST: ${{ needs.test.result }}
+          CLI_E2E: ${{ needs.cli-e2e.result }}
+          VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
+          OPEN_CORE_FORK_BUILD: ${{ needs.open-core-fork-build.result }}
+          PLAN: ${{ needs.plan.result }}
+          DEPLOY: ${{ needs.deploy.result }}
+        run: |
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E verify-docs-build=$VERIFY_DOCS open-core-fork-build=$OPEN_CORE_FORK_BUILD plan=$PLAN deploy=$DEPLOY"
+          # An upstream gate that genuinely failed flips Deploy red. Skipped
+          # (non-deployable / empty-plan / non-docs run) is treated as passing.
+          # verify-docs-build is included so a broken docs build on a docs-only
+          # PR (where core-build..plan all skip) can't green the Deploy check.
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E" "$VERIFY_DOCS" "$OPEN_CORE_FORK_BUILD" "$PLAN"; do
+            if [ "$r" = "failure" ]; then
+              echo "::error::An upstream gate failed; failing the Deploy check."
+              exit 1
+            fi
+          done
+          if [ "$DEPLOY" = "failure" ] || [ "$DEPLOY" = "cancelled" ]; then
+            echo "::error::Deploy did not succeed (result=$DEPLOY)"
+            exit 1
+          fi
+          echo "Deploy succeeded or was legitimately skipped."
+
+  # (OptiHashi container-registration job removed with the overlay snapshot (#9983):
+  # the engine + register script now live only in b4m-optihashi, so registration is
+  # owned by the overlay's own pipeline. lumina5 hydrates the overlay at deploy via
+  # the premium-overlay pin but no longer registers its container.)
+
+  # Reliable backstop for orphaned SST state locks (#8757). The in-job "Cleanup
+  # on deployment failure" step in _deploy-env.yml cannot run when the deploy
+  # runner is killed outright — runner death mid-`sst deploy` (#8633) or a hard
+  # cancellation that blows past the runner's grace window. Those are exactly
+  # the cases that orphan the lock and red-X the next deploy with "Concurrent
+  # update detected". This job runs on a FRESH runner, so it survives the deploy
+  # runner's death, and it re-derives stage + role from event context (no
+  # dependency on the dead job's outputs). A guard step skips the unlock
+  # whenever another deploy run for the same branch is still in flight, so it
+  # never clears a lock that a concurrent successor deploy is holding (the
+  # dominant #8749 rapid-push scenario).
+  unlock:
+    needs: [deploy]
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: Unlock orphaned SST state
+    timeout-minutes: 15
+    if: |
+      always() &&
+      (github.event_name == 'pull_request' || github.event_name == 'push') &&
+      (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
+    # Dedicated group (NOT the deploy group): serializes redundant unlocks for the
+    # same stage so two rapid deploy failures can't run their guards in parallel.
+    # We deliberately do NOT join the deploy group — that would let a queued
+    # successor deploy take the slot ahead of this unlock, deploy against the
+    # still-orphaned lock, and fail with "Concurrent update detected", the exact
+    # symptom this job exists to prevent.
+    concurrency:
+      group: unlock-${{ github.event.number || github.ref_name }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+      actions: read
+    steps:
+      - name: Determine stage
+        id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "stage=pr${{ github.event.number }}" |tee -a "$GITHUB_OUTPUT"
+          elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
+            echo "stage=production" |tee -a "$GITHUB_OUTPUT"
+          else
+            echo "stage=dev" |tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - name: Skip unlock if another deploy for this branch is in flight
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          # head_ref for PRs, ref_name for pushes. Passed via env (never inlined
+          # into the shell) since a branch name is attacker-influenceable input.
+          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          echo "Checking for competing deploy runs on branch: $BRANCH"
+          # A concurrent in-progress deploy run for the same branch still owns the
+          # lock — unlocking would clobber it. Exclude this workflow run itself.
+          # deploy.yml is the only caller that holds the `bike4mind` app lock
+          # (deploy-docs.yml deploys a separate `bike4mind-docs` app), so a single
+          # workflow filter is complete here.
+          ACTIVE=$(gh run list \
+            --repo "$REPO" \
+            --workflow=deploy.yml \
+            --branch="$BRANCH" \
+            --limit 100 \
+            --json databaseId,status \
+            --jq "[.[] | select(.status != \"completed\" and (.databaseId|tostring) != \"$SELF_RUN_ID\")] | length") || ACTIVE=""
+          # Unknown state (API error / rate limit) must err toward SKIP, per the
+          # "never clobber" invariant — an orphaned lock surviving one more cycle
+          # is recoverable; clobbering a held lock fails an active deploy.
+          if ! [[ "$ACTIVE" =~ ^[0-9]+$ ]]; then
+            echo "Could not determine active deploy runs — erring toward skip."
+            echo "skip=true" |tee -a "$GITHUB_OUTPUT"
+          elif [ "$ACTIVE" != "0" ]; then
+            echo "Found $ACTIVE active deploy run(s) for $BRANCH — they own the lock. Skipping unlock."
+            echo "skip=true" |tee -a "$GITHUB_OUTPUT"
+          else
+            echo "No competing deploy runs. Safe to release any orphaned lock."
+            echo "skip=false" |tee -a "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        if: steps.guard.outputs.skip == 'false'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        if: steps.guard.outputs.skip == 'false'
+        uses: pnpm/action-setup@v5
+
+      - name: Setup NPM auth
+        if: steps.guard.outputs.skip == 'false'
+        run: |
+          grep -q //registry.npmjs.org ~/.npmrc || echo '//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}' >>~/.npmrc
+          pnpm config set //registry.npmjs.org/:_authToken ${{ secrets.NPM_TOKEN }}
+
+      - name: Install dependencies
+        if: steps.guard.outputs.skip == 'false'
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Build bike4mind core packages
+        if: steps.guard.outputs.skip == 'false'
+        # Required even though `sst unlock` never runs the resource graph: any sst
+        # command first BUNDLES sst.config.ts, and that bundle resolves the
+        # `await import('./infra')` chain into the @bike4mind/* workspace packages,
+        # which fail to resolve without their dist/. Without this, `sst install`
+        # dies with "Failed to build sst.config.ts".
+        run: pnpm core:build
+
+      - name: Run premium glue codegen
+        if: steps.guard.outputs.skip == 'false'
+        run: pnpm --filter @bike4mind/client run codegen
+
+      - name: Configure AWS credentials
+        if: steps.guard.outputs.skip == 'false'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          # prod role only for a push to the prod branch; dev role for everything
+          # else (PR previews and main→staging), mirroring the deploy job.
+          role-to-assume: ${{ (github.event_name == 'push' && github.ref_name == 'prod') && secrets.AWS_PROD_ROLE_ARN || secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: GitHubActions-${{ github.run_id }}-unlock
+
+      - name: Generate SST platform
+        if: steps.guard.outputs.skip == 'false'
+        # `sst unlock` is the first sst command on this fresh runner; install the
+        # platform explicitly rather than relying on implicit bootstrap.
+        run: pnpm sst install
+        env:
+          CI: 'true'
+          SEED_APP_NAME: ${{ vars.SEED_APP_NAME || 'bike4mind' }}
+
+      - name: Release orphaned SST lock
+        if: steps.guard.outputs.skip == 'false'
+        env:
+          CI: 'true'
+          # `sst unlock` never runs the resource graph, so app() (name/region/home)
+          # is the only env it reads at runtime — SEED_APP_NAME covers it. (The
+          # config still has to BUNDLE first, which is why core is built above.)
+          SEED_APP_NAME: ${{ vars.SEED_APP_NAME || 'bike4mind' }}
+          STAGE: ${{ steps.cfg.outputs.stage }}
+        run: |
+          echo "Releasing any orphaned SST state lock for stage: $STAGE"
+          # Idempotent: a no-op when no lock is present. The original deploy
+          # failure/cancellation is still reported on the deploy job.
+          pnpm sst unlock --stage "$STAGE"
+          echo "Unlock complete."
+
+  e2e:
+    needs: [deploy]
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: E2E Tests
+    timeout-minutes: 20
+    # Run E2E on: push to main (staging gate), or PR with the 'run-e2e' label.
+    # PRs without the label skip E2E entirely to save ~15-20 min of CI per push.
+    if: |
+      (needs.deploy.outputs.is-preview == 'true' || needs.deploy.outputs.stage == 'dev') &&
+      (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+    # Soft-fail on PRs — results are posted as a PR comment, no red X on the workflow.
+    # E2E remains a hard failure on main (staging gate).
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    permissions:
+      contents: read
+      pull-requests: write
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Download core build artifacts
+        id: download-core
+        uses: actions/download-artifact@v7
+        with:
+          name: core-build-${{ needs.deploy.outputs.core-content-hash }}
+          path: .
+        continue-on-error: true
+
+      - name: Build core packages (fallback)
+        if: steps.download-core.outcome == 'failure'
+        run: pnpm core:build
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Playwright Chromium
+        working-directory: apps/client
+        run: npx playwright install chromium --with-deps
+
+      - name: Wait for deployment to be healthy
+        env:
+          # Probe /api/ping (a real Lambda route) rather than the bare origin:
+          # CloudFront can answer the apex with 200/302 before the function is
+          # warm, so a bare-origin check passes against a not-yet-ready deploy.
+          TARGET_URL: https://app.${{ needs.deploy.outputs.preview-url }}/api/ping
+        run: |
+          echo "Waiting for $TARGET_URL to be healthy..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
+            if [ "$STATUS" = "200" ]; then
+              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
+              exit 0
+            fi
+            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
+            sleep 10
+          done
+          echo "Deployment did not become healthy within 300s"
+          exit 1
+
+      - name: Run E2E tests
+        id: e2e
+        env:
+          API_URL: https://app.${{ needs.deploy.outputs.preview-url }}
+          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
+          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
+          AI_LATENCY_RUN: 'false'
+          PW_WORKERS: '1'
+          CI: 'true'
+        run: |
+          set -o pipefail
+          pnpm sst shell --stage ${{ needs.deploy.outputs.stage }} -- pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: playwright-report-${{ needs.deploy.outputs.stage }}
+          path: apps/client/playwright-report/
+          retention-days: 7
+
+      - name: Comment PR with E2E results
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
+
+            // Extract summary line (e.g., "10 passed", "2 failed, 8 passed")
+            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
+            const summary = summaryMatch ? summaryMatch[0].trim() : 'See report for details';
+
+            const passed = '${{ steps.e2e.outcome }}' === 'success';
+            const icon = passed ? '✅' : '❌';
+            const status = passed ? 'Passed' : 'Failed';
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const body = `${icon} **E2E Tests ${status}**
+
+            **Results:** ${summary}
+            **Preview:** \`https://app.${process.env.PREVIEW_URL}\`
+            **Report:** [Download from artifacts](${runUrl})
+
+            <sub>Tested against preview deployment for PR #${context.issue.number}</sub>`;
+
+            // Find and update existing e2e comment, or create new one
+            const { data: comments } = await github.rest.issues.listComments({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+            });
+            const existing = comments.find(c => c.body.includes('**E2E Tests'));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                comment_id: existing.id,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: body,
+              });
+            }
+        env:
+          PREVIEW_URL: ${{ needs.deploy.outputs.preview-url }}
+
+      - name: Fail if E2E tests failed
+        if: steps.e2e.outcome == 'failure'
+        run: exit 1
+
+  notify-production-failure:
+    name: Notify Production Failure
+    needs: deploy
+    if: always() && (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled') && github.ref == 'refs/heads/prod'
+    uses: Bike4Mind/workflow-templates/.github/workflows/slack-notify.yml@main
+    with:
+      status: ${{ needs.deploy.result }}
+      environment: 'Production'
+      workflow_name: 'Deployment'
+      repository: ${{ github.repository }}
+      branch: ${{ github.ref_name }}
+      commit_sha: ${{ github.sha }}
+      commit_message: ${{ github.event.head_commit.message }}
+      commit_author: ${{ github.event.head_commit.author.name }}
+      commit_url: ${{ github.event.head_commit.url }}
+      workflow_run_url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      mention: ${{ vars.SLACK_PROD_USERGROUP_MENTION || '@channel' }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

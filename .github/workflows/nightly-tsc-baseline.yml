@@ -1,0 +1,130 @@
+name: Nightly Pure-tsc Baseline
+
+# Authoritative pure-tsc typecheck. The PR/deploy gates run `typecheck:fast`
+# (tsgo || tsc), so classic tsc only executes when tsgo *fails*. If tsgo is ever
+# permissive where tsc is strict (accepts something tsc would reject), the fast
+# path passes and tsc never runs. This nightly job runs pure tsc across the whole
+# workspace so a tsgo-permissive divergence surfaces within a day rather than by
+# accident. Remove (or relax to weekly) once the tsgo RC is GA and stable.
+# See docs/typecheck-report.md.
+
+on:
+  schedule:
+    - cron: '0 8 * * *' # 08:00 UTC daily (off-peak)
+  workflow_dispatch: {} # allow manual runs
+
+jobs:
+  check-repository:
+    runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+    steps:
+      - name: Check repository
+        id: check
+        run: |
+          if [ "${{ github.repository }}" = "${{ vars.CANONICAL_REPO || 'MillionOnMars/lumina5' }}" ]; then
+            echo "should-run=true" >> $GITHUB_OUTPUT
+          else
+            echo "should-run=false" >> $GITHUB_OUTPUT
+            echo "Skipping workflow - not running on the canonical repository"
+          fi
+
+  typecheck-tsc:
+    needs: check-repository
+    if: ${{ needs.check-repository.outputs.should-run == 'true' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    permissions:
+      contents: read
+      issues: write
+    env:
+      NODE_OPTIONS: --max-old-space-size=14336
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v5
+        with:
+          run_install: false
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Authenticate with private NPM package
+        run: echo "//registry.npmjs.org/:_authToken=${{ secrets.NPM_TOKEN }}" > ~/.npmrc
+
+      - name: Install Dependencies
+        run: pnpm i --frozen-lockfile
+
+      - name: Build core packages
+        run: pnpm turbo:core:build
+
+      # Pure classic tsc — the authoritative baseline. Mirrors the pre-tsgo
+      # deploy.yml gate. No `:fast`, no tsgo: this is the divergence detector.
+      - name: Pure tsc typecheck (authoritative baseline)
+        run: pnpm -w typecheck && pnpm --recursive typecheck
+
+      - name: Open or update failure issue
+        if: failure()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const marker = '<!-- nightly-tsc-baseline -->';
+            const title = '🔴 Nightly pure-tsc baseline failed';
+            const body = [
+              marker,
+              '',
+              'The nightly **pure-tsc** typecheck failed. Because PR/deploy gates run `typecheck:fast` (tsgo || tsc), this means classic `tsc` rejects something the fast path is currently letting through — a likely **tsgo-permissive divergence**.',
+              '',
+              `**Failing run:** ${runUrl}`,
+              '',
+              '**To investigate:**',
+              '1. Open the run logs above and find the first `tsc` error.',
+              '2. Reproduce locally with pure tsc: `pnpm -w typecheck && pnpm --recursive typecheck`.',
+              '3. If real, fix the type error. If it is a tsgo bug, note it in `docs/typecheck-report.md`.',
+              '',
+              '_This issue is auto-updated by `.github/workflows/nightly-tsc-baseline.yml`._',
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const found = existing.data.find(i => i.body && i.body.includes(marker));
+
+            if (found) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: found.number,
+                body: `Still failing as of ${runUrl}`,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: ['P1'],
+              });
+            }
+
+      - name: Notify Slack on failure
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        uses: slackapi/slack-github-action@v2.1.0
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": ":red_circle: Nightly pure-tsc baseline failed — classic tsc rejects something `typecheck:fast` (tsgo) is letting through. <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+            }

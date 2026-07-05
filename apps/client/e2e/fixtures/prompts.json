@@ -1,0 +1,75 @@
+{
+  "prime": {
+    "prompt": "List down the top 5 prime numbers from the smallest",
+    "answer": ["2", "3", "5", "7", "11"]
+  },
+  "capital": {
+    "prompt": "What is the capital of France?",
+    "answer": "Paris"
+  },
+  "movie": {
+    "prompt": "Who wrote the play Romeo and Juliet?",
+    "answer": "Shakespeare"
+  },
+  "sinigang": {
+    "prompt": "What is the recipe for Sinigang?",
+    "answer": "pork",
+    "filepath": "e2e/fixtures/uploads/sinigang.pdf"
+  },
+  "dog-image": {
+    "prompt": "Give me an image of a dog?",
+    "answer": "dog"
+  },
+  "txt-recipe": {
+    "filepath": "e2e/fixtures/uploads/recipe.txt",
+    "queries": [
+      {
+        "prompt": "How many days does it take to grow Potatoes on the attached file?",
+        "answer": ["6 days", "six days", "6"],
+        "answerLogic": "or"
+      },
+      {
+        "prompt": "Which season can I grow Cranberries?",
+        "answer": "Fall"
+      },
+      {
+        "prompt": "How many recipes use Garlic?",
+        "answer": "2"
+      },
+      {
+        "prompt": "What recipe can Corn be used on?",
+        "answer": "Tortilla"
+      }
+    ]
+  },
+  "image-cat": {
+    "filepath": "e2e/fixtures/uploads/cat.png",
+    "queries": [
+      {
+        "prompt": "What is the color of the cat?",
+        "answer": ["orange", "ginger"],
+        "answerLogic": "or"
+      },
+      {
+        "prompt": "How many cats in the picture?",
+        "answer": "one"
+      }
+    ]
+  },
+  "pdf-lorem": {
+    "filepath": "e2e/fixtures/uploads/sample.pdf",
+    "timeout": 120000,
+    "queries": [
+      {
+        "prompt": "What is the file all about?",
+        "answer": ["resume", "résumé"],
+        "answerLogic": "or"
+      },
+      {
+        "prompt": "What is the content of the file?",
+        "answer": ["resume", "résumé"],
+        "answerLogic": "or"
+      }
+    ]
+  }
+}

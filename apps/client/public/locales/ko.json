@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI 설정",
+    "session": "노트북",
+    "session_plural": "노트북들",
+    "favorite": "즐겨찾기",
+    "unfavorite": "즐겨찾기 해제",
+    "favorites": "즐겨찾기 목록",
+    "favorites_count_one": "{{count}} 즐겨찾기",
+    "favorites_count_other": "{{count}} 즐겨찾기",
+    "currentSession": "현재",
+    "other": "기타 태그",
+    "text_model": "텍스트 모델",
+    "image_model": "이미지 모델",
+    "ai_image": "AI 이미지",
+    "switch_to": "{{ name }}로 전환"
+  },
+  "guide": {
+    "title": "가이드"
+  },
+  "intro": {
+    "title": "소개"
+  },
+  "developers": {
+    "title": "개발자",
+    "technical_docs": "기술 문서"
+  },
+  "changelog": {
+    "title": "변경 로그"
+  },
+  "feedback": {
+    "send": "피드백 보내기"
+  },
+  "terms_policies": "약관 및 정책",
+  "login": "로그인",
+  "file": "지식",
+  "forgotPassword": "비밀번호를 잊으셨나요",
+  "signup": "가입하기",
+  "help": "도움말",
+  "manual": "매뉴얼",
+  "inviteLong": "친구 초대하기",
+  "inviteShort": "초대하기",
+  "tools": {
+    "title": "도구들"
+  },
+  "sidenav": {
+    "pin": "사이드바 고정",
+    "unpin": "사이드바 해제",
+    "sessions": {
+      "sort": {
+        "label": "정렬 기준",
+        "tags": "태그별 정렬",
+        "date": "날짜별 정렬"
+      },
+      "new": "새 채팅",
+      "item": {
+        "genTags": "노트북 태그 리스트 생성"
+      }
+    }
+  },
+  "referral": {
+    "title": "친구를 추천해주세요",
+    "email_title_default": "GrokTool에 오신 것을 환영합니다!",
+    "email_body_default": "USER_NAME님께서 GrokTool에 초대하셨습니다! 등록 링크: 다음 초대 코드를 사용하여 가입하세요: INVITE_CODE",
+    "friend_email": "친구의 이메일",
+    "num_referrals_available": "가능한 추천 수:",
+    "no_valid_emails_error": "유효한 이메일 주소를 입력해주세요",
+    "send_referral": "추천 보내기",
+    "send_referral_success": "추천이 성공적으로 보내졌습니다!",
+    "send_referral_skipped": "{{count}} 초대가 생략되었습니다 — 해당 이메일 주소는 이미 계정을 가지고 있습니다.",
+    "send_referral_failed": "{{count}} 초대를 보낼 수 없습니다. 다시 시도해 주세요.",
+    "send_referral_error": "추천을 보내는 데 오류가 발생했습니다. 다시 시도해주세요.",
+    "slack_notification_default": "USER_NAME:USER_ID 사용자가 FRIEND_EMAIL에게 보낸 추천"
+  },
+  "activateVoice": "이 음성을 활성화하기",
+  "liveVoice": "라이브 음성",
+  "whatsNew": "새로운 소식",
+  "welcome": "{{ name }}에 오신 것을 환영합니다",
+  "network": {
+    "statuses": {
+      "0": "연결 중",
+      "1": "연결됨",
+      "2": "연결 해제 중",
+      "3": "연결 해제됨",
+      "-1": "대기 중"
+    },
+    "networkStatus": "네트워크: {{ status }}"
+  },
+  "deleteVoice": "이 음성을 삭제하기",
+  "deleteVoiceConfirm": "이 음성을 삭제하시겠습니까?",
+  "organization": {
+    "organizations": "팀",
+    "defaultName": "내 조직",
+    "shared": "나와 공유됨",
+    "create": "팀 만들기",
+    "search": "팀 검색...",
+    "no_organizations": "찾은 팀이 없습니다",
+    "view_details": "세부정보 보기",
+    "x_seats": "{{count}} 좌석",
+    "active_subscription": "활성 구독",
+    "no_subscription": "구독 없음",
+    "x_members": "{{count}} 멤버",
+    "x_credits": "{{count}} 크레딧",
+    "owner": "소유자"
+  },
+  "session": {
+    "typeYourMessage": "여기에 메시지를 입력하세요",
+    "switchedSession": "{{ sessionName }}으로 전환했습니다",
+    "send": "보내기",
+    "sendMessage": "메시지 보내기",
+    "preparingQuest": "퀘스트 준비 중...",
+    "rephrasePrompt": "입력 최적화",
+    "promptRephrased": "프롬프트가 성공적으로 바뀌었습니다.",
+    "rephraseFailed": "프롬프트 바꾸기에 실패했습니다.",
+    "errors": {
+      "notebookDeleted": "이 노트북은 삭제되었습니다. 새로 만드세요.",
+      "noPermission": "이 노트북에 접근할 권한이 없습니다.",
+      "invalidRequest": "유효하지 않은 요청입니다. 다시 시도해 주세요.",
+      "tooManyRequests": "너무 많은 요청입니다. 잠시 기다렸다가 다시 시도해 주세요.",
+      "serverError": "서버 오류입니다. 나중에 다시 시도해 주세요.",
+      "networkError": "메시지 전송에 실패했습니다. 연결을 확인해 주세요.",
+      "sendFailed": "메시지 전송에 실패했습니다. 다시 시도해 주세요."
+    }
+  },
+  "projects": {
+    "title": "프로젝트",
+    "projects": "프로젝트",
+    "joined_projects": "참여한 프로젝트",
+    "no_joined_projects": "아직 참여한 프로젝트가 없습니다",
+    "add_to_project": "프로젝트에 추가",
+    "modals": {
+      "files": {
+        "title": "프로젝트에 파일 추가",
+        "subtitle": "프로젝트에 추가할 파일 선택",
+        "button_label": "파일 추가",
+        "search_placeholder": "파일 검색",
+        "no_files": "파일을 찾을 수 없습니다."
+      },
+      "members": {
+        "title": "프로젝트에 구성원 추가",
+        "subtitle": "프로젝트에 추가할 사용자 검색 및 선택",
+        "button_label": "구성원 추가",
+        "search_placeholder": "사용자 검색",
+        "no_members": "사용자를 검색해 보세요."
+      },
+      "sessions": {
+        "title": "프로젝트에 노트북 추가",
+        "subtitle": "프로젝트에 추가할 노트북 선택 또는 새로 만들기",
+        "button_label": "노트북 추가",
+        "search_placeholder": "검색",
+        "create_button": "생성",
+        "no_notebooks": "노트를 찾을 수 없습니다. 새로 만들기를 시도해 보세요."
+      },
+      "generic": {
+        "select_all": "모두 선택",
+        "unselect_all": "모두 선택 해제",
+        "add_items_one": "{{count}} 항목 추가",
+        "add_items_other": "{{count}} 항목 추가",
+        "delete_items": "{{count}} 항목 삭제"
+      }
+    }
+  },
+  "logout": "로그아웃",
+  "inbox": {
+    "title": "받은편지함",
+    "messages": "메시지",
+    "invites": "초대",
+    "sendMessage": "메시지 보내기",
+    "noMessages": "메시지가 없습니다"
+  },
+  "addSomething": "{{ name }} 추가하기",
+  "deleteAllSomething": "모든 {{ name }} 삭제하기",
+  "exportAllSomething": "모든 {{ name }} 내보내기",
+  "importLLMHistory": "LLM 기록 가져오기",
+  "downloadAllSomething": "모든 {{ name }} 다운로드하기",
+  "language": {
+    "language_settings": "언어 설정",
+    "change-language": "언어 변경"
+  },
+  "theme": {
+    "turn-dark": "다크 모드 켜기",
+    "turn-light": "라이트 모드 켜기"
+  },
+  "auth": {
+    "usernameOrEmail": "사용자 이름 또는 이메일",
+    "username": "사용자 이름",
+    "password": "비밀번호",
+    "confirmPassword": "비밀번호 확인",
+    "fullName": "전체 이름",
+    "inviteCode": "초대 코드",
+    "needCode": "코드가 필요하십니까?",
+    "noAccount": "계정이 없으신가요?",
+    "haveAccount": "이미 계정이 있으신가요?",
+    "loginWithProvider": "{{ provider }}로 로그인",
+    "checking": "확인 중...",
+    "continue": "계속",
+    "troubleSigningIn": "로그인에 문제가 있나요?",
+    "signingInAs": "로그인 중입니다",
+    "signingIn": "로그인 중...",
+    "backToEmail": "이메일로 돌아가기",
+    "redirectingToProvider": "조직의 로그인으로 리디렉션 중...",
+    "resetInstructions": "이메일 주소를 입력해 주세요. 비밀번호 재설정을 위한 이메일을 보내드리겠습니다.",
+    "sendResetEmail": "비밀번호 재설정 이메일 보내기",
+    "email": "이메일",
+    "resetEmailSentMessage": "이메일이 전송되었습니다! 추가 지침을 확인하려면 이메일을 확인해 주세요",
+    "createAccountDesc": "계정 만들기",
+    "createBtn": "계정 만들기",
+    "loginBtn": "로그인",
+    "passwordStrength": {
+      "label": "비밀번호 강도",
+      "weak": "약함",
+      "fair": "보통",
+      "strong": "강함"
+    },
+    "passwordRequirements": {
+      "title": "비밀번호 요구 사항",
+      "minLength": "최소 {{count}}자",
+      "uppercase": "대문자 하나",
+      "lowercase": "소문자 하나",
+      "number": "숫자 하나",
+      "specialChar": "특수 문자 하나",
+      "met": "충족됨",
+      "notMet": "아직 충족되지 않음"
+    },
+    "errors": {
+      "usernameExists": "사용자 이름 '{{username}}'은 이미 사용 중입니다. 다른 사용자 이름을 선택하세요.",
+      "emailExists": "이메일 '{{email}}'로 이미 계정이 존재합니다. 다른 이메일을 사용하거나 기존 계정에 로그인하세요.",
+      "accountExists": "이 자격 증명으로 이미 계정이 존재합니다. 로그인하거나 다른 자격 증명을 사용해 보세요.",
+      "invalidInviteCode": "입력한 초대 코드가 유효하지 않거나 만료되었습니다. 확인하고 다시 시도하세요.",
+      "registrationFailed": "등록에 실패했습니다. 나중에 다시 시도하세요.",
+      "validation": {
+        "generic": "유효하지 않은 입력",
+        "invalidUsername": "사용자 이름은 문자, 숫자, 밑줄, 마침표 및 대시만 포함할 수 있습니다.",
+        "passwordMismatch": "비밀번호가 일치하지 않습니다.",
+        "passwordRequirements": "비밀번호는 최소 8자 이상이어야 하며, 대문자 및 소문자, 숫자, 특수 문자가 포함되어야 합니다."
+      }
+    }
+  },
+  "search": "검색",
+  "share": "공유",
+  "rename": "이름 바꾸기",
+  "favorite": "즐겨찾기",
+  "unfavorite": "즐겨찾기 해제",
+  "delete": "삭제",
+  "files": {
+    "showAttachedFiles": "첨부파일 보기",
+    "hideAttachedFiles": "첨부파일 숨기기",
+    "title": "파일",
+    "upload": "파일 업로드",
+    "long_title": "파일 브라우저"
+  },
+  "view": "보기",
+  "info": "정보",
+  "clone": "복제",
+  "download": "다운로드",
+  "summarize": "요약하기",
+  "profile": {
+    "title": "프로필",
+    "tooltip": "프로필",
+    "collection": "컬렉션",
+    "collections": {
+      "all_types": "모든 종류"
+    },
+    "users_profile": "{{ name }}의 프로필",
+    "storage_used": "사용된 저장공간",
+    "credits": "크레딧",
+    "subscription": "구독",
+    "edit": "프로필 편집",
+    "manage_subscription": "구독 관리",
+    "upgrade": "업그레이드",
+    "credit_analytics": "크레딧 분석",
+    "pricing": "크레딧 가격",
+    "show_purchases": "구매 내역 보기",
+    "show_usage": "사용량 보기",
+    "show_combined": "결합 보기",
+    "buy_credits": "크레딧 구매"
+  },
+  "community": {
+    "title": "커뮤니티",
+    "tooltip": "커뮤니티",
+    "feed": "커뮤니티 피드"
+  },
+  "subscriptions": {
+    "title": "구독",
+    "expires_on": "만료 날짜 {{ date }}",
+    "renews_on": "갱신 날짜 {{ date }}"
+  },
+  "billing": {
+    "title": "청구"
+  },
+  "credits": {
+    "title": "크레딧",
+    "usage": "크레딧 사용량",
+    "analytics": "크레딧 분석",
+    "analytics_tooltip": "시간에 따른 크레딧 사용량 보기",
+    "current_balance": "현재 크레딧 잔액",
+    "credits": "크레딧",
+    "usage_by_model": "모델별 사용량",
+    "no_transactions": "이번 기간에 크레딧 거래가 없습니다",
+    "model_pricing": "모델 가격",
+    "text_models": "텍스트 모델",
+    "image_models": "이미지 모델",
+    "pricing_per_1k_tokens": "1,000 토큰당 크레딧 가격",
+    "pricing_per_generation": "이미지 생성당 크레딧 가격",
+    "model_name": "모델 이름",
+    "price_tier": "가격 티어",
+    "input_cost": "입력 비용",
+    "output_cost": "출력 비용",
+    "generation_cost": "생성 비용",
+    "no_models_available": "사용 가능한 모델이 없습니다",
+    "pricing_note": "참고: 가격은 대략적이며 모델 매개변수에 따라 다를 수 있습니다. 가격 티어: $ (최저), $$ (중간), $$$ (프리미엄).",
+    "burn_rate": "일일 사용량 (소모율)",
+    "days_remaining": "남은 예상 일수",
+    "usage_pattern": "지난 {{days}}일 동안의 사용 패턴에 기반함",
+    "credits_used": "사용된 크레딧",
+    "credits_purchased": "구매한 크레딧",
+    "net_credits": "순 크레딧"
+  },
+  "time": {
+    "last_7_days": "지난 7일",
+    "last_30_days": "지난 30일",
+    "last_90_days": "지난 90일",
+    "last_180_days": "지난 180일",
+    "last_365_days": "지난 365일"
+  },
+  "common": {
+    "date": "날짜",
+    "refresh": "새로 고침",
+    "days": "일",
+    "cancel": "취소",
+    "save": "저장",
+    "delete": "삭제",
+    "edit": "편집",
+    "close": "닫기",
+    "submit": "제출",
+    "loading": "로딩 중...",
+    "error": "오류",
+    "success": "성공"
+  },
+  "errors": {
+    "failed_to_load_data": "데이터 로드에 실패했습니다. 나중에 다시 시도해 주세요."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "당신의 Atlassian 연결이 만료되었습니다. 계정을 다시 연결해 주세요."
+    }
+  },
+  "credits_modal": {
+    "title": "추가 크레딧",
+    "description": "고급 AI 모델과 기능을 계속 사용하기 위해 추가 크레딧을 구매하세요. 크레딧은 모델 추론 및 특수 기능에 사용되며, 복잡도에 따라 다양한 양을 소비하는 모델이 있습니다.",
+    "current_credits": "현재 크레딧 수량",
+    "best_value": "최고의 가치",
+    "purchase_success": "{{credits}} 크레딧을 구입하였습니다",
+    "history_title": "크레딧 구입 역사",
+    "purchase": "구입",
+    "no_transactions": "아직 거래가 없습니다",
+    "low_credits": "크레딧이 부족합니다",
+    "low_credits_sub": "작업을 계속하려면 더 많은 크레딧을 구매하세요.",
+    "no_credits": "크레딧 없음",
+    "no_credits_sub": "작업을 계속하려면 크레딧을 구매하세요.",
+    "status": {
+      "completed": "완료",
+      "pending": "보류 중",
+      "failed": "실패"
+    }
+  },
+  "settings": {
+    "title": "설정",
+    "tooltip": "설정",
+    "main": "주 설정",
+    "account": "계정",
+    "ai_features": "AI 기능",
+    "connected_apps": {
+      "title": "연결된 앱",
+      "link": "링크",
+      "unlink": "링크 해제"
+    },
+    "developer_tools": "개발자 도구",
+    "experimental_features": {
+      "title": "실험적 기능",
+      "tooltip": "실험적 기능",
+      "header": "실험적 기능",
+      "beta_features": {
+        "title": "베타 기능",
+        "subtitle": "이 기능은 아직 진행 중이며 예기치 않은 결과를 초래할 수 있습니다. 이를 활성화하기로 선택하면 현재 상태에서 사용하는 것에 동의하는 것입니다."
+      }
+    },
+    "ui_preferences": "UI 기본 설정"
+  },
+  "mementos": {
+    "title": "기념품",
+    "tooltip": "기념품"
+  },
+  "admin": {
+    "title": "관리자",
+    "tooltip": "관리자 설정"
+  },
+  "speech": {
+    "title": "음성",
+    "tooltip": "음성 인식 및 텍스트 읽기"
+  },
+  "instructions": {
+    "title": "지침",
+    "tooltip": "지침"
+  },
+  "friends": {
+    "add_friend": "친구 추가",
+    "unfriend": "친구 제거",
+    "pending_request": "대기 중인 친구 요청",
+    "all": "모든 친구",
+    "pending": "대기 중"
+  },
+  "notebooks": {
+    "view_info": "노트북 정보 보기",
+    "clone": "노트북 복제",
+    "download": "노트북 다운로드",
+    "summarize": "노트북 요약",
+    "delete": "노트북 삭제",
+    "delete_confirm": "\"{{ name }}\"을(를) 영구 삭제하시겠습니까? 이 작업은 되돌릴 수 없습니다.",
+    "auto_rename": "AI로 이름 바꾸기"
+  },
+  "add_friend": {
+    "title": "친구 추가",
+    "friend_email": "친구의 이메일",
+    "message": "메시지",
+    "cancel": "취소",
+    "send": "보내기",
+    "email_placeholder": "친구의 이메일을 입력하세요",
+    "message_placeholder": "메시지를 입력하세요"
+  },
+  "file_browser": {
+    "my_files": "내 파일",
+    "shared_with_me": "나와 공유됨",
+    "total_files": "총 인지 항목",
+    "search_placeholder": "이름 또는 태그로 검색...",
+    "file_type": "파일 유형",
+    "all_files": "모든 파일",
+    "text": "텍스트",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "이미지",
+    "excel": "엑셀",
+    "word": "워드",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "마크다운",
+    "code": "코드",
+    "date_created": "생성 날짜",
+    "size": "크기",
+    "name": "이름",
+    "sort_z_to_a": "Z에서 A로 정렬",
+    "sort_a_to_z": "A에서 Z로 정렬",
+    "grid_view": "격자 보기",
+    "list_view": "목록 보기",
+    "select_file_hint": "탭하여 파일 또는 여러 파일을 선택하고 노트북 세션에 추가하세요!",
+    "session_one": "노트북",
+    "session_other": "노트북들",
+    "no_files_available": "사용 가능한 파일이 없습니다",
+    "count_file_selected_one": "{{count}} 파일 선택됨",
+    "count_file_selected_other": "{{count}} 파일 선택됨",
+    "add_count_file_one": "{{count}} 파일 추가",
+    "add_count_file_other": "{{count}} 파일 추가",
+    "delete_count_file_one": "{{count}} 파일 삭제",
+    "delete_count_file_other": "{{count}} 파일 삭제",
+    "share_count_file_one": "{{count}} 파일 공유",
+    "share_count_file_other": "{{count}} 파일 공유",
+    "count_file_one": "{{count}} 파일",
+    "count_file_other": "{{count}} 파일",
+    "add_to_session_success": "{{sessionName}}에 파일: {{fileNames}} 추가 중",
+    "add_file_success": "파일: {{fileNames}} 추가 중",
+    "browse_files": "파일 탐색",
+    "create_new_knowledge": "생성",
+    "create_new_knowledge_from_url": "URL 스크래핑",
+    "enter_url": "URL 입력",
+    "create_file": "파일 생성",
+    "create_file_from_url": "파일 생성",
+    "create_from_url": "빠른 스크래핑",
+    "research": "연구",
+    "open_research": "연구 열기",
+    "url_success": "URL에서 지식을 성공적으로 생성했습니다: {{url}}",
+    "url_error": "URL에서 지식을 생성하는 데 실패했습니다: {{url}}",
+    "url_required": "URL을 입력해 주세요",
+    "previous": "이전",
+    "next": "다음",
+    "page_of": "{{current}} 페이지 / {{total}}",
+    "drop_files_here": "여기에 파일을 드롭하세요",
+    "tagging": "태깅 중...",
+    "tag_files": "파일 태그하기",
+    "select_all": "모두 선택",
+    "unselect_all": "모두 선택 해제",
+    "add_files": "파일 추가",
+    "add_files_to_notebook_one": "{{count}} 파일을 노트북에 추가",
+    "add_files_to_notebook_other": "{{count}} 파일을 노트북에 추가",
+    "in_project": "프로젝트 내"
+  },
+  "file_properties": {
+    "title": "파일 속성",
+    "make_instructions": "지침으로 만들기?",
+    "instruction_priority": "지침 우선순위 (0–999)",
+    "priority_levels": {
+      "global": "0-100: 전역 지침",
+      "group": "101-300: 그룹/회사 지침",
+      "project": "301-500: 프로젝트 지침",
+      "user": "501-999: 사용자 지침"
+    },
+    "save": "저장",
+    "update_success": "\"{{fileName}}\"의 시스템 우선순위 업데이트 완료.",
+    "update_error": "시스템 우선순위 업데이트 실패."
+  },
+  "file_actions": {
+    "notes": "메모",
+    "notes_placeholder": "이 파일에 대한 메모 추가...",
+    "add_notes": "메모 추가",
+    "add_note": "메모 추가",
+    "edit_notes": "메모 편집",
+    "notes_save_error": "메모 저장에 실패했습니다",
+    "manage_tags": "태그 관리",
+    "tags": "태그 관리",
+    "tags_placeholder": "콤마로 구분된 태그 이름 입력...",
+    "add_tag_one": "{{count}} 파일의 태그가 업데이트되었습니다",
+    "add_tag_other": "{{count}} 파일의 태그가 업데이트되었습니다",
+    "failed_to_add_tag_one": "파일의 태그 업데이트에 실패했습니다",
+    "failed_to_add_tag_other": "파일의 태그 업데이트에 실패했습니다",
+    "cancel": "취소",
+    "save": "저장",
+    "download": "다운로드",
+    "vectorize": "벡터화",
+    "instruction": "지침 {{priority}}",
+    "chunked": "청크화됨",
+    "not_chunked": "청크화되지 않음"
+  },
+  "subscription_modal": {
+    "title": "구독",
+    "description": "하나의 통합 인터페이스를 통해 모든 주요 AI 모델에 접근하세요. Deepseek R1과 같은 고급 모델을 개인적으로 실행하세요.",
+    "no_free_tier": "무료 계층 없음 - 전문가에 중점을 둡니다.",
+    "credits_rollover": "사용하지 않은 크레딧은 3개월 동안 유효합니다.",
+    "monthly_billing": "월별 청구",
+    "annual_billing": "연간 청구",
+    "most_popular": "가장 인기 있는",
+    "current": "현재",
+    "credits_per_month": "{{credits}} 크레딧 매월",
+    "subscription_renewal": "구독은 {{date}}에 갱신됩니다.",
+    "personal": "개인",
+    "business": "비즈니스",
+    "team": "팀",
+    "enterprise": "기업"
+  },
+  "agents": {
+    "title": "에이전트",
+    "new_agent": "새 에이전트",
+    "manage_agents": "에이전트 관리",
+    "search_placeholder": "에이전트 검색...",
+    "your_agents": "당신의 에이전트",
+    "loading": "에이전트 로딩 중...",
+    "no_agents": "에이전트를 찾을 수 없습니다",
+    "create_first": "시작하려면 첫 번째 에이전트를 생성하세요",
+    "agents_found": "{{count}} 에이전트 발견",
+    "agents_found_plural": "{{count}} 에이전트 발견",
+    "attached_agents": "첨부된 에이전트",
+    "listening_description": "이 에이전트는 이 대화의 모든 메시지를 듣고 있습니다",
+    "no_search_results": "\"{{search}}\"에 해당하는 에이전트가 없습니다",
+    "search_help": "다른 검색어를 시도해 보세요",
+    "no_agents_description": "시작하려면 첫 번째 에이전트를 생성하세요",
+    "create_agent": "에이전트 생성",
+    "click_to_attach": "현재 세션에 첨부하려면 클릭",
+    "click_to_detach": "현재 세션에서 분리하려면 클릭",
+    "show_attached_agents": "첨부된 에이전트 보기",
+    "hide_attached_agents": "첨부된 에이전트 숨기기",
+    "toggle_attached_agents": "첨부된 에이전트 전환",
+    "agent_listening_tooltip": "{{name}}가 듣고 있으며 도움을 주고자 합니다"
+  },
+  "skills": {
+    "title": "기술",
+    "command_palette_description": "재사용 가능한 지침 템플릿 관리"
+  }
+}

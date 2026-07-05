@@ -1,0 +1,142 @@
+# Gitleaks configuration for Bike4Mind
+# See https://github.com/gitleaks/gitleaks#configuration for full documentation
+
+title = "Bike4Mind Gitleaks Configuration"
+
+# Global allowlist for non-sensitive patterns matching secret formats
+[allowlist]
+description = "Global allowlist for non-sensitive patterns"
+paths = [
+  # Generated/compiled files
+  ".*\\.min\\.js$",
+  ".*\\.chunk\\.js$",
+  ".*\\.bundle\\.js$",
+  ".*build/.*",
+  ".*dist/.*",
+  # Test fixtures and test files — strings here are by definition not live credentials
+  ".*/__fixtures__/.*",
+  ".*/__mocks__/.*",
+  ".*\\.test\\.[tj]sx?$",
+  ".*\\.spec\\.[tj]sx?$",
+  ".*/__tests__/.*",
+  # Documentation — placeholder strings are expected here
+  ".*docs/.*",
+  ".*docs-site/.*",
+  ".*README\\.md$",
+  # Environment example files — values here are intentional placeholders
+  "\\.env\\.example$",
+  "\\.env\\..*\\.example$"
+]
+
+regexes = [
+  # Pre-existing
+  "SHORTKEY=",
+  # AWS documentation canonical fake access key — never a real credential
+  "AKIAIOSFODNN7EXAMPLE",
+  # Slack sample workspace / channel / token patterns from Slack docs
+  "T00000000",
+  "B00000000",
+  "XXXXXXXXXXXXXXXXXXXXXXXXX",
+  # jwt.io sample token prefix
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\\.eyJzdWIiOiIxMjM0NTY3ODkwIi",
+  # Generic placeholder shapes
+  "your[-_]secret[-_]here",
+  "your[-_]api[-_]key",
+  "insert[-_].*[-_]here",
+  "<your[-_]",
+  "\\$\\{[A-Z_]+\\}",
+  "%[A-Z_]+%"
+]
+
+# Domain specific rules
+[[rules]]
+id = "bike4mind-mongodb-uri"
+description = "MongoDB Connection String"
+regex = "mongodb(\\+srv)?://[^\\s'\"]*"
+tags = ["mongodb", "connection-string"]
+secretGroup = 0
+entropy = 3.0
+
+[rules.allowlist]
+regexes = [
+  "mongodb(\\+srv)?://localhost",
+  "mongodb(\\+srv)?://127\\.0\\.0\\.1",
+  "mongodb(\\+srv)?://mongo(:[0-9]+)?/",
+  "mongodb(\\+srv)?://username:password@cluster",
+  "mongodb(\\+srv)?://\\$\\{",
+  "mongodb(\\+srv)?://\\{\\{",
+  # Literal ellipsis placeholder — used in console.log usage examples
+  "mongodb(\\+srv)?://\\.\\.\\.",
+  # Documentation example in echo statements — user:pass with known placeholder hostnames only
+  "mongodb(\\+srv)?://user:pass@(localhost|127\\.0\\.0\\.1|example\\.com|cluster\\.|docdb\\.|your-cluster)"
+]
+
+[[rules]]
+id = "bike4mind-jwt-secret"
+description = "JWT Secret"
+regex = "([_\\.]|^)JWT_SECRET[=:][\"']?([^\\s\"']+)[\"']?"
+tags = ["jwt", "auth"]
+secretGroup = 2
+entropy = 3.0
+
+[[rules]]
+id = "bike4mind-session-secret"
+description = "Session Secret"
+regex = "([_\\.]|^)SESSION_SECRET[=:][\"']?([^\\s\"']+)[\"']?"
+tags = ["session", "auth"]
+secretGroup = 2
+entropy = 3.0
+
+[[rules]]
+id = "bike4mind-stripe-keys"
+description = "Stripe API Key"
+regex = "(sk|pk|whsec)_(test|live)_[0-9a-zA-Z]{24,}"
+tags = ["stripe", "payment"]
+secretGroup = 0
+entropy = 3.0
+
+[[rules]]
+id = "bike4mind-anthropic-key"
+description = "Anthropic API Key"
+regex = "sk-ant-[a-zA-Z0-9]{48}"
+tags = ["anthropic", "ai"]
+secretGroup = 0
+entropy = 4.0
+
+[[rules]]
+id = "bike4mind-gemini-key"
+description = "Google Gemini API Key"
+regex = "AIza[0-9A-Za-z\\-_]{35}"
+tags = ["google", "ai"]
+secretGroup = 0
+entropy = 3.5
+
+[rules.allowlist]
+regexTarget = "secret"
+regexes = [
+  # Redaction test fixtures — the value is input to sanitizeErrorMessage(), not a live key
+  "sanitizeErrorMessage",
+  "REDACTED",
+  "redact",
+  "fixture",
+  "test"
+]
+
+[[rules]]
+id = "bike4mind-slack-webhook"
+description = "Slack Webhook URL"
+regex = "https://hooks\\.slack\\.com/services/T[a-zA-Z0-9]{8,10}/B[a-zA-Z0-9]{8,10}/[a-zA-Z0-9]{24}"
+tags = ["slack", "webhook"]
+secretGroup = 0
+entropy = 3.0
+
+[rules.allowlist]
+regexes = [
+  # Slack documentation sample URL shapes
+  "T00000000",
+  "B00000000",
+  "XXXXXXXXXXXXXXXXXXXXXXXXX"
+]
+
+# Use default builtin rules as well
+[useBuiltinRules]

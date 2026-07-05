@@ -1,0 +1,53 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": ["CI"],
+  "globalPassThroughEnv": ["NODE_OPTIONS"],
+  "tasks": {
+    "codegen": {
+      "inputs": [
+        "scripts/generate-premium-glue.mjs",
+        "../../packages/premium/*/package.json",
+        "../../sst.config.ts"
+      ],
+      "outputs": [
+        "app/premium-generated/**",
+        "pages/api/premium-*/**",
+        "server/premium-generated/**",
+        "../../infra/premium-generated/**"
+      ]
+    },
+    "build": {
+      "dependsOn": ["codegen", "^build"],
+      "outputs": ["dist/**"],
+      "inputs": ["src/**", "tsconfig.json", "tsdown.config.ts", "package.json"]
+    },
+    "typecheck": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck:native": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck:native": {
+      "dependsOn": ["^build"]
+    },
+    "typecheck:fast": {
+      "dependsOn": ["codegen", "^build"]
+    },
+    "//#typecheck:fast": {
+      "dependsOn": ["^build"]
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "clean": {
+      "cache": false
+    }
+  }
+}

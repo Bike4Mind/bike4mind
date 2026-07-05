@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI-inställningar",
+    "session": "Anteckningsbok",
+    "session_plural": "Anteckningsböcker",
+    "favorite": "Favorit",
+    "unfavorite": "Avfavorit",
+    "favorites": "Favoriter",
+    "favorites_count_one": "{{count}} Favorit",
+    "favorites_count_other": "{{count}} Favoriter",
+    "currentSession": "Nuvarande",
+    "other": "Andra taggar",
+    "text_model": "Textmodell",
+    "image_model": "Bildmodell",
+    "ai_image": "AI-bild",
+    "switch_to": "Byt till {{ name }}"
+  },
+  "guide": {
+    "title": "Guide"
+  },
+  "intro": {
+    "title": "Introduktion"
+  },
+  "developers": {
+    "title": "Utvecklare",
+    "technical_docs": "Teknisk dokumentation"
+  },
+  "changelog": {
+    "title": "Ändringslogg"
+  },
+  "feedback": {
+    "send": "Skicka Feedback"
+  },
+  "terms_policies": "Villkor & Policys",
+  "login": "Logga in",
+  "file": "Kunskap",
+  "forgotPassword": "Glömt lösenord",
+  "signup": "Registrera dig",
+  "help": "Hjälp",
+  "manual": "Manual",
+  "inviteLong": "Bjud in en vän",
+  "inviteShort": "Bjud in",
+  "tools": {
+    "title": "Verktyg"
+  },
+  "sidenav": {
+    "pin": "Fäst sidpanel",
+    "unpin": "Avfäst sidpanel",
+    "sessions": {
+      "sort": {
+        "label": "Sortera efter",
+        "tags": "Efter taggar",
+        "date": "Efter datum"
+      },
+      "new": "Ny chatt",
+      "item": {
+        "genTags": "Generera anteckningsbokstaglista"
+      }
+    }
+  },
+  "referral": {
+    "title": "Referera en vän till",
+    "email_title_default": "Välkommen till GrokTool!",
+    "email_body_default": "Du har blivit inbjuden av USER_NAME till GrokTool! REGISTRATION_LINK: Använd följande inbjudningskod för att registrera dig: INVITE_CODE",
+    "friend_email": "Vännens e-post",
+    "num_referrals_available": "Referenser tillgängliga:",
+    "no_valid_emails_error": "Vänligen ange giltiga e-postadresser",
+    "send_referral": "Skicka hänvisning",
+    "send_referral_success": "Hänvisningen skickades framgångsrikt!",
+    "send_referral_skipped": "{{count}} inbjudan/ar hoppades över — de e-postadresserna har redan ett konto.",
+    "send_referral_failed": "{{count}} inbjudan/or kunde inte skickas. Försök igen.",
+    "send_referral_error": "Fel vid skickande av hänvisning. Försök igen.",
+    "slack_notification_default": "Hänvisning skickad av användare USER_NAME:USER_ID till FRIEND_EMAIL"
+  },
+  "activateVoice": "Aktivera denna röst",
+  "liveVoice": "Live röst",
+  "whatsNew": "Vad är nytt",
+  "welcome": "Välkommen till {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Ansluter",
+      "1": "Ansluten",
+      "2": "Kopplar från",
+      "3": "Frånkopplad",
+      "-1": "Väntande"
+    },
+    "networkStatus": "Nätverk: {{ status }}"
+  },
+  "deleteVoice": "Radera denna röst",
+  "deleteVoiceConfirm": "Är du säker på att du vill radera denna röst?",
+  "organization": {
+    "organizations": "Team",
+    "defaultName": "Min organisation",
+    "shared": "Delad med mig",
+    "create": "Skapa team",
+    "search": "Sök team...",
+    "no_organizations": "Inga team hittades",
+    "view_details": "Visa detaljer",
+    "x_seats": "{{count}} platser",
+    "active_subscription": "Aktiv prenumeration",
+    "no_subscription": "Ingen prenumeration",
+    "x_members": "{{count}} medlemmar",
+    "x_credits": "{{count}} krediter",
+    "owner": "Ägare"
+  },
+  "session": {
+    "typeYourMessage": "Skriv ditt meddelande här",
+    "switchedSession": "Bytte till: {{ sessionName }}",
+    "send": "Skicka",
+    "sendMessage": "Skicka meddelande",
+    "preparingQuest": "Förbereder uppdrag...",
+    "rephrasePrompt": "Optimera din inmatning",
+    "promptRephrased": "Prompt omformulerad framgångsrikt",
+    "rephraseFailed": "Misslyckades med att omformulera prompt",
+    "errors": {
+      "notebookDeleted": "Detta anteckningsblock har raderats. Skapa ett nytt.",
+      "noPermission": "Du har inte behörighet att komma åt detta anteckningsblock.",
+      "invalidRequest": "Ogiltig förfrågan. Försök igen.",
+      "tooManyRequests": "För många förfrågningar. Vänta en stund och försök igen.",
+      "serverError": "Serverfel. Försök igen senare.",
+      "networkError": "Misslyckades med att skicka meddelandet. Kontrollera din anslutning.",
+      "sendFailed": "Misslyckades med att skicka meddelandet. Försök igen."
+    }
+  },
+  "projects": {
+    "title": "Projekt",
+    "projects": "Projekt",
+    "joined_projects": "Gå med i projekt",
+    "no_joined_projects": "Inga anslutna projekt än",
+    "add_to_project": "Lägg till projekt",
+    "modals": {
+      "files": {
+        "title": "Lägg till filer i projektet",
+        "subtitle": "Välj filer att lägga till ditt projekt",
+        "button_label": "Lägg till filer",
+        "search_placeholder": "Sök filer",
+        "no_files": "Inga filer hittades."
+      },
+      "members": {
+        "title": "Lägg till medlemmar i projektet",
+        "subtitle": "Sök och välj användare att lägga till ditt projekt",
+        "button_label": "Lägg till medlemmar",
+        "search_placeholder": "Sök användare",
+        "no_members": "Försök att söka efter en användare."
+      },
+      "sessions": {
+        "title": "Lägg till anteckningsbok i ett projekt",
+        "subtitle": "Välj anteckningsböcker att lägga till ditt projekt eller skapa en ny",
+        "button_label": "Lägg till anteckningsböcker",
+        "search_placeholder": "Sök",
+        "create_button": "Skapa",
+        "no_notebooks": "Inga anteckningsböcker hittades. Försök att skapa en ny."
+      },
+      "generic": {
+        "select_all": "Välj alla",
+        "unselect_all": "Avmarkera alla",
+        "add_items_one": "Lägg till {{count}} objekt",
+        "add_items_other": "Lägg till {{count}} objekt",
+        "delete_items": "Ta bort {{count}} objekt"
+      }
+    }
+  },
+  "logout": "Logga ut",
+  "inbox": {
+    "title": "Inkorg",
+    "messages": "Meddelanden",
+    "invites": "Inbjudningar",
+    "sendMessage": "Skicka ett meddelande",
+    "noMessages": "Inga meddelanden"
+  },
+  "addSomething": "Lägg till {{ name }}",
+  "deleteAllSomething": "Ta bort alla {{ name }}",
+  "exportAllSomething": "Exportera alla {{ name }}",
+  "importLLMHistory": "Importera LLM-historik",
+  "downloadAllSomething": "Ladda ner alla {{ name }}",
+  "language": {
+    "language_settings": "Språkinställningar",
+    "change-language": "Byt språk"
+  },
+  "theme": {
+    "turn-dark": "Aktivera mörkt läge",
+    "turn-light": "Aktivera ljust läge"
+  },
+  "auth": {
+    "usernameOrEmail": "Användarnamn eller e-post",
+    "username": "Användarnamn",
+    "password": "Lösenord",
+    "confirmPassword": "Bekräfta lösenord",
+    "fullName": "Fullständigt namn",
+    "inviteCode": "Inbjudningskod",
+    "needCode": "Behöver du en kod?",
+    "noAccount": "Inget konto?",
+    "haveAccount": "Har du redan ett konto?",
+    "loginWithProvider": "Logga in med {{ provider }}",
+    "checking": "Kontrollerar...",
+    "continue": "Fortsätt",
+    "troubleSigningIn": "Problem med att logga in?",
+    "signingInAs": "Loggar in som",
+    "signingIn": "Loggar in...",
+    "backToEmail": "Tillbaka till e-post",
+    "redirectingToProvider": "Omdirigerar till din organisations inloggning...",
+    "resetInstructions": "Ange din e-postadress. Vi skickar ett e-postmeddelande för att återställa ditt lösenord.",
+    "sendResetEmail": "Skicka e-post för återställning av lösenord",
+    "email": "E-post",
+    "resetEmailSentMessage": "E-postmeddelandet har skickats! Kontrollera din e-post för ytterligare instruktioner",
+    "createAccountDesc": "Skapa ett konto",
+    "createBtn": "Skapa konto",
+    "loginBtn": "Logga in",
+    "passwordStrength": {
+      "label": "Lösenordets styrka",
+      "weak": "Svagt",
+      "fair": "Måttligt",
+      "strong": "Starkt"
+    },
+    "passwordRequirements": {
+      "title": "Lösenordskrav",
+      "minLength": "Minst {{count}} tecken",
+      "uppercase": "En versal",
+      "lowercase": "En gemen",
+      "number": "En siffra",
+      "specialChar": "Ett specialtecken",
+      "met": "uppfyllt",
+      "notMet": "inte uppfyllt än"
+    },
+    "errors": {
+      "usernameExists": "Användarnamnet '{{username}}' är redan taget. Vänligen välj ett annat användarnamn.",
+      "emailExists": "Ett konto med e-post '{{email}}' finns redan. Vänligen använd en annan e-post eller logga in på ditt befintliga konto.",
+      "accountExists": "Ett konto med dessa inloggningsuppgifter finns redan. Vänligen försök logga in eller använd andra inloggningsuppgifter.",
+      "invalidInviteCode": "Inbjudningskoden du angav är ogiltig eller har gått ut. Vänligen kontrollera och försök igen.",
+      "registrationFailed": "Registreringen misslyckades. Vänligen försök igen senare.",
+      "validation": {
+        "generic": "Ogiltig inmatning",
+        "invalidUsername": "Användarnamnet kan endast innehålla bokstäver, siffror, understreck, punkter och bindestreck",
+        "passwordMismatch": "Lösenorden matchar inte",
+        "passwordRequirements": "Lösenordet måste vara minst 8 tecken långt med stora och små bokstäver, en siffra och ett specialtecken"
+      }
+    }
+  },
+  "search": "Sök",
+  "share": "Dela",
+  "rename": "Döp om",
+  "favorite": "Favorit",
+  "unfavorite": "Avfavorit",
+  "delete": "Radera",
+  "files": {
+    "showAttachedFiles": "Visa bifogade filer",
+    "hideAttachedFiles": "Dölj bifogade filer",
+    "title": "Filer",
+    "upload": "Ladda upp filer",
+    "long_title": "Filbläddrare"
+  },
+  "view": "Visa",
+  "info": "Info",
+  "clone": "Klona",
+  "download": "Ladda ner",
+  "summarize": "Sammanfatta",
+  "profile": {
+    "title": "Profil",
+    "tooltip": "Profil",
+    "collection": "Samling",
+    "collections": {
+      "all_types": "Alla typer"
+    },
+    "users_profile": "{{ name }}'s Profil",
+    "storage_used": "Använd lagring",
+    "credits": "Krediter",
+    "subscription": "Prenumeration",
+    "edit": "Redigera profil",
+    "manage_subscription": "Hantera prenumeration",
+    "upgrade": "Uppgradera",
+    "credit_analytics": "Kreditanalys",
+    "pricing": "Priser för krediter",
+    "show_purchases": "Visa köp",
+    "show_usage": "Visa användning",
+    "show_combined": "Visa sammanfattning",
+    "buy_credits": "Köp krediter"
+  },
+  "community": {
+    "title": "Gemenskap",
+    "tooltip": "Gemenskap",
+    "feed": "Gemenskapsflöde"
+  },
+  "subscriptions": {
+    "title": "Prenumerationer",
+    "expires_on": "Går ut den {{ date }}",
+    "renews_on": "Förnyas den {{ date }}"
+  },
+  "billing": {
+    "title": "Fakturering"
+  },
+  "credits": {
+    "title": "Krediter",
+    "usage": "Kreditanvändning",
+    "analytics": "Kreditanalys",
+    "analytics_tooltip": "Visa din kreditanvändning över tid",
+    "current_balance": "Aktuell kreditbalans",
+    "credits": "krediter",
+    "usage_by_model": "Användning per modell",
+    "no_transactions": "Inga kredittransaktioner hittades under denna tidsperiod",
+    "model_pricing": "Prissättning av modeller",
+    "text_models": "Textmodeller",
+    "image_models": "Bildmodeller",
+    "pricing_per_1k_tokens": "Priser visas i krediter per 1 000 tokens",
+    "pricing_per_generation": "Priser visas i krediter per bildgenerering",
+    "model_name": "Modellnamn",
+    "price_tier": "Prisklass",
+    "input_cost": "Inmatningskostnad",
+    "output_cost": "Utmatningskostnad",
+    "generation_cost": "Genereringskostnad",
+    "no_models_available": "Inga modeller tillgängliga",
+    "pricing_note": "Notera: Priserna är ungefärliga och kan variera beroende på modellparametrar. Prisklasser: $ (lägsta), $$ (medel), $$$ (premium).",
+    "burn_rate": "Daglig användning (förbrukningstakt)",
+    "days_remaining": "Uppskattade dagar kvar",
+    "usage_pattern": "Baserat på din användningsmönster från de senaste {{days}} dagarna",
+    "credits_used": "Använda krediter",
+    "credits_purchased": "Inköpta krediter",
+    "net_credits": "Nettokrediter"
+  },
+  "time": {
+    "last_7_days": "Senaste 7 dagarna",
+    "last_30_days": "Senaste 30 dagarna",
+    "last_90_days": "Senaste 90 dagarna",
+    "last_180_days": "Senaste 180 dagarna",
+    "last_365_days": "Senaste 365 dagarna"
+  },
+  "common": {
+    "date": "Datum",
+    "refresh": "Uppdatera",
+    "days": "dagar",
+    "cancel": "Avbryt",
+    "save": "Spara",
+    "delete": "Radera",
+    "edit": "Redigera",
+    "close": "Stäng",
+    "submit": "Skicka",
+    "loading": "Laddar...",
+    "error": "Fel",
+    "success": "Framgång"
+  },
+  "errors": {
+    "failed_to_load_data": "Misslyckades med att ladda data. Försök igen senare."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Din Atlassian-anslutning har gått ut. Vänligen återanslut ditt konto."
+    }
+  },
+  "credits_modal": {
+    "title": "Ytterligare krediter",
+    "description": "Köp ytterligare krediter för att fortsätta använda våra avancerade AI-modeller och funktioner. Krediter används för modellinferens och specialfunktioner, med olika modeller som förbrukar varierande mängder baserat på komplexitet.",
+    "current_credits": "Aktuell kreditbelopp",
+    "best_value": "Bästa värde",
+    "purchase_success": "Köpt {{credits}} krediter",
+    "history_title": "Kreditköphistorik",
+    "purchase": "Köp",
+    "no_transactions": "Inga transaktioner än",
+    "low_credits": "Dina krediter är låga",
+    "low_credits_sub": "Köp fler krediter för att fortsätta ditt arbete.",
+    "no_credits": "Inga krediter",
+    "no_credits_sub": "Köp krediter för att fortsätta ditt arbete.",
+    "status": {
+      "completed": "Genomförd",
+      "pending": "I väntan",
+      "failed": "Misslyckades"
+    }
+  },
+  "settings": {
+    "title": "Inställningar",
+    "tooltip": "Inställningar",
+    "main": "Huvudinställningar",
+    "account": "Konto",
+    "ai_features": "AI-funktioner",
+    "connected_apps": {
+      "title": "Anslutna appar",
+      "link": "Länk",
+      "unlink": "Koppla bort"
+    },
+    "developer_tools": "Utvecklarverktyg",
+    "experimental_features": {
+      "title": "Experimentella funktioner",
+      "tooltip": "Experimentella funktioner",
+      "header": "Experimentella funktioner",
+      "beta_features": {
+        "title": "Beta-funktioner",
+        "subtitle": "Dessa funktioner är fortfarande under utveckling och kan orsaka oväntade resultat. Att välja att aktivera dem betyder att du godkänner att använda dem i sitt nuvarande tillstånd."
+      }
+    },
+    "ui_preferences": "UI-preferenser"
+  },
+  "mementos": {
+    "title": "Minnen",
+    "tooltip": "Minnen"
+  },
+  "admin": {
+    "title": "Admin",
+    "tooltip": "Admininställningar"
+  },
+  "speech": {
+    "title": "Tal",
+    "tooltip": "Tal till Text & Text till Tal"
+  },
+  "instructions": {
+    "title": "Instruktioner",
+    "tooltip": "Instruktioner"
+  },
+  "friends": {
+    "add_friend": "Lägg till som vän",
+    "unfriend": "Ta bort som vän",
+    "pending_request": "Vänförfrågan i väntan",
+    "all": "Alla vänner",
+    "pending": "Väntande"
+  },
+  "notebooks": {
+    "view_info": "Visa anteckningsboksinformation",
+    "clone": "Klona anteckningsbok",
+    "download": "Ladda ner anteckningsbok",
+    "summarize": "Sammanfatta anteckningsbok",
+    "delete": "Ta bort anteckningsbok",
+    "delete_confirm": "Är du säker på att du vill permanent ta bort \"{{ name }}\"? Denna åtgärd kan inte ångras.",
+    "auto_rename": "Byt namn med AI"
+  },
+  "add_friend": {
+    "title": "Lägg till en vän",
+    "friend_email": "Väns e-post",
+    "message": "Meddelande",
+    "cancel": "Avbryt",
+    "send": "Skicka",
+    "email_placeholder": "Skriv in din väns e-post",
+    "message_placeholder": "Skriv in ditt meddelande"
+  },
+  "file_browser": {
+    "my_files": "Mina filer",
+    "shared_with_me": "Delat med mig",
+    "total_files": "Totala kunskapsobjekt",
+    "search_placeholder": "Sök efter namn eller tagg...",
+    "file_type": "Filtyp",
+    "all_files": "Alla filer",
+    "text": "Text",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Bild",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Kod",
+    "date_created": "Skapat datum",
+    "size": "Storlek",
+    "name": "Namn",
+    "sort_z_to_a": "Sortera Z till A",
+    "sort_a_to_z": "Sortera A till Z",
+    "grid_view": "Rutnätsvy",
+    "list_view": "Lista vy",
+    "select_file_hint": "Genom att trycka, välj fil eller flera filer och lägg dem till din anteckningssessions!",
+    "session_one": "Anteckningsbok",
+    "session_other": "Anteckningsböcker",
+    "no_files_available": "Inga filer tillgängliga",
+    "count_file_selected_one": "{{count}} fil vald",
+    "count_file_selected_other": "{{count}} filer valda",
+    "add_count_file_one": "Lägg till {{count}} fil",
+    "add_count_file_other": "Lägg till {{count}} filer",
+    "delete_count_file_one": "Radera {{count}} fil",
+    "delete_count_file_other": "Radera {{count}} filer",
+    "share_count_file_one": "Dela {{count}} fil",
+    "share_count_file_other": "Dela {{count}} filer",
+    "count_file_one": "{{count}} fil",
+    "count_file_other": "{{count}} filer",
+    "add_to_session_success": "Lägger till fil: {{fileNames}} till {{sessionName}}",
+    "add_file_success": "Lägger till fil: {{fileNames}}",
+    "browse_files": "Bläddra i filer",
+    "create_new_knowledge": "Skapa",
+    "create_new_knowledge_from_url": "Skrapa URL",
+    "enter_url": "Ange URL",
+    "create_file": "Skapa fil",
+    "create_file_from_url": "Skapa fil",
+    "create_from_url": "Snabbskrapning",
+    "research": "Forskning",
+    "open_research": "Öppna forskning",
+    "url_success": "Framgångsrikt skapad kunskap från URL: {{url}}",
+    "url_error": "Misslyckades med att skapa kunskap från URL: {{url}}",
+    "url_required": "Vänligen ange en URL",
+    "previous": "Föregående",
+    "next": "Nästa",
+    "page_of": "Sida {{current}} av {{total}}",
+    "drop_files_here": "Släpp filer här",
+    "tagging": "Taggar...",
+    "tag_files": "Tagga filer",
+    "select_all": "Markera alla",
+    "unselect_all": "Avmarkera alla",
+    "add_files": "Lägg till filer",
+    "add_files_to_notebook_one": "Lägg till {{count}} fil till anteckningsblock",
+    "add_files_to_notebook_other": "Lägg till {{count}} filer till anteckningsblock",
+    "in_project": "I projekt"
+  },
+  "file_properties": {
+    "title": "Filens egenskaper",
+    "make_instructions": "Göra till instruktioner?",
+    "instruction_priority": "Instruktionsprioritet (0–999)",
+    "priority_levels": {
+      "global": "0-100: Globala instruktioner",
+      "group": "101-300: Grupp/Företagsinstruktioner",
+      "project": "301-500: Projektinstruktioner",
+      "user": "501-999: Användarinstruktioner"
+    },
+    "save": "Spara",
+    "update_success": "Uppdaterad systemprioritet för \"{{fileName}}\".",
+    "update_error": "Misslyckades med att uppdatera systemprioritet."
+  },
+  "file_actions": {
+    "notes": "Anteckningar",
+    "notes_placeholder": "Lägg till anteckningar om denna fil...",
+    "add_notes": "Lägg till anteckningar",
+    "add_note": "Lägg till anteckning",
+    "edit_notes": "Redigera anteckningar",
+    "notes_save_error": "Misslyckades med att spara anteckningar",
+    "manage_tags": "Hantera taggar",
+    "tags": "Hantera taggar",
+    "tags_placeholder": "Ange taggnamn separerade med kommatecken...",
+    "add_tag_one": "Uppdaterad tagg för {{count}} fil",
+    "add_tag_other": "Uppdaterad tagg för {{count}} filer",
+    "failed_to_add_tag_one": "Misslyckades med att uppdatera tagg till fil",
+    "failed_to_add_tag_other": "Misslyckades med att uppdatera tagg till filer",
+    "cancel": "Avbryt",
+    "save": "Spara",
+    "download": "Ladda ner",
+    "vectorize": "Vektorisera",
+    "instruction": "Instruktion {{priority}}",
+    "chunked": "Chunked",
+    "not_chunked": "Inte chunked"
+  },
+  "subscription_modal": {
+    "title": "Prenumeration",
+    "description": "Få tillgång till varje större AI-modell genom ett enhetligt gränssnitt. Kör avancerade modeller som Deepseek R1 privat.",
+    "no_free_tier": "INGEN GRATIS NIVÅ - FOKUSERAD PÅ PROFESSIONALISTER.",
+    "credits_rollover": "Ej använda krediter överförs i 3 månader.",
+    "monthly_billing": "Månadsfakturering",
+    "annual_billing": "Årsfakturering",
+    "most_popular": "Mest Populär",
+    "current": "Aktuell",
+    "credits_per_month": "{{credits}} krediter per månad",
+    "subscription_renewal": "Din prenumeration förnyas den {{date}}",
+    "personal": "Personlig",
+    "business": "Företag",
+    "team": "Team",
+    "enterprise": "Företag"
+  },
+  "agents": {
+    "title": "Agenter",
+    "new_agent": "Ny agent",
+    "manage_agents": "Hantera agenter",
+    "search_placeholder": "Sök agenter...",
+    "your_agents": "Dina agenter",
+    "loading": "Laddar agenter...",
+    "no_agents": "Inga agenter hittades",
+    "create_first": "Skapa din första agent för att komma igång",
+    "agents_found": "{{count}} agent hittad",
+    "agents_found_plural": "{{count}} agenter hittade",
+    "attached_agents": "Bifogade agenter",
+    "listening_description": "Dessa agenter lyssnar på alla meddelanden i denna konversation",
+    "no_search_results": "Inga agenter matchar \"{{search}}\"",
+    "search_help": "Försök med en annan sökterm",
+    "no_agents_description": "Skapa din första agent för att komma igång",
+    "create_agent": "Skapa agent",
+    "click_to_attach": "Klicka för att bifoga till nuvarande session",
+    "click_to_detach": "Klicka för att frikoppla från nuvarande session",
+    "show_attached_agents": "Visa bifogade agenter",
+    "hide_attached_agents": "Dölj bifogade agenter",
+    "toggle_attached_agents": "Växla bifogade agenter",
+    "agent_listening_tooltip": "{{name}} lyssnar och är ivrig att hjälpa"
+  },
+  "skills": {
+    "title": "Färdigheter",
+    "command_palette_description": "Hantera återanvändbara instruktionsmallar"
+  }
+}

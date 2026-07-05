@@ -1,0 +1,43 @@
+name: Remove Stale Label on Activity
+
+on:
+  pull_request:
+    types: [synchronize]
+  issue_comment:
+    types: [created]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  remove-stale:
+    name: Remove Stale Label
+    if: github.event.issue.pull_request || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v8
+        with:
+          script: |
+            const prNumber =
+              context.payload.pull_request?.number ||
+              context.payload.issue?.number;
+
+            if (!prNumber) return;
+
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                name: 'Stale',
+              });
+              core.info(`Removed "Stale" label from PR #${prNumber}`);
+            } catch (error) {
+              // 404 = no Stale label present; 403 = read-only GITHUB_TOKEN on a fork
+              // PR sync. Neither should fail the job.
+              if (error.status === 404 || error.status === 403) {
+                core.info(`No "Stale" label removed from PR #${prNumber} (status ${error.status})`);
+              } else {
+                throw error;
+              }
+            }

@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "AI-instellingen",
+    "session": "Notitieboekje",
+    "session_plural": "Notitieboekjes",
+    "favorite": "Favoriet",
+    "unfavorite": "Geen Favoriet",
+    "favorites": "Favorieten",
+    "favorites_count_one": "{{count}} Favoriet",
+    "favorites_count_other": "{{count}} Favorieten",
+    "currentSession": "Huidig",
+    "other": "Andere Tags",
+    "text_model": "Tekstmodel",
+    "image_model": "Afbeeldingsmodel",
+    "ai_image": "AI-afbeelding",
+    "switch_to": "Overschakelen naar {{ name }}"
+  },
+  "guide": {
+    "title": "Gids"
+  },
+  "intro": {
+    "title": "Inleiding"
+  },
+  "developers": {
+    "title": "Ontwikkelaars",
+    "technical_docs": "Technische Documentatie"
+  },
+  "changelog": {
+    "title": "Wijzigingslogboek"
+  },
+  "feedback": {
+    "send": "Feedback Verzenden"
+  },
+  "terms_policies": "Voorwaarden & Beleid",
+  "login": "Inloggen",
+  "file": "Kennis",
+  "forgotPassword": "Wachtwoord vergeten",
+  "signup": "Aanmelden",
+  "help": "Help",
+  "manual": "Handleiding",
+  "inviteLong": "Nodig een vriend uit",
+  "inviteShort": "Uitnodigen",
+  "tools": {
+    "title": "Gereedschappen"
+  },
+  "sidenav": {
+    "pin": "Zijbalk vastzetten",
+    "unpin": "Zijbalk loskoppelen",
+    "sessions": {
+      "sort": {
+        "label": "Sorteer op",
+        "tags": "Op Tags",
+        "date": "Op Datum"
+      },
+      "new": "Nieuwe Chat",
+      "item": {
+        "genTags": "Genereer Notitieboek taglijst"
+      }
+    }
+  },
+  "referral": {
+    "title": "Verwijs een vriend naar",
+    "email_title_default": "Welkom bij GrokTool!",
+    "email_body_default": "Je bent uitgenodigd door USER_NAME voor GrokTool! REGISTRATIE_LINK: Gebruik de volgende uitnodigingscode om je aan te melden: INVITE_CODE",
+    "friend_email": "E-mail van vriend",
+    "num_referrals_available": "Beschikbare verwijzingen:",
+    "no_valid_emails_error": "Voer geldige e-mailadressen in",
+    "send_referral": "Verwijzing verzenden",
+    "send_referral_success": "Verwijzing succesvol verzonden!",
+    "send_referral_skipped": "{{count}} uitnoding(en) overgeslagen — die e-mailadressen hebben al een account.",
+    "send_referral_failed": "{{count}} uitnoding(en) konden niet worden verzonden. Probeer het opnieuw.",
+    "send_referral_error": "Fout bij het verzenden van verwijzing. Probeer het opnieuw.",
+    "slack_notification_default": "Verwijzing verzonden door gebruiker USER_NAME:USER_ID naar FRIEND_EMAIL"
+  },
+  "activateVoice": "Activeer deze stem",
+  "liveVoice": "Live stem",
+  "whatsNew": "Wat is nieuw",
+  "welcome": "Welkom bij {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "Verbinden",
+      "1": "Verbonden",
+      "2": "Verbinding verbreken",
+      "3": "Verbinding verbroken",
+      "-1": "In afwachting"
+    },
+    "networkStatus": "Netwerk: {{ status }}"
+  },
+  "deleteVoice": "Verwijder deze stem",
+  "deleteVoiceConfirm": "Weet je zeker dat je deze stem wilt verwijderen?",
+  "organization": {
+    "organizations": "Teams",
+    "defaultName": "Mijn organisatie",
+    "shared": "Gedeeld met Mij",
+    "create": "Team Aanmaken",
+    "search": "Zoek teams...",
+    "no_organizations": "Geen teams gevonden",
+    "view_details": "Bekijk Details",
+    "x_seats": "{{count}} stoelen",
+    "active_subscription": "Actieve Abonnement",
+    "no_subscription": "Geen Abonnement",
+    "x_members": "{{count}} leden",
+    "x_credits": "{{count}} credits",
+    "owner": "Eigenaar"
+  },
+  "session": {
+    "typeYourMessage": "Typ hier je bericht",
+    "switchedSession": "Overgeschakeld naar: {{ sessionName }}",
+    "send": "Verstuur",
+    "sendMessage": "Verstuur bericht",
+    "preparingQuest": "Voorbereiden van de queeste...",
+    "rephrasePrompt": "Optimaliseer uw invoer",
+    "promptRephrased": "Prompt succesvol geherformuleerd",
+    "rephraseFailed": "Herformuleren van de prompt is mislukt",
+    "errors": {
+      "notebookDeleted": "Dit notitieboek is verwijderd. Maak een nieuwe aan.",
+      "noPermission": "U heeft geen toestemming om dit notitieboek te openen.",
+      "invalidRequest": "Ongeldig verzoek. Probeer het opnieuw.",
+      "tooManyRequests": "Te veel verzoeken. Wacht even en probeer het opnieuw.",
+      "serverError": "Serverfout. Probeer het later opnieuw.",
+      "networkError": "Bericht verzenden is mislukt. Controleer uw verbinding.",
+      "sendFailed": "Bericht verzenden is mislukt. Probeer het opnieuw."
+    }
+  },
+  "projects": {
+    "title": "Project",
+    "projects": "Projecten",
+    "joined_projects": "Toegevoegde Projecten",
+    "no_joined_projects": "Nog geen aangesloten projecten",
+    "add_to_project": "Toevoegen aan Project",
+    "modals": {
+      "files": {
+        "title": "Bestanden aan project toevoegen",
+        "subtitle": "Selecteer bestanden om toe te voegen aan uw project",
+        "button_label": "Bestanden toevoegen",
+        "search_placeholder": "Zoek bestanden",
+        "no_files": "Geen bestanden gevonden."
+      },
+      "members": {
+        "title": "Leden aan project toevoegen",
+        "subtitle": "Zoek en selecteer gebruikers om toe te voegen aan uw project",
+        "button_label": "Leden toevoegen",
+        "search_placeholder": "Zoek gebruikers",
+        "no_members": "Probeer te zoeken naar een gebruiker."
+      },
+      "sessions": {
+        "title": "Notitieboek aan een project toevoegen",
+        "subtitle": "Selecteer notitieboeken om toe te voegen aan uw project of maak een nieuwe",
+        "button_label": "Notitieboeken toevoegen",
+        "search_placeholder": "Zoeken",
+        "create_button": "Creëren",
+        "no_notebooks": "Geen notitieboeken gevonden. Probeer een nieuwe te maken."
+      },
+      "generic": {
+        "select_all": "Selecteer alles",
+        "unselect_all": "Deselecteer alles",
+        "add_items_one": "Voeg {{count}} item toe",
+        "add_items_other": "Voeg {{count}} items toe",
+        "delete_items": "Verwijder {{count}} items"
+      }
+    }
+  },
+  "logout": "Uitloggen",
+  "inbox": {
+    "title": "Inbox",
+    "messages": "Berichten",
+    "invites": "Uitnodigingen",
+    "sendMessage": "Verstuur een bericht",
+    "noMessages": "Geen berichten"
+  },
+  "addSomething": "Voeg {{ name }} toe",
+  "deleteAllSomething": "Verwijder alle {{ name }}",
+  "exportAllSomething": "Exporteer alle {{ name }}",
+  "importLLMHistory": "Importeer LLM-geschiedenis",
+  "downloadAllSomething": "Download alle {{ name }}",
+  "language": {
+    "language_settings": "Taalinstellingen",
+    "change-language": "Taal wijzigen"
+  },
+  "theme": {
+    "turn-dark": "Donkere modus inschakelen",
+    "turn-light": "Lichte modus inschakelen"
+  },
+  "auth": {
+    "usernameOrEmail": "Gebruikersnaam of Email",
+    "username": "Gebruikersnaam",
+    "password": "Wachtwoord",
+    "confirmPassword": "Bevestig Wachtwoord",
+    "fullName": "Volledige Naam",
+    "inviteCode": "Uitnodigingscode",
+    "needCode": "Code nodig?",
+    "noAccount": "Geen account?",
+    "haveAccount": "Heb je al een account?",
+    "loginWithProvider": "Inloggen met {{ provider }}",
+    "checking": "Controleren...",
+    "continue": "Doorgaan",
+    "troubleSigningIn": "Problemen met inloggen?",
+    "signingInAs": "Inloggen als",
+    "signingIn": "Inloggen...",
+    "backToEmail": "Terug naar e-mail",
+    "redirectingToProvider": "U wordt doorgestuurd naar de inlogpagina van uw organisatie...",
+    "resetInstructions": "Voer uw e-mailadres in. We sturen u een e-mail om uw wachtwoord opnieuw in te stellen.",
+    "sendResetEmail": "Stuur wachtwoord reset e-mail",
+    "email": "Email",
+    "resetEmailSentMessage": "E-mail is verzonden! Controleer uw e-mail voor aanvullende instructies",
+    "createAccountDesc": "Maak een Account",
+    "createBtn": "Maak Account",
+    "loginBtn": "Inloggen",
+    "passwordStrength": {
+      "label": "Wachtwoordsterkte",
+      "weak": "Zwak",
+      "fair": "Gemiddeld",
+      "strong": "Sterk"
+    },
+    "passwordRequirements": {
+      "title": "Wachtwoordvereisten",
+      "minLength": "Minimaal {{count}} tekens",
+      "uppercase": "Één hoofdletter",
+      "lowercase": "Één kleine letter",
+      "number": "Één cijfer",
+      "specialChar": "Één speciaal teken",
+      "met": "voldaan",
+      "notMet": "nog niet voldaan"
+    },
+    "errors": {
+      "usernameExists": "Gebruikersnaam '{{username}}' is al in gebruik. Kies een andere gebruikersnaam.",
+      "emailExists": "Er bestaat al een account met het e-mailadres '{{email}}'. Gebruik een ander e-mailadres of log in op uw bestaande account.",
+      "accountExists": "Er bestaat al een account met deze inloggegevens. Probeer in te loggen of gebruik andere inloggegevens.",
+      "invalidInviteCode": "De uitnodigingscode die u invoerde is ongeldig of is verlopen. Controleer en probeer het opnieuw.",
+      "registrationFailed": "Registratie mislukt. Probeer het later opnieuw.",
+      "validation": {
+        "generic": "Ongeldige invoer",
+        "invalidUsername": "Gebruikersnaam mag alleen letters, cijfers, underscores, punten en streepjes bevatten",
+        "passwordMismatch": "Wachtwoorden komen niet overeen",
+        "passwordRequirements": "Wachtwoord moet minimaal 8 tekens bevatten, met hoofd- en kleine letters, een cijfer en een speciaal teken"
+      }
+    }
+  },
+  "search": "Zoeken",
+  "share": "Delen",
+  "rename": "Hernoemen",
+  "favorite": "Favoriet",
+  "unfavorite": "Geen Favoriet",
+  "delete": "Verwijderen",
+  "files": {
+    "showAttachedFiles": "Toon Bijgevoegde Bestanden",
+    "hideAttachedFiles": "Verberg Bijgevoegde Bestanden",
+    "title": "Bestanden",
+    "upload": "Bestanden Uploaden",
+    "long_title": "Bestandsbrowser"
+  },
+  "view": "Bekijk",
+  "info": "Informatie",
+  "clone": "Klonen",
+  "download": "Downloaden",
+  "summarize": "Samenvatten",
+  "profile": {
+    "title": "Profiel",
+    "tooltip": "Profiel",
+    "collection": "Collectie",
+    "collections": {
+      "all_types": "Alle Typen"
+    },
+    "users_profile": "{{ name }}'s Profiel",
+    "storage_used": "Opslag Gebruikt",
+    "credits": "Credits",
+    "subscription": "Abonnement",
+    "edit": "Profiel Bewerken",
+    "manage_subscription": "Beheer abonnement",
+    "upgrade": "Upgrade",
+    "credit_analytics": "Kredietanalyse",
+    "pricing": "Kredietprijzen",
+    "show_purchases": "Toon Aankopen",
+    "show_usage": "Toon Gebruik",
+    "show_combined": "Toon Gecombineerd",
+    "buy_credits": "Koop credits"
+  },
+  "community": {
+    "title": "Gemeenschap",
+    "tooltip": "Gemeenschap",
+    "feed": "Gemeenschapsfeed"
+  },
+  "subscriptions": {
+    "title": "Abonnementen",
+    "expires_on": "Verloopt op {{ date }}",
+    "renews_on": "Verlengt op {{ date }}"
+  },
+  "billing": {
+    "title": "Facturering"
+  },
+  "credits": {
+    "title": "Tegoeden",
+    "usage": "Kredietgebruik",
+    "analytics": "Kredietanalyse",
+    "analytics_tooltip": "Bekijk je kredietgebruik in de loop van de tijd",
+    "current_balance": "Huidige Kredietbalans",
+    "credits": "credits",
+    "usage_by_model": "Gebruik per Model",
+    "no_transactions": "Geen krediettransacties gevonden in deze periode",
+    "model_pricing": "Modelprijzen",
+    "text_models": "Tekstmodellen",
+    "image_models": "Beeldmodellen",
+    "pricing_per_1k_tokens": "Prijzen weergegeven in credits per 1.000 tokens",
+    "pricing_per_generation": "Prijzen weergegeven in credits per afbeeldingsgeneratie",
+    "model_name": "Modelnaam",
+    "price_tier": "Prijsniveau",
+    "input_cost": "Invoerkosten",
+    "output_cost": "Uitvoerkosten",
+    "generation_cost": "Generatiekosten",
+    "no_models_available": "Geen modellen beschikbaar",
+    "pricing_note": "Opmerking: Prijzen zijn bij benadering en kunnen variëren op basis van modelparameters. Prijsniveaus: $ (laagste), $$ (gemiddeld), $$$ (premium).",
+    "burn_rate": "Dagelijks gebruik (verbrandingspercentage)",
+    "days_remaining": "Geschatte resterende dagen",
+    "usage_pattern": "Op basis van je gebruikspatroon van de afgelopen {{days}} dagen",
+    "credits_used": "Gebruikte Credits",
+    "credits_purchased": "Aangekochte Credits",
+    "net_credits": "Netto Credits"
+  },
+  "time": {
+    "last_7_days": "Laatste 7 dagen",
+    "last_30_days": "Laatste 30 dagen",
+    "last_90_days": "Laatste 90 dagen",
+    "last_180_days": "Laatste 180 dagen",
+    "last_365_days": "Laatste 365 dagen"
+  },
+  "common": {
+    "date": "Datum",
+    "refresh": "Vernieuwen",
+    "days": "dagen",
+    "cancel": "Annuleren",
+    "save": "Opslaan",
+    "delete": "Verwijderen",
+    "edit": "Bewerken",
+    "close": "Sluiten",
+    "submit": "Indienen",
+    "loading": "Laden...",
+    "error": "Fout",
+    "success": "Succes"
+  },
+  "errors": {
+    "failed_to_load_data": "Niet gelukt om gegevens te laden. Probeer het later opnieuw."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "Uw Atlassian-verbinding is verlopen. Maak uw account opnieuw verbinding."
+    }
+  },
+  "credits_modal": {
+    "title": "Extra Creditering",
+    "description": "Koop extra credits om onze geavanceerde AI-modellen en functies te blijven gebruiken. Credits worden gebruikt voor modelinferentie en speciale functies, waarbij verschillende modellen variërende hoeveelheden verbruiken op basis van complexiteit.",
+    "current_credits": "Huidig aantal credits",
+    "best_value": "Beste Waarde",
+    "purchase_success": "Gekocht {{credits}} credits",
+    "history_title": "Credits Aankoopgeschiedenis",
+    "purchase": "Aankoop",
+    "no_transactions": "Nog geen transacties",
+    "low_credits": "Je credits zijn laag",
+    "low_credits_sub": "Koop meer credits om je werk voort te zetten.",
+    "no_credits": "Geen credits",
+    "no_credits_sub": "Koop credits om je werk voort te zetten.",
+    "status": {
+      "completed": "Voltooid",
+      "pending": "In afwachting",
+      "failed": "Mislukt"
+    }
+  },
+  "settings": {
+    "title": "Instellingen",
+    "tooltip": "Instellingen",
+    "main": "Hoofdinstellingen",
+    "account": "Account",
+    "ai_features": "AI-functies",
+    "connected_apps": {
+      "title": "Verbonden Apps",
+      "link": "Link",
+      "unlink": "Koppel los"
+    },
+    "developer_tools": "Ontwikkelaarstools",
+    "experimental_features": {
+      "title": "Experimentele functies",
+      "tooltip": "Experimentele Functies",
+      "header": "Experimentele Functies",
+      "beta_features": {
+        "title": "Beta Functies",
+        "subtitle": "Deze functies zijn nog in ontwikkeling en kunnen ongewenste resultaten opleveren. Het inschakelen ervan betekent dat je ermee instemt ze in hun huidige staat te gebruiken."
+      }
+    },
+    "ui_preferences": "UI-voorkeuren"
+  },
+  "mementos": {
+    "title": "Herinneringen",
+    "tooltip": "Herinneringen"
+  },
+  "admin": {
+    "title": "Beheer",
+    "tooltip": "Beheerinstellingen"
+  },
+  "speech": {
+    "title": "Spraak",
+    "tooltip": "Spraak naar tekst & tekst naar spraak"
+  },
+  "instructions": {
+    "title": "Instructies",
+    "tooltip": "Instructies"
+  },
+  "friends": {
+    "add_friend": "Vriend Toevoegen",
+    "unfriend": "Vriend Verwijderen",
+    "pending_request": "Hangende Vriendschapsverzoek",
+    "all": "Alle Vrienden",
+    "pending": "Hangend"
+  },
+  "notebooks": {
+    "view_info": "Bekijk Notebook Informatie",
+    "clone": "Clone Notebook",
+    "download": "Download Notebook",
+    "summarize": "Samenvatten Notebook",
+    "delete": "Verwijder Notebook",
+    "delete_confirm": "Weet je zeker dat je \"{{ name }}\" permanent wilt verwijderen? Deze actie kan niet ongedaan gemaakt worden.",
+    "auto_rename": "Hernoem met AI"
+  },
+  "add_friend": {
+    "title": "Vriend toevoegen",
+    "friend_email": "E-mail van vriend",
+    "message": "Bericht",
+    "cancel": "Annuleren",
+    "send": "Verzenden",
+    "email_placeholder": "Voer de e-mail van uw vriend in",
+    "message_placeholder": "Voer uw bericht in"
+  },
+  "file_browser": {
+    "my_files": "Mijn Bestanden",
+    "shared_with_me": "Gedeeld met Mij",
+    "total_files": "Totaal Kennisitems",
+    "search_placeholder": "Zoeken op naam of tag...",
+    "file_type": "Bestandstype",
+    "all_files": "Alle Bestanden",
+    "text": "Tekst",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "Afbeelding",
+    "excel": "Excel",
+    "word": "Word",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "Markdown",
+    "code": "Code",
+    "date_created": "Datum Aangemaakt",
+    "size": "Grootte",
+    "name": "Naam",
+    "sort_z_to_a": "Sorteer Z tot A",
+    "sort_a_to_z": "Sorteer A tot Z",
+    "grid_view": "Rasterweergave",
+    "list_view": "Lijstweergave",
+    "select_file_hint": "Tik om bestand of meerdere bestanden te selecteren en deze aan uw notitieboeksessie toe te voegen!",
+    "session_one": "Notitieboek",
+    "session_other": "Notitieboeken",
+    "no_files_available": "Geen bestanden beschikbaar",
+    "count_file_selected_one": "{{count}} bestand geselecteerd",
+    "count_file_selected_other": "{{count}} bestanden geselecteerd",
+    "add_count_file_one": "Voeg {{count}} bestand toe",
+    "add_count_file_other": "Voeg {{count}} bestanden toe",
+    "delete_count_file_one": "Verwijder {{count}} bestand",
+    "delete_count_file_other": "Verwijder {{count}} bestanden",
+    "share_count_file_one": "Deel {{count}} Bestand",
+    "share_count_file_other": "Deel {{count}} Bestanden",
+    "count_file_one": "{{count}} bestand",
+    "count_file_other": "{{count}} bestanden",
+    "add_to_session_success": "Bestand: {{fileNames}} toevoegen aan {{sessionName}}",
+    "add_file_success": "Bestand: {{fileNames}} toevoegen",
+    "browse_files": "Bestanden Bladeren",
+    "create_new_knowledge": "Aanmaken",
+    "create_new_knowledge_from_url": "URL Scrapen",
+    "enter_url": "Voer URL in",
+    "create_file": "Bestand Aanmaken",
+    "create_file_from_url": "Bestand Aanmaken",
+    "create_from_url": "Snelle Scrap",
+    "research": "Onderzoek",
+    "open_research": "Open Onderzoek",
+    "url_success": "Kennis succesvol aangemaakt van URL: {{url}}",
+    "url_error": "Mislukt om kennis aan te maken van URL: {{url}}",
+    "url_required": "Voer een URL in",
+    "previous": "Vorige",
+    "next": "Volgende",
+    "page_of": "Pagina {{current}} van {{total}}",
+    "drop_files_here": "Bestanden hier neergooien",
+    "tagging": "Taggen...",
+    "tag_files": "Bestanden taggen",
+    "select_all": "Selecteer Alles",
+    "unselect_all": "Deselecteer Alles",
+    "add_files": "Bestanden Toevoegen",
+    "add_files_to_notebook_one": "Voeg {{count}} Bestand toe aan Notitieboek",
+    "add_files_to_notebook_other": "Voeg {{count}} Bestanden toe aan Notitieboek",
+    "in_project": "In Project"
+  },
+  "file_properties": {
+    "title": "Bestandseigenschappen",
+    "make_instructions": "Omzetten naar Instructies?",
+    "instruction_priority": "Prioriteit Instructie (0–999)",
+    "priority_levels": {
+      "global": "0-100: Globale Instructies",
+      "group": "101-300: Groep/Bedrijf Instructies",
+      "project": "301-500: Project Instructies",
+      "user": "501-999: Gebruiker Instructies"
+    },
+    "save": "Opslaan",
+    "update_success": "Systeemprioriteit voor \"{{fileName}}\" bijgewerkt.",
+    "update_error": "Bijwerken van systeemprioriteit mislukt."
+  },
+  "file_actions": {
+    "notes": "Notities",
+    "notes_placeholder": "Voeg notities toe over dit bestand...",
+    "add_notes": "Voeg Notities Toe",
+    "add_note": "Voeg Notitie Toe",
+    "edit_notes": "Bewerk Notities",
+    "notes_save_error": "Mislukt om notities op te slaan",
+    "manage_tags": "Beheer Tags",
+    "tags": "Beheer Tags",
+    "tags_placeholder": "Voer tag-namen in, gescheiden door komma's...",
+    "add_tag_one": "Tag bijgewerkt voor {{count}} bestand",
+    "add_tag_other": "Tag bijgewerkt voor {{count}} bestanden",
+    "failed_to_add_tag_one": "Kon tag niet bijwerken voor bestand",
+    "failed_to_add_tag_other": "Kon tag niet bijwerken voor bestanden",
+    "cancel": "Annuleren",
+    "save": "Opslaan",
+    "download": "Downloaden",
+    "vectorize": "Vectoriseren",
+    "instruction": "Instructie {{priority}}",
+    "chunked": "Gedeeltelijk",
+    "not_chunked": "Niet Gedeeltelijk"
+  },
+  "subscription_modal": {
+    "title": "Abonnement",
+    "description": "Toegang tot elk belangrijk AI-model via één uniforme interface. Voer geavanceerde modellen zoals Deepseek R1 privé uit.",
+    "no_free_tier": "GEEN GRATIS NIVEAU - GERICHT OP PROFESSIONEELS.",
+    "credits_rollover": "Ongedistribueerde credits rollen over voor 3 maanden.",
+    "monthly_billing": "Maandelijkse Facturering",
+    "annual_billing": "Jaarlijkse Facturering",
+    "most_popular": "Meest Populair",
+    "current": "Huidig",
+    "credits_per_month": "{{credits}} credits per maand",
+    "subscription_renewal": "Uw abonnement wordt vernieuwd op {{date}}",
+    "personal": "Persoonlijk",
+    "business": "Zakelijk",
+    "team": "Team",
+    "enterprise": "Enterprise"
+  },
+  "agents": {
+    "title": "Agents",
+    "new_agent": "Nieuwe Agent",
+    "manage_agents": "Beheer Agents",
+    "search_placeholder": "Zoek agents...",
+    "your_agents": "Jouw Agents",
+    "loading": "Agents laden...",
+    "no_agents": "Geen agents gevonden",
+    "create_first": "Creëer je eerste agent om aan de slag te gaan",
+    "agents_found": "{{count}} agent gevonden",
+    "agents_found_plural": "{{count}} agents gevonden",
+    "attached_agents": "Toegevoegde Agents",
+    "listening_description": "Deze agents luisteren naar alle berichten in dit gesprek",
+    "no_search_results": "Geen agents die overeenkomen met \"{{search}}\"",
+    "search_help": "Probeer een andere zoekterm",
+    "no_agents_description": "Creëer je eerste agent om aan de slag te gaan",
+    "create_agent": "Agent Aanmaken",
+    "click_to_attach": "Klik om aan de huidige sessie toe te voegen",
+    "click_to_detach": "Klik om los te koppelen van de huidige sessie",
+    "show_attached_agents": "Toon Toegevoegde Agents",
+    "hide_attached_agents": "Verberg Toegevoegde Agents",
+    "toggle_attached_agents": "Schakel Toegevoegde Agents in/uit",
+    "agent_listening_tooltip": "{{name}} luistert en staat klaar om te helpen"
+  },
+  "skills": {
+    "title": "Vaardigheden",
+    "command_palette_description": "Beheer herbruikbare instructiesjablonen"
+  }
+}

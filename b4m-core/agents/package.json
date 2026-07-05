@@ -1,0 +1,60 @@
+{
+  "name": "@bike4mind/agents",
+  "version": "0.18.3",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./toolFormat": {
+      "import": {
+        "types": "./dist/toolFormat.d.mts",
+        "default": "./dist/toolFormat.mjs"
+      },
+      "require": {
+        "types": "./dist/toolFormat.d.cts",
+        "default": "./dist/toolFormat.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "dev": "tsdown --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/llm-adapters": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
+    "@bike4mind/utils": "workspace:*",
+    "isolated-vm": "^7.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}

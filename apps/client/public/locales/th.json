@@ -1,0 +1,577 @@
+{
+  "app_name": "GrokTool",
+  "llm": {
+    "ai_settings": "การตั้งค่า AI",
+    "session": "สมุดบันทึก",
+    "session_plural": "สมุดบันทึก",
+    "favorite": "รายการโปรด",
+    "unfavorite": "ไม่ใช่รายการโปรด",
+    "favorites": "รายการโปรด",
+    "favorites_count_one": "{{count}} รายการโปรด",
+    "favorites_count_other": "{{count}} รายการโปรด",
+    "currentSession": "ปัจจุบัน",
+    "other": "แท็กอื่น ๆ",
+    "text_model": "โมเดลข้อความ",
+    "image_model": "โมเดลภาพ",
+    "ai_image": "ภาพ AI",
+    "switch_to": "สลับไปที่ {{ name }}"
+  },
+  "guide": {
+    "title": "คู่มือ"
+  },
+  "intro": {
+    "title": "บทนำ"
+  },
+  "developers": {
+    "title": "นักพัฒนา",
+    "technical_docs": "เอกสารทางเทคนิค"
+  },
+  "changelog": {
+    "title": "บันทึกการเปลี่ยนแปลง"
+  },
+  "feedback": {
+    "send": "ส่งข้อเสนอแนะ"
+  },
+  "terms_policies": "เงื่อนไขและนโยบาย",
+  "login": "เข้าสู่ระบบ",
+  "file": "ความรู้",
+  "forgotPassword": "ลืมรหัสผ่าน",
+  "signup": "สมัครสมาชิก",
+  "help": "ช่วยเหลือ",
+  "manual": "คู่มือ",
+  "inviteLong": "เชิญเพื่อน",
+  "inviteShort": "เชิญ",
+  "tools": {
+    "title": "เครื่องมือ"
+  },
+  "sidenav": {
+    "pin": "ปักหมุดแถบด้านข้าง",
+    "unpin": "ลบปักหมุดแถบด้านข้าง",
+    "sessions": {
+      "sort": {
+        "label": "เรียงตาม",
+        "tags": "ตามแท็ก",
+        "date": "ตามวันที่"
+      },
+      "new": "แชทใหม่",
+      "item": {
+        "genTags": "สร้างรายการแท็กสมุดบันทึก"
+      }
+    }
+  },
+  "referral": {
+    "title": "แนะนำเพื่อนมาที่",
+    "email_title_default": "ยินดีต้อนรับสู่ GrokTool!",
+    "email_body_default": "คุณได้รับการเชิญจาก USER_NAME ไปยัง GrokTool! ลิงก์การลงทะเบียน: ใช้รหัสเชิญต่อไปนี้เพื่อลงทะเบียน: INVITE_CODE",
+    "friend_email": "อีเมลของเพื่อน",
+    "num_referrals_available": "การอ้างอิงที่มีอยู่:",
+    "no_valid_emails_error": "โปรดป้อนที่อยู่อีเมลที่ถูกต้อง",
+    "send_referral": "ส่งการอ้างอิง",
+    "send_referral_success": "ส่งการอ้างอิงสำเร็จ!",
+    "send_referral_skipped": "ข้ามคำเชิญ {{count}} รายการ — ที่อยู่อีเมลเหล่านั้นมีบัญชีแล้ว",
+    "send_referral_failed": "ไม่สามารถส่งคำเชิญ {{count}} รายการได้ กรุณาลองอีกครั้ง",
+    "send_referral_error": "เกิดข้อผิดพลาดในการส่งการอ้างอิง โปรดลองอีกครั้ง",
+    "slack_notification_default": "การอ้างอิงถูกส่งโดยผู้ใช้ USER_NAME:USER_ID ไปยัง FRIEND_EMAIL"
+  },
+  "activateVoice": "เปิดใช้งานเสียงนี้",
+  "liveVoice": "เสียงสด",
+  "whatsNew": "มีอะไรใหม่",
+  "welcome": "ยินดีต้อนรับสู่ {{ name }}",
+  "network": {
+    "statuses": {
+      "0": "กำลังเชื่อมต่อ",
+      "1": "เชื่อมต่อแล้ว",
+      "2": "กำลังตัดการเชื่อมต่อ",
+      "3": "ตัดการเชื่อมต่อแล้ว",
+      "-1": "รอดำเนินการ"
+    },
+    "networkStatus": "เครือข่าย: {{ status }}"
+  },
+  "deleteVoice": "ลบเสียงนี้",
+  "deleteVoiceConfirm": "คุณแน่ใจหรือไม่ว่าต้องการลบเสียงนี้?",
+  "organization": {
+    "organizations": "ทีม",
+    "defaultName": "องค์กรของฉัน",
+    "shared": "แบ่งปันกับฉัน",
+    "create": "สร้างทีม",
+    "search": "ค้นหาทีม...",
+    "no_organizations": "ไม่พบทีม",
+    "view_details": "ดูรายละเอียด",
+    "x_seats": "{{count}} ที่นั่ง",
+    "active_subscription": "การสมัครสมาชิกที่ใช้งานอยู่",
+    "no_subscription": "ไม่มีการสมัครสมาชิก",
+    "x_members": "{{count}} สมาชิก",
+    "x_credits": "{{count}} เครดิต",
+    "owner": "เจ้าของ"
+  },
+  "session": {
+    "typeYourMessage": "พิมพ์ข้อความของคุณที่นี่",
+    "switchedSession": "เปลี่ยนไปยัง: {{ sessionName }}",
+    "send": "ส่ง",
+    "sendMessage": "ส่งข้อความ",
+    "preparingQuest": "กำลังเตรียมภารกิจ...",
+    "rephrasePrompt": "ปรับปรุงข้อความของคุณ",
+    "promptRephrased": "ปรับปรุงข้อความสำเร็จ",
+    "rephraseFailed": "ไม่สามารถปรับปรุงข้อความได้",
+    "errors": {
+      "notebookDeleted": "สมุดบันทึกนี้ถูกลบแล้ว กรุณาสร้างใหม่",
+      "noPermission": "คุณไม่มีสิทธิ์เข้าถึงสมุดบันทึกนี้",
+      "invalidRequest": "คำขอไม่ถูกต้อง กรุณาลองอีกครั้ง",
+      "tooManyRequests": "คำขอมากเกินไป กรุณารอสักครู่แล้วลองใหม่",
+      "serverError": "เกิดข้อผิดพลาดของเซิร์ฟเวอร์ กรุณาลองใหม่ภายหลัง",
+      "networkError": "ไม่สามารถส่งข้อความได้ กรุณาตรวจสอบการเชื่อมต่อของคุณ",
+      "sendFailed": "ไม่สามารถส่งข้อความได้ กรุณาลองอีกครั้ง"
+    }
+  },
+  "projects": {
+    "title": "โครงการ",
+    "projects": "โครงการ",
+    "joined_projects": "โครงการที่เข้าร่วม",
+    "no_joined_projects": "ยังไม่มีโปรเจกต์ที่เข้าร่วม",
+    "add_to_project": "เพิ่มไปยังโครงการ",
+    "modals": {
+      "files": {
+        "title": "เพิ่มไฟล์ลงในโครงการ",
+        "subtitle": "เลือกไฟล์เพื่อนำเข้าในโครงการของคุณ",
+        "button_label": "เพิ่มไฟล์",
+        "search_placeholder": "ค้นหาไฟล์",
+        "no_files": "ไม่พบไฟล์."
+      },
+      "members": {
+        "title": "เพิ่มสมาชิกลงในโครงการ",
+        "subtitle": "ค้นหาและเลือกผู้ใช้เพื่อนำเข้าในโครงการของคุณ",
+        "button_label": "เพิ่มสมาชิก",
+        "search_placeholder": "ค้นหาผู้ใช้",
+        "no_members": "ลองค้นหาผู้ใช้."
+      },
+      "sessions": {
+        "title": "เพิ่มสมุดบันทึกลงในโครงการ",
+        "subtitle": "เลือกสมุดบันทึกเพื่อนำเข้าในโครงการของคุณหรือลงทะเบียนใหม่",
+        "button_label": "เพิ่มสมุดบันทึก",
+        "search_placeholder": "ค้นหา",
+        "create_button": "สร้าง",
+        "no_notebooks": "ไม่พบสมุดบันทึก ลองสร้างใหม่."
+      },
+      "generic": {
+        "select_all": "เลือกทั้งหมด",
+        "unselect_all": "ยกเลิกการเลือกทั้งหมด",
+        "add_items_one": "เพิ่ม {{count}} รายการ",
+        "add_items_other": "เพิ่ม {{count}} รายการ",
+        "delete_items": "ลบ {{count}} รายการ"
+      }
+    }
+  },
+  "logout": "ออกจากระบบ",
+  "inbox": {
+    "title": "กล่องข้อความ",
+    "messages": "ข้อความ",
+    "invites": "คำเชิญ",
+    "sendMessage": "ส่งข้อความ",
+    "noMessages": "ไม่มีข้อความ"
+  },
+  "addSomething": "เพิ่ม {{ name }}",
+  "deleteAllSomething": "ลบทั้งหมด {{ name }}",
+  "exportAllSomething": "ส่งออกทั้งหมด {{ name }}",
+  "importLLMHistory": "นำเข้าประวัติ LLM",
+  "downloadAllSomething": "ดาวน์โหลดทั้งหมด {{ name }}",
+  "language": {
+    "language_settings": "การตั้งค่าภาษา",
+    "change-language": "เปลี่ยนภาษา"
+  },
+  "theme": {
+    "turn-dark": "เปิดโหมดมืด",
+    "turn-light": "เปิดโหมดสว่าง"
+  },
+  "auth": {
+    "usernameOrEmail": "ชื่อผู้ใช้หรืออีเมล",
+    "username": "ชื่อผู้ใช้",
+    "password": "รหัสผ่าน",
+    "confirmPassword": "ยืนยันรหัสผ่าน",
+    "fullName": "ชื่อเต็ม",
+    "inviteCode": "รหัสเชิญ",
+    "needCode": "ต้องการรหัส?",
+    "noAccount": "ไม่มีบัญชี?",
+    "haveAccount": "มีบัญชีอยู่แล้ว?",
+    "loginWithProvider": "เข้าสู่ระบบด้วย {{ provider }}",
+    "checking": "กำลังตรวจสอบ...",
+    "continue": "ดำเนินการต่อ",
+    "troubleSigningIn": "มีปัญหาในการเข้าสู่ระบบ?",
+    "signingInAs": "กำลังเข้าสู่ระบบเป็น",
+    "signingIn": "กำลังเข้าสู่ระบบ...",
+    "backToEmail": "กลับไปที่อีเมล",
+    "redirectingToProvider": "กำลังเปลี่ยนเส้นทางไปยังการเข้าสู่ระบบองค์กรของคุณ...",
+    "resetInstructions": "กรุณาใส่ที่อยู่อีเมลของคุณ เราจะส่งอีเมลเพื่อรีเซ็ตรหัสผ่านของคุณ",
+    "sendResetEmail": "ส่งอีเมลรีเซ็ตรหัสผ่าน",
+    "email": "อีเมล",
+    "resetEmailSentMessage": "อีเมลได้ถูกส่งแล้ว! กรุณาตรวจสอบอีเมลของคุณสำหรับคำแนะนำเพิ่มเติม",
+    "createAccountDesc": "สร้างบัญชี",
+    "createBtn": "สร้างบัญชี",
+    "loginBtn": "เข้าสู่ระบบ",
+    "passwordStrength": {
+      "label": "ความแข็งแรงของรหัสผ่าน",
+      "weak": "อ่อน",
+      "fair": "พอใช้",
+      "strong": "แข็งแรง"
+    },
+    "passwordRequirements": {
+      "title": "ข้อกำหนดรหัสผ่าน",
+      "minLength": "อย่างน้อย {{count}} ตัวอักษร",
+      "uppercase": "ตัวอักษรตัวใหญ่หนึ่งตัว",
+      "lowercase": "ตัวอักษรตัวเล็กหนึ่งตัว",
+      "number": "ตัวเลขหนึ่งตัว",
+      "specialChar": "อักขระพิเศษหนึ่งตัว",
+      "met": "ตรงตามเงื่อนไข",
+      "notMet": "ยังไม่ตรงตามเงื่อนไข"
+    },
+    "errors": {
+      "usernameExists": "ชื่อผู้ใช้ '{{username}}' ถูกใช้ไปแล้ว กรุณาเลือกชื่อผู้ใช้ที่แตกต่างออกไป",
+      "emailExists": "บัญชีที่มีอีเมล '{{email}}' มีอยู่แล้ว กรุณาใช้อีเมลที่แตกต่างหรือลงชื่อเข้าใช้บัญชีที่มีอยู่",
+      "accountExists": "บัญชีที่มีข้อมูลนี้มีอยู่แล้ว กรุณาลองเข้าสู่ระบบหรือใช้ข้อมูลที่แตกต่าง",
+      "invalidInviteCode": "รหัสเชิญที่คุณป้อนไม่ถูกต้องหรือหมดอายุ กรุณาตรวจสอบและลองใหม่อีกครั้ง",
+      "registrationFailed": "การลงทะเบียนล้มเหลว กรุณาลองใหม่ในภายหลัง",
+      "validation": {
+        "generic": "ข้อมูลไม่ถูกต้อง",
+        "invalidUsername": "ชื่อผู้ใช้ต้องมีแต่ตัวอักษร ตัวเลข ตำแหน่งว่าง จุด และขีด",
+        "passwordMismatch": "รหัสผ่านไม่ตรงกัน",
+        "passwordRequirements": "รหัสผ่านต้องมีอย่างน้อย 8 ตัวอักษร โดยมีตัวพิมพ์ใหญ่และพิมพ์เล็ก ตัวเลข และอักขระพิเศษ"
+      }
+    }
+  },
+  "search": "ค้นหา",
+  "share": "แบ่งปัน",
+  "rename": "เปลี่ยนชื่อ",
+  "favorite": "รายการโปรด",
+  "unfavorite": "ไม่ใช่รายการโปรด",
+  "delete": "ลบ",
+  "files": {
+    "showAttachedFiles": "แสดงไฟล์ที่แนบ",
+    "hideAttachedFiles": "ซ่อนไฟล์ที่แนบ",
+    "title": "ไฟล์",
+    "upload": "อัปโหลดไฟล์",
+    "long_title": "เว็บเบราว์เซอร์ไฟล์"
+  },
+  "view": "ดู",
+  "info": "ข้อมูล",
+  "clone": "โคลน",
+  "download": "ดาวน์โหลด",
+  "summarize": "สรุป",
+  "profile": {
+    "title": "โปรไฟล์",
+    "tooltip": "โปรไฟล์",
+    "collection": "คอลเลกชัน",
+    "collections": {
+      "all_types": "ประเภททั้งหมด"
+    },
+    "users_profile": "โปรไฟล์ของ {{ name }}",
+    "storage_used": "การใช้พื้นที่จัดเก็บ",
+    "credits": "เครดิต",
+    "subscription": "การสมัครสมาชิก",
+    "edit": "แก้ไขโปรไฟล์",
+    "manage_subscription": "จัดการการสมัครสมาชิก",
+    "upgrade": "อัปเกรด",
+    "credit_analytics": "การวิเคราะห์เครดิต",
+    "pricing": "ราคาของเครดิต",
+    "show_purchases": "แสดงการซื้อ",
+    "show_usage": "แสดงการใช้งาน",
+    "show_combined": "แสดงรวมกัน",
+    "buy_credits": "ซื้อเครดิต"
+  },
+  "community": {
+    "title": "ชุมชน",
+    "tooltip": "ชุมชน",
+    "feed": "ฟีดชุมชน"
+  },
+  "subscriptions": {
+    "title": "การสมัครสมาชิก",
+    "expires_on": "หมดอายุในวันที่ {{ date }}",
+    "renews_on": "ต่ออายุในวันที่ {{ date }}"
+  },
+  "billing": {
+    "title": "การเรียกเก็บเงิน"
+  },
+  "credits": {
+    "title": "เครดิต",
+    "usage": "การใช้เครดิต",
+    "analytics": "การวิเคราะห์เครดิต",
+    "analytics_tooltip": "ดูการใช้เครดิตของคุณตามเวลา",
+    "current_balance": "ยอดเครดิตปัจจุบัน",
+    "credits": "เครดิต",
+    "usage_by_model": "การใช้งานตามโมเดล",
+    "no_transactions": "ไม่พบธุรกรรมเครดิตในช่วงเวลานี้",
+    "model_pricing": "ราคาของโมเดล",
+    "text_models": "โมเดลข้อความ",
+    "image_models": "โมเดลภาพ",
+    "pricing_per_1k_tokens": "ราคาแสดงเป็นเครดิตต่อ 1,000 โทเค็น",
+    "pricing_per_generation": "ราคาแสดงเป็นเครดิตต่อการสร้างภาพ",
+    "model_name": "ชื่อโมเดล",
+    "price_tier": "ระดับราคา",
+    "input_cost": "ต้นทุนการป้อนข้อมูล",
+    "output_cost": "ต้นทุนการส่งออก",
+    "generation_cost": "ต้นทุนการสร้าง",
+    "no_models_available": "ไม่มีโมเดลที่ให้บริการ",
+    "pricing_note": "หมายเหตุ: ราคาประมาณการและอาจแตกต่างกันตามพารามิเตอร์ของโมเดล. ระดับราคา: $ (ต่ำสุด), $$ (กลาง), $$$ (พรีเมียม).",
+    "burn_rate": "การใช้ต่อวัน (อัตราการเผา)",
+    "days_remaining": "จำนวนวันที่เหลือประมาณ",
+    "usage_pattern": "ตามรูปแบบการใช้งานของคุณใน {{days}} วันที่ผ่านมา",
+    "credits_used": "เครดิตที่ใช้",
+    "credits_purchased": "เครดิตที่ซื้อ",
+    "net_credits": "เครดิตสุทธิ"
+  },
+  "time": {
+    "last_7_days": "7 วันที่ผ่านมา",
+    "last_30_days": "30 วันที่ผ่านมา",
+    "last_90_days": "90 วันที่ผ่านมา",
+    "last_180_days": "180 วันที่ผ่านมา",
+    "last_365_days": "365 วันที่ผ่านมา"
+  },
+  "common": {
+    "date": "วันที่",
+    "refresh": "รีเฟรช",
+    "days": "วัน",
+    "cancel": "ยกเลิก",
+    "save": "บันทึก",
+    "delete": "ลบ",
+    "edit": "แก้ไข",
+    "close": "ปิด",
+    "submit": "ส่ง",
+    "loading": "กำลังโหลด...",
+    "error": "เกิดข้อผิดพลาด",
+    "success": "สำเร็จ"
+  },
+  "errors": {
+    "failed_to_load_data": "ไม่สามารถโหลดข้อมูลได้ กรุณาลองอีกครั้งภายหลัง."
+  },
+  "integrations": {
+    "atlassian": {
+      "reconnect_required": "การเชื่อมต่อ Atlassian ของคุณหมดอายุ กรุณาเชื่อมต่อบัญชีอีกครั้ง"
+    }
+  },
+  "credits_modal": {
+    "title": "เครดิตเพิ่มเติม",
+    "description": "ซื้อเครดิตเพิ่มเติมเพื่อใช้บริการโมเดล AI ขั้นสูงและฟีเจอร์ต่างๆ เครดิตจะถูกใช้สำหรับการอนุมานโมเดลและฟีเจอร์พิเศษ โดยโมเดลที่แตกต่างกันจะใช้เครดิตในปริมาณที่แตกต่างกันตามความซับซ้อน",
+    "current_credits": "จำนวนเครดิตปัจจุบัน",
+    "best_value": "ค่าที่ดีที่สุด",
+    "purchase_success": "ซื้อเครดิต {{credits}} เครดิต",
+    "history_title": "ประวัติการซื้อเครดิต",
+    "purchase": "ซื้อ",
+    "no_transactions": "ยังไม่มีการทำธุรกรรม",
+    "low_credits": "เครดิตของคุณต่ำ",
+    "low_credits_sub": "ซื้อเครดิตเพิ่มเติมเพื่อดำเนินการต่อ.",
+    "no_credits": "ไม่มีเครดิต",
+    "no_credits_sub": "ซื้อเครดิตเพื่อดำเนินการต่อ.",
+    "status": {
+      "completed": "เสร็จสมบูรณ์",
+      "pending": "รอดำเนินการ",
+      "failed": "ล éch à"
+    }
+  },
+  "settings": {
+    "title": "การตั้งค่า",
+    "tooltip": "การตั้งค่า",
+    "main": "การตั้งค่าหลัก",
+    "account": "บัญชี",
+    "ai_features": "คุณสมบัติ AI",
+    "connected_apps": {
+      "title": "แอพที่เชื่อมต่อ",
+      "link": "ลิงก์",
+      "unlink": "ยกเลิกการเชื่อมต่อ"
+    },
+    "developer_tools": "เครื่องมือพัฒนา",
+    "experimental_features": {
+      "title": "คุณสมบัติทดลอง",
+      "tooltip": "ฟีเจอร์ทดลอง",
+      "header": "ฟีเจอร์ทดลอง",
+      "beta_features": {
+        "title": "ฟีเจอร์เบต้า",
+        "subtitle": "ฟีเจอร์เหล่านี้ยังอยู่ระหว่างการพัฒนาและอาจทำให้เกิดผลลัพธ์ที่ไม่คาดคิด การเลือกเปิดใช้งานหมายความว่าคุณยอมรับที่จะใช้ในสถานะปัจจุบัน."
+      }
+    },
+    "ui_preferences": "การตั้งค่าภาษา UI"
+  },
+  "mementos": {
+    "title": "ของที่ระลึก",
+    "tooltip": "ของที่ระลึก"
+  },
+  "admin": {
+    "title": "ผู้ดูแลระบบ",
+    "tooltip": "การตั้งค่าผู้ดูแลระบบ"
+  },
+  "speech": {
+    "title": "การพูด",
+    "tooltip": "พูดเป็นข้อความ & ข้อความเป็นพูด"
+  },
+  "instructions": {
+    "title": "คำแนะนำ",
+    "tooltip": "คำแนะนำ"
+  },
+  "friends": {
+    "add_friend": "เพิ่มเป็นเพื่อน",
+    "unfriend": "ลบออกจากเพื่อน",
+    "pending_request": "คำขอเพื่อนที่รอดำเนินการ",
+    "all": "เพื่อนทั้งหมด",
+    "pending": "รอดำเนินการ"
+  },
+  "notebooks": {
+    "view_info": "ดูข้อมูลสมุดบันทึก",
+    "clone": "ทำสำเนาสมุดบันทึก",
+    "download": "ดาวน์โหลดสมุดบันทึก",
+    "summarize": "สรุปสมุดบันทึก",
+    "delete": "ลบสมุดบันทึก",
+    "delete_confirm": "คุณแน่ใจหรือว่าต้องการลบ \"{{ name }}\" อย่างถาวร? การกระทำนี้ไม่สามารถย้อนกลับได้.",
+    "auto_rename": "ตั้งชื่อใหม่ด้วย AI"
+  },
+  "add_friend": {
+    "title": "เพิ่มเพื่อน",
+    "friend_email": "อีเมลเพื่อน",
+    "message": "ข้อความ",
+    "cancel": "ยกเลิก",
+    "send": "ส่ง",
+    "email_placeholder": "กรอกอีเมลเพื่อนของคุณ",
+    "message_placeholder": "กรอกข้อความของคุณ"
+  },
+  "file_browser": {
+    "my_files": "ไฟล์ของฉัน",
+    "shared_with_me": "แชร์กับฉัน",
+    "total_files": "จำนวนรายการความรู้ทั้งหมด",
+    "search_placeholder": "ค้นหาตามชื่อหรือแท็ก...",
+    "file_type": "ประเภทไฟล์",
+    "all_files": "ไฟล์ทั้งหมด",
+    "text": "ข้อความ",
+    "pdf": "PDF",
+    "url": "URL",
+    "image": "ภาพ",
+    "excel": "Excel",
+    "word": "คำ",
+    "json": "JSON",
+    "csv": "CSV",
+    "markdown": "มาร์กดาวน์",
+    "code": "รหัส",
+    "date_created": "วันที่สร้าง",
+    "size": "ขนาด",
+    "name": "ชื่อ",
+    "sort_z_to_a": "จัดเรียงจาก Z ถึง A",
+    "sort_a_to_z": "จัดเรียงจาก A ถึง Z",
+    "grid_view": "มุมมองตาราง",
+    "list_view": "มุมมองรายการ",
+    "select_file_hint": "แตะเพื่อเลือกไฟล์หรือหลายไฟล์และเพิ่มไปยังเซสชันสมุดบันทึกของคุณ!",
+    "session_one": "สมุดบันทึก",
+    "session_other": "สมุดบันทึกหลายเล่ม",
+    "no_files_available": "ไม่มีไฟล์ให้บริการ",
+    "count_file_selected_one": "{{count}} ไฟล์ที่เลือก",
+    "count_file_selected_other": "{{count}} ไฟล์ที่เลือก",
+    "add_count_file_one": "เพิ่ม {{count}} ไฟล์",
+    "add_count_file_other": "เพิ่ม {{count}} ไฟล์",
+    "delete_count_file_one": "ลบ {{count}} ไฟล์",
+    "delete_count_file_other": "ลบ {{count}} ไฟล์",
+    "share_count_file_one": "แชร์ไฟล์ {{count}} รายการ",
+    "share_count_file_other": "แชร์ไฟล์ {{count}} รายการ",
+    "count_file_one": "{{count}} ไฟล์",
+    "count_file_other": "{{count}} ไฟล์",
+    "add_to_session_success": "กำลังเพิ่มไฟล์: {{fileNames}} ไปยัง {{sessionName}}",
+    "add_file_success": "กำลังเพิ่มไฟล์: {{fileNames}}",
+    "browse_files": "เรียกดูไฟล์",
+    "create_new_knowledge": "สร้าง",
+    "create_new_knowledge_from_url": "ดึงข้อมูลจาก URL",
+    "enter_url": "กรอก URL",
+    "create_file": "สร้างไฟล์",
+    "create_file_from_url": "สร้างไฟล์",
+    "create_from_url": "ดึงข้อมูลอย่างรวดเร็ว",
+    "research": "วิจัย",
+    "open_research": "เปิดการวิจัย",
+    "url_success": "สร้างความรู้จาก URL สำเร็จ: {{url}}",
+    "url_error": "ไม่สามารถสร้างความรู้จาก URL: {{url}}",
+    "url_required": "กรุณากรอก URL",
+    "previous": "ก่อนหน้า",
+    "next": "ถัดไป",
+    "page_of": "หน้า {{current}} จาก {{total}}",
+    "drop_files_here": "วางไฟล์ที่นี่",
+    "tagging": "กำลังติดแท็ก...",
+    "tag_files": "ติดแท็กไฟล์",
+    "select_all": "เลือกทั้งหมด",
+    "unselect_all": "ยกเลิกเลือกทั้งหมด",
+    "add_files": "เพิ่มไฟล์",
+    "add_files_to_notebook_one": "เพิ่มไฟล์ {{count}} รายการลงในสมุดบันทึก",
+    "add_files_to_notebook_other": "เพิ่มไฟล์ {{count}} รายการลงในสมุดบันทึก",
+    "in_project": "ในโครงการ"
+  },
+  "file_properties": {
+    "title": "คุณสมบัติไฟล์",
+    "make_instructions": "ทำเป็นคำแนะนำหรือไม่?",
+    "instruction_priority": "ลำดับความสำคัญของคำแนะนำ (0–999)",
+    "priority_levels": {
+      "global": "0-100: คำแนะนำทั่วโลก",
+      "group": "101-300: คำแนะนำกลุ่ม/บริษัท",
+      "project": "301-500: คำแนะนำโครงการ",
+      "user": "501-999: คำแนะนำผู้ใช้"
+    },
+    "save": "บันทึก",
+    "update_success": "อัปเดตลำดับความสำคัญของระบบสำหรับ \"{{fileName}}\".",
+    "update_error": "ไม่สามารถอัปเดตลำดับความสำคัญของระบบ."
+  },
+  "file_actions": {
+    "notes": "หมายเหตุ",
+    "notes_placeholder": "เพิ่มหมายเหตุเกี่ยวกับไฟล์นี้...",
+    "add_notes": "เพิ่มหมายเหตุ",
+    "add_note": "เพิ่มหมายเหตุ",
+    "edit_notes": "แก้ไขหมายเหตุ",
+    "notes_save_error": "ไม่สามารถบันทึกหมายเหตุได้",
+    "manage_tags": "จัดการแท็ก",
+    "tags": "จัดการแท็ก",
+    "tags_placeholder": "กรอกชื่อแท็กโดยแยกด้วยคอมม่า...",
+    "add_tag_one": "อัปเดตแท็กสำหรับ {{count}} ไฟล์",
+    "add_tag_other": "อัปเดตแท็กสำหรับ {{count}} ไฟล์",
+    "failed_to_add_tag_one": "ไม่สามารถอัปเดตแท็กให้กับไฟล์",
+    "failed_to_add_tag_other": "ไม่สามารถอัปเดตแท็กให้กับไฟล์",
+    "cancel": "ยกเลิก",
+    "save": "บันทึก",
+    "download": "ดาวน์โหลด",
+    "vectorize": "เวกตอไรซ์",
+    "instruction": "คำแนะนำ {{priority}}",
+    "chunked": "ถูกแบ่งเป็นชิ้น",
+    "not_chunked": "ไม่ถูกแบ่งเป็นชิ้น"
+  },
+  "subscription_modal": {
+    "title": "การสมัครสมาชิก",
+    "description": "เข้าถึงโมเดล AI สำคัญทุกโมเดลได้ผ่านอินเทอร์เฟซที่รวมเป็นหนึ่งเดียว รันโมเดลขั้นสูง เช่น Deepseek R1 อย่างเป็นส่วนตัว",
+    "no_free_tier": "ไม่มีระดับฟรี - มุ่งเน้นที่มืออาชีพ",
+    "credits_rollover": "เครดิตที่ไม่ได้ใช้จะถูกโอนไปยังเดือนถัดไปเป็นเวลา 3 เดือน",
+    "monthly_billing": "การเรียกเก็บเงินรายเดือน",
+    "annual_billing": "การเรียกเก็บเงินรายปี",
+    "most_popular": "ที่นิยมมากที่สุด",
+    "current": "ปัจจุบัน",
+    "credits_per_month": "{{credits}} เครดิตต่อเดือน",
+    "subscription_renewal": "การสมัครสมาชิกของคุณจะต่ออายุใน {{date}}",
+    "personal": "ส่วนบุคคล",
+    "business": "ธุรกิจ",
+    "team": "ทีม",
+    "enterprise": "องค์กร"
+  },
+  "agents": {
+    "title": "เอเจนต์",
+    "new_agent": "เอเจนต์ใหม่",
+    "manage_agents": "จัดการเอเจนต์",
+    "search_placeholder": "ค้นหาเอเจนต์...",
+    "your_agents": "เอเจนต์ของคุณ",
+    "loading": "กำลังโหลดเอเจนต์...",
+    "no_agents": "ไม่พบเอเจนต์",
+    "create_first": "สร้างเอเจนต์แรกของคุณเพื่อเริ่มต้น",
+    "agents_found": "{{count}} เอเจนต์ที่พบ",
+    "agents_found_plural": "{{count}} เอเจนต์ที่พบ",
+    "attached_agents": "เอเจนต์ที่แนบ",
+    "listening_description": "เอเจนต์เหล่านี้กำลังฟังข้อความทั้งหมดในการสนทนานี้",
+    "no_search_results": "ไม่พบเอเจนต์ที่ตรงกับ \"{{search}}\"",
+    "search_help": "ลองค้นหาด้วยคำค้นหาที่แตกต่างกัน",
+    "no_agents_description": "สร้างเอเจนต์แรกของคุณเพื่อเริ่มต้น",
+    "create_agent": "สร้างเอเจนต์",
+    "click_to_attach": "คลิกเพื่อต่อเชื่อมกับเซสชันปัจจุบัน",
+    "click_to_detach": "คลิกเพื่อตัดการเชื่อมต่อจากเซสชันปัจจุบัน",
+    "show_attached_agents": "แสดงเอเจนต์ที่แนบ",
+    "hide_attached_agents": "ซ่อนเอเจนต์ที่แนบ",
+    "toggle_attached_agents": "สลับเอเจนต์ที่แนบ",
+    "agent_listening_tooltip": "{{name}} กำลังฟังและพร้อมที่จะช่วยเหลือ"
+  },
+  "skills": {
+    "title": "ทักษะ",
+    "command_palette_description": "จัดการแม่แบบคำสั่งที่นำมาใช้ซ้ำได้"
+  }
+}

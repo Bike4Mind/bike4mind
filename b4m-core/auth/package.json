@@ -1,0 +1,99 @@
+{
+  "name": "@bike4mind/auth",
+  "version": "0.5.1",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MillionOnMars/lumina5.git",
+    "directory": "b4m-core/auth"
+  },
+  "type": "module",
+  "main": "dist/index.cjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./apiKeyService": {
+      "import": {
+        "types": "./dist/apiKeyService/index.d.mts",
+        "default": "./dist/apiKeyService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/apiKeyService/index.d.cts",
+        "default": "./dist/apiKeyService/index.cjs"
+      }
+    },
+    "./mfaService": {
+      "import": {
+        "types": "./dist/mfaService/index.d.mts",
+        "default": "./dist/mfaService/index.mjs"
+      },
+      "require": {
+        "types": "./dist/mfaService/index.d.cts",
+        "default": "./dist/mfaService/index.cjs"
+      }
+    },
+    "./mfaService/utils": {
+      "import": {
+        "types": "./dist/mfaService/utils.d.mts",
+        "default": "./dist/mfaService/utils.mjs"
+      },
+      "require": {
+        "types": "./dist/mfaService/utils.d.cts",
+        "default": "./dist/mfaService/utils.cjs"
+      }
+    },
+    "./crypto": {
+      "import": {
+        "types": "./dist/crypto.d.mts",
+        "default": "./dist/crypto.mjs"
+      },
+      "require": {
+        "types": "./dist/crypto.d.cts",
+        "default": "./dist/crypto.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "typecheck:native": "tsgo --noEmit --types node",
+    "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@bike4mind/common": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
+    "jsonwebtoken": "^9.0.3",
+    "qrcode": "^1.5.4",
+    "speakeasy": "^2.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@tsconfig/node24": "*",
+    "@types/jsonwebtoken": "^9.0.4",
+    "@types/qrcode": "^1.5.6",
+    "@types/speakeasy": "^2.0.10",
+    "tsdown": "^0.22.2",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.9"
+  }
+}
