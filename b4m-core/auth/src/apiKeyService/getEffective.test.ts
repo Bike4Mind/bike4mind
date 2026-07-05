@@ -255,5 +255,42 @@ describe('getEffectiveLLMApiKeys', () => {
         expect(result.anthropic).toBeNull();
       });
     });
+
+    it('enables ollama from OLLAMA_BASE_URL under self-host without the DB admin settings', async () => {
+      await withEnv({ B4M_SELF_HOST: 'true', OLLAMA_BASE_URL: 'http://ollama:11434' }, async () => {
+        const result = await getEffectiveLLMApiKeys(null, {
+          db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+          // EnableOllama / ollamaBackend intentionally unset (fresh install).
+          getSettingsByNames: makeGetSettingsByNames(),
+        });
+
+        expect(result.ollama).toBe('http://ollama:11434');
+      });
+    });
+
+    it('ignores OLLAMA_BASE_URL outside self-host', async () => {
+      await withEnv({ B4M_SELF_HOST: undefined, OLLAMA_BASE_URL: 'http://ollama:11434' }, async () => {
+        const result = await getEffectiveLLMApiKeys(null, {
+          db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+          getSettingsByNames: makeGetSettingsByNames(),
+        });
+
+        expect(result.ollama).toBeNull();
+      });
+    });
+
+    it('lets an explicit admin ollamaBackend take precedence over OLLAMA_BASE_URL', async () => {
+      await withEnv({ B4M_SELF_HOST: 'true', OLLAMA_BASE_URL: 'http://ollama:11434' }, async () => {
+        const result = await getEffectiveLLMApiKeys(null, {
+          db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+          getSettingsByNames: makeGetSettingsByNames({
+            EnableOllama: 'true',
+            ollamaBackend: 'http://admin-configured:11434',
+          }),
+        });
+
+        expect(result.ollama).toBe('http://admin-configured:11434');
+      });
+    });
   });
 });
