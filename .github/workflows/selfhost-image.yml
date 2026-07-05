@@ -5,10 +5,11 @@ name: Self-host image
 # locally. On PRs the image is built but NOT pushed: a build-only validation
 # gate that needs no secrets (public/fork-PR safe).
 #
-# Each architecture builds on a NATIVE runner (amd64 on ubuntu-latest, arm64
-# on ubuntu-24.04-arm) and pushes by digest; the merge job assembles the
-# digests into the multi-arch tags. This replaces the single-runner QEMU
-# build, whose emulated arm64 leg dominated wall-clock.
+# Each architecture builds on a NATIVE runner (amd64 on ubuntu-latest-m,
+# arm64 on ubuntu-latest-arm, both overridable via repo variables) and pushes
+# by digest; the merge job assembles the digests into the multi-arch tags.
+# This replaces the single-runner QEMU build, whose emulated arm64 leg
+# dominated wall-clock.
 
 on:
   push:
@@ -44,14 +45,17 @@ permissions:
 jobs:
   build:
     name: Build ${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
+    # Runner labels are variable-driven so runner policy changes (e.g. moving
+    # amd64 to a larger paid pool) need no workflow edit. arm64 must stay on a
+    # native arm runner or the build falls back to emulation speed.
+    runs-on: ${{ matrix.arch == 'arm64' && (vars.RUNNER_LABEL_ARM || 'ubuntu-latest-arm') || (vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m') }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
       # PR validation stays amd64-only (build-only, no secrets needed);
       # main/dispatch builds both architectures natively in parallel.
       matrix:
-        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64"},{"arch":"arm64","platform":"linux/arm64"}]') }}
     steps:
       - name: Derive lowercase image name
         env:
@@ -119,7 +123,7 @@ jobs:
     name: Merge multi-arch manifest
     if: github.event_name != 'pull_request'
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 10
     steps:
       - name: Derive lowercase image name

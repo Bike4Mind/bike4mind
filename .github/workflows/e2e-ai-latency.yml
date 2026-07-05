@@ -183,7 +183,7 @@ jobs:
     needs: [discover-models]
     # Run even when discover-models is skipped (single-cell / all-specs modes don't need it).
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       spec_files: ${{ steps.matrix.outputs.spec_files }}
       ai_models: ${{ steps.matrix.outputs.ai_models }}
@@ -424,7 +424,7 @@ jobs:
   notify:
     needs: [setup-matrix, e2e-ai-latency]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
 
     steps:
       - name: Resolve environment URL

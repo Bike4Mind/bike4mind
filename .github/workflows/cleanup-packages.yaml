@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   check-repository:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       should-run: ${{ steps.check.outputs.should-run }}
     steps:
@@ -60,7 +60,7 @@ jobs:
   cleanup-packages:
     needs: check-repository
     if: ${{ needs.check-repository.outputs.should-run == 'true' && !startsWith(github.head_ref, 'release') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       # Step 1: Get the source code to access package.json files
       - name: Checkout repository
