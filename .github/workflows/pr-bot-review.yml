@@ -47,7 +47,8 @@ jobs:
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.event.pull_request.draft == false &&
       github.event.pull_request.base.ref != 'prod' &&
-      github.event.pull_request.head.ref != 'prod' && (
+      github.event.pull_request.head.ref != 'prod' &&
+      !startsWith(github.event.pull_request.head.ref, 'changeset-release/') && (
         github.event.action != 'labeled' ||
         github.event.label.name == 'bot-review'
       )

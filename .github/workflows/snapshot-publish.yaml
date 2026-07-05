@@ -261,7 +261,7 @@ jobs:
     # explicit grant (PR comments ride the issues API).
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     steps:
       - name: Find associated PR
