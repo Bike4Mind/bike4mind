@@ -168,6 +168,13 @@ export interface ICompletionOptions {
      */
     accumInputTokens?: number;
     accumOutputTokens?: number;
+    /**
+     * Multi-turn tool-call accumulator threaded through recursive complete() calls
+     * (Ollama). Consumers assign rather than append functionCalls on each callback,
+     * so the terminal turn must emit the full accumulated list or earlier tool
+     * calls are lost. Internal - do not set manually.
+     */
+    accumToolsUsed?: Array<{ name: string; arguments?: string; id?: string }>;
   };
   /** Provider-agnostic caching strategy configuration */
   cacheStrategy?: ICacheStrategy;
