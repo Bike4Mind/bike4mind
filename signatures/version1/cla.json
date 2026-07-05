@@ -1,0 +1,20 @@
+{
+  "signedContributors": [
+    {
+      "name": "poysama",
+      "id": 596463,
+      "comment_id": 4883703912,
+      "created_at": "2026-07-04T20:24:19Z",
+      "repoId": 1287163475,
+      "pullRequestNo": 6
+    },
+    {
+      "name": "biletskiy6",
+      "id": 16320101,
+      "comment_id": 4885825649,
+      "created_at": "2026-07-05T11:21:07Z",
+      "repoId": 1287163475,
+      "pullRequestNo": 12
+    }
+  ]
+}
