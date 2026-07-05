@@ -179,7 +179,9 @@ export class OllamaBackend implements ICompletionBackend {
       // (no tools, or cap reached) stream live.
       const round = await this.runChatRound(baseRequest, options, callback, { buffer: offerTools });
 
-      const inputTokens = Math.max(priorInputTokens, round.completionInfo.inputTokens ?? 0);
+      // Each round is a separate provider call billed independently, so sum both
+      // (matches the OpenAI/Anthropic backends); prompt_eval_count is per-request.
+      const inputTokens = priorInputTokens + (round.completionInfo.inputTokens ?? 0);
       const outputTokens = priorOutputTokens + (round.completionInfo.outputTokens ?? 0);
 
       // Prefer native tool_calls; fall back to a tool call the model emitted as
@@ -211,10 +213,23 @@ export class OllamaBackend implements ICompletionBackend {
         return;
       }
 
-      // Resolve each call to its tool function and run them.
+      // Partition into calls we can run and calls naming a tool that isn't
+      // registered here (small models hallucinate tool names). For the unknown
+      // ones we still push a not-available result so the next round has changed
+      // history and the model can self-correct - otherwise a phantom native call
+      // would recurse on identical history and burn the whole round budget.
       const resolved = toolCalls
         .map(tc => ({ tc, toolFn: options.tools?.find(t => t.toolSchema.name === tc.name)?.toolFn }))
         .filter((r): r is { tc: NormalizedToolCall; toolFn: ICompletionOptionTools['toolFn'] } => !!r.toolFn);
+      const unknownCalls = toolCalls.filter(tc => !options.tools?.some(t => t.toolSchema.name === tc.name));
+
+      for (const tc of unknownCalls) {
+        this.pushToolMessages(
+          messages,
+          { id: tc.id, name: tc.name, parameters: tc.arguments || '{}' },
+          `Error: tool "${tc.name}" is not available. Do not call it again; answer directly or use a listed tool.`
+        );
+      }
 
       const outcomes = await executeToolsBatch<string>(
         resolved.map(({ tc, toolFn }) => async () => {
@@ -245,10 +260,17 @@ export class OllamaBackend implements ICompletionBackend {
         }
       });
 
+      // Only calls we actually ran count as used; hallucinated tool names must
+      // not inflate the reported tool list.
+      const executedToolsUsed = [
+        ...priorToolsUsed,
+        ...resolved.map(({ tc }) => ({ name: tc.name, arguments: tc.arguments, id: tc.id })),
+      ];
+
       // Stop before another round if the request was cancelled mid-flight, rather
       // than issuing up to maxToolCalls more model calls and tool executions.
       if (options.abortSignal?.aborted) {
-        await callback([''], { inputTokens, outputTokens, toolsUsed });
+        await callback([''], { inputTokens, outputTokens, toolsUsed: executedToolsUsed });
         return;
       }
 
@@ -262,7 +284,7 @@ export class OllamaBackend implements ICompletionBackend {
           _internal: {
             ...options._internal,
             toolCallCount: toolCallCount + 1,
-            accumToolsUsed: toolsUsed,
+            accumToolsUsed: executedToolsUsed,
             accumInputTokens: inputTokens,
             accumOutputTokens: outputTokens,
           },
@@ -348,14 +370,22 @@ export class OllamaBackend implements ICompletionBackend {
   /**
    * Some smaller models emit tool calls as plain message content instead of
    * using the native tool_calls field: a bare {"name":...,"arguments":{...}},
-   * the same wrapped in a ```json fence, several such objects run together
-   * ({...} {...}), or with a little surrounding prose. Recover every such object
-   * that names an available tool; if none match, the content is a normal answer.
+   * the same wrapped in a ```json fence, or several such objects run together
+   * ({...} {...}). Recover every such object that names an available tool; if
+   * none match, the content is a normal answer.
+   *
+   * Guards against false positives: reasoning traces (<think>...</think>) are
+   * stripped first, and we only treat content as a call when the model emits it
+   * as its response (starts with a JSON object or a code fence). JSON merely
+   * quoted inside prose ("the math_evaluate tool takes {...}") is left alone.
    */
   private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
+    const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    if (!withoutThink.startsWith('{') && !withoutThink.startsWith('```')) return [];
+
     const calls: NormalizedToolCall[] = [];
     const seen = new Set<string>();
-    for (const candidate of this.extractJsonObjects(content)) {
+    for (const candidate of this.extractJsonObjects(withoutThink)) {
       const call = this.tryParseToolCallJson(candidate, tools);
       if (!call) continue;
       const key = `${call.name}:${call.arguments}`;

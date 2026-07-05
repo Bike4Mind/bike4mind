@@ -199,4 +199,68 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
     expect(text).not.toContain('math_evaluate');
   });
+
+  it('does not loop on a native call to an unregistered tool; feeds back an error and answers', async () => {
+    const toolFn = vi.fn(async () => 'should-not-run');
+    const { backend, chat } = makeBackend([
+      {
+        // Model hallucinates a tool name that isn't registered.
+        message: { content: '', tool_calls: [{ function: { name: 'nonexistent_tool', arguments: {} } }] },
+        prompt_eval_count: 5,
+        eval_count: 2,
+      },
+      { message: { content: 'Sorry, I will just answer: 42.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 4 },
+    ]);
+
+    const { text, toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    // One recursion at most (error fed back, then answer) - not maxToolCalls rounds.
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(toolFn).not.toHaveBeenCalled();
+    expect(text).toContain('42');
+    // The phantom call must not be reported as used.
+    expect(toolsUsed.map(t => t.name)).not.toContain('nonexistent_tool');
+  });
+
+  it('ignores a tool-call-shaped object inside a <think> block (not a real call)', async () => {
+    const toolFn = vi.fn(async () => 'nope');
+    const { backend, chat } = makeBackend([
+      {
+        message: {
+          content: '<think>{"name":"math_evaluate","arguments":{"expression":"2+2"}}</think>The answer is 4.',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 6,
+      },
+    ]);
+
+    const { text } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    // The think-block JSON must not be executed as a tool call. (The <think> text
+    // itself is passed through for the consumer to render, as before.)
+    expect(toolFn).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(text).toContain('The answer is 4.');
+  });
+
+  it('ignores a tool call merely quoted inside prose (does not start the content)', async () => {
+    const toolFn = vi.fn(async () => 'nope');
+    const { backend, chat } = makeBackend([
+      {
+        message: {
+          content: 'The math_evaluate tool takes {"name":"math_evaluate","arguments":{"expression":"2+2"}} as input.',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 6,
+      },
+    ]);
+
+    const { text } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolFn).not.toHaveBeenCalled();
+    expect(chat).toHaveBeenCalledTimes(1);
+    expect(text).toContain('The math_evaluate tool takes');
+  });
 });

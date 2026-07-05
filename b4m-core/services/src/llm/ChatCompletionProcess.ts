@@ -325,6 +325,15 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+/**
+ * Tools this process auto-adds server-side regardless of user selection (see the
+ * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
+ * for admins, navigate_view, skill). Small local (Ollama) models get confused by
+ * tools they didn't ask for, so these are trimmed for that backend unless the user
+ * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ */
+export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
@@ -1499,11 +1508,10 @@ export class ChatCompletionProcess {
       // the user explicitly enabled, dropping the auto/admin-added extras
       // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
       if (modelInfo.backend === ModelBackend.Ollama && allTools) {
-        const AUTO_ADDED_TOOLS = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
         const userSelected = new Set<string>(parsedBody.tools ?? []);
         const before = allTools.length;
         allTools = allTools.filter(
-          t => !AUTO_ADDED_TOOLS.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
+          t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
         );
         if (allTools.length !== before) {
           logger.info(
