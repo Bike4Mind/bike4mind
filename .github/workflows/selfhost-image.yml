@@ -1,10 +1,14 @@
 name: Self-host image
 
-# Build the self-host Docker image on a CI runner (which has the memory a Next
-# monorepo build needs) and publish it to GHCR, so self-hosters `docker pull`
-# + `docker compose up` instead of building a ~12GB monorepo locally. On PRs
-# the image is built but NOT pushed: a build-only validation gate that needs
-# no secrets (public/fork-PR safe).
+# Build the self-host Docker image and publish it to GHCR, so self-hosters
+# `docker pull` + `docker compose up` instead of building a ~12GB monorepo
+# locally. On PRs the image is built but NOT pushed: a build-only validation
+# gate that needs no secrets (public/fork-PR safe).
+#
+# Each architecture builds on a NATIVE runner (amd64 on ubuntu-latest, arm64
+# on ubuntu-24.04-arm) and pushes by digest; the merge job assembles the
+# digests into the multi-arch tags. This replaces the single-runner QEMU
+# build, whose emulated arm64 leg dominated wall-clock.
 
 on:
   push:
@@ -34,26 +38,29 @@ permissions:
   contents: read
   packages: write
 
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/bike4mind-selfhost
+
 jobs:
   build:
-    name: Build (and publish on main)
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      # PR validation stays amd64-only (build-only, no secrets needed);
+      # main/dispatch builds both architectures natively in parallel.
+      matrix:
+        include: ${{ github.event_name == 'pull_request' && fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"}]') || fromJSON('[{"arch":"amd64","platform":"linux/amd64","runner":"ubuntu-latest"},{"arch":"arm64","platform":"linux/arm64","runner":"ubuntu-24.04-arm"}]') }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # QEMU enables the arm64 leg of the multi-arch publish (Apple Silicon
-      # self-hosters are a large fraction of the audience). Only the main/dispatch
-      # publish builds arm64 (under emulation); PR validation stays amd64-only so
-      # build-only PRs don't pay the slow emulated-arm64 cost.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Publish only on push/dispatch (same-repo). Fork PRs get a read-only token
-      # and never reach this — they run the build-only validation below.
+      # Publish only on push/dispatch (same-repo). Fork PRs get a read-only
+      # token and never reach the push path below.
       - name: Log in to GHCR
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3
@@ -62,25 +69,88 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build (PR validation, no push)
+        if: github.event_name == 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          push: false
+          cache-from: type=gha,scope=selfhost-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=selfhost-${{ matrix.arch }}
+
+      - name: Build and push by digest
+        if: github.event_name != 'pull_request'
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          platforms: ${{ matrix.platform }}
+          # Push the untagged per-arch image by digest; the merge job below
+          # stitches the digests into the tagged multi-arch manifest.
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=selfhost-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=selfhost-${{ matrix.arch }}
+
+      - name: Export digest
+        if: github.event_name != 'pull_request'
+        run: |
+          mkdir -p /tmp/digests
+          digest='${{ steps.build.outputs.digest }}'
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  merge:
+    name: Merge multi-arch manifest
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digests-*
+          merge-multiple: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          # Portable to the new org: resolves to ghcr.io/<owner>/bike4mind-selfhost
-          images: ghcr.io/${{ github.repository_owner }}/bike4mind-selfhost
+          images: ${{ env.IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,format=short
             type=ref,event=tag
 
-      - name: Build (push only on main / dispatch)
-        uses: docker/build-push-action@v6
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
         with:
-          context: .
-          file: Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          platforms: ${{ github.event_name != 'pull_request' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create multi-arch tags
+        working-directory: /tmp/digests
+        run: |
+          # shellcheck disable=SC2046 # word splitting is the point: many -t and digest args
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect published image
+        run: docker buildx imagetools inspect '${{ env.IMAGE }}:${{ steps.meta.outputs.version }}'
