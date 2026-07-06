@@ -43,7 +43,7 @@ export class NotebookExportService {
         exportVersion: CURRENT_EXPORT_VERSION,
         exportedAt: new Date().toISOString(),
         exportedBy: options.anonymize ? undefined : userId,
-        platform: 'lumina5',
+        platform: 'bike4mind',
         notebooks: [],
       };
 

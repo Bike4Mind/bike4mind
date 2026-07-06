@@ -54,7 +54,7 @@ The export creates a JSON file with this structure:
 {
   "exportVersion": "1.0.0",
   "exportedAt": "2024-01-15T10:30:00Z",
-  "platform": "lumina5",
+  "platform": "bike4mind",
   "notebooks": [
     {
       "id": "notebook-123",

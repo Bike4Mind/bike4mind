@@ -6,7 +6,7 @@ export interface NotebookExportFormat {
   exportVersion: string; // Format version for compatibility
   exportedAt: string; // ISO timestamp
   exportedBy?: string; // User ID (optional for privacy)
-  platform: string; // "lumina5" or source platform
+  platform: string; // "bike4mind" or source platform
 
   // Notebooks/Sessions
   notebooks: ExportedNotebook[];
