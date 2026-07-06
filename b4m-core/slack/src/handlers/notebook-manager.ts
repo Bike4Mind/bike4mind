@@ -23,7 +23,7 @@ function findMatchingKeywordRule(text: string, rules: IKeywordRoutingRule[]): st
   for (const rule of rules) {
     for (const keyword of rule.keywords) {
       // Word boundary matching to avoid partial matches
-      // "lumina5" matches "lumina5" or "MillionOnMars/lumina5" but not "luminacy"
+      // e.g. "acme" matches "acme" or "org/acme" but not "acmecorp"
       const pattern = new RegExp(`\\b${escapeRegExp(keyword.toLowerCase())}\\b`, 'i');
       if (pattern.test(lowerText)) {
         return rule.notebookId;

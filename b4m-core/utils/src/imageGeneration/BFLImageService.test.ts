@@ -63,7 +63,7 @@ describe('BFLImageService — does not leak the API key to logs (#9230)', () => 
   });
 });
 
-describe('BFLImageService — safety_tolerance hard cap (#9776)', () => {
+describe('BFLImageService — safety_tolerance hard cap', () => {
   let postSpy: ReturnType<typeof vi.spyOn>;
   let service: BFLImageService;
 

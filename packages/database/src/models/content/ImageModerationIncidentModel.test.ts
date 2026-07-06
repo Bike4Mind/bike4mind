@@ -16,7 +16,7 @@ afterAll(async () => {
   await mongoServer.stop();
 });
 
-describe('ImageModerationIncident model (#9776 Q2a)', () => {
+describe('ImageModerationIncident model', () => {
   it('records an incident with labels', async () => {
     const doc = await imageModerationIncidentRepository.record({
       userId: 'u1',
@@ -36,7 +36,7 @@ describe('ImageModerationIncident model (#9776 Q2a)', () => {
     expect(found?.model).toBe('flux-pro-1.1');
   });
 
-  it('records an upload incident with fabFileId (#9776 Q2b)', async () => {
+  it('records an upload incident with fabFileId', async () => {
     const doc = await imageModerationIncidentRepository.record({
       userId: 'u1',
       fabFileId: 'fab123',

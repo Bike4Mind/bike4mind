@@ -3,7 +3,7 @@ import { recordPolicyAcceptance } from './recordPolicyAcceptance';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
 
-describe('recordPolicyAcceptance — P0-B (GH #9775)', () => {
+describe('recordPolicyAcceptance — AUP/ToS consent gate', () => {
   let mockAdapters: any;
 
   beforeEach(() => {

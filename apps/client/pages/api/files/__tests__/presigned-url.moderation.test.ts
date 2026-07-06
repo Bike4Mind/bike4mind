@@ -21,7 +21,7 @@ vi.mock('@bike4mind/database', () => ({
 
 import { filterServeableFilePaths } from '../presigned-url';
 
-describe('filterServeableFilePaths (Q2b)', () => {
+describe('filterServeableFilePaths', () => {
   // isImageServeable gates on moderationStatus alone now (no mimeType special-case), so an
   // unscanned non-image ('doc.pdf' below) is held exactly like an unscanned image - the
   // declared mimeType is client-controlled and only corrected by the async S3-event scan.

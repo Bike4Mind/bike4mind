@@ -365,7 +365,7 @@ describe('findExistingResearchData utils', () => {
       expect(result).not.toBeNull();
     });
 
-    describe('#9776 Q2b — upload moderation gate on re-crawl', () => {
+    describe('upload moderation gate on re-crawl', () => {
       it('does not re-mint or persist a fileUrl for a blocked image on re-crawl', async () => {
         // Arrange
         const blockedImageFile = {
@@ -469,7 +469,7 @@ describe('findExistingResearchData utils', () => {
         expect(result!.file.fileUrl).toBe('https://s3.example.com/new-signed-url');
       });
 
-      it('does not re-mint a fileUrl for a non-clean non-image on re-crawl (P1-1 fail-closed on ALL mime types)', async () => {
+      it('does not re-mint a fileUrl for a non-clean non-image on re-crawl (fail-closed on ALL mime types)', async () => {
         // Arrange - the serve gate keys on moderationStatus alone, for every mime type. A
         // non-image that is not yet 'clean' (e.g. still pending its objectCreated pass, or a
         // legacy row before the backfill) must be withheld too, not just images.

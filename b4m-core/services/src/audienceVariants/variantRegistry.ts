@@ -1,7 +1,7 @@
 import { IVariantDescriptor } from '@bike4mind/common';
 
 /**
- * Exhaustive registry of all valid audience keys for lumina5 modals.
+ * Exhaustive registry of all valid audience keys for this product's modals.
  *
  * This is the single source of truth - the `ModalAudienceKey` union and Zod
  * enum are derived from it so they can never drift. Adding a new key here

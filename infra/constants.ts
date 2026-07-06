@@ -46,6 +46,5 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // Enable E2E test endpoints (/api/test/*) on preview and staging deployments
   E2E_ENDPOINTS_ENABLED: isPreviewStage || isStagingStage ? 'true' : '',
   // Suppress punycode deprecation warning (DEP0040) from SST's transitive aws-sdk v2 dependency
-  // See: https://github.com/MillionOnMars/lumina5/issues/5631
   NODE_OPTIONS: '--disable-warning=DEP0040',
 };

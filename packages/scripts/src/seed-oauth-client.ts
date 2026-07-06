@@ -4,7 +4,7 @@
  * Registers an OAuth client in B4M's MongoDB.
  * Run once per product to get a client_id + client_secret.
  *
- * Usage (from lumina5 root):
+ * Usage (from repo root):
  *   MONGODB_URI=<uri> CLIENT_NAME=VibesWire REDIRECT_URIS="https://..." \
  *     npx tsx packages/scripts/src/seed-oauth-client.ts
  */
