@@ -384,6 +384,104 @@ describe('ChatCompletionProcess', () => {
       // Provider counts recorded; with provider-basis settlement they ARE the billing basis.
       expect(tokenUsage.actualInputTokens).toBe(apiInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(apiOutputTokens);
+      expect(tokenUsage.settledBasis).toBe('provider');
+    });
+
+    // Adapters coerce missing usage to zero (e.g. DeepSeek and Llama-on-Bedrock
+    // streaming never populate usage), so {0,0} means "provider reported nothing",
+    // not "the call was free". Settlement must fall back to the local estimate.
+    it('falls back to the local estimate when the provider reports zero usage', async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+
+      // Local basis (80 in, 40 out at $10/$30 per 1M): $0.002 -> 10 credits, not free.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
+      expect(tokenUsage.creditsUsed).toBe(10);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    // Partial provider usage (cache read reported without input/output counts) also
+    // falls back to the local path, where the cache-read discount caps at the local
+    // input so a huge provider cache count can never produce a negative cost.
+    it('caps the fallback cache-read discount at the local input on partial provider usage', async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { cacheReadInputTokens: 3000 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+
+      // cache_read (3000) caps at local input (80); credited input = 80 - 80*0.9 = 8.
+      //   8 * 10/1M + 40 * 30/1M = $0.00128; ceil(*5000) = 7 credits. Never negative.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00128, 6);
+      expect(tokenUsage.creditsUsed).toBe(7);
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // When the provider omits usage entirely, settlement falls back to the local
@@ -432,6 +530,7 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.creditsUsed).toBe(10);
       expect(tokenUsage.actualInputTokens).toBeUndefined();
       expect(tokenUsage.actualOutputTokens).toBeUndefined();
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // With prompt caching the provider reports the cached part of the prompt as

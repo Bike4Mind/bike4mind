@@ -64,6 +64,15 @@ const THINKING_IDLE_TIMEOUT_MS = 180000; // 180s for thinking models (can pause 
 const REQUEST_TIMEOUT_MS = 60000; // 60s timeout for the initial API request before any streaming starts
 const SLOW_MODEL_REQUEST_TIMEOUT_MS = 120000; // 120s for slow/opus-class models that need longer to begin streaming
 
+/**
+ * Accumulated multi-turn cache token total. Undefined when zero so turns
+ * without cache activity keep the pre-cache callback shape.
+ */
+const totalCacheTokens = (accum: number, turn: number | undefined): number | undefined => {
+  const total = accum + (turn || 0);
+  return total > 0 ? total : undefined;
+};
+
 export class AnthropicBackend implements ICompletionBackend {
   private _api: Anthropic;
   private logger: Logger;
@@ -613,6 +622,8 @@ export class AnthropicBackend implements ICompletionBackend {
     // assign-not-add pattern in cliCompletions' wrappedOnChunk.
     const accumInputTokens = options._internal?.accumInputTokens ?? 0;
     const accumOutputTokens = options._internal?.accumOutputTokens ?? 0;
+    const accumCacheReadTokens = options._internal?.accumCacheReadTokens ?? 0;
+    const accumCacheWriteTokens = options._internal?.accumCacheWriteTokens ?? 0;
 
     // Check if we've exceeded the tool call limit (only when there are tools to execute).
     // Honor a per-request override (a surface-set, admin-tunable maxToolCalls); else the default.
@@ -927,7 +938,14 @@ export class AnthropicBackend implements ICompletionBackend {
       // Capture per-turn token usage so the post-stream tool-recursion site
       // can carry it forward as accumulated multi-turn billable usage.
       // Populated from the message_delta event inside the streaming Promise.
-      let streamingTurnUsage: { input_tokens?: number; output_tokens?: number } | undefined;
+      let streamingTurnUsage:
+        | {
+            input_tokens?: number;
+            output_tokens?: number;
+            cache_read_input_tokens?: number;
+            cache_creation_input_tokens?: number;
+          }
+        | undefined;
       if (options.stream) {
         // Promise wrapper around the stream API
         await new Promise<void>((resolve, reject) => {
@@ -1201,7 +1219,7 @@ export class AnthropicBackend implements ICompletionBackend {
                       // MessageDeltaUsage lacks an index signature, so it isn't directly
                       // assignable to the (pre-existing) Record<string, unknown> local.
                       usageInfo = event.usage as unknown as Record<string, unknown>;
-                      streamingTurnUsage = usageInfo as { input_tokens?: number; output_tokens?: number } | undefined;
+                      streamingTurnUsage = usageInfo as typeof streamingTurnUsage;
                     }
                     // The terminal message_delta carries delta.stop_reason. Keep the
                     // last non-null value so a truncated turn ('max_tokens') is reported.
@@ -1332,8 +1350,12 @@ export class AnthropicBackend implements ICompletionBackend {
                   cacheStats,
                   inputTokens: accumInputTokens + (usage?.input_tokens || 0),
                   outputTokens: accumOutputTokens + (usage?.output_tokens || 0),
-                  cacheReadInputTokens: usageWithCache?.cache_read_input_tokens,
-                  cacheCreationInputTokens: usageWithCache?.cache_creation_input_tokens,
+                  // Accumulated across tool turns: the provider bills cache per API call.
+                  cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCache?.cache_read_input_tokens),
+                  cacheCreationInputTokens: totalCacheTokens(
+                    accumCacheWriteTokens,
+                    usageWithCache?.cache_creation_input_tokens
+                  ),
                   ...(usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
                   ...(stopReason ? { stopReason } : {}),
                 });
@@ -1596,6 +1618,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+                  // Cache tokens are billed per API call - accumulate like input/output.
+                  accumCacheReadTokens: accumCacheReadTokens + (streamingTurnUsage?.cache_read_input_tokens || 0),
+                  accumCacheWriteTokens: accumCacheWriteTokens + (streamingTurnUsage?.cache_creation_input_tokens || 0),
                 },
               },
               cb,
@@ -1614,6 +1639,11 @@ export class AnthropicBackend implements ICompletionBackend {
               thinking: thinkingBlocks,
               inputTokens: accumInputTokens + (streamingTurnUsage?.input_tokens || 0),
               outputTokens: accumOutputTokens + (streamingTurnUsage?.output_tokens || 0),
+              cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, streamingTurnUsage?.cache_read_input_tokens),
+              cacheCreationInputTokens: totalCacheTokens(
+                accumCacheWriteTokens,
+                streamingTurnUsage?.cache_creation_input_tokens
+              ),
             });
           }
           return; // Exit after handling tools
@@ -1737,8 +1767,12 @@ export class AnthropicBackend implements ICompletionBackend {
           toolsUsed: toolsUsed,
           ...(isTerminalTurn
             ? {
-                cacheReadInputTokens: usageWithCacheNS?.cache_read_input_tokens,
-                cacheCreationInputTokens: usageWithCacheNS?.cache_creation_input_tokens,
+                // Accumulated across tool turns: the provider bills cache per API call.
+                cacheReadInputTokens: totalCacheTokens(accumCacheReadTokens, usageWithCacheNS?.cache_read_input_tokens),
+                cacheCreationInputTokens: totalCacheTokens(
+                  accumCacheWriteTokens,
+                  usageWithCacheNS?.cache_creation_input_tokens
+                ),
               }
             : {}),
           ...(isTerminalTurn && usingResponseFormatToolUse ? { responseFormatMode: 'tool_use' as const } : {}),
@@ -1927,6 +1961,9 @@ export class AnthropicBackend implements ICompletionBackend {
                   toolCallCount: toolCallCount + 1,
                   accumInputTokens: accumInputTokens + (usage?.input_tokens || 0),
                   accumOutputTokens: accumOutputTokens + (usage?.output_tokens || 0),
+                  // Cache tokens are billed per API call - accumulate like input/output.
+                  accumCacheReadTokens: accumCacheReadTokens + (usageWithCacheNS?.cache_read_input_tokens || 0),
+                  accumCacheWriteTokens: accumCacheWriteTokens + (usageWithCacheNS?.cache_creation_input_tokens || 0),
                 },
               },
               cb,

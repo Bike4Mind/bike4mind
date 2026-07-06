@@ -45,15 +45,17 @@ export const UsageEvent = z.object({
   /** Exact model id string used for the call. */
   model: z.string(),
 
-  // Token quantities. inputTokens/outputTokens are the BILLING basis (currently
-  // the local tokenizer). providerInputTokens/providerOutputTokens are what the
-  // provider reported; the delta quantifies the known local over-count.
+  // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
+  // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
+  // counts, so the delta stays a comparable estimate-quality metric across all
+  // rows. settledBasis says which of the two priced costUsd/creditsCharged.
   inputTokens: z.number().default(0),
   outputTokens: z.number().default(0),
   cachedInputTokens: z.number().default(0),
   cacheWriteTokens: z.number().default(0),
   providerInputTokens: z.number().optional(),
   providerOutputTokens: z.number().optional(),
+  settledBasis: z.enum(['provider', 'local']).optional(),
   /** Images generated / video seconds, for per-unit modalities. */
   units: z.number().optional(),
 

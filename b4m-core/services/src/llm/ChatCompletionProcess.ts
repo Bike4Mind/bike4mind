@@ -2306,6 +2306,16 @@ export class ChatCompletionProcess {
           try {
             const isInitialAttempt = fallbackAttempt === 0;
 
+            // Reset per attempt: the sticky field-wise merge below would otherwise
+            // carry a failed attempt's counts (e.g. its cache reads) into the next
+            // attempt's settlement - a billing bug now that provider usage is the
+            // settlement basis, not audit data.
+            actualTokenUsage.inputTokens = undefined;
+            actualTokenUsage.outputTokens = undefined;
+            actualTokenUsage.cacheReadInputTokens = undefined;
+            actualTokenUsage.cacheCreationInputTokens = undefined;
+            actualTokenUsage.stopReason = undefined;
+
             logger.info(
               `⏱️ [${Date.now() - processStartTime}ms] === ${
                 isInitialAttempt ? 'STARTING' : `FALLBACK ATTEMPT ${fallbackAttempt}`
@@ -2950,22 +2960,36 @@ export class ChatCompletionProcess {
 
         // Settlement basis: provider-reported usage when present, the true COGS
         // basis matching the cliCompletions path - all four components (input,
-        // output, cache read, cache creation) at their per-model rates. The
-        // components are the provider's own disjoint accounting of one prompt,
-        // so there is no double-count. The local tokenizer estimate remains the
-        // pre-reservation basis (it must run before the request) and the
-        // settlement fallback when the provider omits usage; that fallback keeps
-        // the capped cache-read discount and never bills cache creation, exactly
-        // the pre-provider-basis behavior. The bases never blend.
-        const hasProviderUsage = actualTokenUsage?.inputTokens != null && actualTokenUsage?.outputTokens != null;
+        // output, cache read, cache creation) at their per-model rates. Both
+        // counts must be strictly positive: adapters coerce missing usage to 0
+        // (DeepSeek and Llama-Bedrock streaming never populate it), so a zero
+        // basis means "provider reported nothing", not "the call was free".
+        // Anything less than full positive usage falls back to the local
+        // estimate, which also remains the pre-reservation basis. The fallback
+        // keeps the capped cache-read discount and never bills cache creation,
+        // exactly the pre-provider-basis behavior. The bases never blend.
+        //
+        // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
+        // Anthropic-family adapters, whose input_tokens EXCLUDE cached tokens.
+        // OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache and must not
+        // forward cache counts here without also subtracting them from input.
+        //
+        // NOTE: the provider input (uncached tail) drives getTextModelCost's
+        // pricing-tier selection. Every model today publishes a single tier, so
+        // this is exact; if tiered pricing lands, a heavily-cached prompt could
+        // select a cheaper tier for its cache volume - revisit tier selection then.
+        const hasProviderUsage = (actualTokenUsage?.inputTokens ?? 0) > 0 && (actualTokenUsage?.outputTokens ?? 0) > 0;
+        const settledBasis = hasProviderUsage ? ('provider' as const) : ('local' as const);
+        const settledInputTokens = hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens;
+        const settledOutputTokens = hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens;
         const cacheReadInputTokens = hasProviderUsage
           ? (actualTokenUsage.cacheReadInputTokens ?? 0)
           : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
         const estimatedCost = hasProviderUsage
           ? getTextModelCost(
               currentModel,
-              actualTokenUsage.inputTokens!,
-              actualTokenUsage.outputTokens!,
+              settledInputTokens,
+              settledOutputTokens,
               cacheReadInputTokens,
               actualTokenUsage.cacheCreationInputTokens ?? 0
             )
@@ -2976,14 +3000,15 @@ export class ChatCompletionProcess {
             );
         quest.promptMeta!.tokenUsage = {
           ...quest.promptMeta!.tokenUsage,
+          // Local-estimate counts stay in outputTokens/totalTokens (comparable
+          // across all rows); provider counts stay in actual*; settledBasis says
+          // which of the two priced this row.
           outputTokens,
           totalTokens: inputTokens + outputTokens,
-          // Provider-reported counts: the billing basis when the provider reported
-          // usage, audit copy otherwise. cacheReadInputTokens is the billed value
-          // (provider count on the provider basis, capped-discount value on fallback).
           actualInputTokens: actualTokenUsage?.inputTokens,
           actualOutputTokens: actualTokenUsage?.outputTokens,
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
+          settledBasis,
           estimatedCost,
           creditsUsed: usdToCredits(estimatedCost),
         };
@@ -3113,9 +3138,13 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: currentModel.backend,
               model: currentModel.id,
-              // Billing basis: provider counts when settled on them, local otherwise.
-              inputTokens: hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens,
-              outputTokens: hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens,
+              // inputTokens/outputTokens are ALWAYS the local estimate and the
+              // provider* fields ALWAYS the provider counts, so drift and invoice
+              // reconciliation stay comparable across rows; settledBasis says
+              // which basis priced costUsd/creditsCharged.
+              inputTokens,
+              outputTokens,
+              settledBasis,
               cachedInputTokens: cacheReadInputTokens,
               cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
               providerInputTokens: actualTokenUsage?.inputTokens,
@@ -3131,8 +3160,30 @@ export class ChatCompletionProcess {
 
           try {
             // Reconcile: compute delta between reserved and actual usage
-            const delta = this.reservedCredits - totalCreditsUsed;
+            let delta = this.reservedCredits - totalCreditsUsed;
             let reconciledHolder: ICreditHolder | null = this.reservedCreditHolder;
+
+            // Pre-reservation is the only insufficient-funds check and it runs on
+            // the local estimate, so a provider-basis settlement (cache writes in
+            // particular) can exceed the reservation. Floor the balance at zero:
+            // clamp the shortfall debit to what the holder has (best effort - the
+            // snapshot predates concurrent spend), log the write-off loudly, and
+            // leave the usage event carrying the true cost so margin reporting
+            // sees the shortfall rather than a phantom collection.
+            if (delta < 0 && this.reservedCreditsOwnerId) {
+              const available = Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0);
+              if (-delta > available) {
+                logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
+                  questId: quest.id,
+                  ownerId: this.reservedCreditsOwnerId,
+                  ownerType: this.reservedCreditsOwnerType,
+                  shortfall: -delta,
+                  available,
+                  writtenOff: -delta - available,
+                });
+                delta = -available;
+              }
+            }
 
             if (delta !== 0 && this.reservedCreditsOwnerId) {
               // delta > 0: we over-reserved, refund the excess back
