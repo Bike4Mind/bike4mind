@@ -1,5 +1,7 @@
 import React from 'react';
-import { Box, Typography, Stack, Tooltip } from '@mui/joy';
+import { Box, Typography, Stack, Tooltip, IconButton } from '@mui/joy';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import { toast } from 'sonner';
 import dayjs from 'dayjs';
 
 // Status Log timeline. Shared between the per-message Prompt Metadata inspector
@@ -16,6 +18,47 @@ export function formatDuration(ms: number): string {
   const m = Math.floor(ms / 60000);
   const s = Math.round((ms % 60000) / 1000);
   return `${m}m ${s}s`;
+}
+
+export type TimelineRow = { entry: StatusLogEntry; delta: number; offset: number; abs: number };
+
+/**
+ * Shared timeline math for the render and the Markdown export, so both reflect
+ * the same ordering/deltas. Sorts chronologically and computes each stage's gap
+ * from the previous stage (`delta`) plus its cumulative offset from the start.
+ */
+export function computeTimeline(statusLog: StatusLogEntry[]) {
+  const sorted = [...statusLog].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  const t0 = new Date(sorted[0].timestamp).getTime();
+  const tEnd = new Date(sorted[sorted.length - 1].timestamp).getTime();
+  const total = Math.max(tEnd - t0, 1); // guard divide-by-zero when all stamps equal
+  const rows: TimelineRow[] = sorted.map((entry, i) => {
+    const t = new Date(entry.timestamp).getTime();
+    const prev = i === 0 ? t : new Date(sorted[i - 1].timestamp).getTime();
+    return { entry, delta: t - prev, offset: prev - t0, abs: t };
+  });
+  return { sorted, t0, tEnd, total, rows };
+}
+
+/**
+ * The on-screen waterfall as a Markdown table (header line + one row per stage:
+ * absolute time, delta, label) so a latency breakdown can be pasted into
+ * issues/PRs/chat instead of screenshotted.
+ */
+export function buildStatusLogMarkdown(statusLog: StatusLogEntry[]): string {
+  const { t0, tEnd, total, rows } = computeTimeline(statusLog);
+  const header = `### Status Log — Total elapsed: ${formatDuration(total)} (${dayjs(t0).format('HH:mm:ss')} → ${dayjs(
+    tEnd
+  ).format('HH:mm:ss')})`;
+  const bodyRows = rows.map(
+    (row, i) =>
+      // Escape pipes in the label so a `|` in a status can't break the table.
+      `| ${dayjs(row.abs).format('HH:mm:ss')} | ${i === 0 ? 'start' : `+${formatDuration(row.delta)}`} | ${row.entry.status.replace(
+        /\|/g,
+        '\\|'
+      )} |`
+  );
+  return [header, '', '| Time | Δ | Step |', '| --- | --- | --- |', ...bodyRows].join('\n');
 }
 
 /**
@@ -36,19 +79,17 @@ const StatusTimeline: React.FC<{ statusLog: StatusLogEntry[] }> = ({ statusLog }
     );
   }
 
-  // Chronological order so deltas read top->bottom as the request progresses.
-  const sorted = [...statusLog].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-  const t0 = new Date(sorted[0].timestamp).getTime();
-  const tEnd = new Date(sorted[sorted.length - 1].timestamp).getTime();
-  const total = Math.max(tEnd - t0, 1); // guard divide-by-zero when all stamps equal
-
-  // Per-stage gap (delta from previous) + cumulative offset from the start.
-  const rows = sorted.map((entry, i) => {
-    const t = new Date(entry.timestamp).getTime();
-    const prev = i === 0 ? t : new Date(sorted[i - 1].timestamp).getTime();
-    return { entry, delta: t - prev, offset: prev - t0, abs: t };
-  });
+  const { t0, tEnd, total, rows } = computeTimeline(statusLog);
   const maxDelta = Math.max(...rows.map(r => r.delta));
+
+  const handleCopyMarkdown = async () => {
+    try {
+      await navigator.clipboard.writeText(buildStatusLogMarkdown(statusLog));
+      toast('Status log copied as Markdown');
+    } catch {
+      toast.error('Failed to copy to clipboard');
+    }
+  };
 
   return (
     <Stack spacing={1.25} sx={{ p: 1 }}>
@@ -56,9 +97,23 @@ const StatusTimeline: React.FC<{ statusLog: StatusLogEntry[] }> = ({ statusLog }
         <Typography level="body-sm" sx={{ fontWeight: 'lg' }}>
           Total elapsed: {formatDuration(total)}
         </Typography>
-        <Typography level="body-xs" sx={{ color: 'text.tertiary', fontVariantNumeric: 'tabular-nums' }}>
-          {dayjs(t0).format('HH:mm:ss')} → {dayjs(tEnd).format('HH:mm:ss')}
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <Typography level="body-xs" sx={{ color: 'text.tertiary', fontVariantNumeric: 'tabular-nums' }}>
+            {dayjs(t0).format('HH:mm:ss')} → {dayjs(tEnd).format('HH:mm:ss')}
+          </Typography>
+          <Tooltip title="Copy as Markdown" arrow placement="top">
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              onClick={handleCopyMarkdown}
+              data-testid="status-log-copy-md-btn"
+              aria-label="Copy status log as Markdown"
+            >
+              <ContentCopyIcon sx={{ fontSize: 14 }} />
+            </IconButton>
+          </Tooltip>
+        </Box>
       </Box>
 
       {rows.map((row, i) => {
