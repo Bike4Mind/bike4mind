@@ -10,7 +10,14 @@ on:
     # prod-targeted PRs — those are the staging→production promotion and
     # `main` already validates them; a separate preview would be redundant.
     branches-ignore: [prod]
-    types: [opened, synchronize, reopened, ready_for_review]
+    # `labeled` is included so applying the opt-in `preview` label deploys a
+    # preview immediately, without waiting for the next commit push. Previews
+    # are OFF by default (DEPLOY_TENANTS.<tenant>.preview_label = "preview"):
+    # with the label absent the `plan` job emits an empty matrix and the deploy
+    # is skipped. To avoid spinning up full CI on unrelated label churn (e.g.
+    # `run-e2e`, `stale`), the root `changes` job below skips `labeled` events
+    # whose label is not `preview`.
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips test + deploy on non-deployable
     # changes, while still reporting the required Deploy/Run Tests checks (a
@@ -43,6 +50,13 @@ jobs:
   # required checks always have a status to report. Logic + the default
   # exclude list live in the local composite action. Fails open on both.
   changes:
+    # Root of the whole DAG. On a `labeled` event only proceed when the added
+    # label is `preview` (the opt-in gate) — any other label add skips this job,
+    # which cascades to every downstream job (they all transitively need
+    # `changes`), so unrelated label churn doesn't burn a full CI + deploy run.
+    # Non-labeled events (opened/synchronize/reopened/ready_for_review, push,
+    # merge_group) have action != 'labeled' and always run.
+    if: github.event.action != 'labeled' || github.event.label.name == 'preview'
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
