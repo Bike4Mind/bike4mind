@@ -18,4 +18,6 @@ export type { ConfigEditorProps } from './ConfigEditor';
 export { TrustLocationSelector } from './TrustLocationSelector';
 export { RewindSelector } from './RewindSelector';
 export { SessionSelector } from './SessionSelector';
+export { EnvironmentPicker } from './EnvironmentPicker';
+export type { EnvChoice } from './EnvironmentPicker';
 export { CompletedGroupNotification } from './CompletedGroupNotification';

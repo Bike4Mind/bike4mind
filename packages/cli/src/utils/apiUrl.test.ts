@@ -20,6 +20,7 @@ import {
 afterEach(() => {
   delete process.env.B4M_DEFAULT_API_URL;
   delete process.env.B4M_CREDITS_URL;
+  delete process.env.B4M_SOURCE_MODE;
 });
 
 describe('getDefaultApiUrl', () => {
@@ -53,14 +54,46 @@ describe('resolveApiEndpoint', () => {
     });
   });
 
-  it('is unconfigured for an unbranded fork with no custom URL', () => {
+  it('is unconfigured for a published unbranded fork with no custom URL', () => {
     delete process.env.B4M_DEFAULT_API_URL;
+    delete process.env.B4M_SOURCE_MODE;
     expect(resolveApiEndpoint(undefined)).toEqual({ status: 'unconfigured' });
   });
 
   it('is unconfigured when a custom URL is an empty string', () => {
     delete process.env.B4M_DEFAULT_API_URL;
+    delete process.env.B4M_SOURCE_MODE;
     expect(resolveApiEndpoint({ customUrl: '' })).toEqual({ status: 'unconfigured' });
+  });
+
+  it('falls back to the local dev server in source mode when nothing else is set', () => {
+    delete process.env.B4M_DEFAULT_API_URL;
+    process.env.B4M_SOURCE_MODE = '1';
+    expect(resolveApiEndpoint(undefined)).toEqual({
+      status: 'configured',
+      url: 'http://localhost:3001',
+      source: 'dev-default',
+    });
+  });
+
+  it('prefers a baked default over the source-mode dev fallback', () => {
+    process.env.B4M_DEFAULT_API_URL = 'https://app.bike4mind.com';
+    process.env.B4M_SOURCE_MODE = '1';
+    expect(resolveApiEndpoint(undefined)).toEqual({
+      status: 'configured',
+      url: 'https://app.bike4mind.com',
+      source: 'baked-default',
+    });
+  });
+
+  it('prefers a custom URL over the source-mode dev fallback', () => {
+    delete process.env.B4M_DEFAULT_API_URL;
+    process.env.B4M_SOURCE_MODE = '1';
+    expect(resolveApiEndpoint({ customUrl: 'https://app.example.com' })).toEqual({
+      status: 'configured',
+      url: 'https://app.example.com',
+      source: 'custom',
+    });
   });
 });
 
@@ -97,9 +130,16 @@ describe('getEnvironmentName', () => {
     expect(getEnvironmentName(undefined)).toBe('Production');
   });
 
-  it('reads as Unconfigured when no custom URL and no baked default (unbranded fork)', () => {
+  it('reads as Unconfigured when no custom URL and no baked default (published unbranded fork)', () => {
     delete process.env.B4M_DEFAULT_API_URL;
+    delete process.env.B4M_SOURCE_MODE;
     expect(getEnvironmentName(undefined)).toBe('Unconfigured');
+  });
+
+  it('reads as Local Dev for the source-mode dev fallback', () => {
+    delete process.env.B4M_DEFAULT_API_URL;
+    process.env.B4M_SOURCE_MODE = '1';
+    expect(getEnvironmentName(undefined)).toBe('Local Dev');
   });
 
   it('reads as Local Dev for a loopback custom URL', () => {

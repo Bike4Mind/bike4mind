@@ -16,6 +16,20 @@ export function getDefaultApiUrl(): string {
 export const LOCAL_DEV_URL = 'http://localhost:3001';
 
 /**
+ * True when the CLI is running from TypeScript source rather than a built
+ * `dist/` bundle (a `pnpm link --global` checkout, `pnpm dev`, etc). The bin
+ * sets `B4M_SOURCE_MODE=1` in this case (see `bin/bike4mind-cli.mjs`).
+ *
+ * It matters here because build-time brand defaults (`B4M_DEFAULT_API_URL`) are
+ * only injected into a real build - a source run always sees them empty. Rather
+ * than leave a contributor unconfigured, we default source runs to the local dev
+ * server, which is almost always what they want.
+ */
+export function isSourceMode(): boolean {
+  return process.env.B4M_SOURCE_MODE === '1';
+}
+
+/**
  * Marketing/credits page shown when the user runs out of credits. Build-time
  * injected like {@link getDefaultApiUrl}; empty for an unbranded fork, in which
  * case the "purchase more credits" line is omitted entirely.
@@ -34,16 +48,23 @@ export function getCreditsUrl(): string {
  * `source` records how the URL was resolved:
  * - `custom`        - the user set it via `--api-url` / `/set-api`
  * - `baked-default` - the build-time default baked into the published binary
+ * - `dev-default`   - the local dev server, auto-selected for a source-mode run
+ *                     that has no custom or baked URL (see {@link isSourceMode})
  */
 export type ApiEndpoint =
-  | { status: 'configured'; url: string; source: 'custom' | 'baked-default' }
+  | { status: 'configured'; url: string; source: 'custom' | 'baked-default' | 'dev-default' }
   | { status: 'unconfigured' };
 
 /**
- * Resolve which backend the CLI should talk to. A configured custom URL wins;
- * otherwise the build-time default service is used; otherwise the endpoint is
- * unconfigured (an unbranded fork or a source/linked checkout that never baked
- * a default). Never returns an empty URL - callers get `unconfigured` instead.
+ * Resolve which backend the CLI should talk to. Precedence:
+ *  1. a configured custom URL (`--api-url` / `/set-api`);
+ *  2. the build-time default service baked into a published binary;
+ *  3. the local dev server, when running from source (contributors almost always
+ *     want their local stack, and source runs never have a baked default);
+ *  4. otherwise unconfigured (a published, unbranded fork) - the caller then
+ *     prompts the user to choose a backend.
+ *
+ * Never returns an empty URL - callers get `unconfigured` instead.
  */
 export function resolveApiEndpoint(configApiConfig?: ApiConfig): ApiEndpoint {
   if (configApiConfig?.customUrl) {
@@ -53,6 +74,10 @@ export function resolveApiEndpoint(configApiConfig?: ApiConfig): ApiEndpoint {
   const bakedDefault = getDefaultApiUrl();
   if (bakedDefault) {
     return { status: 'configured', url: bakedDefault, source: 'baked-default' };
+  }
+
+  if (isSourceMode()) {
+    return { status: 'configured', url: LOCAL_DEV_URL, source: 'dev-default' };
   }
 
   return { status: 'unconfigured' };
@@ -105,7 +130,12 @@ export function getEnvironmentName(configApiConfig?: ApiConfig): string {
     return 'Production';
   }
 
-  // Local dev servers (localhost / 127.0.0.1) read as "Local Dev".
+  // The source-mode fallback points at the local dev server.
+  if (endpoint.source === 'dev-default') {
+    return 'Local Dev';
+  }
+
+  // Custom localhost / 127.0.0.1 URLs also read as "Local Dev".
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(endpoint.url)) {
     return 'Local Dev';
   }

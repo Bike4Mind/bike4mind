@@ -40,7 +40,9 @@ Building the CLI from a checkout instead? See [Development](./packages/cli/READM
 The active backend is shown in the startup banner (`🌍 API Environment: …`) and via `/api-info` inside a session. The CLI resolves it in this order:
 
 1. A **custom URL** you set with `--api-url` / `/set-api` (self-hosted or any deployment).
-2. Otherwise, a **build-time default** baked into the published binary. The upstream `@bike4mind/cli` bakes the hosted service; an [open-core fork](./CONTRIBUTING.md#the-openclosed-boundary) that publishes its own CLI without setting `B4M_DEFAULT_API_URL` ships **empty** — a bare `b4m` then reads as `Unconfigured`, and you **must** point it somewhere with `--api-url` before signing in.
+2. Otherwise, a **build-time default** baked into the published binary. The upstream `@bike4mind/cli` bakes the hosted service; an [open-core fork](./CONTRIBUTING.md#the-openclosed-boundary) that publishes its own CLI without setting `B4M_DEFAULT_API_URL` ships without one.
+3. Otherwise, when running **from source** (a `pnpm link --global` checkout or `pnpm dev` — no `dist/` built), the CLI defaults to the local dev server `http://localhost:3001`, since that's almost always what a contributor wants. Use `--prod` / `--api-url` to change it.
+4. Otherwise (a published, unbranded fork with no baked default), the first `b4m` **prompts you to pick a backend** (hosted / local dev / custom URL) before signing in.
 
 Auth tokens are cached **per environment**, so pointing at a new backend prompts a one-time `/login`, and switching back later reuses the cached session.
 
@@ -134,7 +136,7 @@ Add `--dangerously-skip-permissions` to auto-approve tool prompts in an unattend
 
 ## Troubleshooting
 
-- **Banner says `Unconfigured`** — you're on a fork build with no baked default. Point it somewhere: `b4m --api-url <url>` (or `--prod` on the upstream build).
+- **Prompted to pick a backend / banner says `Unconfigured`** — you're on a published fork build with no baked default. Choose one at the prompt, or point it directly: `b4m --api-url <url>` (or `--prod` on the upstream build). A source/linked checkout doesn't hit this — it defaults to the local dev server.
 - **Can't reach a self-hosted stack** — confirm the app is up (`curl -s -o /dev/null -w '%{http_code}\n' localhost:3000` → `200`) and that you used the right host port. See [self-host troubleshooting](./SELF_HOST.md#troubleshooting).
 - **No sign-in code (self-host)** — the code is emailed to Mailpit, not your inbox. Read it at `http://localhost:8025`.
 - **Auth seems stuck after switching backends** — `--api-url` / `--reset-api` clear tokens for you; if needed, `/logout` then `/login`.

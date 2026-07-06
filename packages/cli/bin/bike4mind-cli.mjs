@@ -279,6 +279,15 @@ const hasDist = existsSync(distPath);
 const isDev = process.env.NODE_ENV === 'development' ||
               (!hasDist && hasSource);
 
+// Signal source mode to the app so endpoint resolution can default an
+// otherwise-unconfigured run to the local dev server (build-time brand
+// defaults are never injected into a source run). Set before any command
+// dispatch below so --reset-api messaging and the app both observe it.
+// See resolveApiEndpoint() / isSourceMode() in src/utils/apiUrl.ts.
+if (isDev) {
+  process.env.B4M_SOURCE_MODE = '1';
+}
+
 // Handle --api-url / --reset-api flags
 // These mutate ~/.bike4mind/config.json and exit before any auth flow runs,
 // so devs can recover from a misconfigured customUrl without editing JSON.
@@ -439,7 +448,9 @@ if (argv._[0] === 'doctor') {
 }
 
 if (isDev) {
-  console.log('🔧 Running in development mode (using TypeScript source)\n');
+  // Note: this is about *how the CLI runs* (unbuilt TypeScript source), which is
+  // distinct from the `--dev` flag (which selects the local dev *backend*).
+  console.log('🔧 Running from TypeScript source (no dist build)\n');
   // Development: use tsx to run TypeScript
   try {
     const { register } = require('tsx/esm/api');
