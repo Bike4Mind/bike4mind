@@ -2948,39 +2948,39 @@ export class ChatCompletionProcess {
           );
         }
 
-        // Bill from our local tokenizer, with a cache-read discount applied.
-        //
-        // Our local `inputTokens` counts the ENTIRE prompt. When prompt caching is
-        // active the provider serves part of that prompt from cache and reports it as
-        // `cache_read_input_tokens` (the provider itself bills those at 0.1x input).
-        // We pass that discount through: the cached portion of our local input is
-        // re-rated to 0.1x, the uncached remainder stays at the full rate.
-        //
-        // This stays ANCHORED to the local count (the source of truth - we don't want
-        // provider accounting changes to silently shift what users pay): the discount
-        // is capped at `inputTokens`, so it can only ever LOWER a charge vs. the full
-        // local basis, never raise it. We do NOT surcharge `cache_creation` - adding
-        // provider cache counts ON TOP of the local input double-billed the cached
-        // prompt and could exceed the local count entirely (the over-count bug).
-        // Cold turns (no cache read) bill exactly as before.
-        //
-        // NOTE: the discounted count also drives getTextModelCost's pricing-tier
-        // selection, and the global CACHE_READ_MULTIPLIER ignores any per-model
-        // `cache_read` override. Every model today publishes a single pricing tier
-        // with no cache_read override, so this is exact. If tiered pricing or a
-        // per-model cache_read rate is ever introduced, switch to computing at full
-        // `inputTokens` and subtracting the discount at the full-tier rate, so a
-        // heavily-cached prompt can't slide into a cheaper tier.
-        const cacheReadInputTokens = Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
-        const creditedInputTokens = inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER);
-        const estimatedCost = getTextModelCost(currentModel, creditedInputTokens, outputTokens);
+        // Settlement basis: provider-reported usage when present, the true COGS
+        // basis matching the cliCompletions path - all four components (input,
+        // output, cache read, cache creation) at their per-model rates. The
+        // components are the provider's own disjoint accounting of one prompt,
+        // so there is no double-count. The local tokenizer estimate remains the
+        // pre-reservation basis (it must run before the request) and the
+        // settlement fallback when the provider omits usage; that fallback keeps
+        // the capped cache-read discount and never bills cache creation, exactly
+        // the pre-provider-basis behavior. The bases never blend.
+        const hasProviderUsage = actualTokenUsage?.inputTokens != null && actualTokenUsage?.outputTokens != null;
+        const cacheReadInputTokens = hasProviderUsage
+          ? (actualTokenUsage.cacheReadInputTokens ?? 0)
+          : Math.min(actualTokenUsage?.cacheReadInputTokens ?? 0, inputTokens);
+        const estimatedCost = hasProviderUsage
+          ? getTextModelCost(
+              currentModel,
+              actualTokenUsage.inputTokens!,
+              actualTokenUsage.outputTokens!,
+              cacheReadInputTokens,
+              actualTokenUsage.cacheCreationInputTokens ?? 0
+            )
+          : getTextModelCost(
+              currentModel,
+              inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
+              outputTokens
+            );
         quest.promptMeta!.tokenUsage = {
           ...quest.promptMeta!.tokenUsage,
           outputTokens,
           totalTokens: inputTokens + outputTokens,
-          // Provider-reported counts captured for audit/drift detection only - NOT
-          // the billing basis (see estimatedCost / creditsUsed above). cacheReadInputTokens
-          // is the (capped) value used for the discount above.
+          // Provider-reported counts: the billing basis when the provider reported
+          // usage, audit copy otherwise. cacheReadInputTokens is the billed value
+          // (provider count on the provider basis, capped-discount value on fallback).
           actualInputTokens: actualTokenUsage?.inputTokens,
           actualOutputTokens: actualTokenUsage?.outputTokens,
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
@@ -2989,14 +2989,12 @@ export class ChatCompletionProcess {
         };
 
         // Drift detection: log when our tokenizer diverges substantially from what
-        // the provider reports. Causes worth investigating: a new content-block
-        // shape we don't measure, tool schemas (toolSchemaTokens TODO at the
-        // breakdown site), a provider accounting change. Threshold is symmetric
-        // ±30% - biased neither way because the failure mode we most need to
-        // catch is local OVER-counting (JSON.stringify wrappers + flat 1600 per
-        // image - the known over-count that local-tokenizer billing carries),
-        // so an asymmetric band loosened on the over-count side would absorb
-        // exactly what we want to surface.
+        // the provider reports. With provider-basis settlement this no longer
+        // guards billing; it monitors the quality of the local estimate that still
+        // drives pre-reservation (and fallback settlement). Causes worth
+        // investigating: a new content-block shape we don't measure, tool schemas
+        // (toolSchemaTokens TODO at the breakdown site), a provider accounting
+        // change. Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing
@@ -3115,8 +3113,9 @@ export class ChatCompletionProcess {
               feature: 'chat',
               provider: currentModel.backend,
               model: currentModel.id,
-              inputTokens,
-              outputTokens,
+              // Billing basis: provider counts when settled on them, local otherwise.
+              inputTokens: hasProviderUsage ? actualTokenUsage.inputTokens! : inputTokens,
+              outputTokens: hasProviderUsage ? actualTokenUsage.outputTokens! : outputTokens,
               cachedInputTokens: cacheReadInputTokens,
               cacheWriteTokens: actualTokenUsage?.cacheCreationInputTokens ?? 0,
               providerInputTokens: actualTokenUsage?.inputTokens,
