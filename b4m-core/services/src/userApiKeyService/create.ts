@@ -18,8 +18,10 @@ const createUserApiKeySchema = z.object({
   metadata: z.object({
     clientIP: z.string().optional(),
     userAgent: z.string().optional(),
-    createdFrom: z.enum(['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin']),
+    createdFrom: z.enum(['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin', 'oauth-exchange']),
     createdByUserId: z.string().optional(),
+    // Tags a key minted by the federated AI-token exchange to its (user, client) pair.
+    oauthClientId: z.string().optional(),
   }),
   productId: z.string().optional(),
   productName: z.string().optional(),
@@ -49,8 +51,9 @@ export interface CreateUserApiKeyResult {
   metadata: {
     clientIP?: string;
     userAgent?: string;
-    createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin';
+    createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin' | 'oauth-exchange';
     createdByUserId?: string;
+    oauthClientId?: string;
   };
   productId?: string;
   productName?: string;

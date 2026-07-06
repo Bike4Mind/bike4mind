@@ -3,6 +3,24 @@ import bcrypt from 'bcryptjs';
 import mongoose, { Schema, model, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
+/**
+ * Trust config for a Pattern-A *federated* client: an app whose own AWS Cognito
+ * pool federates B4M as its upstream IdP. Its presence turns an ordinary
+ * "Sign in with B4M" client into one allowed to mint per-user `ai:generate`
+ * keys via `POST /api/oauth/ai-token`, by exchanging a Cognito ID token the app
+ * already holds for its logged-in user. Absent → the client cannot mint AI keys.
+ */
+export interface IOAuthClientFederatedIdp {
+  /** Expected `iss` of the Cognito ID token, e.g. `https://cognito-idp.<region>.amazonaws.com/<poolId>`. */
+  issuer: string;
+  /** JWKS endpoint. Defaults to `${issuer}/.well-known/jwks.json` (Cognito) when omitted. */
+  jwksUri?: string;
+  /** Expected `aud` claim — the Cognito app-client id the token was issued to. */
+  audience: string;
+  /** `identities[].providerName` that carries B4M's `sub` (== B4M user id) after federation. */
+  providerName: string;
+}
+
 export interface IOAuthClientDocument extends IMongoDocument {
   clientId: string;
   clientSecretHash: string;
@@ -11,6 +29,8 @@ export interface IOAuthClientDocument extends IMongoDocument {
   allowedScopes: string[];
   pkceRequired: boolean;
   isActive: boolean;
+  /** Populated only for Pattern-A federated clients; gates the AI-token exchange. */
+  federatedIdp?: IOAuthClientFederatedIdp;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -31,6 +51,20 @@ const OAuthClientSchema = new Schema<IOAuthClientDocument>(
     allowedScopes: { type: [String], default: ['openid', 'email', 'profile'] },
     pkceRequired: { type: Boolean, default: true },
     isActive: { type: Boolean, default: true },
+    // Pattern-A federated trust config. Absent (default) for ordinary "Sign in with B4M" clients;
+    // its presence is the gate for the AI-token exchange endpoint. `_id: false` - it's an inline value.
+    federatedIdp: {
+      type: new Schema<IOAuthClientFederatedIdp>(
+        {
+          issuer: { type: String, required: true },
+          jwksUri: { type: String },
+          audience: { type: String, required: true },
+          providerName: { type: String, required: true },
+        },
+        { _id: false }
+      ),
+      required: false,
+    },
   },
   {
     timestamps: true,

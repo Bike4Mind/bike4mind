@@ -56,9 +56,18 @@ export interface IUserApiKeyBaseline {
 export interface IUserApiKeyMetadata {
   clientIP?: string;
   userAgent?: string;
-  createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin';
+  createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge' | 'overwatch-admin' | 'oauth-exchange';
   /** Admin userId who minted this key. Set on insert only; service layer must reject updates. */
   createdByUserId?: string;
+  /**
+   * OAuth client that minted this key via the federated AI-token exchange
+   * (`createdFrom === 'oauth-exchange'`). Tags the key to a (user, client) pair
+   * so the exchange endpoint can find and revoke the prior key before minting a
+   * fresh one - keeping at most one active exchange key per pair. NOT `productId`:
+   * productId carries a global per-product active-key cap that would reject mints
+   * once a client had >20 concurrent federated users.
+   */
+  oauthClientId?: string;
   baseline?: IUserApiKeyBaseline;
 }
 
