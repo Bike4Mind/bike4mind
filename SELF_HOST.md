@@ -81,6 +81,24 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost build
 
 Compose tags the build with the same name the stack expects, so the subsequent `up` uses your local image and won't try to pull. The Next.js monorepo build needs ~12-16 GB of memory available to Docker (Docker Desktop: Settings > Resources; on Linux this is just host RAM). A from-source build takes several minutes and produces a ~1 GB image.
 
+### Rebuild after local code changes
+
+Working from a checkout and want to run your own edits (or a freshly pulled `main`) instead of the published image? Build from your working tree and recreate the app in one step:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile ollama up -d --build
+```
+
+`--build` rebuilds the `app` image from the Dockerfile before starting; only `app` rebuilds, the backing services just restart. Drop `--profile ollama` if you are not running local models. Thanks to the pnpm store cache mount and Docker layer caching, a warm rebuild (only app source changed, deps unchanged) takes about 1-2 minutes; a cold first build takes several.
+
+Confirm it came up, then follow the logs:
+
+```bash
+docker compose -f compose.selfhost.yaml ps                      # services Up / healthy
+curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
+docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
+```
+
 ## 4. Sign in
 
 Bike4Mind signs you in with a one-time code sent by email. In the self-host stack, all outgoing mail is caught by the bundled **Mailpit** - nothing leaves your machine:
