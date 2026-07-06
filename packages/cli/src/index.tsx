@@ -40,6 +40,7 @@ import {
   ApiEndpointUnconfiguredError,
   getEnvironmentName,
   getCreditsUrl,
+  parseApiUrl,
   processFileReferences,
   formatStep,
   extractCompactInstructions,
@@ -2596,9 +2597,9 @@ Multi-line Input:
       }
 
       case 'set-api': {
-        const url = args[0];
+        const rawUrl = args[0];
 
-        if (!url) {
+        if (!rawUrl) {
           console.log('Usage: /set-api <url>');
           console.log('');
           console.log('Connect to a self-hosted Bike4Mind instance.');
@@ -2609,14 +2610,16 @@ Multi-line Input:
           return;
         }
 
-        // Validate URL format
-        try {
-          new URL(url);
-        } catch {
-          console.log(`\n❌ Invalid URL: ${url}`);
-          console.log('Please provide a valid HTTPS URL (e.g., https://app.your-instance.example.com)\n');
+        // Validate + normalize through the shared parser so /set-api applies the
+        // same rule as --api-url and the first-run picker: trims whitespace,
+        // strips trailing slashes, and requires an http(s) origin.
+        const result = parseApiUrl(rawUrl);
+        if ('error' in result) {
+          console.log(`\n❌ ${result.error}`);
+          console.log('Please provide a valid http(s) URL (e.g., https://app.your-instance.example.com)\n');
           return;
         }
+        const { url } = result;
 
         await state.configStore.setCustomApiUrl(url);
 
