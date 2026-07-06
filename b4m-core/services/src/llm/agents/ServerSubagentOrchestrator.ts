@@ -226,6 +226,15 @@ export interface ServerOrchestratorDeps {
   /** Extended thinking configuration to propagate to subagents */
   thinking?: { enabled: boolean; budget_tokens: number };
   /**
+   * Artifact-emission guidance appended to every spawned subagent's system
+   * prompt (optional). Set by the Agent Executor when the admin `EnableArtifacts`
+   * setting is on so subagents - including DAG worker nodes - emit `<artifact>`
+   * tags in their answers, which the parent then surfaces on the completion.
+   * Omitted (unchanged behavior) when artifacts are off or the caller is a
+   * context that doesn't inject it (e.g. ChatCompletionProcess).
+   */
+  artifactEmissionPrompt?: string;
+  /**
    * Resolve a fresh LLM backend for the given model ID.
    * Used when agentDef.model requires a different provider than the parent's backend
    * (e.g., agent needs Bedrock but parent uses OpenAI).
@@ -407,6 +416,9 @@ export class ServerSubagentOrchestrator {
       maxIterations,
       systemPrompt,
       thinking: this.deps.thinking,
+      // Appended AFTER `systemPrompt` in getSystemPrompt(); only present when the
+      // host opted into artifacts, so subagents emit <artifact> tags to bubble up.
+      ...(this.deps.artifactEmissionPrompt && { artifactEmissionPrompt: this.deps.artifactEmissionPrompt }),
     });
 
     // Wire up progress updates so the client sees live status during subagent
