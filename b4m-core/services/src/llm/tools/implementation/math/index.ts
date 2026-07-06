@@ -12,6 +12,28 @@ interface MathParams {
   precision?: number;
 }
 
+/**
+ * Format a scalar result. Integers render in full via fixed notation so large
+ * values don't come back in scientific notation (e.g. 1219326221002896 as
+ * "1.2e+15"), which makes some models treat it as not-the-answer and re-call the
+ * tool in a loop. Non-integers keep the default formatter, where `precision` is
+ * significant figures (fixed notation would reinterpret it as decimal places and
+ * could round a small result to 0).
+ */
+function formatResult(value: unknown, precision?: number): string {
+  // mathjs result types (BigNumber, etc.) are handled at runtime; cast for the
+  // typed signatures.
+  const v = value as Parameters<typeof math.format>[0];
+  // Only scalar integers get fixed notation. Guard on the scalar type first:
+  // isInteger on a Matrix/Array returns an element-wise (truthy) result, which
+  // would wrongly force fixed notation onto non-integer vector results.
+  const type = math.typeOf(v);
+  if ((type === 'number' || type === 'BigNumber' || type === 'bigint') && math.isInteger(v as number)) {
+    return math.format(v, { notation: 'fixed' });
+  }
+  return math.format(v, { precision });
+}
+
 async function evaluateMath(params: MathParams): Promise<string> {
   Logger.globalInstance.log('🔢 Math Tool: Starting evaluation of expression:', params.expression);
 
@@ -56,10 +78,10 @@ async function evaluateMath(params: MathParams): Promise<string> {
           return `Matrix result:\n${math.format(lastResult, { precision: params.precision })}`;
         }
 
-        return math.format(lastResult, { precision: params.precision });
+        return formatResult(lastResult, params.precision);
       }
 
-      return math.format(result, { precision: params.precision });
+      return formatResult(result, params.precision);
     }
 
     // Handle different equation formats that LLMs might generate
@@ -149,7 +171,7 @@ async function evaluateMath(params: MathParams): Promise<string> {
       return `Matrix result:\n${math.format(result, { precision: params.precision })}`;
     }
 
-    const formattedResult = math.format(result, { precision: params.precision });
+    const formattedResult = formatResult(result, params.precision);
     Logger.globalInstance.log('🔢 Math Tool: Final formatted result:', formattedResult);
     return formattedResult;
   } catch (error: unknown) {

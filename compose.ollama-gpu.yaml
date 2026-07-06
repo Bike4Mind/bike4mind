@@ -1,0 +1,23 @@
+# NVIDIA GPU acceleration for the bundled `ollama` service.
+#
+# Requires an NVIDIA GPU + driver on the host AND the NVIDIA Container Toolkit
+# configured for Docker (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+# Verify with: `docker run --rm --gpus all ubuntu nvidia-smi`.
+#
+# Use it as a second -f alongside the base stack, with the `ollama` profile:
+#   docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+#     --env-file .env.selfhost --profile ollama up -d
+#
+# No GPU (or no toolkit)? Skip this file. The base `ollama` service runs
+# CPU-only and works everywhere; small Qwen models are usable on CPU.
+name: bike4mind-selfhost
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

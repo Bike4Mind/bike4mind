@@ -1330,6 +1330,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
 const AISettingsTab: React.FC<{
   model: ModelName;
   handleModelSelection: (model: ModelName) => void;
+  onSelectionComplete: () => void;
   modelFilter: 'all' | 'text' | 'image' | 'video';
   handleModelChange: (filter: 'all' | 'text' | 'image' | 'video') => void;
   isMobile: boolean;
@@ -1338,6 +1339,7 @@ const AISettingsTab: React.FC<{
 }> = ({
   model,
   handleModelSelection,
+  onSelectionComplete,
   modelFilter,
   handleModelChange,
   isMobile,
@@ -1378,6 +1380,7 @@ const AISettingsTab: React.FC<{
       <ModelSelection
         model={model}
         setModel={handleModelSelection}
+        onSelectionComplete={onSelectionComplete}
         imageModel={modelFilter === 'image'}
         showAllModels={modelFilter === 'all'}
         modelFilter={modelFilter}
@@ -1981,6 +1984,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                       <AISettingsTab
                         model={typedModel}
                         handleModelSelection={handleModelSelection}
+                        onSelectionComplete={onClose}
                         modelFilter={modelFilter}
                         handleModelChange={handleModelChange}
                         isMobile={isMobile}
@@ -2023,6 +2027,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 <AISettingsTab
                   model={typedModel}
                   handleModelSelection={handleModelSelection}
+                  onSelectionComplete={onClose}
                   modelFilter={modelFilter}
                   handleModelChange={handleModelChange}
                   isMobile={isMobile}

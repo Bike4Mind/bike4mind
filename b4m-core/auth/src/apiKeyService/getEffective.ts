@@ -172,6 +172,11 @@ export const getEffectiveLLMApiKeys = async (
     bfl: keyOrExpired(bflUserKey) || bflDemoKey || null,
     xai: keyOrExpired(xaiUserKey) || xaiDemoKey || envKey('XAI_API_KEY'),
     voyageai: keyOrExpired(voyageaiUserKey) || voyageaiDemoKey || null,
-    ollama: ollamaEnabled ? ollamaBackend || null : null,
+    // Self-host: when OLLAMA_BASE_URL is set in the environment, enable Ollama
+    // pointed at that endpoint without requiring the DB admin settings
+    // (EnableOllama / ollamaBackend). This is what makes local models work
+    // out of the box with no provider keys. An explicit admin config still
+    // takes precedence. envKey() only returns a value when B4M_SELF_HOST=true.
+    ollama: (ollamaEnabled ? ollamaBackend || null : null) || envKey('OLLAMA_BASE_URL'),
   };
 };

@@ -152,6 +152,7 @@ preloadBackendLogos();
 interface ModelSelectionProps {
   model: ModelName;
   setModel: (model: ModelName) => void;
+  onSelectionComplete?: () => void;
   imageModel: boolean;
   showAllModels?: boolean;
   modelFilter?: 'all' | 'text' | 'image' | 'video';
@@ -175,8 +176,19 @@ const formatContextWindow = (size: number): string => {
   return formatNumber(size);
 };
 
+// Section label for models running on the operator's own hardware (self-host).
+const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
+
 // Function to determine backend from model name/ID
 const getModelBackend = (model: ModelInfo): string => {
+  // Self-host: Ollama models run locally on the operator's hardware, so group
+  // them in a dedicated "Local / Self-Hosted" section rather than "Other". In
+  // the hosted product the same backend is remote, so this only applies when
+  // the bundle was built with B4M_SELF_HOST (inlined by next.config.mjs).
+  if (model.backend === ModelBackend.Ollama && process.env.B4M_SELF_HOST === 'true') {
+    return SELF_HOSTED_BACKEND;
+  }
+
   const modelName = model.name.toLowerCase();
   const modelId = model.id.toLowerCase();
   const modelDescription = model.description?.toLowerCase();
@@ -401,7 +413,6 @@ const ModelOption = React.memo(
                 }}
                 onClick={e => {
                   e.stopPropagation();
-                  onSelect(model);
                   onSettingsClick(model);
                 }}
               >
@@ -552,6 +563,7 @@ ModelOption.displayName = 'ModelOption';
 const ModelSelection: React.FC<ModelSelectionProps> = ({
   model,
   setModel,
+  onSelectionComplete,
   imageModel,
   showAllModels,
   modelFilter = 'text',
@@ -700,7 +712,17 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     });
 
     // Sort backends by priority (OpenAI, Anthropic, Google, Meta, etc.)
-    const backendPriority = ['OPEN AI', 'Anthropic', 'Google', 'Meta', 'xAI', 'Mistral', 'Black Forest Labs', 'Cohere'];
+    const backendPriority = [
+      SELF_HOSTED_BACKEND,
+      'OPEN AI',
+      'Anthropic',
+      'Google',
+      'Meta',
+      'xAI',
+      'Mistral',
+      'Black Forest Labs',
+      'Cohere',
+    ];
     const sortedBackends = Object.keys(grouped).sort((a, b) => {
       const aIndex = backendPriority.indexOf(a);
       const bIndex = backendPriority.indexOf(b);
@@ -774,7 +796,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     return userToggledBackends;
   }, [debouncedSearchQuery, modelsByBackend, userToggledBackends]);
 
-  const handleModelSelect = useCallback(
+  const selectModel = useCallback(
     (selectedModel: ModelInfo) => {
       setModel(selectedModel.id);
 
@@ -786,6 +808,22 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       }
     },
     [setModel, setLLM]
+  );
+
+  const handleModelSelect = useCallback(
+    (selectedModel: ModelInfo) => {
+      selectModel(selectedModel);
+      onSelectionComplete?.();
+    },
+    [onSelectionComplete, selectModel]
+  );
+
+  const handleSettingsClick = useCallback(
+    (selectedModel: ModelInfo) => {
+      selectModel(selectedModel);
+      onSettingsClick?.(selectedModel);
+    },
+    [onSettingsClick, selectModel]
   );
 
   // Scroll the currently-selected model card into view on first paint so the
@@ -835,7 +873,17 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
   if (error) return <div>Error loading models: {error.message}</div>;
 
   // Group models by backend for display
-  const backendPriority = ['OPEN AI', 'Anthropic', 'Google', 'Meta', 'xAI', 'Mistral', 'Black Forest Labs', 'Cohere'];
+  const backendPriority = [
+    SELF_HOSTED_BACKEND,
+    'OPEN AI',
+    'Anthropic',
+    'Google',
+    'Meta',
+    'xAI',
+    'Mistral',
+    'Black Forest Labs',
+    'Cohere',
+  ];
   const sortedBackends = Object.keys(modelsByBackend).sort((a, b) => {
     const aIndex = backendPriority.indexOf(a);
     const bIndex = backendPriority.indexOf(b);
@@ -1128,7 +1176,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         maxContextWindow={maxContextWindow}
                         maxTokens={maxTokens}
                         onSelect={handleModelSelect}
-                        onSettingsClick={onSettingsClick}
+                        onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                         isFavorite={true}
                         onToggleFavorite={toggleFavorite}
                         topUsedModelIds={topUsedModelIds}
@@ -1234,7 +1282,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1280,7 +1328,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1326,7 +1374,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1356,7 +1404,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           maxContextWindow={maxContextWindow}
                           maxTokens={maxTokens}
                           onSelect={handleModelSelect}
-                          onSettingsClick={onSettingsClick}
+                          onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                           isFavorite={isFavorite(modelInfo.id)}
                           onToggleFavorite={toggleFavorite}
                           topUsedModelIds={topUsedModelIds}

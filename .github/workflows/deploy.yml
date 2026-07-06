@@ -43,7 +43,7 @@ jobs:
   # required checks always have a status to report. Logic + the default
   # exclude list live in the local composite action. Fails open on both.
   changes:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     outputs:
@@ -176,127 +176,12 @@ jobs:
           retention-days: 7
           if-no-files-found: error
 
-  # Open Core invariant: the public-core fork must build with an empty overlay.
-  # Runs alongside standard CI. Simulates the fork by not cloning any
-  # packages/premium/* repos and proves:
-  #   (a) pnpm install --frozen-lockfile passes with an empty overlay
-  #   (b) codegen emits empty-form outputs without errors
-  #   (c) typecheck passes against those empty-form generated files
-  # After M1c this becomes the only job proving the fork still compiles while
-  # premium overlay packages (packages/premium/*) are present in the official build.
-  open-core-fork-build:
-    name: Open Core (fork simulation)
-    needs: core-build
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 1
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      # Simulate an open-core fork checkout: remove the premium overlay package(s)
-      # and patch pnpm-workspace.yaml + apps/client/package.json so pnpm doesn't
-      # error on workspace references that no longer exist. This must run before
-      # the cache step so the install uses the patched workspace.
-      - name: Simulate open-core fork (remove premium overlay)
-        run: |
-          rm -rf packages/premium/*/
-          node -e "
-            const fs = require('fs');
-            // Remove the premium overlay globs from the workspace file (comments are pnpm-inert).
-            // [^\n]* consumes the whole line so nested globs (packages/premium/*/cc-bridge)
-            // don't leave dangling fragments.
-            let ws = fs.readFileSync('pnpm-workspace.yaml', 'utf8');
-            ws = ws.replace(/\n  - packages\/premium\/[^\n]*/g, '');
-            fs.writeFileSync('pnpm-workspace.yaml', ws);
-            // Remove every @bike4mind/premium-* overlay package from the client's
-            // dependencies (overwatch, libreoncology, and any future carve).
-            const pkg = JSON.parse(fs.readFileSync('apps/client/package.json', 'utf8'));
-            for (const dep of Object.keys(pkg.dependencies)) {
-              if (dep.startsWith('@bike4mind/premium-')) delete pkg.dependencies[dep];
-            }
-            fs.writeFileSync('apps/client/package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      # Workspace is patched (no premium packages) so we must suppress frozen-lockfile;
-      # pnpm enables it automatically in CI, but the committed lockfile includes the
-      # @bike4mind/premium-* overlay packages from the full build and would reject
-      # the patched tree.
-      - name: Install dependencies (fork simulation — no premium overlay)
-        run: pnpm install --recursive --no-frozen-lockfile
-
-      - name: Download core build artifacts
-        id: download-core
-        uses: actions/download-artifact@v7
-        with:
-          name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
-        continue-on-error: true
-
-      - name: Build bike4mind core packages (fallback)
-        if: steps.download-core.outcome == 'failure'
-        run: pnpm core:build
-
-      - name: Run codegen (empty overlay → empty-form outputs)
-        run: pnpm --filter @bike4mind/client run codegen
-
-      # Verify the KEY invariant that caused Path A in the premium-overlay CI clone
-      # work (#9871): sst.config.ts must bundle cleanly with an empty overlay.
-      # Previously, sst.config.ts imported directly from packages/premium/*/src/infra,
-      # so removing the overlay broke ALL non-deploy CI jobs running `pnpm sst install`.
-      # Now sst.config.ts imports from infra/premium-generated/*-infra.generated.ts,
-      # which codegen just emitted as no-op stubs above.
-      - name: Generate SST types (fork build, no-op infra stubs)
-        run: pnpm sst install
-        env:
-          CI: 'true'
-
-      # Only the client needs typechecking here: this job's unique invariant is
-      # "the empty-form generated files (app/premium-generated/*, pages/api/premium-*)
-      # typecheck inside apps/client under an empty overlay." Whole-workspace
-      # typecheck is already covered by the standalone `typecheck` job, so scope
-      # this to the client filter to avoid duplicating it (this job gates plan/deploy).
-      - name: Type check client (fork build, empty overlay)
-        run: pnpm --filter @bike4mind/client run typecheck:fast
-
-      # Infra typecheck: verifies no-op glue files in infra/premium-generated/ compile
-      # correctly against infra/tsconfig.json (which now includes the generated files
-      # instead of the hard-coded overlay source paths). Requires .sst/platform/config.d.ts
-      # which was just generated by `pnpm sst install` above.
-      - name: Type check infra (fork build, no-op infra stubs)
-        run: pnpm typecheck:infra
-
   typecheck:
     needs: core-build
     # Standard runner: tsgo (native TS) is fast and low-memory and runs against
     # the prebuilt core artifact, so this leg is I/O-bound, not CPU/memory-bound.
     # Keeping it off the capped ubuntu-latest-m pool frees a slot per PR.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Type Check
     timeout-minutes: 15
     permissions:
@@ -370,7 +255,7 @@ jobs:
     needs: core-build
     # Standard runner: ESLint is I/O-bound, not CPU/memory-bound. Off the capped
     # ubuntu-latest-m pool to free a slot per PR.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: Lint
     timeout-minutes: 15
     permissions:
@@ -445,7 +330,7 @@ jobs:
     # which is capped at 10 concurrent org-wide. The shard fan-out (client/rest) was a
     # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
     # Matches polaris's test runner (_test.yml).
-    runs-on: ${{ fromJSON(vars.RUNNER_LABEL_HEAVY || '["self-hosted","linux","x64"]') }}
+    runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     timeout-minutes: 20
     permissions:
@@ -541,7 +426,7 @@ jobs:
     # shards were skipped, so this aggregator skips too — a skipped required
     # check counts as passing, instead of failing on skipped shards.
     if: always() && needs.changes.outputs.deployable == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -567,7 +452,7 @@ jobs:
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
@@ -644,16 +529,15 @@ jobs:
   # in the deploy job's SUBSCRIBER_FANOUT_IMAGE env var below.
 
   plan:
-    runs-on: ubuntu-latest
-    needs: [core-build, typecheck, lint, test, cli-e2e, open-core-fork-build]
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    needs: [core-build, typecheck, lint, test, cli-e2e]
     if: |
       always() &&
       needs.core-build.result == 'success' &&
       needs.typecheck.result == 'success' &&
       needs.lint.result == 'success' &&
       needs.test.result == 'success' &&
-      needs.cli-e2e.result == 'success' &&
-      needs.open-core-fork-build.result == 'success'
+      needs.cli-e2e.result == 'success'
     outputs:
       deploy-matrix: ${{ steps.plan.outputs.deploy-matrix }}
       has-deploys: ${{ steps.plan.outputs.has-deploys }}
@@ -675,6 +559,7 @@ jobs:
           PR_NUMBER: ${{ github.event.number }}
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_USER: ${{ github.event.pull_request.user.login }}
+          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
           ACTOR: ${{ github.actor }}
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
@@ -709,6 +594,7 @@ jobs:
           pr_number = os.environ['PR_NUMBER']
           pr_labels = json.loads(os.environ['PR_LABELS']) if os.environ['PR_LABELS'] not in ('', 'null') else []
           pr_user = os.environ['PR_USER']
+          pr_author_association = os.environ['PR_AUTHOR_ASSOCIATION']
           actor = os.environ['ACTOR']
           head_ref = os.environ['HEAD_REF']
           base_ref = os.environ['BASE_REF']
@@ -723,8 +609,14 @@ jobs:
           is_push_main = event == 'push' and ref == 'refs/heads/main'
           is_push_prod = event == 'push' and ref == 'refs/heads/prod'
           is_pr = event == 'pull_request'
+          # Anyone with read access can open a PR between two existing branches
+          # of this repo. Such a PR is same-repo (not a fork), so it lands in the
+          # trusted lane; without this check it would spawn a real preview stack.
+          # Only PR authors with write-level association get preview deploys.
+          # Tests and the rest of CI still run for everyone.
+          is_trusted_author = pr_author_association in ('OWNER', 'MEMBER', 'COLLABORATOR')
 
-          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr
+          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr or (is_pr and not is_trusted_author)
 
           for tenant, tc in config['tenants'].items():
               label = tc.get('preview_label')
@@ -738,6 +630,9 @@ jobs:
                   if label is None or label in pr_labels:
                       deploy.append({"tenant": tenant, "tier": "preview", "pr_number": str(pr_number)})
               # merge_group and skipped PRs => no deploy (test still runs)
+
+          if is_pr and not is_trusted_author:
+              print(f"::notice::No preview deploy: PR author association '{pr_author_association}' is not OWNER/MEMBER/COLLABORATOR.")
 
           deploy_json = json.dumps(deploy)
           print(f"Deploy matrix ({len(deploy)}): {deploy_json}")
@@ -753,7 +648,7 @@ jobs:
   # tenants independent.
   # ============================================================
   deploy:
-    needs: [core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, open-core-fork-build]
+    needs: [core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan]
     if: |
       always() &&
       needs.plan.result == 'success' &&
@@ -762,8 +657,7 @@ jobs:
       needs.typecheck.result == 'success' &&
       needs.lint.result == 'success' &&
       needs.test.result == 'success' &&
-      needs.cli-e2e.result == 'success' &&
-      needs.open-core-fork-build.result == 'success'
+      needs.cli-e2e.result == 'success'
     # Mirror _deploy-env.yml's jobs.deploy.permissions. On the open-core snapshot repo
     # the default GITHUB_TOKEN is restricted, so a reusable-caller job with no permissions
     # block would be rejected at workflow-startup when the reusable requests elevated
@@ -809,9 +703,9 @@ jobs:
   # ============================================================
   deploy-status:
     name: Deploy
-    needs: [changes, core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, deploy, open-core-fork-build]
+    needs: [changes, core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, deploy]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Report deploy result
         env:
@@ -822,16 +716,15 @@ jobs:
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
           VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
-          OPEN_CORE_FORK_BUILD: ${{ needs.open-core-fork-build.result }}
           PLAN: ${{ needs.plan.result }}
           DEPLOY: ${{ needs.deploy.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E verify-docs-build=$VERIFY_DOCS open-core-fork-build=$OPEN_CORE_FORK_BUILD plan=$PLAN deploy=$DEPLOY"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E verify-docs-build=$VERIFY_DOCS plan=$PLAN deploy=$DEPLOY"
           # An upstream gate that genuinely failed flips Deploy red. Skipped
           # (non-deployable / empty-plan / non-docs run) is treated as passing.
           # verify-docs-build is included so a broken docs build on a docs-only
           # PR (where core-build..plan all skip) can't green the Deploy check.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E" "$VERIFY_DOCS" "$OPEN_CORE_FORK_BUILD" "$PLAN"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E" "$VERIFY_DOCS" "$PLAN"; do
             if [ "$r" = "failure" ]; then
               echo "::error::An upstream gate failed; failing the Deploy check."
               exit 1

@@ -256,7 +256,7 @@ jobs:
   comment-published-versions:
     needs: snapshot-publish
     if: success() && needs.snapshot-publish.outputs.published-packages != ''
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     # The repo default token is read-only; commenting on the PR needs an
     # explicit grant (PR comments ride the issues API).
     permissions:

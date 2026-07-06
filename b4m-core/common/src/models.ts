@@ -562,7 +562,12 @@ export const getTextModelCost = (
   const tier = tierForTokens(inputTokens);
   if (tier === null) return 0;
 
+  // Guard against a malformed or non-tiered pricing map (e.g. a local Ollama
+  // model that publishes flat {input:0,output:0} instead of a numeric-keyed
+  // tier). Missing tier pricing means "no cost", not a crash in post-processing.
   const tierPricing = model.pricing[tier];
+  if (!tierPricing) return 0;
+
   const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
   const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
 

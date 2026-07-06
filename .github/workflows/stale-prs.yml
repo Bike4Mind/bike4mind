@@ -11,7 +11,7 @@ permissions:
 jobs:
   stale:
     name: Mark and Close Stale PRs
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - uses: actions/stale@v10
         with:

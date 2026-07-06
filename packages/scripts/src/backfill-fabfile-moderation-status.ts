@@ -3,7 +3,7 @@
 /**
  * Backfill script: Set moderationStatus='clean' on all pre-existing FabFiles
  *
- * Rationale: FabFiles uploaded before Q2b moderation feature have moderationStatus === undefined.
+ * Rationale: FabFiles uploaded before the moderation feature shipped have moderationStatus === undefined.
  * The isImageServeable gate refuses images with moderationStatus !== 'clean', so legacy images
  * would stop serving after deploy. This marks the existing corpus as 'clean' (forward-looking
  * control, not a retroactive scan of history).

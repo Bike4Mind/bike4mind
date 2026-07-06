@@ -683,7 +683,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
   await commandHandler.loadCustomAgentIfConfigured();
 
   // Fetch context for thread context and LLM routing
-  // (e.g., a follow-up "make this issue in lumina5" in a thread that already mentioned "gh issue")
+  // (e.g., a follow-up "make this issue in that repo" in a thread that already mentioned "gh issue")
   let contextMessages: SlackMessage[] = [];
   try {
     const slackContextMessages = await commandHandler.getSlackContextMessages();

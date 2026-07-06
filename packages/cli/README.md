@@ -70,26 +70,73 @@ The CLI will prompt you to authenticate with your Bike4Mind account on first run
 ### CLI Flags
 
 ```bash
-b4m [options]
+b4m [options] ["initial prompt"]
 ```
 
-**Available flags:**
-- `--dev` - Point the CLI at the local dev server (`http://localhost:3001`) and remember it
-- `--prod` - Point the CLI at Bike4Mind production and remember it
-- `--verbose`, `-v` - Show debug logs in console (useful for troubleshooting)
-- `--help`, `-h` - Show help information
-- `--version`, `-V` - Show CLI version
+A bare positional argument seeds **and** submits the first turn while keeping the interactive UI open (e.g. `b4m "summarize the git log"`).
+
+**Environment / API** (see [API Configuration](#api-configuration)):
+
+| Flag | Effect |
+| --- | --- |
+| `--dev` | Point the CLI at the local dev server (`http://localhost:3001`) and remember it. Aliases: `--local`, single-dash forms. |
+| `--prod` | Point the CLI at Bike4Mind production and remember it. Alias: `--production`. |
+| `--api-url <url>` | Point the CLI at **any** instance — a self-hosted stack, an AWS deployment, `http://localhost:3000`, etc. Clears cached auth (bound to the old origin) and exits; run `b4m` again to sign in. |
+| `--reset-api` | Reset the API URL to the built-in default and clear auth, then exit. |
+
+**Session / behavior:**
+
+| Flag | Effect |
+| --- | --- |
+| `--verbose`, `-v` | Show debug logs in the console (also always written to file — see [Debug Logs](#debug-logs)). |
+| `--debug-stream` | Ultra-verbose: log every SSE event (stream-parser debugging). Implies `--verbose`. |
+| `--no-project-config` | Skip loading project-specific config (`.bike4mind/`). |
+| `--add-dir <dir>` | Grant file access to an additional directory. Repeatable. |
+| `--ollama-host <url>` | Add a local Ollama endpoint's models to the picker (e.g. `http://localhost:11434`). |
+| `--no-remote-skills` | Skip fetching remote B4M-web skills for this run (local files only). |
+
+**Headless / non-interactive** (for scripts and CI):
+
+| Flag | Effect |
+| --- | --- |
+| `-p`, `--prompt <query>` | Run a single query non-interactively and exit. |
+| `--output-format <fmt>` | Output when using `-p`: `text` (default), `json`, or `stream-json` (NDJSON of thoughts/actions/observations). |
+| `--dangerously-skip-permissions` | With `-p`, auto-allow all tool permission prompts. Use with caution in CI/CD. |
+
+**Info:**
+
+| Flag | Effect |
+| --- | --- |
+| `--help`, `-h` | Show help. |
+| `--version`, `-V` | Show CLI version. |
+
+> **Host / `claude`-drop-in flags** (`--mcp-config`, `--strict-mcp-config`, `--append-system-prompt`, `--allowedTools`, `--settings`, `--session-id`, `--resume`) are documented under [Running as a `claude` engine inside a host app](#running-as-a-claude-engine-inside-a-host-app).
 
 **Examples:**
 ```bash
+# Point at a self-hosted stack, then sign in
+b4m --api-url http://localhost:3000
+b4m
+
+# One-shot headless query, JSON output
+b4m -p "What is 2+2?" --output-format json
+
 # Run with debug logs visible
 b4m --verbose
 
-# Check version
-b4m --version
+# Seed and submit the first turn, stay interactive
+b4m "review the recent changes"
+```
 
-# Show help
-b4m --help
+### Subcommands
+
+```bash
+b4m mcp list                              # List configured MCP servers
+b4m mcp add <name> -- <command...>        # Add an MCP server
+b4m mcp remove <name>                     # Remove an MCP server
+b4m mcp enable <name> | disable <name>    # Toggle a server on/off
+b4m update                                # Check for and install CLI updates
+b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 ```
 
 ### Switching environments (`--dev` / `--prod`)
@@ -116,31 +163,64 @@ shown in the startup banner (`🌍 API Environment: …`).
 
 ## Commands
 
-While in interactive mode:
+While in interactive mode. This mirrors the registry in `src/config/commands.ts` — run `/help` in a session for the live list (which also includes any custom and project commands).
 
 **Authentication:**
 - `/login` - Authenticate with your B4M account
 - `/logout` - Clear authentication and sign out
 - `/whoami` - Show current authenticated user
 
-**Session Management:**
+**Session management:**
 - `/save <name>` - Save current session
-- `/resume` - List and resume saved sessions
+- `/resume` (alias `/sessions`) - List and resume saved sessions
+- `/clear` (alias `/new`) - Start a new session
+- `/compact [instructions]` - Compact the conversation into a new session
+- `/context` - Show context-window usage
+- `/usage` - Show credit usage and balance
 
-**API Configuration:**
-- `/set-api <url>` - Connect to self-hosted Bike4Mind instance
-- `/reset-api` - Reset to Bike4Mind main service
+**API configuration:**
+- `/set-api <url>` - Connect to a self-hosted / custom Bike4Mind instance
+- `/reset-api` - Reset to the Bike4Mind main service
 - `/api-info` - Show current API configuration
 
-**Tool Permissions:**
-- `/trust <tool-name>` - Trust a tool (won't ask permission again)
-- `/untrust <tool-name>` - Remove tool from trusted list
-- `/trusted` - List all trusted tools
+**Files & checkpoints:**
+- `/add-dir <path>` / `/remove-dir <path>` / `/dirs` - Manage accessible directories
+- `/undo` - Undo the last file change
+- `/checkpoints` - List file restore points
+- `/restore <number>` - Restore files to a checkpoint
+- `/diff [number]` - Diff current state against a checkpoint
+- `/rewind` - Rewind the conversation to a previous point
+
+**Tool permissions:**
+- `/trust <tool-name>` / `/untrust <tool-name>` / `/trusted` - Manage auto-approved tools
+
+**Sandbox** (OS-level isolation for `bash`):
+- `/sandbox` - Show sandbox status and configuration
+- `/sandbox:enable` / `/sandbox:disable` - Toggle the sandbox
+- `/sandbox:mode <auto-allow|permissions>` - Set enforcement mode
+- `/sandbox:trust-domain <domain> [...]` / `/sandbox:domains` - Manage the network allowlist
+- `/sandbox:violations [count]` / `/sandbox:violations:clear` - Inspect / clear violations
+
+**MCP & agents:**
+- `/mcp` (alias `/mcp:list`) - Show MCP server status and connected tools
+- `/agents` (alias `/agents:list`) - List available agents
+- `/agents:new <name>` / `/agents:reload` - Create / reload agent definitions
+
+**Custom commands:**
+- `/commands` - List all custom commands
+- `/commands:new <name>` / `/commands:reload` - Create / reload custom commands
+
+**Durable workflow** (cross-session continuity):
+- `/workflow [decisions|blockers|handoff|review-gates]` - Workflow overview or a section
+- `/decisions` / `/blockers` / `/review-gates` - Shortcuts for the sections above
+- `/handoff [generate|--local]` - Show or generate a session handoff (`--local` = LLM-free snapshot)
 
 **General:**
 - `/help` - Show help
-- `/exit` - Exit CLI
-- `/config` - Show configuration
+- `/config` - Open the interactive configuration editor
+- `/project-config` - Show merged project configuration
+- `/terminal-setup` - Configure Shift+Enter for multi-line input
+- `/exit` (alias `/quit`) - Exit the CLI
 
 ## Configuration
 
@@ -169,25 +249,27 @@ launch flags (see [Switching environments](#switching-environments---dev----prod
 They persist your choice and cache auth per-environment. The `/set-api`, `/reset-api`,
 and `/api-info` commands below operate on the same setting from inside a session.
 
-**For Self-Hosted Instances:**
+**For self-hosted / custom instances:**
 
-If your organization runs a self-hosted Bike4Mind instance, connect to it using:
+The CLI can point at **any** Bike4Mind deployment — a self-hosted Docker stack, an AWS deployment, or `http://localhost:3000` — because auth (the OAuth device flow) and the chat API ship in the open core and are served by that instance directly.
+
+From the launch line (clears auth, then exit — run `b4m` again to sign in):
+
+```bash
+b4m --api-url http://localhost:3000              # local self-host Docker stack
+b4m --api-url https://app.your-instance.example.com
+b4m --reset-api                                  # back to the built-in default
+```
+
+Or from inside a session:
 
 ```bash
 /set-api https://app.your-instance.example.com
+/reset-api    # return to the default service
+/api-info     # show the current API configuration
 ```
 
-To return to the main Bike4Mind service:
-
-```bash
-/reset-api
-```
-
-Check your current API configuration:
-
-```bash
-/api-info
-```
+Auth tokens are cached **per environment**, so switching between hosted and self-host does not force a re-login. For an end-to-end walkthrough (hosted **and** self-host, sign-in, credits, troubleshooting), see the top-level [**BIKE4MIND_CLI.md**](../../BIKE4MIND_CLI.md).
 
 ### Tool API Keys
 
@@ -547,7 +629,7 @@ packages/cli/
 │   │   └── ConfigStore.ts
 │   └── index.tsx         # Main entry point
 └── bin/
-    └── bike4mind-cli.js  # Executable
+    └── bike4mind-cli.mjs  # Executable (source/dist auto-detect + flag parsing)
 ```
 
 ## Dependencies
