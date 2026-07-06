@@ -1,4 +1,3 @@
-// NOTE: a copy of this file exists in @bike4mind/utils/src/retry.ts - keep in sync
 import { isAxiosError } from 'axios';
 
 /**
@@ -204,16 +203,17 @@ async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
       return;
     }
 
-    const timeout = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timeout);
+      reject(new Error('Aborted'));
+    };
 
-    abortSignal?.addEventListener(
-      'abort',
-      () => {
-        clearTimeout(timeout);
-        reject(new Error('Aborted'));
-      },
-      { once: true }
-    );
+    const timeout = setTimeout(() => {
+      abortSignal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+
+    abortSignal?.addEventListener('abort', onAbort, { once: true });
   });
 }
 
@@ -222,18 +222,6 @@ async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
  *
  * Uses exponential backoff with jitter to space out retry attempts.
  * Respects Retry-After headers when present (e.g., for 429 rate limiting).
- *
- * @example
- * ```typescript
- * const result = await withRetry(
- *   () => anthropicClient.messages.create({ ... }),
- *   {
- *     maxRetries: 3,
- *     initialDelayMs: 100,
- *     logger: myLogger,
- *   }
- * );
- * ```
  */
 export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<RetryResult<T>> {
   const {

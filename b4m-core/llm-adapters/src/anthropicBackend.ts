@@ -32,7 +32,7 @@ import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from './retry';
+import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 
