@@ -7,7 +7,11 @@ on:
     # the PR number, so the rest of this workflow handles arbitrary base refs.
     # Exclude prod-targeted PRs (no preview was created, nothing to clean up).
     branches-ignore: [prod]
-    types: [closed]
+    # closed: the PR is done — tear the preview down.
+    # unlabeled: previews are opt-in via the `preview` label (deploy.yml); removing
+    #   it means "stop previewing this PR", so tear the current preview down too
+    #   (the job `if` below restricts unlabeled teardown to the `preview` label).
+    types: [closed, unlabeled]
 
 env:
   AWS_REGION: us-east-2
@@ -41,7 +45,10 @@ jobs:
     # Skip for: dependabot PRs, main→prod promotion PRs, changeset release PRs
     # Note: use pull_request.user.login instead of github.actor so the check
     # still holds when a human syncs/updates a dependabot PR
+    # Event gate: run on PR close, or when the `preview` label is removed
+    # (opt-out teardown). An `unlabeled` event for any other label is ignored.
     if: |
+      (github.event.action == 'closed' || (github.event.action == 'unlabeled' && github.event.label.name == 'preview')) &&
       github.event.pull_request.user.login != 'dependabot[bot]' &&
       !(github.event.pull_request.head.ref == 'main' && github.event.pull_request.base.ref == 'prod') &&
       !startsWith(github.event.pull_request.head.ref, 'changeset-release/')
