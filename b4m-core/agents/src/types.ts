@@ -293,6 +293,12 @@ export interface AgentCheckpoint {
    * with checkpoints written before this field existed.
    */
   initialMessageCount?: number;
+  /**
+   * Provider stop reason of the last LLM completion; persisted to
+   * `promptMeta.finishReason` for chat parity. Optional for backward
+   * compatibility with checkpoints written before this field existed.
+   */
+  finishReason?: string;
 }
 
 /**
