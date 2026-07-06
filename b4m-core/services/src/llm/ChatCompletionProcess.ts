@@ -325,6 +325,15 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
   return [...tools];
 }
 
+/**
+ * Tools this process auto-adds server-side regardless of user selection (see the
+ * auto-add pushes in the request-parse method: blog_publish/blog_edit/blog_draft
+ * for admins, navigate_view, skill). Small local (Ollama) models get confused by
+ * tools they didn't ask for, so these are trimmed for that backend unless the user
+ * explicitly enabled them. Keep this list in sync with those auto-add sites.
+ */
+export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
+
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
@@ -1271,8 +1280,17 @@ export class ChatCompletionProcess {
       const [previousMessages, totalMessageCount, cacheInfo] = previousMessagesResult;
       const oldestIncludedQuestId = cacheInfo.oldestIncludedQuestId ?? null;
 
+      // Local (Ollama) models run on modest hardware with small context budgets and
+      // are easily derailed by prose that isn't about the task. Give them a leaner
+      // system prompt: drop the Bike4Mind product-pitch persona (injected as an
+      // extraContextMessage) and the help-center nudge (below). Provider models are
+      // unaffected and keep the full prompt.
+      const isLocalModel = modelInfo.backend === ModelBackend.Ollama;
+
       // Extract extraContextMessages from Slack or other sources (will be added to context later)
-      const extraContextMessages = parsedBody.extraContextMessages || [];
+      const extraContextMessages = (parsedBody.extraContextMessages || []).filter(
+        m => !(isLocalModel && typeof m.content === 'string' && m.content.includes('[ADMIN_PROMPT:bike4mind_identity]'))
+      );
       if (extraContextMessages.length > 0) {
         logger.debug(
           `📨 [EXTRA_CONTEXT] Received ${extraContextMessages.length} extra context messages from external source`
@@ -1485,6 +1503,23 @@ export class ChatCompletionProcess {
         allTools = allTools.filter(t => !denied.has(t.toolSchema.name));
       }
 
+      // Local (Ollama) models are small and easily confused by tools they weren't
+      // asked to use - they pick the wrong one or loop. Restrict them to the tools
+      // the user explicitly enabled, dropping the auto/admin-added extras
+      // (blog_draft, skill, navigate_view, blog_publish/edit) unless selected.
+      if (modelInfo.backend === ModelBackend.Ollama && allTools) {
+        const userSelected = new Set<string>(parsedBody.tools ?? []);
+        const before = allTools.length;
+        allTools = allTools.filter(
+          t => !AUTO_ADDED_TOOL_NAMES.includes(t.toolSchema.name) || userSelected.has(t.toolSchema.name)
+        );
+        if (allTools.length !== before) {
+          logger.info(
+            `🔧 [Tools] Trimmed ${before - allTools.length} auto-added tool(s) for local model ${modelInfo.id}`
+          );
+        }
+      }
+
       logger.info('🔧 [Tools] allTools:', {
         count: allTools?.length ?? 0,
         names: allTools?.map(t => t.toolSchema.name) ?? [],
@@ -1589,11 +1624,15 @@ export class ChatCompletionProcess {
           // Help Center so a user who types a how-to question ("how do I add to my data lake?")
           // gets pointed to it instead of an ungrounded guess. Admin-editable via the
           // `HelpCenterPrompt` setting; a blank value falls back to the built-in default so the
-          // nudge can never be silently stripped.
-          {
-            role: 'system' as const,
-            content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
-          },
+          // nudge can never be silently stripped. Skipped for local models (lean prompt).
+          ...(isLocalModel
+            ? []
+            : [
+                {
+                  role: 'system' as const,
+                  content: getSettingsValue('HelpCenterPrompt', defaultAdminSettings, HELP_CENTER_PROMPT),
+                },
+              ]),
           // Inject view registry summary when navigate_view tool is enabled
           ...(enabledTools.includes('navigate_view')
             ? [
