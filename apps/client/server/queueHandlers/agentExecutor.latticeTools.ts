@@ -76,15 +76,21 @@ export function buildSubagentLatticeToolPool(
   callbacks: ToolBuilderCallbacks,
   config: BuildSharedToolsOptions['config']
 ): ICompletionOptionTools[] {
+  // Clear `agentStore` so `buildSharedTools` short-circuits *before* its subagent
+  // injection branch. With an `agentStore` present it would build a subagent LLM
+  // plus full `delegate_to_agent` / `coordinate_task` instances — all thrown away
+  // by the name filter below. The Lattice tools resolve purely from the
+  // `enabledTools` / `externalTools` merge, which never touches `agentStore`.
   const built =
-    buildSharedTools(deps, callbacks, {
+    buildSharedTools({ ...deps, agentStore: undefined }, callbacks, {
       enabledTools: [...LATTICE_TOOL_NAMES],
       externalTools: latticeToolDefinitions,
       config,
     }) ?? [];
-  // `buildSharedTools` also injects `delegate_to_agent` / `coordinate_task` when
-  // an `agentStore` is present (both deps carry one here). The opt-in pool must
-  // contain ONLY the Lattice tools, so keep just the known Lattice names.
+  // Defensive: the opt-in pool must contain ONLY the Lattice tools. The
+  // `agentStore` short-circuit above already prevents delegate/coordinate
+  // injection, so this filter is now a guard against a future path that resolves
+  // extra tools before the short-circuit.
   const latticeNames = new Set<string>(LATTICE_TOOL_NAMES);
   return built.filter(tool => latticeNames.has(tool.toolSchema.name));
 }

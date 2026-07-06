@@ -71,8 +71,8 @@ describe('buildSubagentLatticeToolPool', () => {
   });
 
   it('keeps ONLY Lattice tools, dropping delegate/coordinate that buildSharedTools injects', () => {
-    // buildSharedTools appends delegate_to_agent / coordinate_task when an
-    // agentStore is present; the opt-in pool must not carry them.
+    // The pool builder clears agentStore to avoid delegate/coordinate injection,
+    // but this filter still defensively drops them if they ever reach the pool.
     buildSharedToolsMock.mockReturnValue([
       ...LATTICE_TOOL_NAMES.map(tool),
       tool('delegate_to_agent'),
