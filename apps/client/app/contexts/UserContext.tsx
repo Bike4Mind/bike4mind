@@ -15,9 +15,13 @@ import { useTranslation } from 'react-i18next';
 
 /**
  * Decode the `tokenVersion` claim from a JWT access token without verifying
- * the signature (client-side only). Returns null when the token is absent,
- * malformed, or carries no version (legacy tokens), so callers can treat
- * "unknown version" as "do not force logout".
+ * the signature (client-side only). Returns null only when the token is
+ * absent or malformed. A present-but-legacy token (no version claim) returns
+ * null too, distinguishable from "no token" only by the caller checking
+ * whether a token exists. Every server-side surface (auth.ts, refreshToken.ts,
+ * websocket connect.ts) normalizes an absent version to 0 and rejects a
+ * legacy token once the user's version is bumped - callers here must do the
+ * same rather than exempting legacy tokens from the graceful revoke below.
  */
 function decodeTokenVersion(token: string | null): number | null {
   if (!token) return null;
@@ -280,6 +284,26 @@ export const useUser = create<UserContextProps>()(
 );
 
 /**
+ * Decide whether a real-time `users` update should force a graceful sign-out
+ * (the JWT kill switch): true when the user's DB tokenVersion has advanced
+ * past the version embedded in this tab's access token. A legacy token (no
+ * embedded version) normalizes to 0, matching every server-side surface
+ * (auth.ts, refreshToken.ts, websocket connect.ts) - it must NOT be exempted,
+ * or a bumped user keeps a legacy session that 401s on every request with no
+ * graceful sign-out. Returns false when there is no access token at all (a
+ * logged-out tab has nothing to revoke).
+ */
+export function shouldRevokeForTokenVersion(params: {
+  accessToken: string | null;
+  userTokenVersion: unknown;
+}): boolean {
+  if (!params.accessToken) return false;
+  if (typeof params.userTokenVersion !== 'number') return false;
+  const effectiveVersion = decodeTokenVersion(params.accessToken) ?? 0;
+  return params.userTokenVersion > effectiveVersion;
+}
+
+/**
  * Pure decision for UserProvider's /api/identify bootstrap effect. Extracted so the
  * load-bearing mfaPending gate and the cross-tab rehydrate guard are
  * unit-testable without rendering the heavily-wired UserProvider.
@@ -337,10 +361,9 @@ export const UserProvider: React.FC<UserProviderProps> = ({ children }) => {
             // Real-time kill switch: if the user's tokenVersion has advanced
             // past the version embedded in this tab's access token, the session
             // was revoked server-side (password reset / MFA change / unlink) -
-            // drop the token and force re-auth. Legacy tokens with no embedded
-            // version decode to null and are left alone.
-            const tokenVersion = decodeTokenVersion(accessToken);
-            if (typeof data.tokenVersion === 'number' && tokenVersion !== null && data.tokenVersion > tokenVersion) {
+            // drop the token and force re-auth. See shouldRevokeForTokenVersion
+            // for why a legacy (version-less) token is NOT exempted.
+            if (shouldRevokeForTokenVersion({ accessToken, userTokenVersion: data.tokenVersion })) {
               // Session revoked server-side. markSessionRevoked() clears every token
               // (including the impersonation return tokens, so an admin's stashed return
               // credential can't survive a hard revocation) and stamps expiredReason:
