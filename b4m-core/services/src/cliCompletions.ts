@@ -12,7 +12,13 @@ import {
   IUserRepository,
   type CompletionSource,
 } from '@bike4mind/common';
-import { usdToCredits, getSettingsMap, getSettingsValue, getSettingsByNames } from '@bike4mind/utils';
+import {
+  usdToCredits,
+  usdToCreditsStochastic,
+  getSettingsMap,
+  getSettingsValue,
+  getSettingsByNames,
+} from '@bike4mind/utils';
 import {
   getLlmByModel,
   getAvailableModels,
@@ -268,15 +274,20 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     `[CLI_CREDITS] Completion finished. modelInfo exists: ${!!modelInfo}, finalInputTokens: ${finalInputTokens}, finalOutputTokens: ${finalOutputTokens}`
   );
 
+  // Final settlement: one stochastic draw, shared by the client-facing final
+  // event and the ledger adjustment below so display always equals charge.
+  let finalUsdCost = 0;
+  let finalCredits = 0;
+
   if (modelInfo) {
-    const finalUsdCost = getTextModelCost(
+    finalUsdCost = getTextModelCost(
       modelInfo,
       finalInputTokens,
       finalOutputTokens,
       finalCacheReadTokens,
       finalCacheCreationTokens
     );
-    const finalCredits = usdToCredits(finalUsdCost);
+    finalCredits = usdToCreditsStochastic(finalUsdCost);
 
     logger?.info?.(
       `[CLI_CREDITS] Sending final credits to client: ${finalCredits} credits (${finalInputTokens} input + ${finalOutputTokens} output tokens` +
@@ -302,14 +313,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
-      const usdCost = getTextModelCost(
-        modelInfo,
-        finalInputTokens,
-        finalOutputTokens,
-        finalCacheReadTokens,
-        finalCacheCreationTokens
-      );
-      const actualCredits = usdToCredits(usdCost);
+      // Reuse the settlement values computed above - recomputing would draw a
+      // second stochastic rounding and desync the charge from what the client saw.
+      const usdCost = finalUsdCost;
+      const actualCredits = finalCredits;
       const creditDifference = reservedCredits - actualCredits;
 
       logger?.info?.(

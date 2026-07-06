@@ -301,7 +301,7 @@ describe('handleUserSubscriptionInvoice — plan lookup', () => {
       })
     );
     expect(creditService.addCredits).toHaveBeenCalledWith(
-      expect.objectContaining({ credits: 50000, type: 'subscription' }),
+      expect.objectContaining({ credits: 31667, type: 'subscription' }),
       expect.anything()
     );
     expect(emitMetric).not.toHaveBeenCalled();

@@ -55,7 +55,7 @@ import {
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
 import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
-import { usdToCredits } from '@bike4mind/utils';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
   ServerAgentStore,
@@ -1327,28 +1327,33 @@ async function processExecution(
       counters.outputTokens = checkpoint.totalOutputTokens;
       counters.cacheReadTokens = checkpoint.totalCacheReadTokens;
       counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
-      const credits = usdToCredits(costDelta);
-      if (credits <= 0) return;
-      await creditService.deductCreditsWithOrgSupport(
-        {
-          type: 'text_generation_usage',
-          user: user as IUserDocument,
-          organization,
-          credits,
-          sessionId: execution.sessionId,
-          questId: execution.questId,
-          model: execution.model,
-          inputTokens: inputTokensDelta,
-          outputTokens: outputTokensDelta,
-        },
-        {
-          db: {
-            creditTransactions: creditTransactionRepository,
-            users: userRepository,
-            organizations: organizationRepository,
+      // Stochastic settlement: a sub-credit delta legitimately rounds to 0
+      // (paid in expectation across iterations), so only skip the ledger
+      // deduction - the usage event below still records the COGS delta,
+      // otherwise margin reporting would silently under-count cost.
+      const credits = usdToCreditsStochastic(costDelta);
+      if (credits > 0) {
+        await creditService.deductCreditsWithOrgSupport(
+          {
+            type: 'text_generation_usage',
+            user: user as IUserDocument,
+            organization,
+            credits,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: execution.model,
+            inputTokens: inputTokensDelta,
+            outputTokens: outputTokensDelta,
           },
-        }
-      );
+          {
+            db: {
+              creditTransactions: creditTransactionRepository,
+              users: userRepository,
+              organizations: organizationRepository,
+            },
+          }
+        );
+      }
       // Dual-write usage event: analytics only, never billing. One per billed iteration.
       usageEventRepository
         .record({
