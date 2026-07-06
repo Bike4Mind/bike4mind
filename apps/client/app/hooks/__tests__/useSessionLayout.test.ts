@@ -394,7 +394,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
 
   // The composer's live scan-status update. A `scanning` composer item flips to
   // `complete`/`blocked` when the image_moderation_status websocket event resolves.
-  describe('patchPendingMessageFileModerationStatus (Q2b)', () => {
+  describe('patchPendingMessageFileModerationStatus', () => {
     const makePendingFile = (overrides: Partial<PendingMessageFile> = {}): PendingMessageFile => ({
       fabFile: { id: 'file-1', fileName: 'photo.png', mimeType: 'image/png' } as IFabFileDocument,
       uploadProgress: 100,
@@ -492,7 +492,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
   // The Send button must stay disabled while an image is being
   // scanned (not just while it's uploading), but a terminal 'blocked' file must stay
   // removable rather than permanently trapping the composer.
-  describe('hasBlockingPendingFiles (Q2b P2-1)', () => {
+  describe('hasBlockingPendingFiles', () => {
     const makeFile = (status: PendingMessageFile['status']): PendingMessageFile => ({
       fabFile: { id: `file-${status}`, fileName: 'photo.png', mimeType: 'image/png' } as IFabFileDocument,
       uploadProgress: 100,
@@ -527,7 +527,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
   // A held/blocked image must never ship as a message
   // attachment id - the server silently drops an unservable fabFile, leaving the LLM
   // with no attachment and the user with no signal.
-  describe('getSendableMessageFileIds (Q2b P2-1)', () => {
+  describe('getSendableMessageFileIds', () => {
     const makeFile = (id: string, status: PendingMessageFile['status']): PendingMessageFile => ({
       fabFile: { id, fileName: 'photo.png', mimeType: 'image/png' } as IFabFileDocument,
       uploadProgress: 100,
@@ -571,7 +571,7 @@ describe('useSessionLayout - LRU Cache Functions', () => {
   // can arrive before SessionFilePond swaps the upload's temp id for the real FabFile id.
   // recordModerationStatus buffers the event by fabFileId in that case; consumeBufferedModerationStatus
   // replays it once the real id is known (see SessionFilePond's upload `.then`).
-  describe('recordModerationStatus + consumeBufferedModerationStatus (Q2b id-swap race)', () => {
+  describe('recordModerationStatus + consumeBufferedModerationStatus (id-swap race)', () => {
     beforeEach(() => {
       useSessionLayout.setState({ pendingMessageFiles: [], pendingModerationEvents: {} });
     });

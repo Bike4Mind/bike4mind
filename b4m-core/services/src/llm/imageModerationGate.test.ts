@@ -9,7 +9,7 @@ function makeMeta() {
   return { userId: 'u1', sessionId: 's1', questId: 'q1', provider: 'openai', model: 'gpt-image-1' };
 }
 
-describe('moderateImageOrThrow (#9776 Q2a moderation gate)', () => {
+describe('moderateImageOrThrow (moderation gate)', () => {
   it('block: throws ImageModerationBlockedError and records the incident once', async () => {
     const service: ImageModerationService = {
       checkImage: vi.fn().mockRejectedValue(new ImageModerationBlockedError(labels)),

@@ -13,7 +13,7 @@ export const SecopsTriageConfigSchema = z
     /** Master kill switch */
     enabled: z.boolean().default(false),
 
-    /** GitHub repository to create issues in (e.g. 'MillionOnMars/lumina5') */
+    /** GitHub repository to create issues in (e.g. 'owner/repo') */
     githubRepo: z.string().default('MillionOnMars/lumina5'),
 
     /** Minimum ZAP severity level that triggers issue creation */

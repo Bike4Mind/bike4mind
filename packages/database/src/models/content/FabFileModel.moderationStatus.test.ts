@@ -15,7 +15,7 @@ afterAll(async () => {
   await server.stop();
 });
 
-describe('FabFile moderationStatus (#9776 Q2b)', () => {
+describe('FabFile moderationStatus', () => {
   it('defaults to pending and round-trips clean/blocked', async () => {
     const f = await FabFile.create({
       userId: 'u1',

@@ -93,7 +93,7 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe({
 // attach this queue as the Lambda's native async-invocation dead-letter target via
 // `transform.function.deadLetterConfig` below: after Lambda's built-in async retries
 // (2 retries) are exhausted, it writes the original S3 event payload here so a transient
-// Rekognition/moderation failure is no longer silently dropped (#9776 Q2b).
+// Rekognition/moderation failure is no longer silently dropped.
 const fabFileModerationDLQ = new sst.aws.Queue('fabFileModerationDLQ', {});
 const fabFileBucketNotification = fabFileBucket.notify({
   notifications: [
@@ -369,7 +369,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
       resources: ['*'],
     },
     // This handler wires imageGenerateStorage and runs image_generation/edit_image tools
-    // (#9776 B1 — closes the agent-tool moderation bypass).
+    // (closes an agent-tool moderation bypass).
     {
       actions: ['rekognition:DetectModerationLabels'],
       resources: ['*'],
@@ -773,7 +773,7 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe({
       resources: ['*'],
     },
     // deepAgent/toolMaterializer.ts wires imageGenerateStorage and runs image_generation/
-    // edit_image tools (#9776 B1 — closes the agent-tool moderation bypass).
+    // edit_image tools (closes an agent-tool moderation bypass).
     {
       actions: ['rekognition:DetectModerationLabels'],
       resources: ['*'],

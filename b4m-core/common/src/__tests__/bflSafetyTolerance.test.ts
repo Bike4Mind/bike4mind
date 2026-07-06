@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { BFL_SAFETY_TOLERANCE, FluxProInputSchema } from '../schemas/bfl';
 
-describe('BFL safety_tolerance hard cap (#9776)', () => {
+describe('BFL safety_tolerance hard cap', () => {
   it('hard-caps the maximum at 2 (BFL scale: 0=strict, 6=unfiltered)', () => {
     expect(BFL_SAFETY_TOLERANCE.MAX).toBe(2);
   });

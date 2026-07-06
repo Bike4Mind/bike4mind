@@ -101,7 +101,7 @@ describe('GET /api/files/download', () => {
     expect(fs.existsSync(outputZipPath)).toBe(false);
   });
 
-  it('skips held/blocked uploaded images and a not-yet-cleared non-image, keeps clean files (Q2b / P1-1)', async () => {
+  it('skips held/blocked uploaded images and a not-yet-cleared non-image, keeps clean files', async () => {
     (FabFile.find as ReturnType<typeof vi.fn>).mockResolvedValue([
       { fileUrl: 'u1', mimeType: 'text/plain', fileName: 'a.txt', moderationStatus: 'clean' },
       { fileUrl: 'u2', mimeType: 'image/png', fileName: 'held.png', moderationStatus: 'pending' },
