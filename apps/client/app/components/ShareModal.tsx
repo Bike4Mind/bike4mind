@@ -51,7 +51,7 @@ const ShareModal: React.FC<ShareModalProps> = ({ open, onClose, shareableEntity,
           <Typography level="h2">Global Share {shareableEntity?.name}</Typography>
           <Stack direction="row" spacing={2} alignItems="center">
             <Typography level="h4">Global Read:</Typography>
-            <Tooltip title="Global Read means that anyone in GrokTool can view">
+            <Tooltip title="Global Read means that anyone in Bike4Mind can view">
               <Button onClick={() => handleShareChange('read')}>
                 {shareableEntity?.isGlobalRead ? 'Make Private' : 'Make Global'}
               </Button>
@@ -59,7 +59,7 @@ const ShareModal: React.FC<ShareModalProps> = ({ open, onClose, shareableEntity,
           </Stack>
           <Stack direction="row" spacing={2} alignItems="center">
             <Typography level="h4">Global Write:</Typography>
-            <Tooltip title="Global Write means that anyone in GrokTool can edit">
+            <Tooltip title="Global Write means that anyone in Bike4Mind can edit">
               <Button onClick={() => handleShareChange('write')}>
                 {shareableEntity?.isGlobalWrite ? 'Disable Write' : 'Enable Write'}
               </Button>

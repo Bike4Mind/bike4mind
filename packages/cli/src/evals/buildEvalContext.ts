@@ -24,7 +24,7 @@ import { PermissionManager } from '../utils/PermissionManager.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { ApiClient } from '../auth/ApiClient.js';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend.js';
-import { getApiUrl } from '../utils/apiUrl.js';
+import { requireApiUrl } from '../utils/apiUrl.js';
 import { Logger } from '@bike4mind/observability';
 import { getPromptVariant, type PromptVariant } from './prompts.js';
 
@@ -90,7 +90,7 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
   }
 
   const config = await configStore.load();
-  const apiBaseURL = getApiUrl(config.apiConfig);
+  const apiBaseURL = requireApiUrl(config.apiConfig);
   const apiClient = new ApiClient(apiBaseURL, configStore);
 
   // Discover the completions URL from server config (matches index.tsx pattern).

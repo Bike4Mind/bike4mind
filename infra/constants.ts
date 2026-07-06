@@ -36,6 +36,10 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD: process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD || '',
   NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST || '',
   NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD || '',
+  // Credit-valuation knobs (b4m-core/common/src/pricing.ts). Same dual nature as
+  // the Stripe ids above: build-time inlined and runtime-read. Empty == in-source defaults.
+  NEXT_PUBLIC_PRICE_MARGIN: process.env.NEXT_PUBLIC_PRICE_MARGIN || '',
+  NEXT_PUBLIC_USD_TO_CREDITS_RATE: process.env.NEXT_PUBLIC_USD_TO_CREDITS_RATE || '',
   // Enable What's New modal distribution (S3 upload) for main production only
   // Fork environments should NOT set this - they consume via WHATS_NEW_DISTRIBUTION_URL
   ENABLE_WHATS_NEW_DISTRIBUTION: process.env.ENABLE_WHATS_NEW_DISTRIBUTION || '',

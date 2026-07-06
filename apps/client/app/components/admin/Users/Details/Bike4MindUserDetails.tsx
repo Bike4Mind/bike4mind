@@ -10,14 +10,14 @@ import prettyBytes from 'pretty-bytes';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQueryClient } from '@tanstack/react-query';
 
-interface GrokToolUserDetailsProps {
+interface Bike4MindUserDetailsProps {
   user: IUserDocument;
   userKey: string;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
 }
 
-const GrokToolUserDetails: React.FC<GrokToolUserDetailsProps> = React.memo(
+const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
   ({ user, editedFields, onFieldChange, userKey }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
@@ -199,6 +199,6 @@ const GrokToolUserDetails: React.FC<GrokToolUserDetailsProps> = React.memo(
   }
 );
 
-GrokToolUserDetails.displayName = 'GrokToolUserDetails';
+Bike4MindUserDetails.displayName = 'Bike4MindUserDetails';
 
-export default GrokToolUserDetails;
+export default Bike4MindUserDetails;

@@ -2,7 +2,7 @@ import type { ApiKeyTable, ICompletionBackend, ICompletionOptionTools } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
@@ -42,6 +42,19 @@ export interface SubagentTelemetryData {
 }
 
 /**
+ * Cost attribution for a completed delegation, so the caller can record a
+ * usage event. Absent when the model can't be resolved; callers must not
+ * fabricate an event from zeros.
+ */
+export interface SubagentUsageMeta {
+  usdCost: number;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
  * Dependencies for creating the delegate_to_agent tool
  */
 export interface DelegateToAgentToolDeps {
@@ -57,7 +70,7 @@ export interface DelegateToAgentToolDeps {
    */
   getSignal?: () => AbortSignal | undefined;
   /** Callback to report credits used by the agent delegation */
-  onCredits?: (credits: number) => void;
+  onCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
   /** Available models for credit computation */
   availableModels?: ModelInfo[];
   /** Callback to send status updates to the client during subagent execution */
@@ -303,7 +316,21 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         const durationMs = Date.now() - startTime;
 
         if (result.completionInfo.totalCredits && deps.onCredits) {
-          deps.onCredits(result.completionInfo.totalCredits);
+          const modelInfo = deps.availableModels?.find(m => m.id === result.model);
+          const inputTokens = result.completionInfo.totalInputTokens ?? 0;
+          const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
+          deps.onCredits(
+            result.completionInfo.totalCredits,
+            modelInfo
+              ? {
+                  usdCost: getTextModelCost(modelInfo, inputTokens, outputTokens),
+                  provider: modelInfo.backend,
+                  model: result.model,
+                  inputTokens,
+                  outputTokens,
+                }
+              : undefined
+          );
         }
 
         // Report telemetry for successful execution

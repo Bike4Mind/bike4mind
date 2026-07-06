@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Yapay Zeka Ayarları",
     "session": "Not Defteri",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Arkadaşınıza tavsiye edin",
-    "email_title_default": "GrokTool'a Hoş Geldiniz!",
-    "email_body_default": "USER_NAME tarafından GrokTool'a davet edildiniz! KAYIT_LİNKİ: Kayıt olmak için aşağıdaki davet kodunu kullanın: INVITE_CODE",
+    "email_title_default": "Bike4Mind'a Hoş Geldiniz!",
+    "email_body_default": "USER_NAME tarafından Bike4Mind'a davet edildiniz! KAYIT_LİNKİ: Kayıt olmak için aşağıdaki davet kodunu kullanın: INVITE_CODE",
     "friend_email": "Arkadaşın E-postası",
     "num_referrals_available": "Kullanılabilir yönlendirmeler:",
     "no_valid_emails_error": "Lütfen geçerli e-posta adres(ler)i girin",

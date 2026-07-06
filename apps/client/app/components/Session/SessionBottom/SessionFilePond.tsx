@@ -76,7 +76,7 @@ export function SessionFilePond({
         allowPaste={true}
         labelIdle={'<span class="filepond--label-action"></span>'}
         stylePanelLayout="compact" // If I use "integrated then the file upload does not complete"
-        className={styles.groktool}
+        className={styles.bike4mind}
         maxFiles={20}
         name="content"
         server={{

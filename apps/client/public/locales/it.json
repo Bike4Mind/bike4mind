@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Configuraciones de IA",
     "session": "Quaderno",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Riferisci un amico a",
-    "email_title_default": "Benvenuto su GrokTool!",
-    "email_body_default": "Sei stato invitato da USER_NAME su GrokTool! LINK DI REGISTRAZIONE: Usa il seguente codice invito per iscriverti: INVITE_CODE",
+    "email_title_default": "Benvenuto su Bike4Mind!",
+    "email_body_default": "Sei stato invitato da USER_NAME su Bike4Mind! LINK DI REGISTRAZIONE: Usa il seguente codice invito per iscriverti: INVITE_CODE",
     "friend_email": "Email dell'amico",
     "num_referrals_available": "Referimenti disponibili:",
     "no_valid_emails_error": "Inserisci indirizzi email validi",
