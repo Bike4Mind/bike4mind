@@ -34,7 +34,7 @@ const isLeastPrivileged = (variant: IVariantDescriptor): boolean =>
  * clause; internal variants see all change types. Every variant gets the
  * uncertainty rule and the empty-result sentinel instruction.
  *
- * lumina5 is single-deployment, so there is no deployment-scope line.
+ * This product is single-deployment, so there is no deployment-scope line.
  */
 export const buildVariantGuidance = (variant: IVariantDescriptor): string => {
   const audienceLine = isLeastPrivileged(variant)

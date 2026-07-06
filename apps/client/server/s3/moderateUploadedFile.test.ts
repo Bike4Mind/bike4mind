@@ -39,7 +39,7 @@ function deps(overrides: Partial<Parameters<typeof moderateUploadedFile>[0]> = {
   };
 }
 
-describe('moderateUploadedFile (Q2b)', () => {
+describe('moderateUploadedFile', () => {
   it('returns clean for a non-image without downloading the full object or scanning', async () => {
     const d = deps({ mimeType: 'application/pdf', downloadPartialBytes: vi.fn(async () => PDF_SIGNATURE) });
     const result = await moderateUploadedFile(d);
@@ -99,7 +99,7 @@ describe('moderateUploadedFile (Q2b)', () => {
     expect(d.downloadPartialBytes).not.toHaveBeenCalled();
   });
 
-  describe('anti-spoof byte sniffing (P1-2)', () => {
+  describe('anti-spoof byte sniffing', () => {
     it('treats a file with a spoofed non-image declared mimeType but real image bytes as an image', async () => {
       const d = deps({
         mimeType: 'application/pdf', // attacker-declared to dodge the scan
@@ -134,7 +134,7 @@ describe('moderateUploadedFile (Q2b)', () => {
     });
   });
 
-  describe('unsupported image formats (P1-4)', () => {
+  describe('unsupported image formats', () => {
     it('reaches a terminal "blocked" (not a retryable throw) when the format cannot be scanned', async () => {
       const d = deps({
         moderateImageOrThrow: vi.fn(async () => {
@@ -164,7 +164,7 @@ describe('moderateUploadedFile (Q2b)', () => {
   });
 });
 
-describe('isTerminalModerationStatus (P1-3 terminal-state guard)', () => {
+describe('isTerminalModerationStatus (terminal-state guard)', () => {
   it('is terminal for "clean" and "blocked" — must not be re-scanned on S3 redelivery', () => {
     expect(isTerminalModerationStatus('clean')).toBe(true);
     expect(isTerminalModerationStatus('blocked')).toBe(true);

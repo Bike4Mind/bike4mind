@@ -21,7 +21,7 @@ const baseProps = {
 // The "Scanning for safety" upload-moderation placeholder must only ever apply to
 // uploaded FabFile images (which pass `moderationStatus`), never to generated reply
 // images (PromptReplies.tsx), which never pass that prop.
-describe('ImageContainer (Q2b moderation gating)', () => {
+describe('ImageContainer (upload moderation gating)', () => {
   it('shows the scanning placeholder when moderationStatus is set and src is empty (uploaded, mid-scan)', () => {
     render(
       <TestWrapper>

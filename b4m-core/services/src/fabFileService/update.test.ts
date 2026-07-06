@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi, Mock } from 'vitest';
 import { IFabFileDocument, IUserDocument } from '@bike4mind/common';
 import { updateFabFile } from './update';
 
-describe('updateFabFile (#9776 Q2b)', () => {
+describe('updateFabFile (upload moderation gate)', () => {
   const mockUser = { id: 'user-123' } as IUserDocument;
 
   let findAccessibleById: Mock;
@@ -63,7 +63,7 @@ describe('updateFabFile (#9776 Q2b)', () => {
     expect(result.notes).toBe('a note');
   });
 
-  it('#9776 P2-7: persists the cleared fileUrl (not the stale one) — clear must happen BEFORE the write', async () => {
+  it('persists the cleared fileUrl (not the stale one) — clear must happen BEFORE the write', async () => {
     findAccessibleById.mockResolvedValue(baseFile({ moderationStatus: 'pending' }));
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
