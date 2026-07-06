@@ -106,15 +106,6 @@ export function PublishShareModal({
   resolveExisting,
   orgOption,
 }: PublishShareModalProps) {
-  // Public, then Team (only in an org context), then Private - openness descending. The Team
-  // option publishes an org-scoped page; the publish callback maps it to an org-tier page.
-  const visibilityOptions = useMemo<VisibilityOption[]>(
-    () =>
-      orgOption
-        ? [PUBLIC_OPTION, { value: 'organization', ...orgOption, icon: <GroupIcon /> }, PRIVATE_OPTION]
-        : [PUBLIC_OPTION, PRIVATE_OPTION],
-    [orgOption]
-  );
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
   const [result, setResult] = useState<PublishResult | null>(null);
@@ -179,6 +170,32 @@ export function PublishShareModal({
   const phase: 'choose' | 'shared' = result ? 'shared' : 'choose';
   const url = result ? toShareUrl(result) : '';
   const isPublic = visibility === 'public';
+
+  // Visibility choices, ordered by openness. The Team (org) entry appears only when the caller
+  // supplied `orgOption` (an org account context).
+  //
+  // In the SHARED phase we can only PATCH the existing record's `visibility` - we cannot migrate
+  // its scope tier - so the offered set must be valid for the published record's tier:
+  //   • user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
+  //     'organization' on a user-scoped record, whose scopeId is the user id, so the serve gate
+  //     would 403 every org member (moving to org scope requires re-publishing, not a PATCH).
+  //   • org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
+  //     (SCOPE_POLICY), so the server would reject it - don't offer a dead-end.
+  // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
+  // full set is safe.
+  const visibilityOptions = useMemo<VisibilityOption[]>(() => {
+    const orgEntry: VisibilityOption | null = orgOption
+      ? { value: 'organization', ...orgOption, icon: <GroupIcon /> }
+      : null;
+    if (result) {
+      return result.tier === 'organization'
+        ? orgEntry
+          ? [PUBLIC_OPTION, orgEntry]
+          : [PUBLIC_OPTION]
+        : [PUBLIC_OPTION, PRIVATE_OPTION];
+    }
+    return orgEntry ? [PUBLIC_OPTION, orgEntry, PRIVATE_OPTION] : [PUBLIC_OPTION, PRIVATE_OPTION];
+  }, [orgOption, result]);
 
   // Phase 1 -> publish with the chosen visibility.
   const handleCreate = async () => {
