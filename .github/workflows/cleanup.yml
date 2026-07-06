@@ -207,7 +207,7 @@ jobs:
           echo "Database cleanup succeeded."
 
       - name: Remove preview environment
-        uses: Bike4Mind/workflow-templates/.github/actions/sst-remove-idempotent@main
+        uses: ./.github/actions/sst-remove-idempotent
         with:
           stage: pr${{ github.event.number }}
         env:
@@ -265,7 +265,7 @@ jobs:
     name: Notify Cleanup Failure
     needs: cleanup-preview
     if: always() && (needs.cleanup-preview.result == 'failure' || needs.cleanup-preview.result == 'cancelled')
-    uses: Bike4Mind/workflow-templates/.github/workflows/notify-cleanup-failure.yml@main
+    uses: ./.github/workflows/notify-cleanup-failure.yml
     with:
       pr_number: '${{ github.event.number }}'
       pr_title: '${{ github.event.pull_request.title }}'

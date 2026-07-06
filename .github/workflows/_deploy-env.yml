@@ -539,7 +539,7 @@ jobs:
 
       - name: Verify PR is still open
         if: steps.cfg.outputs.is_preview == 'true' && inputs.pr_number != ''
-        uses: Bike4Mind/workflow-templates/.github/actions/verify-pr-open@main
+        uses: ./.github/actions/verify-pr-open
         with:
           pr_number: ${{ inputs.pr_number }}
           github_token: ${{ github.token }}

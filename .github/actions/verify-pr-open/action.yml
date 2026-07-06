@@ -1,0 +1,24 @@
+name: 'Verify PR is Open'
+description: 'Checks if a pull request is still open before proceeding with deployment'
+inputs:
+  pr_number:
+    description: 'Pull request number'
+    required: true
+  github_token:
+    description: 'GitHub token with PR read access'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Check PR state
+      shell: bash
+      run: |
+        PR_STATE=$(gh pr view ${{ inputs.pr_number }} --json state --jq '.state')
+        if [ "$PR_STATE" != "OPEN" ]; then
+          echo "❌ PR #${{ inputs.pr_number }} is no longer open (state: $PR_STATE)"
+          echo "Deployment cancelled to prevent deploying a closed/merged PR."
+          exit 1
+        fi
+        echo "✅ PR #${{ inputs.pr_number }} is still open. Proceeding with deployment."
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}

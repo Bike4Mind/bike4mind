@@ -1069,7 +1069,7 @@ jobs:
     name: Notify Production Failure
     needs: deploy
     if: always() && (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled') && github.ref == 'refs/heads/prod'
-    uses: Bike4Mind/workflow-templates/.github/workflows/slack-notify.yml@main
+    uses: ./.github/workflows/slack-notify.yml
     with:
       status: ${{ needs.deploy.result }}
       environment: 'Production'
