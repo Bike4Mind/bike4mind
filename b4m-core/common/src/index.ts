@@ -56,6 +56,7 @@ export * from './utils/isImageServeable';
 export * from './navigation';
 export * from './sample';
 export * from './rateLimitHeaders';
+export * from './retry';
 export { default as dayjs } from './utils/dayjsConfig';
 export * from './slackManifestTemplate';
 export * from './surfaces';

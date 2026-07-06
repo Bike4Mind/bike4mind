@@ -67,7 +67,17 @@ export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
 export * from './url';
-export * from './retry';
+// retry lives in @bike4mind/common (shared with llm-adapters); re-exported so
+// existing `import { withRetry } from '@bike4mind/utils'` consumers keep working.
+export {
+  withRetry,
+  isRetryableError,
+  calculateRetryDelay,
+  getRetryAfterMs,
+  isUserInitiatedAbort,
+  type RetryOptions,
+  type RetryResult,
+} from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

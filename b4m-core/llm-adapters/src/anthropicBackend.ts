@@ -10,6 +10,9 @@ import { CloudWatchClient, PutMetricDataCommand, StandardUnit } from '@aws-sdk/c
 import {
   ChatModels,
   IMessage,
+  isRetryableError,
+  isUserInitiatedAbort,
+  withRetry,
   MessageContentText,
   ModelBackend,
   NO_TEMPERATURE_MODELS,
@@ -32,7 +35,6 @@ import { Logger } from '@bike4mind/observability';
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from './toolPairingUtils';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from './retry';
 import { buildThinkingParams, type ThinkingConfig } from './thinkingParams';
 import { acquireSlot, releaseSlot } from './_anthropicSemaphore';
 

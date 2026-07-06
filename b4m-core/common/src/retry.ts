@@ -1,4 +1,3 @@
-// NOTE: a copy of this file exists in @bike4mind/utils/src/retry.ts - keep in sync
 import { isAxiosError } from 'axios';
 
 /**
