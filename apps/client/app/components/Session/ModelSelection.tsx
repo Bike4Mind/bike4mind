@@ -152,6 +152,7 @@ preloadBackendLogos();
 interface ModelSelectionProps {
   model: ModelName;
   setModel: (model: ModelName) => void;
+  onSelectionComplete?: () => void;
   imageModel: boolean;
   showAllModels?: boolean;
   modelFilter?: 'all' | 'text' | 'image' | 'video';
@@ -412,7 +413,6 @@ const ModelOption = React.memo(
                 }}
                 onClick={e => {
                   e.stopPropagation();
-                  onSelect(model);
                   onSettingsClick(model);
                 }}
               >
@@ -563,6 +563,7 @@ ModelOption.displayName = 'ModelOption';
 const ModelSelection: React.FC<ModelSelectionProps> = ({
   model,
   setModel,
+  onSelectionComplete,
   imageModel,
   showAllModels,
   modelFilter = 'text',
@@ -795,7 +796,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
     return userToggledBackends;
   }, [debouncedSearchQuery, modelsByBackend, userToggledBackends]);
 
-  const handleModelSelect = useCallback(
+  const selectModel = useCallback(
     (selectedModel: ModelInfo) => {
       setModel(selectedModel.id);
 
@@ -807,6 +808,22 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
       }
     },
     [setModel, setLLM]
+  );
+
+  const handleModelSelect = useCallback(
+    (selectedModel: ModelInfo) => {
+      selectModel(selectedModel);
+      onSelectionComplete?.();
+    },
+    [onSelectionComplete, selectModel]
+  );
+
+  const handleSettingsClick = useCallback(
+    (selectedModel: ModelInfo) => {
+      selectModel(selectedModel);
+      onSettingsClick?.(selectedModel);
+    },
+    [onSettingsClick, selectModel]
   );
 
   // Scroll the currently-selected model card into view on first paint so the
@@ -1159,7 +1176,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                         maxContextWindow={maxContextWindow}
                         maxTokens={maxTokens}
                         onSelect={handleModelSelect}
-                        onSettingsClick={onSettingsClick}
+                        onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                         isFavorite={true}
                         onToggleFavorite={toggleFavorite}
                         topUsedModelIds={topUsedModelIds}
@@ -1265,7 +1282,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1311,7 +1328,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1357,7 +1374,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                                 maxContextWindow={maxContextWindow}
                                 maxTokens={maxTokens}
                                 onSelect={handleModelSelect}
-                                onSettingsClick={onSettingsClick}
+                                onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                                 isFavorite={isFavorite(modelInfo.id)}
                                 onToggleFavorite={toggleFavorite}
                                 topUsedModelIds={topUsedModelIds}
@@ -1387,7 +1404,7 @@ const ModelSelection: React.FC<ModelSelectionProps> = ({
                           maxContextWindow={maxContextWindow}
                           maxTokens={maxTokens}
                           onSelect={handleModelSelect}
-                          onSettingsClick={onSettingsClick}
+                          onSettingsClick={onSettingsClick ? handleSettingsClick : undefined}
                           isFavorite={isFavorite(modelInfo.id)}
                           onToggleFavorite={toggleFavorite}
                           topUsedModelIds={topUsedModelIds}
