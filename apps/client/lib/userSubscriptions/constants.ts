@@ -50,10 +50,9 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     priceId: PROFESSIONAL_PRICE_ID,
     interval: SubscriptionPlanInterval.Monthly,
     name: 'Professional',
-    // $19 / $0.0006 at the uniform per-credit anchor - same rate as the
-    // one-time packages, so subscribers get exactly the advertised markup
-    // (previously 50000, which sold credits below the anchor).
-    credits: 31667,
+    // $30 / $0.0006 at the uniform per-credit anchor - same rate as the
+    // one-time packages, so subscribers get exactly the advertised markup.
+    credits: 50000,
     tier: UserSubscriptionTier.Basic,
     features: [
       'Access to 25+ AI models including GPT-4, Claude 3, Gemini',
