@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload, updateFabFileOnServer } from '@client/app/utils/filesAPICalls';
 import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
 
 /**
@@ -37,10 +38,8 @@ import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStor
 export default function SendToDataLakeModal() {
   const { isOpen, content, fileName, mimeType, sourceLabel } = useSendToDataLakeStore();
   const closeStore = useSendToDataLakeStore(s => s.close);
-  // This modal is mounted app-wide (singleton) - only fetch lakes once it opens,
-  // otherwise every page fires the admin-gated /api/data-lakes call (a 403 when
-  // the feature is off).
-  const { data: lakes, isLoading } = useDataLakes(isOpen);
+  const { isFeatureEnabled } = useAdminSettingsCache();
+  const { data: lakes, isLoading } = useDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
