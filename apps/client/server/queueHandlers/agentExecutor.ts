@@ -1998,7 +1998,7 @@ async function processExecution(
       }
     }
 
-    await persistRunAsQuest(executionId, replyText, logger, generatedImages);
+    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
