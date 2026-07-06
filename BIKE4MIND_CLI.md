@@ -89,6 +89,7 @@ Notes for the self-host path:
 
 - **Port.** The Docker stack serves the app on `3000` by default (`--dev` is a *different* target — the dev server on `3001`). If you remapped the host port (`APP_HOST_PORT` in `.env.selfhost`), use that port in `--api-url`.
 - **Models.** Only models for providers you configured a key for appear — or your local Ollama models. See [Local models with Ollama](./SELF_HOST.md#local-models-with-ollama-no-api-keys). To surface a host-native Ollama in the picker without editing config, launch with `b4m --ollama-host http://localhost:11434`.
+- **Credits — you don't need them.** Self-host sets `B4M_SELF_HOST=true`, which defaults the **Enforce Credits** admin setting **off**, so usage is never metered: you don't grant yourself credits or top up (`/usage` just shows enforcement is disabled). Your only cost is your own LLM provider bill. An admin *can* turn on **Enforce Credits** (Admin → Settings → Credits) if you want to meter users on your instance.
 - **Streaming.** The self-host stack does not yet include the realtime websocket gateway; see the [self-host gaps](./SELF_HOST.md#what-you-get-and-dont).
 
 ## Pointing at any deployment (AWS, staging, …)
