@@ -3,9 +3,10 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
 /**
- * Regression guard for #95: when a briefcase prompt @-mentions an orchestration
- * agent, the agent-executor branch must still honor the briefcase `toolsOverride`
- * rather than dropping it for the agent's own `allowedTools`.
+ * Wiring guard for #95. The dispatch *behavior* is verified in
+ * `resolveDispatchTools.test.ts`; this locks that the hook actually uses that
+ * decision for the agent-executor dispatch, and that the unsupported-tool
+ * refusal still runs first.
  *
  * Source-level assertions (not `renderHook`) match the sibling
  * `useSendMessage.hostCreate.test.ts`: the hook pulls in ~15 providers, so a
@@ -14,9 +15,9 @@ import { resolve } from 'path';
 describe('useSendMessage - briefcase toolsOverride on the orchestration path (#95)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
-  it('threads the briefcase override into the agent-executor dispatch, else falls back to the agent whitelist', () => {
+  it('derives enabledTools from resolveDispatchTools(toolsOverride, effectiveTools, agent whitelist)', () => {
     expect(source).toMatch(
-      /const enabledTools\s*=\s*options\?\.toolsOverride\s*\?\s*effectiveTools\s*:\s*orchestrationAgent\?\.allowedTools;/
+      /const enabledTools\s*=\s*resolveDispatchTools\(\s*options\?\.toolsOverride,\s*effectiveTools,\s*orchestrationAgent\?\.allowedTools\s*\);/
     );
   });
 

@@ -24,6 +24,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
@@ -831,10 +832,13 @@ export function useSendMessage({
         // the executor fills it from admin defaults.
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        // A briefcase `toolsOverride` wins the whitelist (`effectiveTools` is the
-        // resolved override), so an `@`-mention can't drop the tools the prompt
-        // needs. Otherwise use the agent's own whitelist.
-        const enabledTools = options?.toolsOverride ? effectiveTools : orchestrationAgent?.allowedTools;
+        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
+        // drop the tools the prompt needs (see `resolveDispatchTools`).
+        const enabledTools = resolveDispatchTools(
+          options?.toolsOverride,
+          effectiveTools,
+          orchestrationAgent?.allowedTools
+        );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
         // iteration. Mirrors the dedup the `chat_completion` flow does in
