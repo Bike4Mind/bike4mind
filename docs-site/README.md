@@ -23,6 +23,18 @@ Or from the repo root: `pnpm docs:dev` / `pnpm docs:build`.
 
 The build fails on broken links (`onBrokenLinks: throw`), so run `pnpm build` before pushing.
 
+## Contributing a change
+
+Docs are the easiest first contribution - a fix here follows the same flow as any code change.
+
+1. Branch off `main` (`docs/short-description`).
+2. Edit or add pages under `docs/`. Preview live with `pnpm start` (hot-reloads at http://localhost:3010).
+3. Run `pnpm build` - it fails on broken links, so this catches most problems before CI does. The `Verify Docs Build` check runs the same build on your PR.
+4. Open a PR to `main` with a conventional-commit title (e.g. `docs: clarify CLI install steps`). Screenshots help for visual changes.
+5. First-time contributors sign the CLA once (a bot comments with the one-line instruction on your first PR). A maintainer reviews and merges; staging redeploys automatically on merge.
+
+External contributors: fork the repo, push your branch to the fork, and open the PR from there - the same steps otherwise.
+
 ## Content rules
 
 This site is public. No customer or partner names, no internal issue references, no employee names, no real infrastructure identifiers (account IDs, ARNs, bucket or cluster names, hosted-zone IDs) - use obvious placeholders. Self-host commands must match SELF_HOST.md at the repo root exactly.
