@@ -560,6 +560,10 @@ jobs:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           PR_USER: ${{ github.event.pull_request.user.login }}
           PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
+          # Fork PRs have no secret access; same-repo PRs are trusted (pushing the
+          # head branch requires write). Mirrors is_trusted_context below / the
+          # deploy job's fork check. Empty/null on non-PR events → treated as fork.
+          PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork == true && 'true' || 'false' }}
           ACTOR: ${{ github.actor }}
           HEAD_REF: ${{ github.head_ref }}
           BASE_REF: ${{ github.base_ref }}
@@ -609,12 +613,18 @@ jobs:
           is_push_main = event == 'push' and ref == 'refs/heads/main'
           is_push_prod = event == 'push' and ref == 'refs/heads/prod'
           is_pr = event == 'pull_request'
-          # Anyone with read access can open a PR between two existing branches
-          # of this repo. Such a PR is same-repo (not a fork), so it lands in the
-          # trusted lane; without this check it would spawn a real preview stack.
-          # Only PR authors with write-level association get preview deploys.
-          # Tests and the rest of CI still run for everyone.
-          is_trusted_author = pr_author_association in ('OWNER', 'MEMBER', 'COLLABORATOR')
+          is_fork = os.environ.get('PR_IS_FORK', 'false') == 'true'
+          # A trusted author gets a preview deploy; the gate stays to keep untrusted
+          # actors from spawning a real preview stack. Same-repo (non-fork) PRs are
+          # trusted because pushing the head branch requires write access - and this
+          # matches the secret-access boundary GitHub itself enforces (fork PRs get
+          # no secrets/OIDC, so they can't deploy anyway; see is_trusted_context).
+          # Fork PRs fall back to author_association, so a public org member working
+          # from a fork still deploys while an external fork does not. Using the fork
+          # signal (not association alone) is what fixes previews for internal authors
+          # whose org membership is private - GitHub reports those as CONTRIBUTOR, so
+          # the old association-only check skipped their previews. CI runs for everyone.
+          is_trusted_author = (is_pr and not is_fork) or pr_author_association in ('OWNER', 'MEMBER', 'COLLABORATOR')
 
           skip_pr = is_dependabot or is_changeset_release or is_promotion_pr or (is_pr and not is_trusted_author)
 
@@ -632,7 +642,7 @@ jobs:
               # merge_group and skipped PRs => no deploy (test still runs)
 
           if is_pr and not is_trusted_author:
-              print(f"::notice::No preview deploy: PR author association '{pr_author_association}' is not OWNER/MEMBER/COLLABORATOR.")
+              print(f"::notice::No preview deploy: fork PR from an untrusted author (association '{pr_author_association}'). CI still runs.")
 
           deploy_json = json.dumps(deploy)
           print(f"Deploy matrix ({len(deploy)}): {deploy_json}")
