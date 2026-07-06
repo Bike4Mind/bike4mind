@@ -31,7 +31,7 @@ export const userShareSchema = z.object({
   projectId: z.string().optional(),
   extraData: z
     .object({
-      // Groktool-specific fields
+      // Bike4Mind-specific fields
       /** The last time the user exported data */
       lastExportDate: z.date().optional(),
     })
@@ -48,7 +48,7 @@ export interface IUserShare {
   /** The project ID if the user is shared from a project */
   projectId?: string;
   extraData?: {
-    // Groktool-specific fields
+    // Bike4Mind-specific fields
     /** The last time the user exported data */
     lastExportDate?: Date;
   };

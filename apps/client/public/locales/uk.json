@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Налаштування ШІ",
     "session": "Нотатник",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Запросіть друга до",
-    "email_title_default": "Ласкаво просимо до GrokTool!",
-    "email_body_default": "Вас запрошено USER_NAME до GrokTool! ПОСИЛАННЯ ДЛЯ РЕЄСТРАЦІЇ: Використовуйте наступний код запрошення для реєстрації: INVITE_CODE",
+    "email_title_default": "Ласкаво просимо до Bike4Mind!",
+    "email_body_default": "Вас запрошено USER_NAME до Bike4Mind! ПОСИЛАННЯ ДЛЯ РЕЄСТРАЦІЇ: Використовуйте наступний код запрошення для реєстрації: INVITE_CODE",
     "friend_email": "Електронна пошта друга",
     "num_referrals_available": "Доступно рефералів:",
     "no_valid_emails_error": "Будь ласка, введіть дійсну електронну адресу",

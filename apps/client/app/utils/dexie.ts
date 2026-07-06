@@ -46,7 +46,7 @@ export class DexieStore extends Dexie {
   // You must bump the version number when you change this or you will get a vague error:
   // About Table not found
   constructor() {
-    super('GrokTool');
+    super('Bike4Mind');
     // DID YOU BUMP THE VERSION NUMBER?
     // JUST GO AHEAD AND BUMP THE VERSION NUMBER
     this.version(20).stores({

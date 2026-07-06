@@ -35,7 +35,7 @@ const handler = baseApi({ auth: false }).get(
       apiUrl: process.env.APP_URL?.includes('localhost')
         ? `${req.headers['x-forwarded-proto'] || 'http'}://${req.headers.host || 'localhost:3000'}`
         : process.env.APP_URL || '',
-      defaultTheme: 'groktool',
+      defaultTheme: 'bike4mind',
       allowOpenRegistration,
     };
 
