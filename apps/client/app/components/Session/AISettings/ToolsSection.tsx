@@ -55,6 +55,11 @@ import { useConfig } from '@client/app/hooks/data/settings';
  * Tooltip shown when a tool is disabled because its required API key/config is
  * missing on the server. Keyed by tool id; only tools that need external config
  * appear here (availability comes from serverConfig.toolAvailability).
+ *
+ * LOCK-STEP: the keys here must mirror those returned by `computeToolAvailability`
+ * in `apps/client/pages/api/settings/serverConfig.ts`. When you gate a new tool
+ * there, add its tooltip here (a gated tool with no entry falls back to a generic
+ * "Requires an API key that has not been configured." message).
  */
 const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   web_search: 'Requires a Serper API key, configured in Admin > API Keys.',

@@ -65,6 +65,15 @@ const handler = baseApi({ auth: true }).get(
  * tools themselves use so the picker never disables a tool that would actually
  * work (and vice versa). Only booleans are returned - never the key values.
  * Failures degrade to "available" so a lookup error never hides a working tool.
+ *
+ * LOCK-STEP: the tool ids returned here must have a matching entry in
+ * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
+ * which supplies the user-facing "why it's disabled" text.
+ *
+ * Cost: this runs up to 5 admin-setting / user-key lookups per request. It's on
+ * the /serverConfig path (which also serves the WebSocket URL), but the client
+ * caches that response for ~5 min (see `useConfig`), so it touches the DB only on
+ * a fresh page-load, not on every render.
  */
 async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
   const dbAdapters = {
@@ -91,6 +100,11 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     const hasImageKey =
       usable(llmKeys?.bfl) || usable(llmKeys?.openai) || usable(llmKeys?.gemini) || usable(llmKeys?.xai);
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
+    // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
+    // provider specifically. If the admin selects a Voyage model but only an OpenAI key is set
+    // (or vice versa), the tool still shows as available and the semantic path falls back to
+    // keyword search - deliberately lenient, since we'd rather under-gate KB than hide a tool
+    // that still returns keyword results.
     const hasEmbeddingKey = usable(llmKeys?.openai) || usable(llmKeys?.voyageai);
 
     return {
