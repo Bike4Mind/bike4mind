@@ -828,10 +828,10 @@ export function useSendMessage({
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
         // When dispatched with a specific orchestration agent, source the
-        // per-thoroughness iteration cap + tool whitelist from the agent doc.
-        // When dispatched agentless (toggle / `@agent` literal), leave both
-        // unset so the executor's synthetic-profile builder fills them from
-        // admin defaults.
+        // per-thoroughness iteration cap from the agent doc. When dispatched
+        // agentless (toggle / `@agent` literal), leave it unset so the
+        // executor's synthetic-profile builder fills it from admin defaults.
+        // (Tool whitelist precedence is handled separately just below.)
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
         // Tool whitelist precedence. A briefcase launch pins the tools its

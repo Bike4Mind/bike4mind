@@ -15,7 +15,7 @@ import { resolve } from 'path';
  * consumes ~15 context providers, so a full render adds little signal beyond
  * locking these invariants.
  */
-describe('useSendMessage — briefcase toolsOverride on the orchestration path (#95)', () => {
+describe('useSendMessage - briefcase toolsOverride on the orchestration path (#95)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');
 
   it('threads the briefcase override into the agent-executor dispatch, else falls back to the agent whitelist', () => {
