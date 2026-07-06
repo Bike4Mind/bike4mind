@@ -245,6 +245,15 @@ Two notes specific to fork PRs:
 - CI for first-time contributors requires a maintainer to approve the workflow run — this is standard GitHub security, not a judgment on your PR. It happens quickly after triage.
 - Some internal automation (AI review bot, preview-environment deploys) doesn't run on fork PRs because it requires repository secrets. Maintainers will run those stages after initial review where relevant. Absence of a preview deploy on your PR is expected, not a failure.
 
+### Preview deploys are opt-in
+
+Preview environments (`pr<N>.preview.bike4mind.com`) are **off by default**. Every PR still runs the full CI suite (typecheck, lint, tests) — that always happens — but a preview stack is only deployed when a maintainer opts the PR in. There are two equivalent ways to opt in:
+
+- **Label**: add the `preview` label to the PR. The preview deploys immediately.
+- **Comment**: comment `/deploy preview` (or `/deploy-preview`) on the PR — a maintainer-only shortcut that applies the label for you.
+
+Removing the `preview` label — or commenting `/deploy-preview off` — stops future preview deploys for that PR and tears the current preview down. Both the label and the comment command are restricted to maintainers, and neither ever runs on fork PRs. The required **Deploy** check stays green whether or not a preview was requested; a skipped preview is not a failure.
+
 ## The review process
 
 1. **Automated checks run first.** Get them green — maintainers generally review PRs with passing checks before ones without.
