@@ -1,0 +1,133 @@
+name: 'SST Remove (Idempotent)'
+description: 'Removes an SST environment gracefully. Unlocks any stale state lock first, treats "stage not found" as success, and retries once if a lock is acquired mid-flight.'
+inputs:
+  stage:
+    description: 'SST stage name to remove'
+    required: true
+  capture_mongodb_uri:
+    description: 'Whether to capture MongoDB URI before removal'
+    required: false
+    default: 'true'
+outputs:
+  mongodb_uri:
+    description: 'MongoDB URI captured before removal (if enabled)'
+    value: ${{ steps.capture_secrets.outputs.mongodb_uri }}
+  environment_existed:
+    description: 'Whether the environment existed (true/false)'
+    value: ${{ steps.remove.outputs.existed }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Capture MongoDB URI from SST secrets
+      id: capture_secrets
+      if: inputs.capture_mongodb_uri == 'true'
+      shell: bash
+      run: |
+        echo "Capturing MongoDB URI from SST secrets..."
+        MONGODB_URI=$(pnpm sst secret list --stage ${{ inputs.stage }} 2>/dev/null | grep "MONGODB_URI" | sed 's/^MONGODB_URI[[:space:]]*=[[:space:]]*//' | sed 's/^MONGODB_URI[[:space:]]*//' || true)
+
+        if [ -n "$MONGODB_URI" ]; then
+          echo "::add-mask::$MONGODB_URI"
+          echo "mongodb_uri=$MONGODB_URI" >> $GITHUB_OUTPUT
+          echo "✅ Successfully captured MongoDB URI"
+        else
+          echo "⚠️  WARNING: Could not retrieve MONGODB_URI (stage may not exist)"
+          echo "mongodb_uri=" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Unlock stale SST state (if any)
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        # Always attempt unlock first. sst unlock is idempotent: it succeeds
+        # whether or not a lock exists. This handles the common case where a
+        # previous deploy was interrupted (PR closed mid-run, runner died,
+        # quota hit) and never released the lock - leaving subsequent removes
+        # to fail with "Locked  A concurrent update was detected on the app".
+        echo "Pre-emptive unlock for stage ${STAGE}..."
+        pnpm sst unlock --stage "${STAGE}" || echo "Unlock returned non-zero (likely no lock present); continuing"
+
+    - name: Remove SST environment (idempotent)
+      id: remove
+      shell: bash
+      env:
+        STAGE: ${{ inputs.stage }}
+      run: |
+        # Composite actions inherit `set -e -o pipefail` from the GitHub
+        # runner's bash invocation. We capture sst's stdout/stderr inside
+        # `$(...)`, and a non-zero sst exit would trigger errexit before we
+        # get to inspect the output. We handle exit codes explicitly below,
+        # so disable errexit for this block.
+        set +e
+        attempt_remove() {
+          # Captures stdout+stderr to allow output inspection. Returns non-zero
+          # on either a non-zero sst exit OR a "✕ Failed" / "| Error" marker
+          # in the output. SST sometimes reports resource-level failures in
+          # its progress UI while still exiting 0 (see Starlight pr46 cleanup:
+          # DeleteAuthorizer ConflictException, sst exit 0). Without this
+          # parse, the cleanup workflow lies about success.
+          OUTPUT=$(pnpm sst remove --stage "${STAGE}" --yes 2>&1)
+          REMOVE_EXIT=$?
+          echo "$OUTPUT"
+          if [ "$REMOVE_EXIT" -ne 0 ]; then
+            return "$REMOVE_EXIT"
+          fi
+          if echo "$OUTPUT" | grep -qE '✕[[:space:]]+Failed|^\|[[:space:]]+Error'; then
+            echo "::warning::sst remove exited 0 but reported a resource failure; treating as failure."
+            return 1
+          fi
+          return 0
+        }
+
+        echo "Removing SST environment: ${STAGE}..."
+        # Capture attempt_remove's exit code directly. We can't use
+        # `if attempt_remove; then ... fi; EXIT_CODE=$?` because bash
+        # returns 0 from a skipped `if/fi` block, masking the real failure
+        # (this is exactly how the Starlight pr46 cleanup ended up reporting
+        # "exit code: 0" while the workflow showed ✕ Failed earlier).
+        attempt_remove
+        EXIT_CODE=$?
+
+        if [ "$EXIT_CODE" -eq 0 ]; then
+          echo "✅ Preview environment removed successfully"
+          echo "existed=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Idempotency: "Stage not found" means nothing to clean up.
+        if echo "$OUTPUT" | grep -q "Stage not found"; then
+          echo "ℹ️  Stage ${STAGE} does not exist - nothing to clean up"
+          echo "existed=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        # Lock race: a deploy acquired the lock between our pre-unlock and
+        # this remove call. Force-unlock and retry once. If it's still locked
+        # after that, a concurrent deploy is actively running and we should
+        # surface the failure rather than fight it.
+        if echo "$OUTPUT" | grep -q "Locked"; then
+          echo "⚠️  Stage ${STAGE} was locked mid-flight. Force-unlocking and retrying once..."
+          pnpm sst unlock --stage "${STAGE}" || true
+          attempt_remove
+          EXIT_CODE=$?
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "✅ Preview environment removed successfully on retry"
+            echo "existed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if echo "$OUTPUT" | grep -q "Stage not found"; then
+            echo "ℹ️  Stage ${STAGE} disappeared between attempts - treating as removed"
+            echo "existed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        fi
+
+        echo "❌ Failed to remove preview environment (exit code: $EXIT_CODE)"
+        # Belt-and-suspenders: guarantee a non-zero exit even if EXIT_CODE
+        # somehow ended up at 0. Without this, future regressions of the
+        # if/fi-$? trap would silently re-introduce the orphan-on-failure bug.
+        if [ "$EXIT_CODE" -eq 0 ]; then
+          EXIT_CODE=1
+        fi
+        exit "$EXIT_CODE"
