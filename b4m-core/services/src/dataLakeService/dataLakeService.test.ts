@@ -171,7 +171,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     ).rejects.toThrow(/not found/i);
   });
 
-  it('manage-denied for a reader who is not the creator (the #9835 asymmetry)', async () => {
+  it('manage-denied for a reader who is not the creator (the manage-access asymmetry)', async () => {
     const l = lake({ organizationId: 'orgA', requiredUserTag: 'Opti', createdByUserId: 'owner' });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(
@@ -180,7 +180,7 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
   });
 });
 
-describe('assertCanWriteDataLakeTags — gate on the file-tag write paths (#9835)', () => {
+describe('assertCanWriteDataLakeTags — gate on the file-tag write paths', () => {
   const makeDb = (found: IDataLakeDocument | null) => ({
     dataLakes: { findByDatalakeTag: vi.fn().mockResolvedValue(found) },
   });

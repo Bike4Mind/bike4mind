@@ -11,8 +11,6 @@ import { websocketApi } from './websocket';
  *
  * Uses a direct Lambda function URL (NOT behind CloudFront) to avoid the 20s
  * origin read timeout that breaks long-running SSE streams.
- *
- * @see https://github.com/MillionOnMars/lumina5/issues/6634
  */
 export const cliWsCompletionHandler = new sst.aws.Function('CliWsCompletionHandler', {
   handler: 'apps/client/server/cli/wsCompletions.handler',

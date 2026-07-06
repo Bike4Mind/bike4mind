@@ -15,7 +15,7 @@
  *   # Using CLI flags
  *   pnpm sst shell pnpm --filter @bike4mind/scripts create-prod-release \
  *     --dry-run \
- *     --repo MillionOnMars/lumina5 \
+ *     --repo owner/repo \
  *     --github-token ghp_xxx \
  *     --slack https://hooks.slack.com/...
  *

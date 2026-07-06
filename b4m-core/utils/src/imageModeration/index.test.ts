@@ -68,7 +68,7 @@ const C = EXPLICIT_NUDITY_CONFIDENCE + 1;
 // L2 `Explicit Nudity` (ParentName 'Explicit'), and L3 parts (ParentName 'Explicit Nudity').
 // These fixtures lock in that the filter matches the LIVE taxonomy, not a guessed string.
 
-describe('RekognitionImageModerationService.checkImage (#9776 Q2a)', () => {
+describe('RekognitionImageModerationService.checkImage', () => {
   it('blocks v7 explicit content (L1 "Explicit" + L2/L3 subtree returned together)', async () => {
     const client = fakeClient(async () => ({
       ModerationModelVersion: '7.0',
@@ -167,7 +167,7 @@ describe('RekognitionImageModerationService.checkImage (#9776 Q2a)', () => {
     await expect(svc.checkImage(buf, 'image/png')).rejects.toBeTruthy();
   });
 
-  describe('unsupported / unaccepted image formats (#9776 P1-4)', () => {
+  describe('unsupported / unaccepted image formats', () => {
     it('transcodes to JPEG via jimp and retries when Rekognition rejects the format, then succeeds', async () => {
       let call = 0;
       const seenImageBytes: Buffer[] = [];
@@ -228,7 +228,7 @@ describe('RekognitionImageModerationService.checkImage (#9776 Q2a)', () => {
     });
   });
 
-  describe('oversized images crossing the 4.5MB inline limit (#9776 Q2b compound gap)', () => {
+  describe('oversized images crossing the 4.5MB inline limit (compound gap)', () => {
     it('terminal-blocks an oversized image jimp cannot decode, instead of falling through to Rekognition with the original oversized bytes', async () => {
       // Simulates the compound gap: oversized (triggers the proactive downscale attempt) AND
       // a format jimp cannot decode (e.g. HEIC) - before the fix this fell through with the

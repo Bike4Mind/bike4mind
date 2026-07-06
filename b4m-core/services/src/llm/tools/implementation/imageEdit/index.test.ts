@@ -72,7 +72,7 @@ function createFakeContextWithFabFile(fabFile: Record<string, unknown> | null): 
   return context;
 }
 
-describe('getImageFromFileId serveability guard (#9776 Q2b — sibling of the B1 upload/edit fix)', () => {
+describe('getImageFromFileId serveability guard (sibling of the upload/edit agent-tool bypass fix)', () => {
   // 24-char hex - must pass getImageFromFileId's ObjectId-shape check to reach the FabFile lookup.
   const VALID_FILE_ID = 'a'.repeat(24);
 
@@ -112,7 +112,7 @@ describe('getImageFromFileId serveability guard (#9776 Q2b — sibling of the B1
   });
 });
 
-describe('edit_image processAndStoreImage moderation gate (#9776 B1 agent-tool bypass)', () => {
+describe('edit_image processAndStoreImage moderation gate (agent-tool serve-gate bypass)', () => {
   beforeEach(() => {
     mockCheckImage.mockReset();
   });
