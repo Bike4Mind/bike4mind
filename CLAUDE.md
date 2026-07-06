@@ -12,13 +12,13 @@ Everything committed here is public and permanent. Before you commit, ask: *"Wou
 
 ## Commit identity
 
-Commit under your **verified `@bike4mind.com` email**, set per-clone (no `--global`, so your other repos keep their own identity):
+Commit under a **single, consistent email that is verified on your GitHub account**, and use the same one you sign the CLA with. Set it per-clone (no `--global`, so your other repos keep their own identity):
 
 ```bash
-git config user.email "you@bike4mind.com"   # must be verified on your GitHub account
+git config user.email "you@example.com"   # a verified email on your GitHub account
 ```
 
-GitHub only links a commit to your account when the email is verified there — this is also what makes the CLA check match you. Keep one identity per clone; don't let it drift.
+GitHub only links a commit to your account when the email is verified there, and using one verified email consistently is what keeps the CLA check matching you. Don't let your identity drift across commits.
 
 ## Key commands
 
@@ -36,9 +36,9 @@ Verify before pushing: `pnpm turbo:typecheck && pnpm turbo:test && pnpm lint:che
 
 - **`apps/client`** — Next.js app: a Tanstack-Router SPA plus the Pages-API backend (`pages/api/*`). Next.js is used only for the API routes; all client routing is Tanstack Router.
 - **`packages/cli`** — interactive CLI + ReAct agent.
-- **`b4m-core/*`** — the engine, published as `@bike4mind/*` packages (`common`, `utils`, `agents`, `services`, `llm-adapters`, `database` bindings, etc.). Core packages live at `b4m-core/<name>` and are symlinked into `node_modules/@bike4mind/<name>`.
-- **`packages/database`** — Mongoose models + migrations.
-- Realtime WebSocket fanout ships as a separate `@bike4mind/subscriber-fanout` image.
+- **`b4m-core/*`** — the engine, published as `@bike4mind/*` packages (`common`, `utils`, `agents`, `services`, `llm-adapters`, `db-core`, etc.). Core packages live at `b4m-core/<name>` and are symlinked into `node_modules/@bike4mind/<name>`.
+- **`packages/database`** — the `@bike4mind/database` package: Mongoose models, queries, and shared DB utils.
+- Realtime WebSocket fanout ships as a separate container image, referenced per deploy via the `SUBSCRIBER_FANOUT_IMAGE` env var (it lives in its own repo; see `infra/subscriberFanout.ts`).
 
 ## Turborepo build orchestration
 
