@@ -8,12 +8,25 @@ export class LoginPage extends BasePage {
   }
 
   async fillEmail(email: string) {
+    await this.submitEmail(email);
+    // Wait for the strategy check + OTC send round-trip, then the code-entry step.
+    await this.expectOtcStep();
+  }
+
+  /**
+   * Fill the email and click Continue WITHOUT waiting for the OTC step, so a caller can inspect the
+   * strategy/send responses first (e.g. to skip on a shared-IP 429) before asserting the code step.
+   */
+  async submitEmail(email: string) {
     await this.fillMuiInput(this.page.getByTestId('login-email-input').getByRole('textbox'), email);
     const continueBtn = this.page.getByTestId('login-continue-btn');
     await expect(continueBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
     await continueBtn.click();
-    // Wait for strategy check to complete and the OTC code step to appear
-    await this.page.getByTestId('login-otc-input').waitFor({ state: 'visible', timeout: TIMEOUTS.NAVIGATION });
+  }
+
+  /** Wait for the OTC code-entry step to appear after a successful send (ACTION headroom for cold starts). */
+  async expectOtcStep() {
+    await this.page.getByTestId('login-otc-input').waitFor({ state: 'visible', timeout: TIMEOUTS.ACTION });
   }
 
   async fillOtc(code: string) {
