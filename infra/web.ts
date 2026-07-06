@@ -211,7 +211,7 @@ export const web = new sst.aws.Nextjs(
         resources: ['*'],
       },
       {
-        // Image content moderation (#9776): /api/chat?wait=true and /api/opti run the tool loop
+        // Image content moderation: /api/chat?wait=true and /api/opti run the tool loop
         // inline in this Lambda, so the image_generation/edit_image tools' moderation gate calls
         // DetectModerationLabels here. Without this the gate fails closed and breaks image gen.
         actions: ['rekognition:DetectModerationLabels'],
@@ -391,8 +391,8 @@ export const web = new sst.aws.Nextjs(
         }
       },
     },
-    // Order the frontend deploy strictly AFTER the database migration Invocation (CI only). The P0-B
-    // consent gate (#9775) is fail-closed, so it must not serve traffic until the grandfather backfill
+    // Order the frontend deploy strictly AFTER the database migration Invocation (CI only). The
+    // consent gate is fail-closed, so it must not serve traffic until the grandfather backfill
     // has run — otherwise existing users are transiently trapped on the /accept-policies interstitial.
     // migratorInvocation is undefined outside CI (no migration runs → nothing to wait on).
   },

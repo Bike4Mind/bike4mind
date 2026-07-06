@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { isImageServeable } from './isImageServeable';
 
-describe('isImageServeable (#9776 Q2b / P1-1)', () => {
+describe('isImageServeable (upload moderation serve-gate)', () => {
   it('serves a clean image', () => {
     expect(isImageServeable({ mimeType: 'image/png', moderationStatus: 'clean' })).toBe(true);
   });
@@ -16,7 +16,7 @@ describe('isImageServeable (#9776 Q2b / P1-1)', () => {
   });
 
   it('refuses an image with a missing moderationStatus (fail-closed for legacy rows)', () => {
-    // A pre-Q2b image row has moderationStatus undefined. Treat as not-yet-clean.
+    // A legacy image row (predating this gate) has moderationStatus undefined. Treat as not-yet-clean.
     expect(isImageServeable({ mimeType: 'image/png', moderationStatus: undefined })).toBe(false);
     expect(isImageServeable({ mimeType: 'image/png', moderationStatus: null })).toBe(false);
   });

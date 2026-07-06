@@ -293,7 +293,7 @@ describe('registerUser', () => {
     });
   });
 
-  // --- Open-registration master switch (P1-3 backend gate / P1-6 coverage) ---
+  // --- Open-registration master switch (backend gate + coverage) ---
   describe('open registration gate (no invite code)', () => {
     const noInviteParams: RegisterUserParameters = { ...baseParams, inviteCode: undefined };
 
@@ -340,7 +340,7 @@ describe('registerUser', () => {
   });
 });
 
-// --- P1-6: registerViaOTC finalizes verification + deferred credit grant ---
+// --- registerViaOTC finalizes verification + deferred credit grant ---
 describe('registerViaOTC', () => {
   let mockAdapters: any;
   let mockAddCredits: any;

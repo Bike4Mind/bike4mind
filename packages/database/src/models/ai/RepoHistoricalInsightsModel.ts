@@ -93,7 +93,7 @@ interface HistoricalStats {
 // Document interface
 export interface IRepoHistoricalInsightsDocument extends IMongoDocument {
   // Identity - repository-scoped (not user-scoped)
-  repoFullName: string; // e.g., "milliononmars/lumina5" or "jira:PROJ"
+  repoFullName: string; // e.g., "org/repo" or "jira:PROJ"
 
   // Source type - defaults to 'github' for backwards compatibility
   source?: 'github' | 'jira';

@@ -15,7 +15,7 @@ const GITHUB_PATTERNS = {
   // https://github.com/owner/repo/issues/<number>
   issueUrl: /https?:\/\/github\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_.-]+)\/issues\/(\d+)/gi,
 
-  // owner/repo format (e.g., "milliononmars/lumina5")
+  // owner/repo format (e.g., "owner/repo")
   // Must not be preceded by @ (to avoid email-like patterns)
   // Must not be followed by common file extensions
   repoSlash:

@@ -55,7 +55,7 @@ export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
   permissions: [
     { actions: ['bedrock:*'], resources: ['*'] },
     // Content moderation for images produced by the image_generation/edit_image tools
-    // (#9776 B1 — closes the agent-tool moderation bypass; the queue-handler imageGeneration/
+    // (closes an agent-tool moderation bypass; the queue-handler imageGeneration/
     // imageEdit queues already have this).
     { actions: ['rekognition:DetectModerationLabels'], resources: ['*'] },
     { actions: ['xray:*'], resources: ['*'] },

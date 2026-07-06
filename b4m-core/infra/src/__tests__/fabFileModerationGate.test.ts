@@ -237,7 +237,7 @@ describe('detectDangerPatterns() / referencesGate()', () => {
     expect(detectDangerPatterns(`await getCachedSignedUrl(fabFile)`)).toContain('getCachedSignedUrl()');
   });
 
-  it('flags context.storage.getSignedUrl(/.download( (#9776 P3-2 LLM-tool storage accessor)', () => {
+  it('flags context.storage.getSignedUrl(/.download( (LLM-tool storage accessor)', () => {
     expect(detectDangerPatterns(`const url = await context.storage.getSignedUrl(fabFile.filePath);`)).toContain(
       'context.storage.getSignedUrl()/.download()'
     );
@@ -290,7 +290,7 @@ describe('detectDangerPatterns() / referencesGate()', () => {
   });
 });
 
-describe('#9776 Q2b — every FabFile serve/mint call site is gated or allowlisted', () => {
+describe('upload moderation gate — every FabFile serve/mint call site is gated or allowlisted', () => {
   const sourceFiles = SCAN_ROOTS.flatMap(root => collectSourceFiles(resolve(REPO_ROOT, root)));
 
   it('scans a non-trivial number of source files (guards against a broken walk)', () => {
@@ -349,7 +349,7 @@ describe('#9776 Q2b — every FabFile serve/mint call site is gated or allowlist
       violations.length === 0
         ? ''
         : `Found ${violations.length} FabFile serve/mint call site(s) not gated on isImageServeable and not ` +
-            `allowlisted (#9776 Q2b):\n\n${violations.join('\n\n')}\n\n` +
+            `allowlisted:\n\n${violations.join('\n\n')}\n\n` +
             `See CLAUDE.md and b4m-core/common/src/utils/isImageServeable.ts.`
     ).toEqual([]);
   });

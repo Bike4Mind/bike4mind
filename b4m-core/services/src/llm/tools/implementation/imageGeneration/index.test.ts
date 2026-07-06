@@ -58,7 +58,7 @@ function createFakeContext(): ToolContext {
   };
 }
 
-describe('image_generation processAndStoreImages moderation gate (#9776 B1 agent-tool bypass)', () => {
+describe('image_generation processAndStoreImages moderation gate (agent-tool serve-gate bypass)', () => {
   beforeEach(() => {
     mockCheckImage.mockReset();
   });

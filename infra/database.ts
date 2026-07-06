@@ -62,7 +62,7 @@ const cleaner = isPreviewStage
 // - Only when using CI (process.env.CI === 'true')
 // - Only when not in local development (!$dev)
 // Captured + exported so the frontend function can `dependsOn` it: fail-closed gates like the
-// P0-B AUP/ToS consent gate (GH #9775) must not serve traffic until the backfill that grandfathers
+// AUP/ToS consent gate must not serve traffic until the backfill that grandfathers
 // existing users has completed, or those users are (transiently) trapped on the interstitial. The
 // Invocation resource settles only when the migration Lambda returns, so depending on it orders the
 // web deploy strictly after migrations. See web.ts.
@@ -99,5 +99,5 @@ export const databaseManagement = {
 };
 
 // The migration Invocation (undefined outside CI). web.ts adds this to the frontend's `dependsOn`
-// so the fail-closed consent gate never serves traffic ahead of the grandfather backfill (#9775).
+// so the fail-closed consent gate never serves traffic ahead of the grandfather backfill.
 export { migratorInvocation };

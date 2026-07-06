@@ -9,9 +9,9 @@ export enum McpServerName {
 }
 
 export interface IGitHubRepository {
-  fullName: string; // "MillionOnMars/lumina5"
+  fullName: string; // "owner/repo"
   owner: string; // "MillionOnMars"
-  repo: string; // "lumina5"
+  repo: string; // "repo"
 }
 
 export interface IGitHubWebhookConfig {
