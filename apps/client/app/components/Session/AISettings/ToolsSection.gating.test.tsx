@@ -39,7 +39,18 @@ const mocks = vi.hoisted(() => {
   const agentModeDefault = { value: 'off' as 'off' | 'auto' | 'on' };
   const chatDraft = { value: '' };
   const liveAI = { value: true }; // useAdvancedAISettings(state => state.liveAI); default on
-  return { state, useLLM, experimentalAgentMode, agentModeFeatureFlag, agentModeDefault, chatDraft, liveAI };
+  // serverConfig.toolAvailability from useConfig(); undefined = not yet loaded (never gates).
+  const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
+  return {
+    state,
+    useLLM,
+    experimentalAgentMode,
+    agentModeFeatureFlag,
+    agentModeDefault,
+    chatDraft,
+    liveAI,
+    toolAvailability,
+  };
 });
 
 vi.mock('@client/app/contexts/LLMContext', () => ({ useLLM: mocks.useLLM }));
@@ -78,6 +89,9 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 vi.mock('@client/app/hooks/data/mcpServers', () => ({
   useMcpServers: () => ({ data: [], isPending: false, isFetching: false }),
 }));
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useConfig: () => ({ data: { toolAvailability: mocks.toolAvailability.value } }),
+}));
 vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
@@ -103,6 +117,7 @@ beforeEach(() => {
   mocks.agentModeDefault.value = 'off';
   mocks.chatDraft.value = '';
   mocks.liveAI.value = true;
+  mocks.toolAvailability.value = undefined;
 });
 
 // A draft that scores 'complex' (3 indicators: analytical verb + why/because +
@@ -216,5 +231,29 @@ describe('ToolsSection complexity auto-route gating', () => {
     mocks.state.disableAutoRouteForThisSession = true;
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+  });
+});
+
+// A tool whose required API key is missing (serverConfig.toolAvailability[id] ===
+// false) must be dimmed regardless of mode - otherwise it silently returns empty
+// results. Availability that hasn't loaded yet (undefined) must NOT gate.
+describe('ToolsSection missing-key gating', () => {
+  it('dims a tool whose key is reported missing, and leaves configured tools alone', () => {
+    mocks.toolAvailability.value = { web_search: false, wolfram_alpha: true };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(container, 'tool-item-web-search')).toBeTruthy();
+    expect(gated(container, 'tool-item-wolfram-alpha')).toBeFalsy();
+  });
+
+  it('does NOT dim on missing key while availability is still loading (undefined)', () => {
+    mocks.toolAvailability.value = undefined;
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(container, 'tool-item-web-search')).toBeFalsy();
+  });
+
+  it('gates on missing key even in Smart mode with no agent routing', () => {
+    mocks.toolAvailability.value = { wolfram_alpha: false };
+    const { container } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(container, 'tool-item-wolfram-alpha')).toBeTruthy();
   });
 });

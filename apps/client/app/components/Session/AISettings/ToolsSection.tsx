@@ -49,6 +49,23 @@ import DeepResearchConfigModal from './DeepResearchConfigModal';
 import ImageGenerationModelSelectionModal from './ImageGenerationModelSelectionModal';
 import { getToolDisplayName, getToolDescription, isToolAvailableInAgentMode } from '@client/app/utils/toolMapping';
 import { useMcpServers } from '@client/app/hooks/data/mcpServers';
+import { useConfig } from '@client/app/hooks/data/settings';
+
+/**
+ * Tooltip shown when a tool is disabled because its required API key/config is
+ * missing on the server. Keyed by tool id; only tools that need external config
+ * appear here (availability comes from serverConfig.toolAvailability).
+ */
+const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
+  web_search: 'Requires a Serper API key, configured in Admin > API Keys.',
+  deep_research: 'Requires a Serper API key, configured in Admin > API Keys.',
+  weather_info: 'Requires an OpenWeather API key, configured in Admin > API Keys.',
+  wolfram_alpha: 'Requires a Wolfram Alpha API key, configured in Admin > API Keys.',
+  fmp_financial_data: 'Requires an FMP API key, configured in Admin > API Keys.',
+  image_generation: 'Requires an image generation API key (e.g. BFL or OpenAI), configured in Admin > API Keys.',
+  search_knowledge_base: 'Requires an embeddings API key (VoyageAI or OpenAI), configured in Admin > API Keys.',
+  retrieve_knowledge_content: 'Requires an embeddings API key (VoyageAI or OpenAI), configured in Admin > API Keys.',
+};
 
 type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { name: string };
 
@@ -206,6 +223,9 @@ const ToolsSection = ({
   const isDeepResearchEnabled = isAdminFeatureEnabled('EnableDeepResearch');
   const isKnowledgeBaseSearchEnabled = isAdminFeatureEnabled('EnableKnowledgeBaseSearch');
   const isFmpFinancialDataEnabled = isAdminFeatureEnabled('EnableFmpFinancialData');
+  // Presence-only availability of key-gated tools (no key values leak to the client).
+  const { data: serverConfig } = useConfig();
+  const toolAvailability = serverConfig?.toolAvailability;
   const tools = propTools ?? contextTools;
   const theme = useTheme();
   const model = useLLM(s => s.model);
@@ -421,6 +441,12 @@ const ToolsSection = ({
   // Agent mode honors only its fixed toolset. Smart mode allows everything.
   const getToolGate = useCallback(
     (toolId: B4MLLMTools): { reason: string } | null => {
+      // A missing API key is a hard, mode-independent blocker: without it the
+      // tool silently returns nothing, so surface it first. Only gate once the
+      // availability data has loaded (=== false), never on undefined.
+      if (toolAvailability?.[toolId] === false) {
+        return { reason: MISSING_KEY_TOOLTIPS[toolId] ?? 'Requires an API key that has not been configured.' };
+      }
       if (toolMode === 'fast') {
         return { reason: 'Disabled in Fast mode. Switch to Smart mode to let the AI use tools.' };
       }
@@ -433,7 +459,7 @@ const ToolsSection = ({
       }
       return null;
     },
-    [toolMode, agentWillRunFixedToolset, agentModeActive]
+    [toolMode, agentWillRunFixedToolset, agentModeActive, toolAvailability]
   );
 
   const toggleQuestMaster = () => {
