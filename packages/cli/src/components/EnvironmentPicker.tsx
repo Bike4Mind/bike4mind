@@ -9,34 +9,32 @@ import { LOCAL_DEV_URL, parseApiUrl } from '../utils/apiUrl.js';
  * configured (a published, unbranded fork with no baked default) so the user
  * chooses where to connect instead of hitting a dead end. The choice maps
  * directly onto {@link ConfigStore.switchApiEnvironment}'s target argument.
+ *
+ * There is deliberately no "hosted service" option: this picker only renders
+ * when the endpoint is unconfigured, which by definition means no baked default
+ * exists (see resolveApiEndpoint). A branded build always resolves to its baked
+ * default and never reaches here, so the only reachable choices are the local
+ * dev server and a custom/self-hosted URL.
  */
-export type EnvChoice = { target: 'prod' } | { target: 'dev' } | { target: { customUrl: string } };
+export type EnvChoice = { target: 'dev' } | { target: { customUrl: string } };
 
-type MenuValue = 'prod' | 'dev' | 'custom';
+type MenuValue = 'dev' | 'custom';
 
 interface EnvironmentPickerProps {
-  /** The baked-in hosted service URL, if this build has one. Omitted for an unbranded fork. */
-  bakedDefaultUrl?: string;
   onSelect: (choice: EnvChoice) => void;
 }
 
-export function EnvironmentPicker({ bakedDefaultUrl, onSelect }: EnvironmentPickerProps) {
+export function EnvironmentPicker({ onSelect }: EnvironmentPickerProps) {
   const [phase, setPhase] = useState<'menu' | 'custom'>('menu');
   const [customValue, setCustomValue] = useState('');
   const [error, setError] = useState<string | null>(null);
 
-  const items: { label: string; value: MenuValue }[] = [];
-  if (bakedDefaultUrl) {
-    items.push({ label: `Hosted service (${bakedDefaultUrl})`, value: 'prod' });
-  }
-  items.push({ label: `Local dev server (${LOCAL_DEV_URL})`, value: 'dev' });
-  items.push({ label: 'Custom / self-hosted URL…', value: 'custom' });
+  const items: { label: string; value: MenuValue }[] = [
+    { label: `Local dev server (${LOCAL_DEV_URL})`, value: 'dev' },
+    { label: 'Custom / self-hosted URL…', value: 'custom' },
+  ];
 
   const handleMenuSelect = (item: { value: MenuValue }) => {
-    if (item.value === 'prod') {
-      onSelect({ target: 'prod' });
-      return;
-    }
     if (item.value === 'dev') {
       onSelect({ target: 'dev' });
       return;

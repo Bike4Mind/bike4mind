@@ -9,18 +9,14 @@ import { EnvironmentPicker } from './EnvironmentPicker';
 // left to typecheck: driving ink-select-input navigation deterministically in
 // ink-testing-library requires render-cycle waits that make the test flaky.
 describe('EnvironmentPicker', () => {
-  it('offers local dev and custom, and omits hosted for an unbranded build', () => {
+  it('offers only local dev and custom (never a hosted option)', () => {
     const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} />);
     const frame = lastFrame();
     expect(frame).toContain('Local dev server');
     expect(frame).toContain('Custom / self-hosted URL');
+    // The picker only renders when unconfigured, which implies no baked default,
+    // so a hosted-service option is never offered.
     expect(frame).not.toContain('Hosted service');
-  });
-
-  it('offers the hosted service when a baked default is present', () => {
-    const { lastFrame } = render(<EnvironmentPicker bakedDefaultUrl="https://app.bike4mind.com" onSelect={() => {}} />);
-    const frame = lastFrame();
-    expect(frame).toContain('Hosted service (https://app.bike4mind.com)');
   });
 
   it('selects the highlighted option on Enter', () => {

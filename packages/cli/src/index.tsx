@@ -40,7 +40,6 @@ import {
   ApiEndpointUnconfiguredError,
   getEnvironmentName,
   getCreditsUrl,
-  getDefaultApiUrl,
   processFileReferences,
   formatStep,
   extractCompactInstructions,
@@ -4209,7 +4208,6 @@ Multi-line Input:
   if (state.showEnvironmentPicker) {
     return (
       <EnvironmentPicker
-        bakedDefaultUrl={getDefaultApiUrl() || undefined}
         onSelect={(choice: EnvChoice) => {
           void (async () => {
             try {
