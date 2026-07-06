@@ -659,7 +659,8 @@ jobs:
   # plan) genuinely FAILED, or the deploy itself failed/cancelled. Green when
   # everything succeeded OR was legitimately skipped:
   #   - non-deployable change (docs-only/config) → core-build..plan all skipped
-  #   - empty deploy plan (dependabot / changeset-release / main→prod / merge_group)
+  #   - empty deploy plan (every PR event now, since previews moved to the internal
+  #     deployer, plus dependabot / changeset-release / main→prod / merge_group)
   # A skipped upstream is "passing" here; only an explicit failure flips it red.
   # This means a typecheck/lint/cli-e2e failure (none of which are individually
   # required checks) is surfaced through the required Deploy check instead of
@@ -868,11 +869,12 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: E2E Tests
     timeout-minutes: 20
-    # Run E2E on: push to main (staging gate), or PR with the 'run-e2e' label.
-    # PRs without the label skip E2E entirely to save ~15-20 min of CI per push.
-    if: |
-      (needs.deploy.outputs.is-preview == 'true' || needs.deploy.outputs.stage == 'dev') &&
-      (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e'))
+    # Run E2E on push to main only (staging gate). The deploy job never runs on PR
+    # events (empty plan, see the `plan` job above), so needs.deploy.outputs.* are
+    # empty there and the old run-e2e-label-on-PR path was dead; PR E2E is handled
+    # separately by e2e-on-label.yml. The `stage == 'dev'` guard also excludes push
+    # to prod (stage == 'production'), where E2E should not run.
+    if: needs.deploy.outputs.stage == 'dev' && github.event_name == 'push'
     # Soft-fail on PRs — results are posted as a PR comment, no red X on the workflow.
     # E2E remains a hard failure on main (staging gate).
     continue-on-error: ${{ github.event_name == 'pull_request' }}

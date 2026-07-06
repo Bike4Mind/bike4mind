@@ -61,9 +61,10 @@ Example:
 Required for any PR closing a security-labeled issue. Delete this section
 if the PR is not security-related.
 
-Preview deploys are opt-in: add the `preview` label (or comment `/deploy preview`)
-to get a `pr<N>.preview.bike4mind.com` env. Remove the label (or `/deploy-preview off`)
-to stop and tear it down. See CONTRIBUTING.md → "Preview deploys are opt-in".
+Preview environments are created on demand by maintainers via an internal deploy pipeline.
+There's no label or comment command to request one yourself. When a maintainer triggers a
+preview, a bot comment with the `pr<N>.preview.bike4mind.com` URL appears on this PR.
+See CONTRIBUTING.md → "Preview deploys".
 -->
 
 - [ ] Vulnerability reproduced on **staging** with a script/curl (output attached as PR comment)
