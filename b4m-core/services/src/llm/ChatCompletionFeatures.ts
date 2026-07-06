@@ -746,7 +746,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       );
     }
 
-    // 'blocked' is not a valid SubQuestStatus in the type system (only in QuestMasterArtifact).
+    // 'blocked' is not a valid SubQuestStatus in the type system.
     // SubQuestStatus allows: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted'
     // Tasks with status 'not_started' or 'deleted' will proceed to processing here.
 

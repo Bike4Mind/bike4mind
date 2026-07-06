@@ -1,4 +1,4 @@
-import { Artifact, ArtifactContent, ArtifactVersion, QuestMasterArtifact } from '@bike4mind/database';
+import { Artifact, ArtifactContent, ArtifactVersion } from '@bike4mind/database';
 import { type MigrationFile } from './index';
 
 const migration: MigrationFile = {
@@ -17,8 +17,8 @@ const migration: MigrationFile = {
     console.log('Creating ArtifactVersion indexes...');
     await ArtifactVersion.createIndexes();
 
-    console.log('Creating QuestMasterArtifact indexes...');
-    await QuestMasterArtifact.createIndexes();
+    // The QuestMasterArtifact model was removed; its legacy collection is not
+    // recreated on fresh environments. Existing environments keep their data.
 
     console.log('Artifact collections and indexes created successfully!');
   },
@@ -28,7 +28,9 @@ const migration: MigrationFile = {
 
     // Drop collections in reverse order to handle dependencies
     console.log('Dropping QuestMasterArtifact collection...');
-    await QuestMasterArtifact.collection
+    // Raw collection handle: the QuestMasterArtifact model was removed.
+    await Artifact.db
+      .collection('questmaster_artifacts')
       .drop()
       .catch(e => console.log('QuestMasterArtifact collection does not exist or already dropped:', e.message));
 
