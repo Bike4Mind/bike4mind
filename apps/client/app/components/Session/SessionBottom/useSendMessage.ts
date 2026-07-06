@@ -758,8 +758,8 @@ export function useSendMessage({
     // L251), so the optimistic client-side ID won't work - we must create
     // the session first. The dispatch payload differs by mode:
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
-    //     (preserves the earlier `@specific-agent` UX), except a briefcase
-    //     `toolsOverride` still pins the tool whitelist (see `enabledTools` below).
+    //     (preserves the earlier `@specific-agent` UX). A briefcase
+    //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
     //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
     //     the executor build a synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
@@ -827,24 +827,13 @@ export function useSendMessage({
         // optimistic bubble instead of waiting for the persisted Quest on reload.
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
-        // When dispatched with a specific orchestration agent, source the
-        // per-thoroughness iteration cap from the agent doc. When dispatched
-        // agentless (toggle / `@agent` literal), leave it unset so the
-        // executor's synthetic-profile builder fills it from admin defaults.
-        // (Tool whitelist precedence is handled separately just below.)
+        // Iteration cap comes from the agent doc; left unset when agentless so
+        // the executor fills it from admin defaults.
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        // Tool whitelist precedence. A briefcase launch pins the tools its
-        // prompt needs via `toolsOverride`; honor that here just as the
-        // non-orchestration path does (`resolveTools` short-circuits its whole
-        // ladder on an override). Without it, a briefcase prompt that happens to
-        // @-mention an orchestration agent would silently run under the agent's
-        // `allowedTools` and drop the briefcase's required tools. `effectiveTools`
-        // is the same value the normal path sends: the `BRIEFCASE_DISALLOWED`-
-        // stripped override (the unsupported-model refusal already fired above,
-        // so we never reach here with a broken override). Absent a briefcase
-        // override, fall back to the orchestration agent's own whitelist (or
-        // `undefined` when agentless, which triggers the synthetic-profile path).
+        // A briefcase `toolsOverride` wins the whitelist (`effectiveTools` is the
+        // resolved override), so an `@`-mention can't drop the tools the prompt
+        // needs. Otherwise use the agent's own whitelist.
         const enabledTools = options?.toolsOverride ? effectiveTools : orchestrationAgent?.allowedTools;
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
