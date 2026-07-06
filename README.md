@@ -84,4 +84,14 @@ Bike4Mind is licensed under the **[Business Source License 1.1](./LICENSE)** wit
 
 For alternative licensing, contact **licensing@bike4mind.com**.
 
+## Star History
+
+<a href="https://www.star-history.com/?repos=bike4mind%2Fbike4mind&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&legend=top-left" />
+ </picture>
+</a>
+
 © 2026 Bike4Mind, Inc.
