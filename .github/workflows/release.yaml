@@ -130,6 +130,7 @@ jobs:
             [services]="@bike4mind/services"
             [utils]="@bike4mind/utils"
             [mcp]="@bike4mind/mcp"
+            [slack]="@bike4mind/slack"
             [cli]="@bike4mind/cli"
           )
 
@@ -154,6 +155,7 @@ jobs:
               echo "\"@bike4mind/services\": $BUMP"
               echo "\"@bike4mind/utils\": $BUMP"
               echo "\"@bike4mind/mcp\": $BUMP"
+              echo "\"@bike4mind/slack\": $BUMP"
               echo "\"@bike4mind/cli\": $BUMP"
               echo "---"
               echo ""
