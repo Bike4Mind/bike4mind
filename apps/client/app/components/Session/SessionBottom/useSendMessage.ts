@@ -758,7 +758,8 @@ export function useSendMessage({
     // L251), so the optimistic client-side ID won't work - we must create
     // the session first. The dispatch payload differs by mode:
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
-    //     (preserves the earlier `@specific-agent` UX).
+    //     (preserves the earlier `@specific-agent` UX), except a briefcase
+    //     `toolsOverride` still pins the tool whitelist (see `enabledTools` below).
     //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
     //     the executor build a synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
@@ -833,7 +834,18 @@ export function useSendMessage({
         // admin defaults.
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        const enabledTools = orchestrationAgent?.allowedTools;
+        // Tool whitelist precedence. A briefcase launch pins the tools its
+        // prompt needs via `toolsOverride`; honor that here just as the
+        // non-orchestration path does (`resolveTools` short-circuits its whole
+        // ladder on an override). Without it, a briefcase prompt that happens to
+        // @-mention an orchestration agent would silently run under the agent's
+        // `allowedTools` and drop the briefcase's required tools. `effectiveTools`
+        // is the same value the normal path sends: the `BRIEFCASE_DISALLOWED`-
+        // stripped override (the unsupported-model refusal already fired above,
+        // so we never reach here with a broken override). Absent a briefcase
+        // override, fall back to the orchestration agent's own whitelist (or
+        // `undefined` when agentless, which triggers the synthetic-profile path).
+        const enabledTools = options?.toolsOverride ? effectiveTools : orchestrationAgent?.allowedTools;
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
         // iteration. Mirrors the dedup the `chat_completion` flow does in
