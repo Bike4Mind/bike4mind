@@ -603,7 +603,14 @@ export class ReActAgent extends EventEmitter {
     // prepend it so the agent speaks in character while keeping the operational
     // (ReAct tool-use) guidance below. When no persona, behavior is unchanged.
     const persona = this.context.personaPrompt?.trim();
-    return persona ? `${persona}\n\n${base}` : base;
+    const composed = persona ? `${persona}\n\n${base}` : base;
+
+    // Append artifact-emission guidance LAST (after persona + operational prompt)
+    // when the host opted in - parity with chat completions, which inject the
+    // same guidance so chart/code/HTML/SVG/Mermaid output is wrapped in
+    // <artifact> tags. When unset, behavior is unchanged.
+    const artifact = this.context.artifactEmissionPrompt?.trim();
+    return artifact ? `${composed}\n\n${artifact}` : composed;
   }
 
   private buildDefaultSystemPrompt(): string {
