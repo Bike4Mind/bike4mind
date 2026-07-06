@@ -36,6 +36,8 @@ describe('useSendMessage - Agent Mode admin kill switch (regression)', () => {
   });
 
   it('never reads the raw experimentalFeatures.agentMode flag (the bypass the P1 removed)', () => {
-    expect(source).not.toMatch(/experimentalFeatures\s*\??\s*\.\s*agentMode/);
+    // Covers dot, optional-chain, and bracket access:
+    // experimentalFeatures.agentMode / ?.agentMode / ['agentMode'] / ["agentMode"].
+    expect(source).not.toMatch(/experimentalFeatures\s*\??\s*(\.\s*agentMode|\[\s*['"]agentMode['"]\s*\])/);
   });
 });
