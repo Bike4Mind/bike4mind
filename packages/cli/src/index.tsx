@@ -35,7 +35,9 @@ import { getPlanModeFilePath } from './utils/planMode.js';
 import {
   PermissionManager,
   type AgentContext,
-  getApiUrl,
+  resolveApiEndpoint,
+  requireApiUrl,
+  ApiEndpointUnconfiguredError,
   getEnvironmentName,
   getCreditsUrl,
   processFileReferences,
@@ -473,28 +475,40 @@ function CliApp() {
 
       // Validate authentication tokens on startup - auto-trigger login if needed
       const authTokens = await state.configStore.getAuthTokens();
+      const tokenExpired = authTokens ? new Date(authTokens.expiresAt) <= new Date() : false;
 
-      if (!authTokens) {
-        // First-time user or logged out - auto-trigger login flow
-        console.log('\n🔐 Welcome to B4M CLI! Authentication is required to get started.\n');
+      if (!authTokens || tokenExpired) {
+        // Both paths lead to the device-authorization login flow, which needs a
+        // configured endpoint. Without one (a source/linked checkout with no baked
+        // default, or an unbranded fork), the OAuth flow would fail deep in axios
+        // with a cryptic "Invalid URL". Fail loud and actionable here instead.
+        const endpoint = resolveApiEndpoint(config.apiConfig);
+        if (endpoint.status === 'unconfigured') {
+          console.error(`\n❌ ${new ApiEndpointUnconfiguredError().message}\n`);
+          exit();
+          return;
+        }
+
+        if (tokenExpired) {
+          // Returning user with expired token - auto-trigger re-authentication
+          console.log("\n🔐 Your session has expired. Let's re-authenticate.\n");
+          await state.configStore.clearAuthTokens();
+        } else {
+          // First-time user or logged out - auto-trigger login flow
+          console.log('\n🔐 Welcome to B4M CLI! Authentication is required to get started.\n');
+        }
         setState(prev => ({ ...prev, showLoginFlow: true, config }));
         return;
       }
 
+      // Past the gate above, authTokens is present and unexpired.
       const expiresAt = new Date(authTokens.expiresAt);
-      if (expiresAt <= new Date()) {
-        // Returning user with expired token - auto-trigger re-authentication
-        console.log("\n🔐 Your session has expired. Let's re-authenticate.\n");
-        await state.configStore.clearAuthTokens();
-        setState(prev => ({ ...prev, showLoginFlow: true, config }));
-        return;
-      }
-
       const daysUntilExpiry = Math.floor((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
       startupLog.push(`✅ Authenticated (expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''})`);
 
-      // Create API client for server-side LLM calls
-      const apiBaseURL = getApiUrl(config.apiConfig);
+      // Create API client for server-side LLM calls. Past the login gate above
+      // the endpoint is guaranteed configured; requireApiUrl fails loud if not.
+      const apiBaseURL = requireApiUrl(config.apiConfig);
       const envName = getEnvironmentName(config.apiConfig);
 
       // Always surface the active API environment so it's obvious which
@@ -2619,12 +2633,12 @@ Multi-line Input:
 
       case 'api-info': {
         const config = await state.configStore.get();
-        const apiUrl = getApiUrl(config.apiConfig);
+        const endpoint = resolveApiEndpoint(config.apiConfig);
         const apiType = getEnvironmentName(config.apiConfig);
 
         console.log('\n🌍 API Configuration:\n');
         console.log(`Type: ${apiType}`);
-        console.log(`URL: ${apiUrl}`);
+        console.log(`URL: ${endpoint.status === 'configured' ? endpoint.url : '(not configured)'}`);
         console.log('');
         break;
       }
@@ -3103,7 +3117,7 @@ Multi-line Input:
           try {
             // Create API client on-demand
             const config = await state.configStore.get();
-            const apiBaseURL = getApiUrl(config.apiConfig);
+            const apiBaseURL = requireApiUrl(config.apiConfig);
             const apiClient = new ApiClient(apiBaseURL, state.configStore);
 
             // Fetch user info and transactions in parallel
@@ -4002,7 +4016,7 @@ Multi-line Input:
 
       // Create fresh registry with new config
       newFeatureRegistry = new FeatureModuleRegistry();
-      const apiClient = new ApiClient(getApiUrl(updatedConfig.apiConfig), state.configStore);
+      const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
 
       if (updatedConfig.features?.tavern) {
         newFeatureRegistry.register(
@@ -4174,11 +4188,22 @@ Multi-line Input:
 
   // Show login flow if requested (check BEFORE isInitialized to allow login when not authenticated)
   if (state.showLoginFlow) {
-    const loginApiUrl = getApiUrl(state.config?.apiConfig);
+    const endpoint = resolveApiEndpoint(state.config?.apiConfig);
+
+    // Defensive: init()'s login gate prevents entering the flow unconfigured,
+    // so this only guards against a regression. Render an actionable message
+    // rather than handing an empty baseURL to the OAuth client.
+    if (endpoint.status === 'unconfigured') {
+      return (
+        <Box flexDirection="column" padding={1}>
+          <Text color="red">{new ApiEndpointUnconfiguredError().message}</Text>
+        </Box>
+      );
+    }
 
     return (
       <LoginFlow
-        apiUrl={loginApiUrl}
+        apiUrl={endpoint.url}
         configStore={state.configStore}
         onSuccess={() => {
           setState(prev => ({ ...prev, showLoginFlow: false }));
