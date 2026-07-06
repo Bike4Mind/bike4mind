@@ -1,9 +1,10 @@
 {
   "label": "Features",
-  "position": 1,
+  "position": 3,
   "link": {
     "type": "generated-index",
     "title": "Bike4Mind Features",
-    "description": "Explore the powerful features that make Bike4Mind your AI-powered knowledge management platform."
+    "description": "Explore the powerful features that make Bike4Mind your AI-powered knowledge management platform.",
+    "slug": "/features"
   }
-} 
+}

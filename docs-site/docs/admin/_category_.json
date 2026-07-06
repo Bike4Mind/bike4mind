@@ -5,6 +5,7 @@
   "link": {
     "type": "generated-index",
     "title": "Admin Guide",
-    "description": "Documentation for Bike4Mind platform administration, covering user management, system configuration, security, and operational tools."
+    "slug": "/admin",
+    "description": "Administer a Bike4Mind instance: settings, users, organizations, analytics, and operations."
   }
 }

@@ -115,8 +115,8 @@ Even when using Database IDP, these SST secrets are **always required**:
 
 ```bash
 # Set required secrets
-./for-env <stage> pnpm sst secret set JWT_SECRET "$(openssl rand -base64 32)"
-./for-env <stage> pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)"
+pnpm sst secret set JWT_SECRET "$(openssl rand -base64 32)" --stage <stage>
+pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)" --stage <stage>
 ```
 
 :::warning These Secrets Cannot Be Configured via Admin UI
@@ -158,7 +158,7 @@ Click **"Test Okta"** to run comprehensive diagnostics:
 
 **Fix:**
 ```bash
-./for-env <stage> pnpm sst secret set JWT_SECRET "$(openssl rand -base64 32)"
+pnpm sst secret set JWT_SECRET "$(openssl rand -base64 32)" --stage <stage>
 ```
 
 ### "callback_error" After Okta Login
@@ -167,7 +167,7 @@ Click **"Test Okta"** to run comprehensive diagnostics:
 
 **Fix:**
 ```bash
-./for-env <stage> pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)"
+pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)" --stage <stage>
 ```
 
 ### System Health Shows "Missing" But IDP Is Configured
@@ -176,7 +176,7 @@ Click **"Test Okta"** to run comprehensive diagnostics:
 
 The System Health page validates the format, not just existence. Regenerate the key:
 ```bash
-./for-env <stage> pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)"
+pnpm sst secret set SECRET_ENCRYPTION_KEY "$(openssl rand -hex 32)" --stage <stage>
 ```
 
 ### 404 Error on Okta Discovery

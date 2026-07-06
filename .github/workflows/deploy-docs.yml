@@ -1,0 +1,124 @@
+name: Deploy Docs Site
+
+# Deploys docs-site/ (Docusaurus + SST StaticSite).
+#   push to main touching docs-site/  -> stage dev  (docs.staging.bike4mind.com)
+#   manual dispatch                    -> chosen stage; production requires the
+#                                         protected Production environment
+#
+# Every deploy is gated by a sensitive-term scan of the built output. The term
+# regex lives in the DOCS_SCAN_TERMS repo secret (kept out of this public file
+# on purpose - the list itself is sensitive). If the secret is unset the scan
+# fails closed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/deploy-docs.yml'
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'Deployment stage'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - production
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-docs-${{ inputs.stage || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: '24'
+  AWS_REGION: 'us-east-2'
+
+jobs:
+  deploy-docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.repository == (vars.CANONICAL_REPO || 'bike4mind/bike4mind')
+    environment: ${{ inputs.stage == 'production' && 'Production' || null }}
+    steps:
+      - name: Resolve stage
+        id: stage
+        run: |
+          STAGE="${{ inputs.stage || 'dev' }}"
+          echo "stage=$STAGE" >> "$GITHUB_OUTPUT"
+          if [ "$STAGE" = "production" ]; then
+            echo "docs_url=https://docs.bike4mind.com" >> "$GITHUB_OUTPUT"
+          else
+            echo "docs_url=https://docs.staging.bike4mind.com" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+          cache-dependency-path: 'docs-site/pnpm-lock.yaml'
+
+      - name: Install dependencies
+        working-directory: docs-site
+        run: pnpm install --frozen-lockfile --ignore-workspace
+
+      - name: Build site
+        working-directory: docs-site
+        env:
+          DOCS_URL: ${{ steps.stage.outputs.docs_url }}
+          NODE_ENV: 'production'
+        run: pnpm build
+
+      - name: Sensitive-term scan (fail closed)
+        working-directory: docs-site
+        env:
+          SCAN_TERMS: ${{ secrets.DOCS_SCAN_TERMS }}
+        run: |
+          if [ -z "$SCAN_TERMS" ]; then
+            echo "::error::DOCS_SCAN_TERMS secret is not set - refusing to deploy unscanned content"
+            exit 1
+          fi
+          HITS=$(grep -rlPi "$SCAN_TERMS" build || true)
+          if [ -n "$HITS" ]; then
+            echo "::error::Sensitive-term scan found matches in the built site:"
+            echo "$HITS"
+            exit 1
+          fi
+          echo "Scan clean."
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ steps.stage.outputs.stage == 'production' && secrets.AWS_PROD_ROLE_ARN || secrets.AWS_DEV_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy with SST
+        working-directory: docs-site
+        run: npx sst deploy --stage ${{ steps.stage.outputs.stage }}
+
+      - name: Verify deployed site responds
+        run: |
+          URL="${{ steps.stage.outputs.docs_url }}"
+          for i in $(seq 1 20); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -m 15 "$URL/" || true)
+            if [ "$CODE" = "200" ]; then
+              echo "$URL is serving 200"
+              exit 0
+            fi
+            echo "attempt $i: $URL returned $CODE, retrying in 15s"
+            sleep 15
+          done
+          echo "::error::$URL did not return 200 after deploy"
+          exit 1

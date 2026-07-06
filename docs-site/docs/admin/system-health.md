@@ -35,7 +35,7 @@ When email is not configured, a warning alert explains the impact: users will no
 If any secrets are missing, an alert lists them with instructions for setting them:
 
 ```bash
-./for-env <stage> npx sst secret set MAIL_HOST smtp.example.com
+npx sst secret set MAIL_HOST smtp.example.com --stage <stage>
 ```
 
 ### Send Test Email
@@ -140,7 +140,7 @@ The system provides specific guidance for common OAuth errors:
 The bottom of the page includes a help card with general troubleshooting tips:
 
 - Check the fork setup documentation for required environment variables
-- Use `./for-env <stage> npx sst secret list` to see configured secrets
+- Use `npx sst secret list --stage <stage>` to see configured secrets
 - For email issues, verify SMTP credentials and DNS records (SPF, DKIM, DMARC)
 - For database issues, ensure MongoDB/DocumentDB connection strings are correct
 

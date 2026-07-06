@@ -58,7 +58,7 @@ When "All" organizations are selected, additional checkboxes allow excluding spe
 
 | Exclusion | Default | Description |
 |-----------|---------|-------------|
-| **Million On Mars** | Checked | Excludes internal team activity |
+| **Your internal org** | Checked | Excludes internal team activity |
 | **Unknown** | Checked | Excludes activity with no organization |
 | **Personal** | Checked | Excludes personal (non-organizational) activity |
 
@@ -169,7 +169,7 @@ The Analytics tab uses a centralized Zustand store to persist filter state acros
 |-------|---------|-------------|
 | Active sub-tab | User Activity | The currently selected sub-tab |
 | Selected organizations | All | Organization filter selection |
-| Excluded orgs | MoM, Unknown, Personal excluded | Organization exclusion toggles |
+| Excluded orgs | Internal, Unknown, Personal excluded | Organization exclusion toggles |
 | Date filters | Last 7 days | Start and end date range |
 | User activity filters | Empty strings | Counter name and email search terms |
 | Advanced filters visibility | Hidden | Whether advanced filters are shown |

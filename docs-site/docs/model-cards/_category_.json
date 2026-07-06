@@ -1,0 +1,10 @@
+{
+  "label": "Model Cards",
+  "position": 13,
+  "link": {
+    "type": "generated-index",
+    "title": "Model Cards & System Cards",
+    "description": "Archived model cards and system cards for the frontier models Bike4Mind builds on. Preserved here as durable reference even when the underlying model access changes.",
+    "slug": "/model-cards"
+  }
+}
