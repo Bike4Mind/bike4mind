@@ -38,6 +38,9 @@ import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStor
 export default function SendToDataLakeModal() {
   const { isOpen, content, fileName, mimeType, sourceLabel } = useSendToDataLakeStore();
   const closeStore = useSendToDataLakeStore(s => s.close);
+  // Only fetch once the modal opens AND the feature is entitled - otherwise this app-wide
+  // singleton fires the admin-gated /api/data-lakes call on every page, which 403s when
+  // EnableDataLakes is off. The flag defaults closed while settings load, so no fetch races in.
   const { isFeatureEnabled } = useAdminSettingsCache();
   const { data: lakes, isLoading } = useDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
   const queryClient = useQueryClient();
