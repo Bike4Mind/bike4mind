@@ -171,7 +171,7 @@ describe('Slack Export - Phase 2: Enhanced Error Messages', () => {
   const getSlackErrorMessage = (code: string) => {
     const messages: Record<string, string> = {
       channel_not_found: 'Channel not found or bot is not a member. Please invite the bot to the channel first.',
-      not_in_channel: 'Bot is not a member of this channel. Please invite the bot using /invite @GroktoolBot',
+      not_in_channel: 'Bot is not a member of this channel. Please invite the bot using /invite @Bike4MindBot',
       invalid_auth: 'Workspace authentication expired. Please reconnect your Slack workspace.',
       token_revoked: 'Bot token has been revoked. Please reconnect your Slack workspace.',
       missing_scope:
@@ -217,7 +217,7 @@ describe('Slack Export - Phase 2: Enhanced Error Messages', () => {
   it('should provide helpful error message for not_in_channel', () => {
     const message = getSlackErrorMessage('not_in_channel');
 
-    expect(message).toContain('/invite @GroktoolBot');
+    expect(message).toContain('/invite @Bike4MindBot');
     expect(message).toContain('not a member');
   });
 

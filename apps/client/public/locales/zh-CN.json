@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "人工智能设置",
     "session": "笔记本",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "推荐朋友到",
-    "email_title_default": "欢迎来到GrokTool！",
-    "email_body_default": "您被USER_NAME邀请到GrokTool！注册链接：使用以下邀请码注册：INVITE_CODE",
+    "email_title_default": "欢迎来到Bike4Mind！",
+    "email_body_default": "您被USER_NAME邀请到Bike4Mind！注册链接：使用以下邀请码注册：INVITE_CODE",
     "friend_email": "朋友的邮箱",
     "num_referrals_available": "可用的推荐数量：",
     "no_valid_emails_error": "请输入有效的邮箱地址",

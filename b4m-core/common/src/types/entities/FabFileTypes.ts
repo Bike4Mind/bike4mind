@@ -22,7 +22,7 @@ export enum KnowledgeType {
    */
   FILE = 'FILE',
   /**
-   * This is a user-created knowledge through the Groktool knowledge editor.
+   * This is a user-created knowledge through the Bike4Mind knowledge editor.
    */
   TEXT = 'TEXT',
 }
@@ -80,7 +80,7 @@ export interface IFabFile {
   notes?: string;
 
   /**
-   * A FabFile can be a URL, a file uploaded by the user, or a user-created knowledge through the Groktool knowledge editor.
+   * A FabFile can be a URL, a file uploaded by the user, or a user-created knowledge through the Bike4Mind knowledge editor.
    * @see KnowledgeType
    */
   type: KnowledgeType;

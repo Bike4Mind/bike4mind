@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "AI 설정",
     "session": "노트북",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "친구를 추천해주세요",
-    "email_title_default": "GrokTool에 오신 것을 환영합니다!",
-    "email_body_default": "USER_NAME님께서 GrokTool에 초대하셨습니다! 등록 링크: 다음 초대 코드를 사용하여 가입하세요: INVITE_CODE",
+    "email_title_default": "Bike4Mind에 오신 것을 환영합니다!",
+    "email_body_default": "USER_NAME님께서 Bike4Mind에 초대하셨습니다! 등록 링크: 다음 초대 코드를 사용하여 가입하세요: INVITE_CODE",
     "friend_email": "친구의 이메일",
     "num_referrals_available": "가능한 추천 수:",
     "no_valid_emails_error": "유효한 이메일 주소를 입력해주세요",

@@ -102,7 +102,7 @@ test.describe('Authentication', () => {
       });
 
       const hasDexie = await new Promise<boolean>(resolve => {
-        const req = indexedDB.open('GrokTool');
+        const req = indexedDB.open('Bike4Mind');
         req.onsuccess = () => {
           const db = req.result;
           try {
@@ -171,7 +171,7 @@ test.describe('Authentication', () => {
       });
 
       const dexieRecordCount = await new Promise<number>(resolve => {
-        const req = indexedDB.open('GrokTool');
+        const req = indexedDB.open('Bike4Mind');
         req.onsuccess = () => {
           const db = req.result;
           try {

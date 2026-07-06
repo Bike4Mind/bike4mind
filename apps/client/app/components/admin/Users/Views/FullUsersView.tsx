@@ -29,7 +29,7 @@ import DangerousIcon from '@mui/icons-material/Dangerous';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import SubscriptionsIcon from '@mui/icons-material/Subscriptions';
 import AdminProfile from '../../AdminProfile';
-import GrokToolUserDetails from '../Details/GrokToolUserDetails';
+import Bike4MindUserDetails from '../Details/Bike4MindUserDetails';
 import LoginDetails from '../Details/LoginDetails';
 import UserDetails from '../Details/UserDetails';
 import UserSubscriptionStatus from '../Details/UserSubscriptionStatus';
@@ -313,7 +313,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
                   </Typography>
                 </Stack>
                 <Divider />
-                <GrokToolUserDetails
+                <Bike4MindUserDetails
                   user={formState}
                   userKey={user.id}
                   editedFields={editedFields}

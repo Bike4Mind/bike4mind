@@ -7,7 +7,7 @@ import useGetLogo from '@client/app/hooks/useGetLogo';
 
 const lines = [
   {
-    firstPhrase: 'Hop aboard the GrokTool express 🚂',
+    firstPhrase: 'Hop aboard the Bike4Mind express 🚂',
     secondPhrase:
       "—because if we don't automate our jobs, someone else will (and they might not share their coffee ☕).",
   },
@@ -37,7 +37,7 @@ const lines = [
     secondPhrase: '—where we might just automate our own roles (but hey, more time for hobbies! 🎨🎮).',
   },
   {
-    firstPhrase: 'Join the GrokTool adventure 🧭',
+    firstPhrase: 'Join the Bike4Mind adventure 🧭',
     secondPhrase: "—navigating the AI maze so we don't end up making the tea for robots 🤖🍵.",
   },
   {

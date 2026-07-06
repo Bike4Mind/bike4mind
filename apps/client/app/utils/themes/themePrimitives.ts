@@ -342,7 +342,7 @@ export const shape = {
  * Branding configuration
  */
 export const branding = {
-  id: 'groktool',
+  id: 'bike4mind',
   // Display brand name externalized for open-core; id stays a stable theme key.
   name: APP_NAME, // single-source brand name, no re-reading the raw env var
   modeToggleEnabled: true,

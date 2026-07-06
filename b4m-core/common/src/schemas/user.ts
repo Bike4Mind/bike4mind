@@ -5,7 +5,7 @@ export const VALID_USER_TAGS = [
   'TFG',
   'tfg',
   'Developer',
-  'GrokTool',
+  'Bike4Mind',
   'Dev',
   'dev',
   'Analyst',
