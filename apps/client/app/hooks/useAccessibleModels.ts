@@ -64,12 +64,13 @@ export function useAccessibleModels() {
     accessibleImageModels,
     accessibleSpeechModels,
     accessibleVideoModels,
-    // Also treat missing tags as loading. `tags` is persisted to localStorage
-    // (see pickPersistedFields in UserContext), so a hydrated user has them on
-    // refresh. This guard is a safety net for a `currentUser` set without tags -
-    // a cached shim written before tag persistence shipped, until the
-    // users-subscription or a re-login refreshes it.
-    isLoading: isConfigsLoading || !currentUser?.tags,
+    // Gate loading on the presence of the user object, not on `tags`. A user
+    // can legitimately have no tags (`tags: null` or `[]` - e.g. admin-created
+    // without tags), and empty/absent tags are handled by isModelAccessible as
+    // tag-only matching. Gating on `!currentUser?.tags` here stuck those users
+    // on "Loading AI models..." forever. Once `currentUser` is set we resolve;
+    // while it's still null (not yet hydrated) we keep loading.
+    isLoading: isConfigsLoading || !currentUser,
     userTags,
     isAdmin,
     isModelAccessible: useCallback(

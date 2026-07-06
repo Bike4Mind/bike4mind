@@ -225,13 +225,22 @@ RESOLVED_VARIABLE="$STAGING_VARIABLE"  # Uses staging infrastructure
 
 ## Preview Environment Configuration
 
-Preview environments (PR deployments) automatically use staging infrastructure:
+Preview environments (PR deployments) use staging infrastructure:
 - **VPC**: Uses resolved staging VPC ID
 - **Hosted Zone**: Uses resolved staging hosted zone
 - **ECR Cache**: Uses resolved staging ECR repository
 - **Domain**: Constructed as `pr{PR_NUMBER}.{PREVIEW_SERVER_DOMAIN}`
 
 This ensures preview environments are isolated from production but share staging infrastructure for cost efficiency.
+
+### Opt-in gating (`preview_label`)
+
+Preview deploys are **opt-in**. Each tenant in the `DEPLOY_TENANTS` repo variable carries a `preview_label` field, read by the `plan` job in `deploy.yml`:
+
+- `preview_label: "preview"` (current) — a PR deploys a preview **only** when it carries the `preview` label. No label ⇒ the deploy matrix is empty ⇒ CI runs but no preview is deployed (the required **Deploy** check still reports green).
+- `preview_label: null` — legacy "always deploy a preview on every trusted PR" behavior.
+
+`deploy.yml` also triggers on the `labeled` pull_request event, so adding the label deploys immediately rather than waiting for the next push. Maintainers can toggle the label from a PR comment via the `/deploy preview` (opt-in) and `/deploy-preview off` (opt-out + teardown) commands — see `.github/workflows/deploy-preview-command.yml`. Removing the label tears the preview down (`cleanup.yml`, `unlabeled` trigger). Fork PRs never deploy previews regardless of labels.
 
 ## Preview Domain Calculation
 

@@ -61,6 +61,12 @@ packages/premium/pi/
 # clones the pinned ref from premium-overlay.lock.json before pnpm install.
 packages/premium/tavern/
 
+# Premium overlay snapshot for b4m-optihashi, hydrated at pinned ref by the deploy
+# job (clones from premium-overlay.lock.json before pnpm install). Missing entry
+# meant a local `pnpm bootstrap:premium` clone showed as untracked and one bulk
+# `git add` away from publishing private overlay code.
+packages/premium/optihashi/
+
 # Docusaurus
 docs-site/build/
 docs-site/.docusaurus/

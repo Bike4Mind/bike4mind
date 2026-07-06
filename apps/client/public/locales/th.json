@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "การตั้งค่า AI",
     "session": "สมุดบันทึก",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "แนะนำเพื่อนมาที่",
-    "email_title_default": "ยินดีต้อนรับสู่ GrokTool!",
-    "email_body_default": "คุณได้รับการเชิญจาก USER_NAME ไปยัง GrokTool! ลิงก์การลงทะเบียน: ใช้รหัสเชิญต่อไปนี้เพื่อลงทะเบียน: INVITE_CODE",
+    "email_title_default": "ยินดีต้อนรับสู่ Bike4Mind!",
+    "email_body_default": "คุณได้รับการเชิญจาก USER_NAME ไปยัง Bike4Mind! ลิงก์การลงทะเบียน: ใช้รหัสเชิญต่อไปนี้เพื่อลงทะเบียน: INVITE_CODE",
     "friend_email": "อีเมลของเพื่อน",
     "num_referrals_available": "การอ้างอิงที่มีอยู่:",
     "no_valid_emails_error": "โปรดป้อนที่อยู่อีเมลที่ถูกต้อง",

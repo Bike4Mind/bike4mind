@@ -1,0 +1,100 @@
+name: Preview Deploy Command
+
+# Slash command to opt a PR in/out of preview deploys from a comment, instead of
+# clicking the label in the UI. Previews are OFF by default; this is a
+# convenience wrapper around the `preview` label — it does NOT deploy directly.
+#
+#   /deploy preview            -> add the `preview` label  (starts a preview)
+#   /deploy-preview            -> same
+#   /deploy preview off        -> remove the `preview` label (stops future
+#   /deploy-preview off           deploys and tears the current preview down)
+#
+# The label add/remove is performed with a GitHub App token, NOT the default
+# GITHUB_TOKEN: events produced by GITHUB_TOKEN do not trigger further workflow
+# runs, so a token-added label would never fire deploy.yml's `labeled` trigger.
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  toggle-preview:
+    name: Toggle preview label
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    # Trust + scope gate (mirrors deploy.yml's fork-safety):
+    #  - must be a comment on a PR (issue_comment fires for issues too);
+    #  - author must have write-level association (OWNER/MEMBER/COLLABORATOR),
+    #    the same set deploy.yml's `plan` job treats as a trusted preview author;
+    #  - body must start with the command. Cheap prefix filter so we don't mint
+    #    an app token for every comment. `contains`/`startsWith` on comment.body
+    #    in `if:` is safe — it is a boolean expression, not a shell.
+    if: >-
+      github.event.issue.pull_request &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) &&
+      (startsWith(github.event.comment.body, '/deploy preview') || startsWith(github.event.comment.body, '/deploy-preview'))
+    permissions:
+      # Fallback token scopes (used only if the app token can't be minted). The
+      # app token below is what actually lets the label change trigger deploys.
+      issues: write
+      pull-requests: write
+    steps:
+      # App identity so the label change triggers deploy.yml / cleanup.yml.
+      # Mirrors cleanup.yml: prefer the MillionOnMars ops app, fall back to the
+      # org release app (present on this repo). Needs Issues: write (or Pull
+      # requests: write) to manage labels.
+      - name: Generate app token
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GH_APP_ID || vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY || secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Add or remove the preview label
+        uses: actions/github-script@v8
+        env:
+          # Read the untrusted comment body via env, never interpolated into a
+          # shell or the script source (script-injection safe).
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        with:
+          # App token drives the label change so downstream workflows fire; fall
+          # back to the default token (label still applies, but the immediate
+          # deploy/teardown trigger is suppressed — noted in the reply).
+          github-token: ${{ steps.app-token.outputs.token || github.token }}
+          script: |
+            const LABEL = 'preview';
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const usedAppToken = !!process.env.APP_TOKEN;
+
+            // First line, lower-cased. `off`/`remove`/`stop`/`down` after the
+            // command means opt-out; anything else means opt-in.
+            const line = (process.env.COMMENT_BODY || '').split('\n')[0].trim().toLowerCase();
+            const isOff = /\b(off|remove|stop|down|teardown|disable)\b/.test(line);
+
+            // 👀 acknowledge the command.
+            try {
+              await github.rest.reactions.createForIssueComment({
+                owner, repo, comment_id: context.payload.comment.id, content: 'eyes',
+              });
+            } catch (e) { core.info(`reaction failed (non-fatal): ${e.message}`); }
+
+            const suppressedNote = usedAppToken ? '' :
+              '\n\n> Note: the app token was unavailable, so this label change will **not** auto-trigger the deploy/teardown. Push a commit or re-apply via the UI to trigger it.';
+
+            let body;
+            if (isOff) {
+              try {
+                await github.rest.issues.removeLabel({ owner, repo, issue_number, name: LABEL });
+                body = `🧹 Removed the \`${LABEL}\` label. Future pushes to this PR will **not** deploy a preview, and the existing \`pr${issue_number}\` preview will be torn down.` + suppressedNote;
+              } catch (e) {
+                if (e.status === 404) {
+                  body = `ℹ️ The \`${LABEL}\` label was not set — nothing to remove.`;
+                } else { throw e; }
+              }
+            } else {
+              await github.rest.issues.addLabels({ owner, repo, issue_number, labels: [LABEL] });
+              body = `🚀 Added the \`${LABEL}\` label — a preview deploy for \`pr${issue_number}\` is starting. Track it in the **Deploy** check on the PR. Comment \`/deploy-preview off\` to stop and tear it down.` + suppressedNote;
+            }
+
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });

@@ -8,20 +8,33 @@ on:
   pull_request:
     types: [opened, edited, synchronize]
     branches: [main]
+  # Also run on the merge queue so the required "validate" check reports there.
+  # A merge_group has no PR title to lint, so the job no-ops and passes; without
+  # this, enabling a merge queue would hang forever waiting on a check that never
+  # runs on merge_group.
+  merge_group:
+    branches: [main]
 
 permissions:
   pull-requests: read
 
 jobs:
   validate:
-    # Skip forks, dependabot, and Version Packages PRs
-    if: >-
-      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') &&
-      github.actor != 'dependabot[bot]' &&
-      !startsWith(github.head_ref, 'changeset-release/')
+    # Runs on the canonical repo for both pull_request and merge_group, so the
+    # required "validate" check always reports (forks are excluded and can't reach
+    # the merge queue anyway). The actual title lint is gated to real PRs below.
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - name: Validate PR title (Conventional Commits)
+        # Enforce only on real PRs. Skip on merge_group (no title to lint),
+        # dependabot, and Version Packages PRs — a skipped step still succeeds,
+        # so the required "validate" check stays green in all those cases.
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.actor != 'dependabot[bot]' &&
+          !startsWith(github.head_ref, 'changeset-release/')
+        uses: amannn/action-semantic-pull-request@v5
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

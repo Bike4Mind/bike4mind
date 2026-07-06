@@ -1,6 +1,6 @@
 /* FilePond.module.css */
 
-.groktool .filepondRoot {
+.bike4mind .filepondRoot {
   max-height: 100em;
   color: green;
 }
@@ -30,7 +30,7 @@
   /* Additional selector for ensuring transparency */
 }
 
-.groktool .filepond--item {
+.bike4mind .filepond--item {
   border-radius: 10px;
   background-color: 'red';
 }

@@ -1,0 +1,169 @@
+name: Slack Notification
+
+on:
+  workflow_call:
+    inputs:
+      status:
+        description: 'Status of the workflow (success, failure, cancelled)'
+        required: true
+        type: string
+      environment:
+        description: 'Environment name (production, staging, preview)'
+        required: true
+        type: string
+      workflow_name:
+        description: 'Name of the workflow that triggered this notification'
+        required: true
+        type: string
+      repository:
+        description: 'Repository name (owner/repo)'
+        required: false
+        type: string
+        default: ''
+      branch:
+        description: 'Branch name'
+        required: false
+        type: string
+        default: ''
+      commit_sha:
+        description: 'Commit SHA'
+        required: false
+        type: string
+        default: ''
+      commit_message:
+        description: 'Commit message'
+        required: false
+        type: string
+        default: ''
+      commit_author:
+        description: 'Commit author name'
+        required: false
+        type: string
+        default: ''
+      commit_url:
+        description: 'Commit URL'
+        required: false
+        type: string
+        default: ''
+      workflow_run_url:
+        description: 'Workflow run URL'
+        required: false
+        type: string
+        default: ''
+      mention:
+        description: 'Slack mention (e.g., "@channel", "<!subteam^ID|@group>", or "" for no mention)'
+        required: false
+        type: string
+        default: ''
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: 'Slack webhook URL for notifications'
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine notification emoji and text
+        id: message
+        run: |
+          case "${{ inputs.status }}" in
+            success)
+              echo "emoji=✅" >> $GITHUB_OUTPUT
+              echo "status_text=Succeeded" >> $GITHUB_OUTPUT
+              ;;
+            failure)
+              echo "emoji=🚨" >> $GITHUB_OUTPUT
+              echo "status_text=Failed" >> $GITHUB_OUTPUT
+              ;;
+            cancelled)
+              echo "emoji=⚠️" >> $GITHUB_OUTPUT
+              echo "status_text=Cancelled" >> $GITHUB_OUTPUT
+              ;;
+            *)
+              echo "emoji=ℹ️" >> $GITHUB_OUTPUT
+              echo "status_text=${{ inputs.status }}" >> $GITHUB_OUTPUT
+              ;;
+          esac
+
+      - name: Compute short commit SHA
+        id: short_sha
+        if: inputs.commit_sha != ''
+        run: echo "value=${SHA:0:7}" >> $GITHUB_OUTPUT
+        env:
+          SHA: ${{ inputs.commit_sha }}
+
+      - name: Prepare commit message for JSON
+        id: prepare
+        if: inputs.commit_message != ''
+        run: |
+          COMMIT_MSG=$(cat << 'COMMIT_MSG_EOF'
+          ${{ inputs.commit_message }}
+          COMMIT_MSG_EOF
+          )
+          # First line only, truncated to 200 Unicode code points (not bytes, so emoji
+          # are preserved intact), then JSON-escaped with outer quotes stripped so we
+          # can splice into the payload's mrkdwn string.
+          ESCAPED_MSG=$(printf '%s' "$COMMIT_MSG" | python3 -c '
+          import json, sys
+          lines = sys.stdin.read().strip().splitlines()
+          text = lines[0] if lines else ""
+          if len(text) > 200:
+              text = text[:197] + "..."
+          print(json.dumps(text)[1:-1])
+          ')
+          echo "escaped_message=$ESCAPED_MSG" >> $GITHUB_OUTPUT
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "${{ inputs.mention != '' && format('{0} ', inputs.mention) || '' }}${{ steps.message.outputs.emoji }} ${{ inputs.environment }} - ${{ inputs.workflow_name }} ${{ steps.message.outputs.status_text }}",
+              "blocks": [
+                ${{ inputs.mention != '' && format('{{"type": "section", "text": {{"type": "mrkdwn", "text": "{0}"}}}},', inputs.mention) || '' }}
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "${{ steps.message.outputs.emoji }} ${{ inputs.environment }} - ${{ inputs.workflow_name }} ${{ steps.message.outputs.status_text }}",
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ inputs.repository != '' && inputs.repository || github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Branch:*\n${{ inputs.branch != '' && inputs.branch || github.ref_name }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Environment:*\n${{ inputs.environment }}"
+                    }
+                    ${{ inputs.commit_url != '' && inputs.commit_sha != '' && format(',{{"type": "mrkdwn", "text": "*Commit:*\n<{0}|{1}>"}}', inputs.commit_url, steps.short_sha.outputs.value) || '' }}
+                    ${{ inputs.commit_author != '' && format(',{{"type": "mrkdwn", "text": "*Author:*\n{0}"}}', inputs.commit_author) || '' }}
+                  ]
+                }
+                ${{ inputs.commit_message != '' && format(',{{"type": "section", "text": {{"type": "mrkdwn", "text": "*Commit Message:*\n{0}"}}}},', steps.prepare.outputs.escaped_message) || ',' }}
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow Run"
+                      },
+                      "url": "${{ inputs.workflow_run_url != '' && inputs.workflow_run_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}"
+                    }
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK

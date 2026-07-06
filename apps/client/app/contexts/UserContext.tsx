@@ -136,10 +136,11 @@ const safeUserStorage = {
 // `tags` and `preferences` are both persisted so feature gates survive a hard
 // refresh: `useGetIdentify` feeds the persisted user back into React Query as
 // `initialData` with a 5-min `staleTime`, so `/api/identify` does NOT refetch
-// on reload. Without persisted `tags`, `useAccessibleModels` (gated on
-// `!currentUser?.tags`) leaves the AI Settings model list spinning forever;
-// without persisted `preferences`, experimental-feature gates render from
-// admin defaults instead of the user's real value. Both are small.
+// on reload. Persisting `tags` keeps model-access gates (e.g. entitlement- and
+// tag-scoped models in `useAccessibleModels`) resolving from the user's real
+// tags on reload rather than an empty set; without persisted `preferences`,
+// experimental-feature gates render from admin defaults instead of the user's
+// real value. Both are small.
 type PersistedUserFields = Pick<
   IUserDocument,
   | 'id'

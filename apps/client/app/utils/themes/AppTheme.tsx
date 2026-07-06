@@ -62,7 +62,7 @@ export default function AppTheme({ children, themeComponents, disableCustomTheme
       theme={theme || undefined}
       disableTransitionOnChange
       defaultMode="system"
-      modeStorageKey="groktool-color-scheme"
+      modeStorageKey="bike4mind-color-scheme"
     >
       {children}
     </CssVarsProvider>

@@ -591,12 +591,12 @@ const AdminSettingsTab: React.FC = () => {
         if (!isParentOn) return false;
       }
 
-      const isGrokToolSetting = settingInfo?.app === 'groktool';
+      const isBike4MindSetting = settingInfo?.app === 'bike4mind';
 
       // In tab-scoped mode, hide settings not applicable to the current theme.
       // "All Tabs" mode reveals everything (across all tabs and app scopes).
       if (!allTabs && settingInfo.app) {
-        if (!isGrokToolSetting) return false;
+        if (!isBike4MindSetting) return false;
       }
 
       if (searchTerm) {

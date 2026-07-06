@@ -25,34 +25,88 @@ export function getCreditsUrl(): string {
 }
 
 /**
- * Resolve API URL based on configuration
- * Returns custom URL if set, otherwise the build-time default service.
+ * The backend the CLI talks to, modeled as a discriminated union so that
+ * "no endpoint configured" is a distinct, explicit state rather than an empty
+ * string masquerading as a URL. This keeps a missing endpoint from silently
+ * reaching the network layer, where it surfaced as a cryptic axios
+ * "Invalid URL" three layers away from the actual configuration problem.
+ *
+ * `source` records how the URL was resolved:
+ * - `custom`        - the user set it via `--api-url` / `/set-api`
+ * - `baked-default` - the build-time default baked into the published binary
  */
-export function getApiUrl(configApiConfig?: ApiConfig): string {
-  // Return custom URL if configured (self-hosted)
+export type ApiEndpoint =
+  | { status: 'configured'; url: string; source: 'custom' | 'baked-default' }
+  | { status: 'unconfigured' };
+
+/**
+ * Resolve which backend the CLI should talk to. A configured custom URL wins;
+ * otherwise the build-time default service is used; otherwise the endpoint is
+ * unconfigured (an unbranded fork or a source/linked checkout that never baked
+ * a default). Never returns an empty URL - callers get `unconfigured` instead.
+ */
+export function resolveApiEndpoint(configApiConfig?: ApiConfig): ApiEndpoint {
   if (configApiConfig?.customUrl) {
-    return configApiConfig.customUrl;
+    return { status: 'configured', url: configApiConfig.customUrl, source: 'custom' };
   }
 
-  // Default to the build-time-configured service (empty for an unbranded fork)
-  return getDefaultApiUrl();
+  const bakedDefault = getDefaultApiUrl();
+  if (bakedDefault) {
+    return { status: 'configured', url: bakedDefault, source: 'baked-default' };
+  }
+
+  return { status: 'unconfigured' };
 }
 
 /**
- * Get human-readable API type name
+ * Thrown when a network operation needs an endpoint but none is configured.
+ * The message is user-facing and actionable - it tells the developer exactly
+ * how to point the CLI at a backend.
+ */
+export class ApiEndpointUnconfiguredError extends Error {
+  constructor() {
+    super(
+      'No API endpoint configured. Point the CLI at a backend first:\n' +
+        '  b4m --dev              # local dev server (http://localhost:3001)\n' +
+        '  b4m --api-url <url>    # a hosted or self-hosted instance'
+    );
+    this.name = 'ApiEndpointUnconfiguredError';
+  }
+}
+
+/**
+ * Resolve the API URL for a network call, failing loud when unconfigured.
+ * Use this at the network boundary (constructing an `ApiClient` / `OAuthClient`)
+ * so a missing endpoint throws an actionable error instead of an empty
+ * `baseURL` producing an opaque "Invalid URL".
+ */
+export function requireApiUrl(configApiConfig?: ApiConfig): string {
+  const endpoint = resolveApiEndpoint(configApiConfig);
+  if (endpoint.status === 'unconfigured') {
+    throw new ApiEndpointUnconfiguredError();
+  }
+  return endpoint.url;
+}
+
+/**
+ * Get human-readable API type name for display (banner, `/api-info`).
  */
 export function getEnvironmentName(configApiConfig?: ApiConfig): string {
-  const url = configApiConfig?.customUrl;
+  const endpoint = resolveApiEndpoint(configApiConfig);
 
-  if (!url) {
-    // No custom URL -> the build-time default service. An unbranded fork that baked
-    // no default (empty) has no configured service to name, so report "Unconfigured"
-    // rather than a misleading "Production".
-    return getDefaultApiUrl() ? 'Production' : 'Unconfigured';
+  // An unbranded fork / source checkout with no baked default has no configured
+  // service to name - report "Unconfigured" rather than a misleading "Production".
+  if (endpoint.status === 'unconfigured') {
+    return 'Unconfigured';
   }
 
-  // Local dev servers (localhost / 127.0.0.1) read as "Local Dev"
-  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(url)) {
+  // The build-time default service is the hosted production backend.
+  if (endpoint.source === 'baked-default') {
+    return 'Production';
+  }
+
+  // Local dev servers (localhost / 127.0.0.1) read as "Local Dev".
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(endpoint.url)) {
     return 'Local Dev';
   }
 
