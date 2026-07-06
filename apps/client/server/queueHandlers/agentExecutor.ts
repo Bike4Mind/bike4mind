@@ -72,7 +72,7 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
-import { resolveLatticeTools } from './agentExecutor.latticeTools';
+import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1134,16 +1134,27 @@ async function processExecution(
       executionEnableLattice: execution.enableLattice,
     });
 
-    const tools = buildSharedTools(toolDeps, toolCallbacks, {
+    const subagentToolConfig = buildSubagentToolConfig({
+      model: execution.model,
+      apiKeyTable: apiKeyTable as ApiKeyTable,
+      imageConfig: execution.imageConfig,
+    });
+
+    // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
+    // the parent's own Lattice toolbelt above, which is gated on `enableLattice`)
+    // and threaded to `delegate_to_agent` / `coordinate_task` via `optInTools`. A
+    // subagent whose IAgent `allowedTools` names `lattice_*` then gets Lattice
+    // even when the parent run didn't enable it — and Lattice never leaks into the
+    // parent's own toolbelt because this pool is kept out of `tools`. See
+    // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
+    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+
+    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       // Dedupe: a caller may already have enabled create_mission/mission_status;
       // a raw append would make buildSharedTools wrap the same tool twice.
       enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       externalTools: { ...premiumLlmTools, ...missionChatTools, ...latticeExternalTools },
-      config: buildSubagentToolConfig({
-        model: execution.model,
-        apiKeyTable: apiKeyTable as ApiKeyTable,
-        imageConfig: execution.imageConfig,
-      }),
+      config: subagentToolConfig,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -2163,6 +2174,12 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        // Required for the Lattice opt-in pool below to actually work: the
+        // Lattice tools persist models to Mongo and reload them by ObjectId on
+        // subsequent calls. Without this adapter they fall back to an in-memory
+        // id that fails the ObjectId guard, silently breaking the
+        // create->populate->query chain (same wiring as the top-level path).
+        latticeModels: latticeModelRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
@@ -2206,12 +2223,20 @@ async function processSubagentDispatch(
       onToolFinish: async () => {},
       sessionId: child.sessionId,
     };
-    const tools = buildSharedTools(toolDeps, toolCallbacks, {
-      config: buildSubagentToolConfig({
-        model: child.model,
-        apiKeyTable: apiKeyTable as ApiKeyTable,
-        imageConfig: child.imageConfig,
-      }),
+    const subagentToolConfig = buildSubagentToolConfig({
+      model: child.model,
+      apiKeyTable: apiKeyTable as ApiKeyTable,
+      imageConfig: child.imageConfig,
+    });
+
+    // Lattice opt-in pool for this subagent (and any grandchildren it delegates
+    // to). Built unconditionally and granted only when the agent's `allowedTools`
+    // names `lattice_*`; mirrors the top-level path so Lattice availability is
+    // identical whether a subagent runs in-process or in its own Lambda.
+    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+
+    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      config: subagentToolConfig,
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 
@@ -2309,6 +2334,9 @@ async function processSubagentDispatch(
       llm,
       logger,
       parentTools: tools,
+      // Granted to this dispatched subagent only when its `allowedTools` names
+      // `lattice_*`; the orchestrator dedupes against `parentTools`.
+      optInTools: subagentLatticeTools,
       availableModels: models,
       signal: abortController.signal,
       onProgress: async (status: string) => {

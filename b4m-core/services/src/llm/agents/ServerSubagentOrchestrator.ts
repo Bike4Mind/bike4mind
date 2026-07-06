@@ -1,4 +1,4 @@
-import { ReActAgent, filterToolsByPatterns, humanizeToolName } from '@bike4mind/agents';
+import { ReActAgent, selectSubagentTools, humanizeToolName } from '@bike4mind/agents';
 import type { AgentResult, AgentStep, ThoroughnessLevel, ServerAgentDefinition } from '@bike4mind/agents';
 import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
@@ -217,6 +217,17 @@ export interface ServerOrchestratorDeps {
   logger: Logger;
   /** Parent's already-built tools (both B4M native + MCP) */
   parentTools: ICompletionOptionTools[];
+  /**
+   * Tools a subagent can opt into ONLY by explicitly naming them (or a matching
+   * wildcard) in its `allowedTools`. Unlike `parentTools`, these are NOT granted
+   * under the "no allowedTools ⇒ allow all" default — they require a deliberate
+   * opt-in (see `filterOptInTools`). Kept separate from `parentTools` so they
+   * never leak into the parent's own toolbelt; used for launch-gated capabilities
+   * like Lattice that a delegated agent may need but that shouldn't be forced on
+   * every run. Deduped against `parentTools` when merged, so enabling the
+   * capability on the parent run doesn't double-register the tool.
+   */
+  optInTools?: ICompletionOptionTools[];
   /** Abort signal from the parent request (user cancellation, Lambda timeout) */
   signal?: AbortSignal;
   /** Available models for credit computation */
@@ -335,8 +346,16 @@ export class ServerSubagentOrchestrator {
       ...(currentDepth >= MAX_SUBAGENT_DEPTH ? DEPTH_CAP_DENIED : []),
     ];
 
-    // Filter parent's tools for the subagent
-    const filteredTools = filterToolsByPatterns(this.deps.parentTools, agentDef.allowedTools, deniedTools);
+    // Filter parent's tools for the subagent, then merge in any opt-in tools the
+    // agent explicitly requested (e.g. Lattice). Opt-in tools require an explicit
+    // `allowedTools` match — they're never granted by the allow-all default — and
+    // are deduped against the parent set.
+    const filteredTools = selectSubagentTools(
+      this.deps.parentTools,
+      this.deps.optInTools ?? [],
+      agentDef.allowedTools,
+      deniedTools
+    );
 
     // Substitute variables in system prompt
     let systemPrompt = agentDef.systemPrompt;

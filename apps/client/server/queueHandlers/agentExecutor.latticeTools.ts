@@ -20,7 +20,14 @@
  * this contribution catches a future refactor that forgets the continuation
  * fallback or the `externalTools` merge.
  */
-import { LATTICE_TOOL_NAMES } from '@bike4mind/services';
+import {
+  LATTICE_TOOL_NAMES,
+  buildSharedTools,
+  type BuildSharedToolsOptions,
+  type ToolBuilderDeps,
+  type ToolBuilderCallbacks,
+} from '@bike4mind/services';
+import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import { latticeToolDefinitions } from '@bike4mind/services/llm/tools/cliTools';
 
 export interface ResolveLatticeToolsInput {
@@ -46,4 +53,38 @@ export function resolveLatticeTools({
     latticeEnabledTools: enableLattice ? LATTICE_TOOL_NAMES : [],
     latticeExternalTools: enableLattice ? latticeToolDefinitions : {},
   };
+}
+
+/**
+ * Builds the Lattice tool pool a subagent can OPT INTO via `allowedTools`.
+ *
+ * Unlike `resolveLatticeTools` (which gates the PARENT's Lattice toolbelt on the
+ * `enableLattice` launch flag), this builds the Lattice tools UNCONDITIONALLY.
+ * The result is handed to `ServerSubagentOrchestrator`'s `optInTools`, which
+ * grants them only to subagents whose `allowedTools` explicitly name `lattice_*`
+ * — so a delegated agent can use Lattice even when the parent run didn't enable
+ * it, without Lattice ever being forced onto every delegated run.
+ *
+ * `deps.db.latticeModels` MUST be wired or created models won't persist across
+ * calls (the create→populate→query chain silently breaks — the same adapter the
+ * top-level path wires for its own Lattice tools). Returns `[]` if the tool
+ * builder yields nothing (defensive; `buildSharedTools` returns `undefined` when
+ * no tools resolve).
+ */
+export function buildSubagentLatticeToolPool(
+  deps: ToolBuilderDeps,
+  callbacks: ToolBuilderCallbacks,
+  config: BuildSharedToolsOptions['config']
+): ICompletionOptionTools[] {
+  const built =
+    buildSharedTools(deps, callbacks, {
+      enabledTools: [...LATTICE_TOOL_NAMES],
+      externalTools: latticeToolDefinitions,
+      config,
+    }) ?? [];
+  // `buildSharedTools` also injects `delegate_to_agent` / `coordinate_task` when
+  // an `agentStore` is present (both deps carry one here). The opt-in pool must
+  // contain ONLY the Lattice tools, so keep just the known Lattice names.
+  const latticeNames = new Set<string>(LATTICE_TOOL_NAMES);
+  return built.filter(tool => latticeNames.has(tool.toolSchema.name));
 }

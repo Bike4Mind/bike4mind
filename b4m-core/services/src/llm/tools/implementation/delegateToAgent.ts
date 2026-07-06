@@ -51,6 +51,13 @@ export interface DelegateToAgentToolDeps {
   /** All parent tools (the subagent will receive a filtered subset) */
   parentTools: ICompletionOptionTools[];
   /**
+   * Tools the subagent can OPT INTO by explicitly naming them in `allowedTools`
+   * (never granted by the allow-all default). Forwarded to the orchestrator's
+   * `optInTools` channel and propagated to grandchildren so opt-in capabilities
+   * like Lattice are available at every nesting level. See `ServerOrchestratorDeps.optInTools`.
+   */
+  optInTools?: ICompletionOptionTools[];
+  /**
    * Getter for the parent's abort signal. Uses a getter because the AbortController
    * is created after buildTools() returns - the signal isn't available at tool
    * construction time but will be available when the tool is actually invoked.
@@ -231,6 +238,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         getRemainingTimeMs: deps.getRemainingTimeMs,
         handoffSignal: deps.handoffSignal,
         depth: childDepth,
+        optInTools: deps.optInTools,
       });
 
       // Background mode: dispatch + return a structured payload immediately. The LLM
