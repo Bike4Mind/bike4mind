@@ -81,11 +81,24 @@ export async function serpApiSearch(
   return response.json();
 }
 
+export const WEB_SEARCH_NOT_CONFIGURED_MSG =
+  'Web search is not configured: an administrator needs to set the Serper API key in Admin > API Keys. ' +
+  'No search was performed.';
+
 export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
   params: WebSearchParams
 ): Promise<WebSearchResult> {
   Logger.globalInstance.log('🔍 WebSearch Tool: Starting search for query:', params.query);
+
+  // Surface a clear "not configured" message instead of silently returning
+  // "No results found", which reads to the model (and user) as if the web
+  // genuinely had nothing - the exact confusion this tool's gating fixes.
+  const apiKey = await getSerperKey(adapters);
+  if (!apiKey) {
+    Logger.globalInstance.error('❌ WebSearch Tool: No API key configured. Skipping search.');
+    return { formattedResults: WEB_SEARCH_NOT_CONFIGURED_MSG, citables: [] };
+  }
 
   try {
     const data = await serpApiSearch(adapters, params.query, params.num_results);
