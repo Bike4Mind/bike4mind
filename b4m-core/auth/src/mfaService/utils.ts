@@ -117,10 +117,10 @@ export function verifyBackupCode(userBackupCodes: string[], providedCode: string
 
 /**
  * Check if a user requires MFA based on enforcement settings
- * In lumina5, when MFA is enforced, it applies to ALL users
+ * When MFA is enforced, it applies to ALL users
  */
 export function userRequiresMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
-  return enforceMFASetting; // In lumina5, enforcement applies to all users
+  return enforceMFASetting; // Enforcement applies to all users
 }
 
 /**
@@ -210,7 +210,7 @@ export function userEligibleForMFA(user: IUserDocument): boolean {
 
 /**
  * Check if a user can disable MFA based on enforcement settings
- * In lumina5, when MFA is enforced, NO user can disable it
+ * When MFA is enforced, NO user can disable it
  */
 export function userCanDisableMFA(user: IUserDocument, enforceMFASetting: boolean): boolean {
   return !enforceMFASetting;

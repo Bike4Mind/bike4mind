@@ -6,8 +6,6 @@
  * - Per-iteration checkpointing for Lambda self-dispatch
  * - Direct SDK invocation (bypasses CloudFront 20s limit)
  * - SQS-triggered resume from checkpoint for continuation
- *
- * @see https://github.com/MillionOnMars/lumina5/issues/8006
  */
 
 import { appFilesBucket, fabFileBucket, generatedImagesBucket } from './buckets';
@@ -61,7 +59,7 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     },
     {
       // Content moderation for images produced by the image_generation/edit_image tools
-      // (#9776 B1 — closes the agent-tool moderation bypass). Applies to BOTH the primary
+      // (closes an agent-tool moderation bypass). Applies to BOTH the primary
       // AgentExecutor function and the continuation-queue subscription, since they share this
       // config object — see the note above SHARED_AGENT_EXECUTOR_CONFIG.
       actions: ['rekognition:DetectModerationLabels'],

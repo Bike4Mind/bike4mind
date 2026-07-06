@@ -38,7 +38,7 @@ describe('createFabFile — unsupported file-type gating', () => {
   });
 });
 
-describe('createFabFile (#9776 Q2b root cause)', () => {
+describe('createFabFile (upload moderation gate root cause)', () => {
   const mockUserId = 'user-123';
 
   let mockAdapters: CreateFabFileAdapters;

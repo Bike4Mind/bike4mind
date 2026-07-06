@@ -12,7 +12,7 @@ const hit = (overrides: Partial<IModerationHit> = {}): IModerationHit => ({
   ...overrides,
 });
 
-describe('UserModel — moderation hit tracking (#9778)', () => {
+describe('UserModel — moderation hit tracking', () => {
   it('lazily creates the moderation subdocument on the first hit', async () => {
     const user = await User.create({ username: 'mod-1', name: 'Mod One' });
     expect(user.moderation).toBeUndefined();

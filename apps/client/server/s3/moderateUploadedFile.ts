@@ -78,8 +78,8 @@ export interface ModerateUploadedFileResult {
 /**
  * Decide the moderationStatus for a freshly-uploaded file. Non-images and
  * disabled moderation -> 'clean' (never held). Images -> download + scan; a CONFIRMED block ->
- * 'blocked' (the object is left in S3 for §2258A preservation; the caller must not serve it;
- * the incident was already recorded by `moderateImageOrThrow`'s gate).
+ * 'blocked' (the object is left in S3 for legal-preservation reasons — do not delete; the
+ * caller must not serve it; the incident was already recorded by `moderateImageOrThrow`'s gate).
  *
  * Image-ness is decided from byte-sniffed magic numbers, not the caller-supplied `mimeType`
  * (anti-spoof) - see `downloadPartialBytes` above.

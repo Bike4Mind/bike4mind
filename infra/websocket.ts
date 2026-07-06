@@ -89,7 +89,6 @@ websocketApi.route('voice_session_ended', {
 });
 
 // CLI Completions — streaming, long-running (bypasses CloudFront 20s timeout)
-// @see https://github.com/MillionOnMars/lumina5/issues/6634
 websocketApi.route('cli_completion_request', {
   handler: 'apps/client/server/websocket/cliCompletion.func',
   runtime: 'nodejs24.x',

@@ -14,7 +14,7 @@ import { updateSession } from './update';
 import { getCachedSignedUrl } from '@bike4mind/utils';
 import { IUserDocument } from '@bike4mind/common';
 
-describe('updateSession — signed-URL cache pre-warm gate (#9776 Q2b addendum)', () => {
+describe('updateSession — signed-URL cache pre-warm gate', () => {
   const user = { id: 'user-1' } as IUserDocument;
 
   const makeAdapters = (files: Array<Record<string, unknown>>) => ({

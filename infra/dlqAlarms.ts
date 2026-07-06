@@ -393,7 +393,7 @@ if (isMonitoredStage) {
     createDlqAlarms(dlq);
   }
 
-  // FabFile Moderation DLQ (#9776 Q2b) — deliberately NOT added to DLQ_DESCRIPTORS above.
+  // FabFile Moderation DLQ — deliberately NOT added to DLQ_DESCRIPTORS above.
   // It backs apps/client/server/s3/objectCreated's Lambda async-invocation dead-letter
   // target (see infra/queues.ts), not an sst.aws.Queue `.subscribe()` consumer. Every
   // DLQ_DESCRIPTORS entry has a `sourceQueue` that DLQ_REGISTRY (apps/client/server/utils/
