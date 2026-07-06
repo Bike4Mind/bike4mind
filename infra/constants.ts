@@ -36,10 +36,8 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD: process.env.NEXT_PUBLIC_STRIPE_PRICE_LIBONC_PROD || '',
   NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_TEST || '',
   NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD: process.env.NEXT_PUBLIC_STRIPE_PRICE_ORG_SUB_PROD || '',
-  // Credit-valuation knobs (b4m-core/common/src/pricing.ts). Same dual nature as the
-  // Stripe ids above: `next build` inlines them into the client bundle, and every
-  // billing lambda reads them from process.env at runtime; both must see one value
-  // or displayed prices diverge from charges. Empty == in-source defaults.
+  // Credit-valuation knobs (b4m-core/common/src/pricing.ts). Same dual nature as
+  // the Stripe ids above: build-time inlined and runtime-read. Empty == in-source defaults.
   NEXT_PUBLIC_PRICE_MARGIN: process.env.NEXT_PUBLIC_PRICE_MARGIN || '',
   NEXT_PUBLIC_USD_TO_CREDITS_RATE: process.env.NEXT_PUBLIC_USD_TO_CREDITS_RATE || '',
   // Enable What's New modal distribution (S3 upload) for main production only

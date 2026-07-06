@@ -8,8 +8,7 @@ const importPricing = async () => {
 
 describe('pricing utils', () => {
   describe('usdToCredits', () => {
-    // Baseline behavior must not depend on ambient env: once the override
-    // feature is in use, dev shells and CI may have these vars set.
+    // Isolate from ambient env: dev shells and CI may set these vars once the feature is in use.
     let usdToCredits: (usd: number) => number;
 
     beforeAll(async () => {
@@ -103,8 +102,7 @@ describe('pricing utils', () => {
     });
 
     it('falls back to defaults when the derived credits-per-USD would round to zero', async () => {
-      // rate misconfigured as credits-per-USD: margin/rate = 0.0006 -> round -> 0,
-      // which would collapse every charge to the 1-credit minimum
+      // margin/rate rounds to 0, which would collapse every charge to 1 credit
       vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', '5000');
       const pricing = await importPricing();
       expect(pricing.usdToCredits(1)).toBe(5000);

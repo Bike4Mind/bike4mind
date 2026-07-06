@@ -2,11 +2,9 @@ const DEFAULT_PRICE_MARGIN = 3;
 const DEFAULT_USD_TO_CREDITS_RATE = 0.0006;
 
 /**
- * Accepts an env override only if it is a strictly parsed positive finite
- * number. Number() (not parseFloat) so a truncated value like "2,5" is
- * rejected rather than silently billed as 2. Zero or negative would mean
- * free or negative billing. Warns on rejected values so a discarded
- * override is distinguishable from an applied one; unset stays silent.
+ * Env override: strict positive finite Number only ("2,5" is rejected,
+ * not truncated to 2; zero or negative would bill free or negative).
+ * Warns on rejected values; unset stays silent.
  */
 const envNumber = (name: string, raw: string | undefined, fallback: number): number => {
   if (raw === undefined || raw === '') return fallback;
@@ -16,11 +14,9 @@ const envNumber = (name: string, raw: string | undefined, fallback: number): num
   return fallback;
 };
 
-// Literal process.env.NEXT_PUBLIC_* member access is required for Next.js to
-// inline the values into the client bundle (same pattern as constants/dataLakes.ts),
-// keeping displayed prices and server billing on the same value when the var is
-// set in the shared deploy config for both build and runtime. The typeof guard
-// keeps non-Next browser bundles (no process global) importable.
+// Literal process.env.NEXT_PUBLIC_* access is required for Next.js to inline
+// the values into the client bundle (see constants/dataLakes.ts); the typeof
+// guard keeps non-Next browser bundles (no process global) importable.
 const hasProcess = typeof process !== 'undefined';
 
 /**
@@ -49,9 +45,8 @@ const USD_TO_CREDITS_RATE = envNumber(
  * Integer credits charged per $1 of provider cost. Derived once with rounding
  * because the raw division carries float noise (0.0006 is inexact in binary):
  * naive ceil((usd * 3) / 0.0006) charges a phantom credit on exact multiples.
- * The derived value is guarded: env values that individually pass validation
- * can still round to 0 here (margin/rate < 0.5), which would collapse every
- * charge to the 1-credit minimum.
+ * Guarded because individually valid env values can still derive 0
+ * (margin/rate < 0.5), collapsing every charge to the 1-credit minimum.
  */
 const CREDITS_PER_USD_COST = (() => {
   const derived = Math.round(PRICE_MARGIN / USD_TO_CREDITS_RATE);

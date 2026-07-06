@@ -741,10 +741,9 @@ jobs:
           # no fallback; empty == only the base opti-knowledge lake. Keeps customer lake identity out
           # of open-core — set NEXT_PUBLIC_PREMIUM_DATA_LAKES to a JSON array of DataLakeConfig.
           NEXT_PUBLIC_PREMIUM_DATA_LAKES: ${{ vars.NEXT_PUBLIC_PREMIUM_DATA_LAKES }}
-          # Credit-valuation knobs (b4m-core/common/src/pricing.ts). Build-time NEXT_PUBLIC_*
-          # inlined into the client AND read by billing lambdas at runtime via
-          # DEFAULT_LAMBDA_ENVIRONMENT. Set both per stage or neither; empty == in-source
-          # defaults. Invalid values are ignored with a warning, never applied partially.
+          # Credit-valuation knobs (b4m-core/common/src/pricing.ts), build-time NEXT_PUBLIC_*
+          # also read by billing lambdas at runtime. Set both per stage or neither; empty ==
+          # in-source defaults, invalid values ignored with a warning.
           NEXT_PUBLIC_PRICE_MARGIN: ${{ vars.NEXT_PUBLIC_PRICE_MARGIN }}
           NEXT_PUBLIC_USD_TO_CREDITS_RATE: ${{ vars.NEXT_PUBLIC_USD_TO_CREDITS_RATE }}
           # Account-tied subscriber-fanout image reference (registry + tag). Set the
