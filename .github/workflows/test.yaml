@@ -97,11 +97,13 @@ jobs:
   publish:
     needs: [check-repository, test]
     if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    # Reusable-workflow permissions flow from the CALLER: the called comment job
-    # can only use what is granted here (repo default token is read-only).
+    # Reusable-workflow permissions flow from the CALLER: a nested job can only
+    # use what is granted here. snapshot-publish's comment-published-versions job
+    # requests pull-requests: write, so the caller must grant at least that or the
+    # whole run fails at startup with a permissions-mismatch error.
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
       issues: write
     uses: ./.github/workflows/snapshot-publish.yaml
     secrets:

@@ -1,0 +1,113 @@
+name: Notify Preview Cleanup Failure
+
+on:
+  workflow_call:
+    inputs:
+      pr_number:
+        description: 'Pull request number'
+        required: true
+        type: string
+      pr_title:
+        description: 'Pull request title'
+        required: false
+        type: string
+        default: ''
+      pr_author:
+        description: 'Pull request author'
+        required: false
+        type: string
+        default: ''
+      pr_url:
+        description: 'Pull request URL'
+        required: false
+        type: string
+        default: ''
+      stage_name:
+        description: 'SST stage name that failed to cleanup'
+        required: true
+        type: string
+      repository:
+        description: 'Repository name'
+        required: false
+        type: string
+        default: ''
+      workflow_run_url:
+        description: 'Workflow run URL'
+        required: false
+        type: string
+        default: ''
+      mention:
+        description: 'Slack mention for notifications'
+        required: false
+        type: string
+        default: '@here'
+    secrets:
+      SLACK_WEBHOOK_URL:
+        description: 'Slack webhook URL for notifications'
+        required: true
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack notification
+        uses: slackapi/slack-github-action@v1.27.0
+        with:
+          payload: |
+            {
+              "text": "${{ inputs.mention }} 🚨 Preview Cleanup Failed - PR #${{ inputs.pr_number }}",
+              "blocks": [
+                {
+                  "type": "header",
+                  "text": {
+                    "type": "plain_text",
+                    "text": "🚨 Preview Environment Cleanup Failed",
+                    "emoji": true
+                  }
+                },
+                {
+                  "type": "section",
+                  "fields": [
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Repository:*\n${{ inputs.repository != '' && inputs.repository || github.repository }}"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*PR:*\n<${{ inputs.pr_url }}|#${{ inputs.pr_number }}${{ inputs.pr_title != '' && format(' - {0}', inputs.pr_title) || '' }}>"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Stage:*\n`${{ inputs.stage_name }}`"
+                    },
+                    {
+                      "type": "mrkdwn",
+                      "text": "*Author:*\n${{ inputs.pr_author }}"
+                    }
+                  ]
+                },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "⚠️ *Manual cleanup required* - This environment may be orphaned and consuming AWS resources."
+                  }
+                },
+                {
+                  "type": "actions",
+                  "elements": [
+                    {
+                      "type": "button",
+                      "text": {
+                        "type": "plain_text",
+                        "text": "View Workflow Run"
+                      },
+                      "url": "${{ inputs.workflow_run_url != '' && inputs.workflow_run_url || format('{0}/{1}/actions/runs/{2}', github.server_url, github.repository, github.run_id) }}"
+                    }${{ inputs.pr_url != '' && format(',{{"type": "button", "text": {{"type": "plain_text", "text": "View Pull Request"}}, "url": "{0}"}}', inputs.pr_url) || '' }}
+                  ]
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
