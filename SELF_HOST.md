@@ -130,6 +130,18 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+## Drive it with the CLI (`b4m`)
+
+Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly — the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
+
+```bash
+npm install -g @bike4mind/cli        # requires Node.js 24+
+b4m --api-url http://localhost:3000  # point it at your stack (use your APP_HOST_PORT if remapped)
+b4m                                  # start, then /login — read the sign-in code from Mailpit at :8025
+```
+
+Auth is cached per environment, so you can keep a separate hosted login and switch with `--prod` / `--api-url`. Full guide (hosted **and** self-host, switching, troubleshooting): [**BIKE4MIND_CLI.md**](./BIKE4MIND_CLI.md).
+
 ## Local models with Ollama (no API keys)
 
 Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.

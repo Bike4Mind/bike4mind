@@ -27,13 +27,13 @@ export async function handleDoctorCommand(): Promise<void> {
   // 1. Node.js version
   const nodeVersion = process.version;
   const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0], 10);
-  if (nodeMajor >= 18) {
-    results.push({ name: 'Node.js version', status: 'pass', message: `${nodeVersion} (>= 18 required)` });
+  if (nodeMajor >= 24) {
+    results.push({ name: 'Node.js version', status: 'pass', message: `${nodeVersion} (>= 24 required)` });
   } else {
     results.push({
       name: 'Node.js version',
       status: 'fail',
-      message: `${nodeVersion} (>= 18 required, please upgrade)`,
+      message: `${nodeVersion} (>= 24 required, please upgrade)`,
     });
   }
 
