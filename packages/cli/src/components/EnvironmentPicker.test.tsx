@@ -1,30 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
-import { EnvironmentPicker, validateApiUrlInput } from './EnvironmentPicker';
+import { EnvironmentPicker } from './EnvironmentPicker';
 
-describe('validateApiUrlInput', () => {
-  it('accepts an http(s) URL and strips trailing slashes', () => {
-    expect(validateApiUrlInput('https://app.example.com/')).toEqual({ url: 'https://app.example.com' });
-    expect(validateApiUrlInput('  http://localhost:3000  ')).toEqual({ url: 'http://localhost:3000' });
-  });
-
-  it('rejects an empty input', () => {
-    expect(validateApiUrlInput('   ')).toEqual({ error: 'Please enter a URL.' });
-  });
-
-  it('rejects a malformed URL', () => {
-    const result = validateApiUrlInput('not a url');
-    expect(result).toHaveProperty('error');
-  });
-
-  it('rejects a non-http(s) protocol', () => {
-    const result = validateApiUrlInput('ftp://example.com');
-    expect(result).toHaveProperty('error');
-    expect('error' in result && result.error).toMatch(/http/);
-  });
-});
-
+// URL validation lives in utils/apiUrl.ts (parseApiUrl) and is unit-tested
+// there. These tests cover the picker's rendering + option-selection wiring.
+// The custom-URL navigation path (arrow-down -> Enter -> type -> submit) is
+// left to typecheck: driving ink-select-input navigation deterministically in
+// ink-testing-library requires render-cycle waits that make the test flaky.
 describe('EnvironmentPicker', () => {
   it('offers local dev and custom, and omits hosted for an unbranded build', () => {
     const { lastFrame } = render(<EnvironmentPicker onSelect={() => {}} />);

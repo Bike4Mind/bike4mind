@@ -16,6 +16,35 @@ export function getDefaultApiUrl(): string {
 export const LOCAL_DEV_URL = 'http://localhost:3001';
 
 /**
+ * Normalize and validate a user-supplied API URL. The single source of truth for
+ * what counts as an acceptable endpoint, shared by the `--api-url` flag
+ * (apiCommand.ts) and the first-run `EnvironmentPicker`. Trims surrounding
+ * whitespace, strips trailing slashes, and requires an http(s) origin.
+ *
+ * Returns a discriminated result rather than throwing so each caller can render
+ * the failure in its own idiom (a CLI `process.exit`, an Ink error line, …).
+ */
+export function parseApiUrl(raw: string): { url: string } | { error: string } {
+  const url = raw.trim().replace(/\/+$/, '');
+  if (!url) {
+    return { error: 'Please enter a URL.' };
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return { error: `Invalid URL: ${url}` };
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return { error: `Only http:// and https:// URLs are supported (got ${parsed.protocol}//)` };
+  }
+
+  return { url };
+}
+
+/**
  * True when the CLI is running from TypeScript source rather than a built
  * `dist/` bundle (a `pnpm link --global` checkout, `pnpm dev`, etc). The bin
  * sets `B4M_SOURCE_MODE=1` in this case (see `bin/bike4mind-cli.mjs`).

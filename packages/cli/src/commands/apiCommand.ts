@@ -12,7 +12,7 @@
  */
 
 import { ConfigStore } from '../storage/ConfigStore.js';
-import { resolveApiEndpoint } from '../utils/apiUrl.js';
+import { parseApiUrl, resolveApiEndpoint } from '../utils/apiUrl.js';
 
 type ApiCommandOptions = { mode: 'reset' } | { mode: 'set'; url: string };
 
@@ -20,22 +20,13 @@ export async function handleApiCommand(options: ApiCommandOptions): Promise<void
   const configStore = new ConfigStore();
 
   if (options.mode === 'set') {
-    const url = options.url.trim().replace(/\/+$/, '');
-
-    let parsed: URL;
-    try {
-      parsed = new URL(url);
-    } catch {
-      console.error(`❌ Invalid URL: ${url}`);
+    const result = parseApiUrl(options.url);
+    if ('error' in result) {
+      console.error(`❌ ${result.error}`);
       console.error('   Example: --api-url http://localhost:3000');
       process.exit(1);
     }
-
-    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-      console.error(`❌ Only http:// and https:// URLs are supported (got ${parsed.protocol}//)`);
-      console.error('   Example: --api-url http://localhost:3000');
-      process.exit(1);
-    }
+    const { url } = result;
 
     await configStore.setCustomApiUrl(url);
     await configStore.clearAuthTokens();

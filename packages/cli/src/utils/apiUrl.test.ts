@@ -15,6 +15,7 @@ import {
   getDefaultApiUrl,
   getCreditsUrl,
   getEnvironmentName,
+  parseApiUrl,
 } from './apiUrl';
 
 afterEach(() => {
@@ -148,5 +149,25 @@ describe('getEnvironmentName', () => {
 
   it('reads as Self-Hosted for any other custom URL', () => {
     expect(getEnvironmentName({ customUrl: 'https://app.example.com' })).toBe('Self-Hosted');
+  });
+});
+
+describe('parseApiUrl', () => {
+  it('accepts an http(s) URL and strips trailing slashes and surrounding whitespace', () => {
+    expect(parseApiUrl('https://app.example.com/')).toEqual({ url: 'https://app.example.com' });
+    expect(parseApiUrl('  http://localhost:3000  ')).toEqual({ url: 'http://localhost:3000' });
+  });
+
+  it('rejects an empty input', () => {
+    expect(parseApiUrl('   ')).toEqual({ error: 'Please enter a URL.' });
+  });
+
+  it('rejects a malformed URL', () => {
+    expect(parseApiUrl('not a url')).toHaveProperty('error');
+  });
+
+  it('rejects a non-http(s) protocol', () => {
+    const result = parseApiUrl('ftp://example.com');
+    expect('error' in result && result.error).toMatch(/http/);
   });
 });

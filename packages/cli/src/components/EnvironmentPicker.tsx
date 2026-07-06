@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { Box, Text } from 'ink';
 import SelectInput from 'ink-select-input';
 import TextInput from 'ink-text-input';
-import { LOCAL_DEV_URL } from '../utils/apiUrl.js';
+import { LOCAL_DEV_URL, parseApiUrl } from '../utils/apiUrl.js';
 
 /**
  * First-run backend selection. Shown when the CLI starts with no endpoint
@@ -18,31 +18,6 @@ interface EnvironmentPickerProps {
   /** The baked-in hosted service URL, if this build has one. Omitted for an unbranded fork. */
   bakedDefaultUrl?: string;
   onSelect: (choice: EnvChoice) => void;
-}
-
-/**
- * Normalize and validate a user-entered API URL. Mirrors the `--api-url`
- * validation in apiCommand.ts: trims, strips trailing slashes, and requires an
- * http(s) origin. Exported for unit testing.
- */
-export function validateApiUrlInput(raw: string): { url: string } | { error: string } {
-  const url = raw.trim().replace(/\/+$/, '');
-  if (!url) {
-    return { error: 'Please enter a URL.' };
-  }
-
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    return { error: `Invalid URL: ${url}` };
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return { error: `Only http:// and https:// URLs are supported (got ${parsed.protocol}//)` };
-  }
-
-  return { url };
 }
 
 export function EnvironmentPicker({ bakedDefaultUrl, onSelect }: EnvironmentPickerProps) {
@@ -70,7 +45,7 @@ export function EnvironmentPicker({ bakedDefaultUrl, onSelect }: EnvironmentPick
   };
 
   const handleCustomSubmit = (raw: string) => {
-    const result = validateApiUrlInput(raw);
+    const result = parseApiUrl(raw);
     if ('error' in result) {
       setError(result.error);
       return;
