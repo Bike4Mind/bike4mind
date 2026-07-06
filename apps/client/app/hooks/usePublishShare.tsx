@@ -26,6 +26,7 @@ interface ShareState {
   markdown?: string;
   defaultVisibility: PublishVisibility;
   resolveExisting?: () => Promise<ExistingPublication | null>;
+  orgOption?: { label: string; hint: string };
 }
 
 interface PublishAndShareOpts {
@@ -47,6 +48,12 @@ interface PublishAndShareOpts {
    * new". Runs only after the dialog opens, so it never publishes anything.
    */
   resolveExisting?: () => Promise<ExistingPublication | null>;
+  /**
+   * When set, the dialog offers a "Team" (organization) visibility choice. Pass only when the
+   * caller is in an org ("Team") account context and the publish callback can produce an
+   * org-scoped page. Omit for personal scope.
+   */
+  orgOption?: { label: string; hint: string };
 }
 
 /**
@@ -71,6 +78,7 @@ export function usePublishShare() {
       markdown: opts.markdown,
       defaultVisibility: opts.defaultVisibility ?? 'public',
       resolveExisting: opts.resolveExisting,
+      orgOption: opts.orgOption,
     });
   }, []);
 
@@ -85,6 +93,7 @@ export function usePublishShare() {
       markdown={state.markdown}
       defaultVisibility={state.defaultVisibility}
       resolveExisting={state.resolveExisting}
+      orgOption={state.orgOption}
     />
   );
 

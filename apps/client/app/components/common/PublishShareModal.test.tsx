@@ -160,3 +160,52 @@ describe('PublishShareModal — update re-asserts the PRESERVED comment policy',
     expect(apiPatch).not.toHaveBeenCalled();
   });
 });
+
+describe('PublishShareModal — Team (organization) visibility option', () => {
+  const publishResult: PublishResult = {
+    publicId: 'pub-org',
+    url: '/p/o/org_42/s',
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 's',
+    visibility: 'organization',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('omits the Team option when no orgOption is given (personal context)', () => {
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={noopPublish} title="My artifact" />
+      </Wrapper>
+    );
+    expect(radio('public')).not.toBeNull();
+    expect(radio('private')).not.toBeNull();
+    expect(radio('organization')).toBeNull();
+  });
+
+  it('offers the Team option and publishes with organization visibility when picked', async () => {
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal
+          open
+          onClose={() => {}}
+          publish={publish}
+          title="My artifact"
+          defaultVisibility="public"
+          orgOption={{ label: 'Team', hint: 'Members of Acme' }}
+        />
+      </Wrapper>
+    );
+
+    const orgRadio = radio('organization');
+    expect(orgRadio).not.toBeNull();
+
+    fireEvent.click(orgRadio!);
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+
+    await waitFor(() => expect(publish).toHaveBeenCalledTimes(1));
+    // The dialog hands 'organization' to the publish callback, which maps it to an org-tier page.
+    expect(publish).toHaveBeenCalledWith('organization', expect.objectContaining({ mode: 'new' }));
+  });
+});

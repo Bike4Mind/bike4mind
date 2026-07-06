@@ -51,6 +51,7 @@ import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 
 // Types
@@ -127,8 +128,13 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   onArtifactCreate,
   onArtifactEdit,
 }) => {
-  // Publish-and-share: render an artifact to a hosted static bundle (/p/u/...).
+  // Publish-and-share: render an artifact to a hosted static bundle (/p/u/... or, in a Team
+  // account context, an org-scoped /p/o/...).
   const currentUser = useUser(s => s.currentUser);
+  // Active account-switcher org (null in personal context). Enables the dialog's Team option
+  // and org-scoped publishing; the server re-validates membership before trusting it.
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
   const handlePublishArtifact = useCallback(
     (artifact: ArtifactWithContent) => {
@@ -148,16 +154,18 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
       }
       publishAndShare({
         title: artifact.title || 'Shared artifact',
+        ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
         ...buildArtifactPublishWiring({
           artifactId,
           type: artifact.type,
           content: artifact.content ?? '',
           title: artifact.title,
           userId: String(currentUser.id),
+          orgId: activeOrg?.id,
         }),
       });
     },
-    [currentUser, publishAndShare]
+    [currentUser, activeOrg, publishAndShare]
   );
 
   // State

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   Modal,
   ModalDialog,
@@ -18,6 +18,7 @@ import {
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
+import GroupIcon from '@mui/icons-material/Group';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
@@ -61,21 +62,24 @@ export interface PublishShareModalProps {
     visibility: PublishVisibility;
     commentPolicy?: CommentPolicy;
   } | null>;
+  /**
+   * When set, offers a "Team" (organization) visibility choice, publishing an org-scoped
+   * page visible to org members. Supplied only when the caller is in an org ("Team") account
+   * context - the publish callback maps org visibility to an org-tier page. Omit for personal
+   * scope (only Public/Private are offered).
+   */
+  orgOption?: { label: string; hint: string };
 }
 
-const VISIBILITY_OPTIONS: Array<{
-  value: PublishVisibility;
-  label: string;
-  hint: string;
-  icon: React.ReactNode;
-}> = [
-  { value: 'public', label: 'Public', hint: 'Anyone with the link', icon: <PublicIcon /> },
-  { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> },
-  // NOTE: 'organization' intentionally omitted - these share flows publish under
-  // the user scope, and org-visibility is gated by org-tier scopeId on the serve
-  // path, so it would 403 for org members. Proper org-scoped sharing is a
-  // tracked follow-up (needs org-tier publishing / owner-org gating).
-];
+type VisibilityOption = { value: PublishVisibility; label: string; hint: string; icon: React.ReactNode };
+
+const PUBLIC_OPTION: VisibilityOption = {
+  value: 'public',
+  label: 'Public',
+  hint: 'Anyone with the link',
+  icon: <PublicIcon />,
+};
+const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', hint: 'Only you', icon: <LockIcon /> };
 
 /** Amber accent for the currently-selected visibility - draws the eye to the
  *  active choice (and signals exposure when Public is selected). */
@@ -100,7 +104,17 @@ export function PublishShareModal({
   markdown,
   defaultVisibility = 'public',
   resolveExisting,
+  orgOption,
 }: PublishShareModalProps) {
+  // Public, then Team (only in an org context), then Private - openness descending. The Team
+  // option publishes an org-scoped page; the publish callback maps it to an org-tier page.
+  const visibilityOptions = useMemo<VisibilityOption[]>(
+    () =>
+      orgOption
+        ? [PUBLIC_OPTION, { value: 'organization', ...orgOption, icon: <GroupIcon /> }, PRIVATE_OPTION]
+        : [PUBLIC_OPTION, PRIVATE_OPTION],
+    [orgOption]
+  );
   const [visibility, setVisibility] = useState<PublishVisibility>(defaultVisibility);
   const [commentsOn, setCommentsOn] = useState(true);
   const [result, setResult] = useState<PublishResult | null>(null);
@@ -291,7 +305,7 @@ export function PublishShareModal({
             data-testid="publish-share-visibility"
             sx={{ gap: 1 }}
           >
-            {VISIBILITY_OPTIONS.map(o => {
+            {visibilityOptions.map(o => {
               const selected = visibility === o.value;
               return (
                 <Box
