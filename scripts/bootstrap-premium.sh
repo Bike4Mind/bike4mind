@@ -38,7 +38,7 @@ fi
 
 # Overlay selection: unset PREMIUM_OVERLAYS means "all" (existing default behavior).
 # Setting it (even to "") switches to selection mode, matched against short names
-# derived from this run's own lock-file keys — never a second, hardcodable list.
+# derived from this run's own lock-file keys - never a second, hardcodable list.
 select_all=1
 requested=""
 if [ "${PREMIUM_OVERLAYS+set}" = "set" ]; then
