@@ -48,6 +48,7 @@
     "postinstall": "node -e \"try { require('better-sqlite3') } catch(e) { if(e.message.includes('bindings')) { console.log('\\n⚠️  Rebuilding better-sqlite3 native bindings...'); require('child_process').execSync('pnpm rebuild better-sqlite3', {stdio:'inherit'}) } }\""
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "1.2.0",
     "@anthropic-ai/sdk": "^0.97.1",
     "@aws-sdk/client-apigatewaymanagementapi": "^3.1080.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
