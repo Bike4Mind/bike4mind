@@ -1,11 +1,12 @@
 import { IChatHistoryItem } from '@bike4mind/common';
 import Box from '@mui/joy/Box';
-import React, { memo, useCallback, useMemo } from 'react';
+import React, { memo, useCallback, useEffect, useMemo } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import MessageContent from '@client/app/components/Session/MessageContent';
 import FallbackModelBadge from './FallbackModelBadge';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { flashMessageHighlight, registerScrollToMessageHandler } from '@client/app/utils/chatScroll';
 
 // --- Virtuoso context type ---
 // Passed via Virtuoso's `context` prop to stable module-level custom components.
@@ -145,10 +146,16 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
             canUseAdminTools={canUseAdminTools}
           />
         );
-        if (contentMaxWidth) {
-          return <Box sx={{ maxWidth: contentMaxWidth, marginX: 'auto' }}>{content}</Box>;
-        }
-        return content;
+        // data-message-id is the anchor for scroll-to-message highlighting
+        // (see utils/chatScroll.ts)
+        return (
+          <Box
+            data-message-id={messageData.id ?? undefined}
+            sx={contentMaxWidth ? { maxWidth: contentMaxWidth, marginX: 'auto' } : undefined}
+          >
+            {content}
+          </Box>
+        );
       },
       [
         sessionId,
@@ -168,6 +175,23 @@ const ChatHistory: React.FC<ChatHistoryProps> = memo(
     );
 
     const virtuosoContext = useMemo<VirtuosoContext>(() => ({ sessionId, footer }), [sessionId, footer]);
+
+    // Scroll-to-message service for other components (e.g. the QuestMaster
+    // plan board). Virtuoso's index API reaches messages that are currently
+    // virtualized out and have no DOM node.
+    useEffect(() => {
+      return registerScrollToMessageHandler(messageId => {
+        const reversedIndex = reversedHistory.findIndex(item => item.id === messageId);
+        if (reversedIndex === -1) return false;
+        virtuosoRef.current?.scrollToIndex({
+          index: firstItemIndex + reversedIndex,
+          align: 'center',
+          behavior: 'smooth',
+        });
+        flashMessageHighlight(messageId);
+        return true;
+      });
+    }, [reversedHistory, firstItemIndex, virtuosoRef]);
 
     // Don't mount Virtuoso until data is available - initialTopMostItemIndex
     // only applies on mount, so the component must mount AFTER data loads
