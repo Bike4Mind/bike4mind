@@ -104,7 +104,9 @@ jobs:
       # for direct pushes to main/prod.
       # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
       # covered without editing this step. Mirrors the post-merge guard in
-      # _deploy-env.yml.
+      # _deploy-env.yml, and the same [0-9a-f]{40} check `pnpm premium:pin --check`
+      # (scripts/premium-pin.mjs) runs locally - keep the two in sync if this
+      # regex ever changes.
       - name: Verify premium overlay pins are SHAs (merge-queue gate)
         if: github.event_name == 'merge_group'
         run: |

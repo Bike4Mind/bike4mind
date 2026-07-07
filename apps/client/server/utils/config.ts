@@ -6,14 +6,24 @@ import { Resource } from 'sst';
  * unprovisioned `Resource.*` property throws in the getter itself - `?.`
  * cannot guard that, since the throw happens before `?.` ever runs. Config is
  * built eagerly at module scope and imported by nearly every server route, so
- * one un-provisioned optional secret would otherwise 500 every route. This
- * mirrors the self-host shim's behavior (undefined instead of throwing) on
- * the real SST runtime too.
+ * one un-provisioned optional secret would otherwise 500 every route on any
+ * stage where it isn't linked. Every stage deployed from this repo's own
+ * infra/secrets.ts + infra/web.ts links all of these today (each has a
+ * default value), so this is forward-looking hardening rather than a fix for
+ * a currently-reachable failure - it guards a self-host fork or a future
+ * premium-cutover phase that stops declaring one of these secrets. Mirrors
+ * the self-host shim's behavior (undefined instead of throwing) on the real
+ * SST runtime too. Warns once per unlinked field so a stage that actually
+ * hits this path is still diagnosable in logs, not just "the feature quietly
+ * doesn't work."
  */
-function readOptionalSecret(read: () => string | undefined): string | undefined {
+function readOptionalSecret(name: string, read: () => string | undefined): string | undefined {
   try {
     return read();
   } catch {
+    console.warn(
+      `[config] ${name} is not linked/provisioned on this stage - degrading to undefined instead of throwing.`
+    );
     return undefined;
   }
 }
@@ -55,19 +65,34 @@ const Config = {
   SECRET_ENCRYPTION_KEY: Resource.SECRET_ENCRYPTION_KEY?.value,
   // RSA private key for OIDC ID token signing (RS256). Base64-encoded PEM.
   // If not set, an ephemeral key is generated at startup (dev only).
-  OAUTH_RSA_PRIVATE_KEY: readOptionalSecret(() => Resource.OAUTH_RSA_PRIVATE_KEY.value),
-  SECRET_ENCRYPTION_KEY_PREVIOUS: readOptionalSecret(() => Resource.SECRET_ENCRYPTION_KEY_PREVIOUS.value),
+  OAUTH_RSA_PRIVATE_KEY: readOptionalSecret('OAUTH_RSA_PRIVATE_KEY', () => Resource.OAUTH_RSA_PRIVATE_KEY.value),
+  SECRET_ENCRYPTION_KEY_PREVIOUS: readOptionalSecret(
+    'SECRET_ENCRYPTION_KEY_PREVIOUS',
+    () => Resource.SECRET_ENCRYPTION_KEY_PREVIOUS.value
+  ),
   // OptiHashi external-compute integration
-  OPTIHASHI_API_URL: readOptionalSecret(() => Resource.OPTIHASHI_API_URL.value),
-  OPTIHASHI_API_TOKEN: readOptionalSecret(() => Resource.OPTIHASHI_API_TOKEN.value),
-  OPTIHASHI_WEBHOOK_SECRET: readOptionalSecret(() => Resource.OPTIHASHI_WEBHOOK_SECRET.value),
-  OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: readOptionalSecret(() => Resource.OPTIHASHI_WEBHOOK_SECRET_PREVIOUS.value),
+  OPTIHASHI_API_URL: readOptionalSecret('OPTIHASHI_API_URL', () => Resource.OPTIHASHI_API_URL.value),
+  OPTIHASHI_API_TOKEN: readOptionalSecret('OPTIHASHI_API_TOKEN', () => Resource.OPTIHASHI_API_TOKEN.value),
+  OPTIHASHI_WEBHOOK_SECRET: readOptionalSecret(
+    'OPTIHASHI_WEBHOOK_SECRET',
+    () => Resource.OPTIHASHI_WEBHOOK_SECRET.value
+  ),
+  OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: readOptionalSecret(
+    'OPTIHASHI_WEBHOOK_SECRET_PREVIOUS',
+    () => Resource.OPTIHASHI_WEBHOOK_SECRET_PREVIOUS.value
+  ),
   // Overwatch analytics integration
-  OVERWATCH_INGEST_ENABLED: readOptionalSecret(() => Resource.OVERWATCH_INGEST_ENABLED.value),
-  OVERWATCH_INGEST_URL: readOptionalSecret(() => Resource.OVERWATCH_INGEST_URL.value),
-  OVERWATCH_INGEST_KEY: readOptionalSecret(() => Resource.OVERWATCH_INGEST_KEY.value),
-  B4M_ANALYTICS_ENABLED: readOptionalSecret(() => Resource.B4M_ANALYTICS_ENABLED.value),
-  OVERWATCH_PSEUDONYM_SALT: readOptionalSecret(() => Resource.OVERWATCH_PSEUDONYM_SALT.value),
+  OVERWATCH_INGEST_ENABLED: readOptionalSecret(
+    'OVERWATCH_INGEST_ENABLED',
+    () => Resource.OVERWATCH_INGEST_ENABLED.value
+  ),
+  OVERWATCH_INGEST_URL: readOptionalSecret('OVERWATCH_INGEST_URL', () => Resource.OVERWATCH_INGEST_URL.value),
+  OVERWATCH_INGEST_KEY: readOptionalSecret('OVERWATCH_INGEST_KEY', () => Resource.OVERWATCH_INGEST_KEY.value),
+  B4M_ANALYTICS_ENABLED: readOptionalSecret('B4M_ANALYTICS_ENABLED', () => Resource.B4M_ANALYTICS_ENABLED.value),
+  OVERWATCH_PSEUDONYM_SALT: readOptionalSecret(
+    'OVERWATCH_PSEUDONYM_SALT',
+    () => Resource.OVERWATCH_PSEUDONYM_SALT.value
+  ),
   STAGE: Resource.App.stage,
 } as const;
 

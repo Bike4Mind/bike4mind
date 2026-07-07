@@ -58,6 +58,7 @@ describe('Config eager-read hardening', () => {
 
   it('resolves unlinked premium-overlay secrets to undefined instead of throwing on import', async () => {
     mockResourceWithUnlinked();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { Config } = await import('./config');
 
@@ -70,6 +71,14 @@ describe('Config eager-read hardening', () => {
     expect(Config.OVERWATCH_INGEST_KEY).toBeUndefined();
     expect(Config.OVERWATCH_PSEUDONYM_SALT).toBeUndefined();
     expect(Config.B4M_ANALYTICS_ENABLED).toBeUndefined();
+    expect(Config.OAUTH_RSA_PRIVATE_KEY).toBeUndefined();
+    expect(Config.SECRET_ENCRYPTION_KEY_PREVIOUS).toBeUndefined();
+
+    // Each unlinked field warns once with its own name, so a mis-provisioned
+    // stage is diagnosable in logs rather than silently non-functional.
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OPTIHASHI_API_URL'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_URL'));
+    warnSpy.mockRestore();
   });
 
   it('does not let one unlinked premium secret take down the hard-required reads', async () => {
@@ -103,10 +112,15 @@ describe('Config eager-read hardening', () => {
       OPTIHASHI_API_URL: { value: 'https://optihashi.example.com' },
       OVERWATCH_INGEST_ENABLED: { value: 'true' },
     });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const { Config } = await import('./config');
 
     expect(Config.OPTIHASHI_API_URL).toBe('https://optihashi.example.com');
     expect(Config.OVERWATCH_INGEST_ENABLED).toBe('true');
+    // Linked fields never hit the catch, so no warning for them specifically.
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OPTIHASHI_API_URL'));
+    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_ENABLED'));
+    warnSpy.mockRestore();
   });
 });

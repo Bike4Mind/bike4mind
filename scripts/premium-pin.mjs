@@ -87,6 +87,12 @@ function cmdMerged(pins, name) {
     console.log(`${key} is already pinned to a SHA (${ref}) - nothing to resolve.`);
     return;
   }
+  // Defense-in-depth: the lock file is hand-editable, so validate its current ref
+  // the same way cmdPin validates a new one before it reaches `gh api`.
+  if (ref.includes('..') || !REF_RE.test(ref)) {
+    console.error(`Error: '${key}' has a malformed ref in premium-overlay.lock.json: '${ref}'`);
+    process.exit(1);
+  }
   const owner = process.env.PREMIUM_OVERLAY_OWNER || 'Bike4Mind';
   const repo = `${owner}/${key}`;
   console.log(`Resolving ${repo}@${ref} to its latest commit SHA...`);
