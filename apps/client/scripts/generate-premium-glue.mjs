@@ -234,7 +234,14 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
   const target = pkgJson.exports?.[subpath];
   if (typeof target !== 'string') return null; // conditional exports object, or no match - skip.
 
+  // Containment guard, mirroring the ones below for generatedPath (:293, :349):
+  // `target` comes from the overlay's own package.json, which is already fully
+  // trusted (its .ts source is compiled directly into the app elsewhere), but stay
+  // consistent with this file's own defense-in-depth convention regardless of that.
+  const pkgRoot = resolve(join(PREMIUM_DIR, pkg.dir));
   const resolved = resolve(join(PREMIUM_DIR, pkg.dir, target));
+  if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + sep)) return null;
+
   return existsSync(resolved) ? resolved : null;
 }
 
@@ -247,6 +254,12 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
 // webhook POST to a route missing this hung forever instead of getting a response).
 // So instead of re-exporting `config` across a module boundary, copy its literal
 // text into the generated glue file so Next analyzes it directly, in-file.
+//
+// The literal-extraction regex requires the closing `}` to be immediately followed
+// by `;` (no space) - true for this repo's own Prettier-formatted source today, but
+// a differently-formatted config would silently fail to extract and fall back to no
+// config export at all, i.e. reintroducing the exact hang this function exists to
+// prevent. Warn loudly in that case instead of failing silently.
 function extractConfigLiteral(sourceFilePath) {
   if (!sourceFilePath) return null;
   let content;
@@ -256,7 +269,15 @@ function extractConfigLiteral(sourceFilePath) {
     return null;
   }
   const match = content.match(/export\s+const\s+config\s*=\s*(\{[\s\S]*?\});/);
-  return match ? match[1] : null;
+  if (match) return match[1];
+  if (/export\s+const\s+config\s*=/.test(content)) {
+    console.warn(
+      `[codegen] WARNING: ${sourceFilePath} declares "export const config" but its literal object ` +
+        `could not be extracted (unexpected formatting) - the generated stub will be missing this ` +
+        `config, which can silently reintroduce a bodyParser-related hang.`
+    );
+  }
+  return null;
 }
 
 function generateApiStubs(packages) {
