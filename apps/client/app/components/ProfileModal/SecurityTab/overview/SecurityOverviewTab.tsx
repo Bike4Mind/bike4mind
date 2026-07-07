@@ -57,7 +57,7 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
   const lastDetection = events.length > 0 ? new Date(events[0].timestamp) : null;
 
   // Behavioral summary
-  const riskScore = Math.max(0, Math.min(100, Math.round(behavioralSummary.data?.riskScore ?? 0)));
+  const securityScore = Math.max(0, Math.min(100, Math.round(behavioralSummary.data?.securityScore ?? 50)));
   const riskLevel = behavioralSummary.data?.riskLevel ?? 'low';
   const isOverviewLoading =
     failedLogins.isLoading || suspiciousSummary.isLoading || apiUsage.isLoading || behavioralSummary.isLoading;
@@ -68,7 +68,7 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
       <Stack direction={{ xs: 'column', md: 'row' }} gap={2} alignItems="stretch">
         <Box sx={{ flex: { xs: '1 1 auto', lg: '0 0 260px' } }}>
           <SecurityStatusCard
-            riskScore={riskScore}
+            securityScore={securityScore}
             riskLevel={riskLevel}
             passedChecks={passedChecks}
             totalChecks={totalChecks}
@@ -191,10 +191,10 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
             <Box data-testid="ai-assessment-risk-score-bar" sx={{ mb: 1.5 }}>
               <Stack direction="row" justifyContent="space-between" mb={0.5}>
                 <Typography level="body-xs" sx={{ opacity: mode === 'light' ? 0.75 : 0.9 }}>
-                  Risk Score
+                  Security Score
                 </Typography>
                 <Typography level="body-xs" sx={{ opacity: mode === 'light' ? 0.75 : 0.9 }}>
-                  {riskScore}/100
+                  {securityScore}/100
                 </Typography>
               </Stack>
               <Box
@@ -208,7 +208,7 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
                 <Box
                   sx={{
                     height: '100%',
-                    width: `${riskScore}%`,
+                    width: `${securityScore}%`,
                     background:
                       riskLevel === 'high'
                         ? theme.palette.security.critical.solidBg

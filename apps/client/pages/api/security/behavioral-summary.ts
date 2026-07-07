@@ -17,7 +17,7 @@ import { CacheKeys } from '@server/utils/cacheKeys';
 
 const SecurityBehavioralSummarySchema = z.object({
   summary: z.string(),
-  riskScore: z.number().min(0).max(100),
+  securityScore: z.number().min(0).max(100),
   riskLevel: z.enum(['low', 'medium', 'high']),
   recommendations: z.array(z.string()).min(1).max(5),
 });
@@ -124,8 +124,8 @@ You are given a JSON object that summarizes one user's recent account security a
 
 Your job is to:
 1) Briefly describe the user's current security posture in 2–4 sentences.
-2) Assign a numeric riskScore from 0–100 (0 = no risk, 100 = critical risk).
-3) Map that score to a riskLevel of "low", "medium", or "high".
+2) Assign a numeric securityScore from 0–100 (0 = critical risk, 100 = excellent security posture).
+3) Map that score to a riskLevel: securityScore >= 70 is "low", 30–69 is "medium", below 30 is "high".
 4) Provide 2–3 concise, actionable recommendations focused on what THIS user should do next.
 
 IMPORTANT:
@@ -134,7 +134,7 @@ IMPORTANT:
 - Respond with **JSON only**, matching this exact TypeScript type:
   {
     summary: string;
-    riskScore: number; // 0–100
+    securityScore: number; // 0–100, higher = safer
     riskLevel: 'low' | 'medium' | 'high';
     recommendations: string[]; // 2–3 short bullet points
   }
@@ -185,7 +185,7 @@ Respond ONLY with the JSON object, no prose, no backticks.
     parsed = {
       summary:
         'We could not automatically analyze your account activity. Based on current telemetry, your account appears to be low risk.',
-      riskScore: 10,
+      securityScore: 80,
       riskLevel: 'low',
       recommendations: [
         'Enable two-factor authentication for your account.',
@@ -207,7 +207,7 @@ Respond ONLY with the JSON object, no prose, no backticks.
       parsed = {
         summary:
           'We could not reliably interpret the AI analysis. At this time, your account appears to be low risk based on available data.',
-        riskScore: 15,
+        securityScore: 80,
         riskLevel: 'low',
         recommendations: [
           'Enable two-factor authentication for your account.',
@@ -264,7 +264,7 @@ const handler = baseApi()
         const fallback: SecurityBehavioralSummary = {
           summary:
             'We encountered an error while generating your AI security summary. Based on currently available telemetry, your account does not show obvious signs of compromise.',
-          riskScore: 20,
+          securityScore: 80,
           riskLevel: 'low',
           recommendations: [
             'Enable two-factor authentication for your account.',
