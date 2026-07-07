@@ -125,7 +125,7 @@ You are given a JSON object that summarizes one user's recent account security a
 Your job is to:
 1) Briefly describe the user's current security posture in 2–4 sentences.
 2) Assign a numeric securityScore from 0–100 (0 = critical risk, 100 = excellent security posture).
-3) Map that score to a riskLevel: securityScore >= 70 is "low", 30–69 is "medium", below 30 is "high".
+3) Map that score to a riskLevel: securityScore >= 70 is "low", 30-69 is "medium", < 30 is "high".
 4) Provide 2–3 concise, actionable recommendations focused on what THIS user should do next.
 
 IMPORTANT:

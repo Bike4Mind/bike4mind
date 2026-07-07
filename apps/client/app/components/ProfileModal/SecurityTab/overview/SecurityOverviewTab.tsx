@@ -57,7 +57,7 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
   const lastDetection = events.length > 0 ? new Date(events[0].timestamp) : null;
 
   // Behavioral summary
-  const securityScore = Math.max(0, Math.min(100, Math.round(behavioralSummary.data?.securityScore ?? 50)));
+  const securityScore = Math.max(0, Math.min(100, Math.round(behavioralSummary.data?.securityScore ?? 80)));
   const riskLevel = behavioralSummary.data?.riskLevel ?? 'low';
   const isOverviewLoading =
     failedLogins.isLoading || suspiciousSummary.isLoading || apiUsage.isLoading || behavioralSummary.isLoading;
@@ -186,7 +186,7 @@ const SecurityOverviewTab: React.FC<SecurityOverviewTabProps> = ({ onTabSelect, 
               : (behavioralSummary.data?.summary ?? 'No summary available.')}
           </Typography>
 
-          {/* Risk score bar */}
+          {/* Security score bar */}
           {behavioralSummary.data && (
             <Box data-testid="ai-assessment-risk-score-bar" sx={{ mb: 1.5 }}>
               <Stack direction="row" justifyContent="space-between" mb={0.5}>
