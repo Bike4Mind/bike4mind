@@ -98,7 +98,7 @@
     "@types/aws-lambda": "^8.10.161",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
-    "tsdown": "^0.22.2",
+    "tsdown": "^0.22.3",
     "typescript": "^5.9.3"
   }
 }
