@@ -1178,6 +1178,8 @@ async function processExecution(
     // `enableArtifacts` is read on every invocation (new + continuation) because
     // the DAG bubble-up at persist-time gates on it too, and reading it here
     // avoids a second settings round-trip further down.
+    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
+    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
     const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
     const artifactEmissionPrompt =
       isNewExecution && enableArtifacts
@@ -2369,7 +2371,10 @@ async function processSubagentDispatch(
     // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
     // children are always fresh in-process runs (no checkpoint), so no
     // isNewExecution guard is needed.
-    const childArtifactEmissionPrompt = (await adminSettingsRepository.getSettingsValue('EnableArtifacts'))
+    // Hoist the gate into a local (mirrors the top-level path) so we only read
+    // ArtifactEmissionPrompt when artifacts are actually on.
+    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
+    const childArtifactEmissionPrompt = childArtifactsEnabled
       ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
       : undefined;
 
