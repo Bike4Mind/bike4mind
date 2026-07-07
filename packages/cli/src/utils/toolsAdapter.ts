@@ -49,6 +49,18 @@ function getAllowedToolPatterns(): string[] {
 }
 
 /**
+ * Shell-like tools whose free-text command argument must be run through the
+ * command-risk classifier before the permission decision. Maps tool name -> the
+ * arg field holding the command string. `bash_execute` is the only shell-exec tool
+ * today; any new one (e.g. `shell_execute`, an MCP `run_shell`, a code-exec tool)
+ * MUST be added here or it will silently skip the classifier and can auto-run
+ * destructive strings via `--allowedTools` / sandbox auto-allow / auto-accept.
+ */
+const SHELL_LIKE_TOOL_COMMAND_FIELDS: Record<string, string> = {
+  bash_execute: 'command',
+};
+
+/**
  * Simple CLI-friendly storage adapter
  * Most methods won't be called for CLI-only tools
  * Silent to avoid interfering with Ink rendering
@@ -233,12 +245,13 @@ function wrapToolWithPermission(
       // Command-level risk gate: inspect the actual command text (not just the
       // tool name) so a destructive command hidden behind a wrapper
       // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
-      // silently auto-run. A high-risk bash command ALWAYS requires an explicit
+      // silently auto-run. A high-risk command ALWAYS requires an explicit
       // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
       // auto-accept short-circuits below. It only ever tightens: benign commands
       // keep their existing (possibly auto-approved) behavior.
-      const commandRisk =
-        toolName === 'bash_execute' && typeof args?.command === 'string' ? classifyCommandRisk(args.command) : null;
+      const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
+      const commandText = commandField ? args?.[commandField] : undefined;
+      const commandRisk = typeof commandText === 'string' ? classifyCommandRisk(commandText) : null;
       const forcePromptForRisk = commandRisk?.level === 'high';
 
       // Host allowlist (claude --allowedTools): auto-approve tools matching an

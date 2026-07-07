@@ -57,27 +57,82 @@ const COMMAND_WRAPPERS = new Set([
 /** Privilege-escalation programs: elevated on their own, transparent to the inner program. */
 const PRIVILEGE_ESCALATION = new Set(['sudo', 'doas', 'su', 'runuser', 'pkexec']);
 
-/** Wrapper/escalation flags that consume the following token as their value. */
-const VALUE_FLAGS = new Set([
-  '-n',
-  '-s',
-  '-k',
-  '-c',
-  '-i',
-  '-o',
-  '-e',
-  '-p',
-  '-P',
-  '-I',
-  '-u',
-  '-g',
-  '-U',
-  '--signal',
-  '--kill-after',
-  '--adjustment',
-  '--user',
-  '--group',
-]);
+/**
+ * Flags that consume the following token as their value, scoped PER PROGRAM.
+ *
+ * This must not be a global set: `-i`/`-s`/`-e`/`-k` are *value* flags for some
+ * programs but *boolean* flags for `sudo`/`env` (e.g. `sudo -i` = login shell,
+ * `env -i` = ignore environment). A global set would consume the real program as
+ * a bogus "value" - e.g. `env -i rm -rf /` would drop `rm` and classify `low`.
+ * Anything not listed for a program is treated as a boolean flag (consumes only
+ * itself), which fails safe: we stop at the real program rather than skip past it.
+ */
+const PROGRAM_VALUE_FLAGS: Record<string, Set<string>> = {
+  // sudo: -i/-s/-e/-k/-n/-b/-E/-H/-P/-S/-v are boolean; only these take a value.
+  sudo: new Set([
+    '-u',
+    '--user',
+    '-g',
+    '--group',
+    '-U',
+    '-p',
+    '--prompt',
+    '-C',
+    '--close-from',
+    '-D',
+    '--chdir',
+    '-h',
+    '--host',
+    '-r',
+    '--role',
+    '-t',
+    '--type',
+    '-R',
+    '--chroot',
+    '-a',
+    '--auth-type',
+  ]),
+  doas: new Set(['-u', '-C', '-a']),
+  // su/runuser: -c (command) is handled by the early escalator recursion; -s takes a shell.
+  su: new Set(['-s', '--shell', '-g', '--group', '-G', '--supp-group']),
+  runuser: new Set(['-s', '--shell', '-g', '--group', '-G', '--supp-group']),
+  pkexec: new Set(['--user']),
+  // env: -i/-0/-v are boolean; -u unsets a var, -C changes dir, -S splits a string.
+  env: new Set([
+    '-u',
+    '--unset',
+    '-C',
+    '--chdir',
+    '-S',
+    '--split-string',
+    '--block-signal',
+    '--default-signal',
+    '--ignore-signal',
+  ]),
+  nice: new Set(['-n', '--adjustment']),
+  timeout: new Set(['-s', '--signal', '-k', '--kill-after']),
+  ionice: new Set(['-c', '--class', '-n', '--classdata', '-p', '--pid', '-P', '--pgid', '-u', '--uid']),
+  stdbuf: new Set(['-i', '--input', '-o', '--output', '-e', '--error']),
+  xargs: new Set([
+    '-I',
+    '-i',
+    '-n',
+    '--max-args',
+    '-P',
+    '--max-procs',
+    '-s',
+    '--max-chars',
+    '-d',
+    '--delimiter',
+    '-E',
+    '-a',
+    '--arg-file',
+    '-L',
+    '--max-lines',
+  ]),
+};
+
+const NO_VALUE_FLAGS: Set<string> = new Set();
 
 /** Wrappers that take one bare positional argument before the command (e.g. `timeout 5 <cmd>`). */
 const WRAPPERS_WITH_POSITIONAL = new Set(['timeout']);
@@ -201,13 +256,14 @@ function skipToInnerProgram(args: string[], onPrivEscalation?: (prog: string) =>
     if (isPrivEsc) onPrivEscalation?.(prog);
     index += 1;
 
+    const valueFlags = PROGRAM_VALUE_FLAGS[prog] ?? NO_VALUE_FLAGS;
     let positionalToSkip = WRAPPERS_WITH_POSITIONAL.has(prog) ? 1 : 0;
     while (index < args.length) {
       const arg = args[index];
       if (arg.startsWith('-')) {
         index += 1;
-        // Consume the value of a value-taking flag (`-n 10`, `-s SIGTERM`).
-        if (VALUE_FLAGS.has(arg) && index < args.length) index += 1;
+        // Consume the value of a value-taking flag for THIS program (`-n 10`, `-u root`).
+        if (valueFlags.has(arg) && index < args.length) index += 1;
         continue;
       }
       if (ENV_ASSIGNMENT.test(arg)) {
@@ -433,13 +489,21 @@ function leadingProgram(args: string[]): string {
   return index < args.length ? programName(args[index]) : '';
 }
 
-/** True if any `>`/`>>` redirection targets a raw block device (`/dev/sda`, `/dev/nvme0n1`, ...). */
+/**
+ * True if any `>`/`>>` redirection targets a raw block device. Covers the common
+ * host shapes: SCSI/SATA (`sd[a-z]`), NVMe, Xen (`xvd[a-z]`, default on many EC2
+ * AMIs), virtio (`vd[a-z]`), legacy IDE (`hd[a-z]`), device-mapper/LVM (`dm-N`,
+ * `mapper/`), software RAID (`md N`), eMMC/SD (`mmcblkN`), loop, and macOS `diskN`.
+ */
+const BLOCK_DEVICE_RE =
+  /^\/dev\/(sd[a-z]|nvme\d+n\d+|xvd[a-z]|vd[a-z]|hd[a-z]|dm-\d+|md\d+|mmcblk\d+|loop\d+|disk\d+|mapper\/)/;
+
 function writesToBlockDevice(tokens: ShellToken[]): boolean {
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isOperator(token) && (token.op === '>' || token.op === '>>')) {
       const target = asString(tokens[i + 1]);
-      if (target && /^\/dev\/(sd[a-z]|nvme\d+n\d+|disk\d+|hd[a-z]|vd[a-z]|mapper\/)/.test(target)) {
+      if (target && BLOCK_DEVICE_RE.test(target)) {
         return true;
       }
     }

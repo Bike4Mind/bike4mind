@@ -150,6 +150,48 @@ describe('classifyCommandRisk', () => {
     });
   });
 
+  describe('regression: boolean wrapper flags must not swallow the program (PR #235 review)', () => {
+    // `-i`/`-s`/`-e`/`-k` are boolean for sudo/env - they must NOT consume the next
+    // token as a value, or the real (destructive) program disappears.
+    it('does not let `sudo -i` swallow the inner program', () => {
+      expectAtLeast('sudo -i rm -rf /', 'high');
+    });
+
+    it('does not let `sudo -s` swallow the inner shell', () => {
+      expectAtLeast('sudo -s sh -c "rm -rf /"', 'high');
+    });
+
+    it('does not let `sudo -k` swallow the inner program', () => {
+      expectAtLeast('sudo -k rm -rf /', 'high');
+    });
+
+    it('does not let `env -i` downgrade a wipe to low (the sharpest bypass)', () => {
+      expectAtLeast('env -i rm -rf /', 'high');
+    });
+
+    it('still consumes genuine value flags (`sudo -u root`, `nice -n 10`, `timeout 5`)', () => {
+      expectAtLeast('sudo -u root rm -rf /', 'high');
+      expectAtLeast('nice -n 10 rm -rf /', 'high');
+      expectAtLeast('timeout 5 rm -rf /', 'high');
+      expectAtLeast('env -u PATH rm -rf /', 'high');
+    });
+  });
+
+  describe('regression: block-device coverage (PR #235 review)', () => {
+    it('flags redirection to common cloud/host block devices', () => {
+      expectAtLeast('echo boom > /dev/xvda', 'high'); // Xen root disk (EC2)
+      expectAtLeast('echo boom > /dev/dm-0', 'high'); // device-mapper / LVM
+      expectAtLeast('echo boom > /dev/md0', 'high'); // software RAID
+      expectAtLeast('echo boom > /dev/mmcblk0', 'high'); // eMMC/SD
+      expectAtLeast('echo boom > /dev/loop0', 'high'); // loop device
+    });
+
+    it('does not flag redirection to a normal file under /dev-like paths', () => {
+      expect(classifyCommandRisk('echo hi > out.txt').level).toBe('low');
+      expect(classifyCommandRisk('echo hi > /dev/null').level).toBe('low');
+    });
+  });
+
   describe('hidden-command indirection', () => {
     it('sees through eval', () => {
       expectAtLeast('eval "rm -rf /"', 'high');
