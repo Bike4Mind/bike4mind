@@ -22,6 +22,7 @@
     "android",
     "**/*.test.ts",
     "**/*.test.tsx",
+    "**/*.fixture.ts",
     ".next/standalone",
     ".next/server",
     ".next/cache",
