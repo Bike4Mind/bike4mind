@@ -6,6 +6,7 @@ const mockCountConsecutiveFailures = vi.fn();
 const mockCountFixesDispatchedToday = vi.fn();
 const mockFindByPrNumber = vi.fn();
 const mockDeleteByKey = vi.fn();
+const mockClaimCiRetry = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {
@@ -20,6 +21,7 @@ vi.mock('@bike4mind/database', () => ({
     countConsecutiveFailures: (...args: unknown[]) => mockCountConsecutiveFailures(...args),
     countFixesDispatchedToday: (...args: unknown[]) => mockCountFixesDispatchedToday(...args),
     findByPrNumber: (...args: unknown[]) => mockFindByPrNumber(...args),
+    claimCiRetry: (...args: unknown[]) => mockClaimCiRetry(...args),
   },
 }));
 
@@ -530,6 +532,11 @@ describe('sreRevision handler', () => {
       );
       expect(mockSendToQueue).not.toHaveBeenCalled();
       expect(mockPostSreNoFixNeededMessage).not.toHaveBeenCalled();
+      // Escalation is terminal, not a retry: it must never consume a CI-retry slot.
+      // claimCiRetry (the only path that increments ciRetryCount) is owned by
+      // workflow-callback.ts; the revision handler must never call it, so a single
+      // failing CI run can never double-count against maxCiRetries.
+      expect(mockClaimCiRetry).not.toHaveBeenCalled();
     });
   });
 });
