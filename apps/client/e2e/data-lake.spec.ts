@@ -167,6 +167,7 @@ test.describe('Data Lake - append mode', () => {
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - lifecycle', () => {
   test('archive moves the lake to the Archived section', async ({ request, dataLakePage }) => {
+    test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Archive ${RUN}`,
       fileTagPrefix: `e2earch${RUN}:`,

@@ -66,7 +66,11 @@ export class DataLakePage extends BasePage {
 
   /** Open the `/data-lakes` explorer home and clear startup modals. */
   async gotoDataLakes() {
-    await this.page.goto('/data-lakes');
+    // Navigate on 'domcontentloaded', not the default 'load'. Under parallel load the preview's
+    // heavy SPA bundles can delay the 'load' event 60s+, hanging goto() on about:blank even though
+    // the shell responds in ~2s and the app is otherwise fine. The explorer-visible assertion below
+    // is the real readiness gate, so we don't need to block navigation on full 'load'.
+    await this.page.goto('/data-lakes', { waitUntil: 'domcontentloaded' });
     await this.dismissModals();
     await expect(this.page.getByTestId('opti-datalake-explorer')).toBeVisible({ timeout: TIMEOUTS.NAVIGATION });
   }
@@ -281,7 +285,33 @@ export class DataLakePage extends BasePage {
 
   async archive(id: string) {
     await this.archiveBtn(id).click();
-    await expect(this.card(id)).toBeHidden({ timeout: TIMEOUTS.VISIBLE });
+
+    // Archive cancels in-flight batches and soft-hides files server-side, then invalidates and
+    // refetches the active-lakes query before the card leaves the list. On a loaded stage that
+    // round-trip exceeds the VISIBLE budget, so gate on the success toast first (racing an error
+    // toast so a real archive failure fails fast with the server message instead of timing out on
+    // toBeHidden), then assert the card is gone on the larger ACTION budget.
+    const success = this.page.locator('[data-sonner-toast]').filter({ hasText: 'Data lake archived' });
+    const errorToast = this.page.locator('[data-sonner-toast][data-type="error"]');
+    const outcome = await Promise.race([
+      success
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.ACTION })
+        .then(() => 'success' as const)
+        .catch(() => 'timeout' as const),
+      errorToast
+        .waitFor({ state: 'visible', timeout: TIMEOUTS.ACTION })
+        .then(() => 'error' as const)
+        .catch(() => 'timeout' as const),
+    ]);
+    if (outcome === 'error') {
+      const message = await errorToast
+        .first()
+        .innerText()
+        .catch(() => '(could not read toast)');
+      throw new Error(`Data lake archive failed: ${message}`);
+    }
+
+    await expect(this.card(id)).toBeHidden({ timeout: TIMEOUTS.ACTION });
   }
 
   async expandArchived() {
