@@ -251,7 +251,18 @@ function wrapToolWithPermission(
       // keep their existing (possibly auto-approved) behavior.
       const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
       const commandText = commandField ? args?.[commandField] : undefined;
-      const commandRisk = typeof commandText === 'string' ? classifyCommandRisk(commandText) : null;
+      // `classifyCommandRisk` is documented never to throw, but this call sits on the
+      // security boundary for every shell command - if it ever does, treat that as a
+      // high-risk command (force the prompt) rather than letting the error escape the
+      // permission gate and skip classification entirely.
+      let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
+      if (typeof commandText === 'string') {
+        try {
+          commandRisk = classifyCommandRisk(commandText);
+        } catch {
+          commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+        }
+      }
       const forcePromptForRisk = commandRisk?.level === 'high';
 
       // Host allowlist (claude --allowedTools): auto-approve tools matching an

