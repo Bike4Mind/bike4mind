@@ -183,7 +183,7 @@ services:
       test:
         [
           'CMD-SHELL',
-          'node -e "fetch(process.env.SELF||\"http://localhost:3001/health\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"',
+          'node -e "fetch(\"http://localhost:3001/health\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"',
         ]
       interval: 10s
       timeout: 5s

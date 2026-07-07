@@ -150,6 +150,16 @@ wss.on('connection', async (ws, req) => {
     return;
   }
 
+  // The browser may have closed during the connect handshake. If so, don't
+  // register the dead socket or flush buffered frames (that would create orphan
+  // subscriptions no disconnect prunes). The earlier close handler's disconnect
+  // can race ahead of connect's Connection write, so run disconnect again here
+  // (idempotent) to guarantee cleanup.
+  if (ws.readyState !== ws.OPEN) {
+    callApp('disconnect', { connectionId }).catch(() => {});
+    return;
+  }
+
   sockets.set(connectionId, ws);
   ready = true;
   for (const raw of pending) handleFrame(raw);
