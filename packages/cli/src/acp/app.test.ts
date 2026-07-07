@@ -29,7 +29,9 @@ describe('ACP transport handlers', () => {
       expect(res.agentInfo?.name).toBe('bike4mind');
       expect(res.agentInfo?.version).toBe('9.9.9-test');
       expect(res.agentCapabilities?.loadSession).toBe(true);
-      expect(res.agentCapabilities?.promptCapabilities?.image).toBe(true);
+      // image is intentionally false for v1 (see AcpServer.initialize) - the
+      // prompt path is text-only, so we don't advertise image uploads.
+      expect(res.agentCapabilities?.promptCapabilities?.image).toBe(false);
     });
   });
 

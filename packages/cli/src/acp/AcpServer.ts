@@ -147,7 +147,11 @@ export class AcpServer {
       agentInfo: { name: AGENT_INFO.name, title: AGENT_INFO.title, version: this.version },
       agentCapabilities: {
         loadSession: true,
-        promptCapabilities: { image: true, embeddedContext: true },
+        // image is false for v1: the prompt path flattens content to text, so
+        // advertising image support would invite uploads the agent can't see.
+        // embeddedContext is honored - contentBlocksToText reads embedded
+        // resource text/uris. Image passthrough is a tracked follow-up.
+        promptCapabilities: { image: false, embeddedContext: true },
       },
     };
   }
@@ -276,6 +280,12 @@ export class AcpServer {
         if (abortController.signal.aborted) {
           return { stopReason: 'cancelled' };
         }
+        // Log the full error locally; forward the message to the client. A
+        // follow-up should scrub paths/credential-adjacent detail before it
+        // crosses the wire.
+        logger.error(
+          `[acp] Prompt turn failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`
+        );
         throw RequestError.internalError(undefined, error instanceof Error ? error.message : String(error));
       } finally {
         detachEvents();
@@ -426,6 +436,10 @@ export class AcpServer {
     session.persisted.updatedAt = now;
     session.persisted.metadata.totalTokens += result.completionInfo.totalTokens;
     session.persisted.metadata.toolCallCount += result.completionInfo.toolCalls;
+    // Credits are the CLI's cost basis; without this a persisted ACP session
+    // always reports 0 spent (mirrors index.tsx).
+    session.persisted.metadata.totalCredits =
+      (session.persisted.metadata.totalCredits ?? 0) + (result.completionInfo.totalCredits ?? 0);
     await this.sessionStore.save(session.persisted);
   }
 

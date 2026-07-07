@@ -42,7 +42,7 @@ Then pick "Bike4Mind" in Zed's agent panel.
 
 | Method | Behavior |
 |--------|----------|
-| `initialize` | Negotiates protocol version, advertises `loadSession` + image/embedded prompt capabilities. |
+| `initialize` | Negotiates protocol version, advertises `loadSession` + `embeddedContext` prompt capabilities. Image prompts are not advertised in v1 (the prompt path is text-only). |
 | `session/new` | Validates + confines `cwd` (must be an absolute, existing directory), creates a session. |
 | `session/load` | Rehydrates a persisted session and replays its history as `session/update` chunks. |
 | `session/prompt` | Runs a ReAct turn, streaming output as `session/update` notifications; returns a `stopReason`. |
@@ -90,6 +90,8 @@ root for that turn.
 
 - Remote (HTTP/WebSocket) ACP transport - stdio only.
 - Editor-delegated auth - auth stays server-side.
+- Image prompts - the prompt path is text-only, so `image` is advertised as
+  `false`; passing image blocks through as message content is a follow-up.
 - `fs/read_text_file` / `fs/write_text_file` delegation to the client (unsaved
   editor buffers) - the agent uses its own file tools against `cwd`.
 - Concurrent multi-`cwd` sessions from one process (turns are globally

@@ -113,7 +113,9 @@ function summarizeInput(input: unknown): string | undefined {
 }
 
 function truncate(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  // ASCII-only per repo convention; reserve 3 chars for the ellipsis so the
+  // result never exceeds `max`.
+  return text.length > max ? `${text.slice(0, max - 3)}...` : text;
 }
 
 // ---------------------------------------------------------------------------
