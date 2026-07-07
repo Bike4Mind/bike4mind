@@ -213,6 +213,52 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
 
 // --- Generate API route stubs ---
 
+// Resolve a validated bare specifier (e.g. '@bike4mind/premium-optihashi/api/webhooks/qwork')
+// declared by `pkg` back to the real source file on disk, via that package's own
+// `exports` map in its package.json - so we can inspect the source without executing it.
+// Returns null (never throws) for any shape this doesn't confidently recognize;
+// callers treat null as "no config to re-export", which is the pre-existing behavior.
+function resolveExportFromToSourceFile(pkg, exportFrom) {
+  let subpath;
+  if (exportFrom === pkg.name) subpath = '.';
+  else if (exportFrom.startsWith(`${pkg.name}/`)) subpath = `.${exportFrom.slice(pkg.name.length)}`;
+  else return null; // exportFrom names a different package - not resolvable from here.
+
+  const pkgJsonPath = join(PREMIUM_DIR, pkg.dir, 'package.json');
+  let pkgJson;
+  try {
+    pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const target = pkgJson.exports?.[subpath];
+  if (typeof target !== 'string') return null; // conditional exports object, or no match - skip.
+
+  const resolved = resolve(join(PREMIUM_DIR, pkg.dir, target));
+  return existsSync(resolved) ? resolved : null;
+}
+
+// Next.js's Pages Router requires `export const config = {...}` to be a literal,
+// statically-analyzable object declared DIRECTLY in the route file - a bare
+// `export { config } from 'source'` re-export is not reliably picked up by Next's
+// build-time page-config analyzer. Dropping `config` silently re-enables Next's
+// default body parser, which then consumes a raw-body handler's request stream
+// before the handler's own manual read ever runs (verified live: a correctly-signed
+// webhook POST to a route missing this hung forever instead of getting a response).
+// So instead of re-exporting `config` across a module boundary, copy its literal
+// text into the generated glue file so Next analyzes it directly, in-file.
+function extractConfigLiteral(sourceFilePath) {
+  if (!sourceFilePath) return null;
+  let content;
+  try {
+    content = readFileSync(sourceFilePath, 'utf8');
+  } catch {
+    return null;
+  }
+  const match = content.match(/export\s+const\s+config\s*=\s*(\{[\s\S]*?\});/);
+  return match ? match[1] : null;
+}
+
 function generateApiStubs(packages) {
   // Wipe all previously-generated stubs so removing a package removes its stubs.
   // Pattern: pages/api/premium-* dirs (all premium API dirs are namespaced premium-*).
@@ -257,9 +303,15 @@ function generateApiStubs(packages) {
       // exportFrom is interpolated raw into `export { default } from '<spec>'`.
       assertModuleSpecifier(exportFrom, pkg.name, 'apiRouteStubs.exportFrom');
 
+      // If the source route exports a Next.js page `config` (e.g. { api: { bodyParser:
+      // false } } for a raw-body webhook handler), copy its literal text in - see
+      // extractConfigLiteral's comment for why this can't just be re-exported.
+      const configLiteral = extractConfigLiteral(resolveExportFromToSourceFile(pkg, exportFrom));
+      const configExport = configLiteral ? `export const config = ${configLiteral};\n` : '';
+
       writeFile(
         outPath,
-        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.apiRouteStubs\nexport { default } from '${exportFrom}';\n`
+        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.apiRouteStubs\nexport { default } from '${exportFrom}';\n${configExport}`
       );
     }
   }
