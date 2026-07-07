@@ -54,7 +54,13 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
+import {
+  getTextModelCost,
+  CreditHolderType,
+  ARTIFACT_EMISSION_PROMPT,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
 import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
@@ -75,6 +81,7 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 import { resolveLatticeTools } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
@@ -1159,6 +1166,26 @@ async function processExecution(
       });
     }
 
+    // Artifact-emission parity with chat completions. When the admin
+    // `EnableArtifacts` setting is on, inject the SAME guidance chat injects
+    // (`ArtifactEmissionPrompt`, falling back to the built-in
+    // `ARTIFACT_EMISSION_PROMPT`) so the agent wraps chart/code/HTML/SVG/Mermaid
+    // output in `<artifact>` tags in its final answer - which the existing client
+    // machinery renders as a card and durably persists, no client change needed.
+    //
+    // Resolved only on NEW executions: continuations already carry the composed
+    // system message in the checkpoint (messages[0]), same as `personaPrompt`.
+    // `enableArtifacts` is read on every invocation (new + continuation) because
+    // the DAG bubble-up at persist-time gates on it too, and reading it here
+    // avoids a second settings round-trip further down.
+    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
+    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
+    const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+    const artifactEmissionPrompt =
+      isNewExecution && enableArtifacts
+        ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
+        : undefined;
+
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
     // temperature / maxTokens / thinking so they only override the agent's
@@ -1177,6 +1204,9 @@ async function processExecution(
       // baked into the checkpointed system message (messages[0]), so it carries
       // forward without re-resolving the profile.
       ...(orchestrationProfile?.systemPrompt && { personaPrompt: orchestrationProfile.systemPrompt }),
+      // Appended after persona/base in getSystemPrompt(); undefined on
+      // continuations (baked into the checkpoint) and when artifacts are off.
+      ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
     });
 
@@ -1955,12 +1985,38 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    await persistRunAsQuest(
-      executionId,
-      finalAnswer ?? 'Agent execution completed without a final answer.',
-      logger,
-      generatedImages
-    );
+    let replyText = finalAnswer ?? 'Agent execution completed without a final answer.';
+
+    // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
+    // child report and may drop the raw `<artifact>` blocks the workers emitted,
+    // so append the ones the parent didn't reproduce to the reply text - the
+    // client renders cards from the text (see collectDagChildArtifactBlocks).
+    // Re-read children here (rather than carrying from the DAG-resume block)
+    // so it survives a parent self-dispatch after resume; gated on the same
+    // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
+    if (enableArtifacts && execution.dagSpec) {
+      try {
+        const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
+        const childAnswers = dagChildren
+          .filter(c => c.status === 'completed')
+          .map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
+        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers });
+        if (extraBlocks.length > 0) {
+          replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
+          logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
+            executionId,
+            count: extraBlocks.length,
+          });
+        }
+      } catch (bubbleErr) {
+        logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts — continuing', {
+          executionId,
+          error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
+        });
+      }
+    }
+
+    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
@@ -2320,6 +2376,19 @@ async function processSubagentDispatch(
     // browser-like runtimes where `Timer.unref` doesn't exist.
     abortPoller.unref?.();
 
+    // Artifact-emission parity for dispatched subagents (DAG worker nodes and
+    // Lambda-dispatched delegates). Give them the same `<artifact>` guidance as
+    // the top-level agent so their answers carry tags the parent can surface on
+    // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
+    // children are always fresh in-process runs (no checkpoint), so no
+    // isNewExecution guard is needed.
+    // Hoist the gate into a local (mirrors the top-level path) so we only read
+    // ArtifactEmissionPrompt when artifacts are actually on.
+    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
+    const childArtifactEmissionPrompt = childArtifactsEnabled
+      ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
+      : undefined;
+
     const orchestrator = new ServerSubagentOrchestrator({
       userId: child.userId,
       llm,
@@ -2335,6 +2404,8 @@ async function processSubagentDispatch(
       // Without this, the orchestrator defaults to depth=1 and allows 3 more
       // levels of delegation below itself regardless of actual chain depth.
       depth,
+      // Only present when artifacts are on; makes subagents emit <artifact> tags.
+      ...(childArtifactEmissionPrompt && { artifactEmissionPrompt: childArtifactEmissionPrompt }),
     });
 
     try {
