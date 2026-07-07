@@ -6,6 +6,7 @@
   "scripts": {
     "clean": "rm -fr node_modules packages/{common,server}/node_modules apps/client/node_modules {,apps/client/}{.next,.open-next} tsconfig.tsbuildinfo .sst/dist b4m-core/node_modules b4m-core/*/dist b4m-core/*/node_modules b4m-core/mcp/servers/*/node_modules .turbo b4m-core/*/.turbo apps/*/.turbo packages/*/.turbo",
     "bootstrap:premium": "bash scripts/bootstrap-premium.sh",
+    "premium:pin": "node scripts/premium-pin.mjs",
     "daily-insights:generate": "pnpm --filter scripts daily-insights:generate",
     "db:create-user": "pnpm --filter scripts db:create-user",
     "db:seed-users": "pnpm --filter client db:seed-users",
