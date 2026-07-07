@@ -21,6 +21,7 @@ import {
 import { Session as SessionModel } from '@bike4mind/database/auth';
 import { accessibleBy } from '@casl/mongoose';
 import { Subscription } from '@server/models/Subscription';
+import { questMasterPlanSubscriptionScope } from '@server/websocket/subscriptionScopes';
 import { NotFoundError } from '@server/utils/errors';
 import { sendToConnection, withWebSocketContext } from '@server/websocket/utils';
 import crypto from 'crypto';
@@ -74,7 +75,12 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     scope = { sessionId: { $in: accessibleSessions.map(s => s._id) } };
   } else if (collectionName === QuestMasterPlan.collection.collectionName) {
     const accessibleSessions = await SessionModel.find(accessibleBy(userAbility).ofType(SessionModel), { _id: true });
-    scope = { notebookId: { $in: accessibleSessions.map(s => s._id) } };
+    // Plan access is user-based (owner/shared/public) with a session-based
+    // fallback for legacy and session-visibility plans
+    scope = questMasterPlanSubscriptionScope(
+      user._id.toString(),
+      accessibleSessions.map(s => s._id)
+    );
   } else if (collectionName === Invite.collection.collectionName) {
     const canShareProjectsQuery = accessibleBy(userAbility, Permission.share).ofType(Project);
     const shareableProjectIds = await Project.find(canShareProjectsQuery).distinct('_id');
