@@ -41,7 +41,8 @@ const seeder = new sst.aws.Function('DatabaseSeeder', {
 });
 
 // Database cleanup function for preview environments
-// Used by cleanup.yml workflow to drop PR databases before sst-remove
+// Invoked by the internal deployer's preview-remove teardown (bike4mind-deployer's `remove`
+// job throttles the stage's Lambdas and invokes DatabaseCleaner) before `sst remove`
 // Only deployed for preview stages - not needed for dev or production
 const cleaner = isPreviewStage
   ? new sst.aws.Function('DatabaseCleaner', {
