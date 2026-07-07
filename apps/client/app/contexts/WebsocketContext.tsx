@@ -4,6 +4,7 @@ import { ReadyState, useBaseWebsocket } from 'react-use-websocket';
 import { HeartbeatAction, IMessageDataToClient, IMessageDataToServer } from '@bike4mind/common';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
+import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 
 export { ReadyState };
 
@@ -14,6 +15,29 @@ export { ReadyState };
  */
 function isValidWebsocketUrl(url: string | undefined): url is string {
   return Boolean(url && url !== 'undefined' && !url.includes('/undefined'));
+}
+
+/**
+ * Decide whether a WS close event should trigger an auth probe. A close that follows a
+ * connect ATTEMPT which never opened (`openedThisAttempt: false`) is the only signal a 401
+ * handshake refusal produces - a WS close carries no HTTP status, so this is the closest
+ * thing to "the server rejected this connection" the client can observe. An established
+ * connection dropping (idle timeout, network blip) is not inherently an auth signal and
+ * should NOT probe. mfaPending sessions have no refresh token by design (mirrors the same
+ * exclusion in ApiContext's 401 interceptor) - probing would just 401 there for an
+ * unrelated reason and is pointless.
+ */
+export function shouldProbeOnFailedWsConnect(params: {
+  openedThisAttempt: boolean;
+  accessToken: string | null;
+  mfaPending: boolean;
+  pathname: string;
+}): boolean {
+  if (params.openedThisAttempt) return false;
+  if (!params.accessToken) return false;
+  if (params.mfaPending) return false;
+  if (isPublicPath(params.pathname)) return false;
+  return true;
 }
 
 export interface WebsocketContextValue {
@@ -61,6 +85,11 @@ export const WebsocketProvider = ({ children, url }: Props) => {
   const didUnmount = useRef(false);
   const setLastJsonMessage = useLastJsonMessage(useShallow(s => s.setLastJsonMessage));
   const accessToken = useAccessToken(useCallback(state => state.accessToken, []));
+  // True once `onOpen` has fired for the CURRENT connect attempt; reset on each close.
+  // Mirrors the same flag in the CLI's WebSocketConnectionManager.
+  const openedThisAttemptRef = useRef(false);
+  // Single-flight guard so a burst of close events fires at most one auth probe.
+  const probeInFlightRef = useRef(false);
 
   // Map the action being listened for to the callbacks that want to hear about it
   const listeners = useRef(new Map<string, ((message: IMessageDataToClient) => Promise<void>)[]>());
@@ -89,9 +118,35 @@ export const WebsocketProvider = ({ children, url }: Props) => {
     reconnectInterval: i => 125 * (i + 1) ** 2 + Math.random() * 1000,
     onOpen: () => {
       console.log('ws connected');
+      openedThisAttemptRef.current = true;
     },
     onClose(event: CloseEvent) {
       console.log('ws disconnected', event.code, event.reason);
+      const openedThisAttempt = openedThisAttemptRef.current;
+      openedThisAttemptRef.current = false;
+
+      if (
+        !probeInFlightRef.current &&
+        shouldProbeOnFailedWsConnect({
+          openedThisAttempt,
+          accessToken,
+          mfaPending: useAccessToken.getState().mfaPending,
+          pathname: window.location.pathname,
+        })
+      ) {
+        probeInFlightRef.current = true;
+        // A connect ATTEMPT just failed to open while holding a token - the closest signal
+        // to "the server rejected this connection" a WS close can carry. Fire one authed
+        // request through `api` and let its existing 401 interceptor (ApiContext) do the
+        // work: refresh -> forceSessionExpiredRedirect on a genuine revocation, or nothing
+        // on a network error (WS keeps retrying on its own backoff either way).
+        api
+          .get('/api/identify')
+          .catch(() => {})
+          .finally(() => {
+            probeInFlightRef.current = false;
+          });
+      }
     },
     onReconnectStop(numAttempts) {
       console.log('ws reconnect stopped after', numAttempts, 'attempts');

@@ -182,7 +182,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       completionsUrl = serverConfig?.completionsUrl;
 
       if (wsUrl && wsCompletionUrl) {
-        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter);
+        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
+        wsManager.onRevoked(() => {
+          logger.warn('[headless] Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
+        });
         await wsManager.connect();
         const wsToolExecutor = new WebSocketToolExecutor(wsManager, tokenGetter);
         setWebSocketToolExecutor(wsToolExecutor);

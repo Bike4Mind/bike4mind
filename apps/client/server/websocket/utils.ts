@@ -8,6 +8,7 @@ import { Config } from '@server/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
 import { TokenExpiredError } from 'jsonwebtoken';
+import { UnauthorizedError } from '@bike4mind/common';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient
@@ -155,8 +156,17 @@ export function withWebSocketContext<T>(
       }
 
       // For WebSocket connections, we should return a 200 status code even for errors
-      // to prevent the connection from being terminated, unless it's an authorization error
-      const isAuthError = error instanceof Error && error.message.toLowerCase().includes('unauthorized');
+      // to prevent the connection from being terminated, unless it's an authorization error.
+      // Detect by TYPE, not by sniffing error.message for "unauthorized" - UnauthorizedError's
+      // message is caller-supplied (e.g. connect.ts throws 'Session expired', 'User not found')
+      // and never contains that substring, so the old check silently treated every WS auth
+      // rejection as a transient error: $connect returned 200, API Gateway accepted the
+      // handshake, but Connection.create() had already been skipped by the throw - a "zombie"
+      // connection with no DB row and no subscriptions. TokenExpiredError is included because
+      // dataSubscribeRequest.ts/dataUnsubscribeRequest.ts call verifyToken directly with no
+      // local try/catch, so an expired token there throws this raw (not wrapped) into this
+      // same catch.
+      const isAuthError = error instanceof UnauthorizedError || error instanceof TokenExpiredError;
 
       return {
         statusCode: isAuthError ? 401 : 200,

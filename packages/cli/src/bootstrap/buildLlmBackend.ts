@@ -42,8 +42,17 @@ export interface BuildLlmBackendResult {
  * singleton exactly as before.
  */
 export interface BuildLlmBackendDeps {
-  /** Create + connect a WebSocket manager. Rejects if the socket can't connect. */
-  connectWebSocket: (wsUrl: string, tokenGetter: () => Promise<string | null>) => Promise<WebSocketConnectionManager>;
+  /**
+   * Create + connect a WebSocket manager. Rejects if the socket can't connect.
+   * `verifySession` is called when a connect ATTEMPT fails to open (a 401 handshake
+   * refusal never fires onopen) - see WebSocketConnectionManager for why this is the only
+   * way to tell "session revoked" apart from "transient network issue" on a WS close.
+   */
+  connectWebSocket: (
+    wsUrl: string,
+    tokenGetter: () => Promise<string | null>,
+    verifySession: () => Promise<boolean>
+  ) => Promise<WebSocketConnectionManager>;
   /** Install the server-tool executor for the connected socket (sets the ToolRouter singleton). */
   installWebSocketToolExecutor: (ws: WebSocketConnectionManager, tokenGetter: () => Promise<string | null>) => void;
   /** Clear the server-tool executor (used on SSE fallback). */
@@ -64,8 +73,11 @@ export interface BuildLlmBackendDeps {
 
 /** Production wiring: real transport classes + the ToolRouter singleton. */
 export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
-  connectWebSocket: async (wsUrl, tokenGetter) => {
-    const ws = new WebSocketConnectionManager(wsUrl, tokenGetter);
+  connectWebSocket: async (wsUrl, tokenGetter, verifySession) => {
+    const ws = new WebSocketConnectionManager(wsUrl, tokenGetter, verifySession);
+    ws.onRevoked(() => {
+      logger.warn('Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
+    });
     await ws.connect();
     return ws;
   },
@@ -128,7 +140,7 @@ export async function buildLlmBackend(
     completionsUrl = serverConfig?.completionsUrl;
 
     if (wsUrl && wsCompletionUrl) {
-      wsManager = await deps.connectWebSocket(wsUrl, tokenGetter);
+      wsManager = await deps.connectWebSocket(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
 
       // Set up WebSocket tool executor for server-side tools
       deps.installWebSocketToolExecutor(wsManager, tokenGetter);

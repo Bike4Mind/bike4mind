@@ -13,8 +13,21 @@ type MessageHandler = (message: Record<string, unknown>) => void;
 /** Callback invoked when the WebSocket connection drops */
 type DisconnectHandler = () => void;
 
+/** Callback invoked when the session is confirmed revoked (verified, reconnecting has stopped) */
+type RevokedHandler = () => void;
+
 /** Function that returns the current access token (JWT or API key) */
 type TokenGetter = () => Promise<string | null>;
+
+/**
+ * Verifies the session is still valid (e.g. by making an authed request through the CLI's
+ * ApiClient, whose response interceptor already refreshes an expired token and retries).
+ * Returns true if the session is valid (fresh or successfully refreshed) or if verification
+ * itself failed for a reason unrelated to auth (network blip, 5xx) - both cases should keep
+ * reconnecting. Returns false only when the session is genuinely revoked (refresh itself was
+ * rejected), which stops the reconnect loop.
+ */
+type SessionVerifier = () => Promise<boolean>;
 
 /**
  * Manages a persistent WebSocket connection for CLI <-> server communication.
@@ -26,20 +39,34 @@ export class WebSocketConnectionManager {
   private ws: WebSocket | null = null;
   private wsUrl: string;
   private getToken: TokenGetter;
+  private verifySession?: SessionVerifier;
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private reconnectAttempts = 0;
   private maxReconnectDelay = 30_000;
   private handlers = new Map<string, MessageHandler>();
   private actionHandlers = new Map<string, MessageHandler>();
   private disconnectHandlers = new Set<DisconnectHandler>();
+  private revokedHandlers = new Set<RevokedHandler>();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
   private connecting = false;
   private closed = false;
+  /** True once `onopen` has fired for the CURRENT connect attempt; reset at the start of each attempt. */
+  private openedThisAttempt = false;
+  /** Single-flight guard so a burst of close/error events triggers at most one verification. */
+  private verifyingSession = false;
+  /** Set once a verification confirms the session is revoked; permanently stops reconnecting. */
+  private revoked = false;
 
-  constructor(wsUrl: string, getToken: TokenGetter) {
+  /**
+   * @param verifySession - Optional. Called when a connect ATTEMPT fails (the socket closed
+   *   without ever opening) - exactly the signal an auth-rejected handshake produces. Omit to
+   *   preserve the old always-retry-forever behavior.
+   */
+  constructor(wsUrl: string, getToken: TokenGetter, verifySession?: SessionVerifier) {
     this.wsUrl = wsUrl;
     this.getToken = getToken;
+    this.verifySession = verifySession;
   }
 
   /**
@@ -49,6 +76,7 @@ export class WebSocketConnectionManager {
   async connect(): Promise<void> {
     if (this.connected || this.connecting) return;
     this.connecting = true;
+    this.openedThisAttempt = false;
 
     const token = await this.getToken();
     if (!token) {
@@ -79,6 +107,7 @@ export class WebSocketConnectionManager {
         logger.debug('[WS] Connected');
         this.connected = true;
         this.connecting = false;
+        this.openedThisAttempt = true;
         this.reconnectAttempts = 0;
         this.startHeartbeat();
         resolve();
@@ -108,11 +137,21 @@ export class WebSocketConnectionManager {
 
       this.ws.onclose = () => {
         logger.debug('[WS] Connection closed');
+        const openedThisAttempt = this.openedThisAttempt;
         this.cleanup();
         this.notifyDisconnect();
-        if (!this.closed) {
+        if (this.closed || this.revoked) return;
+
+        // An established connection dropping (idle timeout, heartbeat failure, network blip)
+        // is not inherently an auth signal - reconnect immediately as before. Only a connect
+        // ATTEMPT that never opened matches the WS auth-rejection signal (a 401 handshake
+        // refusal never fires onopen), so that is the one case worth verifying before
+        // committing to another blind retry.
+        if (openedThisAttempt || !this.verifySession) {
           this.scheduleReconnect();
+          return;
         }
+        void this.verifyThenReconnect();
       };
 
       this.ws.onerror = (err: Event) => {
@@ -194,6 +233,26 @@ export class WebSocketConnectionManager {
   }
 
   /**
+   * Register a handler that fires once the session is confirmed revoked (verifySession
+   * returned false) and the reconnect loop has permanently stopped.
+   */
+  onRevoked(handler: RevokedHandler): void {
+    this.revokedHandlers.add(handler);
+  }
+
+  /**
+   * Remove a revoked handler.
+   */
+  offRevoked(handler: RevokedHandler): void {
+    this.revokedHandlers.delete(handler);
+  }
+
+  /** Whether the session has been confirmed revoked (reconnecting has permanently stopped). */
+  get isRevoked(): boolean {
+    return this.revoked;
+  }
+
+  /**
    * Close the connection and stop all heartbeat/reconnect logic.
    */
   disconnect(): void {
@@ -206,6 +265,7 @@ export class WebSocketConnectionManager {
     this.handlers.clear();
     this.actionHandlers.clear();
     this.disconnectHandlers.clear();
+    this.revokedHandlers.clear();
   }
 
   private startHeartbeat(): void {
@@ -249,8 +309,43 @@ export class WebSocketConnectionManager {
     }
   }
 
+  private notifyRevoked(): void {
+    for (const handler of this.revokedHandlers) {
+      try {
+        handler();
+      } catch {
+        // Ignore errors from revoked handlers
+      }
+    }
+  }
+
+  /**
+   * Called when a connect attempt fails to open at all - the signal a 401 handshake refusal
+   * produces. Verifies the session via the injected `verifySession` (single-flighted) before
+   * deciding whether to keep retrying. A verification that itself errors (network blip, 5xx)
+   * is treated as transient - only an explicit `false` result stops the loop.
+   */
+  private async verifyThenReconnect(): Promise<void> {
+    if (this.verifyingSession) return;
+    this.verifyingSession = true;
+    try {
+      const stillValid = await this.verifySession!();
+      if (!stillValid) {
+        logger.debug('[WS] Session verification failed - session revoked, stopping reconnect');
+        this.revoked = true;
+        this.notifyRevoked();
+        return;
+      }
+    } catch (err) {
+      logger.debug(`[WS] Session verification errored - treating as transient: ${err}`);
+    } finally {
+      this.verifyingSession = false;
+    }
+    this.scheduleReconnect();
+  }
+
   private scheduleReconnect(): void {
-    if (this.closed) return;
+    if (this.closed || this.revoked) return;
 
     this.reconnectAttempts++;
     const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempts - 1), this.maxReconnectDelay);

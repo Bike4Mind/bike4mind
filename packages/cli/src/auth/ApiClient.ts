@@ -193,4 +193,27 @@ export class ApiClient {
       return null;
     }
   }
+
+  /**
+   * Verifies the session is still valid via a cheap authed GET. The response interceptor
+   * above already attempts a token refresh and retries on 401, so a resolved call means the
+   * session is valid (fresh or transparently refreshed). Returns false ONLY when the
+   * interceptor's own refresh-failure path threw (a genuine revocation - the two messages
+   * above); any other error (network blip, 5xx, etc.) is treated as transient and returns
+   * true, so callers keep retrying rather than giving up on a blip.
+   *
+   * Used by WebSocketConnectionManager to distinguish "session revoked" from "transient
+   * network issue" when a WS connect attempt fails to open - a WS close event carries no
+   * HTTP status, so this is the only way to tell the two apart.
+   */
+  async checkSessionValid(): Promise<boolean> {
+    try {
+      await this.get('/api/identify');
+      return true;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : '';
+      const isRevoked = message.startsWith('Authentication expired.') || message.startsWith('Authentication failed.');
+      return !isRevoked;
+    }
+  }
 }
