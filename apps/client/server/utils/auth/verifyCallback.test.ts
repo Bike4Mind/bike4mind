@@ -480,6 +480,25 @@ describe('verifyCallback - OAuth create: username dedupe on collision', () => {
     expect(mockCreate.mock.calls[0][0].username).toBe('nodisplay');
   });
 
+  it('never creates with an empty name (required field) - falls back to the derived username', async () => {
+    // A minimal provider assertion: only an email, no displayName/name/username. Without
+    // the fallback, `name: ''` would throw a non-E11000 validation error and lock the user
+    // out - the same class of opaque OAuth-create failure this helper prevents.
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'onlyemail', name: 'onlyemail' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-onlyemail',
+      emails: [{ value: 'onlyemail@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const createArg = mockCreate.mock.calls[0][0];
+    expect(createArg.name).toBeTruthy();
+    expect(createArg.name).toBe('onlyemail'); // derived username reused as the name
+    expect(createArg.username).toBe('onlyemail');
+  });
+
   it('derives a random fallback username when even the email local-part is empty', async () => {
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
     mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'user-abc12345' });

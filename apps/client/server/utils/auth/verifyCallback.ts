@@ -16,11 +16,18 @@ import {
 // username collision; if that many are exhausted something else is wrong.
 const MAX_USERNAME_RETRIES = 5;
 
-/** True only for a MongoDB E11000 on the `username` unique index specifically. */
+/**
+ * True only for a MongoDB E11000 on the `username` unique index specifically.
+ * Requires a SINGLE-key keyPattern of exactly `username`: today the only unique
+ * indexes are single-field (`username_1`, partial `email_1`), but if the compound
+ * `{username, email}` index ever became unique its keyPattern would contain
+ * `username` too - the length guard keeps this from being mis-classified as a
+ * plain username collision (which would then retry with the same colliding email).
+ */
 function isUsernameDuplicateKeyError(err: unknown): boolean {
   if (!err || typeof err !== 'object') return false;
   const e = err as { code?: number; keyPattern?: Record<string, unknown> };
-  return e.code === 11000 && !!e.keyPattern && 'username' in e.keyPattern;
+  return e.code === 11000 && !!e.keyPattern && Object.keys(e.keyPattern).length === 1 && 'username' in e.keyPattern;
 }
 
 /**
@@ -62,8 +69,14 @@ async function createUniqueOAuthUser(params: {
   oauthCredentials: Record<string, unknown>;
 }) {
   const { name, baseUsername, email, oauthCredentials } = params;
+  // `name` is a required field. Providers that send neither a displayName/name
+  // nor a username (a minimal OIDC/SAML assertion carrying only an email) would
+  // otherwise create with name='' -> a non-E11000 validation error that is not
+  // retried and fails the whole sign-in - the same class of opaque OAuth-create
+  // lockout this helper exists to prevent. baseUsername is guaranteed non-empty.
+  const safeName = name || baseUsername;
   const buildDoc = (username: string) => ({
-    name,
+    name: safeName,
     username,
     password: null,
     isAdmin: false,
@@ -77,8 +90,12 @@ async function createUniqueOAuthUser(params: {
     try {
       const user = await User.create(buildDoc(candidate));
       if (retry > 0) {
+        // Strip control chars before logging: baseUsername/candidate derive from
+        // the provider displayName (attacker-controllable) and this is raw console
+        // output, so a CRLF/ANSI-laden display name could forge adjacent log lines.
+        const safe = (s: string) => s.replace(/[\r\n\t]/g, ' ');
         console.info(
-          `[verifyCallback] oauth create: username "${baseUsername}" was taken - created "${candidate}" (retry ${retry})`
+          `[verifyCallback] oauth create: username "${safe(baseUsername)}" was taken - created "${safe(candidate)}" (retry ${retry})`
         );
       }
       return user;
