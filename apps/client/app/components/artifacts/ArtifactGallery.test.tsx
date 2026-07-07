@@ -95,11 +95,8 @@ function wireApi(singleArtifact: () => Promise<any>) {
 async function openShare(user: ReturnType<typeof userEvent.setup>) {
   // Wait for the list to render the card past the artifactTypes loading gate.
   await screen.findByText('My Demo Artifact');
-  // The card's kebab is the only menu trigger without visible "Sort" text.
-  const triggers = Array.from(document.querySelectorAll('[aria-haspopup="menu"]')) as HTMLElement[];
-  const kebab = triggers.find(t => !/sort/i.test(t.textContent || ''));
-  expect(kebab).toBeTruthy();
-  await user.click(kebab!);
+  const kebab = await screen.findByTestId('artifact-card-menu-btn');
+  await user.click(kebab);
   const share = await screen.findByTestId('artifact-publish-share');
   await user.click(share);
 }
@@ -169,5 +166,33 @@ describe('ArtifactGallery - Share hydrates content (#147)', () => {
     expect(mocks.toastError).not.toHaveBeenCalledWith('This artifact has no content to publish');
     expect(mocks.buildArtifactPublishWiring).not.toHaveBeenCalled();
     expect(mocks.publishAndShare).not.toHaveBeenCalled();
+  });
+
+  it('ignores a re-entrant Share click while a hydration fetch is already in flight', async () => {
+    // A deferred single-artifact fetch we control: keep it pending so the first Share click
+    // stays mid-hydration while we fire a second one. The in-flight guard must drop the second.
+    let resolveFetch!: (v: any) => void;
+    const pending = new Promise<any>(res => {
+      resolveFetch = res;
+    });
+    wireApi(() => pending);
+    const user = userEvent.setup();
+    render(
+      <TestWrapper>
+        <ArtifactGallery />
+      </TestWrapper>
+    );
+
+    await openShare(user); // first click: hydration fetch starts and stays pending
+    await openShare(user); // second click while in flight: should be ignored by the guard
+
+    const hydrationCalls = mocks.apiGet.mock.calls.filter(
+      ([url]: [string]) => typeof url === 'string' && url.includes('includeContent=true')
+    );
+    expect(hydrationCalls).toHaveLength(1);
+
+    // Let the first flow finish so it publishes exactly once and no pending work leaks.
+    resolveFetch({ data: { content: { content: '<h1>hydrated</h1>' } } });
+    await waitFor(() => expect(mocks.publishAndShare).toHaveBeenCalledTimes(1));
   });
 });
