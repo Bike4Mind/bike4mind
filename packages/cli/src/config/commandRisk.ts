@@ -192,8 +192,27 @@ const ALWAYS_DESTRUCTIVE = new Set([
   'sgdisk',
 ]);
 
-/** Flags that make `rm` recursive or forced. */
-const RM_DANGEROUS_FLAGS = new Set(['-r', '-R', '-rf', '-fr', '-rF', '-Rf', '--recursive', '--force', '-f']);
+/**
+ * Short-flag letters that make `rm` recursive or forced, and the long forms.
+ * Matched by decomposing a short-flag bundle into its letters (see
+ * {@link shortFlagContains}) rather than enumerating orderings, so `-rf`, `-fr`,
+ * `-Rvf`, `-vfr`, ... are all covered in one shot.
+ */
+const RM_DANGEROUS_SHORT_FLAGS = /[rRf]/;
+const RM_DANGEROUS_LONG_FLAGS = new Set(['--recursive', '--force']);
+
+/** Short-flag letters that make chmod/chown/chgrp recursive (`-R`, `-r`). */
+const RECURSIVE_SHORT_FLAGS = /[Rr]/;
+
+/**
+ * True if `flag` is a single-dash short-flag bundle (`-Rf`, `-vrf`) containing any
+ * letter matched by `letters`. Double-dash long flags never match here - the caller
+ * matches those against an explicit set. Decomposing the bundle catches every
+ * ordering/combination (`-rf`, `-fr`, `-vRf`, ...) that whole-string equality misses.
+ */
+function shortFlagContains(flag: string, letters: RegExp): boolean {
+  return flag.startsWith('-') && !flag.startsWith('--') && letters.test(flag.slice(1));
+}
 
 /**
  * Path arguments that make an `rm` catastrophic: filesystem root, home, or things
@@ -347,7 +366,9 @@ function classifySimpleCommand(args: string[], reasons: string[]): CommandRiskLe
   if (prog === 'rm') {
     const flags = inner.slice(1).filter(arg => arg.startsWith('-'));
     const targets = inner.slice(1).filter(arg => !arg.startsWith('-'));
-    const recursiveOrForced = flags.some(flag => RM_DANGEROUS_FLAGS.has(flag));
+    const recursiveOrForced = flags.some(
+      flag => shortFlagContains(flag, RM_DANGEROUS_SHORT_FLAGS) || RM_DANGEROUS_LONG_FLAGS.has(flag)
+    );
     const catastrophicTarget = targets.some(target => RM_DANGEROUS_TARGETS.has(target));
     if (recursiveOrForced || catastrophicTarget) {
       reasons.push(`destructive 'rm'${catastrophicTarget ? ' targeting a critical path' : ' (recursive/forced)'}`);
@@ -360,7 +381,7 @@ function classifySimpleCommand(args: string[], reasons: string[]): CommandRiskLe
   // Recursive ownership/permission changes are destructive (can brick a tree).
   if (
     (prog === 'chmod' || prog === 'chown' || prog === 'chgrp') &&
-    inner.some(arg => arg === '-R' || arg === '-r' || arg === '--recursive')
+    inner.some(arg => shortFlagContains(arg, RECURSIVE_SHORT_FLAGS) || arg === '--recursive')
   ) {
     reasons.push(`recursive '${prog}'`);
     return maxLevel(level, 'high');

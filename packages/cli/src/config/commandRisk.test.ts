@@ -192,6 +192,22 @@ describe('classifyCommandRisk', () => {
     });
   });
 
+  describe('regression: bundled short flags must not hide recursion (PR #235 review)', () => {
+    // Recursion/force checks decompose a short-flag bundle into its letters, so any
+    // ordering or added letter (`-Rf`, `-Rh`, `-Rv`, `-rvf`, `-Rfv`, ...) is caught -
+    // whole-string equality (`arg === '-R'`) missed these and dropped the level.
+    it('flags recursive chmod/chown/chgrp hidden in a short-flag bundle', () => {
+      expectAtLeast('chmod -Rf 777 /', 'high');
+      expectAtLeast('chown -Rh nobody /etc', 'high');
+      expectAtLeast('chgrp -Rv group /etc', 'high');
+    });
+
+    it('flags recursive/forced rm hidden in a short-flag bundle', () => {
+      expectAtLeast('rm -rvf /home/user', 'high');
+      expectAtLeast('rm -Rfv /home/user', 'high');
+    });
+  });
+
   describe('hidden-command indirection', () => {
     it('sees through eval', () => {
       expectAtLeast('eval "rm -rf /"', 'high');
