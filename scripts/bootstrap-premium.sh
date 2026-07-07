@@ -8,8 +8,12 @@
 #
 # Usage: pnpm bootstrap:premium
 #
-# Env (override the org):
+# Env (override the org, or select which overlays to hydrate):
 #   PREMIUM_OVERLAY_OWNER=Bike4Mind   # GitHub org/owner the overlays are cloned from
+#   PREMIUM_OVERLAYS=optihashi,libreoncology
+#                                     # Comma-separated short names (the packages/premium/<name>
+#                                     # dir names) to hydrate. Unset = all overlays pinned in the
+#                                     # lock file (default). Set to an empty string to hydrate none.
 set -euo pipefail
 
 LOCK_FILE="premium-overlay.lock.json"
@@ -32,7 +36,17 @@ if [ -z "${pairs}" ]; then
   exit 0
 fi
 
-cloned=0 present=0 skipped=0
+# Overlay selection: unset PREMIUM_OVERLAYS means "all" (existing default behavior).
+# Setting it (even to "") switches to selection mode, matched against short names
+# derived from this run's own lock-file keys — never a second, hardcodable list.
+select_all=1
+requested=""
+if [ "${PREMIUM_OVERLAYS+set}" = "set" ]; then
+  select_all=0
+  requested=$(echo "${PREMIUM_OVERLAYS}" | tr ',' '\n' | sed 's/^[[:space:]]*//; s/[[:space:]]*$//' | grep -v '^$' || true)
+fi
+
+cloned=0 present=0 skipped=0 unselected=0
 
 while IFS=$'\t' read -r key ref; do
   [ -n "${key}" ] || continue
@@ -46,9 +60,18 @@ while IFS=$'\t' read -r key ref; do
     exit 1
   fi
 
+  # Short name (e.g. b4m-overwatch -> overwatch) is what PREMIUM_OVERLAYS selects by,
+  # matching the packages/premium/<name> dir name used everywhere else.
+  short="${key#b4m-}"
+
+  if [ "${select_all}" -eq 0 ] && ! printf '%s\n' "${requested}" | grep -qxF "${short}"; then
+    unselected=$((unselected + 1))
+    continue
+  fi
+
   repo="${PREMIUM_OVERLAY_OWNER:-Bike4Mind}/${key}"
   # Workspace dir: strip the 'b4m-' prefix (b4m-overwatch -> overwatch).
-  overlay_dir="packages/premium/${key#b4m-}"
+  overlay_dir="packages/premium/${short}"
 
   # Reject a malformed ref before it reaches git checkout: a leading '-' would be
   # parsed as an option, and '..' is path traversal. Accept a 40-char SHA or a
@@ -84,7 +107,19 @@ while IFS=$'\t' read -r key ref; do
   cloned=$((cloned + 1))
 done <<< "${pairs}"
 
-echo "Premium overlay bootstrap: ${cloned} cloned, ${present} already present, ${skipped} skipped (no access)."
+# Typo guard: warn about any requested name that matched no key in the lock file,
+# comparing against this run's own lock-derived short names (never a second list).
+if [ "${select_all}" -eq 0 ] && [ -n "${requested}" ]; then
+  available=$(printf '%s\n' "${pairs}" | cut -f1 | sed 's/^b4m-//')
+  while IFS= read -r name; do
+    [ -n "${name}" ] || continue
+    if ! printf '%s\n' "${available}" | grep -qxF "${name}"; then
+      echo "Warning: PREMIUM_OVERLAYS requested '${name}', which matches no key in ${LOCK_FILE}. Available: $(printf '%s' "${available}" | tr '\n' ' ')" >&2
+    fi
+  done <<< "${requested}"
+fi
+
+echo "Premium overlay bootstrap: ${cloned} cloned, ${present} already present, ${skipped} skipped (no access), ${unselected} unselected."
 if [ "${cloned}" -gt 0 ]; then
   echo "Run 'pnpm install' to wire up the workspace."
 fi
