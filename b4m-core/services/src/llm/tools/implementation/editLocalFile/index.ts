@@ -3,12 +3,19 @@ import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import { diffLines, type Change } from 'diff';
 import { assertPathAllowed } from '../../utils/pathValidation';
-import { fuzzyMatch } from './fuzzyMatch';
+import { fuzzyMatch, type FuzzyStrategy } from './fuzzyMatch';
 
 interface EditLocalFileParams {
   path: string;
   old_string: string;
   new_string: string;
+}
+
+interface EditLocalFileResult {
+  /** Human/model-facing summary of the edit (success message + diff). */
+  message: string;
+  /** Set when the edit was resolved via the fuzzy fallback rather than an exact match. */
+  strategy?: FuzzyStrategy;
 }
 
 interface DiffResult {
@@ -46,7 +53,7 @@ function generateDiff(original: string, modified: string): DiffResult {
   return { additions, deletions, diff: diffString.trim() };
 }
 
-async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<string> {
+async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<EditLocalFileResult> {
   const { path: filePath, old_string, new_string } = params;
 
   // Validate path is within allowed directories (cwd is always included)
@@ -65,6 +72,7 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
   let startIndex: number;
   let matchedText: string;
   let replacement: string;
+  let strategy: FuzzyStrategy | undefined;
 
   if (currentContent.includes(old_string)) {
     const occurrences = currentContent.split(old_string).length - 1;
@@ -92,6 +100,7 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
     startIndex = fuzzy.startIndex;
     matchedText = fuzzy.matchedText;
     replacement = fuzzy.replacement;
+    strategy = fuzzy.strategy;
   }
 
   const newContent =
@@ -102,11 +111,19 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
   // Generate diff for feedback against the span actually replaced.
   const diffResult = generateDiff(matchedText, replacement);
 
-  return (
+  // When the exact match missed, tell the model its old_string drifted so it can
+  // be more precise next time (indentation and line endings were preserved).
+  const fuzzyNote = strategy
+    ? `\n\nNote: old_string was not an exact match; it was resolved with a fuzzy fallback (${strategy}), ` +
+      `preserving the file's original indentation and line endings.`
+    : '';
+
+  const message =
     `File edited successfully: ${filePath}\n` +
     `Changes: +${diffResult.additions} lines, -${diffResult.deletions} lines\n` +
-    `\nDiff:\n${diffResult.diff}`
-  );
+    `\nDiff:\n${diffResult.diff}${fuzzyNote}`;
+
+  return { message, strategy };
 }
 
 export const editLocalFileTool: ToolDefinition = {
@@ -122,9 +139,12 @@ export const editLocalFileTool: ToolDefinition = {
       });
 
       try {
-        const result = await editLocalFile(params, context.allowedDirectories);
-        context.logger.info('✅ EditLocalFile: Success', { path: params.path });
-        return result;
+        const { message, strategy } = await editLocalFile(params, context.allowedDirectories);
+        context.logger.info('✅ EditLocalFile: Success', {
+          path: params.path,
+          matchType: strategy ?? 'exact',
+        });
+        return message;
       } catch (error) {
         context.logger.error('❌ EditLocalFile: Failed', error);
         throw error;

@@ -41,6 +41,14 @@ export class DisproportionateMatchError extends Error {
   }
 }
 
+/** The matchers in the fuzzy cascade, in the order they are attempted. */
+export type FuzzyStrategy =
+  | 'escape-normalized'
+  | 'line-trimmed'
+  | 'whitespace-normalized'
+  | 'blank-line-boundary'
+  | 'block-anchor';
+
 export interface FuzzyMatchResult {
   /** The exact substring of `content` that will be replaced (present verbatim). */
   matchedText: string;
@@ -48,8 +56,8 @@ export interface FuzzyMatchResult {
   replacement: string;
   /** Character offset in `content` where {@link matchedText} begins. */
   startIndex: number;
-  /** Name of the matcher that produced this result (for logging / telemetry). */
-  strategy: string;
+  /** The matcher that produced this result (for logging / telemetry). */
+  strategy: FuzzyStrategy;
 }
 
 /** A span whose char length exceeds this AND `old_string.length * ratio` is refused. */
@@ -256,7 +264,7 @@ function buildLineSpanResult(
   endLine: number,
   oldLines: string[],
   newString: string,
-  strategy: string
+  strategy: FuzzyStrategy
 ): FuzzyMatchResult {
   const spanStart = contentLines[startLine].start;
   const lastLine = contentLines[endLine];
@@ -299,7 +307,7 @@ export function fuzzyMatch(content: string, oldString: string, newString: string
   const oldLines = oldString.split(EOL_PATTERN);
 
   // 2-3. Line-level block matching, increasing tolerance.
-  const lineMatchers: Array<{ strategy: string; normalize: LineNormalizer }> = [
+  const lineMatchers: Array<{ strategy: FuzzyStrategy; normalize: LineNormalizer }> = [
     { strategy: 'line-trimmed', normalize: trimmedNormalizer },
     { strategy: 'whitespace-normalized', normalize: whitespaceNormalizer },
   ];
