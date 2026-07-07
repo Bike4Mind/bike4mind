@@ -163,8 +163,12 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
             `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
           );
           content = data.content?.content ?? '';
-        } catch {
-          content = '';
+        } catch (err) {
+          // A transport/auth failure is not the same as "empty content" - keep the two
+          // distinct so a transient error doesn't send anyone chasing a data problem.
+          console.error('Failed to load artifact content for publish:', err);
+          toast.error('Could not load artifact content, please try again');
+          return;
         }
       }
       if (!content) {
