@@ -20,6 +20,21 @@ import { getTestUsers } from './helpers/test-users';
 const RUN = Date.now().toString().slice(-6);
 const FIXTURE = path.resolve(__dirname, 'fixtures/uploads/recipe.txt');
 
+/**
+ * Build an in-memory upload whose content is unique per (RUN, label). Upload dedup is
+ * scoped per-user by content hash (see /api/files/check-duplicates), NOT per-lake, so
+ * success-path upload tests that reused the shared FIXTURE poisoned each other: the first
+ * upload registered the hash and every later one got "All files are duplicates (skipped)".
+ * Appending a unique marker gives each test a distinct hash. Use FIXTURE (verbatim) only
+ * where a duplicate is intentional (the conflict-resolution test) or nothing is uploaded
+ * (taxonomy/source steps).
+ */
+function uniqueUpload(label: string): { name: string; mimeType: string; buffer: Buffer }[] {
+  const bytes = fs.readFileSync(FIXTURE);
+  const buffer = Buffer.concat([bytes, Buffer.from(`\n# e2e-unique ${RUN} ${label}\n`)]);
+  return [{ name: `recipe-${label}-${RUN}.txt`, mimeType: 'text/plain', buffer }];
+}
+
 // Track every lake created via API so we can purge them regardless of which test made them.
 const created: string[] = [];
 
@@ -355,7 +370,7 @@ test.describe('Data Lake - create wizard (full upload)', () => {
 
     await dataLakePage.openManagerFromHome();
     await dataLakePage.startCreate();
-    await dataLakePage.selectFiles([FIXTURE]);
+    await dataLakePage.selectFiles(uniqueUpload('full'));
     await dataLakePage.advanceToConfig();
 
     await dataLakePage.fillMuiInput(dataLakePage.configNameInput, name);
@@ -367,16 +382,13 @@ test.describe('Data Lake - create wizard (full upload)', () => {
     expect(lake, 'created lake should be listed').toBeTruthy();
   });
 
-  test('DL-E5: access-tag + entitlement gates set via the wizard persist on the lake', async ({
-    request,
-    dataLakePage,
-  }) => {
+  test('access-tag + entitlement gates set via the wizard persist on the lake', async ({ request, dataLakePage }) => {
     test.setTimeout(3 * TIMEOUTS.TEST);
     const name = `E2E Create Gated ${RUN}`;
 
     await dataLakePage.openManagerFromHome();
     await dataLakePage.startCreate();
-    await dataLakePage.selectFiles([FIXTURE]);
+    await dataLakePage.selectFiles(uniqueUpload('gated'));
     await dataLakePage.advanceToConfig();
 
     await dataLakePage.fillMuiInput(dataLakePage.configNameInput, name);
@@ -399,7 +411,7 @@ test.describe('Data Lake - create wizard (full upload)', () => {
     );
   });
 
-  test('DL-E2: selecting a file that already exists surfaces the conflict-resolution UI', async ({
+  test('selecting a file that already exists surfaces the conflict-resolution UI', async ({
     request,
     dataLakePage,
   }) => {
@@ -431,7 +443,7 @@ test.describe('Data Lake - create wizard (full upload)', () => {
 // Group D — Taxonomy tag editing
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - taxonomy', () => {
-  test('DL-D2: deleting a suggested tag removes it from the list', async ({ dataLakePage }) => {
+  test('deleting a suggested tag removes it from the list', async ({ dataLakePage }) => {
     test.setTimeout(3 * TIMEOUTS.TEST);
 
     await dataLakePage.openManagerFromHome();
@@ -449,7 +461,7 @@ test.describe('Data Lake - taxonomy', () => {
 // Group G — Append: full upload into an existing lake
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - append (full upload)', () => {
-  test('DL-G1: uploads a file into an existing lake (no taxonomy step)', async ({ request, dataLakePage }) => {
+  test('uploads a file into an existing lake (no taxonomy step)', async ({ request, dataLakePage }) => {
     test.setTimeout(2 * TIMEOUTS.TEST);
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Append Full ${RUN}`,
@@ -458,7 +470,7 @@ test.describe('Data Lake - append (full upload)', () => {
 
     await dataLakePage.openManagerFromHome();
     await dataLakePage.startAppend(lake.id);
-    await dataLakePage.selectFiles([FIXTURE]);
+    await dataLakePage.selectFiles(uniqueUpload('appendf'));
     await dataLakePage.advanceToConfig(); // append skips taxonomy; config is pre-filled + locked
     await dataLakePage.startUploadAndWaitComplete();
   });
@@ -468,7 +480,7 @@ test.describe('Data Lake - append (full upload)', () => {
 // Group J — Viewer / explorer article (seeded via API to avoid the upload pipeline)
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - explorer article', () => {
-  test('DL-J6: "Ask about" an article prefills chat and navigates to a new session', async ({
+  test('"Ask about" an article prefills chat and navigates to a new session', async ({
     request,
     dataLakePage,
     page,
@@ -487,7 +499,7 @@ test.describe('Data Lake - explorer article', () => {
     await expect(page).toHaveURL(/\/new/, { timeout: TIMEOUTS.NAVIGATION });
   });
 
-  test('DL-J2: the sort toggle flips sort state', async ({ request, dataLakePage }) => {
+  test('the sort toggle flips sort state', async ({ request, dataLakePage }) => {
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E Sort ${RUN}`,
       fileTagPrefix: `e2esort${RUN}:`,

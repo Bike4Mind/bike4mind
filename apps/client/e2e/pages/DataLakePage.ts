@@ -113,8 +113,8 @@ export class DataLakePage extends BasePage {
   }
 
   /** Attach files to the wizard's plain (non-folder) file input. */
-  async selectFiles(filePaths: string[]) {
-    await this.selectFilesInput.setInputFiles(filePaths);
+  async selectFiles(files: string[] | { name: string; mimeType: string; buffer: Buffer }[]) {
+    await this.selectFilesInput.setInputFiles(files);
   }
 
   async wizardNext() {
