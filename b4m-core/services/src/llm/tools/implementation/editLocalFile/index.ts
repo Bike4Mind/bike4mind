@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import { diffLines, type Change } from 'diff';
 import { assertPathAllowed } from '../../utils/pathValidation';
+import { fuzzyMatch } from './fuzzyMatch';
 
 interface EditLocalFileParams {
   path: string;
@@ -58,32 +59,48 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
 
   const currentContent = await fs.readFile(resolvedPath, 'utf-8');
 
-  // Validate that old_string exists in the file
-  if (!currentContent.includes(old_string)) {
-    // Provide helpful error message
-    const preview = old_string.length > 100 ? old_string.substring(0, 100) + '...' : old_string;
-    throw new Error(
-      `String to replace not found in file. ` +
-        `Make sure the old_string matches exactly (including whitespace and line endings). ` +
-        `Searched for: "${preview}"`
-    );
+  // The span of the file we will replace, and what we will replace it with.
+  // The exact fast path is unchanged; a validated fuzzy fallback (indentation,
+  // blank-line, whitespace-width, and escape drift) only runs after it misses.
+  let startIndex: number;
+  let matchedText: string;
+  let replacement: string;
+
+  if (currentContent.includes(old_string)) {
+    const occurrences = currentContent.split(old_string).length - 1;
+    if (occurrences > 1) {
+      throw new Error(
+        `Found ${occurrences} occurrences of the string to replace. ` +
+          `Please provide a more specific old_string that matches exactly one location.`
+      );
+    }
+    startIndex = currentContent.indexOf(old_string);
+    matchedText = old_string;
+    replacement = new_string;
+  } else {
+    // Throws AmbiguousMatchError / DisproportionateMatchError with actionable
+    // messages; returns null when no tolerant matcher resolves the block.
+    const fuzzy = fuzzyMatch(currentContent, old_string, new_string);
+    if (!fuzzy) {
+      const preview = old_string.length > 100 ? old_string.substring(0, 100) + '...' : old_string;
+      throw new Error(
+        `String to replace not found in file. ` +
+          `Make sure the old_string matches exactly (including whitespace and line endings). ` +
+          `Searched for: "${preview}"`
+      );
+    }
+    startIndex = fuzzy.startIndex;
+    matchedText = fuzzy.matchedText;
+    replacement = fuzzy.replacement;
   }
 
-  // Count occurrences
-  const occurrences = currentContent.split(old_string).length - 1;
-  if (occurrences > 1) {
-    throw new Error(
-      `Found ${occurrences} occurrences of the string to replace. ` +
-        `Please provide a more specific old_string that matches exactly one location.`
-    );
-  }
-
-  const newContent = currentContent.replace(old_string, new_string);
+  const newContent =
+    currentContent.slice(0, startIndex) + replacement + currentContent.slice(startIndex + matchedText.length);
 
   await fs.writeFile(resolvedPath, newContent, 'utf-8');
 
-  // Generate diff for feedback
-  const diffResult = generateDiff(old_string, new_string);
+  // Generate diff for feedback against the span actually replaced.
+  const diffResult = generateDiff(matchedText, replacement);
 
   return (
     `File edited successfully: ${filePath}\n` +
