@@ -134,6 +134,7 @@ export async function handler(event: never, context: Context) {
 
   const now = new Date();
   let holdersProcessed = 0;
+  let holdersFailed = 0;
   let totalExpiredLots = 0;
   let totalExpiredCredits = 0;
   let skip = 0;
@@ -149,9 +150,19 @@ export async function handler(event: never, context: Context) {
     if (batch.length === 0) break;
 
     for (const { _id: holderKey } of batch) {
-      const { expiredLots, expiredCredits } = await processHolder(holderKey, now, logger);
-      totalExpiredLots += expiredLots;
-      totalExpiredCredits += expiredCredits;
+      // Isolate per-holder failures: a single holder that throws (e.g. its doc
+      // was concurrently deleted, so subtractCredits can't decrement) must not
+      // abort the batch. Because holders are swept in a stable $sort order, an
+      // unhandled throw here would permanently block every later holder. The
+      // sweep is idempotent, so a skipped holder self-heals on the next run.
+      try {
+        const { expiredLots, expiredCredits } = await processHolder(holderKey, now, logger);
+        totalExpiredLots += expiredLots;
+        totalExpiredCredits += expiredCredits;
+      } catch (err) {
+        holdersFailed++;
+        logger.error(`[CreditLotSweep] Failed to process ${holderKey.ownerType} ${holderKey.ownerId}`, err);
+      }
     }
 
     holdersProcessed += batch.length;
@@ -159,13 +170,14 @@ export async function handler(event: never, context: Context) {
   }
 
   logger.log(
-    `[CreditLotSweep] Processed ${holdersProcessed} holder(s): expired ${totalExpiredLots} lot(s) totalling ${totalExpiredCredits} credits`
+    `[CreditLotSweep] Processed ${holdersProcessed} holder(s) (${holdersFailed} failed): expired ${totalExpiredLots} lot(s) totalling ${totalExpiredCredits} credits`
   );
 
   return {
     statusCode: 200,
     body: JSON.stringify({
       holdersProcessed,
+      holdersFailed,
       expiredLots: totalExpiredLots,
       expiredCredits: totalExpiredCredits,
     }),
