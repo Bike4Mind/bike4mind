@@ -310,7 +310,10 @@ export function fuzzyMatch(content: string, oldString: string, newString: string
     // larger than what the model supplied.
     return {
       matchedText: unescaped,
-      replacement: normalizeEol(newString, eol),
+      // Unescape `newString` symmetrically: an over-escaping model applies the
+      // same encoding to both parameters, so literal `\n` / `\t` in `newString`
+      // must collapse too or they get written into the file verbatim.
+      replacement: normalizeEol(unescapeOneLevel(newString), eol),
       startIndex: content.indexOf(unescaped),
       strategy: 'escape-normalized',
     };

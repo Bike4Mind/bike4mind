@@ -89,6 +89,16 @@ describe('fuzzyMatch', () => {
       const result = applyFuzzy(content, oldString, 'const s = "world";');
       expect(result).toBe('const s = "world";\n');
     });
+
+    it('unescapes new_string too when the model over-escapes both parameters', () => {
+      const content = 'if (x) {\n\treturn true;\n}\n';
+      const oldString = 'if (x) {\\n\\treturn true;\\n}';
+      // Same over-escaping habit applied to new_string: literal \n / \t must
+      // collapse, otherwise they get written into the file verbatim.
+      const newString = 'if (x) {\\n\\treturn false;\\n}';
+      const result = applyFuzzy(content, oldString, newString);
+      expect(result).toBe('if (x) {\n\treturn false;\n}\n');
+    });
   });
 
   describe('block-anchor (interior drift)', () => {
