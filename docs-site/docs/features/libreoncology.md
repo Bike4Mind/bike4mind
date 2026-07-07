@@ -33,6 +33,7 @@ ungated user can neither load a page nor call a LibreOncology endpoint.
 | **Resources** | `/libreoncology/resources` | A static clinical reference (public/login-only): dose constraints, fractionation schemes, and curated external references. Each row can hand a question to the tutor. |
 | **Docs** | `/libreoncology/docs` | The founding documents (public/login-only) — vision, problem statement, business model, roadmap, and more. |
 | **About / Transparency** | `/libreoncology/about`, `/libreoncology/transparency` | Mission and credibility pages (public/login-only). |
+| **Admin** | `/libreoncology/admin`, `/libreoncology/admin/courses/{course}` | The authoring dashboard and per-course editor (**author-gated** — see [Authoring and review](#authoring-and-review-admin)). |
 
 The public **Home** is the default index (`/libreoncology`); the Tutor and course content require a `libreoncology:pro` subscription (existing tagged users keep access via the comp-tag grant). Unsubscribed users hitting a gated surface are routed to `/libreoncology/upgrade`.
 
@@ -87,6 +88,57 @@ grounded turn and **cached on a backing session**, so a returning user (on any d
 cached pathway with no new model call. **Regenerate** runs a fresh grounded turn; the **Sources**
 view opens the cited documents. Every pathway shows an `AI draft — not reviewed` badge until a
 specialist signs off — grounded clinical content is never shown without it.
+
+## Authoring and review (admin)
+
+Course-map content ships through a **draft → human review → publish** pipeline, operated from an
+admin surface at `/libreoncology/admin`. Learners only ever see **published** content — an AI
+draft, however fresh, is invisible until an author publishes it.
+
+### The author role
+
+The admin surface and its APIs gate on the scoped `libreoncology:author` entitlement (granted via
+the user tag of the same name; platform admins and developers bypass). Authoring is independent of
+the learner subscription — an author needs no `libreoncology:pro` plan, and buying a plan grants no
+authoring rights. Authors see an **Admin** link in the LibreOncology header; everyone else doesn't
+(and the routes/APIs deny regardless of link visibility).
+
+### Dashboard
+
+One row per disease site: publish state (none / draft only / published), draft status and revision,
+the published version, the curated-document count, and two health badges —
+
+- **stale** — the curated library changed since the draft was generated (cheap metadata check, no
+  model calls), so a regenerate would see different sources;
+- **generation failed** — the last synthesis attempt errored (with the failure message), so
+  "no draft" is distinguishable from "generation keeps failing".
+
+**Generate / Regenerate** runs the synchronous course-map synthesis (up to ~a minute). A draft a
+human has touched is **never overwritten by regeneration** — the run is skipped and the dashboard
+says so; discard the draft first to start over from clean AI output.
+
+### Course editor
+
+Per-course editing over the draft: rename/describe modules, switch a module's format
+(oral-exam / walkthrough), reorder, merge two modules (source documents are combined server-side),
+delete a module, or discard the whole draft. Every field carries an **ai / human provenance chip**,
+so a reviewer can see at a glance which content is untouched AI output versus curated by a person.
+
+Edits are optimistic-concurrency guarded: if the draft changed elsewhere (another author, a
+regenerate) the change is rejected, the editor refreshes to the latest state, and a banner says so
+— stale edits can never silently overwrite newer work.
+
+**Publish** snapshots the reviewed draft as the next immutable version and makes it live for
+learners; **Unpublish** takes the live snapshot down (learners see the empty state) while all
+version history is kept. Publishing an empty draft is rejected — deliberate blanking goes through
+Unpublish.
+
+### Version history and audit
+
+The editor's **Version history** tab lists every published version (who, when, from which draft
+revision) and can open any version's full module snapshot. The **Audit** tab shows the append-only
+receipt trail — generate, edit, reorder, merge, delete, discard, publish, unpublish — with
+identifiers only (module ids, field names, revisions), never content values.
 
 ## Notes for operators
 
