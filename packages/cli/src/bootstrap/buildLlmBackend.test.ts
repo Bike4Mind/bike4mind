@@ -55,7 +55,7 @@ describe('buildLlmBackend — transport selection', () => {
     const { deps, fakeWs, wsBackend } = makeDeps();
     const res = await buildLlmBackend(makeInput(), deps);
 
-    expect(deps.connectWebSocket).toHaveBeenCalledWith('wss://x', expect.any(Function));
+    expect(deps.connectWebSocket).toHaveBeenCalledWith('wss://x', expect.any(Function), expect.any(Function));
     expect(deps.installWebSocketToolExecutor).toHaveBeenCalledOnce();
     expect(deps.createWebSocketBackend).toHaveBeenCalledOnce();
     expect(deps.registerKeepHandlers).toHaveBeenCalledWith(fakeWs);

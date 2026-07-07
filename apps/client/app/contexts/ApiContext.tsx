@@ -196,17 +196,30 @@ export const ApiProvider: React.FC<PropsWithChildren> = ({ children }) => {
                 refreshToken: response.data.refreshToken,
               });
             } catch (e) {
-              // Only the initiator runs the teardown. Refresh failed - the session
-              // can't be recovered. This mirrors the reload-recovery path
-              // (RestrictedPage redirects on a missing user) and the logout
-              // redirect: redirect to login instead of leaving the user stranded
-              // on a page that floods 401s with no prompt. A full-page
-              // window.location.replace (inside the helper) avoids a circular
-              // import on the user store and unmounts the app, which also stops
-              // the in-flight 401 cascade. The session_expired code surfaces a
-              // toast on the login screen, and redirectTo returns the user to
-              // where they were after re-login.
-              await forceSessionExpiredRedirect();
+              // Only the initiator runs the teardown. Distinguish a genuine
+              // revocation from a transient outage by the refresh endpoint's
+              // status: a 400 (invalid_grant) / 401 means the refresh token was
+              // rejected - the session can't be recovered, so tear down. A 5xx /
+              // network error / the 10s timeout is a transient outage (a cold or
+              // hanging refresh Lambda - the very case the timeout above guards) -
+              // reject and let the caller retry rather than logging the user out
+              // on a blip. This matters most during a deploy, when WS connections
+              // drop (triggering the WebsocketContext probe through this same
+              // interceptor) at the exact moment the refresh Lambda is coldest -
+              // without this gate that correlation causes spurious logout storms.
+              // Mirrors the CLI ApiClient's SessionRevokedError distinction.
+              //
+              // The teardown: forceSessionExpiredRedirect mirrors the reload-recovery
+              // path (RestrictedPage redirects on a missing user) and the logout
+              // redirect - a full-page window.location.replace (inside the helper)
+              // avoids a circular import on the user store, unmounts the app, and
+              // stops the in-flight 401 cascade. The session_expired code surfaces a
+              // toast on the login screen, and redirectTo returns the user to where
+              // they were after re-login.
+              const refreshStatus = isAxiosError(e) ? e.response?.status : undefined;
+              if (refreshStatus === 400 || refreshStatus === 401) {
+                await forceSessionExpiredRedirect();
+              }
               throw e;
             } finally {
               refreshPromise = null;
