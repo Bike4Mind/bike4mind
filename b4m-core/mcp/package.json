@@ -74,7 +74,7 @@
     "@bike4mind/common": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@octokit/rest": "^22.0.1",
-    "unzipper": "^0.12.3",
+    "unzipper": "^0.12.5",
     "zod": "^4.4.3"
   }
 }

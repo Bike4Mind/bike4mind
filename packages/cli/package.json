@@ -120,7 +120,7 @@
     "ws": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yargs": "^18.0.0",
-    "yauzl": "^3.3.0",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.3",
     "zod-validation-error": "^5.0.0",
     "zustand": "^5.0.13"
