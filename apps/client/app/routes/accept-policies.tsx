@@ -122,13 +122,17 @@ const AcceptPoliciesPage = () => {
                   onChange={e => setAcceptPolicies(e.target.checked)}
                   disabled={isSubmitting}
                   label={
+                    // Each Link needs position+zIndex to sit above MUI Joy Checkbox's transparent
+                    // input overlay (an absolutely-positioned span at zIndex 1 covering the whole
+                    // control); without it a click lands on the input and toggles the box instead
+                    // of opening the policy.
                     <Typography sx={{ fontSize: '14px' }}>
                       I agree to the{' '}
                       <Link
                         href={ExternalLinks.terms}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={{ position: 'relative', zIndex: 2 }}
                       >
                         Terms of Service
                       </Link>
@@ -137,7 +141,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.acceptableUse}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={{ position: 'relative', zIndex: 2 }}
                       >
                         Acceptable Use Policy
                       </Link>
@@ -146,7 +150,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.privacy}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={{ position: 'relative', zIndex: 2 }}
                       >
                         Privacy Policy
                       </Link>
