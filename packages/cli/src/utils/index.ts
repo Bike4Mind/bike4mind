@@ -1,7 +1,14 @@
 export { generateCliTools, type AgentContext } from './toolsAdapter';
 export { PermissionManager } from './PermissionManager';
 export { generateFileDiffPreview, generateFileCreatePreview, generateFileDeletePreview } from './diffPreview';
-export { getApiUrl, getEnvironmentName, getCreditsUrl } from './apiUrl';
+export {
+  resolveApiEndpoint,
+  requireApiUrl,
+  ApiEndpointUnconfiguredError,
+  getEnvironmentName,
+  getCreditsUrl,
+  type ApiEndpoint,
+} from './apiUrl';
 export { logger } from './Logger';
 export { searchCommands } from './fuzzySearch';
 export {

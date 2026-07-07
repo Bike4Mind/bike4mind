@@ -18,7 +18,7 @@ interface CallToActionConfig {
 }
 
 export const CallToActionManager: React.FC = () => {
-  const grokToolCallToActions: CallToActionConfig = {
+  const bike4MindCallToActions: CallToActionConfig = {
     slim: [
       /*
       {
@@ -45,7 +45,7 @@ export const CallToActionManager: React.FC = () => {
     ],
   };
 
-  const callToActions = grokToolCallToActions;
+  const callToActions = bike4MindCallToActions;
 
   const [visibleFullCallToActions, setVisibleFullCallToActions] = React.useState(
     callToActions.full.map((_, index) => true)

@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "AI設定",
     "session": "ノートブック",
@@ -60,9 +60,9 @@
     }
   },
   "referral": {
-    "title": "友達をGrokToolに紹介する",
-    "email_title_default": "GrokToolへようこそ！",
-    "email_body_default": "USER_NAMEによってGrokToolに招待されました！登録リンク：次の招待コードを使用してサインアップしてください：INVITE_CODE",
+    "title": "友達をBike4Mindに紹介する",
+    "email_title_default": "Bike4Mindへようこそ！",
+    "email_body_default": "USER_NAMEによってBike4Mindに招待されました！登録リンク：次の招待コードを使用してサインアップしてください：INVITE_CODE",
     "friend_email": "友達のメール",
     "num_referrals_available": "利用可能な紹介数：",
     "no_valid_emails_error": "有効なメールアドレスを入力してください",

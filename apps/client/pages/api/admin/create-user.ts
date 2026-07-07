@@ -58,7 +58,9 @@ const handler = baseApi().post(
           isAdmin: validatedData.isAdmin,
           level: validatedData.level,
           initialCredits: validatedData.initialCredits,
-          tags: validatedData.tags.length > 0 ? validatedData.tags : undefined,
+          // Pass tags through as-is (zod prefaults to []); createUser stores []
+          // rather than null so a tag-less user isn't stuck "Loading AI models...".
+          tags: validatedData.tags,
           record: {
             // No usable password in passwordless mode; store a random unusable
             // value when the admin doesn't supply one. The user signs in via OTC.

@@ -927,6 +927,9 @@ importers:
 
   b4m-core/common:
     dependencies:
+      axios:
+        specifier: 1.16.1
+        version: 1.16.1
       dayjs:
         specifier: ^1.11.20
         version: 1.11.20

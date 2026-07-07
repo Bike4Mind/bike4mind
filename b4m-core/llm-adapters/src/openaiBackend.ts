@@ -38,7 +38,7 @@ import {
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from './retry';
+import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object

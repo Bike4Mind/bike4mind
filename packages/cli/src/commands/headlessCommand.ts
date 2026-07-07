@@ -16,7 +16,7 @@ import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { buildSystemPrompt } from '../core/prompts';
-import { generateCliTools, PermissionManager, type AgentContext, getApiUrl, loadContextFiles } from '../utils';
+import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend';
@@ -136,8 +136,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       process.exit(1);
     }
 
-    // Initialize LLM backend - WebSocket preferred, SSE fallback
-    const apiBaseURL = getApiUrl(config.apiConfig);
+    // Initialize LLM backend - WebSocket preferred, SSE fallback.
+    // Fail loud when unconfigured rather than handing axios an empty baseURL.
+    let apiBaseURL: string;
+    try {
+      apiBaseURL = requireApiUrl(config.apiConfig);
+    } catch (error) {
+      process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    }
     const apiClient = new ApiClient(apiBaseURL, configStore);
 
     // Layer B4M-web skills on top of the local files already loaded above.

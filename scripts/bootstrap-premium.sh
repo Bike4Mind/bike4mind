@@ -7,6 +7,9 @@
 # repo (open-core devs skip everything). After cloning, run `pnpm install`.
 #
 # Usage: pnpm bootstrap:premium
+#
+# Env (override the org):
+#   PREMIUM_OVERLAY_OWNER=Bike4Mind   # GitHub org/owner the overlays are cloned from
 set -euo pipefail
 
 LOCK_FILE="premium-overlay.lock.json"
@@ -43,7 +46,7 @@ while IFS=$'\t' read -r key ref; do
     exit 1
   fi
 
-  repo="MillionOnMars/${key}"
+  repo="${PREMIUM_OVERLAY_OWNER:-Bike4Mind}/${key}"
   # Workspace dir: strip the 'b4m-' prefix (b4m-overwatch -> overwatch).
   overlay_dir="packages/premium/${key#b4m-}"
 

@@ -286,6 +286,8 @@ export interface ServerAgentExecutionResult extends AgentResult {
   agentName: string;
   thoroughness: ThoroughnessLevel;
   summary: string;
+  /** Model the delegation actually ran on, for cost attribution by the caller. */
+  model: string;
 }
 
 /**
@@ -520,6 +522,7 @@ export class ServerSubagentOrchestrator {
         agentName: agentDef.name,
         thoroughness: effectiveThoroughness,
         summary,
+        model: effectiveModel,
       };
 
       if (this.deps.tracker && childExecutionId) {
@@ -570,6 +573,7 @@ export class ServerSubagentOrchestrator {
           agentName: agentDef.name,
           thoroughness: effectiveThoroughness,
           summary: `⚠️ **Partial results (timed out after ${Math.round(duration / 1000)}s)**\n\n${summary}`,
+          model: effectiveModel,
         };
 
         if (this.deps.tracker && childExecutionId) {
@@ -762,7 +766,7 @@ export class ServerSubagentOrchestrator {
         this.deps.logger.info(
           `🤖⏸  [SubagentOrchestrator] Parent deadline approaching; handing off subagent "${agentDef.name}" (childExecutionId: ${childExecutionId})`
         );
-        return this.buildPlaceholderResult(agentDef, thoroughness, childExecutionId);
+        return this.buildPlaceholderResult(agentDef, thoroughness, childExecutionId, effectiveModel);
       }
 
       const status = await this.deps.tracker.pollChildStatus(childExecutionId);
@@ -771,10 +775,13 @@ export class ServerSubagentOrchestrator {
       }
 
       if (status.status === 'completed') {
-        return this.buildResultFromChildStatus(agentDef, thoroughness, status, { partial: false });
+        return this.buildResultFromChildStatus(agentDef, thoroughness, status, effectiveModel, { partial: false });
       }
       if (status.status === 'aborted') {
-        return this.buildResultFromChildStatus(agentDef, thoroughness, status, { partial: true, aborted: true });
+        return this.buildResultFromChildStatus(agentDef, thoroughness, status, effectiveModel, {
+          partial: true,
+          aborted: true,
+        });
       }
       if (status.status === 'failed') {
         throw new Error(`Subagent "${agentDef.name}" failed: ${status.error ?? 'unknown error'}`);
@@ -793,7 +800,8 @@ export class ServerSubagentOrchestrator {
   private buildPlaceholderResult(
     agentDef: ServerAgentDefinition,
     thoroughness: ThoroughnessLevel,
-    childExecutionId: string
+    childExecutionId: string,
+    model: string
   ): ServerAgentExecutionResult {
     const summary =
       `**${agentDef.name} Agent — Dispatched**\n\n` +
@@ -803,6 +811,7 @@ export class ServerSubagentOrchestrator {
       agentName: agentDef.name,
       thoroughness,
       summary,
+      model,
       finalAnswer: summary,
       steps: [],
       completionInfo: {
@@ -820,6 +829,7 @@ export class ServerSubagentOrchestrator {
     agentDef: ServerAgentDefinition,
     thoroughness: ThoroughnessLevel,
     status: ChildExecutionStatus,
+    model: string,
     opts: { partial: boolean; aborted?: boolean }
   ): ServerAgentExecutionResult {
     const result = status.result;
@@ -846,6 +856,7 @@ export class ServerSubagentOrchestrator {
       ...partialResult,
       agentName: agentDef.name,
       thoroughness,
+      model,
       summary,
     };
   }

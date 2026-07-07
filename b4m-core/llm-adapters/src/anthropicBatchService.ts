@@ -2,7 +2,7 @@ import { Anthropic } from '@anthropic-ai/sdk';
 import type { MessageCreateParamsNonStreaming, MessageParam } from '@anthropic-ai/sdk/resources/messages';
 import type { MessageBatchResult } from '@anthropic-ai/sdk/resources/messages/batches';
 import { Logger } from '@bike4mind/observability';
-import { withRetry, isRetryableError } from './retry';
+import { withRetry, isRetryableError } from '@bike4mind/common';
 
 /**
  * Lean, single-shot Anthropic Message Batches client.

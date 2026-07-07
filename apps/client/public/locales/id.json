@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Pengaturan AI",
     "session": "Buku Catatan",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Ajak teman ke",
-    "email_title_default": "Selamat Datang di GrokTool!",
-    "email_body_default": "Anda telah diundang oleh USER_NAME ke GrokTool! LINK PENDAFTARAN: Gunakan kode undangan berikut untuk mendaftar: INVITE_CODE",
+    "email_title_default": "Selamat Datang di Bike4Mind!",
+    "email_body_default": "Anda telah diundang oleh USER_NAME ke Bike4Mind! LINK PENDAFTARAN: Gunakan kode undangan berikut untuk mendaftar: INVITE_CODE",
     "friend_email": "Email Teman",
     "num_referrals_available": "Referal yang tersedia:",
     "no_valid_emails_error": "Harap masukkan alamat email yang valid",

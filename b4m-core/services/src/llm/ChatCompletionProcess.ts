@@ -48,6 +48,7 @@ import {
   shouldTriggerFallback,
   stripAllToolBlocks,
   usdToCredits,
+  usdToCreditsStochastic,
   LOW_CREDIT_ALERT_THRESHOLD,
   ITokenizer,
   getLastBuildDebugInfo,
@@ -2998,6 +2999,10 @@ export class ChatCompletionProcess {
               inputTokens - cacheReadInputTokens * (1 - CACHE_READ_MULTIPLIER),
               outputTokens
             );
+        // Single stochastic settlement draw, shared by the quest meta, the
+        // usage event, and the ledger deduction below so they can never
+        // disagree about what was charged.
+        const textCreditsUsed = usdToCreditsStochastic(estimatedCost);
         quest.promptMeta!.tokenUsage = {
           ...quest.promptMeta!.tokenUsage,
           // Local-estimate counts stay in outputTokens/totalTokens (comparable
@@ -3010,7 +3015,7 @@ export class ChatCompletionProcess {
           cacheReadInputTokens: cacheReadInputTokens > 0 ? cacheReadInputTokens : undefined,
           settledBasis,
           estimatedCost,
-          creditsUsed: usdToCredits(estimatedCost),
+          creditsUsed: textCreditsUsed,
         };
 
         // Drift detection: log when our tokenizer diverges substantially from what
@@ -3118,7 +3123,6 @@ export class ChatCompletionProcess {
           if (!this.db.creditTransactions) {
             throw new BadRequestError('Enforce credits is enabled but credit transactions are not available');
           }
-          const textCreditsUsed = usdToCredits(estimatedCost);
           const toolCreditsUsed = (quest.promptMeta!.functionCalls || []).reduce(
             (sum, fc) => sum + (fc.creditsUsed || 0),
             0

@@ -1,7 +1,14 @@
 {
   "name": "@bike4mind/slack",
   "version": "0.0.1",
-  "private": true,
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Bike4Mind/bike4mind.git",
+    "directory": "b4m-core/slack"
+  },
   "type": "module",
   "main": "dist/index.cjs",
   "module": "dist/index.mjs",

@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Настройки ИИ",
     "session": "Блокнот",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Пригласите друга в",
-    "email_title_default": "Добро пожаловать в GrokTool!",
-    "email_body_default": "Вы были приглашены USER_NAME в GrokTool! ССЫЛКА НА РЕГИСТРАЦИЮ: Используйте следующий код приглашения для регистрации: INVITE_CODE",
+    "email_title_default": "Добро пожаловать в Bike4Mind!",
+    "email_body_default": "Вы были приглашены USER_NAME в Bike4Mind! ССЫЛКА НА РЕГИСТРАЦИЮ: Используйте следующий код приглашения для регистрации: INVITE_CODE",
     "friend_email": "Электронная почта друга",
     "num_referrals_available": "Доступно приглашений:",
     "no_valid_emails_error": "Пожалуйста, введите действительные адреса электронной почты",

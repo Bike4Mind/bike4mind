@@ -121,6 +121,7 @@ jobs:
             "b4m-core/services"
             "b4m-core/utils"
             "b4m-core/mcp"
+            "b4m-core/slack"
             "packages/premium/optihashi/engine"
             "packages/cli"
           )

@@ -1,6 +1,21 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IUserDocument } from '@bike4mind/common';
-import { useUser, migrateUserContext, UserContextProps, resolveIdentifyEffect } from './UserContext';
+import {
+  useUser,
+  migrateUserContext,
+  UserContextProps,
+  resolveIdentifyEffect,
+  shouldRevokeForTokenVersion,
+} from './UserContext';
+
+// Builds a JWT-shaped string (unsigned - decodeTokenVersion never verifies the
+// signature) so shouldRevokeForTokenVersion can decode a `tokenVersion` claim,
+// or omit it entirely to simulate a legacy pre-tokenVersion token.
+const fakeToken = (payload: Record<string, unknown> = {}): string => {
+  const b64url = (obj: unknown) =>
+    Buffer.from(JSON.stringify(obj)).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return `${b64url({ alg: 'HS256', typ: 'JWT' })}.${b64url(payload)}.sig`;
+};
 
 // UserProvider is not exercised here - mock its heavier transitive imports so
 // importing the module only constructs the zustand store.
@@ -100,6 +115,42 @@ describe('resolveIdentifyEffect — mfaPending gate + cross-tab guard + stale-ca
 
   it('skips while identify is still loading (neither success nor error)', () => {
     expect(resolveIdentifyEffect({ mfaPending: false, hasToken: true, isSuccess: false, isError: false })).toBe('skip');
+  });
+});
+
+describe('shouldRevokeForTokenVersion — JWT kill switch (legacy-token gap fix)', () => {
+  it('does not revoke when there is no access token (logged-out tab)', () => {
+    expect(shouldRevokeForTokenVersion({ accessToken: null, userTokenVersion: 5 })).toBe(false);
+  });
+
+  it('does not revoke when the DB tokenVersion is not a number', () => {
+    expect(
+      shouldRevokeForTokenVersion({ accessToken: fakeToken({ tokenVersion: 0 }), userTokenVersion: undefined })
+    ).toBe(false);
+  });
+
+  it('does not revoke a current versioned token', () => {
+    const token = fakeToken({ tokenVersion: 1 });
+    expect(shouldRevokeForTokenVersion({ accessToken: token, userTokenVersion: 1 })).toBe(false);
+  });
+
+  it('revokes a versioned token once the DB version advances past it', () => {
+    const token = fakeToken({ tokenVersion: 1 });
+    expect(shouldRevokeForTokenVersion({ accessToken: token, userTokenVersion: 2 })).toBe(true);
+  });
+
+  it('revokes a legacy (version-less) token once the DB version is bumped - the bug this fixes', () => {
+    // Before the fix, a legacy token decoded to `null` and was exempted from the
+    // kill switch entirely, leaving the session 401-ing on every request with no
+    // graceful sign-out. It must now normalize to 0, matching every server-side
+    // surface (auth.ts, refreshToken.ts, websocket connect.ts).
+    const legacyToken = fakeToken({ id: 'u1' });
+    expect(shouldRevokeForTokenVersion({ accessToken: legacyToken, userTokenVersion: 1 })).toBe(true);
+  });
+
+  it('does not revoke a legacy token while the DB version is still 0/unset', () => {
+    const legacyToken = fakeToken({ id: 'u1' });
+    expect(shouldRevokeForTokenVersion({ accessToken: legacyToken, userTokenVersion: 0 })).toBe(false);
   });
 });
 

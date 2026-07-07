@@ -62,7 +62,9 @@ export async function createUser(
     password,
     username,
     email,
-    tags: tags ?? null,
+    // Normalize to [] (never null): a null tags list makes tag-gated UI (e.g.
+    // useAccessibleModels) unable to distinguish "no tags" from "not loaded".
+    tags: tags ?? [],
     systemFiles: [],
     lastNotebookId: null,
     mfa: null,
