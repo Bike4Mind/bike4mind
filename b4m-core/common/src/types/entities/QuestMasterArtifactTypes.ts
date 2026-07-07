@@ -1,10 +1,11 @@
 import { BaseArtifact } from './ArtifactTypes';
+import { QuestComplexity, SubQuestStatus } from './QuestTypes';
 
 export interface Quest {
   id: string;
   title: string;
   description: string;
-  status: 'pending' | 'in-progress' | 'completed' | 'skipped';
+  status: SubQuestStatus;
   order: number;
   dependencies?: string[]; // IDs of prerequisite quests
   estimatedMinutes?: number;
@@ -23,7 +24,7 @@ export interface QuestMasterContent {
   quests: Quest[];
   totalSteps: number;
   estimatedDuration?: number; // Total minutes
-  complexity: 'low' | 'medium' | 'high';
+  complexity: QuestComplexity;
   category?: string;
   prerequisites?: string[];
   completionCriteria?: string[];

@@ -1,7 +1,6 @@
 import { IBaseRepository } from './BaseTypes';
 import { IShareableStaticMethods } from './ShareableDocumentTypes';
 import { BaseArtifact, ReactArtifactV2, HtmlArtifactV2, SvgArtifactV2, MermaidArtifactV2 } from './ArtifactTypes';
-import { QuestMasterArtifactV2 } from './QuestMasterArtifactTypes';
 
 // Document interfaces for MongoDB integration
 export interface IArtifactDocument extends BaseArtifact {
@@ -35,12 +34,6 @@ export interface IArtifactVersionDocument {
   createdBy: string;
   createdAt: Date;
   isActive: boolean;
-}
-
-export interface IQuestMasterArtifactDocument extends QuestMasterArtifactV2 {
-  _id: string;
-  createdAt: Date;
-  updatedAt: Date;
 }
 
 // Repository interfaces following the established pattern
@@ -109,31 +102,6 @@ export interface IArtifactVersionRepository extends IBaseRepository<IArtifactVer
   ): Promise<IArtifactVersionDocument>;
   setActiveVersion(artifactId: string, version: number): Promise<boolean>;
   getLatestVersion(artifactId: string): Promise<number>;
-}
-
-export interface IQuestMasterArtifactRepository extends IBaseRepository<IQuestMasterArtifactDocument> {
-  shareable: IShareableStaticMethods<IQuestMasterArtifactDocument>;
-
-  // QuestMaster-specific methods
-  findByComplexity(
-    complexity: 'beginner' | 'intermediate' | 'advanced' | 'expert'
-  ): Promise<IQuestMasterArtifactDocument[]>;
-  findByProgress(minCompletion: number, maxCompletion?: number): Promise<IQuestMasterArtifactDocument[]>;
-  findWithAvailableQuests(userId: string): Promise<IQuestMasterArtifactDocument[]>;
-
-  // Quest management
-  updateQuestStatus(
-    artifactId: string,
-    questId: string,
-    status: 'not_started' | 'in_progress' | 'completed' | 'blocked'
-  ): Promise<boolean>;
-  completeQuest(artifactId: string, questId: string): Promise<boolean>;
-  getNextAvailableQuest(artifactId: string): Promise<string | null>;
-  calculateProgress(artifactId: string): Promise<{ totalQuests: number; completedQuests: number; percentage: number }>;
-
-  // Search
-  searchByQuestContent(searchTerm: string): Promise<IQuestMasterArtifactDocument[]>;
-  findByTags(tags: string[]): Promise<IQuestMasterArtifactDocument[]>;
 }
 
 // Type-specific artifact repositories for future extension

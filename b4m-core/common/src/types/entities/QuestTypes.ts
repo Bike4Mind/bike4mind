@@ -32,14 +32,26 @@ export interface IChatHistoryItemRepository extends IBaseRepository<IChatHistory
 }
 
 /**
- * Valid status values for sub-quests
+ * Valid status values for sub-quests.
+ * Canonical vocabulary - the mongoose schema, zod schemas, and client all
+ * derive from these constants.
  */
-export type SubQuestStatus = 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted';
+export const SUBQUEST_STATUS_VALUES = ['not_started', 'in_progress', 'completed', 'skipped', 'deleted'] as const;
+export type SubQuestStatus = (typeof SUBQUEST_STATUS_VALUES)[number];
 
 /**
  * Status of a review gate on a sub-quest
  */
-export type ReviewGateStatus = 'pending' | 'approved' | 'rejected';
+export const REVIEW_GATE_STATUS_VALUES = ['pending', 'approved', 'rejected'] as const;
+export type ReviewGateStatus = (typeof REVIEW_GATE_STATUS_VALUES)[number];
+
+/**
+ * Valid complexity ratings for quests.
+ * Canonical vocabulary - matches what the planner generates and validates
+ * (Easy < 1 hour, Medium 1-4 hours, Hard > 4 hours).
+ */
+export const QUEST_COMPLEXITY_VALUES = ['Easy', 'Medium', 'Hard'] as const;
+export type QuestComplexity = (typeof QUEST_COMPLEXITY_VALUES)[number];
 
 /**
  * A blocker preventing progress on the quest plan
