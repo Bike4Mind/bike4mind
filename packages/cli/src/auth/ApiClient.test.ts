@@ -95,6 +95,17 @@ describe('ApiClient.checkSessionValid', () => {
     expect(await client.checkSessionValid()).toBe(false);
   });
 
+  it('returns false when a request still 401s after a SUCCESSFUL refresh - a definitive revocation', async () => {
+    // The refresh itself succeeds, but the retried request 401s again. That is the second
+    // SessionRevokedError throw site (interceptor's already-retried branch): a 401 surviving a
+    // fresh token is definitive, not transient.
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockResolvedValue({ access_token: 'fresh', refresh_token: 'refresh2', expires_in: 3600 });
+
+    expect(await client.checkSessionValid()).toBe(false);
+  });
+
   it('returns true when refresh fails with a 5xx - a transient outage, not a revocation', async () => {
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
       Promise.reject(make401(config))) as AxiosAdapter;

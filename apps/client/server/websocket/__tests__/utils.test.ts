@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { TokenExpiredError } from 'jsonwebtoken';
+import { JsonWebTokenError, NotBeforeError, TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
 
 vi.mock('@server/utils/config', () => ({
@@ -48,6 +48,35 @@ describe('withWebSocketContext - auth-error detection', () => {
     const handler = withWebSocketContext(
       async () => {
         throw new TokenExpiredError('jwt expired', new Date());
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(401);
+  });
+
+  it('returns 401 for a raw JsonWebTokenError - a forged/invalid-signature token (matched via the base class)', async () => {
+    // verifyToken re-throws the raw jwt error; an invalid signature is a JsonWebTokenError,
+    // not a TokenExpiredError, so it must still be treated as an auth rejection (401), not a
+    // transient 200/zombie.
+    const handler = withWebSocketContext(
+      async () => {
+        throw new JsonWebTokenError('invalid signature');
+      },
+      { skipDatabase: true }
+    );
+
+    const result = await handler({} as never, mockContext);
+
+    expect(result.statusCode).toBe(401);
+  });
+
+  it('returns 401 for a raw NotBeforeError - a not-yet-valid token (also a JsonWebTokenError subclass)', async () => {
+    const handler = withWebSocketContext(
+      async () => {
+        throw new NotBeforeError('jwt not active', new Date());
       },
       { skipDatabase: true }
     );

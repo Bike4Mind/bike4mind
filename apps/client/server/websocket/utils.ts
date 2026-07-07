@@ -7,7 +7,7 @@ import { Context } from 'aws-lambda';
 import { Config } from '@server/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
-import { TokenExpiredError } from 'jsonwebtoken';
+import { JsonWebTokenError } from 'jsonwebtoken';
 import { UnauthorizedError } from '@bike4mind/common';
 
 // sendToClient may be called multiple times in a single request,
@@ -156,11 +156,13 @@ export function withWebSocketContext<T>(
       // and never contains that substring, so the old check silently treated every WS auth
       // rejection as a transient error: $connect returned 200, API Gateway accepted the
       // handshake, but Connection.create() had already been skipped by the throw - a "zombie"
-      // connection with no DB row and no subscriptions. TokenExpiredError is included because
+      // connection with no DB row and no subscriptions. JsonWebTokenError is included because
       // dataSubscribeRequest.ts/dataUnsubscribeRequest.ts call verifyToken directly with no
-      // local try/catch, so an expired token there throws this raw (not wrapped) into this
-      // same catch.
-      const isAuthError = error instanceof UnauthorizedError || error instanceof TokenExpiredError;
+      // local try/catch, so a raw jwt error throws (unwrapped) into this same catch. It is the
+      // BASE class of TokenExpiredError (expired), NotBeforeError (not-yet-valid), and the
+      // signature/malformed errors - all of which are token-validity failures that belong in
+      // the 401 bucket - so matching the base covers every jwt rejection in one check.
+      const isAuthError = error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
 
       // Auth rejections are expected, benign, and high-volume (every stale-token client) -
       // log them at info so they don't flood error logs/alerts. Only genuine (non-auth)

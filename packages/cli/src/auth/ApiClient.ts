@@ -84,6 +84,10 @@ export class ApiClient {
 
             // Skip refresh if the access token is still fresh (issued within the last hour).
             // A 401 with a fresh token is likely a transient server error, not an auth issue.
+            // NOTE: this means a tokenVersion kill-switch bump is not detected as a revocation
+            // for up to ~1h on a freshly-logged-in session (checkSessionValid reports it valid
+            // until the token ages past this window). REST calls still 401 in the meantime, so
+            // it is a bounded no-teardown delay, not retained access.
             const tokenAge = Date.now() - (new Date(tokens.expiresAt).getTime() - 7 * 24 * 60 * 60 * 1000);
             const ONE_HOUR = 60 * 60 * 1000;
             if (tokenAge < ONE_HOUR) {
