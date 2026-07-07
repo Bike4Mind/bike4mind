@@ -12,7 +12,7 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
-import { buildRedirectTo } from '@client/app/utils/authRedirect';
+import { buildRedirectTo, shouldRedirectToConsent } from '@client/app/utils/authRedirect';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
@@ -173,7 +173,7 @@ const layoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'layout',
   beforeLoad: ({ location }) => {
-    const { currentUser } = useUser.getState();
+    const { currentUser, isHydrated } = useUser.getState();
     if (!currentUser) {
       const redirectTo = buildRedirectTo(
         location.pathname,
@@ -189,8 +189,10 @@ const layoutRoute = createRoute({
     // P0-B abuse gate: route an authenticated-but-not-yet-consented account (in
     // practice a brand-new OAuth/SAML/OTC user) to the acceptance interstitial. UX only - the
     // server consent-gate middleware is the real enforcement - but it turns opaque 403s into a
-    // smooth redirect.
-    if (currentUser && !currentUser.aupAcceptedVersion) {
+    // smooth redirect. Gated on `isHydrated` so a rehydrated pre-deploy session (whose persisted
+    // user stub predates `aupAcceptedVersion`) does not flash the interstitial before /api/identify
+    // refetches the server-authoritative value - see shouldRedirectToConsent.
+    if (shouldRedirectToConsent({ currentUser, isHydrated })) {
       const redirectTo = buildRedirectTo(
         location.pathname,
         location.searchStr,

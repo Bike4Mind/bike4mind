@@ -163,10 +163,11 @@ type PersistedUserFields = Pick<
   // Persisted so first-run UX (e.g. suppressing "What's New" for brand-new accounts) survives a
   // page reload - otherwise createdAt is undefined after rehydrate and the grace window misfires.
   | 'createdAt'
-  // P0-B abuse gate: persisted so the router `beforeLoad` consent guard reads the real
-  // acceptance state on hard reload. Without it the rehydrated user lacks the field, the guard
-  // treats every already-consented user as un-consented, and flashes the /accept-policies
-  // interstitial until /api/identify refetches. Read-only mirror of the server-authoritative field.
+  // P0-B abuse gate: persisted as a read-only mirror of the server-authoritative field so the
+  // consent state is available instantly on rehydrate. The router `beforeLoad` consent guard
+  // additionally defers on `!isHydrated` (see shouldRedirectToConsent), so a session that predates
+  // this field being persisted still won't flash the /accept-policies interstitial on hard reload -
+  // it waits for /api/identify to land the grandfathered value.
   | 'aupAcceptedVersion'
 >;
 
