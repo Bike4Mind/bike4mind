@@ -137,7 +137,7 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
   const handlePublishArtifact = useCallback(
-    (artifact: ArtifactWithContent) => {
+    async (artifact: ArtifactWithContent) => {
       if (!currentUser?.id) {
         toast.error('You must be signed in to publish');
         return;
@@ -152,13 +152,32 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
         toast.error('This artifact has no stable id to publish');
         return;
       }
+      // The gallery renders from the list feed (/api/artifacts), which omits `content` to stay
+      // lean. publishArtifactBundle throws on empty content before any network call, so hydrate
+      // the single artifact (the :id GET includes content by default; the string lives at
+      // response.content.content) before wiring up the publish dialog.
+      let content = artifact.content ?? '';
+      if (!content) {
+        try {
+          const { data } = await api.get<{ content?: { content?: string } }>(
+            `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
+          );
+          content = data.content?.content ?? '';
+        } catch {
+          content = '';
+        }
+      }
+      if (!content) {
+        toast.error('This artifact has no content to publish');
+        return;
+      }
       publishAndShare({
         title: artifact.title || 'Shared artifact',
         ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
         ...buildArtifactPublishWiring({
           artifactId,
           type: artifact.type,
-          content: artifact.content ?? '',
+          content,
           title: artifact.title,
           userId: String(currentUser.id),
           orgId: activeOrg?.id,
