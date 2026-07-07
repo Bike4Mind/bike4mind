@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { api } from '@client/app/contexts/ApiContext';
 import useGetLogo from '@client/app/hooks/useGetLogo';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 
 /**
@@ -122,17 +122,13 @@ const AcceptPoliciesPage = () => {
                   onChange={e => setAcceptPolicies(e.target.checked)}
                   disabled={isSubmitting}
                   label={
-                    // Each Link needs position+zIndex to sit above MUI Joy Checkbox's transparent
-                    // input overlay (an absolutely-positioned span at zIndex 1 covering the whole
-                    // control); without it a click lands on the input and toggles the box instead
-                    // of opening the policy.
                     <Typography sx={{ fontSize: '14px' }}>
                       I agree to the{' '}
                       <Link
                         href={ExternalLinks.terms}
                         target="_blank"
                         rel="noopener noreferrer"
-                        sx={{ position: 'relative', zIndex: 2 }}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Terms of Service
                       </Link>
@@ -141,7 +137,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.acceptableUse}
                         target="_blank"
                         rel="noopener noreferrer"
-                        sx={{ position: 'relative', zIndex: 2 }}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Acceptable Use Policy
                       </Link>
@@ -150,7 +146,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.privacy}
                         target="_blank"
                         rel="noopener noreferrer"
-                        sx={{ position: 'relative', zIndex: 2 }}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Privacy Policy
                       </Link>

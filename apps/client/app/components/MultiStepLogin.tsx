@@ -37,7 +37,7 @@ import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 
 /**
@@ -928,17 +928,13 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     onChange={e => setAcceptPolicies(e.target.checked)}
                     disabled={isVerifying}
                     label={
-                      // Each Link needs position+zIndex to sit above MUI Joy Checkbox's transparent
-                      // input overlay (an absolutely-positioned span at zIndex 1 covering the whole
-                      // control); without it a click lands on the input and toggles the box instead
-                      // of opening the policy.
                       <Typography sx={{ fontSize: '13px', color: 'text.secondary' }}>
                         I agree to the{' '}
                         <Link
                           href={ExternalLinks.terms}
                           target="_blank"
                           rel="noopener noreferrer"
-                          sx={{ position: 'relative', zIndex: 2 }}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Terms of Service
                         </Link>
@@ -947,7 +943,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           href={ExternalLinks.acceptableUse}
                           target="_blank"
                           rel="noopener noreferrer"
-                          sx={{ position: 'relative', zIndex: 2 }}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Acceptable Use Policy
                         </Link>
@@ -956,7 +952,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           href={ExternalLinks.privacy}
                           target="_blank"
                           rel="noopener noreferrer"
-                          sx={{ position: 'relative', zIndex: 2 }}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Privacy Policy
                         </Link>

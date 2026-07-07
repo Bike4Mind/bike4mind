@@ -20,6 +20,19 @@ export const ExternalLinks = {
 };
 
 /**
+ * `sx` for a `<Link>` placed inside a MUI Joy `Checkbox`/`Radio` `label`.
+ *
+ * MUI Joy renders the control's clickable area as an absolutely-positioned "action" overlay
+ * (containing the transparent `<input>`) at `zIndex: 1` covering the whole control, so a click on
+ * a nested link lands on the overlay and toggles the box instead of opening the link.
+ * `position: relative` + `zIndex: 2` promotes the link above that overlay so the anchor becomes the
+ * click target. `position` is required because `zIndex` is a no-op on statically-positioned
+ * elements - both are needed. (`onClick` stopPropagation does NOT work: the click never reaches the
+ * anchor to propagate from.) See #59.
+ */
+export const CHECKBOX_LABEL_LINK_SX = { position: 'relative', zIndex: 2 } as const;
+
+/**
  * Opens a URL in a new browser TAB (not a popup window) with full
  * `noopener,noreferrer` protection.
  *
