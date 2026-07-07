@@ -60,7 +60,9 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
   };
 
   const url = Config.OVERWATCH_INGEST_URL;
-  // key is intentionally not destructured into a named log-visible variable
+  const key = Config.OVERWATCH_INGEST_KEY;
+  // isAnalyticsConfigured() above already checked both are set; narrows the type here.
+  if (!url || !key) return;
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), EMIT_TIMEOUT_MS);
 
@@ -70,7 +72,7 @@ export async function emitActiveEvent(opts: EmitOptions): Promise<void> {
       headers: {
         'Content-Type': 'application/json',
         // x-api-key per apiKeyAuth.ts - NOT Bearer (Bearer falls through to JWT auth -> 401)
-        'x-api-key': Config.OVERWATCH_INGEST_KEY,
+        'x-api-key': key,
       },
       body: JSON.stringify({ event }),
       signal: ac.signal,
