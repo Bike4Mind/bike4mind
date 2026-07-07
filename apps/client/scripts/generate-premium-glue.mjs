@@ -284,10 +284,14 @@ function extractConfigLiteral(sourceFilePath) {
   // Anchored to line start (with leading whitespace allowed) so a config-shaped literal
   // sitting inside a comment or string above the real declaration can't win the match -
   // otherwise `.match()` would still succeed there, skipping the fallback warning below
-  // while emitting whatever that comment/string literal happened to contain.
-  const match = content.match(/^\s*export\s+const\s+config\s*=\s*(\{[\s\S]*?\});/m);
+  // while emitting whatever that comment/string literal happened to contain. Tolerates an
+  // optional type annotation (`config: PageConfig =`) between the name and `=` - without
+  // it, an annotated declaration matches neither this regex nor the fallback trigger below,
+  // silently emitting no config export with no warning (no route currently uses this form,
+  // but nothing stops one from starting to).
+  const match = content.match(/^\s*export\s+const\s+config(?::\s*[A-Za-z_][A-Za-z0-9_.]*)?\s*=\s*(\{[\s\S]*?\});/m);
   if (match) return match[1];
-  if (/export\s+const\s+config\s*=/.test(content)) {
+  if (/export\s+const\s+config(?::\s*[A-Za-z_][A-Za-z0-9_.]*)?\s*=/.test(content)) {
     console.warn(
       `[codegen] WARNING: ${sourceFilePath} declares "export const config" but its literal object ` +
         `could not be extracted (unexpected formatting) - the generated stub will be missing this ` +
