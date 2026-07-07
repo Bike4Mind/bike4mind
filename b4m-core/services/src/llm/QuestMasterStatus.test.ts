@@ -13,7 +13,7 @@ import { QuestMasterFeature, ChatCompletionContext } from './ChatCompletionFeatu
  * - skipped: Skip (explicitly skipped by user)
  * - deleted: Proceed (edge case - not in skip list)
  *
- * Note: 'blocked' is NOT a valid SubQuestStatus - it only exists in QuestMasterArtifactModel.
+ * Note: 'blocked' is NOT a valid SubQuestStatus.
  */
 describe('QuestMasterFeature - Status State Machine', () => {
   let feature: QuestMasterFeature;
@@ -172,7 +172,7 @@ describe('QuestMasterFeature - Status State Machine', () => {
 
     // 'blocked' is not a valid SubQuestStatus in the type system.
     // SubQuestStatus only includes: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted'
-    // The 'blocked' status only exists in QuestMasterArtifactModel, not in QuestMasterPlanModel.
+    // The 'blocked' status is not part of the QuestMasterPlan subquest vocabulary.
 
     it('should proceed when subQuest status is deleted (edge case)', async () => {
       mockDb.questMasterPlans.findById.mockResolvedValue(mockQuestMasterPlan);

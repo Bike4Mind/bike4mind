@@ -6,16 +6,12 @@ import {
   QuestBlocker,
   QuestDecision,
   QuestHandoff,
+  REVIEW_GATE_STATUS_VALUES,
+  SUBQUEST_STATUS_VALUES,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 import { softDeletePlugin } from '../../utils/mongo';
-
-// Valid status values for subquests
-const SUBQUEST_STATUS_VALUES = ['not_started', 'in_progress', 'completed', 'skipped', 'deleted'] as const;
-
-// Valid review gate status values
-const REVIEW_GATE_STATUS_VALUES = ['pending', 'approved', 'rejected'] as const;
 
 export const QuestMasterDataSchema = new Schema<QuestMasterData>(
   {
