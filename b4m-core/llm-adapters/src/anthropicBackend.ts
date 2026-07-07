@@ -396,7 +396,7 @@ export class AnthropicBackend implements ICompletionBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 }, // Placeholder pricing - update with public rates
+          200000: { input: 1 / 1_000_000, output: 5 / 1_000_000 }, // $1 / 1M Input tokens, $5 / 1M Output tokens
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
