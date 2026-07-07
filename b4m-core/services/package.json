@@ -240,7 +240,7 @@
     "@types/yauzl": "^2.10.3",
     "@vitest/coverage-v8": "^4.1.9",
     "@vitest/ui": "^4.1.9",
-    "mailparser": "^3.9.12",
+    "mailparser": "^3.9.14",
     "tsdown": "^0.22.2",
     "typescript": "^5.9.3",
     "vite-tsconfig-paths": "^6.1.1",
