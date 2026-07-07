@@ -215,6 +215,49 @@ function shortFlagContains(flag: string, letters: RegExp): boolean {
 }
 
 /**
+ * Extract the command string carried by a `-c`/`--command` flag appearing after
+ * `startIndex` in `args`. Handles every documented form: separate value
+ * (`-c CMD`, `--command CMD`), GNU combined long form (`--command=CMD`, which
+ * shell-quote emits as a single `--command=rm -rf /` token), and combined short
+ * form (`-cCMD`). Returns the code string, or `null` if no command flag is found.
+ */
+function commandFlagValue(args: string[], startIndex: number): string | null {
+  for (let i = startIndex + 1; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '-c' || arg === '--command') {
+      return i + 1 < args.length ? args[i + 1] : null;
+    }
+    if (arg.startsWith('--command=')) return arg.slice('--command='.length);
+    if (arg.startsWith('-c') && !arg.startsWith('--') && arg.length > 2) return arg.slice(2);
+  }
+  return null;
+}
+
+/**
+ * Extract the command string carried by `env`'s `-S`/`--split-string` flag, or
+ * `null` if `env` does not appear with a split-string flag. Handles separate value
+ * (`-S CMD`), combined long form (`--split-string=CMD`), and combined short form
+ * (`-SCMD`). Scans env's own flags, consuming the values of its other value flags
+ * (`-u FOO`, `-C dir`) so the split-string flag is still found after them.
+ */
+function envSplitStringValue(args: string[]): string | null {
+  const envIndex = args.findIndex(arg => programName(arg) === 'env');
+  if (envIndex === -1) return null;
+  const envValueFlags = PROGRAM_VALUE_FLAGS.env;
+  for (let i = envIndex + 1; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '-S' || arg === '--split-string') {
+      return i + 1 < args.length ? args[i + 1] : null;
+    }
+    if (arg.startsWith('--split-string=')) return arg.slice('--split-string='.length);
+    if (arg.startsWith('-S') && !arg.startsWith('--') && arg.length > 2) return arg.slice(2);
+    if (!arg.startsWith('-')) return null; // reached the inner program with no split-string flag
+    if (envValueFlags.has(arg)) i += 1; // this flag consumes the next token as its value
+  }
+  return null;
+}
+
+/**
  * Path arguments that make an `rm` catastrophic: filesystem root, home, or things
  * that expand to a broad tree.
  */
@@ -314,13 +357,25 @@ function classifySimpleCommand(args: string[], reasons: string[]): CommandRiskLe
   // its value as a flag pair and hide the real command.
   const escalatorIndex = args.findIndex(arg => ESCALATORS_WITH_COMMAND_FLAG.has(programName(arg)));
   if (escalatorIndex !== -1) {
-    const codeFlagIndex = args.findIndex((arg, i) => i > escalatorIndex && (arg === '-c' || arg === '--command'));
-    if (codeFlagIndex !== -1 && codeFlagIndex + 1 < args.length) {
+    const code = commandFlagValue(args, escalatorIndex);
+    if (code !== null) {
       reasons.push(`privilege escalation via '${programName(args[escalatorIndex])}'`);
-      const nested = classifyCommandRisk(args[codeFlagIndex + 1]);
+      const nested = classifyCommandRisk(code);
       reasons.push(...nested.reasons);
       return maxLevel('medium', nested.level);
     }
+  }
+
+  // `env -S "<cmd>"` (split-string) parses its argument as a full argv and runs it -
+  // functionally an interpreter's `-c`. `-S`/`--split-string` is a value flag on env,
+  // so the generic wrapper-skip would consume the command string as a flag value and
+  // leave `inner` empty (classified `low`). Recurse into the string first.
+  const splitString = envSplitStringValue(args);
+  if (splitString !== null) {
+    reasons.push("split-string execution via 'env -S'");
+    const nested = classifyCommandRisk(splitString);
+    reasons.push(...nested.reasons);
+    return maxLevel(level, nested.level);
   }
 
   const index = skipToInnerProgram(args, prog => {
@@ -337,8 +392,13 @@ function classifySimpleCommand(args: string[], reasons: string[]): CommandRiskLe
   // string is the real command - recurse into it. `-e` is only inline code for
   // eval-style interpreters (`perl -e`); for shells it means `errexit`.
   if (INTERPRETERS.has(prog)) {
+    // Code-flag letters: `-c` for every interpreter, plus `-e` (evaluate) for
+    // eval-style ones. Decompose short-flag bundles so `bash -ec "..."`,
+    // `sh -exc "..."`, `perl -we '...'` are caught the same way rm/chmod bundles
+    // are - whole-string equality (`arg === '-c'`) misses every bundled form.
+    const codeFlagLetters = EVAL_E_INTERPRETERS.has(prog) ? /[ce]/ : /c/;
     const codeFlagIndex = inner.findIndex(
-      (arg, i) => i > 0 && (arg === '-c' || arg === '--command' || (arg === '-e' && EVAL_E_INTERPRETERS.has(prog)))
+      (arg, i) => i > 0 && (arg === '--command' || shortFlagContains(arg, codeFlagLetters))
     );
     if (codeFlagIndex !== -1 && codeFlagIndex + 1 < inner.length) {
       reasons.push(`inline code executed via '${prog} ${inner[codeFlagIndex]}'`);
@@ -359,6 +419,14 @@ function classifySimpleCommand(args: string[], reasons: string[]): CommandRiskLe
   // Raw disk / filesystem destroyers: always high.
   if (ALWAYS_DESTRUCTIVE.has(prog) || prog.startsWith('mkfs.')) {
     reasons.push(`destructive command '${prog}'`);
+    return maxLevel(level, 'high');
+  }
+
+  // `tee /dev/<disk>` writes to a raw block device with no redirection operator,
+  // so the redirect-based check below never sees it. Plain `tee foo.txt` is benign,
+  // so this fires only on a block-device positional argument.
+  if (prog === 'tee' && inner.slice(1).some(arg => !arg.startsWith('-') && BLOCK_DEVICE_RE.test(arg))) {
+    reasons.push('write to a raw block device via tee');
     return maxLevel(level, 'high');
   }
 
@@ -523,7 +591,12 @@ function writesToBlockDevice(tokens: ShellToken[]): boolean {
   for (let i = 0; i < tokens.length; i += 1) {
     const token = tokens[i];
     if (isOperator(token) && (token.op === '>' || token.op === '>>')) {
-      const target = asString(tokens[i + 1]);
+      let targetIndex = i + 1;
+      // bash force-clobber `>|` tokenizes as `>` then `|`; step over the `|` to
+      // reach the redirect target, which would otherwise be read as the operator.
+      const following = tokens[targetIndex];
+      if (isOperator(following) && following.op === '|') targetIndex += 1;
+      const target = asString(tokens[targetIndex]);
       if (target && BLOCK_DEVICE_RE.test(target)) {
         return true;
       }

