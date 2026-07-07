@@ -70,6 +70,12 @@ export function resolveLatticeTools({
  * top-level path wires for its own Lattice tools). Returns `[]` if the tool
  * builder yields nothing (defensive; `buildSharedTools` returns `undefined` when
  * no tools resolve).
+ *
+ * Built eagerly once per execution even when no subagent ends up opting in. That
+ * is intentional and cheap: clearing `agentStore` (below) short-circuits before
+ * the subagent-LLM build and the delegate/coordinate injection, so this resolves
+ * only the Lattice native tools + `externalTools` merge - synchronous, no I/O. If
+ * this ever grows expensive, make it lazy (build on first delegation) instead.
  */
 export function buildSubagentLatticeToolPool(
   deps: ToolBuilderDeps,
