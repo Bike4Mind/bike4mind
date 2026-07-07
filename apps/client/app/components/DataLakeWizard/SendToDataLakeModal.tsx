@@ -93,6 +93,12 @@ export default function SendToDataLakeModal() {
     }
   };
 
+  // Shared choke point for every "Send to Data Lake" entry point: with the feature
+  // off, never render - even if some (future) ungated caller opens the store, the
+  // dead-end empty state must not surface. Mirrors CreateDataLakeButton's gate.
+  // Placed after all hooks so the hook order is stable across flag changes.
+  if (!isFeatureEnabled('EnableDataLakes')) return null;
+
   return (
     <Modal open={isOpen} onClose={close}>
       <ModalDialog data-testid="send-to-datalake-modal" sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}>

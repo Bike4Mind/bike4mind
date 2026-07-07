@@ -37,6 +37,7 @@ import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useGetFabFilesByQuestId } from '@client/app/hooks/data/fabFiles';
 import { Save as SaveIcon, Add as AddIcon, Storage as StorageIcon } from '@mui/icons-material';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { usePromptMetaInspector } from '@client/app/components/Session/PromptMetaInspector';
 import HiveIcon from '@mui/icons-material/Hive';
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
@@ -197,6 +198,7 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     // Opens the app-level Send-to-Data-Lake modal (singleton in ProviderBundle) for one reply.
     const openSendToDataLake = useSendToDataLakeStore(s => s.open);
+    const { isFeatureEnabled } = useAdminSettingsCache();
 
     const handleSendReplyToDataLake = useCallback(
       (messageData: IChatHistoryItem) => {
@@ -764,6 +766,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
+                        data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
                         slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
                         sx={{
@@ -861,15 +864,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         Save as {detectChatContentType(messageData.replies?.[0] || '')}
                       </MenuItem>
-                      <MenuItem
-                        onClick={() => handleSendReplyToDataLake(messageData)}
-                        data-testid="message-send-to-datalake"
-                      >
-                        <ListItemDecorator>
-                          <StorageIcon />
-                        </ListItemDecorator>
-                        Send to Data Lake
-                      </MenuItem>
+                      {isFeatureEnabled('EnableDataLakes') && (
+                        <MenuItem
+                          onClick={() => handleSendReplyToDataLake(messageData)}
+                          data-testid="message-send-to-datalake"
+                        >
+                          <ListItemDecorator>
+                            <StorageIcon />
+                          </ListItemDecorator>
+                          Send to Data Lake
+                        </MenuItem>
+                      )}
                       {hasShareableReply && (
                         <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
                           <ListItemDecorator>
@@ -920,6 +925,7 @@ const MessageContent: React.FC<ContentProps> = memo(
                   <Dropdown>
                     <Tooltip title="More options">
                       <MenuButton
+                        data-testid="message-actions-menu-btn"
                         slots={{ root: IconButton }}
                         slotProps={{ root: { variant: 'outlined', color: 'neutral', size: 'sm' } }}
                         sx={{
@@ -1017,15 +1023,17 @@ const MessageContent: React.FC<ContentProps> = memo(
                         </ListItemDecorator>
                         Save as {detectChatContentType(messageData.replies?.[0] || '')}
                       </MenuItem>
-                      <MenuItem
-                        onClick={() => handleSendReplyToDataLake(messageData)}
-                        data-testid="message-send-to-datalake"
-                      >
-                        <ListItemDecorator>
-                          <StorageIcon />
-                        </ListItemDecorator>
-                        Send to Data Lake
-                      </MenuItem>
+                      {isFeatureEnabled('EnableDataLakes') && (
+                        <MenuItem
+                          onClick={() => handleSendReplyToDataLake(messageData)}
+                          data-testid="message-send-to-datalake"
+                        >
+                          <ListItemDecorator>
+                            <StorageIcon />
+                          </ListItemDecorator>
+                          Send to Data Lake
+                        </MenuItem>
+                      )}
                       {hasShareableReply && (
                         <MenuItem onClick={handleShareReply} data-testid="message-share-reply">
                           <ListItemDecorator>
