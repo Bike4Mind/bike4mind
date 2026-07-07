@@ -24,6 +24,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
@@ -758,7 +759,8 @@ export function useSendMessage({
     // L251), so the optimistic client-side ID won't work - we must create
     // the session first. The dispatch payload differs by mode:
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
-    //     (preserves the earlier `@specific-agent` UX).
+    //     (preserves the earlier `@specific-agent` UX). A briefcase
+    //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
     //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
     //     the executor build a synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
@@ -826,14 +828,17 @@ export function useSendMessage({
         // optimistic bubble instead of waiting for the persisted Quest on reload.
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
-        // When dispatched with a specific orchestration agent, source the
-        // per-thoroughness iteration cap + tool whitelist from the agent doc.
-        // When dispatched agentless (toggle / `@agent` literal), leave both
-        // unset so the executor's synthetic-profile builder fills them from
-        // admin defaults.
+        // Iteration cap comes from the agent doc; left unset when agentless so
+        // the executor fills it from admin defaults.
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        const enabledTools = orchestrationAgent?.allowedTools;
+        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
+        // drop the tools the prompt needs (see `resolveDispatchTools`).
+        const enabledTools = resolveDispatchTools(
+          options?.toolsOverride,
+          effectiveTools,
+          orchestrationAgent?.allowedTools
+        );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
         // iteration. Mirrors the dedup the `chat_completion` flow does in
