@@ -126,7 +126,6 @@ export class AcpServer {
   private stackPromise: Promise<AgentStack> | null = null;
   private stack: AgentStack | null = null;
   private activeTurn: ActiveTurn | null = null;
-  private permissionCounter = 0;
 
   /**
    * @param connectionSignal aborts when the ACP connection closes; used to fail
@@ -155,7 +154,7 @@ export class AcpServer {
 
   async newSession(params: schema.NewSessionRequest): Promise<schema.NewSessionResponse> {
     const cwd = assertConfinedCwd(params.cwd);
-    await this.ensureStack();
+    const stack = await this.ensureStack();
 
     const id = randomUUID();
     const persisted: Session = {
@@ -163,7 +162,7 @@ export class AcpServer {
       name: `ACP ${new Date().toISOString()}`,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      model: this.stack!.modelId,
+      model: stack.modelId,
       messages: [],
       metadata: { totalTokens: 0, totalCost: 0, toolCallCount: 0 },
     };
@@ -237,11 +236,18 @@ export class AcpServer {
     requestSignal: AbortSignal
   ): Promise<schema.PromptResponse> {
     const session = this.requireSession(params.sessionId);
+
+    // An empty prompt is a no-op turn: skip the mutex, bootstrap, and an LLM
+    // round-trip entirely rather than running the agent on "".
+    const userText = contentBlocksToText(params.prompt);
+    if (!userText.trim()) {
+      return { stopReason: 'end_turn' };
+    }
+
     const stack = await this.ensureStack();
 
     // Serialize every turn: sessions share one agent and one process cwd.
     return this.turnMutex.runExclusive(async () => {
-      const userText = contentBlocksToText(params.prompt);
       const abortController = new AbortController();
       session.abortController = abortController;
       // Cancel the turn if the client cancels the request or drops the connection.
@@ -436,7 +442,7 @@ export class AcpServer {
     // No active turn should never happen, but deny rather than assume.
     if (!turn) return { action: 'deny' };
 
-    const toolCallId = `perm-${++this.permissionCounter}`;
+    const toolCallId = `perm-${randomUUID()}`;
     const toolCall: schema.ToolCallUpdate = {
       toolCallId,
       title: toolCallTitle(toolName, args),
@@ -652,7 +658,19 @@ export class AcpServer {
 
   private async resolveAdditionalDirectories(): Promise<string[]> {
     const configDirs = await this.configStore.getAdditionalDirectories();
-    const flagDirs = process.env.B4M_ADDITIONAL_DIRS ? (JSON.parse(process.env.B4M_ADDITIONAL_DIRS) as string[]) : [];
-    return [...new Set([...configDirs, ...flagDirs])];
+    return [...new Set([...configDirs, ...this.parseEnvDirs()])];
+  }
+
+  /** Parse B4M_ADDITIONAL_DIRS defensively - a malformed value must not brick bootstrap. */
+  private parseEnvDirs(): string[] {
+    const raw = process.env.B4M_ADDITIONAL_DIRS;
+    if (!raw) return [];
+    try {
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((d): d is string => typeof d === 'string') : [];
+    } catch {
+      logger.debug(`[acp] Ignoring malformed B4M_ADDITIONAL_DIRS: ${raw}`);
+      return [];
+    }
   }
 }
