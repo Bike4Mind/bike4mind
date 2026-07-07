@@ -3,6 +3,7 @@ import {
   userRepository,
   withTransaction,
   adminSettingsRepository,
+  creditLotRepository,
   creditTransactionRepository,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -102,7 +103,10 @@ const handler = baseApi({ auth: false })
                 transactionId: `verify-grant:${userBeforeVerify.id}`,
                 reason: 'deferred registration credit grant (email verified)',
               },
-              { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+              {
+                db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+                creditHolderMethods: userRepository,
+              }
             );
             req.logger.info(`Granted ${amount} deferred free credits to verified user ${userBeforeVerify.id}`);
           } else {
@@ -150,7 +154,10 @@ const handler = baseApi({ auth: false })
                 transactionId: `domain-grant-credits:${userBeforeVerify.id}`,
                 reason: 'domain-grant signup credits',
               },
-              { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+              {
+                db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
+                creditHolderMethods: userRepository,
+              }
             );
             req.logger.info(
               `Granted ${signupCredits} one-time domain-grant signup credits to verified user ${userBeforeVerify.id}`

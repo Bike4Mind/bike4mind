@@ -1,4 +1,5 @@
 import {
+  creditLotRepository,
   creditTransactionRepository,
   organizationRepository,
   userRepository,
@@ -111,7 +112,7 @@ const handler = baseApi().post(
             metadata: { source: SubscriptionSource.AdminGrant, reason },
           },
           {
-            db: { creditTransactions: creditTransactionRepository },
+            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
           }
         );

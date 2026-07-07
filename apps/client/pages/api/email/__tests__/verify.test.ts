@@ -41,6 +41,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: any) => fn(),
   adminSettingsRepository: { findBySettingName: (...a: any[]) => mockFindBySettingName(...a) },
   creditTransactionRepository: {},
+  creditLotRepository: {},
 }));
 
 const mockVerifyEmailToken = vi.fn();
