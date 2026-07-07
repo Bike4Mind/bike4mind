@@ -1,5 +1,6 @@
 import { type APIRequestContext } from '@playwright/test';
 import { Resource } from 'sst';
+import crypto from 'crypto';
 
 interface LoginResponse {
   accessToken: string;
@@ -164,7 +165,15 @@ export async function apiGetOtcCode(request: APIRequestContext, email: string): 
 export async function apiCreateFile(
   request: APIRequestContext,
   token: string,
-  params: { fileName: string; content: string; mimeType?: string }
+  params: {
+    fileName: string;
+    content: string;
+    mimeType?: string;
+    /** Tag the file (e.g. a data lake's datalakeTag) so it surfaces as a lake article. */
+    tags?: { name: string; strength?: number }[];
+    /** Explicit content hash — set to sha256Hex(content) to make the file a dedup match. */
+    contentHash?: string;
+  }
 ): Promise<string> {
   const baseURL = process.env.API_URL || 'http://localhost:3000';
   const response = await request.post(`${baseURL}/api/files/createFabFile`, {
@@ -175,6 +184,8 @@ export async function apiCreateFile(
       fileSize: Buffer.byteLength(params.content, 'utf-8'),
       type: 'FILE',
       content: params.content,
+      ...(params.tags ? { tags: params.tags.map(t => ({ name: t.name, strength: t.strength ?? 1 })) } : {}),
+      ...(params.contentHash ? { contentHash: params.contentHash } : {}),
     },
   });
 
@@ -184,6 +195,30 @@ export async function apiCreateFile(
 
   const body = await response.json();
   return body.id || body._id;
+}
+
+/** SHA-256 hex of a string — matches the client-side hash the dedup check computes over file bytes. */
+export function sha256Hex(content: string): string {
+  return crypto.createHash('sha256').update(content, 'utf-8').digest('hex');
+}
+
+/**
+ * Seed a file directly INTO a lake by tagging it with the lake's datalakeTag, so it shows up as
+ * an article without driving the (heavy) upload wizard. Pass `contentHash` to also make it a
+ * dedup match for a wizard upload of the same content.
+ */
+export async function apiSeedLakeArticle(
+  request: APIRequestContext,
+  token: string,
+  lake: { datalakeTag: string },
+  params: { fileName: string; content: string; contentHash?: string }
+): Promise<string> {
+  return apiCreateFile(request, token, {
+    fileName: params.fileName,
+    content: params.content,
+    contentHash: params.contentHash,
+    tags: [{ name: lake.datalakeTag, strength: 1 }],
+  });
 }
 
 export async function apiUpdateAdminSetting(
@@ -270,6 +305,177 @@ export async function apiUpdateUser(
   if (!response.ok()) {
     throw new Error(`Update user failed: ${response.status()} ${response.statusText()}`);
   }
+}
+
+// ── Data Lakes ────────────────────────────────────────────────────────────────
+// Helpers for the data-lake E2E suite. The feature is gated by the EnableDataLakes
+// admin setting (default off) — enable it once in setup with an admin token, then
+// pre-seed / tear down lakes via these instead of driving the (heavy) upload wizard.
+
+export interface DataLake {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string;
+  fileTagPrefix: string;
+  requiredUserTag?: string;
+  requiredEntitlement?: string;
+  organizationId?: string;
+  datalakeTag: string;
+  fileCount?: number;
+  createdAt: string;
+}
+
+/** Turn a display name into a schema-valid slug (lowercase alphanumeric + hyphens, 2–60 chars). */
+export function toDataLakeSlug(name: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  // Schema requires min length 2 and no leading/trailing hyphen.
+  return slug.length >= 2 ? slug : `dl-${slug}`;
+}
+
+/** Enable the admin-gated EnableDataLakes feature flag (idempotent). Requires an admin token. */
+export async function apiEnableDataLakes(request: APIRequestContext, adminToken: string): Promise<void> {
+  await apiUpdateAdminSetting(request, adminToken, 'EnableDataLakes', true);
+}
+
+export async function apiCreateDataLake(
+  request: APIRequestContext,
+  token: string,
+  params: {
+    name: string;
+    /** Defaults to a slug derived from `name`. Must be lowercase alphanumeric + hyphens. */
+    slug?: string;
+    /** Must end with ":" (e.g. "e2e:"). Defaults to a prefix derived from the slug. */
+    fileTagPrefix?: string;
+    description?: string;
+    requiredUserTag?: string;
+    requiredEntitlement?: string;
+    organizationId?: string;
+  }
+): Promise<DataLake> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const slug = params.slug ?? toDataLakeSlug(params.name);
+  const fileTagPrefix = params.fileTagPrefix ?? `${slug.replace(/-/g, '').slice(0, 20) || 'e2e'}:`;
+  const response = await request.post(`${baseURL}/api/data-lakes`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: {
+      name: params.name,
+      slug,
+      fileTagPrefix,
+      ...(params.description ? { description: params.description } : {}),
+      ...(params.requiredUserTag ? { requiredUserTag: params.requiredUserTag } : {}),
+      ...(params.requiredEntitlement ? { requiredEntitlement: params.requiredEntitlement } : {}),
+      ...(params.organizationId ? { organizationId: params.organizationId } : {}),
+    },
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Create data lake failed: ${response.status()} ${response.statusText()}`);
+  }
+
+  const body = await response.json();
+  return { ...body, id: body.id || body._id } as DataLake;
+}
+
+/** List active data lakes accessible to the caller. */
+export async function apiListDataLakes(request: APIRequestContext, token: string): Promise<DataLake[]> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok()) {
+    throw new Error(`List data lakes failed: ${response.status()} ${response.statusText()}`);
+  }
+  const body = await response.json();
+  return body.data as DataLake[];
+}
+
+/** Raw status of the list endpoint for a token — used to assert the gate (403 when the feature is off). */
+export async function apiListDataLakesStatus(request: APIRequestContext, token: string): Promise<number> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.status();
+}
+
+/** Raw GET of a lake's articles — asserts the SERVER-side access boundary (403/404) for a given token. */
+export async function apiGetDataLakeArticlesStatus(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string
+): Promise<number> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/data-lakes/${dataLakeId}/articles`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return response.status();
+}
+
+export type DataLakeLifecycleAction = 'archive' | 'unarchive' | 'restore' | 'delete' | 'cleanup';
+
+/** Drive a lake lifecycle transition. Returns the response status (so callers can assert 403 for non-owners). */
+export async function apiLakeLifecycle(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string,
+  action: DataLakeLifecycleAction
+): Promise<number> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/data-lakes/${dataLakeId}/lifecycle`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { action },
+  });
+  return response.status();
+}
+
+export async function apiSetDataLakeVisibility(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string,
+  visibility: 'private' | 'organization',
+  organizationId?: string
+): Promise<number> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/data-lakes/${dataLakeId}/visibility`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: { visibility, ...(organizationId ? { organizationId } : {}) },
+  });
+  return response.status();
+}
+
+export async function apiUpdateDataLake(
+  request: APIRequestContext,
+  token: string,
+  dataLakeId: string,
+  fields: { name?: string; description?: string; requiredUserTag?: string; requiredEntitlement?: string }
+): Promise<number> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.put(`${baseURL}/api/data-lakes/${dataLakeId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: fields,
+  });
+  return response.status();
+}
+
+/**
+ * Best-effort teardown for a created lake. Tries the hard DELETE first; if the env only
+ * exposes lifecycle transitions, falls back to soft-delete → cleanup (purge). Never throws
+ * so an afterAll cleanup can't fail a green run.
+ */
+export async function apiDeleteDataLake(request: APIRequestContext, token: string, dataLakeId: string): Promise<void> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const del = await request
+    .delete(`${baseURL}/api/data-lakes/${dataLakeId}`, { headers: { Authorization: `Bearer ${token}` } })
+    .catch(() => null);
+  if (del && del.ok()) return;
+  // Fallback: soft-delete then irreversible purge.
+  await apiLakeLifecycle(request, token, dataLakeId, 'delete').catch(() => 0);
+  await apiLakeLifecycle(request, token, dataLakeId, 'cleanup').catch(() => 0);
 }
 
 interface SkillSeed {

@@ -70,6 +70,7 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
 
   return (
     <Box
+      data-testid="taxonomy-tag-card"
       sx={{
         display: 'flex',
         alignItems: 'center',
@@ -132,10 +133,22 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
       {/* Actions */}
       {!isEditing && (
         <Stack direction="row" gap={0}>
-          <IconButton size="sm" variant="plain" color="neutral" onClick={() => setIsEditing(true)}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="neutral"
+            data-testid="taxonomy-tag-edit"
+            onClick={() => setIsEditing(true)}
+          >
             <EditIcon sx={{ fontSize: 14 }} />
           </IconButton>
-          <IconButton size="sm" variant="plain" color="danger" onClick={() => onDelete(tag.name)}>
+          <IconButton
+            size="sm"
+            variant="plain"
+            color="danger"
+            data-testid="taxonomy-tag-delete"
+            onClick={() => onDelete(tag.name)}
+          >
             <DeleteOutlineIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Stack>
