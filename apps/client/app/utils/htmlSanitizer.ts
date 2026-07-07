@@ -67,6 +67,11 @@ export interface SanitizeHtmlOptions {
    * `iframe`/`object`/`embed` so injected content cannot nest privileged frames
    * or plugins even when scripts are allowed.
    *
+   * This path also disables DOMPurify's SAFE_FOR_XML mXSS guard, which would
+   * otherwise force-remove any <script> whose body contains a `<` glued to a
+   * word char (ordinary JS like `for(i=0;i<n;i++)`); see the call site for the
+   * full rationale. The sandbox iframe + route CSP remain the boundary.
+   *
    * Callers that render into a NON-sandboxed context must leave this false.
    */
   allowScripts?: boolean;
@@ -122,6 +127,19 @@ export const sanitizeHtmlForIframe = (htmlContent: string, options: SanitizeHtml
     WHOLE_DOCUMENT: isCompleteDocument,
     ALLOW_DATA_ATTR: true,
     ALLOW_ARIA_ATTR: true,
+    // DOMPurify's SAFE_FOR_XML mXSS guard (on by default) force-removes any
+    // raw-text node whose content matches /<[/\w!]/ - i.e. a `<` glued to a
+    // letter/digit/`_`/`/`/`!`. That heuristic exists to catch namespace-
+    // confusion markup smuggled through text nodes, but it cannot tell HTML
+    // from JavaScript: ordinary comparison/loop code (`for(i=0;i<n;i++)`,
+    // `if(x<0)`, `a<b`) trips it, so DOMPurify silently deletes the WHOLE
+    // <script> and interactive artifacts render inert. Disable the guard ONLY
+    // on the allowScripts path, where the real boundary is already (1) the
+    // opaque-origin sandbox iframe (`allow-scripts`, no `allow-same-origin`)
+    // and (2) the /api/artifact-sandbox route CSP - and where the sanitized
+    // output is `document.write`n into that opaque origin, so mXSS cannot reach
+    // the app origin regardless. The default (guarded) path is untouched.
+    ...(allowScripts ? { SAFE_FOR_XML: false } : {}),
     ADD_TAGS: [...DOCUMENT_SHELL_TAGS, ...(allowScripts ? ['script'] : [])],
     ADD_ATTR: [...EXTRA_ATTRS, ...(allowScripts ? SCRIPT_ATTRS : [])],
     FORBID_ATTR: FORBIDDEN_EVENT_ATTRS,
