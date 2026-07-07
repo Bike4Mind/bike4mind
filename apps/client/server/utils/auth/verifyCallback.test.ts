@@ -370,6 +370,150 @@ describe('verifyCallback - catch block surfaces the error', () => {
   });
 });
 
+describe('verifyCallback - OAuth create: username dedupe on collision', () => {
+  // Real MongoDB E11000 shape includes `code`, `keyPattern`, `keyValue` directly on
+  // the thrown error (verified against a live duplicate-key error during the incident
+  // this fix closes).
+  const usernameDupErr = () =>
+    Object.assign(new Error('E11000 duplicate key error collection: dev.users index: username_1'), {
+      code: 11000,
+      keyPattern: { username: 1 },
+      keyValue: { username: 'Ken Wallace' },
+    });
+
+  it('dedupes with a numeric suffix when the base username is already taken', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate
+      .mockRejectedValueOnce(usernameDupErr())
+      .mockResolvedValueOnce({ _id: 'new-id', username: 'Ken Wallace 2' });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-kw',
+      displayName: 'Ken Wallace',
+      emails: [{ value: 'ken@bike4mind.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledTimes(2);
+    expect(mockCreate.mock.calls[0][0].username).toBe('Ken Wallace');
+    expect(mockCreate.mock.calls[1][0].username).toBe('Ken Wallace 2');
+  });
+
+  it('retries through multiple numeric suffixes, then a short random suffix, before giving up', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    // 5 collisions (base, base 2, base 3, base 4, base 5); the 6th attempt (random suffix) succeeds.
+    for (let i = 0; i < 5; i++) mockCreate.mockRejectedValueOnce(usernameDupErr());
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'taken-abc123' });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-taken',
+      displayName: 'taken',
+      emails: [{ value: 'taken@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect(mockCreate).toHaveBeenCalledTimes(6);
+    expect(mockCreate.mock.calls.map(c => c[0].username)).toEqual([
+      'taken',
+      'taken 2',
+      'taken 3',
+      'taken 4',
+      'taken 5',
+      expect.stringMatching(/^taken-[a-f0-9]{6}$/),
+    ]);
+  });
+
+  it('fails clean after exhausting all retries instead of looping forever', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    for (let i = 0; i < 6; i++) mockCreate.mockRejectedValueOnce(usernameDupErr());
+
+    const { err, user, info } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-alwaystaken',
+      displayName: 'alwaystaken',
+      emails: [{ value: 'alwaystaken@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(6); // bounded - never retries forever
+    expect(err).toBeNull();
+    expect(user).toBeUndefined();
+    expect((info as { message: string }).message).toContain('E11000');
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('does NOT retry on an email-index collision - fails clean rather than risking a duplicate-email account', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    const emailDupErr = Object.assign(new Error('E11000 duplicate key error collection: dev.users index: email_1'), {
+      code: 11000,
+      keyPattern: { email: 1 },
+      keyValue: { email: 'race@example.com' },
+    });
+    mockCreate.mockRejectedValueOnce(emailDupErr);
+
+    const { err, user, info } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-race',
+      displayName: 'Race Condition',
+      emails: [{ value: 'race@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(1); // no retry attempted on a non-username collision
+    expect(err).toBeNull();
+    expect(user).toBeUndefined();
+    expect((info as { message: string }).message).toContain('E11000');
+    expect(errorSpy).toHaveBeenCalled();
+  });
+
+  it('derives a fallback username from the email local-part when the provider gives no username or displayName', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'nodisplay' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-nodisplay',
+      username: '', // Google never sends this, but be defensive about an empty string
+      emails: [{ value: 'nodisplay@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].username).toBe('nodisplay');
+  });
+
+  it('never creates with an empty name (required field) - falls back to the derived username', async () => {
+    // A minimal provider assertion: only an email, no displayName/name/username. Without
+    // the fallback, `name: ''` would throw a non-E11000 validation error and lock the user
+    // out - the same class of opaque OAuth-create failure this helper prevents.
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'onlyemail', name: 'onlyemail' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-onlyemail',
+      emails: [{ value: 'onlyemail@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    const createArg = mockCreate.mock.calls[0][0];
+    expect(createArg.name).toBeTruthy();
+    expect(createArg.name).toBe('onlyemail'); // derived username reused as the name
+    expect(createArg.username).toBe('onlyemail');
+  });
+
+  it('derives a random fallback username when even the email local-part is empty', async () => {
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockResolvedValueOnce({ _id: 'new-id', username: 'user-abc12345' });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-emptylocal',
+      username: '',
+      emails: [{ value: '@example.com', verified: true }],
+    });
+
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockCreate.mock.calls[0][0].username).toMatch(/^user-[a-f0-9]{8}$/);
+  });
+});
+
 describe('verifyCallback - Google "with params" callback signature', () => {
   it('strips the params arg and forwards profile + done correctly', async () => {
     mockFindOne.mockResolvedValueOnce(null);
