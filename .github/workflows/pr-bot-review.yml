@@ -110,14 +110,19 @@ jobs:
           # only .changeset/config.json must still be reviewed. FAIL-OPEN - any ambiguity or
           # error resolves to "review" (a wrongly-skipped review is worse than one extra pass).
           # Every path calls emit() and exits 0, so a hiccup can never fail the step into a
-          # fail-CLOSED skip.
+          # fail-CLOSED skip. The || fallbacks below are load-bearing under the default
+          # `bash -e -o pipefail` shell (e.g. grep's no-match exit 1 must not fail the step).
+          # Author-name spoofing can't bypass this: skipping ALSO requires every changed path
+          # to be under .changeset/, so real code always gets reviewed (and this job is
+          # same-repo only, so no fork can reach it).
           emit() { echo "guard: skip=$1"; echo "skip=$1" >> "$GITHUB_OUTPUT"; exit 0; }
 
-          # Most recent claude[bot] review's reviewed SHA. --paginate: reviews come back
-          # ascending, 30/page, so the newest can be on a later page. DISMISSED reviews still
+          # Most recent claude[bot] review's reviewed SHA. --paginate walks all pages, but
+          # --jq runs PER PAGE, so stream the matching commit_ids (ascending) and take the
+          # global last with `tail -n1` rather than a per-page `last`. DISMISSED reviews still
           # carry a commit_id and count.
           LAST=$(gh api --paginate "repos/${{ github.repository }}/pulls/${PR}/reviews" \
-                   --jq "map(select(.user.login==\"${BOT_REVIEW_LOGIN}\" and .commit_id != null)) | last | .commit_id" 2>/dev/null || echo "")
+                   --jq ".[] | select(.user.login==\"${BOT_REVIEW_LOGIN}\" and .commit_id != null) | .commit_id" 2>/dev/null | tail -n1 || echo "")
           if [ -z "$LAST" ] || [ "$LAST" = "null" ]; then echo "guard: no prior ${BOT_REVIEW_LOGIN} review"; emit false; fi
 
           HEAD_SHA=$(git rev-parse HEAD)
@@ -143,9 +148,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # Best-effort feedback: a transient comment failure must not red the check
+          # (the review was correctly skipped either way).
           gh pr comment ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --body "🤖 Skipped re-review - the only new commits since the last bot review are the auto-generated changeset (no substantive changes). Push a code change and re-apply \`bot-review\` for a fresh review."
+            --body "🤖 Skipped re-review - the only new commits since the last bot review are the auto-generated changeset (no substantive changes). Push a code change and re-apply \`bot-review\` for a fresh review." || true
 
       - name: Run /bot-review
         id: bot_review
