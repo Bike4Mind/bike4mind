@@ -22,9 +22,11 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     priceId: LIBREONCOLOGY_PRO_PRICE_ID,
     interval: SubscriptionPlanInterval.Monthly,
     name: 'LibreOncology',
-    // Default launch allotment; will become runtime-configurable via the
-    // LibreOncology admin-settings quest (see ACCESS_MODEL §8 / §10).
-    credits: 30000,
+    // Default launch allotment at the uniform $0.0006/credit anchor
+    // ($19 / 0.0006, matching the Professional plan); will become
+    // runtime-configurable via the LibreOncology admin-settings quest
+    // (see ACCESS_MODEL §8 / §10).
+    credits: 31667,
     // No tier: LibreOncology is a separate product, not a rung on the B4M plan
     // ladder. Omitting tier keeps it out of the cross-plan change flow
     // (change.ts rejects tier-less plans), so a B4M subscriber can't silently
@@ -48,6 +50,8 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     priceId: PROFESSIONAL_PRICE_ID,
     interval: SubscriptionPlanInterval.Monthly,
     name: 'Professional',
+    // $30 / $0.0006 at the uniform per-credit anchor - same rate as the
+    // one-time packages, so subscribers get exactly the advertised markup.
     credits: 50000,
     tier: UserSubscriptionTier.Basic,
     features: [

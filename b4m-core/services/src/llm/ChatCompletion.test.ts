@@ -15,9 +15,15 @@ import {
   isOverloadedError,
   getLlmWithFallback,
   usdToCredits,
+  usdToCreditsStochastic,
 } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels } from '@bike4mind/llm-adapters';
-import { ChatModels, ModelBackend, usdToCredits as realUsdToCredits } from '@bike4mind/common';
+import {
+  ChatModels,
+  ModelBackend,
+  usdToCredits as realUsdToCredits,
+  usdToCreditsStochastic as realUsdToCreditsStochastic,
+} from '@bike4mind/common';
 import { ToolBuilder } from './tools/ToolBuilder';
 import { runWithFakeTimers } from './__tests__/helpers/fakeTimers';
 
@@ -47,6 +53,7 @@ vi.mock('@bike4mind/utils', () => ({
   getSettingsMap: vi.fn().mockResolvedValue({}),
   getSettingsValue: vi.fn(),
   usdToCredits: vi.fn(),
+  usdToCreditsStochastic: vi.fn(),
   processUrlsFromPrompt: vi.fn(),
   getLastBuildDebugInfo: vi.fn().mockReturnValue({}),
   isOverloadedError: vi.fn().mockReturnValue(false),
@@ -110,6 +117,7 @@ const mockedShouldTriggerFallback = vi.mocked(shouldTriggerFallback);
 const mockedIsOverloadedError = vi.mocked(isOverloadedError);
 const mockedGetLlmWithFallback = vi.mocked(getLlmWithFallback);
 const mockedUsdToCredits = vi.mocked(usdToCredits);
+const mockedUsdToCreditsStochastic = vi.mocked(usdToCreditsStochastic);
 const mockedCalculateTotalTokenLength = vi.mocked(calculateTotalTokenLength);
 
 const mockDb = {};
@@ -340,6 +348,9 @@ describe('ChatCompletionProcess', () => {
       // Delegate to the real implementation (pure fn in @bike4mind/common) so
       // these end-to-end billing assertions can never drift from production pricing.
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      // Pin the settlement draw: rng()=0 rounds up whenever a fraction exists,
+      // making the stochastic charge a deterministic ceil for assertions.
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
@@ -379,9 +390,9 @@ describe('ChatCompletionProcess', () => {
 
       // Billing math uses the LOCAL counts:
       //   80 * 10/1M + 40 * 30/1M = $0.0008 + $0.0012 = $0.002
-      //   ceil(0.002 * 5000) = 10 credits
+      //   0.002 * 2000 = 4 credits (whole number - no rounding involved)
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
-      expect(tokenUsage.creditsUsed).toBe(10);
+      expect(tokenUsage.creditsUsed).toBe(4);
       expect(tokenUsage.totalTokens).toBe(localInputTokens + localOutputTokens);
 
       // Audit fields preserve the PROVIDER counts so we can detect drift.
@@ -405,6 +416,9 @@ describe('ChatCompletionProcess', () => {
       mockedCalculateTotalTokenLength.mockResolvedValue(localInputTokens);
       mockTokenizer.countTokens.mockResolvedValue(localOutputTokens);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      // Pin the settlement draw: rng()=0 rounds up whenever a fraction exists,
+      // making the stochastic charge a deterministic ceil for assertions.
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
       mockedGetLlmByModel.mockReturnValue({
         complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
@@ -450,11 +464,11 @@ describe('ChatCompletionProcess', () => {
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
 
       // cache_read (3000) caps at local input (80); credited input = 80 - 80*0.9 = 8.
-      //   8 * 10/1M + 40 * 30/1M = $0.00008 + $0.0012 = $0.00128; ceil(*5000) = 7 credits.
+      //   8 * 10/1M + 40 * 30/1M = $0.00008 + $0.0012 = $0.00128; 2.56 raw -> 3 credits (pinned draw).
       // Strictly cheaper than the un-discounted full local cost ($0.002, 10cr), and far
       // below the previously double-billed ~60+ credits.
       expect(tokenUsage.estimatedCost).toBeCloseTo(0.00128, 6);
-      expect(tokenUsage.creditsUsed).toBe(7);
+      expect(tokenUsage.creditsUsed).toBe(3);
       // Capped value recorded for audit.
       expect(tokenUsage.cacheReadInputTokens).toBe(localInputTokens);
     });
@@ -466,6 +480,9 @@ describe('ChatCompletionProcess', () => {
       const localOutputTokens = 10;
       mockTokenizer.countTokens.mockResolvedValue(localOutputTokens);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      // Pin the settlement draw: rng()=0 rounds up whenever a fraction exists,
+      // making the stochastic charge a deterministic ceil for assertions.
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
       const runWithCacheRead = async (localInputTokens: number, cacheReadInputTokens?: number) => {
         mockDb.quests.update.mockClear();
@@ -504,17 +521,17 @@ describe('ChatCompletionProcess', () => {
       };
 
       // Cold turn: no cache read, full local input billed.
-      //   3000 * 10/1M + 10 * 30/1M = $0.0300 + $0.0003 = $0.0303; ceil(*5000) = 152 credits.
+      //   3000 * 10/1M + 10 * 30/1M = $0.0300 + $0.0003 = $0.0303; 60.6 raw -> 61 credits (pinned draw).
       const cold = await runWithCacheRead(3000, undefined);
       expect(cold.estimatedCost).toBeCloseTo(0.0303, 6);
-      expect(cold.creditsUsed).toBe(152);
+      expect(cold.creditsUsed).toBe(61);
 
       // Warm turn: 2800 of the 3000 local input served from cache; credited input
       //   = 3000 - 2800*0.9 = 480. 480 * 10/1M + 10 * 30/1M = $0.0048 + $0.0003 = $0.0051
-      //   ceil(*5000) = 26 credits. ~6x cheaper than the cold turn, prompt unchanged.
+      //   10.2 raw -> 11 credits (pinned draw). ~6x cheaper than the cold turn, prompt unchanged.
       const warm = await runWithCacheRead(3000, 2800);
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
-      expect(warm.creditsUsed).toBe(26);
+      expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
     });
   });
