@@ -42,6 +42,7 @@ import useSessionLayout from '@client/app/hooks/useSessionLayout';
 import { isOptimisticId } from '@client/app/utils/llm';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
+import { useStreamingArtifactPersistence } from '@client/app/hooks/useStreamingArtifactPersistence';
 
 export function useDeleteAllSessions(options: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
@@ -567,6 +568,13 @@ export const useSendSessionToDataLake = () => {
 
 export const useSubscribeToSessionQuests = (sessionId?: string, isStreaming?: boolean) => {
   const queryClient = useQueryClient();
+  // Agent-mode runs don't persist artifacts on the WS `completed` path (that only
+  // carries the pre-bubble finalAnswer). Persist from this subscription's raw
+  // change-stream doc instead, which is the post-bubble Quest written by
+  // persistRunAsQuest. Gated on agentExecutionId so chat quests (persisted via
+  // useSubscribeChatCompletion) are never double-persisted here. A dedicated hook
+  // instance keeps its dedup ref disjoint from the chat persistence instance.
+  const agentArtifactPersistence = useStreamingArtifactPersistence();
   const callback = useCallback(
     (type: string, data: IChatHistoryItemDocument) => {
       // PERFORMANCE FIX: Skip updates during active streaming to prevent double pipeline conflict
@@ -581,8 +589,16 @@ export const useSubscribeToSessionQuests = (sessionId?: string, isStreaming?: bo
       updateAllQueryData(queryClient, 'quests', operation, data, {
         keysAllowedToCreate: [['quests', 'session', data.sessionId]],
       });
+
+      if (operation === 'write' && data.agentExecutionId && data.status === 'done') {
+        agentArtifactPersistence.persistArtifactsFromQuest({
+          id: data.id,
+          sessionId: data.sessionId,
+          replies: data.replies,
+        });
+      }
     },
-    [queryClient, isStreaming]
+    [queryClient, isStreaming, agentArtifactPersistence]
   );
 
   useSubscribeCollection(
