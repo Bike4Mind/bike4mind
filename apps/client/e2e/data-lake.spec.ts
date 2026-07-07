@@ -95,7 +95,7 @@ test.describe('Data Lake - management panel', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group A/B/M — Create wizard (drive the steps we can without a live S3/vectorize upload)
+// Create wizard (drive the steps we can without a live S3/vectorize upload)
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - create wizard', () => {
   test('step gating: Next is disabled until files are selected, enabled after', async ({ dataLakePage }) => {
@@ -129,7 +129,7 @@ test.describe('Data Lake - create wizard', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group G — Append mode
+// Append mode
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - append mode', () => {
   test('add-files wizard opens titled for the target lake', async ({ request, dataLakePage }) => {
@@ -148,7 +148,7 @@ test.describe('Data Lake - append mode', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group I — Lifecycle (archive → deleted → purge) through the UI
+// Lifecycle (archive → deleted → purge) through the UI
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - lifecycle', () => {
   test('archive moves the lake to the Archived section', async ({ request, dataLakePage }) => {
@@ -193,7 +193,7 @@ test.describe('Data Lake - lifecycle', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group H — Settings modal (rename + gate can't-clear rule)
+// Settings modal (rename + gate can't-clear rule)
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - settings', () => {
   test('rename a lake via the settings modal', async ({ request, dataLakePage }) => {
@@ -248,7 +248,7 @@ test.describe('Data Lake - settings', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Group J — Viewer
+// Viewer
 // ─────────────────────────────────────────────────────────────────────────────
 test.describe('Data Lake - viewer', () => {
   test('opens the viewer with a filterable tree', async ({ request, dataLakePage }) => {
