@@ -491,6 +491,9 @@ describe('sreRevision handler', () => {
         expect.stringContaining('Self-Heal Escalation')
       );
       expect(mockSendToQueue).not.toHaveBeenCalled();
+      // Same invariant as the explicit escalate:true case: this terminal failure path
+      // is not a retry, so it must never consume a CI-retry slot.
+      expect(mockClaimCiRetry).not.toHaveBeenCalled();
     });
 
     it('does NOT post an escalation comment on a human-review revision failure (no ciFailureOutput)', async () => {
