@@ -83,7 +83,6 @@ export default function NotebookGroupList({
                   isShared={'isShared' in d ? d.isShared : false}
                   favoriteSessions={favoriteSessions}
                   showMessageCount={showMessageCount}
-                  disableExportOps={false}
                   onNavigate={onNavigate}
                   onNotebookClick={onNotebookClick}
                   onToggle={onToggle}

@@ -24,7 +24,6 @@ const NotebookRow = memo(function NotebookRow({
   isShared,
   favoriteSessions,
   showMessageCount,
-  disableExportOps,
   onNavigate,
   onNotebookClick,
   onToggle,
@@ -35,7 +34,6 @@ const NotebookRow = memo(function NotebookRow({
   isShared: boolean;
   favoriteSessions?: ISessionFavoriteItem[];
   showMessageCount: boolean;
-  disableExportOps: boolean;
   onNavigate: (path: string) => void;
   onNotebookClick: (session: ISessionDocument) => void;
   onToggle: (id: string) => void;
@@ -63,7 +61,6 @@ const NotebookRow = memo(function NotebookRow({
       onToggleSelection={() => onToggle(item.id)}
       isShared={isShared}
       showMessageCount={showMessageCount}
-      disableExportOps={disableExportOps}
     />
   );
 });
