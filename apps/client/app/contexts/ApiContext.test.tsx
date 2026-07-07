@@ -20,6 +20,21 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
 const ok = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse =>
   ({ data, status: 200, statusText: 'OK', headers: {}, config }) as AxiosResponse;
 
+// A non-auth failure (e.g. 503 from a cold/hanging refresh Lambda) - transient, NOT a
+// revocation, so the interceptor must reject-and-retry rather than force a logout.
+const makeStatus = (config: InternalAxiosRequestConfig, status: number): AxiosError =>
+  new AxiosError(`Error ${status}`, 'ERR_BAD_RESPONSE', config, {}, {
+    status,
+    statusText: 'Error',
+    data: {},
+    headers: {},
+    config,
+  } as AxiosResponse);
+
+// A bare network error carries no response (isAxiosError true, response undefined) - also transient.
+const makeNetworkError = (config: InternalAxiosRequestConfig): AxiosError =>
+  new AxiosError('Network Error', 'ERR_NETWORK', config, {});
+
 describe('ApiProvider 401 interceptor -> login redirect', () => {
   const realLocation = window.location;
   let replace: ReturnType<typeof vi.fn>;
@@ -104,6 +119,50 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(res.data).toEqual({ ok: true });
     expect(replace).not.toHaveBeenCalled();
     expect(useAccessToken.getState().accessToken).toBe('new-access');
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
+
+  it('does NOT log out when the refresh fails with a transient 5xx (cold Lambda / outage)', async () => {
+    // The original request 401s (token expired) so a refresh is attempted, but the
+    // refresh endpoint returns 503 - a transient outage, not a rejected refresh token.
+    // Logging the user out here would be a false positive; this is the exact deploy-time
+    // correlation the WebsocketContext probe can trigger through this interceptor.
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') return Promise.reject(makeStatus(config, 503));
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    // Transient - no redirect, session preserved so the client keeps retrying.
+    expect(replace).not.toHaveBeenCalled();
+    const state = useAccessToken.getState();
+    expect(state.accessToken).toBe('stale');
+    expect(state.expired).toBe(false);
+  });
+
+  it('does NOT log out when the refresh fails with a bare network error (transient)', async () => {
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') return Promise.reject(makeNetworkError(config));
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().accessToken).toBe('stale');
     expect(useAccessToken.getState().expired).toBe(false);
   });
 

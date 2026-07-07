@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Template for the ./for-env env-var wrapper. `pnpm boot`/`edev`/`start`/`up`
+# (package.json), scripts/dev-reset.sh, and scripts/stripe-preview-webhook.sh
+# all invoke `./for-env <stage> <command...>`, but `for-env` itself is not
+# committed to this repo, by design: it maps stages to AWS profiles/VPC IDs/
+# other cloud identifiers, which can never be public.
+#
+# This is the Tier-2 (SST personal/shared stage) path - running `sst dev`
+# against real AWS. It is not needed for local self-host development
+# (B4M_SELF_HOST=true, see SELF_HOST.md and compose.selfhost.yaml), which is
+# the default recommended path for premium overlay feature work.
+#
+# Bike4Mind engineers: the real for-env already exists, privately - see the
+# internal devtools runbook rather than filling in this template.
+#
+# Self-hosting on your own infrastructure: copy this file to `./for-env`
+# (git-ignored) and fill in your own values, then `chmod +x for-env`.
+#
+# Usage:
+#   ./for-env <stage> <command...>
+#   ./for-env local ./dev
+#
+# Real values (VPC ID, AWS profile name, etc.) are cloud identifiers specific
+# to your own AWS account - find them via `aws ec2 describe-vpcs` / your AWS
+# SSO config, not from anything in this repo.
+set -euo pipefail
+
+stage="${1:?Usage: ./for-env <stage> <command...>}"
+shift
+
+case "${stage}" in
+  local)
+    # Personal SST dev stage (`sst dev` / Live-Lambda). All non-prod stages
+    # in a single-tenant self-hosted deploy can share one VPC/NAT (see
+    # infra/vpc.ts) - VPC_ID must point at that shared VPC, not a new one.
+    export AWS_PROFILE="REPLACE_ME_your-aws-sso-profile"
+    export VPC_ID="REPLACE_ME_vpc-xxxxxxxxxxxxxxxxx"
+    export SEED_APP_NAME="bike4mind"
+    ;;
+  *)
+    echo "for-env: unknown stage '${stage}' - add a case for it in your local ./for-env (copied from for-env.example)" >&2
+    exit 1
+    ;;
+esac
+
+exec "$@"

@@ -21,7 +21,6 @@ export * as researchDataService from './researchData';
 export * as taskSchedulerService from './taskSchedulerService';
 export * as tagService from './tagService';
 export * as artifactService from './artifactService';
-export * as questMasterService from './questMasterService';
 export * as notebookExportService from './notebookExportService';
 export * as notebookImportService from './notebookImportService';
 export * as notebookCurationService from './notebookCurationService';

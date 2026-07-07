@@ -7,6 +7,10 @@ export {
   ApiEndpointUnconfiguredError,
   getEnvironmentName,
   getCreditsUrl,
+  isSourceMode,
+  LOCAL_DEV_URL,
+  getDefaultApiUrl,
+  parseApiUrl,
   type ApiEndpoint,
 } from './apiUrl';
 export { logger } from './Logger';

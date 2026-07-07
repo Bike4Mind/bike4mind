@@ -18,8 +18,8 @@ import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { App, TrustLocationSelector, RewindSelector, SessionSelector } from './components';
-import type { PermissionResponse } from './components';
+import { App, TrustLocationSelector, RewindSelector, SessionSelector, EnvironmentPicker } from './components';
+import type { PermissionResponse, EnvChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { LoginFlow } from './components/LoginFlow';
 import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
@@ -40,6 +40,7 @@ import {
   ApiEndpointUnconfiguredError,
   getEnvironmentName,
   getCreditsUrl,
+  parseApiUrl,
   processFileReferences,
   formatStep,
   extractCompactInstructions,
@@ -207,6 +208,7 @@ interface CliState {
   rewindSelector: RewindSelectorState | null;
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
+  showEnvironmentPicker?: boolean; // First-run backend picker when no endpoint is configured
   config?: CliConfig; // Cached config for synchronous access
   availableModels?: ModelInfo[]; // Models fetched from API at startup
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
@@ -479,13 +481,12 @@ function CliApp() {
 
       if (!authTokens || tokenExpired) {
         // Both paths lead to the device-authorization login flow, which needs a
-        // configured endpoint. Without one (a source/linked checkout with no baked
-        // default, or an unbranded fork), the OAuth flow would fail deep in axios
-        // with a cryptic "Invalid URL". Fail loud and actionable here instead.
+        // configured endpoint. When there isn't one (a published, unbranded fork
+        // with no baked default), let the user pick a backend interactively
+        // rather than dead-ending the OAuth flow on an empty URL.
         const endpoint = resolveApiEndpoint(config.apiConfig);
         if (endpoint.status === 'unconfigured') {
-          console.error(`\n❌ ${new ApiEndpointUnconfiguredError().message}\n`);
-          exit();
+          setState(prev => ({ ...prev, showEnvironmentPicker: true, config }));
           return;
         }
 
@@ -497,6 +498,17 @@ function CliApp() {
           // First-time user or logged out - auto-trigger login flow
           console.log('\n🔐 Welcome to B4M CLI! Authentication is required to get started.\n');
         }
+
+        // Make the target backend obvious before login - especially the
+        // source-mode default, which would otherwise silently point contributors
+        // at localhost when they might have expected production.
+        if (endpoint.source === 'dev-default') {
+          console.log(
+            `🔧 No endpoint configured; defaulting to the local dev server (${endpoint.url}).\n` +
+              '   Use `b4m --prod` or `b4m --api-url <url>` to target a different backend.\n'
+          );
+        }
+
         setState(prev => ({ ...prev, showLoginFlow: true, config }));
         return;
       }
@@ -2390,7 +2402,7 @@ Available commands:
 
 API Configuration:
   /set-api <url> - Connect to self-hosted Bike4Mind instance
-  /reset-api - Reset to Bike4Mind main service
+  /reset-api - Clear the custom API URL (falls back to the default, or prompts you to pick one)
   /api-info - Show current API configuration
 
 Tool Permissions:
@@ -2585,9 +2597,9 @@ Multi-line Input:
       }
 
       case 'set-api': {
-        const url = args[0];
+        const rawUrl = args[0];
 
-        if (!url) {
+        if (!rawUrl) {
           console.log('Usage: /set-api <url>');
           console.log('');
           console.log('Connect to a self-hosted Bike4Mind instance.');
@@ -2598,14 +2610,16 @@ Multi-line Input:
           return;
         }
 
-        // Validate URL format
-        try {
-          new URL(url);
-        } catch {
-          console.log(`\n❌ Invalid URL: ${url}`);
-          console.log('Please provide a valid HTTPS URL (e.g., https://app.your-instance.example.com)\n');
+        // Validate + normalize through the shared parser so /set-api applies the
+        // same rule as --api-url and the first-run picker: trims whitespace,
+        // strips trailing slashes, and requires an http(s) origin.
+        const result = parseApiUrl(rawUrl);
+        if ('error' in result) {
+          console.log(`\n❌ ${result.error}`);
+          console.log('Please provide a valid http(s) URL (e.g., https://app.your-instance.example.com)\n');
           return;
         }
+        const { url } = result;
 
         await state.configStore.setCustomApiUrl(url);
 
@@ -2619,17 +2633,23 @@ Multi-line Input:
         break;
       }
 
-      case 'reset-api':
+      case 'reset-api': {
         await state.configStore.setCustomApiUrl(null);
 
         // Clear authentication when resetting API URL
         await state.configStore.clearAuthTokens();
 
-        console.log('\n✅ API URL reset to Bike4Mind main service');
+        const resetEndpoint = resolveApiEndpoint();
+        console.log('\n✅ Custom API URL cleared');
         console.log('🔓 Authentication cleared');
-        console.log('💡 Run /login to authenticate');
-        console.log('Please restart the CLI for changes to take effect.\n');
+        if (resetEndpoint.status === 'configured') {
+          console.log(`🌍 The CLI will now use ${resetEndpoint.url}`);
+          console.log('💡 Restart the CLI, then run /login to authenticate.\n');
+        } else {
+          console.log("💡 Restart the CLI and you'll be prompted to choose a backend.\n");
+        }
         break;
+      }
 
       case 'api-info': {
         const config = await state.configStore.get();
@@ -4181,6 +4201,34 @@ Multi-line Input:
           if (state.sessionSelector) {
             state.sessionSelector.resolve(null);
           }
+        }}
+      />
+    );
+  }
+
+  // Show the first-run backend picker when no endpoint is configured (checked
+  // before the login flow, since a backend must be chosen before authenticating).
+  if (state.showEnvironmentPicker) {
+    return (
+      <EnvironmentPicker
+        onSelect={(choice: EnvChoice) => {
+          void (async () => {
+            try {
+              const result = await state.configStore.switchApiEnvironment(choice.target);
+              setState(prev => ({ ...prev, showEnvironmentPicker: false }));
+              console.log(`\n✅ Connecting to ${result.envName} (${result.url})\n`);
+              // Re-run init now that an endpoint is configured; it will proceed
+              // into the login flow.
+              init().catch(err => {
+                console.error('\n❌ Initialization failed:', err.message, '\n');
+                exit();
+              });
+            } catch (err) {
+              setState(prev => ({ ...prev, showEnvironmentPicker: false }));
+              console.error(`\n❌ Failed to save endpoint: ${err instanceof Error ? err.message : String(err)}\n`);
+              exit();
+            }
+          })();
         }}
       />
     );

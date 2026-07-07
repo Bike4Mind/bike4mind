@@ -233,14 +233,9 @@ Preview environments (PR deployments) use staging infrastructure:
 
 This ensures preview environments are isolated from production but share staging infrastructure for cost efficiency.
 
-### Opt-in gating (`preview_label`)
+### Preview deploys (internal)
 
-Preview deploys are **opt-in**. Each tenant in the `DEPLOY_TENANTS` repo variable carries a `preview_label` field, read by the `plan` job in `deploy.yml`:
-
-- `preview_label: "preview"` (current) — a PR deploys a preview **only** when it carries the `preview` label. No label ⇒ the deploy matrix is empty ⇒ CI runs but no preview is deployed (the required **Deploy** check still reports green).
-- `preview_label: null` — legacy "always deploy a preview on every trusted PR" behavior.
-
-`deploy.yml` also triggers on the `labeled` pull_request event, so adding the label deploys immediately rather than waiting for the next push. Maintainers can toggle the label from a PR comment via the `/deploy preview` (opt-in) and `/deploy-preview off` (opt-out + teardown) commands — see `.github/workflows/deploy-preview-command.yml`. Removing the label tears the preview down (`cleanup.yml`, `unlabeled` trigger). Fork PRs never deploy previews regardless of labels.
+Preview deploys do not run from this repository. Maintainers create previews on demand through an internal deployer that pins the PR's head SHA and deploys `pr<N>` stages into the dedicated previews AWS account; a bot comment on the PR carries the preview URL, and stale previews are swept nightly. This repo's `deploy.yml` emits deploy-matrix entries only for `push` to `main` (staging) and `prod` (production).
 
 ## Preview Domain Calculation
 

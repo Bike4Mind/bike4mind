@@ -51,8 +51,8 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",
-    "@aws-sdk/client-bedrock-runtime": "^3.1069.0",
-    "@aws-sdk/client-cloudwatch": "^3.1069.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
+    "@aws-sdk/client-cloudwatch": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@google/genai": "^1.46.0",

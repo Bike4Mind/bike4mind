@@ -7,6 +7,7 @@
 
 import { getConfig, getEnvSignature } from './config.js';
 import { NOTION_API_BASE_URL, NOTION_VERSION } from './constants.js';
+import { debug, debugError } from './logger.js';
 
 let lastEnvSignature: string | null = null;
 
@@ -28,6 +29,10 @@ export async function notionRequest<T>(path: string, init?: RequestInit): Promis
   ensureFreshConfig();
   const { accessToken } = getConfig();
 
+  const method = init?.method ?? 'GET';
+  debug(`${method} ${path}`);
+  const startTime = Date.now();
+
   const response = await fetch(`${NOTION_API_BASE_URL}${path}`, {
     ...init,
     headers: {
@@ -37,6 +42,8 @@ export async function notionRequest<T>(path: string, init?: RequestInit): Promis
       ...(init?.headers || {}),
     },
   });
+
+  const elapsed = Date.now() - startTime;
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => '');
@@ -51,6 +58,13 @@ export async function notionRequest<T>(path: string, init?: RequestInit): Promis
       // Not JSON - use raw text below
     }
 
+    debugError(`${method} ${path} failed ${response.status} in ${elapsed}ms`, {
+      status: response.status,
+      code: notionCode,
+      message: notionMessage,
+      rawLength: errorText.length,
+    });
+
     const error = new Error(notionMessage || `Notion API error: ${response.status} ${response.statusText}`);
     (error as Error & { status?: number; code?: string }).status = response.status;
     if (notionCode) {
@@ -59,5 +73,6 @@ export async function notionRequest<T>(path: string, init?: RequestInit): Promis
     throw error;
   }
 
+  debug(`${method} ${path} -> ${response.status} in ${elapsed}ms`);
   return (await response.json()) as T;
 }

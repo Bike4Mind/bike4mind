@@ -31,6 +31,10 @@ cdk.context.json
 # Local-only docker compose override (per-developer mongo port/container)
 compose.override.yaml
 
+# Per-developer env-var wrapper for the SST personal-stage path (Tier 2).
+# Copy for-env.example -> for-env and fill in real (private) stage values.
+/for-env
+
 *.tsbuildinfo
 
 .cursor/rules

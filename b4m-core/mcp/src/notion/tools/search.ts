@@ -20,6 +20,7 @@ import { getConfig, type AllowedPageEntry } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { searchFilterTypeSchema, paginationParams } from '../helpers/schemas.js';
 import { TOOL_NOTION_SEARCH } from '../constants.js';
+import { debug } from '../logger.js';
 
 /**
  * Extract the title from a Notion search result's properties.
@@ -140,6 +141,7 @@ export function registerSearchTools(server: McpServer): void {
     },
     async ({ query, page_size, filterType }) => {
       try {
+        debug('search invoked', { query, page_size, filterType });
         const config = getConfig();
         const requestedSize = page_size ?? 10;
 
@@ -163,6 +165,7 @@ export function registerSearchTools(server: McpServer): void {
           body: JSON.stringify(body),
         });
 
+        debug(`search returned ${(result.results || []).length} raw results`);
         let items = (result.results || []).map(item => ({
           object: item.object,
           id: item.id,
@@ -180,6 +183,11 @@ export function registerSearchTools(server: McpServer): void {
 
           const allowedIdSet = buildAllowedIdSet(config.allowedPages);
           const normalizedExcluded = new Set(config.excludedPageIds.map(normalizeId));
+
+          debug('access mode is "selected", filtering results', {
+            allowedPages: config.allowedPages.length,
+            excludedPageIds: config.excludedPageIds.length,
+          });
 
           // Phase 1: Fast client-side filtering using parent field on results
           const resolved: boolean[] = new Array(items.length);
@@ -205,10 +213,17 @@ export function registerSearchTools(server: McpServer): void {
             }
           }
 
+          const preFilterCount = items.length;
           items = items.filter((_, idx) => resolved[idx]);
           items = items.slice(0, requestedSize);
+          debug('filtering complete', {
+            preFilter: preFilterCount,
+            postFilter: items.length,
+            ancestryWalks: needsAncestryWalk.length,
+          });
         }
 
+        debug('search complete', { query, resultCount: items.length });
         return createSuccessResponse({
           query,
           count: items.length,

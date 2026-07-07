@@ -943,6 +943,81 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  // Confidence-gate telemetry (#56 M1.1). Locks the atomic accumulators and the
+  // derived read-facing summary (avgConfidence = sum / evaluated), including the
+  // continuation-Lambda invariant (increments compose across separate calls).
+  describe('confidence telemetry', () => {
+    it('initializes a fresh execution with a zeroed telemetry subdoc (min defaults to 1)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+
+      const created = await agentExecutionRepository.findById(exec.id);
+      expect(created?.confidenceTelemetry).toMatchObject({
+        evaluatedCount: 0,
+        emittedCount: 0,
+        minConfidence: 1,
+        confidenceSum: 0,
+      });
+    });
+
+    it('accumulates evaluated count, sum, and running min across calls', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7);
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.1);
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.7);
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.confidenceTelemetry?.evaluatedCount).toBe(3);
+      expect(updated?.confidenceTelemetry?.confidenceSum).toBeCloseTo(1.5, 10);
+      expect(updated?.confidenceTelemetry?.minConfidence).toBeCloseTo(0.1, 10);
+      expect(updated?.confidenceTelemetry?.emittedCount).toBe(0);
+    });
+
+    it('increments emittedCount independently of evaluatedCount', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution());
+
+      await agentExecutionRepository.recordIterationConfidence(exec.id, 0.4);
+      await agentExecutionRepository.recordGateEmitted(exec.id);
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.confidenceTelemetry?.evaluatedCount).toBe(1);
+      expect(updated?.confidenceTelemetry?.emittedCount).toBe(1);
+    });
+
+    it('derives avgConfidence and omits the summary when the gate never evaluated (via listStuck)', async () => {
+      const userId = new mongoose.Types.ObjectId().toString();
+      const evaluated = await agentExecutionRepository.create(
+        makeBaseExecution({ userId, status: 'paused', query: 'evaluated' })
+      );
+      await agentExecutionRepository.create(makeBaseExecution({ userId, status: 'paused', query: 'untouched' }));
+
+      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.8);
+      await agentExecutionRepository.recordIterationConfidence(evaluated.id, 0.2);
+      await agentExecutionRepository.recordGateEmitted(evaluated.id);
+
+      const old = new Date(Date.now() - 60 * 60 * 1000);
+      await AgentExecutionModel.collection.updateMany({ userId, status: 'paused' }, { $set: { updatedAt: old } });
+
+      const items = await agentExecutionRepository.listStuck({
+        olderThan: new Date(Date.now() - 30 * 60 * 1000),
+        userId,
+        limit: 10,
+      });
+
+      const evaluatedItem = items.find(i => i.query === 'evaluated');
+      const untouchedItem = items.find(i => i.query === 'untouched');
+
+      expect(evaluatedItem?.confidenceTelemetry).toEqual({
+        evaluatedCount: 2,
+        emittedCount: 1,
+        minConfidence: expect.closeTo(0.2, 10),
+        avgConfidence: expect.closeTo(0.5, 10),
+      });
+      // evaluatedCount 0 -> no signal -> summary omitted (no misleading avg NaN).
+      expect(untouchedItem?.confidenceTelemetry).toBeUndefined();
+    });
+  });
+
   // Typed timeout signal replaces error.message substring matching.
   // These tests lock the contract end-to-end (write via `markFailed`, read via
   // `findById` and `getPollableStatus`) so a future projection or schema tweak

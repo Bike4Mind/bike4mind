@@ -244,6 +244,16 @@ The default is baked in at build time from the hosted build environment — ther
 fallback in source** (open-core, #9306/#9392), so a fresh clone ships empty. A fork publishes its
 own CLI by setting `B4M_DEFAULT_API_URL` when building — see `tsdown.config.ts`.
 
+Because that default is injected only at build time, the endpoint is resolved like this:
+
+1. A **custom URL** you set (`--api-url` / `--dev` / `--prod` / `/set-api`) always wins.
+2. Otherwise, the **build-time default** baked into a published binary.
+3. Otherwise, when running **from source** (a `pnpm link --global` checkout, `pnpm dev` — no
+   `dist/` built), the CLI defaults to the local dev server `http://localhost:3001`. Use
+   `--prod` / `--api-url` to point it elsewhere.
+4. Otherwise (a published, unbranded fork with no baked default), the first `b4m` **prompts you
+   to choose a backend**.
+
 **Quick switch between local dev and production:** use the `b4m --dev` / `b4m --prod`
 launch flags (see [Switching environments](#switching-environments---dev----prod)).
 They persist your choice and cache auth per-environment. The `/set-api`, `/reset-api`,
@@ -540,6 +550,11 @@ b4m --version
 ```
 
 After step 4, running `b4m` anywhere on your system executes this working tree. Re-run `pnpm link --global` if you move or rename the repo.
+
+> **Which backend does a linked checkout talk to?** A source/linked run has no build-time
+> default baked in, so `b4m` defaults to the local dev server (`http://localhost:3001`) — start
+> your local stack, or point it elsewhere with `b4m --prod` / `b4m --api-url <url>`. See
+> [API Configuration](#api-configuration) for the full resolution order.
 
 ### Editing CLI source (`packages/cli/src/`)
 

@@ -25,6 +25,7 @@ import { getConfig, type AllowedPageEntry } from '../config.js';
 import { createSuccessResponse, createErrorResponse } from '../helpers/responses.js';
 import { notionPageIdSchema, notionDatabaseIdSchema, startCursorSchema } from '../helpers/schemas.js';
 import { TOOL_NOTION_CREATE_PAGE, TOOL_NOTION_APPEND_BLOCKS, TOOL_NOTION_READ_PAGE } from '../constants.js';
+import { debug, debugWarn } from '../logger.js';
 
 /**
  * Guards write operations. Returns an error response if writes are disabled
@@ -34,6 +35,7 @@ function checkWriteAccess(): ReturnType<typeof createErrorResponse> | null {
   const config = getConfig();
 
   if (!config.writeEnabled) {
+    debugWarn('write access denied: writeEnabled is false');
     return createErrorResponse(
       new Error(
         'Notion write access is disabled. Enable it in your integration settings (Profile > Integrations > Notion).'
@@ -42,6 +44,7 @@ function checkWriteAccess(): ReturnType<typeof createErrorResponse> | null {
   }
 
   if (!config.rootPageId) {
+    debugWarn('write access denied: no rootPageId configured');
     return createErrorResponse(
       new Error(
         'No Notion root page configured. Set a root page ID in your integration settings to scope where content is created.'
@@ -63,10 +66,12 @@ async function checkPageAccess(
   pageId: string,
   requiredAccess: 'read' | 'readwrite'
 ): Promise<ReturnType<typeof createErrorResponse> | null> {
+  debug(`checkPageAccess: pageId=${pageId}, requiredAccess=${requiredAccess}`);
   const config = getConfig();
 
   // Legacy mode - no page-level restrictions
   if (config.accessMode !== 'selected') {
+    debug('checkPageAccess: accessMode is "all", granting access');
     return null;
   }
 
@@ -92,8 +97,10 @@ async function checkPageAccess(
   }
 
   // Walk ancestry to check if any ancestor is in the allowed list
+  debug(`checkPageAccess: walking ancestry for pageId=${pageId}`);
   const ancestorResult = await findAllowedAncestor(pageId, config.allowedPages, config.excludedPageIds);
   if (ancestorResult) {
+    debug(`checkPageAccess: ancestor match found`, { ancestorId: ancestorResult.id, access: ancestorResult.access });
     if (requiredAccess === 'readwrite' && ancestorResult.access !== 'readwrite') {
       return createErrorResponse(
         new Error(`Write access denied for page ${pageId}. Its parent scope is configured as read-only.`)
@@ -187,6 +194,7 @@ async function isDescendantOfRoot(targetId: string, rootPageId: string): Promise
     return true;
   }
 
+  debug(`isDescendantOfRoot: checking targetId=${targetId} against rootPageId=${rootPageId}`);
   let currentId = targetId;
   for (let depth = 0; depth < MAX_ANCESTRY_DEPTH; depth++) {
     let item: NotionRetrieveResponse;
@@ -199,19 +207,26 @@ async function isDescendantOfRoot(targetId: string, rootPageId: string): Promise
       }
     } catch {
       // Can't retrieve - not accessible or doesn't exist
+      debug(`isDescendantOfRoot: failed to retrieve ${currentId} at depth ${depth}`);
       return false;
     }
 
     const parent = item.parent;
-    if (!parent) return false;
+    if (!parent) {
+      debug(`isDescendantOfRoot: no parent on ${currentId} at depth ${depth}`);
+      return false;
+    }
 
     const parentId = parent.page_id || parent.database_id || parent.block_id;
     if (!parentId) {
       // Reached workspace root without finding rootPageId
+      debug(`isDescendantOfRoot: reached workspace root at depth ${depth}`);
       return false;
     }
 
+    debug(`isDescendantOfRoot: depth ${depth}, parentId=${parentId}`);
     if (normalizeId(parentId) === normalizedRoot) {
+      debug(`isDescendantOfRoot: match found at depth ${depth}`);
       return true;
     }
 
@@ -219,6 +234,7 @@ async function isDescendantOfRoot(targetId: string, rootPageId: string): Promise
   }
 
   // Exceeded max depth
+  debugWarn(`isDescendantOfRoot: exceeded max ancestry depth (${MAX_ANCESTRY_DEPTH})`);
   return false;
 }
 
@@ -405,6 +421,7 @@ export function registerPageTools(server: McpServer): void {
     },
     async ({ title, content, parentPageId, parentDatabaseId }) => {
       try {
+        debug('create_page invoked', { title, hasContent: !!content, parentPageId, parentDatabaseId });
         // Gate write access (legacy toggle + root page)
         const writeError = checkWriteAccess();
         if (writeError) return writeError;
@@ -503,6 +520,7 @@ export function registerPageTools(server: McpServer): void {
     },
     async ({ blockId, blocks }) => {
       try {
+        debug('append_blocks invoked', { blockId, blockCount: blocks.length });
         // Gate write access (legacy toggle + root page)
         const writeError = checkWriteAccess();
         if (writeError) return writeError;
@@ -558,6 +576,7 @@ export function registerPageTools(server: McpServer): void {
     },
     async ({ pageId, page_size, start_cursor }) => {
       try {
+        debug('read_page invoked', { pageId, page_size, start_cursor });
         // Page-level access control
         const pageAccessError = await checkPageAccess(pageId, 'read');
         if (pageAccessError) return pageAccessError;

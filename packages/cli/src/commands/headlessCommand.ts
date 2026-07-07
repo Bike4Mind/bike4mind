@@ -182,7 +182,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       completionsUrl = serverConfig?.completionsUrl;
 
       if (wsUrl && wsCompletionUrl) {
-        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter);
+        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
+        wsManager.onRevoked(() => {
+          logger.warn('[headless] Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
+        });
         await wsManager.connect();
         const wsToolExecutor = new WebSocketToolExecutor(wsManager, tokenGetter);
         setWebSocketToolExecutor(wsToolExecutor);
@@ -198,6 +201,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         throw new Error('No websocketUrl or wsCompletionUrl in server config');
       }
     } catch {
+      // A failed connect() still schedules a verify/reconnect via onclose. Falling back to
+      // SSE without tearing that down would leave an orphaned reconnect loop running with
+      // no owner, so disconnect before dropping the reference.
+      wsManager?.disconnect();
       wsManager = null;
       setWebSocketToolExecutor(null);
       llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, completionsUrl });

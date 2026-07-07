@@ -72,8 +72,6 @@ jobs:
       # Use b4m-release-bot App token (not GITHUB_TOKEN) so the manual bump PR
       # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
       # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
-      # NOTE: cleanup.yml uses the same App with different secret names (GH_APP_ID / GH_APP_PRIVATE_KEY).
-      # Consider consolidating to one naming convention in a follow-up.
       - name: Generate App token
         id: app-token
         uses: actions/create-github-app-token@v3

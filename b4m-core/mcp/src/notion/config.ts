@@ -5,6 +5,8 @@
  * Reinitializes when env vars change at runtime (MCP host can update them).
  */
 
+import { debug } from './logger.js';
+
 export interface AllowedPageEntry {
   id: string;
   access: 'read' | 'readwrite';
@@ -72,6 +74,13 @@ export function getConfig(): NotionConfig {
       excludedPageIds,
     };
     envSignature = signature;
+    debug('config initialized', {
+      writeEnabled: cachedConfig.writeEnabled,
+      rootPageId: cachedConfig.rootPageId ? '[set]' : null,
+      accessMode: cachedConfig.accessMode,
+      allowedPages: cachedConfig.allowedPages.length,
+      excludedPageIds: cachedConfig.excludedPageIds.length,
+    });
   }
 
   return cachedConfig;

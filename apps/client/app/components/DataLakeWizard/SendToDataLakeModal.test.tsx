@@ -16,11 +16,23 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
   updateFabFileOnServer: (...args: unknown[]) => updateFabFileOnServer(...args),
 }));
 
+// Mirror React Query's `enabled` semantics: a disabled query never fetches, so it has no data.
+const useDataLakes = vi.fn((enabled: boolean = true) =>
+  enabled
+    ? { data: [{ id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake:test' }], isLoading: false }
+    : { data: undefined, isLoading: false }
+);
+
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => ({
-    data: [{ id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake:test' }],
-    isLoading: false,
-  }),
+  useDataLakes: (enabled?: boolean) => useDataLakes(enabled),
+}));
+
+// The component reads the EnableDataLakes flag via useAdminSettingsCache; default it on so
+// the modal renders lakes. Individual tests can override isFeatureEnabled.
+const isFeatureEnabled = vi.fn(() => true);
+
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({ isFeatureEnabled }),
 }));
 
 vi.mock('sonner', () => ({
@@ -41,6 +53,9 @@ describe('SendToDataLakeModal', () => {
   beforeEach(() => {
     createFabFileOnServerWithUpload.mockReset();
     updateFabFileOnServer.mockReset();
+    useDataLakes.mockClear();
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
     useSendToDataLakeStore.setState({
       isOpen: true,
       content: 'hello world',
@@ -102,5 +117,22 @@ describe('SendToDataLakeModal', () => {
     screen.getByTestId('send-to-datalake-confirm-btn').click();
 
     await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not run the lakes query when EnableDataLakes is off, even while open', () => {
+    isFeatureEnabled.mockReturnValue(false);
+
+    render(
+      <TestWrapper>
+        <SendToDataLakeModal />
+      </TestWrapper>
+    );
+
+    // The query gate is `isOpen && isFeatureEnabled('EnableDataLakes')`. The store is open
+    // (set in beforeEach), so with the flag off the hook must still be called with enabled=false
+    // to avoid the 403 on /api/data-lakes.
+    expect(isFeatureEnabled).toHaveBeenCalledWith('EnableDataLakes');
+    expect(useDataLakes).toHaveBeenCalledWith(false);
+    expect(screen.queryByTestId('send-to-datalake-option-lake-1')).toBeNull();
   });
 });

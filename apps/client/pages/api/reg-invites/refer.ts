@@ -108,8 +108,9 @@ const handler = baseApi().post(
           inviteCode = existingInvite.code;
         }
 
-        const registrationLinkWithCode = `${registrationLink}?code=${inviteCode}`;
-
+        // Passwordless registration has no invite-code field, so the email links to
+        // the bare /register page - no `?code=` (dead copy the form can't consume).
+        // The invite record + code are still minted for referral tracking below.
         const finalBody = `
             <!DOCTYPE html>
             <html>
@@ -136,8 +137,7 @@ const handler = baseApi().post(
               <div class="content">
                 ${buildEmailLogoImg(brand, logoUrl)}
                 <p>${escape(emailBody)}</p>
-                <p>Use the following invite code to sign up: <strong>${escape(inviteCode)}</strong></p>
-                <p><a href="${escape(registrationLinkWithCode)}">Click here to register</a></p>
+                <p><a href="${escape(registrationLink)}">Click here to register</a></p>
               </div>
             </body>
             </html>

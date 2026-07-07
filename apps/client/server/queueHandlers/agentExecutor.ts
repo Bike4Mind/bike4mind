@@ -1862,6 +1862,14 @@ async function processExecution(
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
       const gate = readLastIterationConfidence();
+      if (gate !== null) {
+        // Telemetry (#56 M1.1): record every iteration the gate evaluates -
+        // including ones that complete in the same turn (isComplete=true) or
+        // clear the threshold - so `evaluatedCount` is the true denominator for
+        // fire rate. `recordGateEmitted` below increments the numerator only on
+        // a real pause. Baseline observability before touching signal quality.
+        await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
+      }
       if (
         gate !== null &&
         !iterationResult.isComplete &&
@@ -1892,6 +1900,9 @@ async function processExecution(
           await sendWs('failed', { executionId, reason: 'aborted' });
           return;
         }
+        // Telemetry (#56 M1.1): count this real pause only after `setPendingGate`
+        // confirms it landed (i.e. not raced by a concurrent abort).
+        await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', { executionId, ...gatePayload });
         // Emit a `progress` event with the paused status so the client's
         // existing `progress` subscriber flips `ExecutionStatusBanner` to
