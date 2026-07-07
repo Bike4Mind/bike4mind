@@ -91,6 +91,13 @@ export function useStreamingMessageMerge({
           images: chatCompletion.quest.images || baseQuest.images,
           videos: chatCompletion.quest.videos || baseQuest.videos,
           status: chatCompletion.quest.status || baseQuest.status,
+          // Prefer the live streamed classifier so the error CTA renders immediately,
+          // before the post-completion quest refetch backfills it from the DB.
+          errorCode: chatCompletion.quest.errorCode ?? baseQuest.errorCode,
+          // For a terminal error frame the authored message lives in the streamed
+          // quest's `reply` (streaming errors carry no `replies[]`); surface it so the
+          // notice never renders blank in the window before `baseQuest` reflects it.
+          reply: chatCompletion.quest.errorCode ? (chatCompletion.quest.reply ?? baseQuest.reply) : baseQuest.reply,
           promptMeta: mergedPromptMeta,
         };
       }
@@ -108,6 +115,7 @@ export function useStreamingMessageMerge({
         videos: sq.videos || [],
         status: sq.status || 'running',
         type: sq.type || 'message',
+        errorCode: sq.errorCode,
         deepResearchState: sq.deepResearchState,
         questMasterReply: sq.questMasterReply,
         questMasterPlanId: sq.questMasterPlanId,

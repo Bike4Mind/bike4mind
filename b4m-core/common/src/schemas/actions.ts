@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
-import { shareableDocumentSchema } from '../types';
+import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
 import { AGENT_EXECUTION_STATUSES, type AgentExecutionStatus } from '../constants/agentExecutionStatus';
 
 // Schemas for actions sent over the WebSocket connection.
@@ -306,6 +306,10 @@ export const StreamedChatCompletionAction = z.object({
       videos: z.array(z.string()).optional(),
       type: z.enum(['message', 'oob', 'error', 'system', 'voice_transcript']),
       status: z.enum(['stopped', 'running', 'done']).optional(),
+      // Machine-readable classifier for `type: 'error'` quests so the client can render a
+      // targeted error state (e.g. the inline "Add Credits" CTA) rather than raw `reply` text.
+      // Values derive from QUEST_ERROR_CODES so this enum can't drift from the TS union.
+      errorCode: z.enum(QUEST_ERROR_CODES).optional(),
       questMasterReply: z.string().nullable().optional(),
       questMasterPlanId: z.string().optional(),
       creditsUsed: z.number().optional(),

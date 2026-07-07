@@ -34,6 +34,7 @@ import CodeArtifactPreviewCard from '../GenAI/CodeArtifactPreviewCard';
 import ContentTransformPreviewCard from '../GenAI/ContentTransformPreviewCard';
 import { AccountTree as MermaidIcon, InsertDriveFileOutlined } from '@mui/icons-material';
 import ImageDisplay from './ImageDisplay';
+import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
 import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
@@ -534,6 +535,7 @@ const PromptReplies: FC<PromptReplyProps> = ({
     <>
       <ReplyContainer
         completed={messageData.status === 'done'}
+        errorCode={messageData.errorCode}
         showSyntaxHighlight={showSyntaxHighlight}
         reply={messageData.questMasterReply || replies[0]}
         thought={thoughts[0]}
@@ -1088,6 +1090,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   search,
   isExpandable = false,
   completed = false,
+  errorCode,
   questMasterPlanId,
   onSendMessage,
   messageId,
@@ -1445,6 +1448,13 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
+  }
+
+  // Out-of-credits errors render as a plain-language notice with an inline "Add Credits"
+  // CTA instead of the dead-end raw error text. `reply` carries the server-authored
+  // message (with the credit numbers).
+  if (errorCode === 'insufficient_credits') {
+    return <InsufficientCreditsNotice message={reply} />;
   }
 
   return (

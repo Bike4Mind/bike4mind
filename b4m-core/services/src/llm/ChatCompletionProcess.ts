@@ -24,6 +24,7 @@ import {
   ICreditHolder,
   ICreditHolderMethods,
   isImageServeable,
+  QuestErrorCode,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -96,6 +97,7 @@ import { AgentDetectionFeature } from './features/AgentDetectionFeature';
 import { SkillsFeature } from './features/SkillsFeature';
 import { StatusManager } from './StatusManager';
 import { buildContextOverflowMessage } from './contextOverflowMessage';
+import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
 import { TelemetryBuilder, mapBackendToProvider, categorizeToolError, AnomalyAlertService } from '../telemetry';
@@ -257,9 +259,17 @@ interface ProcessInitContext {
 }
 
 export class InsufficientCreditsError extends Error {
-  constructor(message: string) {
+  /**
+   * Optional machine-readable classifier propagated onto the error quest
+   * (`quest.errorCode`) so the client can render a targeted error state. Set only
+   * for genuine out-of-credits throws - the dispute-pending fraud gates reuse this
+   * error class but must NOT surface an "Add Credits" CTA, so they leave it unset.
+   */
+  readonly code?: QuestErrorCode;
+  constructor(message: string, code?: QuestErrorCode) {
     super(message);
     this.name = 'InsufficientCreditsError';
+    this.code = code;
   }
 }
 
@@ -2012,10 +2022,12 @@ export class ChatCompletionProcess {
           // Rollback immediately and reject
           await reservationMethods.incrementCredits(reservationOwnerId, requiredCredits);
           const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + requiredCredits;
-          const errorMessage = organization
-            ? `Your organization "${organization.name}" does not have enough credits. Available: ${actualBalance}, required: ${requiredCredits}.`
-            : `You do not have enough credits. Available: ${actualBalance}, required: ${requiredCredits}. Try a shorter prompt or reduce history.`;
-          throw new InsufficientCreditsError(errorMessage);
+          const errorMessage = buildInsufficientCreditsMessage({
+            available: actualBalance,
+            required: requiredCredits,
+            organizationName: organization?.name,
+          });
+          throw new InsufficientCreditsError(errorMessage, 'insufficient_credits');
         }
 
         // Update in-memory balance so mid-stream tool validation sees the reduced balance
@@ -3648,6 +3660,13 @@ export class ChatCompletionProcess {
       quest.reply = (err as Error).message;
       quest.type = 'error';
       quest.status = 'done';
+      // Propagate a machine-readable classifier so the client can render a targeted
+      // error state (e.g. the inline "Add Credits" CTA). Only genuine out-of-credits
+      // throws set `code` - the dispute-pending fraud gates reuse InsufficientCreditsError
+      // but intentionally leave it unset.
+      if (err instanceof InsufficientCreditsError && err.code) {
+        quest.errorCode = err.code;
+      }
 
       const errorSaveStartTime = Date.now();
       finalQuest = await saveQuest(quest);
