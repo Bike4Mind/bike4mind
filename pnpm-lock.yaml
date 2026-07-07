@@ -1757,6 +1757,9 @@ importers:
       sharp:
         specifier: ^0.34.5
         version: 0.34.5
+      shell-quote:
+        specifier: ^1.8.4
+        version: 1.8.4
       speakeasy:
         specifier: ^2.0.0
         version: 2.0.0
@@ -1836,6 +1839,9 @@ importers:
       '@types/react':
         specifier: ^19.2.15
         version: 19.2.15
+      '@types/shell-quote':
+        specifier: ^1.7.5
+        version: 1.7.5
       '@types/ws':
         specifier: ^8.18.1
         version: 8.18.1
@@ -5120,6 +5126,9 @@ packages:
 
   '@types/serve-static@1.15.8':
     resolution: {integrity: sha512-roei0UY3LhpOJvjbIP6ZZFngyLKl5dskOtDhxY5THRSpO+ZI+nzJ+m5yUMzGrp89YRa7lvknKkMYjqQFGwA7Sg==}
+
+  '@types/shell-quote@1.7.5':
+    resolution: {integrity: sha512-+UE8GAGRPbJVQDdxi16dgadcBfQ+KG2vgZhV1+3A1XmHbmwcdwhCUwIdy+d3pAGrbvgRoVSjeI9vOWyq376Yzw==}
 
   '@types/sinon@17.0.4':
     resolution: {integrity: sha512-RHnIrhfPO3+tJT0s7cFaXGZvsL4bbR3/k7z3P312qMS4JaS2Tk+KiwiLx1S0rQ56ERj00u1/BtdyVd0FY+Pdew==}
@@ -15875,6 +15884,8 @@ snapshots:
       '@types/http-errors': 2.0.5
       '@types/node': 24.12.3
       '@types/send': 0.17.5
+
+  '@types/shell-quote@1.7.5': {}
 
   '@types/sinon@17.0.4':
     dependencies:
