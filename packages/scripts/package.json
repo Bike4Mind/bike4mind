@@ -45,10 +45,10 @@
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-lambda": "^3.1069.0",
-    "@aws-sdk/client-s3": "^3.1069.0",
-    "@aws-sdk/client-sqs": "^3.1069.0",
-    "@aws-sdk/client-ssm": "^3.1069.0",
+    "@aws-sdk/client-lambda": "^3.1080.0",
+    "@aws-sdk/client-s3": "^3.1080.0",
+    "@aws-sdk/client-sqs": "^3.1080.0",
+    "@aws-sdk/client-ssm": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
