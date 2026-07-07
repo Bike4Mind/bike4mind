@@ -4,14 +4,34 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { DataLakeSettingsModal } from './DataLakeListPanel';
+import DataLakeListPanel, { DataLakeSettingsModal } from './DataLakeListPanel';
 
 const updateMutate = vi.fn();
 const warn = vi.fn();
 
-vi.mock('@client/app/hooks/data/dataLakes', () => ({
-  useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
-  useSetLakeVisibility: () => ({ mutate: vi.fn(), isPending: false }),
+vi.mock('@client/app/hooks/data/dataLakes', () => {
+  const mutation = () => ({ mutate: vi.fn(), isPending: false });
+  return {
+    useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
+    useSetLakeVisibility: () => ({ mutate: vi.fn(), isPending: false }),
+    useArchiveDataLake: mutation,
+    useUnarchiveDataLake: mutation,
+    useRestoreDeletedDataLake: mutation,
+    usePermanentDeleteDataLake: mutation,
+    useCleanupDataLake: mutation,
+    useGetArchivedDataLakes: () => ({ data: undefined }),
+    useGetDeletedDataLakes: () => ({ data: undefined }),
+  };
+});
+
+vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
+  useDataLakes: () => ({ data: [], isLoading: false }),
+}));
+
+// Default (flag on) is established per-describe; tests override per-case.
+const isFeatureEnabled = vi.fn();
+vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
+  useAdminSettingsCache: () => ({ isFeatureEnabled }),
 }));
 
 // The settings modal derives org-visibility state from the account switcher (useAccounts),
@@ -105,5 +125,37 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
     expect(updateMutate).toHaveBeenCalledTimes(1);
     // Unchanged gate is still sent so it's preserved.
     expect(updateMutate.mock.calls[0][0]).toMatchObject({ requiredUserTag: 'Opti' });
+  });
+});
+
+describe('DataLakeListPanel - EnableDataLakes gating', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+  });
+
+  it('renders the panel when the feature is on', () => {
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-list-panel')).toBeInTheDocument();
+  });
+
+  it('renders nothing when the feature is off (shared choke point for every manager entry)', () => {
+    isFeatureEnabled.mockImplementation((key: string) => key !== 'EnableDataLakes');
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    // The panel's lakes queries 403 when the feature is off, and its empty state
+    // is a dead end - so the panel must not render at all, mirroring
+    // SendToDataLakeModal's render guard.
+    expect(screen.queryByTestId('datalake-list-panel')).not.toBeInTheDocument();
   });
 });

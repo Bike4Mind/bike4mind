@@ -40,6 +40,7 @@ import { MobileSearchFilter } from './MobileSearchFilter';
 import { useAddFilesToProject } from '@client/app/hooks/data/projects';
 import { UploadActionsSelect } from './UploadActionsSelect';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useQueryClient } from '@tanstack/react-query';
@@ -61,6 +62,10 @@ const FileBrowserContent = () => {
   const isResearchEngineFeatureEnabled = isFeatureEnabled('enableResearchEngine');
 
   const openDataLakeManager = useDataLakeWizardStore(s => s.openManager);
+  // Admin flag (useAdminSettingsCache), distinct from the experimental-features
+  // isFeatureEnabled above: hide the Data Lakes manager entry when the feature is
+  // off, matching the rest of the data-lake surface (CreateDataLakeButton etc).
+  const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
 
   // WebSocket subscription for real-time file vectorization updates
   const { subscribeToAction } = useWebsocket();
@@ -472,7 +477,7 @@ const FileBrowserContent = () => {
             onUploadFiles={handleUploadFiles}
             onAddFromUrl={handleAddFromUrl}
             onCreateKnowledge={handleCreateKnowledge}
-            onCreateDataLake={openDataLakeManager}
+            onCreateDataLake={isAdminFeatureEnabled('EnableDataLakes') ? openDataLakeManager : undefined}
             isUploading={createFile.isPending}
           />
 
@@ -890,9 +895,12 @@ const FileBrowserContent = () => {
   );
 };
 
-const UploadDropdown: FC<{ isLoading: boolean }> = ({ isLoading }) => {
+export const UploadDropdown: FC<{ isLoading: boolean }> = ({ isLoading }) => {
   const createFile = useCreateFabFile();
   const openDataLakeManager = useDataLakeWizardStore(s => s.openManager);
+  // Hide the Data Lakes manager entry when the feature is off, matching the rest
+  // of the data-lake surface (CreateDataLakeButton etc).
+  const { isFeatureEnabled } = useAdminSettingsCache();
   const [openUrl, setOpenUrl] = useState(false);
   const [setKnowledgeOpen, setSelectedFabFileId, setViewOnly] = useKnowledgeModal(
     useShallow(state => [state.setOpen, state.setSelectedFabFileId, state.setViewOnly] as const)
@@ -926,7 +934,7 @@ const UploadDropdown: FC<{ isLoading: boolean }> = ({ isLoading }) => {
         onUploadFiles={handleUploadFiles}
         onAddFromUrl={handleAddFromUrl}
         onCreateKnowledge={handleCreateKnowledge}
-        onCreateDataLake={openDataLakeManager}
+        onCreateDataLake={isFeatureEnabled('EnableDataLakes') ? openDataLakeManager : undefined}
         isUploading={createFile.isPending}
         variant="desktop"
       />

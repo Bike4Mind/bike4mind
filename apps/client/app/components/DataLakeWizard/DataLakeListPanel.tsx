@@ -46,6 +46,7 @@ import {
 } from '@client/app/hooks/data/dataLakes';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { toast } from 'sonner';
 import DataLakeViewer from './DataLakeViewer';
 
@@ -67,8 +68,15 @@ export default function DataLakeListPanel() {
 
   const { data: archivedLakes } = useGetArchivedDataLakes(showArchived);
   const { data: deletedLakes } = useGetDeletedDataLakes(showDeleted);
+  const { isFeatureEnabled } = useAdminSettingsCache();
 
   const stop = (e: React.MouseEvent) => e.stopPropagation();
+
+  // Shared choke point for every manager entry point: with the feature off the
+  // lakes queries 403 and the empty panel is a dead end, so never render - even
+  // if some (future) ungated caller opens the manager. Mirrors the render guard
+  // in SendToDataLakeModal. Placed after all hooks so the hook order is stable.
+  if (!isFeatureEnabled('EnableDataLakes')) return null;
 
   return (
     <>
