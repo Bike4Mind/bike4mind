@@ -186,8 +186,11 @@ interface AnchorMatch {
 /**
  * Anchor matching: pin the first and last (trimmed) lines of the block, allow the
  * interior line count to drift, and require enough interior lines to line up in
- * order. Windows are bounded to {@link MAX_ANCHOR_EXPANSION}x the block length;
- * the disproportion guard is the final backstop on the resolved span.
+ * order. Windows are bounded to {@link MAX_ANCHOR_EXPANSION}x the block length.
+ * Similarity is measured against the window's own interior size (see
+ * {@link interiorSimilarity}), so a window padded with unrelated lines is rejected
+ * rather than silently accepted; the disproportion guard is a further backstop on
+ * the resolved span.
  */
 function findAnchorMatches(contentLines: LineInfo[], oldLines: string[]): AnchorMatch[] {
   const blockLength = oldLines.length;
@@ -210,14 +213,22 @@ function findAnchorMatches(contentLines: LineInfo[], oldLines: string[]): Anchor
   return matches;
 }
 
-/** Fraction of `interiorOld` lines matched, in order, within the window (i, j). */
+/**
+ * Similarity of the window `(i, j)` to the old block's interior. `interiorOld`
+ * lines must appear in order, and the score is divided by the *larger* of the
+ * old interior and the window's own interior line count. Dividing by the window
+ * size is what stops a window padded with unrelated lines (e.g. one that bridges
+ * two adjacent blocks) from scoring highly on a single incidental match: such a
+ * window has few matched lines relative to its size, so it falls below threshold.
+ */
 function interiorSimilarity(contentLines: LineInfo[], i: number, j: number, interiorOld: string[]): number {
-  if (interiorOld.length === 0) return 1;
+  const windowInterior = j - i - 1;
+  if (interiorOld.length === 0 && windowInterior === 0) return 1;
   let cursor = 0;
   for (let w = i + 1; w < j && cursor < interiorOld.length; w++) {
     if (contentLines[w].text.trim() === interiorOld[cursor]) cursor++;
   }
-  return cursor / interiorOld.length;
+  return cursor / Math.max(interiorOld.length, windowInterior);
 }
 
 /**
@@ -294,7 +305,9 @@ export function fuzzyMatch(content: string, oldString: string, newString: string
   if (unescaped !== oldString && content.includes(unescaped)) {
     const occurrences = countOccurrences(content, unescaped);
     if (occurrences > 1) throw new AmbiguousMatchError(occurrences);
-    if (isDisproportionate(unescaped.length, oldString.length)) throw new DisproportionateMatchError();
+    // No disproportion guard here: unescaping only ever shortens `oldString`
+    // (each 2-char escape collapses to 1 char), so the matched span can never be
+    // larger than what the model supplied.
     return {
       matchedText: unescaped,
       replacement: normalizeEol(newString, eol),
@@ -348,10 +361,11 @@ export function fuzzyMatch(content: string, oldString: string, newString: string
 
   // 5. Block-anchor similarity: pin first/last line, tolerate interior drift.
   if (oldLines.length >= ANCHOR_MIN_LINES) {
+    // Each (startLine, endLine) pair is generated at most once by the anchor
+    // scan, so the match count is already the distinct-span count.
     const anchorMatches = findAnchorMatches(contentLines, oldLines);
-    const distinctSpans = new Set(anchorMatches.map(match => `${match.startLine}:${match.endLine}`));
-    if (distinctSpans.size > 1) throw new AmbiguousMatchError(distinctSpans.size);
-    if (anchorMatches.length >= 1) {
+    if (anchorMatches.length > 1) throw new AmbiguousMatchError(anchorMatches.length);
+    if (anchorMatches.length === 1) {
       const best = anchorMatches[0];
       return buildLineSpanResult(
         content,

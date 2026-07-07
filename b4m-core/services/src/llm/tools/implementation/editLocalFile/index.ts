@@ -103,6 +103,9 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
     strategy = fuzzy.strategy;
   }
 
+  // Splice the replacement in literally. (String.prototype.replace would
+  // interpret `$&`, `$$`, `$1`, etc. in `replacement` as substitution patterns;
+  // slicing avoids that so the new content is inserted byte-for-byte.)
   const newContent =
     currentContent.slice(0, startIndex) + replacement + currentContent.slice(startIndex + matchedText.length);
 

@@ -126,18 +126,29 @@ describe('fuzzyMatch', () => {
 
   describe('disproportion guard', () => {
     it('isDisproportionate flags spans far larger than old_string', () => {
-      expect(isDisproportionate(50, 40)).toBe(false); // small spans are exempt
+      expect(isDisproportionate(50, 40)).toBe(false); // under the ratio
       expect(isDisproportionate(300, 250)).toBe(false); // under the ratio
       expect(isDisproportionate(300, 50)).toBe(true); // large and > 3x
     });
 
     it('refuses an anchor match that bridges a disproportionately large region', () => {
-      const filler = Array.from({ length: 8 }, (_, i) => `  const bloat${i} = ${'y'.repeat(40)};`).join('\n');
-      // Anchors ("open() {" / "}") and the interior "marker();" line up, so the
-      // anchor matcher fires -- but the resolved span is far larger than old_string.
-      const content = ['open() {', '  marker();', filler, '}'].join('\n');
-      const oldString = ['open() {', '  marker();', '}'].join('\n');
+      // The interior "a()" / "b()" lines line up (similarity stays above
+      // threshold), so the anchor matcher fires -- but a single huge interior
+      // line makes the resolved span far larger than old_string.
+      const huge = `  const bloat = ${'y'.repeat(300)};`;
+      const content = ['open() {', '  a();', huge, '  b();', '}'].join('\n');
+      const oldString = ['open() {', '  a();', '  b();', '}'].join('\n');
       expect(() => fuzzyMatch(content, oldString, 'open() {\n}')).toThrow(DisproportionateMatchError);
+    });
+
+    it('refuses (rather than silently applying) an anchor block that resolves into a larger span in a small file', () => {
+      // Reproducer: old_string's anchors match the first block, but its lone
+      // interior line ("b;") only appears in the *second* block. The one window
+      // that survives interior matching spans both blocks -- it must not be
+      // silently accepted just because the file is small.
+      const content = ['if (x) {', '  a;', '}', 'if (y) {', '  b;', '}'].join('\n');
+      const oldString = ['if (x) {', '  b;', '}'].join('\n');
+      expect(fuzzyMatch(content, oldString, 'REPLACED')).toBeNull();
     });
   });
 
