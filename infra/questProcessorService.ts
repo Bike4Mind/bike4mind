@@ -3,7 +3,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
-import { cdnUrlForLambdaEnv } from './router';
+import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { allSecrets } from './secrets';
 import { cluster, resolvedVpcId } from './vpc';
 import { websocketApi } from './websocket';
@@ -56,10 +56,14 @@ export const questProcessorService = new sst.aws.Service('QuestProcessorService'
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
   // out-of-band keeps `sst deploy` build-free, matching subscriberFanout.
   image: questProcessorImage,
-  // VPC-internal load balancer — only the frontend Lambda (same VPC) can reach it. The
-  // shared-secret bearer checked in server.ts is defense-in-depth on top of this.
+  // Internet-facing load balancer. Public so the v2 CLI/3rd-party completions endpoint
+  // (/api/ai/v2/completions) can be exposed under the bike4mind domain via the shared
+  // CloudFront router (route added below). /process is also reachable on this ALB but is
+  // NOT routed through CloudFront and stays guarded by the shared-secret bearer checked in
+  // server.ts. NOTE: the frontend Lambda's /process dispatch now targets the public ALB DNS
+  // (Resource.QuestProcessorService.url) and egresses via NAT rather than staying VPC-internal.
   loadBalancer: {
-    public: false,
+    public: true,
     rules: [{ listen: '80/http', forward: '8080/http' }],
     health: {
       '8080/http': {
@@ -152,6 +156,16 @@ export const questProcessorService = new sst.aws.Service('QuestProcessorService'
 // conflict on the shared `default` SG. Guarded on !$dev: in `sst dev` the Service runs via
 // dev.command with no load balancer, and accessing nodes.loadBalancer would throw.
 if (!$dev) {
+  // Expose the v2 CLI/3rd-party completions endpoint under the bike4mind domain via the
+  // shared CloudFront router (same distribution as the app and the v1 `cliLlmHandler`
+  // Lambda). CloudFront terminates TLS at the edge and forwards to the public ALB over
+  // http (:80 -> container :8080). Only this path is routed through CloudFront; /process is
+  // reachable only via the ALB directly. routePrefix namespaces the path per-stage on the
+  // shared dev distribution (empty on deployed dev/production). Guarded on !$dev because the
+  // load balancer (and thus `.url`) only exists when the Service runs in the cloud - under
+  // `sst dev` it runs via dev.command with no ALB, and the CLI reaches it on localhost:8788.
+  router.route(`${routePrefix}/api/ai/v2/completions`, questProcessorService.url);
+
   const defaultSecurityGroupId = aws.ec2
     .getSecurityGroupsOutput({
       filters: [

@@ -7,21 +7,26 @@ import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { processQuest } from '@server/queueHandlers/questProcessor';
+import { registerCompletionsV2Route } from './completionsRoute';
 
 /**
- * QuestProcessorService - always-on HTTP worker.
+ * QuestProcessorService - always-on HTTP worker (Fargate).
  *
- * Replaces the old EventBridge -> questProcessor Lambda. The frontend (`/api/ai/llm`,
- * `/api/chat`) creates the quest, then POSTs the QuestStartBody here and gets a 202
- * back in ~milliseconds. We process the quest in-process (the container outlives the
- * HTTP request, unlike a Lambda) and stream results over the existing WebSocket path.
+ * Replaces the old EventBridge -> questProcessor Lambda. Serves two surfaces:
+ *   - POST /process - the frontend (`/api/ai/llm`, `/api/chat`) creates the quest, POSTs the
+ *     QuestStartBody here, and gets a 202 back in ~milliseconds; we process it in-process (the
+ *     container outlives the request, unlike a Lambda) and stream results over WebSocket.
+ *   - POST /api/ai/v2/completions - the user-authenticated CLI/3rd-party SSE completions
+ *     endpoint (see completionsRoute.ts).
  *
  * Why this exists: a long-running container has no cold start and no 15-minute Lambda
  * timeout - the two problems the Lambda path suffered from.
  *
- * Reachability: served on a VPC-internal load balancer, so only the frontend Lambda
- * (same VPC) can reach it. A shared-secret bearer (SECRET_ENCRYPTION_KEY, which both
- * sides already link) is checked as defense-in-depth on top of the network boundary.
+ * Reachability: served on a PUBLIC load balancer (so /api/ai/v2/completions can be exposed
+ * under the bike4mind domain via CloudFront - see infra/questProcessorService.ts). /process is
+ * reachable on the same ALB but is NOT routed through CloudFront and is guarded by a
+ * shared-secret bearer (SECRET_ENCRYPTION_KEY, checked in `authorize` below); the v2 endpoint
+ * uses its own user auth (API key / JWT).
  */
 
 // Default to 8788 for local dev (8080 is commonly taken on dev machines, e.g. Docker
@@ -120,6 +125,14 @@ export function createApp() {
         inFlight.delete(task);
       });
     inFlight.add(task);
+  });
+
+  // v2 CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on the
+  // always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
+  // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
+  registerCompletionsV2Route(app, promise => {
+    inFlight.add(promise);
+    void promise.finally(() => inFlight.delete(promise));
   });
 
   return app;
