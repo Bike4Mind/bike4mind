@@ -244,12 +244,14 @@ describe('executeToolsBatch', () => {
       const log: Array<{ id: string; event: string; time: number }> = [];
       const tasks = [timedTask('A', 30, log), timedTask('B', 30, log)];
 
-      const startTime = Date.now();
       await executeToolsBatch(tasks, { parallel: true, maxConcurrency: 10 });
-      const elapsed = Date.now() - startTime;
 
-      // Should run concurrently (not limited)
-      expect(elapsed).toBeLessThan(55);
+      // Should run concurrently (not limited): both tasks start before either ends.
+      // This interleaving check is jitter-immune, unlike a raw wall-clock bound which
+      // flaked on loaded CI runners (66ms vs a 55ms limit) - see the concurrency test above.
+      const lastStart = Math.max(...log.filter(e => e.event === 'start').map(e => e.time));
+      const firstEnd = Math.min(...log.filter(e => e.event === 'end').map(e => e.time));
+      expect(lastStart).toBeLessThanOrEqual(firstEnd);
     });
 
     it('handles PermissionDeniedError with concurrency limiting', async () => {
