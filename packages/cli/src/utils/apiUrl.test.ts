@@ -8,7 +8,14 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { getApiUrl, getDefaultApiUrl, getCreditsUrl, getEnvironmentName } from './apiUrl';
+import {
+  resolveApiEndpoint,
+  requireApiUrl,
+  ApiEndpointUnconfiguredError,
+  getDefaultApiUrl,
+  getCreditsUrl,
+  getEnvironmentName,
+} from './apiUrl';
 
 afterEach(() => {
   delete process.env.B4M_DEFAULT_API_URL;
@@ -27,20 +34,48 @@ describe('getDefaultApiUrl', () => {
   });
 });
 
-describe('getApiUrl', () => {
-  it('prefers a configured custom URL over the default', () => {
+describe('resolveApiEndpoint', () => {
+  it('prefers a configured custom URL over the default, tagged as custom', () => {
     process.env.B4M_DEFAULT_API_URL = 'https://app.bike4mind.com';
-    expect(getApiUrl({ customUrl: 'https://app.example.com' })).toBe('https://app.example.com');
+    expect(resolveApiEndpoint({ customUrl: 'https://app.example.com' })).toEqual({
+      status: 'configured',
+      url: 'https://app.example.com',
+      source: 'custom',
+    });
   });
 
-  it('falls back to the build-time default when no custom URL is set', () => {
+  it('falls back to the build-time default, tagged as baked-default', () => {
     process.env.B4M_DEFAULT_API_URL = 'https://app.bike4mind.com';
-    expect(getApiUrl(undefined)).toBe('https://app.bike4mind.com');
+    expect(resolveApiEndpoint(undefined)).toEqual({
+      status: 'configured',
+      url: 'https://app.bike4mind.com',
+      source: 'baked-default',
+    });
   });
 
-  it('returns an empty default for an unbranded fork with no custom URL', () => {
+  it('is unconfigured for an unbranded fork with no custom URL', () => {
     delete process.env.B4M_DEFAULT_API_URL;
-    expect(getApiUrl(undefined)).toBe('');
+    expect(resolveApiEndpoint(undefined)).toEqual({ status: 'unconfigured' });
+  });
+
+  it('is unconfigured when a custom URL is an empty string', () => {
+    delete process.env.B4M_DEFAULT_API_URL;
+    expect(resolveApiEndpoint({ customUrl: '' })).toEqual({ status: 'unconfigured' });
+  });
+});
+
+describe('requireApiUrl', () => {
+  it('returns the configured URL', () => {
+    process.env.B4M_DEFAULT_API_URL = 'https://app.bike4mind.com';
+    expect(requireApiUrl(undefined)).toBe('https://app.bike4mind.com');
+    expect(requireApiUrl({ customUrl: 'https://app.example.com' })).toBe('https://app.example.com');
+  });
+
+  it('throws an actionable ApiEndpointUnconfiguredError when unconfigured', () => {
+    delete process.env.B4M_DEFAULT_API_URL;
+    expect(() => requireApiUrl(undefined)).toThrow(ApiEndpointUnconfiguredError);
+    // The message must point the developer at how to configure an endpoint.
+    expect(() => requireApiUrl(undefined)).toThrow(/--api-url/);
   });
 });
 

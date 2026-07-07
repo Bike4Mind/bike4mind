@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "AI کی ترتیبات",
     "session": "نوٹ بک",
@@ -60,9 +60,9 @@
     }
   },
   "referral": {
-    "title": "دوست کو GrokTool میں متعارف کرائیں",
-    "email_title_default": "GrokTool میں خوش آمدید!",
-    "email_body_default": "آپ کو USER_NAME نے GrokTool میں مدعو کیا ہے! REGISTRATION_LINK: سائن اپ کرنے کے لئے درج ذیل دعوت نامہ کوڈ استعمال کریں: INVITE_CODE",
+    "title": "دوست کو Bike4Mind میں متعارف کرائیں",
+    "email_title_default": "Bike4Mind میں خوش آمدید!",
+    "email_body_default": "آپ کو USER_NAME نے Bike4Mind میں مدعو کیا ہے! REGISTRATION_LINK: سائن اپ کرنے کے لئے درج ذیل دعوت نامہ کوڈ استعمال کریں: INVITE_CODE",
     "friend_email": "دوست کا ایمیل",
     "num_referrals_available": "دستیاب حوالہ جات:",
     "no_valid_emails_error": "براہ کرم درست ایمیل پتہ داخل کریں",

@@ -1,4 +1,5 @@
-import { test } from './fixtures';
+import { test, expect } from './fixtures';
+import { apiGetOtcCode } from './helpers/api';
 
 test.describe('Signup', () => {
   // The "Sign up" link + /register are gated on the global `allowOpenRegistration` setting.
@@ -41,5 +42,71 @@ test.describe('Signup', () => {
     await signupPage.submit();
 
     await signupPage.expectOtcStep();
+  });
+
+  test('registers inline from the login form (email → code → username → account)', async ({
+    basePage,
+    loginPage,
+    page,
+    request,
+  }) => {
+    // The login form doubles as registration: entering an email with no account, verifying the
+    // emailed code, then picking a username creates the account WITHOUT visiting /register (see
+    // MultiStepLogin's `register-username` step, gated on the same allowOpenRegistration setting
+    // as the beforeEach above). Unlike auth.spec.ts's login happy-path, this needs a brand-new
+    // email so the verified code returns `registrationRequired` instead of logging in.
+    //
+    // The full flow is only completable end-to-end because the emailed code is read back via the
+    // non-prod /api/test/otc-code endpoint (gated by E2E_CLEANUP_SECRET + a -e2e@test.com email
+    // restriction - there's no test mailbox). A unique email per run dodges the account-already-
+    // exists shape and the per-recipient send cooldown.
+    const timestamp = Date.now();
+    const email = `inline-signup-${timestamp}-e2e@test.com`;
+
+    await basePage.clearAllStorage();
+    await loginPage.goto();
+
+    // Rate-limit escape hatch. The OTC send (5/15min per IP) and auth-strategy (10/min per IP)
+    // checks are rate limited server-side; on the shared CI egress IP a run can legitimately draw
+    // a 429, which leaves the form stuck on the email step. That's an infra limit, not a product
+    // regression - annotate + skip rather than fail red. We flag only an *observed* 429, so any
+    // other reason the OTC step fails to appear still fails the test.
+    let rateLimited = false;
+    page.on('response', resp => {
+      if (resp.status() === 429 && /\/api\/(otc\/send|auth\/strategy)/.test(resp.url())) {
+        rateLimited = true;
+      }
+    });
+
+    await loginPage.submitEmail(email); // clicks Continue; sends the code (no OTC-step wait yet)
+    try {
+      await loginPage.expectOtcStep();
+    } catch (err) {
+      if (rateLimited) {
+        test.info().annotations.push({
+          type: 'rate-limited',
+          description:
+            'OTC send / auth-strategy returned 429 on the shared CI IP (send 5/15min, strategy 10/min). ' +
+            'Infra rate limit, not a product failure — skipping.',
+        });
+        test.skip();
+      }
+      throw err; // not a 429 → a real failure, surface it
+    }
+
+    const code = await apiGetOtcCode(request, email);
+    await loginPage.fillOtc(code);
+    // New email → the verified code returns registrationRequired, so login stays put and reveals
+    // the inline username step rather than redirecting into the app.
+    await loginPage.submitExpectingInlineRegister();
+    await loginPage.expectInlineRegisterStep();
+
+    await loginPage.fillInlineRegisterUsername(`inline-signup-${timestamp}`);
+    await loginPage.acceptInlineRegisterPolicies();
+    await loginPage.submitInlineRegister();
+    await basePage.dismissModals();
+
+    // Account created and signed in - we're off /login and into the app.
+    await expect(page).not.toHaveURL(/.*login.*/);
   });
 });

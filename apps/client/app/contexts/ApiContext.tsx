@@ -17,6 +17,48 @@ export function resetRefreshPromise() {
   refreshPromise = null;
 }
 
+// Guard so a burst of concurrent unrecoverable 401s triggers exactly one
+// redirect instead of racing multiple window.location.replace calls.
+// Exported so login flows can reset it, mirroring resetRefreshPromise above.
+let redirecting = false;
+export function resetRedirectingGuard() {
+  redirecting = false;
+}
+
+/**
+ * Single, idempotent teardown for a 401 that cannot be recovered by refresh
+ * (already expired, no refresh token, or the refresh attempt itself failed).
+ * Clears tokens, marks the session expired, wipes client caches, and redirects
+ * to /login - so an unrecoverable session always ends in a clean sign-out
+ * instead of silently flooding 401s with no prompt (the prior behavior for
+ * the "already expired / no refresh token" branch).
+ */
+async function forceSessionExpiredRedirect(): Promise<void> {
+  // markSessionExpired() clears the tokens AND sets expired: true in a
+  // single store write, so localStorage doesn't retain stale credentials
+  // and background tabs receive exactly one storage event with the final
+  // expired: true payload - no transient expired: false to race against
+  // the cross-tab redirect in providers.tsx. User-context localStorage
+  // is cleared separately by clearClientCaches().
+  useAccessToken.getState().markSessionExpired();
+
+  // Re-check isPublicPath here: the caller's own isPublicPath check may have
+  // happened before an async refresh round-trip, during which the user may
+  // have navigated to /login or another public path - don't redirect there.
+  if (redirecting || isPublicPath(window.location.pathname)) {
+    return;
+  }
+  redirecting = true;
+
+  // Await clearClientCaches before navigating: window.location.replace can unload
+  // the page mid-flight and cut off its async IndexedDB/Dexie deletes, leaving the
+  // previous user's cached data on disk (a concern on shared machines). The .catch
+  // keeps the redirect firing even if a delete rejects; login-page mount also
+  // re-clears as a backstop.
+  await clearClientCaches().catch(() => {});
+  window.location.replace(buildLoginRedirectUrl('session_expired', window.location));
+}
+
 // Helper function to check if a path is public.
 // Exported so the cross-tab logout listener (providers.tsx) can apply the same
 // "don't redirect away from a public/auth page" guard the interceptor uses.
@@ -102,10 +144,17 @@ export const ApiProvider: React.FC<PropsWithChildren> = ({ children }) => {
             return Promise.reject(error);
           }
 
-          const { refreshToken, expired } = getState();
+          const { refreshToken, expired, mfaPending } = getState();
 
-          // Already expired or no refresh token - don't attempt refresh
+          // Already expired or no refresh token - don't attempt refresh.
           if (expired || !refreshToken) {
+            // During mfaPending the login stage issues no refresh token by
+            // design (see useAccessToken.ts), so a 401 on a non-allowlisted
+            // endpoint lands here for a user who is mid-MFA-setup, not
+            // actually locked out - skip the forced redirect in that case.
+            if (!mfaPending) {
+              await forceSessionExpiredRedirect();
+            }
             return Promise.reject(error);
           }
 
@@ -147,36 +196,17 @@ export const ApiProvider: React.FC<PropsWithChildren> = ({ children }) => {
                 refreshToken: response.data.refreshToken,
               });
             } catch (e) {
-              // Only the initiator clears caches and marks session expired.
-              // markSessionExpired() clears the tokens AND sets expired: true in a
-              // single store write, so localStorage doesn't retain stale credentials
-              // and background tabs receive exactly one storage event with the final
-              // expired: true payload - no transient expired: false to race against
-              // the cross-tab redirect in providers.tsx. User-context localStorage
-              // is cleared separately by clearClientCaches().
-              useAccessToken.getState().markSessionExpired();
-              // Refresh failed - the session can't be recovered. Redirect to login
-              // instead of leaving the user stranded on a page that floods 401s with
-              // no prompt. This mirrors the reload-recovery path (RestrictedPage
-              // redirects on a missing user) and the logout redirect. A full-page
-              // window.location.replace avoids a circular import on the user store and
-              // unmounts the app, which also stops the in-flight 401 cascade. The
-              // session_expired code surfaces a toast on the login screen, and
-              // redirectTo returns the user to where they were after re-login.
-              // Re-check isPublicPath here (the response-time isPublicPath check above
-              // already filtered when the response landed): the refresh round-trip is
-              // async, so the user may have navigated to /login or another public
-              // path meanwhile - don't redirect (or capture redirectTo) in that case.
-              //
-              // Await clearClientCaches before navigating: window.location.replace can unload
-              // the page mid-flight and cut off its async IndexedDB/Dexie deletes, leaving the
-              // previous user's cached data on disk (a concern on shared machines). The .catch
-              // keeps the redirect firing even if a delete rejects; login-page mount also
-              // re-clears as a backstop.
-              await clearClientCaches().catch(() => {});
-              if (!isPublicPath(window.location.pathname)) {
-                window.location.replace(buildLoginRedirectUrl('session_expired', window.location));
-              }
+              // Only the initiator runs the teardown. Refresh failed - the session
+              // can't be recovered. This mirrors the reload-recovery path
+              // (RestrictedPage redirects on a missing user) and the logout
+              // redirect: redirect to login instead of leaving the user stranded
+              // on a page that floods 401s with no prompt. A full-page
+              // window.location.replace (inside the helper) avoids a circular
+              // import on the user store and unmounts the app, which also stops
+              // the in-flight 401 cascade. The session_expired code surfaces a
+              // toast on the login screen, and redirectTo returns the user to
+              // where they were after re-login.
+              await forceSessionExpiredRedirect();
               throw e;
             } finally {
               refreshPromise = null;

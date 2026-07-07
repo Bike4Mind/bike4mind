@@ -522,7 +522,7 @@ interface BaseSetting {
    * The app(s) that this setting is applicable to.
    * If not provided, the setting is applicable to all apps.
    */
-  app?: 'groktool';
+  app?: 'bike4mind';
   /** The category that this setting belongs to. */
   category?: Category;
   /** The group that this setting belongs to. */

@@ -149,6 +149,14 @@ export async function publishArtifactBundle(input: {
   content: string;
   title: string;
   userId: string;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/u/{userId}` page).
+   * Pass `'organization'` with `scopeId` set to the org id to publish an org-scoped page
+   * (`/p/o/{orgId}`) that the serve gate authorizes to org members - see `artifactBundlePublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier`. Defaults to `userId` (user tier). For org tier, the org id. */
+  scopeId?: string;
   visibility?: PublishVisibility;
   commentPolicy?: CommentPolicy;
   /**
@@ -184,8 +192,8 @@ export async function publishArtifactBundle(input: {
 
   // Step 1 - request a presigned PUT for index.html.
   const { data: draft } = await api.post<UploadUrlResponse>('/api/publish/artifact/upload-url', {
-    tier: 'user',
-    scopeId: input.userId,
+    tier: input.tier ?? 'user',
+    scopeId: input.scopeId ?? input.userId,
     slug,
     title: input.title || 'Shared artifact',
     visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
@@ -228,6 +236,13 @@ export interface ArtifactPublishOpts {
  * decides the mode: "update" reuses the existing publication's slug (passed back as
  * `existingSlug`) so finalize appends a version; "new" (the default) derives a fresh
  * slug for a separate page.
+ *
+ * When the caller is in an org ("Team") account context, `orgId` enables the dialog's
+ * Team option: picking `'organization'` visibility publishes an org-tier page
+ * (`tier:'organization'`, `scopeId=orgId` → `/p/o/{orgId}/{slug}`). This is the ONLY
+ * combination the serve gate authorizes to org members - a user-tier page with org
+ * visibility would 403 for everyone but the owner (its scopeId is the user id, never the
+ * viewer's org id). The server re-validates org membership before trusting the scope.
  */
 export function artifactBundlePublisher(input: {
   artifactId: string;
@@ -235,11 +250,18 @@ export function artifactBundlePublisher(input: {
   content: string;
   title: string;
   userId: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
 }): (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult> {
+  const { orgId, ...bundle } = input;
   return (visibility, opts) =>
     publishArtifactBundle({
-      ...input,
+      ...bundle,
       visibility,
+      // Org visibility publishes a real org-tier page (scopeId = org id) so same-org members
+      // can view it. Requires an active org; the dialog only offers the Team option when one
+      // exists, so this branch is unreachable without orgId.
+      ...(visibility === 'organization' && orgId ? { tier: 'organization' as const, scopeId: orgId } : {}),
       // 'update' pins the existing slug so finalize appends a version; 'new' with a prior
       // publication forces a unique slug so it can't collide back onto ANY existing one.
       ...(opts?.mode === 'update' && opts.existingSlug
@@ -265,6 +287,8 @@ export function buildArtifactPublishWiring(input: {
   content: string;
   title: string;
   userId: string;
+  /** The caller's active org, when in a "Team" account context. Enables org-scoped publishing. */
+  orgId?: string;
 }): {
   resolveExisting: () => Promise<ManagedArtifact | null>;
   publish: (visibility: PublishVisibility, opts?: ArtifactPublishOpts) => Promise<PublishResult>;

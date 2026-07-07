@@ -22,6 +22,7 @@
               pkgs.ollama
               pkgs.stripe-cli
               pkgs.gitleaks
+              pkgs.python3
             ];
           };
         }

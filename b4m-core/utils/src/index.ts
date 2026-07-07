@@ -67,7 +67,14 @@ export * from './adminSettings';
 export * from './notificationDeduplicator';
 export * from './tokenCounting';
 export * from './url';
-export * from './retry';
+export {
+  withRetry,
+  isRetryableError,
+  isUserInitiatedAbort,
+  getRetryAfterMs,
+  calculateRetryDelay,
+} from '@bike4mind/common';
+export type { RetryOptions, RetryResult } from '@bike4mind/common';
 export * from './circuitBreaker';
 export * from './rateLimitHeaders';
 export * from './voiceHistory';

@@ -59,3 +59,4 @@ export * from './rateLimitHeaders';
 export { default as dayjs } from './utils/dayjsConfig';
 export * from './slackManifestTemplate';
 export * from './surfaces';
+export * from './retry';

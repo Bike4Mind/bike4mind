@@ -477,7 +477,7 @@ export class SlackFeature implements ChatCompletionFeature {
       const closing = questReplies.substring(questReplies.length - 400, questReplies.length);
       await postMessageToSlack(
         this.chatCompletion.slackWebhookUrl,
-        `GrokTool replied to *${this.user.name}* with this response:\n${opening}...\n...\n...${closing}`
+        `Bike4Mind replied to *${this.user.name}* with this response:\n${opening}...\n...\n...${closing}`
       );
     }
   }

@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "एआई सेटिंग्स",
     "session": "नोटबुक",
@@ -60,9 +60,9 @@
     }
   },
   "referral": {
-    "title": "एक मित्र को GrokTool में रेफर करें",
-    "email_title_default": "GrokTool में आपका स्वागत है!",
-    "email_body_default": "आपको USER_NAME द्वारा GrokTool में आमंत्रित किया गया है! पंजीकरण लिंक: साइन अप करने के लिए निम्नलिखित आमंत्रण कोड का उपयोग करें: INVITE_CODE",
+    "title": "एक मित्र को Bike4Mind में रेफर करें",
+    "email_title_default": "Bike4Mind में आपका स्वागत है!",
+    "email_body_default": "आपको USER_NAME द्वारा Bike4Mind में आमंत्रित किया गया है! पंजीकरण लिंक: साइन अप करने के लिए निम्नलिखित आमंत्रण कोड का उपयोग करें: INVITE_CODE",
     "friend_email": "मित्र का ईमेल",
     "num_referrals_available": "उपलब्ध रेफरल:",
     "no_valid_emails_error": "कृपया मान्य ईमेल पते दर्ज करें",

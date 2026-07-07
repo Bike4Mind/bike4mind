@@ -20,7 +20,7 @@ import type { ServerSubagentTracker, SubagentHandoffSignal } from './agents/Serv
 import { b4mTools, generateTools, type LlmTools } from './tools/index';
 import type { ToolContext } from './tools/base/types';
 import type { ToolDefinition } from './tools/base/types';
-import { createDelegateToAgentTool } from './tools/implementation/delegateToAgent';
+import { createDelegateToAgentTool, type SubagentUsageMeta } from './tools/implementation/delegateToAgent';
 import { createCoordinateTaskTool } from './tools/implementation/coordinateTask';
 import type { DagDispatcher, DagHandoffSignal } from './tools/implementation/coordinateTask';
 import { extractAndSaveEntitiesFromToolResult, shouldExtractEntitiesFromTool } from '../conversationContextService';
@@ -150,8 +150,8 @@ export interface ToolBuilderCallbacks {
   /** Session ID for entity extraction from tool results */
   sessionId?: string;
 
-  /** Called when delegate_to_agent accumulates credits */
-  onSubagentCredits?: (credits: number) => void;
+  /** Called when delegate_to_agent accumulates credits; meta carries cost attribution when resolvable */
+  onSubagentCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
 
   /** Called when a subagent completes with telemetry */
   onSubagentTelemetry?: (telemetry: unknown) => void;
@@ -329,7 +329,9 @@ export function buildSharedTools(
     logger,
     parentTools,
     getSignal: getAbortSignal,
-    onCredits: callbacks.onSubagentCredits ? (credits: number) => callbacks.onSubagentCredits!(credits) : undefined,
+    onCredits: callbacks.onSubagentCredits
+      ? (credits: number, meta?: SubagentUsageMeta) => callbacks.onSubagentCredits!(credits, meta)
+      : undefined,
     availableModels: deps.precomputed?.models,
     onStatusUpdate: callbacks.onSubagentStatusUpdate
       ? async (status: string) => callbacks.onSubagentStatusUpdate!(status)

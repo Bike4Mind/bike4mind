@@ -1,5 +1,5 @@
 {
-  "app_name": "GrokTool",
+  "app_name": "Bike4Mind",
   "llm": {
     "ai_settings": "Mga Setting ng AI",
     "session": "Notebook",
@@ -61,8 +61,8 @@
   },
   "referral": {
     "title": "Mag-refer ng kaibigan sa",
-    "email_title_default": "Maligayang pagdating sa GrokTool!",
-    "email_body_default": "Iniimbitahan ka ni USER_NAME sa GrokTool! LINK NG PAGPAPAREHISTRO: Gamitin ang sumusunod na code ng imbitasyon para mag-sign up: INVITE_CODE",
+    "email_title_default": "Maligayang pagdating sa Bike4Mind!",
+    "email_body_default": "Iniimbitahan ka ni USER_NAME sa Bike4Mind! LINK NG PAGPAPAREHISTRO: Gamitin ang sumusunod na code ng imbitasyon para mag-sign up: INVITE_CODE",
     "friend_email": "Email ng Kaibigan",
     "num_referrals_available": "Mga referral na magagamit:",
     "no_valid_emails_error": "Mangyaring magpasok ng wastong mga email address",

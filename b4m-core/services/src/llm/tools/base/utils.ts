@@ -13,7 +13,7 @@ export async function validateUserCredits(
   input: CostInput,
   logger: Logger,
   organization?: IOrganizationDocument | null
-): Promise<number> {
+): Promise<{ requiredCredits: number; usdCost: number }> {
   let userCredits = user.currentCredits ?? 0;
 
   if (organization) {
@@ -54,7 +54,8 @@ export async function validateUserCredits(
     throw new Error('Model not supported');
   }
 
-  const requiredCredits = usdToCredits(usdCost * n);
+  const totalUsdCost = usdCost * n;
+  const requiredCredits = usdToCredits(totalUsdCost);
 
   if (!Number.isFinite(requiredCredits)) {
     throw new UnprocessableEntityError(`Unable to compute credit cost for model "${modelInfo.id}" (got ${usdCost}).`);
@@ -67,5 +68,6 @@ export async function validateUserCredits(
     );
   }
 
-  return requiredCredits;
+  // usdCost is the n-scaled total so it describes the same quantity as requiredCredits.
+  return { requiredCredits, usdCost: totalUsdCost };
 }
