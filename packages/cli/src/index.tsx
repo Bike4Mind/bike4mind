@@ -2120,8 +2120,8 @@ function CliApp() {
    *
    * `generateHandoff` mutates the passed-in session in place, then we save
    * that exact reference. We don't rely on the trailing `performCleanup()` to
-   * persist the change because `state.session` may have been replaced while we
-   * waited for the prompt (e.g. by a background-agent update), making the
+   * persist the change because the store's session may have been replaced while
+   * we waited for the prompt (e.g. by a background-agent update), making the
    * mutated snapshot orphaned. Best-effort: any failure is logged and
    * swallowed so it never blocks exit.
    */
@@ -2336,9 +2336,14 @@ function CliApp() {
         if (customCommand.model && state.agent) {
           console.log(`🔄 Using model override: ${customCommand.model}`);
 
-          // Temporarily override the model on the active session (single source
-          // of truth). Capture the same object reference for both the override
-          // and the restore so the swap is self-contained.
+          // Temporarily override the model on the active session by mutating the
+          // captured reference in place. NOTE: this restore is best-effort and
+          // known-incomplete - handleCustomCommandMessage installs new session
+          // references in the store, so the restore below mutates a now-orphaned
+          // object and the override can persist to the saved session. Behavior
+          // is unchanged from before the single-source-of-truth refactor; a
+          // proper fix (restore on the current store session, or a first-class
+          // "run with model override" transition) is tracked in #241.
           const overrideSession = useCliStore.getState().session;
           const originalModel = overrideSession?.model;
           if (overrideSession) {
@@ -4148,15 +4153,18 @@ Multi-line Input:
     );
   }
 
-  // Show rewind selector if requested. The selector is gated behind
-  // `state.rewindSelector` (React state), which triggers this re-render when
-  // set; the session is stable while the selector is open (the agent is idle),
-  // so a non-subscribing getState() read is correct here.
-  const rewindSession = useCliStore.getState().session;
-  if (state.rewindSelector && rewindSession) {
+  // The rewind/session selectors below are each gated behind React state
+  // (`state.rewindSelector` / `state.sessionSelector`), which triggers this
+  // re-render when set; the session is stable while a selector is open (the
+  // agent is idle), so a single non-subscribing getState() snapshot is correct
+  // for both branches.
+  const currentSession = useCliStore.getState().session;
+
+  // Show rewind selector if requested
+  if (state.rewindSelector && currentSession) {
     return (
       <RewindSelector
-        messages={rewindSession.messages}
+        messages={currentSession.messages}
         onSelect={messageIndex => {
           if (state.rewindSelector) {
             state.rewindSelector.resolve(messageIndex);
@@ -4176,7 +4184,7 @@ Multi-line Input:
     return (
       <SessionSelector
         sessions={state.sessionSelector.sessions}
-        currentSession={useCliStore.getState().session}
+        currentSession={currentSession}
         onSelect={session => {
           if (state.sessionSelector) {
             state.sessionSelector.resolve(session);
