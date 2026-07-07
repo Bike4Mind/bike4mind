@@ -25,6 +25,7 @@ import {
   ICreditHolderMethods,
   isImageServeable,
   QuestErrorCode,
+  getQuestErrorCode,
 } from '@bike4mind/common';
 import {
   BadRequestError,
@@ -3661,11 +3662,15 @@ export class ChatCompletionProcess {
       quest.type = 'error';
       quest.status = 'done';
       // Propagate a machine-readable classifier so the client can render a targeted
-      // error state (e.g. the inline "Add Credits" CTA). Only genuine out-of-credits
-      // throws set `code` - the dispute-pending fraud gates reuse InsufficientCreditsError
-      // but intentionally leave it unset.
-      if (err instanceof InsufficientCreditsError && err.code) {
-        quest.errorCode = err.code;
+      // error state (e.g. the inline "Add Credits" CTA). Two sources: the chat
+      // reservation path throws InsufficientCreditsError (only genuine out-of-credits
+      // throws set `code` - the dispute-pending fraud gates leave it unset), and the
+      // mid-turn image/video generation tools throw a `getQuestErrorCode`-tagged
+      // UnprocessableEntityError that the shared tool-batch executor surfaces as a
+      // terminal error.
+      const questErrorCode = err instanceof InsufficientCreditsError ? err.code : getQuestErrorCode(err);
+      if (questErrorCode) {
+        quest.errorCode = questErrorCode;
       }
 
       const errorSaveStartTime = Date.now();
@@ -3674,7 +3679,12 @@ export class ChatCompletionProcess {
         `⏱️ [${Date.now() - processStartTime}ms] Error quest save completed in ${Date.now() - errorSaveStartTime}ms`
       );
 
-      if (err instanceof InsufficientCreditsError) {
+      if (err instanceof InsufficientCreditsError || getQuestErrorCode(err)) {
+        // Terminal out-of-credits: quest already saved above with type='error',
+        // the server-authored message, and errorCode set. Return without re-throwing
+        // so the queue handler doesn't treat it as an unhandled failure (DLQ/retry) -
+        // there is nothing to retry until the holder adds credits. Covers both the
+        // chat reservation InsufficientCreditsError and the tagged generation-tool 422.
         logger.log(`Insufficient credits for quest ${questId}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {

@@ -29,7 +29,6 @@ import {
   NotFoundError,
   TiktokenTokenizer,
   usdToCredits,
-  UnprocessableEntityError,
   BaseStorage,
   getSettingsByNames,
 } from '@bike4mind/utils';
@@ -44,6 +43,7 @@ import { fromZodError } from 'zod-validation-error';
 import { SoraVideoCostCalculator, SoraCostInput } from './videoCostCalculator/SoraVideoCostCalculator';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { startQuestHeartbeat } from './questHeartbeat';
+import { insufficientCreditsError, getQuestErrorCode } from '@bike4mind/common';
 
 /**
  * Schema for video generation queue handler body
@@ -277,7 +277,7 @@ export class VideoGenerationService {
 
     if (credits < requiredCredits) {
       const sourceLabel = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw new UnprocessableEntityError(
+      throw insufficientCreditsError(
         `${sourceLabel} not have enough credits to complete this video generation. Current credits: ${credits}, required: approximately ${requiredCredits}.`
       );
     }
@@ -334,6 +334,7 @@ export class VideoGenerationService {
         type: quest.type,
         status: quest.status,
         videos: quest.videos,
+        errorCode: quest.errorCode,
       };
     };
 
@@ -559,6 +560,10 @@ export class VideoGenerationService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
+      // Propagate the machine-readable classifier (e.g. 'insufficient_credits') so the client
+      // renders the inline "Add Credits" CTA instead of the dead-end raw error text. Unset for
+      // untagged failures, mirroring the chat reservation path's errorCode handling.
+      quest.errorCode = getQuestErrorCode(error);
       await this.db.quests.update(quest);
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',

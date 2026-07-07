@@ -1,4 +1,5 @@
 export * from './errors';
+export * from './insufficientCredits';
 export * from './validation';
 export * from './apikey';
 export * from './models';

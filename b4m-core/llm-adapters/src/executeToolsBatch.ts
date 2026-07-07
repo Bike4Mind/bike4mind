@@ -1,9 +1,22 @@
-import { PermissionDeniedError } from '@bike4mind/common';
+import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
 export const DEFAULT_MAX_PARALLEL_TOOLS = 8;
 
 export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unknown };
+
+/**
+ * A tool failure that must end the whole turn rather than be fed back to the model
+ * as a recoverable observation. Two cases today:
+ * - PermissionDeniedError: the user declined the tool; retrying is pointless.
+ * - Out-of-credits (tagged via `getQuestErrorCode`, e.g. insufficient_credits): no
+ *   tool call can succeed without credits, so we short-circuit to the quest-level
+ *   error state (which renders the inline "Add Credits" CTA) instead of letting the
+ *   model narrate around a dead-end error string.
+ */
+function isTerminalToolError(error: unknown): boolean {
+  return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+}
 
 /**
  * Execute an array of async tasks either in parallel (with concurrency limiting)
@@ -34,11 +47,11 @@ export async function executeToolsBatch<T>(
       s.status === 'fulfilled' ? { ok: true as const, result: s.value } : { ok: false as const, error: s.reason }
     );
 
-    // Fail-fast: check for permission errors before returning any results.
+    // Fail-fast: check for terminal errors before returning any results.
     // With Promise.allSettled, sibling tasks have already executed - this is
-    // accepted because PermissionDeniedError is rare in multi-tool batches.
+    // accepted because terminal tool errors are rare in multi-tool batches.
     for (const outcome of outcomes) {
-      if (!outcome.ok && outcome.error instanceof PermissionDeniedError) {
+      if (!outcome.ok && isTerminalToolError(outcome.error)) {
         throw outcome.error;
       }
     }
@@ -53,7 +66,7 @@ export async function executeToolsBatch<T>(
       const result = await task();
       outcomes.push({ ok: true, result });
     } catch (error) {
-      if (error instanceof PermissionDeniedError) throw error;
+      if (isTerminalToolError(error)) throw error;
       outcomes.push({ ok: false, error });
     }
   }
