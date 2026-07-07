@@ -130,7 +130,10 @@ export function useSendMessage({
 
   const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
   const { currentUser } = useUser();
-  const effectiveCredits = useEffectiveCredits();
+  // Send-time validation must see the live balance - the server enforces
+  // credits on the reservation regardless, but the frozen display value
+  // would let this client-side check miss a genuine mid-turn exhaustion.
+  const effectiveCredits = useEffectiveCredits({ live: true });
   const { sendJsonMessage, readyState, resetLastJsonMessage } = useWebsocket();
   const queryClient = useQueryClient();
   const { migrateQuests, migrateSession, cleanupOptimistic } = useSessionCacheMigration();
