@@ -29,7 +29,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useEffect, useState, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
@@ -489,9 +489,15 @@ const Register: React.FC = () => {
               variant="plain"
               sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
             >
-              {currentStep === 'form'
-                ? t('auth.createAccountDesc')
-                : t('auth.codeSentTo', { email: submittedData?.email })}
+              {currentStep === 'form' ? (
+                t('auth.createAccountDesc')
+              ) : (
+                <Trans
+                  i18nKey="auth.codeSentTo"
+                  values={{ email: submittedData?.email }}
+                  components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+                />
+              )}
             </Typography>
           </Box>
 
