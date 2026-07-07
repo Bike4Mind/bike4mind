@@ -51,6 +51,7 @@ import {
 } from './types/QuestTypes';
 import QuestExportMenu from './QuestExportMenu';
 import { useSubscribeCollection } from '@client/app/utils/react-query';
+import { requestScrollToMessage } from '@client/app/utils/chatScroll';
 import { SubscriptionCallbackFunction } from '@client/app/hooks/useCollection';
 
 interface QuestMasterComponentProps {
@@ -439,18 +440,13 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
   // Track previous data to detect status changes
   const prevDataRef = useRef<IQuestMasterPlanDocument | null>(null);
 
-  // Track mounted state to prevent memory leaks in DOM manipulation callbacks
+  // Track mounted state to prevent memory leaks in async callbacks
   const isMountedRef = useRef(true);
-  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
     return () => {
       isMountedRef.current = false;
-      // Clean up any pending highlight timeout
-      if (highlightTimeoutRef.current) {
-        clearTimeout(highlightTimeoutRef.current);
-      }
     };
   }, []);
 
@@ -874,33 +870,12 @@ const QuestMasterReply: React.FC<QuestMasterComponentProps> = ({
       return;
     }
 
-    // Scroll to the chat message in the history via its data-message-id.
-    // Uses DOM queries because chat messages render in a separate virtualized list
-    // that doesn't share React state with QuestMasterReply.
-    const messageElement = document.querySelector(`[data-message-id="${chatHistoryItemId}"]`);
-    if (messageElement) {
-      messageElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      // Add a temporary highlight effect using CSS animation
-      messageElement.classList.add('highlight-flash');
-      const handleAnimationEnd = () => {
-        if (!isMountedRef.current) return;
-        messageElement.classList.remove('highlight-flash');
-        messageElement.removeEventListener('animationend', handleAnimationEnd);
-      };
-      messageElement.addEventListener('animationend', handleAnimationEnd);
-      // Fallback timeout in case animation doesn't fire - store ref for cleanup
-      // Clear any existing timeout first
-      if (highlightTimeoutRef.current) {
-        clearTimeout(highlightTimeoutRef.current);
-      }
-      highlightTimeoutRef.current = setTimeout(() => {
-        if (isMountedRef.current) {
-          messageElement.classList.remove('highlight-flash');
-        }
-        highlightTimeoutRef.current = null;
-      }, 2500);
-    } else {
-      toast.info('Message not found in current view. It may have been scrolled out.');
+    // The chat history is a virtualized list in a separate React tree; the
+    // scroll service in utils/chatScroll reaches it via Virtuoso's index API,
+    // which works even for messages currently virtualized out of the DOM.
+    const scrolled = requestScrollToMessage(chatHistoryItemId);
+    if (!scrolled) {
+      toast.info('Message not found in this notebook.');
     }
   }, []);
 

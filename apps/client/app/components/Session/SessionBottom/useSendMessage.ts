@@ -60,6 +60,7 @@ import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAI
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
+import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 
 // Sentinel statusMessage written by `handleSendClick` to render the Stop
@@ -256,29 +257,18 @@ export function useSendMessage({
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
 
-  // Check for new quest goal from /quests page (auto-submit)
+  // Consume a quest launch intent from the /quests page (auto-submit).
+  // The /new route records it in a useLayoutEffect, which runs before this
+  // effect; consume-once semantics prevent replay on refresh or remount.
   useEffect(() => {
-    const newQuestGoal = localStorage.getItem('newQuestGoal');
-    const autoSubmit = localStorage.getItem('autoSubmitQuest');
-    const shouldEnableQuestMaster = localStorage.getItem('enableQuestMasterOnSubmit');
-    if (newQuestGoal) {
-      console.log(
-        '🎯 Found quest goal:',
-        newQuestGoal,
-        'autoSubmit:',
-        autoSubmit,
-        'enableQM:',
-        shouldEnableQuestMaster
-      );
-      localStorage.removeItem('newQuestGoal');
-      localStorage.removeItem('autoSubmitQuest');
-      localStorage.removeItem('enableQuestMasterOnSubmit');
-      setChatInputValue(newQuestGoal);
+    const intent = consumeQuestLaunchIntent();
+    if (intent) {
+      setChatInputValue(intent.goal);
 
-      if (autoSubmit === 'true') {
+      if (intent.autoSubmit) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setPendingAutoSubmitGoal(newQuestGoal);
-        if (shouldEnableQuestMaster === 'true') {
+        setPendingAutoSubmitGoal(intent.goal);
+        if (intent.enableQuestMaster) {
           setEnableQuestMasterOnSubmit(true);
         }
       }
