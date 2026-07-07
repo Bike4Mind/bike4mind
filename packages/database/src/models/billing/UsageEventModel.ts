@@ -42,6 +42,7 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
 
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
+    writtenOffCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },

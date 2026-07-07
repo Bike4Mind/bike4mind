@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ChatCompletionProcess,
   addPairedTool,
+  computeSettlementDelta,
   isAbortError,
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
@@ -1185,5 +1186,31 @@ describe('addPairedTool', () => {
       'image_generation',
       'edit_image',
     ]);
+  });
+});
+
+describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
+  it('refunds the excess on over-reservation', () => {
+    expect(computeSettlementDelta(100, 60, 500)).toEqual({ delta: 40, writtenOffCredits: 0 });
+  });
+
+  it('is a no-op on exact settlement', () => {
+    expect(computeSettlementDelta(100, 100, 500)).toEqual({ delta: 0, writtenOffCredits: 0 });
+  });
+
+  it('charges a shortfall the balance can cover in full', () => {
+    expect(computeSettlementDelta(100, 130, 500)).toEqual({ delta: -30, writtenOffCredits: 0 });
+  });
+
+  it('clamps the shortfall to the balance and reports the write-off', () => {
+    expect(computeSettlementDelta(100, 130, 10)).toEqual({ delta: -10, writtenOffCredits: 20 });
+  });
+
+  it('writes off the whole shortfall at zero balance', () => {
+    expect(computeSettlementDelta(100, 130, 0)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+
+  it('treats a negative balance snapshot as zero', () => {
+    expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
   });
 });

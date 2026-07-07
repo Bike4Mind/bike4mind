@@ -335,6 +335,28 @@ export function addPairedTool<T extends string>(tools: readonly T[], trigger: T,
  */
 export const AUTO_ADDED_TOOL_NAMES = ['blog_draft', 'blog_publish', 'blog_edit', 'navigate_view', 'skill'];
 
+/**
+ * Reconciliation delta with the zero-balance floor. Pre-reservation (the only
+ * insufficient-funds check) runs on the local estimate, so a provider-basis
+ * settlement (cache writes in particular) can exceed the reservation. When the
+ * shortfall debit exceeds the holder's balance, the debit clamps to what the
+ * holder has and the rest is reported as writtenOffCredits: uncollected revenue
+ * the usage event must surface so margin reporting doesn't count a phantom
+ * collection. Best effort: the balance snapshot predates concurrent spend.
+ */
+export function computeSettlementDelta(
+  reservedCredits: number,
+  totalCreditsUsed: number,
+  availableCredits: number
+): { delta: number; writtenOffCredits: number } {
+  const delta = reservedCredits - totalCreditsUsed;
+  if (delta >= 0) return { delta, writtenOffCredits: 0 };
+  const available = Math.max(0, availableCredits);
+  if (-delta <= available) return { delta, writtenOffCredits: 0 };
+  // `available > 0 ? ...` avoids returning -0 when the balance is empty.
+  return { delta: available > 0 ? -available : 0, writtenOffCredits: -delta - available };
+}
+
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
@@ -2965,6 +2987,9 @@ export class ChatCompletionProcess {
         // counts must be strictly positive: adapters coerce missing usage to 0
         // (DeepSeek and Llama-Bedrock streaming never populate it), so a zero
         // basis means "provider reported nothing", not "the call was free".
+        // Deliberately including the output axis: a report with real input but
+        // zero output falls back to the local estimate rather than billing the
+        // zeroed axis as free.
         // Anything less than full positive usage falls back to the local
         // estimate, which also remains the pre-reservation basis. The fallback
         // keeps the capped cache-read discount and never bills cache creation,
@@ -3130,6 +3155,27 @@ export class ChatCompletionProcess {
           const totalCreditsUsed = textCreditsUsed + toolCreditsUsed;
           quest.creditsUsed = totalCreditsUsed;
 
+          // Clamp computed BEFORE the usage event so the event can carry the
+          // written-off portion; summing creditsCharged alone would over-count
+          // collected revenue whenever the clamp fires.
+          const { delta: settlementDelta, writtenOffCredits } = this.reservedCreditsOwnerId
+            ? computeSettlementDelta(
+                this.reservedCredits,
+                totalCreditsUsed,
+                this.reservedCreditHolder?.currentCredits ?? 0
+              )
+            : { delta: this.reservedCredits - totalCreditsUsed, writtenOffCredits: 0 };
+          if (writtenOffCredits > 0) {
+            logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
+              questId: quest.id,
+              ownerId: this.reservedCreditsOwnerId,
+              ownerType: this.reservedCreditsOwnerType,
+              shortfall: totalCreditsUsed - this.reservedCredits,
+              available: Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0),
+              writtenOff: writtenOffCredits,
+            });
+          }
+
           // Dual-write usage event: ties frozen COGS to credits debited
           // for margin reporting. Fire-and-forget - must never affect billing.
           this.db.usageEvents
@@ -3155,6 +3201,10 @@ export class ChatCompletionProcess {
               providerOutputTokens: actualTokenUsage?.outputTokens,
               costUsd: estimatedCost,
               creditsCharged: textCreditsUsed,
+              // Quest-level write-off (uncollected part of the whole settlement,
+              // tools included), recorded on the chat settlement event so
+              // collected revenue = sum(creditsCharged) - sum(writtenOffCredits).
+              writtenOffCredits: writtenOffCredits > 0 ? writtenOffCredits : undefined,
               status: 'ok',
               latencyMs: Date.now() - processStartTime,
             })
@@ -3163,31 +3213,10 @@ export class ChatCompletionProcess {
             });
 
           try {
-            // Reconcile: compute delta between reserved and actual usage
-            let delta = this.reservedCredits - totalCreditsUsed;
+            // Reconcile on the pre-computed, zero-floored delta (see
+            // computeSettlementDelta for the clamp semantics).
+            const delta = settlementDelta;
             let reconciledHolder: ICreditHolder | null = this.reservedCreditHolder;
-
-            // Pre-reservation is the only insufficient-funds check and it runs on
-            // the local estimate, so a provider-basis settlement (cache writes in
-            // particular) can exceed the reservation. Floor the balance at zero:
-            // clamp the shortfall debit to what the holder has (best effort - the
-            // snapshot predates concurrent spend), log the write-off loudly, and
-            // leave the usage event carrying the true cost so margin reporting
-            // sees the shortfall rather than a phantom collection.
-            if (delta < 0 && this.reservedCreditsOwnerId) {
-              const available = Math.max(0, this.reservedCreditHolder?.currentCredits ?? 0);
-              if (-delta > available) {
-                logger.warn('[BILLING_SHORTFALL_CLAMP] Settlement exceeds balance; flooring at zero', {
-                  questId: quest.id,
-                  ownerId: this.reservedCreditsOwnerId,
-                  ownerType: this.reservedCreditsOwnerType,
-                  shortfall: -delta,
-                  available,
-                  writtenOff: -delta - available,
-                });
-                delta = -available;
-              }
-            }
 
             if (delta !== 0 && this.reservedCreditsOwnerId) {
               // delta > 0: we over-reserved, refund the excess back

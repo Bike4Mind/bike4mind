@@ -63,6 +63,12 @@ export const UsageEvent = z.object({
   costUsd: z.number(),
   /** Credits actually debited from the owner for this call. */
   creditsCharged: z.number(),
+  /**
+   * Credits written off by the zero-balance shortfall clamp (quest-level,
+   * recorded on the settlement event). Collected revenue is
+   * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
+   */
+  writtenOffCredits: z.number().optional(),
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),

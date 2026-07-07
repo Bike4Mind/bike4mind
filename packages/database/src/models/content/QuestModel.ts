@@ -30,6 +30,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       cacheReadInputTokens: { type: Number, required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
+      settledBasis: { type: String, enum: ['provider', 'local'], required: false },
     },
     context: {
       attachedFiles: [
