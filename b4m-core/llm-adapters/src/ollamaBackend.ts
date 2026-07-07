@@ -81,6 +81,8 @@ export class OllamaBackend implements ICompletionBackend {
             pricing: {
               [contextWindow]: { input: 0, output: 0 },
             },
+            // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
+            freeToRun: true,
             // Derived from the model's own reported capabilities rather than
             // hardcoded; falls back to false when /api/show is unavailable.
             supportsVision: capabilities.includes('vision'),
