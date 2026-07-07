@@ -29,7 +29,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form';
 import { z } from 'zod';
 import { zodResolver } from '@hookform/resolvers/zod';
 import React, { useEffect, useState, useRef } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import useGetLogo from '../hooks/useGetLogo';
 import { useBrandingSettings, usePublicConfig } from '../hooks/data/settings';
@@ -489,9 +489,15 @@ const Register: React.FC = () => {
               variant="plain"
               sx={{ textAlign: 'center', color: 'text.tertiary', fontSize: '14px', mt: '4px' }}
             >
-              {currentStep === 'form'
-                ? t('auth.createAccountDesc')
-                : t('auth.codeSentTo', { email: submittedData?.email })}
+              {currentStep === 'form' ? (
+                t('auth.createAccountDesc')
+              ) : (
+                <Trans
+                  i18nKey="auth.codeSentTo"
+                  values={{ email: submittedData?.email }}
+                  components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+                />
+              )}
             </Typography>
           </Box>
 
@@ -645,7 +651,7 @@ const Register: React.FC = () => {
                         Controller (not register spread): MUI Joy Checkbox forwards a ref to its
                         root span, not the <input>, so a bare register() would not reliably track
                         `checked`. Controller drives the boolean value explicitly. */}
-                    <Stack spacing={1} sx={{ mt: '20px' }}>
+                    <Stack sx={{ mt: '20px', gap: '8px' }}>
                       <Controller
                         control={control}
                         name="acceptPolicies"
@@ -654,6 +660,7 @@ const Register: React.FC = () => {
                             className="register-aup-tos-checkbox"
                             data-testid="register-aup-tos-checkbox"
                             size="sm"
+                            sx={{ alignItems: 'center' }}
                             checked={value === true}
                             onChange={e => onChange(e.target.checked)}
                             onBlur={onBlur}
@@ -714,7 +721,7 @@ const Register: React.FC = () => {
                       />
                     </Stack>
 
-                    <FormControl className="register-submit-control" sx={{ mt: '24px' }}>
+                    <FormControl className="register-submit-control" sx={{ mt: '32px' }}>
                       <Button
                         className="register-submit-button"
                         data-testid="register-submit-btn"
@@ -759,7 +766,7 @@ const Register: React.FC = () => {
                             fontWeight: 500,
                             fontSize: '14px',
                             cursor: 'pointer',
-                            transition: 'opacity 0.2s ease-in-out',
+                            transition: 'color 0.2s ease-in-out',
                             '&:hover': { textDecoration: 'underline' },
                           }}
                         >
@@ -839,7 +846,7 @@ const Register: React.FC = () => {
                     fontSize: '14px',
                     cursor: resendCooldown > 0 ? 'default' : 'pointer',
                     opacity: resendCooldown > 0 ? 0.5 : 1,
-                    transition: 'opacity 0.2s ease-in-out',
+                    transition: 'color 0.2s ease-in-out, opacity 0.2s ease-in-out',
                     '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
                   }}
                 >
