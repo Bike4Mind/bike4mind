@@ -180,10 +180,11 @@ jobs:
           client-id: ${{ vars.PREMIUM_OVERLAY_CLIENT_ID }}
           private-key: ${{ secrets.PREMIUM_OVERLAY_APP_PRIVATE_KEY }}
           # Owner of the premium overlay repos + the overlay GitHub App installation.
-          # Configurable so the open-core cutover (repos + app move MillionOnMars ->
-          # Bike4Mind) is an instant `PREMIUM_OVERLAY_OWNER` var flip, not a code change.
-          # Unset var falls back to MillionOnMars, so this is a no-op until the var is set.
-          owner: ${{ vars.PREMIUM_OVERLAY_OWNER || 'MillionOnMars' }}
+          # The open-core cutover (repos + app moved MillionOnMars -> Bike4Mind) is
+          # complete, so this defaults to Bike4Mind; `PREMIUM_OVERLAY_OWNER` stays
+          # configurable for any future org move. The overlay-checkout steps below use
+          # the SAME expression, so the token owner and the checkout owner can't drift.
+          owner: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}
           repositories: |
             b4m-overwatch
             b4m-libreoncology
@@ -204,7 +205,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-overwatch
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-overwatch
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-overwatch-ref }}
           path: packages/premium/overwatch
@@ -238,7 +239,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-libreoncology
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-libreoncology
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-libreoncology-ref }}
           path: packages/premium/libreoncology
@@ -272,7 +273,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-pi
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-pi
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-pi-ref }}
           path: packages/premium/pi
@@ -306,7 +307,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-tavern
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-tavern
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-tavern-ref }}
           path: packages/premium/tavern
@@ -339,7 +340,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-optihashi
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-optihashi
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-optihashi-ref }}
           path: packages/premium/optihashi

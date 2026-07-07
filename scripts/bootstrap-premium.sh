@@ -43,7 +43,7 @@ while IFS=$'\t' read -r key ref; do
     exit 1
   fi
 
-  repo="MillionOnMars/${key}"
+  repo="${PREMIUM_OVERLAY_OWNER:-Bike4Mind}/${key}"
   # Workspace dir: strip the 'b4m-' prefix (b4m-overwatch -> overwatch).
   overlay_dir="packages/premium/${key#b4m-}"
 
