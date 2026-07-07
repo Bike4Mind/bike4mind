@@ -18,13 +18,19 @@ import EmailIcon from '@mui/icons-material/Email';
 import EditIcon from '@mui/icons-material/Edit';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import WarningIcon from '@mui/icons-material/Warning';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useSearch, useNavigate } from '@tanstack/react-router';
 import { api } from '@client/app/contexts/ApiContext';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 
 const RESEND_COOLDOWN_SECONDS = 60;
+
+// Deep-link action from the "Cancel Email Change" button in the security-alert
+// email (see the cancelUrl built in `pages/api/email/change.ts`). Landing on
+// `/profile?action=cancel-email-change` opens the cancel confirmation dialog.
+const CANCEL_EMAIL_CHANGE_ACTION = 'cancel-email-change';
 
 const useRequestEmailChange = () => {
   const queryClient = useQueryClient();
@@ -183,6 +189,9 @@ const ChangeEmailCard = () => {
   const [cooldownSeconds, setCooldownSeconds] = useState(0);
   const { t } = useTranslation();
   const cancelChange = useCancelEmailChange();
+  const search = useSearch({ strict: false }) as { action?: string };
+  const navigate = useNavigate();
+  const handledCancelActionRef = useRef(false);
 
   const resendVerification = useMutation({
     mutationFn: async () => {
@@ -211,6 +220,25 @@ const ChangeEmailCard = () => {
     return () => clearTimeout(timer);
   }, [cooldownSeconds]);
 
+  // Handle the `?action=cancel-email-change` deep link from the security-alert
+  // email. Open the confirmation dialog rather than cancelling outright: an
+  // email client or link scanner that pre-fetches the URL must not be able to
+  // silently cancel a legitimate change - an explicit click is still required.
+  // Wait until `pendingEmail` has loaded (via /api/identify) before acting, and
+  // strip the param afterward so a reload or back-nav doesn't reopen the dialog.
+  useEffect(() => {
+    if (search?.action !== CANCEL_EMAIL_CHANGE_ACTION) return;
+    if (handledCancelActionRef.current) return;
+    if (!currentUser?.pendingEmail) return;
+    handledCancelActionRef.current = true;
+    // Intentional one-shot deep-link handler (ref-guarded): open the dialog in
+    // response to the URL param. This is a URL->UI sync, not a render cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConfirmCancelOpen(true);
+    const { action: _action, ...rest } = search;
+    navigate({ to: '/profile', search: rest, replace: true });
+  }, [search, currentUser?.pendingEmail, navigate]);
+
   if (!currentUser?.email) {
     return null;
   }
@@ -226,8 +254,9 @@ const ChangeEmailCard = () => {
     try {
       await cancelChange.mutateAsync();
       toast.success('Email change cancelled successfully');
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to cancel email change');
+    } catch (err: unknown) {
+      const apiErr = err as { response?: { data?: { message?: string } }; message?: string };
+      toast.error(apiErr.response?.data?.message || apiErr.message || 'Failed to cancel email change');
     }
   };
 
@@ -266,7 +295,7 @@ const ChangeEmailCard = () => {
             </Box>
 
             {hasPendingChange && (
-              <Alert color="warning" variant="soft" sx={{ mt: 1 }}>
+              <Alert color="warning" variant="soft" sx={{ mt: 1 }} data-testid="profile-pending-email-alert">
                 <Typography level="body-sm">
                   <strong>Pending:</strong> {currentUser.pendingEmail}
                   <br />
@@ -284,6 +313,7 @@ const ChangeEmailCard = () => {
                 color="danger"
                 onClick={handleCancelClick}
                 loading={cancelChange.isPending}
+                data-testid="profile-cancel-email-change-btn"
               >
                 {t('profile.cancel_change', { defaultValue: 'Cancel' })}
               </Button>
@@ -307,7 +337,13 @@ const ChangeEmailCard = () => {
                     {cooldownSeconds > 0 ? `Resend in ${cooldownSeconds}s` : 'Verify'}
                   </Button>
                 )}
-                <Button size="sm" variant="outlined" startDecorator={<EditIcon />} onClick={() => setModalOpen(true)}>
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  startDecorator={<EditIcon />}
+                  onClick={() => setModalOpen(true)}
+                  data-testid="profile-change-email-btn"
+                >
                   {t('profile.change_email', { defaultValue: 'Change' })}
                 </Button>
               </>
@@ -329,10 +365,20 @@ const ChangeEmailCard = () => {
             Are you sure you want to cancel the pending email change to <strong>{currentUser.pendingEmail}</strong>?
           </Typography>
           <Stack direction="row" spacing={2} justifyContent="flex-end" sx={{ mt: 3 }}>
-            <Button variant="outlined" color="neutral" onClick={() => setConfirmCancelOpen(false)}>
+            <Button
+              variant="outlined"
+              color="neutral"
+              onClick={() => setConfirmCancelOpen(false)}
+              data-testid="profile-cancel-email-dismiss-btn"
+            >
               No, Keep It
             </Button>
-            <Button color="danger" onClick={handleCancelConfirm} loading={cancelChange.isPending}>
+            <Button
+              color="danger"
+              onClick={handleCancelConfirm}
+              loading={cancelChange.isPending}
+              data-testid="profile-cancel-email-confirm-btn"
+            >
               Yes, Cancel Change
             </Button>
           </Stack>
