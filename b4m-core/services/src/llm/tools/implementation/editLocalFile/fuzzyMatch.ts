@@ -223,7 +223,6 @@ function findAnchorMatches(contentLines: LineInfo[], oldLines: string[]): Anchor
  */
 function interiorSimilarity(contentLines: LineInfo[], i: number, j: number, interiorOld: string[]): number {
   const windowInterior = j - i - 1;
-  if (interiorOld.length === 0 && windowInterior === 0) return 1;
   let cursor = 0;
   for (let w = i + 1; w < j && cursor < interiorOld.length; w++) {
     if (contentLines[w].text.trim() === interiorOld[cursor]) cursor++;
