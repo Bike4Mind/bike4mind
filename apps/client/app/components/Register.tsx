@@ -645,7 +645,7 @@ const Register: React.FC = () => {
                         Controller (not register spread): MUI Joy Checkbox forwards a ref to its
                         root span, not the <input>, so a bare register() would not reliably track
                         `checked`. Controller drives the boolean value explicitly. */}
-                    <Stack spacing={1} sx={{ mt: '20px' }}>
+                    <Stack sx={{ mt: '20px', gap: '8px' }}>
                       <Controller
                         control={control}
                         name="acceptPolicies"
@@ -654,6 +654,7 @@ const Register: React.FC = () => {
                             className="register-aup-tos-checkbox"
                             data-testid="register-aup-tos-checkbox"
                             size="sm"
+                            sx={{ alignItems: 'center' }}
                             checked={value === true}
                             onChange={e => onChange(e.target.checked)}
                             onBlur={onBlur}
@@ -714,7 +715,7 @@ const Register: React.FC = () => {
                       />
                     </Stack>
 
-                    <FormControl className="register-submit-control" sx={{ mt: '24px' }}>
+                    <FormControl className="register-submit-control" sx={{ mt: '32px' }}>
                       <Button
                         className="register-submit-button"
                         data-testid="register-submit-btn"
@@ -759,7 +760,7 @@ const Register: React.FC = () => {
                             fontWeight: 500,
                             fontSize: '14px',
                             cursor: 'pointer',
-                            transition: 'opacity 0.2s ease-in-out',
+                            transition: 'color 0.2s ease-in-out',
                             '&:hover': { textDecoration: 'underline' },
                           }}
                         >
@@ -839,7 +840,7 @@ const Register: React.FC = () => {
                     fontSize: '14px',
                     cursor: resendCooldown > 0 ? 'default' : 'pointer',
                     opacity: resendCooldown > 0 ? 0.5 : 1,
-                    transition: 'opacity 0.2s ease-in-out',
+                    transition: 'color 0.2s ease-in-out, opacity 0.2s ease-in-out',
                     '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
                   }}
                 >

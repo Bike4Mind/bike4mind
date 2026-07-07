@@ -215,7 +215,7 @@
     "backToEmail": "Back to email",
     "checkYourEmail": "Check your email",
     "codeSent": "Verification code sent! Check your email.",
-    "codeSentTo": "We sent a code to {{email}}",
+    "codeSentTo": "We sent a code to <email>{{email}}</email>",
     "emailRequired": "Email is required",
     "enterEmail": "Enter your email address",
     "verifyCode": "Verify Code",
