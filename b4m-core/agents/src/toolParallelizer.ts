@@ -53,6 +53,22 @@ export interface ToolExecutionPlan {
 export type IsReadOnlyToolFn = (toolName: string) => boolean;
 
 /**
+ * Thrown by executeToolsInParallel when the AbortSignal fires mid-batch.
+ *
+ * Carries the results gathered before the abort so the caller can still pair a
+ * tool_result with every advertised tool_use (see ReActAgent's abort backfill)
+ * instead of discarding completed work when the throw unwinds the batch. The
+ * message stays 'Tool execution aborted' so isAbortError and existing
+ * string-matching call sites (and tests) keep working unchanged.
+ */
+export class ToolExecutionAbortedError extends Error {
+  constructor(public readonly partialResults: Map<string, ToolResult>) {
+    super('Tool execution aborted');
+    this.name = 'ToolExecutionAbortedError';
+  }
+}
+
+/**
  * Default set of known write (non-parallelizable) tools.
  * These tools can modify state and should always be sequential.
  */
@@ -133,7 +149,7 @@ export async function executeToolsInParallel(
 
   // Check for abort before starting
   if (signal?.aborted) {
-    throw new Error('Tool execution aborted');
+    throw new ToolExecutionAbortedError(results);
   }
 
   // Phase 1: Execute read-only tools in parallel
@@ -186,7 +202,7 @@ export async function executeToolsInParallel(
 
   // Check for abort before sequential phase
   if (signal?.aborted) {
-    throw new Error('Tool execution aborted');
+    throw new ToolExecutionAbortedError(results);
   }
 
   // Phase 2: Execute write tools sequentially
@@ -200,7 +216,7 @@ export async function executeToolsInParallel(
         error: new Error('Tool execution aborted'),
         status: 'rejected',
       });
-      throw new Error('Tool execution aborted');
+      throw new ToolExecutionAbortedError(results);
     }
 
     try {

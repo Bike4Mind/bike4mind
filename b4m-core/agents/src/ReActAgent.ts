@@ -16,8 +16,38 @@ import {
   shouldUseParallelExecution,
   defaultIsReadOnlyTool,
   getToolId,
+  ToolExecutionAbortedError,
+  type ToolExecutionPlan,
+  type ToolResult,
   type ToolUseInfo,
 } from './toolParallelizer';
+
+/**
+ * Placeholder tool_result content for a tool_use that never ran because the run
+ * was aborted mid-batch. Emitting it keeps the hard provider invariant that
+ * every tool_use block has a matching tool_result - without it an aborted
+ * parallel batch leaves orphaned tool_use ids that fail the next turn or a
+ * session resume with a provider 400 ("tool_use ids must have tool_result blocks").
+ */
+const CANCELLED_TOOL_RESULT = 'Tool call cancelled before execution (run aborted).';
+
+/**
+ * Map a tool execution result to the observation string appended to history.
+ * Backfills a cancellation placeholder for tools that never ran (absent from the
+ * results map) or were aborted mid-flight, so every advertised tool_use is
+ * paired with a tool_result. Real successes and genuine tool errors are
+ * preserved unchanged.
+ */
+function observationForResult(result: ToolResult | undefined): string {
+  if (!result) return CANCELLED_TOOL_RESULT;
+  if (result.status === 'fulfilled') return result.result ?? '';
+  const message = result.error?.message ?? 'Unknown error';
+  // An abort surfaces as a rejected result; present it as a clean cancellation
+  // rather than an "Error:" so scoreToolResult does not flag it as a
+  // low-confidence tool failure.
+  if (message.toLowerCase().includes('aborted')) return CANCELLED_TOOL_RESULT;
+  return `Error: ${message}`;
+}
 
 /**
  * True when an error is an abort/cancellation (user stop or execution timeout)
@@ -352,22 +382,18 @@ export class ReActAgent extends EventEmitter {
                     this.emitActionStep(toolUse);
                   }
 
-                  // Phase 2: Categorize and execute tools in parallel
+                  // Phase 2: Categorize and execute tools in parallel. On abort this
+                  // returns the partial results gathered so far instead of throwing,
+                  // so Phase 3 still pairs a tool_result with every advertised tool_use.
                   const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
-                  const results = await executeToolsInParallel(
-                    plan,
-                    toolUse => this.executeToolWithQueueFallback(toolUse),
-                    options.signal
-                  );
+                  const results = await this.runToolBatchAbortTolerant(plan, options.signal);
 
-                  // Phase 3: Build messages and emit observations in original order
+                  // Phase 3: Build messages and emit observations in original order.
+                  // Tools that never ran (dropped when the abort unwound the batch)
+                  // are backfilled with a "cancelled before execution" placeholder.
                   for (const toolUse of unprocessedTools) {
-                    const toolIdStr = getToolId(toolUse);
-                    const result = results.get(toolIdStr);
-                    const observation =
-                      result?.status === 'fulfilled'
-                        ? (result.result ?? '')
-                        : `Error: ${result?.error?.message ?? 'Unknown error'}`;
+                    const result = results.get(getToolId(toolUse));
+                    const observation = observationForResult(result);
 
                     this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
                     this.emitObservationStep(toolUse.name, observation);
@@ -1013,19 +1039,16 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
                     const actionStep = this.buildActionStep(toolUse);
                     iterationSteps.push(actionStep);
                   }
+                  // On abort this returns the partial results instead of throwing, so the
+                  // loop below still pairs a tool_result with every advertised tool_use.
+                  // That keeps the aborted iteration's checkpoint self-consistent (every
+                  // tool_use paired) rather than relying on the catch-block rollback, so a
+                  // resumed session replays cleanly with no orphaned tool_use ids.
                   const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
-                  const results = await executeToolsInParallel(
-                    plan,
-                    toolUse => this.executeToolWithQueueFallback(toolUse),
-                    options.signal
-                  );
+                  const results = await this.runToolBatchAbortTolerant(plan, options.signal);
                   for (const toolUse of unprocessedTools) {
-                    const toolIdStr = getToolId(toolUse);
-                    const result = results.get(toolIdStr);
-                    const observation =
-                      result?.status === 'fulfilled'
-                        ? (result.result ?? '')
-                        : `Error: ${result?.error?.message ?? 'Unknown error'}`;
+                    const result = results.get(getToolId(toolUse));
+                    const observation = observationForResult(result);
                     this.appendToolMessages(this.messages, toolUse, observation, thinkingBlocks);
                     const obsStep = this.buildObservationStep(toolUse.name, observation);
                     iterationSteps.push(obsStep);
@@ -1358,6 +1381,28 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   private parseToolArguments(args: string | unknown): unknown {
     if (typeof args !== 'string') return args;
     return parseToolArgsLenient(args, this.context.logger);
+  }
+
+  /**
+   * Run a categorized tool batch, tolerating a mid-batch abort.
+   *
+   * executeToolsInParallel throws a ToolExecutionAbortedError when the signal
+   * fires between or within phases; that error carries the results gathered so
+   * far. We unwrap it and return the partial map instead of propagating, so the
+   * caller's message-pairing loop still runs for EVERY advertised tool_use
+   * (completed tools keep their real result; the rest are backfilled as
+   * cancelled). Non-abort errors propagate unchanged so real failures still surface.
+   */
+  private async runToolBatchAbortTolerant(
+    plan: ToolExecutionPlan,
+    signal?: AbortSignal
+  ): Promise<Map<string, ToolResult>> {
+    try {
+      return await executeToolsInParallel(plan, toolUse => this.executeToolWithQueueFallback(toolUse), signal);
+    } catch (error) {
+      if (error instanceof ToolExecutionAbortedError) return error.partialResults;
+      throw error;
+    }
   }
 
   /**
