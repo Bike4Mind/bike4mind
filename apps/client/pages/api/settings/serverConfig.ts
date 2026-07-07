@@ -4,6 +4,7 @@ import { Config } from '@server/utils/config';
 import { apiKeyService } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { ApiKeyType } from '@bike4mind/common';
 import type { B4MLLMTools } from '@bike4mind/common';
 import { Resource } from 'sst';
 
@@ -70,7 +71,8 @@ const handler = baseApi({ auth: true }).get(
  * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
  * which supplies the user-facing "why it's disabled" text.
  *
- * Cost: this runs up to 5 admin-setting / user-key lookups per request. It's on
+ * Cost: this runs ~10 admin-setting / user-key lookups per request (4 single-key
+ * getters + Firecrawl + the batched LLM keys + one per image provider). It's on
  * the /serverConfig path (which also serves the WebSocket URL), but the client
  * caches that response for ~5 min (see `useConfig`), so it touches the DB only on
  * a fresh page-load, not on every render.
@@ -82,13 +84,24 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
   };
 
   try {
-    const [serperKey, openWeatherKey, wolframKey, fmpKey, llmKeys] = await Promise.all([
+    // The image tool resolves its key via getEffectiveApiKey (user key -> admin demo
+    // key, NO self-host env fallback), so image availability must use the same path -
+    // getEffectiveLLMApiKeys would add an env fallback the tool never sees.
+    const imageProviders = [ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini, ApiKeyType.xai];
+
+    const [serperKey, openWeatherKey, wolframKey, fmpKey, firecrawlSetting, llmKeys, imageKeys] = await Promise.all([
       apiKeyService.getSerperKey(dbAdapters),
       apiKeyService.getOpenWeatherKey(dbAdapters),
       apiKeyService.getWolframAlphaKey(dbAdapters),
       apiKeyService.getFmpApiKey(dbAdapters),
-      // Image/embedding keys resolve per user (user key -> admin demo -> self-host env).
+      // Deep Research uses Firecrawl (not Serper) - mirror the tool's own key read.
+      adminSettingsRepository.findBySettingName('FirecrawlApiKey'),
+      // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
+      // so matching its self-host env fallback here is correct.
       userId ? apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
+      userId
+        ? Promise.all(imageProviders.map(type => apiKeyService.getEffectiveApiKey(userId, { type }, dbAdapters)))
+        : Promise.resolve<(string | undefined)[]>([]),
     ]);
 
     // getEffectiveLLMApiKeys returns the sentinel 'expired' (truthy) for an expired
@@ -97,8 +110,8 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     const usable = (key: string | null | undefined) => !!key && key !== 'expired';
 
     const hasSerper = !!serperKey;
-    const hasImageKey =
-      usable(llmKeys?.bfl) || usable(llmKeys?.openai) || usable(llmKeys?.gemini) || usable(llmKeys?.xai);
+    const hasFirecrawl = !!firecrawlSetting?.settingValue;
+    const hasImageKey = imageKeys.some(usable);
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
     // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
     // provider specifically. If the admin selects a Voyage model but only an OpenAI key is set
@@ -109,14 +122,15 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
 
     return {
       web_search: hasSerper,
-      // Deep Research is built on web search, so it needs the same Serper key.
-      deep_research: hasSerper,
+      // Deep Research uses the Firecrawl web-scraping service, not Serper.
+      deep_research: hasFirecrawl,
       weather_info: !!openWeatherKey,
       wolfram_alpha: !!wolframKey,
       fmp_financial_data: !!fmpKey,
       image_generation: hasImageKey,
+      // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
+      // is a direct file/keyword lookup that needs no external key, so it isn't gated.
       search_knowledge_base: hasEmbeddingKey,
-      retrieve_knowledge_content: hasEmbeddingKey,
     };
   } catch (err) {
     // Fail open: an availability lookup error should not disable working tools.

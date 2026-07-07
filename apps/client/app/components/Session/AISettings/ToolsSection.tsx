@@ -63,13 +63,12 @@ import { useConfig } from '@client/app/hooks/data/settings';
  */
 const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   web_search: 'Requires a Serper API key, configured in Admin > API Keys.',
-  deep_research: 'Requires a Serper API key, configured in Admin > API Keys.',
+  deep_research: 'Requires a Firecrawl API key, configured in Admin > API Keys.',
   weather_info: 'Requires an OpenWeather API key, configured in Admin > API Keys.',
   wolfram_alpha: 'Requires a Wolfram Alpha API key, configured in Admin > API Keys.',
   fmp_financial_data: 'Requires an FMP API key, configured in Admin > API Keys.',
   image_generation: 'Requires an image generation API key (e.g. BFL or OpenAI), configured in Admin > API Keys.',
   search_knowledge_base: 'Requires an embeddings API key (VoyageAI or OpenAI), configured in Admin > API Keys.',
-  retrieve_knowledge_content: 'Requires an embeddings API key (VoyageAI or OpenAI), configured in Admin > API Keys.',
 };
 
 type McpServerOption = Pick<IMcpServerDocument, 'id' | 'enabled' | 'tools'> & { name: string };
