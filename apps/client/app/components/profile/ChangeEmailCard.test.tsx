@@ -109,11 +109,46 @@ describe('ChangeEmailCard', () => {
     expect(navArg.replace).toBe(true);
   });
 
-  it('does not open the dialog from the deep link when there is no pending change', () => {
+  it('consumes a stale deep link (loaded, nothing pending): no dialog, but strips the param', async () => {
+    // pendingEmail key present but null => authoritative state loaded, nothing to cancel.
     mockCurrentUser = { email: 'current@example.com', emailVerified: true, pendingEmail: null };
+    mockSearch = { action: 'cancel-email-change', tab: 'profile' };
+    renderCard();
+    expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
+    // The param is still stripped so it can't linger and re-fire on a later pending change.
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
+    expect(mockNavigate.mock.calls[0][0].search).not.toHaveProperty('action');
+  });
+
+  it('waits (does not consume the link) while the pending state has not loaded', () => {
+    // The persisted slim user omits the pendingEmail key entirely - "not loaded yet".
+    mockCurrentUser = { email: 'current@example.com', emailVerified: true };
     mockSearch = { action: 'cancel-email-change' };
     renderCard();
     expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
     expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('does not re-open the dialog on a later null -> pending transition once the link is consumed', async () => {
+    const client = new QueryClient();
+    const ui = (
+      <QueryClientProvider client={client}>
+        <CssVarsProvider>
+          <ChangeEmailCard />
+        </CssVarsProvider>
+      </QueryClientProvider>
+    );
+    // Arrive via a stale link with nothing pending: the link is consumed one-shot.
+    mockCurrentUser = { email: 'current@example.com', emailVerified: true, pendingEmail: null };
+    mockSearch = { action: 'cancel-email-change' };
+    const { rerender } = render(ui);
+    await waitFor(() => expect(mockNavigate).toHaveBeenCalled());
+    expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
+
+    // User then requests a new change on the same page: pendingEmail flips null -> truthy.
+    mockCurrentUser = { email: 'current@example.com', emailVerified: true, pendingEmail: 'brand-new@example.com' };
+    rerender(ui);
+    // The dialog must NOT auto-open for the just-created change.
+    expect(screen.queryByTestId('profile-cancel-email-confirm-btn')).not.toBeInTheDocument();
   });
 });

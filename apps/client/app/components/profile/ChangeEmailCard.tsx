@@ -224,20 +224,29 @@ const ChangeEmailCard = () => {
   // email. Open the confirmation dialog rather than cancelling outright: an
   // email client or link scanner that pre-fetches the URL must not be able to
   // silently cancel a legitimate change - an explicit click is still required.
-  // Wait until `pendingEmail` has loaded (via /api/identify) before acting, and
-  // strip the param afterward so a reload or back-nav doesn't reopen the dialog.
+  //
+  // Key on `'pendingEmail' in currentUser`, not on its truthiness. The persisted
+  // slim user and WebSocket-projected updates omit the key entirely, while the
+  // full /api/identify user always carries it (null or a string). That lets us
+  // tell "not loaded yet" (keep waiting) from "loaded, nothing pending" (consume
+  // the link and move on). Once the authoritative state is known we one-shot the
+  // handler and strip the param in BOTH branches, so a stale link (change already
+  // cancelled/expired) can't leave the param lingering to re-fire the dialog on a
+  // later null -> pending transition.
   useEffect(() => {
     if (search?.action !== CANCEL_EMAIL_CHANGE_ACTION) return;
     if (handledCancelActionRef.current) return;
-    if (!currentUser?.pendingEmail) return;
+    if (!currentUser || !('pendingEmail' in currentUser)) return;
     handledCancelActionRef.current = true;
-    // Intentional one-shot deep-link handler (ref-guarded): open the dialog in
-    // response to the URL param. This is a URL->UI sync, not a render cascade.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setConfirmCancelOpen(true);
+    if (currentUser.pendingEmail) {
+      // Intentional one-shot deep-link handler (ref-guarded): open the dialog in
+      // response to the URL param. This is a URL->UI sync, not a render cascade.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setConfirmCancelOpen(true);
+    }
     const { action: _action, ...rest } = search;
     navigate({ to: '/profile', search: rest, replace: true });
-  }, [search, currentUser?.pendingEmail, navigate]);
+  }, [search, currentUser, navigate]);
 
   if (!currentUser?.email) {
     return null;
