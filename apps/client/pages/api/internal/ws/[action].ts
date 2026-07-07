@@ -6,6 +6,7 @@ import { func as subscribeFunc } from '@server/websocket/dataSubscribeRequest';
 import { func as unsubscribeFunc } from '@server/websocket/dataUnsubscribeRequest';
 import type { Context } from 'aws-lambda';
 import { Resource } from 'sst';
+import crypto from 'crypto';
 
 /**
  * Self-host WebSocket handler bridge.
@@ -32,11 +33,16 @@ const handler = baseApi({ auth: false }).post(
       return res.status(404).json({ error: 'Not found' });
     }
 
-    // Shared-secret guard (mirrors pages/api/test/cleanup.ts). The ws gateway
-    // sends this header; browsers cannot (they never learn the secret).
+    // Shared-secret guard, constant-time. The ws gateway sends this header;
+    // browsers cannot (they never learn the secret).
     const expected = process.env.INTERNAL_WS_SECRET;
-    const provided = req.headers['x-internal-ws-secret'];
-    if (!expected || provided !== expected) {
+    const providedRaw = req.headers['x-internal-ws-secret'];
+    const provided = Array.isArray(providedRaw) ? '' : (providedRaw ?? '');
+    const secretOk =
+      !!expected &&
+      provided.length === expected.length &&
+      crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+    if (!secretOk) {
       return res.status(401).json({ error: 'Invalid internal ws secret' });
     }
 
@@ -64,8 +70,10 @@ const handler = baseApi({ auth: false }).post(
     if (action === 'disconnect') {
       // domainName/stage only feed disconnect's best-effort cc_agent despawn
       // broadcast; the core cleanup (Connection + QuerySubscription pull) ignores
-      // them. Derive them from the management endpoint so the URL is at least
-      // pointed at the gateway.
+      // them. Note: disconnect builds https://<host>/<stage>, but the self-host
+      // management endpoint is plain HTTP (http://ws:3001), so that broadcast is
+      // effectively a no-op here (it is wrapped in try/catch upstream and the
+      // core cleanup still runs). Derive host/stage from the endpoint anyway.
       const mgmt = new URL(Resource.websocket.managementEndpoint);
       const event = {
         requestContext: {
@@ -95,8 +103,10 @@ const handler = baseApi({ auth: false }).post(
         const result = await unsubscribeFunc(event as never, lambdaContext('selfhost_ws_unsubscribe'));
         return res.status(result.statusCode).json(result);
       }
-      // Unrouted action: ack (mirrors the $default WS route) so the gateway
-      // doesn't treat it as an error. Extend here for other inbound actions.
+      // Self-host bridges the realtime subset only: subscribe_query /
+      // unsubscribe_query here, heartbeat in the gateway. Other hosted WS actions
+      // (voice, cli, cc_agent, jupyter, keep) are not wired up. Ack-and-ignore so
+      // the gateway does not treat them as errors; extend here to add more.
       return res.status(200).json({ statusCode: 200, ignored: parsedAction ?? null });
     }
 

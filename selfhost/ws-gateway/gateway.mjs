@@ -58,42 +58,51 @@ async function readBody(req) {
 
 // ---- HTTP face: API Gateway Management API emulator + health ----------------
 const server = http.createServer(async (req, res) => {
-  if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
-    res.writeHead(200, { 'content-type': 'text/plain' });
-    return res.end('ok');
-  }
+  // A malformed request or a socket race (e.g. ws.send on a half-closed peer)
+  // can throw; catch so the connection gets a 500 instead of hanging on an
+  // unhandled rejection.
+  try {
+    if (req.method === 'GET' && (req.url === '/health' || req.url === '/')) {
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      return res.end('ok');
+    }
 
-  // POST/GET/DELETE /@connections/{connectionId}
-  const match = req.url && req.url.match(/^\/@connections\/([^/?]+)/);
-  if (match) {
-    const connectionId = decodeURIComponent(match[1]);
-    const ws = sockets.get(connectionId);
-    const isOpen = ws && ws.readyState === ws.OPEN;
+    // POST/GET/DELETE /@connections/{connectionId}
+    const match = req.url && req.url.match(/^\/@connections\/([^/?]+)/);
+    if (match) {
+      const connectionId = decodeURIComponent(match[1]);
+      const ws = sockets.get(connectionId);
+      const isOpen = ws && ws.readyState === ws.OPEN;
 
-    if (req.method === 'POST') {
-      const body = await readBody(req);
-      if (!isOpen) {
-        // Match API Gateway: 410 Gone lets callers prune the stale subscriber.
-        res.writeHead(410);
-        return res.end('Gone');
+      if (req.method === 'POST') {
+        const body = await readBody(req);
+        if (!isOpen) {
+          // Match API Gateway: 410 Gone lets callers prune the stale subscriber.
+          res.writeHead(410);
+          return res.end('Gone');
+        }
+        ws.send(body);
+        res.writeHead(200);
+        return res.end();
       }
-      ws.send(body);
-      res.writeHead(200);
-      return res.end();
+      if (req.method === 'DELETE') {
+        if (ws) ws.close();
+        res.writeHead(204);
+        return res.end();
+      }
+      if (req.method === 'GET') {
+        res.writeHead(isOpen ? 200 : 410);
+        return res.end();
+      }
     }
-    if (req.method === 'DELETE') {
-      if (ws) ws.close();
-      res.writeHead(204);
-      return res.end();
-    }
-    if (req.method === 'GET') {
-      res.writeHead(isOpen ? 200 : 410);
-      return res.end();
-    }
-  }
 
-  res.writeHead(404);
-  res.end('Not found');
+    res.writeHead(404);
+    res.end('Not found');
+  } catch (err) {
+    console.error('[ws-gateway] http handler error:', err?.message || err);
+    if (!res.headersSent) res.writeHead(500);
+    res.end();
+  }
 });
 
 // ---- WebSocket face: browser clients ---------------------------------------
