@@ -53,6 +53,44 @@ export interface IPendingGate {
   requestedAt: Date;
 }
 
+// --- Confidence Telemetry ---
+
+/**
+ * Per-execution confidence-gate telemetry (issue #56 M1.1). Accumulated across
+ * every iteration the gate evaluates so we can measure the gate's real fire
+ * rate in production before investing in signal-quality work.
+ *
+ * Stored as raw accumulators rather than a pre-computed average: `avgConfidence`
+ * is derived as `confidenceSum / evaluatedCount` at read time, which is exact
+ * and drift-free. Incrementing a stored mean via `$inc` cannot be done
+ * correctly, so we never persist one.
+ *
+ * Counters are advanced with atomic `$inc`/`$min` (see `recordIterationConfidence`
+ * / `recordGateEmitted`) so they stay correct across continuation Lambdas, which
+ * restart with fresh memory and increment the same persisted document.
+ */
+export interface IConfidenceTelemetry {
+  /** Iterations for which the gate produced a confidence signal and evaluated it. */
+  evaluatedCount: number;
+  /** Times the gate actually fired and paused the run for human review. */
+  emittedCount: number;
+  /** Lowest per-iteration confidence observed across the run (1 until first eval). */
+  minConfidence: number;
+  /** Sum of per-iteration confidences; `avgConfidence = confidenceSum / evaluatedCount`. */
+  confidenceSum: number;
+}
+
+/**
+ * Read-facing confidence-telemetry summary exposed on list items. `avgConfidence`
+ * is derived from the stored `confidenceSum`; the raw sum never leaves the model.
+ */
+export type ConfidenceTelemetrySummary = {
+  evaluatedCount: number;
+  emittedCount: number;
+  minConfidence: number;
+  avgConfidence: number;
+};
+
 // --- Waiting On Subagent ---
 
 /**
@@ -236,6 +274,14 @@ export interface IAgentExecution {
    */
   pendingGate?: IPendingGate;
 
+  /**
+   * Confidence-gate telemetry (issue #56 M1.1). Accumulated every iteration the
+   * gate evaluates; backs the fire-rate metrics surfaced in the admin tab.
+   * Optional at the type level because it is a system-managed accumulator no
+   * caller sets at create time - the schema default guarantees it at runtime.
+   */
+  confidenceTelemetry?: IConfidenceTelemetry;
+
   // Billing
   iterationBilling: IIterationBilling[];
   totalCreditsUsed: number;
@@ -339,6 +385,19 @@ const PendingGateSchema = new mongoose.Schema(
     confidence: { type: Number, required: true },
     reason: { type: String, required: true },
     requestedAt: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+// `minConfidence` starts at 1 (the max possible) so the first `$min` update
+// with an observed confidence always wins. Do NOT default it to 0, or `$min`
+// would latch to 0 forever.
+const ConfidenceTelemetrySchema = new mongoose.Schema(
+  {
+    evaluatedCount: { type: Number, default: 0 },
+    emittedCount: { type: Number, default: 0 },
+    minConfidence: { type: Number, default: 1 },
+    confidenceSum: { type: Number, default: 0 },
   },
   { _id: false }
 );
@@ -500,6 +559,11 @@ const AgentExecutionSchema = new mongoose.Schema(
     // Confidence-gate state
     pendingGate: { type: PendingGateSchema, required: false },
 
+    // Confidence-gate telemetry (#56 M1.1). `default: () => ({})` instantiates
+    // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
+    // apply to every new execution.
+    confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
+
     // Billing
     iterationBilling: { type: [IterationBillingSchema], default: [] },
     totalCreditsUsed: { type: Number, default: 0 },
@@ -603,6 +667,8 @@ export interface AgentExecutionListItem {
   abortedAt?: Date;
   totalIterations?: number;
   errorMessage?: string;
+  /** Confidence-gate telemetry (#56 M1.1); omitted when the gate never evaluated. */
+  confidenceTelemetry?: ConfidenceTelemetrySummary;
 }
 
 /**
@@ -641,6 +707,7 @@ const EXECUTION_LIST_PROJECTION = {
   abortedAt: 1,
   'result.totalIterations': 1,
   'error.message': 1,
+  confidenceTelemetry: 1,
 } as const;
 
 type ExecutionListLeanDoc = {
@@ -664,7 +731,23 @@ type ExecutionListLeanDoc = {
   abortedAt?: Date;
   result?: { totalIterations?: number };
   error?: { message: string };
+  confidenceTelemetry?: IConfidenceTelemetry;
 };
+
+/**
+ * Derive the read-facing telemetry summary. Returns `undefined` when the gate
+ * never evaluated (evaluatedCount 0), so the UI can render a clean "no signal"
+ * rather than a misleading `min 1.00 / avg NaN`.
+ */
+function toConfidenceSummary(telemetry: IConfidenceTelemetry | undefined): ConfidenceTelemetrySummary | undefined {
+  if (!telemetry || telemetry.evaluatedCount <= 0) return undefined;
+  return {
+    evaluatedCount: telemetry.evaluatedCount,
+    emittedCount: telemetry.emittedCount,
+    minConfidence: telemetry.minConfidence,
+    avgConfidence: telemetry.confidenceSum / telemetry.evaluatedCount,
+  };
+}
 
 function toListItem(doc: ExecutionListLeanDoc): AgentExecutionListItem {
   return {
@@ -688,6 +771,7 @@ function toListItem(doc: ExecutionListLeanDoc): AgentExecutionListItem {
     abortedAt: doc.abortedAt,
     totalIterations: doc.result?.totalIterations,
     errorMessage: doc.error?.message,
+    confidenceTelemetry: toConfidenceSummary(doc.confidenceTelemetry),
   };
 }
 
@@ -1086,6 +1170,35 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
       { $unset: { pendingGate: '' } }
     );
     return result.modifiedCount > 0;
+  }
+
+  /**
+   * Record one gate-evaluated iteration's confidence (#56 M1.1). Atomic
+   * `$inc`/`$min` so the counters stay correct across continuation Lambdas,
+   * which restart with fresh memory and increment the same persisted doc.
+   * Called for every iteration the gate evaluates - including ones that
+   * complete in the same turn or clear the threshold - so `evaluatedCount` is
+   * the honest denominator for the gate's fire rate.
+   */
+  async recordIterationConfidence(id: string, confidence: number): Promise<void> {
+    await this.model.updateOne(
+      { _id: id },
+      {
+        $inc: {
+          'confidenceTelemetry.evaluatedCount': 1,
+          'confidenceTelemetry.confidenceSum': confidence,
+        },
+        $min: { 'confidenceTelemetry.minConfidence': confidence },
+      }
+    );
+  }
+
+  /**
+   * Increment the count of times the gate actually fired and paused the run
+   * (#56 M1.1). The numerator to `recordIterationConfidence`'s denominator.
+   */
+  async recordGateEmitted(id: string): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $inc: { 'confidenceTelemetry.emittedCount': 1 } });
   }
 
   async addIterationBilling(id: string, billing: IIterationBilling): Promise<void> {
