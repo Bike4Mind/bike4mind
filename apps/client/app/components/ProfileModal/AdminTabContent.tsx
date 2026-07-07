@@ -9,6 +9,7 @@ import { Box, Button, Stack, Textarea, Typography, Tooltip } from '@mui/joy';
 import Link from 'next/link';
 import React, { useEffect, useState } from 'react';
 import SectionContainer from '@client/app/components/ProfileModal/SectionContainer';
+import { cardSurfaceSx } from '@client/app/components/ProfileModal/settingsStyles';
 import { red } from '@client/app/utils/themes/colors';
 
 interface ProfileDataFormProps {
@@ -97,14 +98,11 @@ const AdminDataForm: React.FC<ProfileDataFormProps> = ({ userData }) => {
         {isAdmin && (
           <Box
             sx={theme => ({
+              ...cardSurfaceSx(theme),
               display: 'flex',
               flexDirection: 'column',
               gap: '20px',
-              padding: '1.25rem',
-              backgroundColor: theme.palette.mode === 'light' ? '#FFFFFF' : theme.palette.background.body,
-              border: '1px solid',
-              borderColor: theme.palette.mode === 'light' ? 'rgba(190, 209, 223, 0.7)' : 'border.light',
-              borderRadius: '8px',
+              p: '1.25rem', // override the helper's 16px - this outer wrapper uses 20px padding
             })}
           >
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -215,14 +213,11 @@ const AdminDataForm: React.FC<ProfileDataFormProps> = ({ userData }) => {
 
           <Box
             sx={theme => ({
+              ...cardSurfaceSx(theme),
               display: 'flex',
               flexDirection: 'column',
               gap: '20px',
-              padding: '1.25rem',
-              backgroundColor: theme.palette.mode === 'light' ? '#FFFFFF' : theme.palette.background.body,
-              border: '1px solid',
-              borderColor: theme.palette.mode === 'light' ? 'rgba(190, 209, 223, 0.7)' : 'border.light',
-              borderRadius: '8px',
+              p: '1.25rem', // override the helper's 16px - this outer wrapper uses 20px padding
             })}
           >
             {(userActivityCounters?.data ?? [])?.length > 0 ? (
@@ -296,14 +291,11 @@ const AdminDataForm: React.FC<ProfileDataFormProps> = ({ userData }) => {
                 <Box
                   key={index}
                   sx={theme => ({
+                    ...cardSurfaceSx(theme),
                     display: 'flex',
                     flexDirection: 'column',
                     gap: '20px',
-                    padding: '1.25rem',
-                    backgroundColor: theme.palette.mode === 'light' ? '#FFFFFF' : theme.palette.background.body,
-                    border: '1px solid',
-                    borderColor: theme.palette.mode === 'light' ? 'rgba(190, 209, 223, 0.7)' : 'border.light',
-                    borderRadius: '8px',
+                    p: '1.25rem', // override the helper's 16px - this outer wrapper uses 20px padding
                     minWidth: '300px',
                   })}
                 >
