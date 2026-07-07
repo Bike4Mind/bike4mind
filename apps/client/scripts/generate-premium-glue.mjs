@@ -232,7 +232,20 @@ function resolveExportFromToSourceFile(pkg, exportFrom) {
     return null;
   }
   const target = pkgJson.exports?.[subpath];
-  if (typeof target !== 'string') return null; // conditional exports object, or no match - skip.
+  if (target === undefined) return null; // no exports entry for this subpath - nothing to resolve.
+  if (typeof target !== 'string') {
+    // A conditional-exports object ({ import, require, ... }) or array target exists at this
+    // key but isn't a plain string path we can read - warn rather than silently returning null,
+    // matching extractConfigLiteral's posture: an unresolvable source file means any `config`
+    // export it might have is silently dropped from the generated stub, which can reintroduce
+    // the exact bodyParser hang this file exists to prevent.
+    console.warn(
+      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] is not a plain string ` +
+        `path (got ${JSON.stringify(target)}) - can't resolve it to check for a "config" export. ` +
+        `If this route needs Next's bodyParser config, the generated stub will be missing it.`
+    );
+    return null;
+  }
 
   // Containment guard, mirroring the ones below for generatedPath (:293, :349):
   // `target` comes from the overlay's own package.json, which is already fully
@@ -268,7 +281,11 @@ function extractConfigLiteral(sourceFilePath) {
   } catch {
     return null;
   }
-  const match = content.match(/export\s+const\s+config\s*=\s*(\{[\s\S]*?\});/);
+  // Anchored to line start (with leading whitespace allowed) so a config-shaped literal
+  // sitting inside a comment or string above the real declaration can't win the match -
+  // otherwise `.match()` would still succeed there, skipping the fallback warning below
+  // while emitting whatever that comment/string literal happened to contain.
+  const match = content.match(/^\s*export\s+const\s+config\s*=\s*(\{[\s\S]*?\});/m);
   if (match) return match[1];
   if (/export\s+const\s+config\s*=/.test(content)) {
     console.warn(
