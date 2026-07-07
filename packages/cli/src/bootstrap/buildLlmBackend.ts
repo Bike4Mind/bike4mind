@@ -78,7 +78,15 @@ export const defaultLlmBackendDeps: BuildLlmBackendDeps = {
     ws.onRevoked(() => {
       logger.warn('Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
     });
-    await ws.connect();
+    try {
+      await ws.connect();
+    } catch (err) {
+      // A failed connect ATTEMPT still schedules a verify/reconnect via onclose. If the
+      // caller falls back to SSE on this throw, that background loop would be orphaned -
+      // reconnecting forever with no owner. Tear it down before propagating.
+      ws.disconnect();
+      throw err;
+    }
     return ws;
   },
   installWebSocketToolExecutor: (ws, tokenGetter) => {

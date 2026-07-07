@@ -149,12 +149,6 @@ export function withWebSocketContext<T>(
       const result = await handler(event, context, logger);
       return result;
     } catch (error) {
-      if (error instanceof TokenExpiredError) {
-        logger.info(`Token expired for WebSocket ${context.functionName}`);
-      } else {
-        logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
-      }
-
       // For WebSocket connections, we should return a 200 status code even for errors
       // to prevent the connection from being terminated, unless it's an authorization error.
       // Detect by TYPE, not by sniffing error.message for "unauthorized" - UnauthorizedError's
@@ -167,6 +161,15 @@ export function withWebSocketContext<T>(
       // local try/catch, so an expired token there throws this raw (not wrapped) into this
       // same catch.
       const isAuthError = error instanceof UnauthorizedError || error instanceof TokenExpiredError;
+
+      // Auth rejections are expected, benign, and high-volume (every stale-token client) -
+      // log them at info so they don't flood error logs/alerts. Only genuine (non-auth)
+      // handler failures are logged at error.
+      if (isAuthError) {
+        logger.info(`Auth rejected for WebSocket ${context.functionName}: ${(error as Error).message}`);
+      } else {
+        logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
+      }
 
       return {
         statusCode: isAuthError ? 401 : 200,

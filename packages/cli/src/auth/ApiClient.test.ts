@@ -34,6 +34,17 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
 const ok = (config: InternalAxiosRequestConfig): AxiosResponse =>
   ({ data: { id: 'user-1' }, status: 200, statusText: 'OK', headers: {}, config }) as AxiosResponse;
 
+// A refresh-endpoint rejection carrying an HTTP status (e.g. 400 invalid_grant / 401), so
+// the interceptor can tell a genuine revocation from a transient (5xx / network) outage.
+const refreshHttpError = (status: number): AxiosError =>
+  new AxiosError('Refresh rejected', 'ERR_BAD_REQUEST', undefined, {}, {
+    status,
+    statusText: 'Bad Request',
+    data: { error: 'invalid_grant' },
+    headers: {},
+    config: {} as InternalAxiosRequestConfig,
+  } as AxiosResponse);
+
 describe('ApiClient.checkSessionValid', () => {
   let client: ApiClient;
 
@@ -68,12 +79,36 @@ describe('ApiClient.checkSessionValid', () => {
     expect(await client.checkSessionValid()).toBe(true);
   });
 
-  it('returns false when refresh itself fails - a genuine revocation', async () => {
+  it('returns false when refresh is rejected with 400 (invalid_grant) - a genuine revocation', async () => {
     client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
       Promise.reject(make401(config))) as AxiosAdapter;
-    mockRefreshToken.mockRejectedValue(new Error('invalid_grant'));
+    mockRefreshToken.mockRejectedValue(refreshHttpError(400));
 
     expect(await client.checkSessionValid()).toBe(false);
+  });
+
+  it('returns false when refresh is rejected with 401 - a genuine revocation', async () => {
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(refreshHttpError(401));
+
+    expect(await client.checkSessionValid()).toBe(false);
+  });
+
+  it('returns true when refresh fails with a 5xx - a transient outage, not a revocation', async () => {
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(refreshHttpError(503));
+
+    expect(await client.checkSessionValid()).toBe(true);
+  });
+
+  it('returns true when refresh fails with a bare network error - transient, not a revocation', async () => {
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+    mockRefreshToken.mockRejectedValue(new Error('Network Error'));
+
+    expect(await client.checkSessionValid()).toBe(true);
   });
 
   it('returns true on a non-auth error (network blip) - treated as transient, not revoked', async () => {

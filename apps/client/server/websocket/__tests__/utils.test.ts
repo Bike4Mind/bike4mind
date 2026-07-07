@@ -1,5 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { UnauthorizedError } from '@bike4mind/common';
+import { Logger } from '@bike4mind/observability';
 import { TokenExpiredError } from 'jsonwebtoken';
 import type { Context } from 'aws-lambda';
 
@@ -76,5 +77,50 @@ describe('withWebSocketContext - auth-error detection', () => {
     const result = await handler({} as never, mockContext);
 
     expect(result).toEqual({ statusCode: 200, body: 'ok' });
+  });
+
+  describe('log level', () => {
+    // withWebSocketContext does `new Logger().withMetadata(...)`, and withMetadata returns a
+    // fresh Logger, so the info/error calls resolve through Logger.prototype - spy there.
+    let infoSpy: ReturnType<typeof vi.spyOn>;
+    let errorSpy: ReturnType<typeof vi.spyOn>;
+
+    beforeEach(() => {
+      infoSpy = vi.spyOn(Logger.prototype, 'info').mockImplementation(() => {});
+      errorSpy = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      infoSpy.mockRestore();
+      errorSpy.mockRestore();
+    });
+
+    it('logs an auth rejection at info, not error (stale-token clients are high-volume and benign)', async () => {
+      const handler = withWebSocketContext(
+        async () => {
+          throw new UnauthorizedError('Session expired');
+        },
+        { skipDatabase: true }
+      );
+
+      await handler({} as never, mockContext);
+
+      expect(infoSpy).toHaveBeenCalledTimes(1);
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('logs a genuine (non-auth) handler failure at error', async () => {
+      const handler = withWebSocketContext(
+        async () => {
+          throw new Error('boom');
+        },
+        { skipDatabase: true }
+      );
+
+      await handler({} as never, mockContext);
+
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(infoSpy).not.toHaveBeenCalled();
+    });
   });
 });

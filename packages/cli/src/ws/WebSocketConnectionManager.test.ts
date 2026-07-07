@@ -177,6 +177,45 @@ describe('WebSocketConnectionManager - verify-before-reconnect on a failed conne
     expect(manager.isRevoked).toBe(false);
   });
 
+  it('disconnect() after a failed connect ATTEMPT stops the reconnect loop (no orphan)', async () => {
+    // The orphan bug: connect() rejects, the caller falls back to SSE, but the failed
+    // attempt already scheduled a reconnect - so the manager reconnects forever with no
+    // owner. buildLlmBackend/headlessCommand now call disconnect() on that fallback; this
+    // asserts disconnect() actually tears the loop down. No verifier -> a failed attempt
+    // schedules a reconnect directly (the simplest path that arms the timer).
+    const manager = await freshManager('wss://x', async () => 'token');
+
+    const { connectPromise, ws } = await startConnect(manager);
+    ws.triggerFailedClose();
+    await connectPromise;
+
+    manager.disconnect();
+
+    const countBefore = FakeWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeWebSocket.instances.length).toBe(countBefore);
+  });
+
+  it('disconnect() stops a reconnect scheduled by verifySession()==true (production fallback path)', async () => {
+    // Production wires a verifier. On a failed attempt it verifies, and a `true` result
+    // schedules a reconnect. If the caller then falls back to SSE and disconnects, that
+    // scheduled reconnect must not fire.
+    const verifySession = vi.fn().mockResolvedValue(true);
+    const manager = await freshManager('wss://x', async () => 'token', verifySession);
+
+    const { connectPromise, ws } = await startConnect(manager);
+    ws.triggerFailedClose();
+    await connectPromise;
+    await Promise.resolve(); // let verifyThenReconnect's `await verifySession()` settle
+    await Promise.resolve();
+
+    manager.disconnect();
+
+    const countBefore = FakeWebSocket.instances.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeWebSocket.instances.length).toBe(countBefore);
+  });
+
   it('single-flights verifySession so a burst of close events does not trigger multiple verifications', async () => {
     let resolveVerify: (v: boolean) => void = () => {};
     const verifySession = vi.fn(() => new Promise<boolean>(resolve => (resolveVerify = resolve)));

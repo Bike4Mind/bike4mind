@@ -201,6 +201,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         throw new Error('No websocketUrl or wsCompletionUrl in server config');
       }
     } catch {
+      // A failed connect() still schedules a verify/reconnect via onclose. Falling back to
+      // SSE without tearing that down would leave an orphaned reconnect loop running with
+      // no owner, so disconnect before dropping the reference.
+      wsManager?.disconnect();
       wsManager = null;
       setWebSocketToolExecutor(null);
       llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, completionsUrl });

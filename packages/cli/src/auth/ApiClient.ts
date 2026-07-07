@@ -1,10 +1,26 @@
-import axios, { type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import axios, { isAxiosError, type AxiosInstance, type AxiosRequestConfig } from 'axios';
 import { ConfigStore } from '../storage/ConfigStore';
 import { OAuthClient } from './OAuthClient';
 import { logger } from '../utils/Logger';
 import packageJson from '../../package.json';
 
 const USER_AGENT = `b4m-cli/${packageJson.version}`;
+
+/**
+ * Thrown by the response interceptor only when the session is DEFINITIVELY revoked - the
+ * refresh token was rejected (400/401 invalid_grant), or a request still 401s after a
+ * successful refresh. A transient refresh outage (5xx / network / timeout) throws a plain
+ * Error instead, so callers that must distinguish "log out" from "retry" (e.g.
+ * checkSessionValid / the WS reconnect loop) can key on the type. The human-readable
+ * message is preserved on both paths so existing `error.message.includes(...)` callers are
+ * unaffected.
+ */
+export class SessionRevokedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionRevokedError';
+  }
+}
 
 /**
  * Authenticated API client for B4M services
@@ -107,11 +123,21 @@ export class ApiClient {
               await this.configStore.clearAuthTokens();
             }
 
-            throw new Error('Authentication expired. Please run `b4m login` again.');
+            // A 400/401 from the refresh endpoint means the refresh token was rejected =
+            // genuine revocation (SessionRevokedError). A 5xx / network / timeout is a transient
+            // outage - throw a plain Error (same message, so string-matching callers are
+            // unaffected) so revoke-vs-transient consumers keep retrying instead of tearing down.
+            const msg = 'Authentication expired. Please run `b4m login` again.';
+            const refreshStatus = isAxiosError(refreshError) ? refreshError.response?.status : undefined;
+            if (refreshStatus === 400 || refreshStatus === 401) {
+              throw new SessionRevokedError(msg);
+            }
+            throw new Error(msg);
           }
         }
 
-        // If we already retried and still got 401, auth is invalid
+        // If we already retried and still got 401, auth is invalid - a 401 that survives a
+        // successful refresh is a definitive revocation.
         if (error.response?.status === 401 && originalRequest._retry) {
           logger.debug('AUTH: Token refresh retry failed');
           // Only clear tokens if genuinely expired
@@ -119,7 +145,7 @@ export class ApiClient {
           if (tokens && new Date(tokens.expiresAt) <= new Date()) {
             await this.configStore.clearAuthTokens();
           }
-          throw new Error('Authentication failed. Please run /login to authenticate.');
+          throw new SessionRevokedError('Authentication failed. Please run /login to authenticate.');
         }
 
         return Promise.reject(error);
@@ -197,10 +223,11 @@ export class ApiClient {
   /**
    * Verifies the session is still valid via a cheap authed GET. The response interceptor
    * above already attempts a token refresh and retries on 401, so a resolved call means the
-   * session is valid (fresh or transparently refreshed). Returns false ONLY when the
-   * interceptor's own refresh-failure path threw (a genuine revocation - the two messages
-   * above); any other error (network blip, 5xx, etc.) is treated as transient and returns
-   * true, so callers keep retrying rather than giving up on a blip.
+   * session is valid (fresh or transparently refreshed). Returns false ONLY on a
+   * `SessionRevokedError` (the refresh token was rejected, or a 401 survived a refresh);
+   * every other outcome - a transient refresh outage, a network blip, or the interceptor's
+   * fresh-token 401 skip - is treated as transient and returns true, so callers keep
+   * retrying rather than tearing down on a blip.
    *
    * Used by WebSocketConnectionManager to distinguish "session revoked" from "transient
    * network issue" when a WS connect attempt fails to open - a WS close event carries no
@@ -211,9 +238,7 @@ export class ApiClient {
       await this.get('/api/identify');
       return true;
     } catch (err) {
-      const message = err instanceof Error ? err.message : '';
-      const isRevoked = message.startsWith('Authentication expired.') || message.startsWith('Authentication failed.');
-      return !isRevoked;
+      return !(err instanceof SessionRevokedError);
     }
   }
 }
