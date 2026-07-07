@@ -7,6 +7,9 @@
 # repo (open-core devs skip everything). After cloning, run `pnpm install`.
 #
 # Usage: pnpm bootstrap:premium
+#
+# Env (override the org):
+#   PREMIUM_OVERLAY_OWNER=Bike4Mind   # GitHub org/owner the overlays are cloned from
 set -euo pipefail
 
 LOCK_FILE="premium-overlay.lock.json"
