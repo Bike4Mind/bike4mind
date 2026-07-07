@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
+import { ExternalLinks } from '@client/app/utils/externalLinks';
 import MultiStepLogin from './MultiStepLogin';
 
 // Factory-safe mock handles (vi.mock is hoisted above imports).
@@ -222,6 +223,35 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     expect(mocks.verifyOTC).toHaveBeenLastCalledWith(
       expect.objectContaining({ username: 'newbie2', pendingToken: 'ptok-3' })
     );
+  });
+
+  // Regression guard for #59: the ToS/AUP/Privacy links in the acceptance-checkbox label must
+  // point at the right policy pages and open in a new tab. (The underlying bug - clicks landing
+  // on the checkbox's transparent input overlay instead of the anchor - is a visual stacking-order
+  // issue jsdom cannot reproduce, so it is verified in a browser, not here. See the fix: each Link
+  // is raised above the overlay (which is zIndex: 1) with sx={{ position: 'relative', zIndex: 2 }}.)
+  it('renders the policy links with the correct href, new-tab target, and rel', async () => {
+    const user = userEvent.setup();
+    mocks.verifyOTC.mockResolvedValueOnce({
+      registrationRequired: true,
+      email: 'new@test.com',
+      pendingToken: 'ptok-2',
+    });
+
+    renderLogin();
+    await advanceToUsernameStep(user);
+
+    const cases: Array<[string, string]> = [
+      ['Terms of Service', ExternalLinks.terms],
+      ['Acceptable Use Policy', ExternalLinks.acceptableUse],
+      ['Privacy Policy', ExternalLinks.privacy],
+    ];
+    for (const [name, href] of cases) {
+      const link = screen.getByRole('link', { name });
+      expect(link).toHaveAttribute('href', href);
+      expect(link).toHaveAttribute('target', '_blank');
+      expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    }
   });
 
   it('does not advance to the username step when open registration is disabled', async () => {
