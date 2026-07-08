@@ -61,6 +61,7 @@ import { APP_NAME } from '@client/config/general'; // brand externalized
 import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
+import { parseTestEmailAddresses } from './parseTestEmailAddresses';
 
 // Email attempt for Activity History
 interface EmailAttempt {
@@ -307,12 +308,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     }
   };
 
-  const parseTestEmails = () => {
-    return formData.testEmailAddresses
-      .split(/[\n,]+/)
-      .map(e => e.trim())
-      .filter(e => e.length > 0 && e.includes('@'));
-  };
+  const parseTestEmails = () => parseTestEmailAddresses(formData.testEmailAddresses);
 
   const handleSave = async () => {
     const recipientFilter = buildRecipientFilter();

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildTestRecipients, type Recipient } from './emailJobOrchestrator';
+import { dedupeTestRecipients } from './emailTestRecipients';
 
 function makeRecipients(count: number): Recipient[] {
   return Array.from({ length: count }, (_, i) => ({
@@ -56,5 +57,22 @@ describe('buildTestRecipients', () => {
 
   it('returns an empty list when there are no real recipients', () => {
     expect(buildTestRecipients([], ['test@example.com'])).toEqual([]);
+  });
+});
+
+// Regression guard: the orchestrator dedupes test recipients before calling
+// buildTestRecipients. Without that dedupe, duplicate/mixed-case test addresses
+// each consume a Math.min slot and double-deliver to one inbox. This asserts the
+// composition the orchestrator relies on, so removing the dedupe call at the call
+// site would fail here.
+describe('dedupeTestRecipients feeding buildTestRecipients', () => {
+  it('sends one email per distinct inbox for duplicate/mixed-case test addresses', () => {
+    const realRecipients = makeRecipients(5);
+    const testRecipients = ['qa@example.com', 'QA@example.com', ' qa@example.com '];
+
+    const result = buildTestRecipients(realRecipients, dedupeTestRecipients(testRecipients));
+
+    expect(result).toHaveLength(1);
+    expect(result[0].email).toBe('qa@example.com');
   });
 });
