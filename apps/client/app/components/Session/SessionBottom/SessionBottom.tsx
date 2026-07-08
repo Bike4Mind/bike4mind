@@ -472,7 +472,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
 
                         setShowSlashSuggestions(shouldShowSlashSuggestions);
                       }}
-                      onSubmit={async () => await handleSendClick()}
+                      onSubmit={async () => {
+                        // Block Enter-to-send while a response is still streaming.
+                        if (shouldShowStopButton || submitting) return;
+                        await handleSendClick();
+                      }}
                       onPaste={handlePaste}
                       placeholder={`${t('session.typeYourMessage')}...`}
                       agents={lexicalAgents}
