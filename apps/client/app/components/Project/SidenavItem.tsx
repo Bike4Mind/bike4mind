@@ -3,7 +3,7 @@ import { Box, Typography, Tooltip, IconButton } from '@mui/joy';
 import { FC, memo, useRef, useState, useEffect } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
-import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 
 interface ProjectSidenavItemProps {
   project: IProjectDocument;
@@ -44,7 +44,7 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
       onClick={handleClick}
       sx={theme => ({
         borderRadius: '8px',
-        padding: onToggleExpand !== undefined ? '6px 12px 6px 4px' : '6px 12px',
+        padding: onToggleExpand !== undefined ? '6px 6px 6px 12px' : '6px 12px',
         minHeight: '36px',
         display: 'flex',
         alignItems: 'center',
@@ -56,33 +56,6 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
         transition: 'background 0.2s',
       })}
     >
-      {onToggleExpand !== undefined && (
-        <IconButton
-          data-testid="project-expand-btn"
-          aria-label={isExpanded ? 'Collapse project' : 'Expand project'}
-          aria-expanded={isExpanded}
-          variant="plain"
-          color="neutral"
-          size="sm"
-          onClick={e => {
-            e.stopPropagation();
-            onToggleExpand();
-          }}
-          sx={{
-            minWidth: '20px',
-            minHeight: '20px',
-            width: '20px',
-            height: '20px',
-            p: 0,
-            flexShrink: 0,
-            transition: 'transform 0.15s',
-            transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            '--IconButton-size': '20px',
-          }}
-        >
-          <ChevronRightIcon sx={{ fontSize: '16px' }} />
-        </IconButton>
-      )}
       <Box
         sx={{
           display: 'flex',
@@ -90,7 +63,6 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
           gap: '8px',
           flex: 1,
           overflow: 'hidden',
-          pl: onToggleExpand !== undefined ? '4px' : 0,
         }}
       >
         <Tooltip title="Project" placement="top">
@@ -133,6 +105,46 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
           </Typography>
         </Tooltip>
       </Box>
+      {onToggleExpand !== undefined && (
+        <IconButton
+          data-testid="project-expand-btn"
+          aria-label={isExpanded ? 'Collapse project' : 'Expand project'}
+          aria-expanded={isExpanded}
+          variant="plain"
+          color="neutral"
+          size="sm"
+          onClick={e => {
+            e.stopPropagation();
+            onToggleExpand();
+          }}
+          sx={{
+            minWidth: '24px',
+            minHeight: '24px',
+            width: '24px',
+            height: '24px',
+            p: 0,
+            ml: '4px',
+            flexShrink: 0,
+            '--IconButton-size': '24px',
+            // Always visible (unlike the notebook three-dot, which is hover-gated), but reuse the
+            // notebook button's color logic: icon at 50% by default, full on hover, no bg change.
+            '& .MuiSvgIcon-root': {
+              opacity: 0.5,
+              transition: 'opacity 0.3s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+              // Points down when collapsed, flips up when expanded.
+              transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+            },
+            '&:hover, &:focus-visible, &:active': {
+              backgroundColor: 'transparent',
+              '& .MuiSvgIcon-root': {
+                opacity: 1,
+              },
+            },
+          }}
+        >
+          <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
+        </IconButton>
+      )}
     </Box>
   );
 };
