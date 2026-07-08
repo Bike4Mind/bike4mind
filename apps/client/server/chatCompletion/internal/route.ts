@@ -40,7 +40,7 @@ export function authorize(req: Request): boolean {
  * @param track - registers the quest's processing promise with the service's SIGTERM drain
  *   set, so in-flight work finishes (bounded by DRAIN_TIMEOUT_MS) before exit.
  */
-export function registerProcessRoute(app: Express, track: (p: Promise<void>) => void): void {
+export function registerInternalRoutes(app: Express, track: (p: Promise<void>) => void): void {
   const routeLogger = new Logger({ metadata: { service: 'questProcessorService' } });
 
   // Auth gate. Runs BEFORE the 25MB JSON body parser so an unauthenticated caller can't
