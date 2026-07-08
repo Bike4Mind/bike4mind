@@ -74,8 +74,8 @@ export class LoginPage extends BasePage {
    * Both gate the Create account button, and the server rejects account creation without them.
    */
   async acceptInlineRegisterPolicies() {
-    await this.page.getByTestId('login-register-aup-tos-checkbox').getByRole('checkbox').check();
-    await this.page.getByTestId('login-register-age-checkbox').getByRole('checkbox').check();
+    await this.checkMuiCheckbox(this.page.getByTestId('login-register-aup-tos-checkbox').getByRole('checkbox'));
+    await this.checkMuiCheckbox(this.page.getByTestId('login-register-age-checkbox').getByRole('checkbox'));
   }
 
   /** Submit the inline register step to create the account, then wait to be routed off /login. */
