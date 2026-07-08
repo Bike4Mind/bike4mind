@@ -192,7 +192,10 @@ interface SessionSelectorState {
 }
 
 interface CliState {
-  session: Session | null;
+  // NOTE: the active session is NOT stored here. It lives solely in the Zustand
+  // store (`useCliStore`) as the single source of truth. Read it imperatively
+  // via `useCliStore.getState().session` and write it via `setStoreSession`.
+  // Rendering subscribes to the store directly (see App.tsx). See issue #227.
   sessionStore: SessionStore;
   configStore: ConfigStore;
   commandHistoryStore: CommandHistoryStore;
@@ -250,7 +253,6 @@ function CliApp() {
   const imageRenderer = new ImageRenderer();
 
   const [state, setState] = useState<CliState>({
-    session: null,
     sessionStore: new SessionStore(),
     configStore: new ConfigStore(),
     commandHistoryStore: new CommandHistoryStore(),
@@ -289,7 +291,11 @@ function CliApp() {
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
 
-  // Use Zustand store for UI state
+  // Use Zustand store for UI state. The session is the single source of truth;
+  // handlers read the latest value via `useCliStore.getState().session` and
+  // write via `setStoreSession`. Message rendering subscribes to the store
+  // directly in App.tsx, so CliApp deliberately does NOT subscribe to the
+  // session here (that would re-render the whole app on every streaming step).
   const setStoreSession = useCliStore(state => state.setSession);
   const enqueuePermissionPrompt = useCliStore(state => state.enqueuePermissionPrompt);
   const enqueueUserQuestionPrompt = useCliStore(state => state.enqueueUserQuestionPrompt);
@@ -305,9 +311,10 @@ function CliApp() {
     const cleanupTasks: Promise<void>[] = [];
 
     // Save session
-    if (state.session) {
+    const session = useCliStore.getState().session;
+    if (session) {
       cleanupTasks.push(
-        state.sessionStore.save(state.session).catch(err => {
+        state.sessionStore.save(session).catch(err => {
           logger.debug(`[CLEANUP] Session save error: ${err.message}`);
         })
       );
@@ -367,7 +374,8 @@ function CliApp() {
       process.exit(0);
     }, 100);
   }, [
-    state.session,
+    // session is read fresh from the store (useCliStore.getState()), so it is
+    // intentionally not a dependency here.
     state.sessionStore,
     state.mcpManager,
     state.agent,
@@ -964,7 +972,6 @@ function CliApp() {
 
       setState((prev: CliState) => ({
         ...prev,
-        session: newSession,
         agent,
         mcpManager,
         permissionManager,
@@ -1136,7 +1143,8 @@ function CliApp() {
    * Shows concise user message but sends full template to agent
    */
   const handleCustomCommandMessage = async (fullTemplate: string, displayMessage: string) => {
-    if (!state.agent || !state.session) {
+    const session = useCliStore.getState().session;
+    if (!state.agent || !session) {
       console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
       return;
     }
@@ -1208,15 +1216,14 @@ function CliApp() {
 
       // Add both messages immediately
       const sessionWithMessages: Session = {
-        ...state.session,
-        messages: [...state.session.messages, userMessage, pendingAssistantMessage],
+        ...session,
+        messages: [...session.messages, userMessage, pendingAssistantMessage],
         updatedAt: new Date().toISOString(),
       };
-      setState((prev: CliState) => ({ ...prev, session: sessionWithMessages }));
       setStoreSession(sessionWithMessages);
 
       // Build conversation history
-      const recentMessages = state.session.messages.slice(-20);
+      const recentMessages = session.messages.slice(-20);
       const previousMessages = recentMessages
         .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
         .map((msg: Message) => ({
@@ -1278,7 +1285,7 @@ function CliApp() {
             total: result.completionInfo.totalTokens,
           },
           creditsUsed: result.completionInfo.totalCredits,
-          model: state.session.model,
+          model: session.model,
           permissionDenied,
         },
       };
@@ -1308,7 +1315,6 @@ function CliApp() {
         },
       };
 
-      setState((prev: CliState) => ({ ...prev, session: finalSession }));
       setStoreSession(finalSession);
 
       // Save session after each message
@@ -1349,7 +1355,6 @@ function CliApp() {
             updatedAt: new Date().toISOString(),
           };
 
-          setState((prev: CliState) => ({ ...prev, session: sessionWithCancel }));
           setStoreSession(sessionWithCancel);
           await state.sessionStore.save(sessionWithCancel);
         }
@@ -1378,7 +1383,6 @@ function CliApp() {
         }
 
         sessionWithDenied.messages = messages;
-        setState((prev: CliState) => ({ ...prev, session: sessionWithDenied }));
         setStoreSession(sessionWithDenied);
         await state.sessionStore.save(sessionWithDenied);
         return;
@@ -1403,7 +1407,6 @@ function CliApp() {
       }
 
       sessionWithError.messages = messages;
-      setState((prev: CliState) => ({ ...prev, session: sessionWithError }));
       setStoreSession(sessionWithError);
     } finally {
       // Clean up abort controller and event handlers
@@ -1484,7 +1487,6 @@ function CliApp() {
             );
 
             await logger.initialize(newSession.id);
-            setState((prev: CliState) => ({ ...prev, session: newSession }));
             setStoreSession(newSession);
             useCliStore.getState().clearPendingMessages();
 
@@ -1543,7 +1545,6 @@ function CliApp() {
         messages: [...activeSession.messages, userMessage],
         updatedAt: new Date().toISOString(),
       };
-      setState((prev: CliState) => ({ ...prev, session: sessionWithUserMessage }));
       setStoreSession(sessionWithUserMessage);
 
       // Add pending assistant message to pendingMessages (dynamic, will update in real-time)
@@ -1624,7 +1625,6 @@ function CliApp() {
         },
       };
 
-      setState((prev: CliState) => ({ ...prev, session: updatedSession }));
       setStoreSession(updatedSession);
 
       // Auto-save session
@@ -1656,7 +1656,6 @@ function CliApp() {
             updatedAt: new Date().toISOString(),
           };
 
-          setState((prev: CliState) => ({ ...prev, session: sessionWithCancel }));
           setStoreSession(sessionWithCancel);
           await state.sessionStore.save(sessionWithCancel);
         }
@@ -1736,7 +1735,8 @@ function CliApp() {
    * without adding a user message to the conversation.
    */
   const handleBackgroundCompletion = async () => {
-    if (!state.agent || !state.session) {
+    const session = useCliStore.getState().session;
+    if (!state.agent || !session) {
       return;
     }
 
@@ -1768,7 +1768,7 @@ function CliApp() {
       useCliStore.getState().addPendingMessage(pendingAssistantMessage);
 
       // Build conversation history from previous messages
-      const recentMessages = state.session.messages.slice(-20);
+      const recentMessages = session.messages.slice(-20);
       const previousMessages = recentMessages
         .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
         .map((msg: Message) => ({
@@ -1831,8 +1831,7 @@ function CliApp() {
       // Remove pending message
       useCliStore.getState().clearPendingMessages();
 
-      // Update session in state and store
-      setState((prev: CliState) => ({ ...prev, session: updatedSession }));
+      // Update session in the store (single source of truth)
       setStoreSession(updatedSession);
       await state.sessionStore.save(updatedSession);
     } catch (error: unknown) {
@@ -1851,7 +1850,8 @@ function CliApp() {
   // Handle bash command execution directly (no backend calls)
   const handleBashCommand = useCallback(
     (command: string) => {
-      if (!state.session) return;
+      const session = useCliStore.getState().session;
+      if (!session) return;
 
       let output: string;
       let isError = false;
@@ -1886,18 +1886,18 @@ function CliApp() {
 
       // Update session with both messages
       const updatedSession: Session = {
-        ...state.session,
-        messages: [...state.session.messages, userMessage, assistantMessage],
+        ...session,
+        messages: [...session.messages, userMessage, assistantMessage],
         updatedAt: new Date().toISOString(),
       };
 
-      setState(prev => ({ ...prev, session: updatedSession }));
       setStoreSession(updatedSession);
 
       // Auto-save session
       state.sessionStore.save(updatedSession);
     },
-    [state.session, state.sessionStore]
+    // session is read fresh from the store, so it is intentionally not a dependency.
+    [state.sessionStore]
   );
 
   const handleImageDetected = async (imageData: Buffer): Promise<string> => {
@@ -2132,13 +2132,13 @@ function CliApp() {
    *
    * `generateHandoff` mutates the passed-in session in place, then we save
    * that exact reference. We don't rely on the trailing `performCleanup()` to
-   * persist the change because `state.session` may have been replaced while we
-   * waited for the prompt (e.g. by a background-agent update), making the
+   * persist the change because the store's session may have been replaced while
+   * we waited for the prompt (e.g. by a background-agent update), making the
    * mutated snapshot orphaned. Best-effort: any failure is logged and
    * swallowed so it never blocks exit.
    */
   const maybePromptExitHandoff = async (): Promise<void> => {
-    const session = state.session;
+    const session = useCliStore.getState().session;
     if (!session) return;
     if (!state.agent) return;
     if (session.messages.length < SHORT_SESSION_THRESHOLD) return;
@@ -2211,7 +2211,7 @@ function CliApp() {
     const blockers = blockerStoreRef.current.blockers;
     const openBlockers = blockers.filter(b => b.status === 'open').length;
     const gateCount = reviewGateStoreRef.current.reviewGates.length;
-    const handoff = state.session?.metadata.workflow?.handoff;
+    const handoff = useCliStore.getState().session?.metadata.workflow?.handoff;
 
     console.log('\n🔧 Workflow Overview\n');
     console.log(`  📋 Decisions: ${decisionCount}`);
@@ -2231,14 +2231,15 @@ function CliApp() {
    *     rate-limited or offline.
    */
   const runHandoffCommand = async (args: string[]): Promise<void> => {
-    if (!state.session) {
+    const session = useCliStore.getState().session;
+    if (!session) {
       console.log('No active session');
       return;
     }
 
     const wantsLocal = args.includes('--local');
     const filteredArgs = args.filter(a => a !== '--local');
-    const existing = state.session.metadata.workflow?.handoff;
+    const existing = session.metadata.workflow?.handoff;
     const wantsRegen = filteredArgs[0] === 'generate' || filteredArgs[0] === 'regen' || wantsLocal;
 
     if (existing && !wantsRegen) {
@@ -2249,12 +2250,12 @@ function CliApp() {
     }
 
     if (wantsLocal) {
-      const local = await writeLocalFallbackHandoff(state.session);
+      const local = await writeLocalFallbackHandoff(session);
       if (!local) {
         console.log('❌ Failed to write local handoff');
         return;
       }
-      await state.sessionStore.save(state.session);
+      await state.sessionStore.save(session);
       console.log('\n🤝 Local session handoff (no LLM call)\n');
       console.log(formatHandoffOutput(local.handoff));
       console.log(`\n📄 Local handoff written to ${local.filePath}`);
@@ -2262,7 +2263,7 @@ function CliApp() {
       return;
     }
 
-    if (state.session.messages.length < SHORT_SESSION_THRESHOLD) {
+    if (session.messages.length < SHORT_SESSION_THRESHOLD) {
       console.log(`Not enough messages to generate a handoff (need at least ${SHORT_SESSION_THRESHOLD})`);
       return;
     }
@@ -2271,12 +2272,12 @@ function CliApp() {
       return;
     }
 
-    const result = await generateHandoff(state.session);
+    const result = await generateHandoff(session);
     if (!result) {
       console.log('❌ Failed to generate handoff. Try /handoff --local for an LLM-free snapshot.');
       return;
     }
-    await state.sessionStore.save(state.session);
+    await state.sessionStore.save(session);
     const fellBack = result.source === 'local-fallback';
     console.log(fellBack ? '\n🤝 Local session handoff (LLM unavailable)\n' : '\n🤝 Session handoff\n');
     console.log(formatHandoffOutput(result.handoff));
@@ -2335,7 +2336,7 @@ function CliApp() {
             agentName,
             thoroughness: customCommand.thoroughness,
             variables: customCommand.variables,
-            parentSessionId: state.session?.id || 'unknown',
+            parentSessionId: useCliStore.getState().session?.id || 'unknown',
           });
 
           // Display the agent result summary
@@ -2347,18 +2348,26 @@ function CliApp() {
         if (customCommand.model && state.agent) {
           console.log(`🔄 Using model override: ${customCommand.model}`);
 
-          // Temporarily override the agent's model
-          const originalModel = state.session?.model;
-          if (state.session) {
-            state.session.model = customCommand.model;
+          // Temporarily override the model on the active session by mutating the
+          // captured reference in place. NOTE: this restore is best-effort and
+          // known-incomplete - handleCustomCommandMessage installs new session
+          // references in the store, so the restore below mutates a now-orphaned
+          // object and the override can persist to the saved session. Behavior
+          // is unchanged from before the single-source-of-truth refactor; a
+          // proper fix (restore on the current store session, or a first-class
+          // "run with model override" transition) is tracked in #241.
+          const overrideSession = useCliStore.getState().session;
+          const originalModel = overrideSession?.model;
+          if (overrideSession) {
+            overrideSession.model = customCommand.model;
           }
 
           // Execute the command - send full template to agent but show concise message to user
           await handleCustomCommandMessage(substitutedBody, displayMessage);
 
           // Restore original model
-          if (state.session && originalModel) {
-            state.session.model = originalModel;
+          if (overrideSession && originalModel) {
+            overrideSession.model = originalModel;
           }
         } else {
           // Execute without model override
@@ -2470,16 +2479,17 @@ Multi-line Input:
         break;
 
       case 'save': {
-        if (!state.session) {
+        const session = useCliStore.getState().session;
+        if (!session) {
           console.log('No active session to save');
           return;
         }
-        if (state.session.messages.length === 0) {
+        if (session.messages.length === 0) {
           console.log('❌ Cannot save session with no messages');
           return;
         }
-        const sessionName = args.join(' ') || state.session.name;
-        state.session.name = sessionName;
+        const sessionName = args.join(' ') || session.name;
+        session.name = sessionName;
         // Sync workflow state before saving so decisions/blockers are persisted
         // even if handoff generation is skipped or fails. When generateHandoff
         // succeeds it will overwrite this with a fresh workflow object that
@@ -2489,17 +2499,17 @@ Multi-line Input:
           blockerStoreRef.current.blockers.length > 0 ||
           reviewGateStoreRef.current.reviewGates.length > 0
         ) {
-          state.session.metadata.workflow = {
+          session.metadata.workflow = {
             decisions: decisionStoreRef.current.decisions,
             blockers: blockerStoreRef.current.blockers,
-            handoff: state.session.metadata.workflow?.handoff,
+            handoff: session.metadata.workflow?.handoff,
             reviewGates: reviewGateStoreRef.current.reviewGates,
           };
         }
         // Generate structured handoff so the next session can resume seamlessly.
         // Skipped silently for short sessions or when no agent is available.
-        const handoffResult = await generateHandoff(state.session);
-        await state.sessionStore.save(state.session);
+        const handoffResult = await generateHandoff(session);
+        await state.sessionStore.save(session);
         console.log(`✅ Session saved as "${sessionName}"`);
         if (handoffResult) {
           const label =
@@ -2561,10 +2571,7 @@ Multi-line Input:
             ? { ...loadedSession, messages: injectHandoffMessage(loadedSession.messages, handoff) }
             : loadedSession;
 
-          // Update React state
-          setState((prev: CliState) => ({ ...prev, session: sessionForState }));
-
-          // Sync to Zustand store
+          // Update the session in the store (single source of truth)
           setStoreSession(sessionForState);
           useCliStore.getState().clearPendingMessages();
 
@@ -2854,10 +2861,11 @@ Multi-line Input:
         // Create new session (preserving model from current session or config).
         // Pinned-session mode (host board pane): keep the SAME uuid so the host's
         // --resume still finds this conversation after a /clear.
-        const model = state.session?.model || state.config?.defaultModel || ChatModels.CLAUDE_4_5_SONNET;
+        const currentSession = useCliStore.getState().session;
+        const model = currentSession?.model || state.config?.defaultModel || ChatModels.CLAUDE_4_5_SONNET;
         const clearPinnedId = process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID;
         const newSession: Session = {
-          id: clearPinnedId ? (state.session?.id ?? clearPinnedId) : uuidv4(),
+          id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : uuidv4(),
           name: `Session ${new Date().toLocaleString()}`,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
@@ -2883,10 +2891,7 @@ Multi-line Input:
           state.checkpointStore.setSessionId(newSession.id);
         }
 
-        // Update state
-        setState((prev: CliState) => ({ ...prev, session: newSession }));
-
-        // Sync to Zustand store
+        // Update the session in the store (single source of truth)
         setStoreSession(newSession);
 
         // Clear pending messages from Zustand store
@@ -2921,19 +2926,20 @@ Multi-line Input:
       }
 
       case 'rewind': {
-        if (!state.session) {
+        const session = useCliStore.getState().session;
+        if (!session) {
           console.log('No active session to rewind');
           return;
         }
 
         // Check if conversation is empty
-        if (state.session.messages.length === 0) {
+        if (session.messages.length === 0) {
           console.log('⚠️  Conversation is empty. Nothing to rewind.');
           return;
         }
 
         // Get user messages
-        const userMessages = state.session.messages.filter(msg => msg.role === 'user');
+        const userMessages = session.messages.filter(msg => msg.role === 'user');
 
         if (userMessages.length === 0) {
           console.log('⚠️  No user messages found. Nothing to rewind.');
@@ -2955,38 +2961,38 @@ Multi-line Input:
             return;
           }
 
-          if (!state.session) {
+          const activeSession = useCliStore.getState().session;
+          if (!activeSession) {
             console.log('❌ No active session');
             return;
           }
 
           // Get the selected message content to prefill the input
-          const selectedMessage = state.session.messages[messageIndex];
+          const selectedMessage = activeSession.messages[messageIndex];
           const prefillContent = selectedMessage?.content || '';
 
           // Remove the selected message and all messages after it
           // The user will re-send the message (possibly edited) from the input
-          const rewindedMessages = state.session.messages.slice(0, messageIndex);
+          const rewindedMessages = activeSession.messages.slice(0, messageIndex);
 
           // Recalculate metadata
           const newMetadata = recalculateSessionMetadata(rewindedMessages);
 
           // Create updated session
           const rewindedSession: Session = {
-            ...state.session,
+            ...activeSession,
             messages: rewindedMessages,
             updatedAt: new Date().toISOString(),
             metadata: newMetadata,
           };
 
-          // Update state with rewound session and prefill input
+          // Prefill the input with the selected message
           setState((prev: CliState) => ({
             ...prev,
-            session: rewindedSession,
             prefillInput: prefillContent,
           }));
 
-          // Sync to Zustand store
+          // Update the session in the store (single source of truth)
           setStoreSession(rewindedSession);
           useCliStore.getState().clearPendingMessages();
 
@@ -3249,13 +3255,14 @@ Multi-line Input:
       }
 
       case 'context': {
-        if (!state.session) {
+        const session = useCliStore.getState().session;
+        if (!session) {
           console.log('No active session');
           break;
         }
 
         const tokenCounter = getTokenCounter();
-        const contextWindow = tokenCounter.getContextWindow(state.session.model, state.availableModels);
+        const contextWindow = tokenCounter.getContextWindow(session.model, state.availableModels);
 
         // Calculate token counts for each component (reflect the variant the user has selected)
         const variantForCount = state.config?.preferences.promptVariant ?? 'current';
@@ -3285,7 +3292,7 @@ Multi-line Input:
           featureModulePrompts: state.featureRegistry?.getSystemPromptSections() || undefined,
           deferredToolNames: deferredNames,
         });
-        const usage = tokenCounter.countSessionTokens(state.session, systemPrompt);
+        const usage = tokenCounter.countSessionTokens(session, systemPrompt);
         // Tool schemas ship with every request - count whatever is currently
         // loaded on the agent (built-ins + any MCP/B4M schemas hydrated via
         // tool_search). Without this the meter under-reports real usage by
@@ -3339,7 +3346,7 @@ Multi-line Input:
         // Conversation tokens
         console.log('\nConversation:');
         console.log(
-          `  Messages:          ${usage.messageTokens.toLocaleString()} tokens (${state.session.messages.length} messages)`
+          `  Messages:          ${usage.messageTokens.toLocaleString()} tokens (${session.messages.length} messages)`
         );
 
         // Warning if context is nearly full
@@ -3352,19 +3359,20 @@ Multi-line Input:
       }
 
       case 'compact': {
-        if (!state.session || !state.agent) {
+        const session = useCliStore.getState().session;
+        if (!session || !state.agent) {
           console.log('No active session');
           break;
         }
 
-        if (state.session.messages.length < 6) {
+        if (session.messages.length < 6) {
           console.log('Not enough messages to compact (need at least 6)');
           break;
         }
 
         const userInstructions = args.join(' ') || undefined;
 
-        const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(state.session.messages, {
+        const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(session.messages, {
           userInstructions,
           claudeMdInstructions: extractCompactInstructions(state.contextContent || ''),
         });
@@ -3385,12 +3393,12 @@ Multi-line Input:
           const summary = result.finalAnswer;
 
           // Save old session first
-          await state.sessionStore.save(state.session);
-          const oldSessionName = state.session.name;
+          await state.sessionStore.save(session);
+          const oldSessionName = session.name;
 
           // Create new compacted session
           const newSession = createCompactedSession(
-            state.session,
+            session,
             summary,
             preservedMessages,
             !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
@@ -3399,8 +3407,7 @@ Multi-line Input:
           // Reinitialize logger with new session ID
           await logger.initialize(newSession.id);
 
-          // Update state
-          setState((prev: CliState) => ({ ...prev, session: newSession }));
+          // Update the session in the store (single source of truth)
           setStoreSession(newSession);
           useCliStore.getState().clearPendingMessages();
 
@@ -4068,8 +4075,9 @@ Multi-line Input:
       // Rebuild system prompt with new feature module sections
       const newFeaturePrompts = newFeatureRegistry.getSystemPromptSections();
       const currentInteractionMode = useCliStore.getState().interactionMode;
+      const rebuildSession = useCliStore.getState().session;
       const planFilePathForRebuild =
-        currentInteractionMode === 'plan' && state.session ? getPlanModeFilePath(state.session.id) : undefined;
+        currentInteractionMode === 'plan' && rebuildSession ? getPlanModeFilePath(rebuildSession.id) : undefined;
       state.agent.setSystemPrompt(
         buildSystemPrompt(updatedConfig.preferences.promptVariant ?? 'current', {
           contextContent: state.contextContent,
@@ -4093,7 +4101,7 @@ Multi-line Input:
       }
     }
 
-    // Update local state with new config
+    // Update local state with new config (pure reducer - no side effects)
     setState(prev => {
       const updates: Partial<typeof prev> = { config: updatedConfig };
 
@@ -4101,27 +4109,25 @@ Multi-line Input:
         updates.featureRegistry = newFeatureRegistry;
       }
 
-      // If model changed, also update the session model
-      if (modelChanged && prev.session) {
-        const updatedSession: Session = {
-          ...prev.session,
-          model: updatedConfig.defaultModel,
-          updatedAt: new Date().toISOString(),
-        };
-
-        // Sync session to Zustand store
-        setStoreSession(updatedSession);
-
-        // Update the agent's model (context is private, but we can access it)
-        if (prev.agent) {
-          (prev.agent as any).context.model = updatedConfig.defaultModel;
-        }
-
-        return { ...prev, ...updates, session: updatedSession };
-      }
-
       return { ...prev, ...updates };
     });
+
+    // If the model changed, update the session model in the store (single source of truth)
+    if (modelChanged) {
+      const currentSession = useCliStore.getState().session;
+      if (currentSession) {
+        setStoreSession({
+          ...currentSession,
+          model: updatedConfig.defaultModel,
+          updatedAt: new Date().toISOString(),
+        });
+
+        // Update the agent's model (context is private, but we can access it)
+        if (state.agent) {
+          (state.agent as any).context.model = updatedConfig.defaultModel;
+        }
+      }
+    }
 
     // Update LLM backend's model if it changed
     // The LLM backend is stored in the agent's context
@@ -4167,11 +4173,18 @@ Multi-line Input:
     );
   }
 
+  // The rewind/session selectors below are each gated behind React state
+  // (`state.rewindSelector` / `state.sessionSelector`), which triggers this
+  // re-render when set; the session is stable while a selector is open (the
+  // agent is idle), so a single non-subscribing getState() snapshot is correct
+  // for both branches.
+  const currentSession = useCliStore.getState().session;
+
   // Show rewind selector if requested
-  if (state.rewindSelector && state.session) {
+  if (state.rewindSelector && currentSession) {
     return (
       <RewindSelector
-        messages={state.session.messages}
+        messages={currentSession.messages}
         onSelect={messageIndex => {
           if (state.rewindSelector) {
             state.rewindSelector.resolve(messageIndex);
@@ -4191,7 +4204,7 @@ Multi-line Input:
     return (
       <SessionSelector
         sessions={state.sessionSelector.sessions}
-        currentSession={state.session}
+        currentSession={currentSession}
         onSelect={session => {
           if (state.sessionSelector) {
             state.sessionSelector.resolve(session);

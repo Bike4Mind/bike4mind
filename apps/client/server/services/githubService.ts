@@ -246,11 +246,13 @@ export class GitHubService {
   /**
    * Factory method to create a GitHubService using the system default connection.
    *
-   * Returns null for permanent config states (no connection / disabled / suspended) -
-   * callers should swallow the message without retrying since retries will never help.
+   * Returns null for permanent config states (no connection / disabled / suspended /
+   * missing SECRET_ENCRYPTION_KEY) - callers should swallow the message without retrying
+   * since retries will never help.
    *
-   * Throws for transient failures (DB error, auth init failure) so SQS retries the
-   * message and routes it to the DLQ if retries are exhausted.
+   * Throws for transient failures (DB error, or auth-init failure inside
+   * createFromConnection) so SQS retries the message and routes it to the DLQ if retries
+   * are exhausted.
    */
   static async forSystem(logger: Logger): Promise<GitHubService | null> {
     // DB failure is transient - propagates so callers retry rather than silently drop.
@@ -274,8 +276,17 @@ export class GitHubService {
       return null;
     }
 
-    // Auth init failure propagates for retry or DLQ escalation - covers both transient
-    // (network unreachable) and permanent config errors (wrong encryption key).
+    // Missing encryption key is a permanent deploy misconfiguration, not transient:
+    // stored credentials can never be decrypted, so retrying will never succeed. Return
+    // null (like disabled/suspended) so the SQS consumer swallows the message rather than
+    // retrying it to the DLQ.
+    if (!Config.SECRET_ENCRYPTION_KEY) {
+      logger.error('[GitHubService] SECRET_ENCRYPTION_KEY not configured - permanent config error, not retrying');
+      return null;
+    }
+
+    // DB failure (above) and auth-init failure (inside createFromConnection) remain
+    // transient and propagate so the SQS consumer retries / escalates to the DLQ.
     return GitHubService.createFromConnection(connection, logger);
   }
 

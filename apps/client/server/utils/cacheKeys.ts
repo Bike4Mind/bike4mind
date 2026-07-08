@@ -73,7 +73,7 @@ export const CacheKeys = {
   },
 
   securityBehavioralSummary: (userId: string) => {
-    return `security-behavioral-summary:${userId}`;
+    return `security-behavioral-summary-v2:${userId}`;
   },
 
   securityDashboardAiAssessment: (stage: string, fingerprintHash: string) => {

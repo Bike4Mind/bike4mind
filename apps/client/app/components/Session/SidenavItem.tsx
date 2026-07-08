@@ -13,6 +13,7 @@ import {
   useUpdateSessionTags,
 } from '@client/app/hooks/data/sessions';
 import { useJobStatus } from '@client/app/hooks/useJobStatus';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { ISessionDocument, ISessionFavoriteItem, InviteType } from '@bike4mind/common';
 import { formatSessionTitle } from '@client/app/utils/sessionTitle';
 import CloseIcon from '@mui/icons-material/Close';
@@ -90,7 +91,6 @@ const SessionSidenavItem: FC<{
   onToggleSelection?: () => void;
   isShared?: boolean;
   showMessageCount?: boolean;
-  disableExportOps?: boolean;
   /** Override the rendered name (e.g. /opti shows still-default-named sessions as
    *  "New conversation"). Falsy values fall back to the formatted session name. */
   displayNameOverride?: string;
@@ -110,7 +110,6 @@ const SessionSidenavItem: FC<{
   onToggleSelection,
   isShared = false,
   showMessageCount = true,
-  disableExportOps = false,
   displayNameOverride,
   selected,
 }): React.JSX.Element => {
@@ -126,6 +125,7 @@ const SessionSidenavItem: FC<{
   const exportToExcel = useExportSessionToExcel();
   const exportToWord = useExportSessionToWord();
   const sendToDataLake = useSendSessionToDataLake();
+  const { isFeatureEnabled } = useAdminSettingsCache();
   const summarizeSession = useSummarizeSession();
   const toggleFavoriteSession = useToggleFavoriteSession(session.id);
   const updateSessionTags = useUpdateSessionTags();
@@ -526,14 +526,16 @@ const SessionSidenavItem: FC<{
               >
                 <ArticleIcon /> Export to Word
               </MenuItem>
-              <MenuItem
-                onClick={handleSendToDataLake}
-                className="sidenav-item-menuitem-send-datalake"
-                data-testid="sidenav-item-menuitem-send-datalake"
-                disabled={sendToDataLake.isPending}
-              >
-                <StorageIcon /> Send to Data Lake
-              </MenuItem>
+              {isFeatureEnabled('EnableDataLakes') && (
+                <MenuItem
+                  onClick={handleSendToDataLake}
+                  className="sidenav-item-menuitem-send-datalake"
+                  data-testid="sidenav-item-menuitem-send-datalake"
+                  disabled={sendToDataLake.isPending}
+                >
+                  <StorageIcon /> Send to Data Lake
+                </MenuItem>
+              )}
               {canUpdate && (
                 <>
                   <MenuItem onClick={handleSummarizeSession} className="sidenav-item-menuitem-summarize">
@@ -837,40 +839,38 @@ const SessionSidenavItem: FC<{
                 <MenuItem onClick={handleCloneSession} className="sidenav-item-menuitem-clone">
                   <FolderCopyIcon /> {t('notebooks.clone')}
                 </MenuItem>
-                {!disableExportOps && (
-                  <>
-                    <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
-                      <DownloadIcon /> {t('notebooks.download')}
-                    </MenuItem>
-                    <MenuItem onClick={handleCopyAsMarkdown} className="sidenav-item-menuitem-copy-markdown">
-                      <ContentCopyIcon /> Copy as Markdown
-                    </MenuItem>
-                    <Divider sx={{ my: 1 }} />
-                    <MenuItem
-                      onClick={handleExportToExcel}
-                      className="sidenav-item-menuitem-export-excel"
-                      data-testid="sidenav-item-menuitem-export-excel"
-                      disabled={exportToExcel.isPending}
-                    >
-                      <GridOnIcon /> Export to Excel
-                    </MenuItem>
-                    <MenuItem
-                      onClick={handleExportToWord}
-                      className="sidenav-item-menuitem-export-word"
-                      data-testid="sidenav-item-menuitem-export-word"
-                      disabled={exportToWord.isPending}
-                    >
-                      <ArticleIcon /> Export to Word
-                    </MenuItem>
-                    <MenuItem
-                      onClick={handleSendToDataLake}
-                      className="sidenav-item-menuitem-send-datalake"
-                      data-testid="sidenav-item-menuitem-send-datalake"
-                      disabled={sendToDataLake.isPending}
-                    >
-                      <StorageIcon /> Send to Data Lake
-                    </MenuItem>
-                  </>
+                <MenuItem onClick={handleDownloadSession} className="sidenav-item-menuitem-download">
+                  <DownloadIcon /> {t('notebooks.download')}
+                </MenuItem>
+                <MenuItem onClick={handleCopyAsMarkdown} className="sidenav-item-menuitem-copy-markdown">
+                  <ContentCopyIcon /> Copy as Markdown
+                </MenuItem>
+                <Divider sx={{ my: 1 }} />
+                <MenuItem
+                  onClick={handleExportToExcel}
+                  className="sidenav-item-menuitem-export-excel"
+                  data-testid="sidenav-item-menuitem-export-excel"
+                  disabled={exportToExcel.isPending}
+                >
+                  <GridOnIcon /> Export to Excel
+                </MenuItem>
+                <MenuItem
+                  onClick={handleExportToWord}
+                  className="sidenav-item-menuitem-export-word"
+                  data-testid="sidenav-item-menuitem-export-word"
+                  disabled={exportToWord.isPending}
+                >
+                  <ArticleIcon /> Export to Word
+                </MenuItem>
+                {isFeatureEnabled('EnableDataLakes') && (
+                  <MenuItem
+                    onClick={handleSendToDataLake}
+                    className="sidenav-item-menuitem-send-datalake"
+                    data-testid="sidenav-item-menuitem-send-datalake"
+                    disabled={sendToDataLake.isPending}
+                  >
+                    <StorageIcon /> Send to Data Lake
+                  </MenuItem>
                 )}
                 {canUpdate && (
                   <>

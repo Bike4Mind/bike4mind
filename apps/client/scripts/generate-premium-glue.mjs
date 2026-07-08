@@ -213,6 +213,94 @@ export const premiumNotebookSidenav: PremiumNotebookSidenav = dynamic(
 
 // --- Generate API route stubs ---
 
+// Resolve a validated bare specifier (e.g. '@bike4mind/premium-optihashi/api/webhooks/qwork')
+// declared by `pkg` back to the real source file on disk, via that package's own
+// `exports` map in its package.json - so we can inspect the source without executing it.
+// Returns null (never throws) for any shape this doesn't confidently recognize;
+// callers treat null as "no config to re-export", which is the pre-existing behavior.
+function resolveExportFromToSourceFile(pkg, exportFrom) {
+  let subpath;
+  if (exportFrom === pkg.name) subpath = '.';
+  else if (exportFrom.startsWith(`${pkg.name}/`)) subpath = `.${exportFrom.slice(pkg.name.length)}`;
+  else return null; // exportFrom names a different package - not resolvable from here.
+
+  const pkgJsonPath = join(PREMIUM_DIR, pkg.dir, 'package.json');
+  let pkgJson;
+  try {
+    pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+  } catch {
+    return null;
+  }
+  const target = pkgJson.exports?.[subpath];
+  if (target === undefined) return null; // no exports entry for this subpath - nothing to resolve.
+  if (typeof target !== 'string') {
+    // A conditional-exports object ({ import, require, ... }) or array target exists at this
+    // key but isn't a plain string path we can read - warn rather than silently returning null,
+    // matching extractConfigLiteral's posture: an unresolvable source file means any `config`
+    // export it might have is silently dropped from the generated stub, which can reintroduce
+    // the exact bodyParser hang this file exists to prevent.
+    console.warn(
+      `[codegen] WARNING: ${pkg.name}'s package.json exports["${subpath}"] is not a plain string ` +
+        `path (got ${JSON.stringify(target)}) - can't resolve it to check for a "config" export. ` +
+        `If this route needs Next's bodyParser config, the generated stub will be missing it.`
+    );
+    return null;
+  }
+
+  // Containment guard, mirroring the ones below for generatedPath (:293, :349):
+  // `target` comes from the overlay's own package.json, which is already fully
+  // trusted (its .ts source is compiled directly into the app elsewhere), but stay
+  // consistent with this file's own defense-in-depth convention regardless of that.
+  const pkgRoot = resolve(join(PREMIUM_DIR, pkg.dir));
+  const resolved = resolve(join(PREMIUM_DIR, pkg.dir, target));
+  if (resolved !== pkgRoot && !resolved.startsWith(pkgRoot + sep)) return null;
+
+  return existsSync(resolved) ? resolved : null;
+}
+
+// Next.js's Pages Router requires `export const config = {...}` to be a literal,
+// statically-analyzable object declared DIRECTLY in the route file - a bare
+// `export { config } from 'source'` re-export is not reliably picked up by Next's
+// build-time page-config analyzer. Dropping `config` silently re-enables Next's
+// default body parser, which then consumes a raw-body handler's request stream
+// before the handler's own manual read ever runs (verified live: a correctly-signed
+// webhook POST to a route missing this hung forever instead of getting a response).
+// So instead of re-exporting `config` across a module boundary, copy its literal
+// text into the generated glue file so Next analyzes it directly, in-file.
+//
+// The literal-extraction regex requires the closing `}` to be immediately followed
+// by `;` (no space) - true for this repo's own Prettier-formatted source today, but
+// a differently-formatted config would silently fail to extract and fall back to no
+// config export at all, i.e. reintroducing the exact hang this function exists to
+// prevent. Warn loudly in that case instead of failing silently.
+function extractConfigLiteral(sourceFilePath) {
+  if (!sourceFilePath) return null;
+  let content;
+  try {
+    content = readFileSync(sourceFilePath, 'utf8');
+  } catch {
+    return null;
+  }
+  // Anchored to line start (with leading whitespace allowed) so a config-shaped literal
+  // sitting inside a comment or string above the real declaration can't win the match -
+  // otherwise `.match()` would still succeed there, skipping the fallback warning below
+  // while emitting whatever that comment/string literal happened to contain. Tolerates an
+  // optional type annotation (`config: PageConfig =`) between the name and `=` - without
+  // it, an annotated declaration matches neither this regex nor the fallback trigger below,
+  // silently emitting no config export with no warning (no route currently uses this form,
+  // but nothing stops one from starting to).
+  const match = content.match(/^\s*export\s+const\s+config(?::\s*[A-Za-z_][A-Za-z0-9_.]*)?\s*=\s*(\{[\s\S]*?\});/m);
+  if (match) return match[1];
+  if (/export\s+const\s+config(?::\s*[A-Za-z_][A-Za-z0-9_.]*)?\s*=/.test(content)) {
+    console.warn(
+      `[codegen] WARNING: ${sourceFilePath} declares "export const config" but its literal object ` +
+        `could not be extracted (unexpected formatting) - the generated stub will be missing this ` +
+        `config, which can silently reintroduce a bodyParser-related hang.`
+    );
+  }
+  return null;
+}
+
 function generateApiStubs(packages) {
   // Wipe all previously-generated stubs so removing a package removes its stubs.
   // Pattern: pages/api/premium-* dirs (all premium API dirs are namespaced premium-*).
@@ -257,9 +345,15 @@ function generateApiStubs(packages) {
       // exportFrom is interpolated raw into `export { default } from '<spec>'`.
       assertModuleSpecifier(exportFrom, pkg.name, 'apiRouteStubs.exportFrom');
 
+      // If the source route exports a Next.js page `config` (e.g. { api: { bodyParser:
+      // false } } for a raw-body webhook handler), copy its literal text in - see
+      // extractConfigLiteral's comment for why this can't just be re-exported.
+      const configLiteral = extractConfigLiteral(resolveExportFromToSourceFile(pkg, exportFrom));
+      const configExport = configLiteral ? `export const config = ${configLiteral};\n` : '';
+
       writeFile(
         outPath,
-        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.apiRouteStubs\nexport { default } from '${exportFrom}';\n`
+        `${GENERATED_BANNER}// Source: ${pkg.name} via b4mContributions.apiRouteStubs\nexport { default } from '${exportFrom}';\n${configExport}`
       );
     }
   }

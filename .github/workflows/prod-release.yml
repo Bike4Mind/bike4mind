@@ -53,6 +53,26 @@ jobs:
       pull-requests: read # Required for fetching PR details in changelog generation
 
     steps:
+      # Use b4m-release-bot App token (not GITHUB_TOKEN) to create the GitHub
+      # Release. GITHUB_TOKEN / github-actions[bot] is not a bypass actor on the
+      # release-tag-protection ruleset, so its tag creation is rejected (422
+      # "creations being restricted"). The release App is a bypass actor.
+      - name: Generate App token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Verify App token is non-empty
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          if [ -z "$APP_TOKEN" ]; then
+            echo "::error::App token generation returned empty — check RELEASE_APP_ID / RELEASE_APP_PRIVATE_KEY."
+            exit 1
+          fi
+
       - name: Determine configuration
         id: config
         run: |
@@ -123,7 +143,9 @@ jobs:
           SEED_APP_NAME: ${{ steps.config.outputs.app_name }}
           SEED_STAGE_NAME: ${{ steps.config.outputs.stage }}
           AWS_REGION: ${{ env.AWS_REGION }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # b4m-release-bot App token so the GitHub Release tag creation passes
+          # the release-tag-protection ruleset (App is a bypass actor).
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           # For workflow_run events (auto-trigger), always send Slack
           # For manual runs, send only if the input is true

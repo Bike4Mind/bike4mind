@@ -62,6 +62,8 @@ export interface ReplyContainerProps {
   search?: string;
   isExpandable?: boolean;
   completed?: boolean;
+  /** Machine-readable classifier for an error quest, drives targeted error UI (e.g. the Add Credits CTA). */
+  errorCode?: IChatHistoryItem['errorCode'];
   questMasterPlanId?: string;
   promptMeta?: PromptMeta;
   messageId?: string;

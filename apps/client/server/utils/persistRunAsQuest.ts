@@ -25,7 +25,14 @@ export async function persistRunAsQuest(
    * Written to `quest.images` so the inline image grid renders in chat history - the agent
    * path has no live quest to accrete these into, unlike classic chat. See agentExecutor.
    */
-  generatedImages?: string[]
+  generatedImages?: string[],
+  /**
+   * Provider stop reason of the run's final LLM completion (from the agent
+   * checkpoint). Written to `quest.promptMeta.finishReason` for parity with
+   * chat, which the client reads to tell a truncated artifact from a completed
+   * reply that merely contains an unclosed `<artifact>` tag in prose.
+   */
+  finishReason?: string
 ): Promise<void> {
   const images = generatedImages?.length ? generatedImages : undefined;
   try {
@@ -58,6 +65,8 @@ export async function persistRunAsQuest(
           status: 'done',
           updatedAt: new Date(),
           ...(execution.usedMementoIds?.length ? { 'promptMeta.context.mementoIds': execution.usedMementoIds } : {}),
+          // Dotted key coexists with `promptMeta.context.mementoIds` above - no clobber.
+          ...(finishReason ? { 'promptMeta.finishReason': finishReason } : {}),
         },
         // $addToSet (not $set) so images contributed by subagents - which write to this same
         // Quest from their own Lambdas via addImagesByAgentExecutionId - aren't clobbered.
@@ -77,9 +86,15 @@ export async function persistRunAsQuest(
         // Link back to the AgentExecution so the client can lazy-load the
         // iteration trace on a "Show reasoning" disclosure under the reply.
         agentExecutionId: executionId,
-        ...(execution.usedMementoIds?.length
-          ? { promptMeta: { context: { mementoIds: execution.usedMementoIds } } }
-          : {}),
+        // Compose one promptMeta from both sources so neither clobbers the
+        // other; omit it entirely when both are absent.
+        ...(() => {
+          const promptMeta = {
+            ...(finishReason ? { finishReason } : {}),
+            ...(execution.usedMementoIds?.length ? { context: { mementoIds: execution.usedMementoIds } } : {}),
+          };
+          return Object.keys(promptMeta).length ? { promptMeta } : {};
+        })(),
       });
     }
 

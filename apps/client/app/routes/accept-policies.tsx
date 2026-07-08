@@ -8,7 +8,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { api } from '@client/app/contexts/ApiContext';
 import useGetLogo from '@client/app/hooks/useGetLogo';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 
 /**
@@ -128,7 +128,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.terms}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Terms of Service
                       </Link>
@@ -137,7 +137,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.acceptableUse}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Acceptable Use Policy
                       </Link>
@@ -146,7 +146,7 @@ const AcceptPoliciesPage = () => {
                         href={ExternalLinks.privacy}
                         target="_blank"
                         rel="noopener noreferrer"
-                        onClick={e => e.stopPropagation()}
+                        sx={CHECKBOX_LABEL_LINK_SX}
                       >
                         Privacy Policy
                       </Link>

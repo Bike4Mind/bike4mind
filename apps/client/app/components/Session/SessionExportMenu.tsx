@@ -21,6 +21,7 @@ import {
   Storage as StorageIcon,
 } from '@mui/icons-material';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
+import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import {
   CircularProgress,
   Divider,
@@ -53,6 +54,7 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
   const [isExcelGenerating, setIsExcelGenerating] = useState(false);
   const [isDocxGenerating, setIsDocxGenerating] = useState(false);
   const openSendToDataLake = useSendToDataLakeStore(s => s.open);
+  const { isFeatureEnabled } = useAdminSettingsCache();
 
   const filename = getSessionExportFilename(session.name);
   const isExporting = isExcelGenerating || isDocxGenerating;
@@ -225,19 +227,25 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
           Copy as JSON
         </MenuItem>
 
-        <Divider sx={{ my: 0.5 }} />
+        {/* Data Lake Section - the item is the section's only entry, so hide the
+            header and divider with it when the feature is off (matches the rest of
+            the data-lake surface, e.g. CreateDataLakeButton in FileBrowser). */}
+        {isFeatureEnabled('EnableDataLakes') && (
+          <>
+            <Divider sx={{ my: 0.5 }} />
 
-        {/* Data Lake Section */}
-        <Typography level="body-xs" sx={{ px: 1.5, py: 0.5, fontWeight: 'bold', color: 'neutral.500' }}>
-          Knowledge
-        </Typography>
+            <Typography level="body-xs" sx={{ px: 1.5, py: 0.5, fontWeight: 'bold', color: 'neutral.500' }}>
+              Knowledge
+            </Typography>
 
-        <MenuItem data-testid="session-send-to-datalake" onClick={handleSendToDataLake}>
-          <ListItemDecorator>
-            <StorageIcon fontSize="small" />
-          </ListItemDecorator>
-          Send to Data Lake
-        </MenuItem>
+            <MenuItem data-testid="session-send-to-datalake" onClick={handleSendToDataLake}>
+              <ListItemDecorator>
+                <StorageIcon fontSize="small" />
+              </ListItemDecorator>
+              Send to Data Lake
+            </MenuItem>
+          </>
+        )}
       </Menu>
     </Dropdown>
   );

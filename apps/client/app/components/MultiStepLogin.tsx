@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useRouter } from '@tanstack/react-router';
 import { applyRedirect, appendRedirectTo } from '@client/app/utils/authRedirect';
 import { getLoginErrorMessage } from '@client/app/utils/loginErrorMessages';
-import { useTranslation } from 'react-i18next';
+import { useTranslation, Trans } from 'react-i18next';
 import { toast } from 'sonner';
 import {
   Box,
@@ -37,7 +37,7 @@ import { gray, brand } from '@client/app/utils/themes/colors';
 import { visuallyHidden } from '@client/app/utils/a11yStyles';
 import { getWebsiteUrl, WEBSITE_URL } from '@client/config/general';
 import { CURRENT_POLICY_VERSION } from '@bike4mind/common';
-import { ExternalLinks } from '@client/app/utils/externalLinks';
+import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { trackSignupConversion } from '@client/app/utils/signupConversion';
 
 /**
@@ -574,7 +574,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
               className="otc-subtitle"
               sx={{ color: 'text.tertiary', fontSize: '14px', mt: '4px', textAlign: 'center' }}
             >
-              {t('auth.codeSentTo', { email: email.trim() })}
+              <Trans
+                i18nKey="auth.codeSentTo"
+                values={{ email: email.trim() }}
+                components={{ email: <Box component="span" sx={{ color: 'text.primary', fontWeight: 600 }} /> }}
+              />
             </Typography>
           )}
 
@@ -774,7 +778,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           fontWeight: 500,
                           fontSize: '14px',
                           cursor: 'pointer',
-                          transition: 'opacity 0.2s ease-in-out',
+                          transition: 'color 0.2s ease-in-out',
                           '&:hover': { textDecoration: 'underline' },
                         }}
                       >
@@ -819,11 +823,9 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                     disabled={isVerifying}
                     sx={{
                       ...inputStyles,
-                      '--Input-minHeight': '48px',
-                      fontSize: '24px',
-                      letterSpacing: '8px',
+                      '--Input-minHeight': '40px',
                       textAlign: 'center',
-                      '& input': { textAlign: 'center' },
+                      '& input': { textAlign: 'center', letterSpacing: '4px' },
                     }}
                   />
                 </FormControl>
@@ -846,26 +848,10 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                   </Typography>
                 </Button>
 
-                <Box sx={{ display: 'flex', justifyContent: 'center', mt: '20px', gap: 2 }}>
-                  <Link
-                    className="resend-code-link"
-                    data-testid="login-resend-btn"
-                    color="primary"
-                    onClick={handleResendCode}
-                    sx={{
-                      fontWeight: 500,
-                      fontSize: '14px',
-                      cursor: resendCooldown > 0 ? 'default' : 'pointer',
-                      opacity: resendCooldown > 0 ? 0.5 : 1,
-                      transition: 'opacity 0.2s ease-in-out',
-                      '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
-                    }}
-                  >
-                    {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
-                  </Link>
-                </Box>
-
-                <Box className="back-to-email-container" sx={{ display: 'flex', justifyContent: 'center', mt: '12px' }}>
+                <Box
+                  className="otc-actions-container"
+                  sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: '20px', gap: 2 }}
+                >
                   <Link
                     className="back-to-email-link"
                     data-testid="login-back-btn"
@@ -875,11 +861,28 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                       fontWeight: 500,
                       fontSize: '14px',
                       cursor: 'pointer',
-                      transition: 'opacity 0.2s ease-in-out',
+                      transition: 'color 0.2s ease-in-out',
                       '&:hover': { textDecoration: 'underline' },
                     }}
                   >
                     ← {t('auth.backToEmail')}
+                  </Link>
+
+                  <Link
+                    className="resend-code-link"
+                    data-testid="login-resend-btn"
+                    color={resendCooldown > 0 ? 'neutral' : 'primary'}
+                    onClick={handleResendCode}
+                    sx={{
+                      fontWeight: 500,
+                      fontSize: '14px',
+                      color: resendCooldown > 0 ? 'text.tertiary' : undefined,
+                      cursor: resendCooldown > 0 ? 'default' : 'pointer',
+                      transition: 'color 0.2s ease-in-out',
+                      '&:hover': { textDecoration: resendCooldown > 0 ? 'none' : 'underline' },
+                    }}
+                  >
+                    {resendCooldown > 0 ? `${t('auth.resendCode')} (${resendCooldown}s)` : t('auth.resendCode')}
                   </Link>
                 </Box>
               </form>
@@ -934,7 +937,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           href={ExternalLinks.terms}
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={e => e.stopPropagation()}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Terms of Service
                         </Link>
@@ -943,7 +946,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           href={ExternalLinks.acceptableUse}
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={e => e.stopPropagation()}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Acceptable Use Policy
                         </Link>
@@ -952,7 +955,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                           href={ExternalLinks.privacy}
                           target="_blank"
                           rel="noopener noreferrer"
-                          onClick={e => e.stopPropagation()}
+                          sx={CHECKBOX_LABEL_LINK_SX}
                         >
                           Privacy Policy
                         </Link>
@@ -1002,7 +1005,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
                       fontWeight: 500,
                       fontSize: '14px',
                       cursor: 'pointer',
-                      transition: 'opacity 0.2s ease-in-out',
+                      transition: 'color 0.2s ease-in-out',
                       '&:hover': { textDecoration: 'underline' },
                     }}
                   >

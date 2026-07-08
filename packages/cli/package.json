@@ -89,7 +89,7 @@
     "glob": "^13.0.6",
     "gray-matter": "^4.0.3",
     "ignore": "^7.0.5",
-    "ink": "^7.0.3",
+    "ink": "^7.1.0",
     "ink-select-input": "^6.2.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
@@ -120,7 +120,7 @@
     "ws": "^8.21.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "yargs": "^18.0.0",
-    "yauzl": "^3.3.0",
+    "yauzl": "^3.4.0",
     "zod": "^4.4.3",
     "zod-validation-error": "^5.0.0",
     "zustand": "^5.0.13"
@@ -139,8 +139,8 @@
     "@types/ws": "^8.18.1",
     "@types/yargs": "^17.0.35",
     "ink-testing-library": "^4.0.0",
-    "tsdown": "^0.22.2",
-    "tsx": "^4.22.3",
+    "tsdown": "^0.22.3",
+    "tsx": "^4.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9"
   },

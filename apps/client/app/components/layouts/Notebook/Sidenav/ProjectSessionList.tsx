@@ -30,7 +30,6 @@ function ProjectSessionList({ project, onNotebookClick, favoriteSessions }: Proj
             isChecked={false}
             isShared={false}
             showMessageCount={false}
-            disableExportOps={false}
           />
         ))
       ) : (

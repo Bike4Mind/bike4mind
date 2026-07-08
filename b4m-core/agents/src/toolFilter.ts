@@ -65,6 +65,47 @@ export function filterToolsByPatterns(
 }
 
 /**
+ * Filter an OPT-IN tool pool: identical to `filterToolsByPatterns` except the
+ * default flips. A tool in this pool is granted ONLY when an allowed pattern
+ * explicitly matches it — with no allowed patterns, nothing is returned.
+ *
+ * This is the deliberate inverse of `filterToolsByPatterns`'s "no allowed
+ * patterns ⇒ allow all" rule. It exists for capabilities that must never be
+ * handed out by the allow-all default (e.g. Lattice): an agent has to name
+ * `lattice_*` (or a matching wildcard like `*`) in its `allowedTools` to get
+ * them. Deny patterns still take precedence, same as the base filter.
+ */
+export function filterOptInTools(
+  optInTools: ICompletionOptionTools[],
+  allowedPatterns?: string[],
+  deniedPatterns?: string[]
+): ICompletionOptionTools[] {
+  // Explicit opt-in required: without an allow list, grant nothing.
+  if (!allowedPatterns || allowedPatterns.length === 0) {
+    return [];
+  }
+  return filterToolsByPatterns(optInTools, allowedPatterns, deniedPatterns);
+}
+
+/**
+ * Compute a subagent's effective toolset: the parent's tools the agent is
+ * allowed to use, PLUS any opt-in tools it explicitly requested. Opt-in tools
+ * are deduped against the parent set by name so a tool present in both (e.g.
+ * the parent run already had the opt-in capability enabled) isn't wrapped twice.
+ */
+export function selectSubagentTools(
+  parentTools: ICompletionOptionTools[],
+  optInTools: ICompletionOptionTools[],
+  allowedPatterns?: string[],
+  deniedPatterns?: string[]
+): ICompletionOptionTools[] {
+  const fromParent = filterToolsByPatterns(parentTools, allowedPatterns, deniedPatterns);
+  const optIn = filterOptInTools(optInTools, allowedPatterns, deniedPatterns);
+  const seen = new Set(fromParent.map(tool => tool.toolSchema.name));
+  return [...fromParent, ...optIn.filter(tool => !seen.has(tool.toolSchema.name))];
+}
+
+/**
  * Get tool names from a list of tools
  */
 export function getToolNames(tools: ICompletionOptionTools[]): string[] {

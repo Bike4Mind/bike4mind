@@ -877,12 +877,10 @@ jobs:
     # separately by e2e-on-label.yml. The `stage == 'dev'` guard also excludes push
     # to prod (stage == 'production'), where E2E should not run.
     if: needs.deploy.outputs.stage == 'dev' && github.event_name == 'push'
-    # Soft-fail on PRs — results are posted as a PR comment, no red X on the workflow.
-    # E2E remains a hard failure on main (staging gate).
-    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    # Staging gate: runs only on push to main (dev), and a failure here is a
+    # hard failure. PR-triggered E2E is handled separately by e2e-on-label.yml.
     permissions:
       contents: read
-      pull-requests: write
       id-token: write
 
     steps:
@@ -976,57 +974,6 @@ jobs:
           name: playwright-report-${{ needs.deploy.outputs.stage }}
           path: apps/client/playwright-report/
           retention-days: 7
-
-      - name: Comment PR with E2E results
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
-
-            // Extract summary line (e.g., "10 passed", "2 failed, 8 passed")
-            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
-            const summary = summaryMatch ? summaryMatch[0].trim() : 'See report for details';
-
-            const passed = '${{ steps.e2e.outcome }}' === 'success';
-            const icon = passed ? '✅' : '❌';
-            const status = passed ? 'Passed' : 'Failed';
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-
-            const body = `${icon} **E2E Tests ${status}**
-
-            **Results:** ${summary}
-            **Preview:** \`https://app.${process.env.PREVIEW_URL}\`
-            **Report:** [Download from artifacts](${runUrl})
-
-            <sub>Tested against preview deployment for PR #${context.issue.number}</sub>`;
-
-            // Find and update existing e2e comment, or create new one
-            const { data: comments } = await github.rest.issues.listComments({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            const existing = comments.find(c => c.body.includes('**E2E Tests'));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                comment_id: existing.id,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            }
-        env:
-          PREVIEW_URL: ${{ needs.deploy.outputs.preview-url }}
 
       - name: Fail if E2E tests failed
         if: steps.e2e.outcome == 'failure'

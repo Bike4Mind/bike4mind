@@ -135,4 +135,20 @@ describe('SendToDataLakeModal', () => {
     expect(useDataLakes).toHaveBeenCalledWith(false);
     expect(screen.queryByTestId('send-to-datalake-option-lake-1')).toBeNull();
   });
+
+  it('does not render at all when EnableDataLakes is off, even if the store is open', () => {
+    isFeatureEnabled.mockReturnValue(false);
+
+    render(
+      <TestWrapper>
+        <SendToDataLakeModal />
+      </TestWrapper>
+    );
+
+    // The modal is the shared choke point for every "Send to Data Lake" entry point.
+    // Rendering it with the feature off would surface a dead-end empty state pointing
+    // at a Files -> Data Lakes entry that is itself hidden, so it must return null
+    // (mirroring CreateDataLakeButton in FileBrowser).
+    expect(screen.queryByTestId('send-to-datalake-modal')).toBeNull();
+  });
 });

@@ -49,6 +49,15 @@ export type SessionProps = {
   user: string;
 };
 
+/**
+ * Machine-readable error classifiers for `type: 'error'` quests. Set server-side
+ * so the client can branch to a targeted error UI (see `IChatHistoryItem.errorCode`).
+ * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
+ * derives its values from this tuple, so the two can never drift.
+ */
+export const QUEST_ERROR_CODES = ['insufficient_credits'] as const;
+export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
+
 export interface IChatHistoryItem {
   id?: string;
   sessionId: string;
@@ -112,6 +121,14 @@ export interface IChatHistoryItem {
   status?: 'stopped' | 'running' | 'done';
   creditsUsed?: number;
   deletedAt?: Date;
+
+  /**
+   * Machine-readable classifier for an `type: 'error'` quest, set server-side so
+   * the client can render a targeted error state instead of the raw `reply` text.
+   * Currently only `insufficient_credits` (drives the inline "Add Credits" CTA in
+   * the reply bubble); extend the union as other errors gain bespoke UI.
+   */
+  errorCode?: QuestErrorCode;
 
   /**
    * The ID of the QuestMaster plan that was created from this chat history item
