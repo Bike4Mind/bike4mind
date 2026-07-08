@@ -231,6 +231,10 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed,
+        // Cache counts here come from Anthropic-native fields (input_tokens EXCLUDES
+        // cache), so forwarding them is billing-safe. A Bedrock model reporting cache
+        // with cache-INCLUSIVE input must not forward without subtracting (see the
+        // warnings in openaiBackend/geminiBackend).
         ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
         ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),

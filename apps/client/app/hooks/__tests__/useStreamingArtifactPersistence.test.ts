@@ -2,18 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 
 // Isolate the hook's orchestration (parse -> dedup -> persist -> broadcast) from
-// the parser/persistence internals, which have their own tests.
+// the parser/persistence internals, which have their own tests. The hook delegates
+// parsing + fallback promotion to parseArtifactsWithFallback (see artifactParser.test.ts).
 const persistArtifacts = vi.fn(() => Promise.resolve());
-const parseArtifacts = vi.fn();
-const convertCodeBlocksToArtifacts = vi.fn((c: string) => c);
+const parseArtifactsWithFallback = vi.fn();
 
 vi.mock('../../utils/artifactPersistence', () => ({
   persistArtifacts: (...args: unknown[]) => persistArtifacts(...args),
 }));
 
 vi.mock('../../utils/artifactParser', () => ({
-  parseArtifacts: (...args: unknown[]) => parseArtifacts(...args),
-  convertCodeBlocksToArtifacts: (...args: [string]) => convertCodeBlocksToArtifacts(...args),
+  parseArtifactsWithFallback: (...args: unknown[]) => parseArtifactsWithFallback(...args),
   getArtifactTimestamp: () => 1000,
   generateCompleteArtifactId: (type: string, identifier: string, _ts: number, index: number) =>
     `${type}-${identifier}-${index}`,
@@ -35,11 +34,11 @@ const codeArtifact = {
 describe('useStreamingArtifactPersistence', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    parseArtifacts.mockReturnValue({ artifacts: [] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [], cleanedContent: '' });
   });
 
   it('parses artifacts from a completed quest and persists them once', async () => {
-    parseArtifacts.mockReturnValue({ artifacts: [codeArtifact] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());
 
     act(() => {
@@ -55,7 +54,7 @@ describe('useStreamingArtifactPersistence', () => {
   });
 
   it('does not persist the same quest twice (dedup by quest id)', async () => {
-    parseArtifacts.mockReturnValue({ artifacts: [codeArtifact] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());
 
     act(() => {
@@ -66,21 +65,21 @@ describe('useStreamingArtifactPersistence', () => {
     await waitFor(() => expect(persistArtifacts).toHaveBeenCalledTimes(1));
   });
 
-  it('falls back to code-block conversion when no artifact tags are found', () => {
-    // First parse finds nothing; after conversion the second parse finds one.
-    parseArtifacts.mockReturnValueOnce({ artifacts: [] }).mockReturnValueOnce({ artifacts: [codeArtifact] });
+  it('delegates parsing (including fallback promotion) to parseArtifactsWithFallback', () => {
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());
 
     act(() => {
-      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['```js\nx\n```'] });
+      result.current.persistArtifactsFromQuest({ id: 'q1', sessionId: 's1', replies: ['a', 'b'] });
     });
 
-    expect(convertCodeBlocksToArtifacts).toHaveBeenCalledOnce();
+    // Replies are joined before parsing so an artifact split across chunks is still seen.
+    expect(parseArtifactsWithFallback).toHaveBeenCalledWith('a\nb');
     expect(persistArtifacts).toHaveBeenCalledTimes(1);
   });
 
   it('broadcasts an artifacts-persisted event with the generated ids', async () => {
-    parseArtifacts.mockReturnValue({ artifacts: [codeArtifact] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const listener = vi.fn();
     window.addEventListener('artifacts-persisted', listener);
     const { result } = renderHook(() => useStreamingArtifactPersistence());
@@ -101,7 +100,7 @@ describe('useStreamingArtifactPersistence', () => {
   });
 
   it('skips quests with no id and quests with no replies', () => {
-    parseArtifacts.mockReturnValue({ artifacts: [codeArtifact] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());
 
     act(() => {
@@ -113,7 +112,7 @@ describe('useStreamingArtifactPersistence', () => {
   });
 
   it('re-allows persistence for a quest id after reset (new session)', async () => {
-    parseArtifacts.mockReturnValue({ artifacts: [codeArtifact] });
+    parseArtifactsWithFallback.mockReturnValue({ artifacts: [codeArtifact], cleanedContent: '' });
     const { result } = renderHook(() => useStreamingArtifactPersistence());
 
     act(() => {

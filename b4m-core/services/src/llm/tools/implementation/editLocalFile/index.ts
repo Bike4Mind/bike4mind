@@ -3,11 +3,19 @@ import { promises as fs } from 'fs';
 import { existsSync } from 'fs';
 import { diffLines, type Change } from 'diff';
 import { assertPathAllowed } from '../../utils/pathValidation';
+import { fuzzyMatch, type FuzzyStrategy } from './fuzzyMatch';
 
 interface EditLocalFileParams {
   path: string;
   old_string: string;
   new_string: string;
+}
+
+interface EditLocalFileResult {
+  /** Human/model-facing summary of the edit (success message + diff). */
+  message: string;
+  /** Set when the edit was resolved via the fuzzy fallback rather than an exact match. */
+  strategy?: FuzzyStrategy;
 }
 
 interface DiffResult {
@@ -45,7 +53,7 @@ function generateDiff(original: string, modified: string): DiffResult {
   return { additions, deletions, diff: diffString.trim() };
 }
 
-async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<string> {
+async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: string[]): Promise<EditLocalFileResult> {
   const { path: filePath, old_string, new_string } = params;
 
   // Validate path is within allowed directories (cwd is always included)
@@ -58,38 +66,67 @@ async function editLocalFile(params: EditLocalFileParams, allowedDirectories?: s
 
   const currentContent = await fs.readFile(resolvedPath, 'utf-8');
 
-  // Validate that old_string exists in the file
-  if (!currentContent.includes(old_string)) {
-    // Provide helpful error message
-    const preview = old_string.length > 100 ? old_string.substring(0, 100) + '...' : old_string;
-    throw new Error(
-      `String to replace not found in file. ` +
-        `Make sure the old_string matches exactly (including whitespace and line endings). ` +
-        `Searched for: "${preview}"`
-    );
+  // The span of the file we will replace, and what we will replace it with.
+  // The exact fast path is unchanged; a validated fuzzy fallback (indentation,
+  // blank-line, whitespace-width, and escape drift) only runs after it misses.
+  let startIndex: number;
+  let matchedText: string;
+  let replacement: string;
+  let strategy: FuzzyStrategy | undefined;
+
+  if (currentContent.includes(old_string)) {
+    const occurrences = currentContent.split(old_string).length - 1;
+    if (occurrences > 1) {
+      throw new Error(
+        `Found ${occurrences} occurrences of the string to replace. ` +
+          `Please provide a more specific old_string that matches exactly one location.`
+      );
+    }
+    startIndex = currentContent.indexOf(old_string);
+    matchedText = old_string;
+    replacement = new_string;
+  } else {
+    // Throws AmbiguousMatchError / DisproportionateMatchError with actionable
+    // messages; returns null when no tolerant matcher resolves the block.
+    const fuzzy = fuzzyMatch(currentContent, old_string, new_string);
+    if (!fuzzy) {
+      const preview = old_string.length > 100 ? old_string.substring(0, 100) + '...' : old_string;
+      throw new Error(
+        `String to replace not found in file. ` +
+          `Make sure the old_string matches exactly (including whitespace and line endings). ` +
+          `Searched for: "${preview}"`
+      );
+    }
+    startIndex = fuzzy.startIndex;
+    matchedText = fuzzy.matchedText;
+    replacement = fuzzy.replacement;
+    strategy = fuzzy.strategy;
   }
 
-  // Count occurrences
-  const occurrences = currentContent.split(old_string).length - 1;
-  if (occurrences > 1) {
-    throw new Error(
-      `Found ${occurrences} occurrences of the string to replace. ` +
-        `Please provide a more specific old_string that matches exactly one location.`
-    );
-  }
-
-  const newContent = currentContent.replace(old_string, new_string);
+  // Splice the replacement in literally. (String.prototype.replace would
+  // interpret `$&`, `$$`, `$1`, etc. in `replacement` as substitution patterns;
+  // slicing avoids that so the new content is inserted byte-for-byte.)
+  const newContent =
+    currentContent.slice(0, startIndex) + replacement + currentContent.slice(startIndex + matchedText.length);
 
   await fs.writeFile(resolvedPath, newContent, 'utf-8');
 
-  // Generate diff for feedback
-  const diffResult = generateDiff(old_string, new_string);
+  // Generate diff for feedback against the span actually replaced.
+  const diffResult = generateDiff(matchedText, replacement);
 
-  return (
+  // When the exact match missed, tell the model its old_string drifted so it can
+  // be more precise next time (indentation and line endings were preserved).
+  const fuzzyNote = strategy
+    ? `\n\nNote: old_string was not an exact match; it was resolved with a fuzzy fallback (${strategy}), ` +
+      `preserving the file's original indentation and line endings.`
+    : '';
+
+  const message =
     `File edited successfully: ${filePath}\n` +
     `Changes: +${diffResult.additions} lines, -${diffResult.deletions} lines\n` +
-    `\nDiff:\n${diffResult.diff}`
-  );
+    `\nDiff:\n${diffResult.diff}${fuzzyNote}`;
+
+  return { message, strategy };
 }
 
 export const editLocalFileTool: ToolDefinition = {
@@ -105,9 +142,12 @@ export const editLocalFileTool: ToolDefinition = {
       });
 
       try {
-        const result = await editLocalFile(params, context.allowedDirectories);
-        context.logger.info('✅ EditLocalFile: Success', { path: params.path });
-        return result;
+        const { message, strategy } = await editLocalFile(params, context.allowedDirectories);
+        context.logger.info('✅ EditLocalFile: Success', {
+          path: params.path,
+          matchType: strategy ?? 'exact',
+        });
+        return message;
       } catch (error) {
         context.logger.error('❌ EditLocalFile: Failed', error);
         throw error;

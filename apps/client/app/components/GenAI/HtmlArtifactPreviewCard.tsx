@@ -42,17 +42,24 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
 
   // Default to expanded if artifacts are disabled
   const [isExpanded, setIsExpanded] = useState(!artifactsEnabled);
-  const [showRenderedPreview, setShowRenderedPreview] = useState(false);
+  // Default an expanded artifact to the rendered view, not raw source (users asking for
+  // an "article" should see the article, not a wall of HTML). Source stays a click away.
+  const [showRenderedPreview, setShowRenderedPreview] = useState(true);
 
   // Artifact should already have complete ID from PromptReplies
   const effectiveArtifact = artifact;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === effectiveArtifact.id;
 
-  // Toggle inline preview (card click behavior)
+  // Card click: expanding from collapsed opens straight into the rendered view; once
+  // expanded, a click toggles between rendered and source.
   const handleToggleInlinePreview = (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setIsExpanded(true);
+    if (!isExpanded) {
+      setIsExpanded(true);
+      setShowRenderedPreview(true);
+      return;
+    }
     setShowRenderedPreview(!showRenderedPreview);
   };
 

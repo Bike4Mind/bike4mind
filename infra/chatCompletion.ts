@@ -169,14 +169,14 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
           fromPort: 80,
           toPort: 80,
           prefixListIds: [plId],
-          description: 'CloudFront edge -> public /api/ai/v1/completions',
+          description: 'CloudFront edge to public /api/ai/v1/completions',
         },
         {
           protocol: 'tcp',
           fromPort: 80,
           toPort: 80,
           cidrBlocks: cidrs,
-          description: 'VPC NAT egress -> internal /process dispatch',
+          description: 'VPC NAT egress to internal /process dispatch',
         },
       ]);
       // egress left at SST's default (0.0.0.0/0): the ALB must reach the tasks.

@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { logEvent } from '@server/utils/analyticsLog';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { AuthEvents } from '@bike4mind/common';
+import { resolveOAuthFailureReason, oauthFailureRedirectMessage } from '@server/utils/auth/oauthFailureReason';
 
 const handler = baseApi({ auth: false })
   .use(async (req, res, next) => {
@@ -68,13 +69,17 @@ const handler = baseApi({ auth: false })
           return res.redirect(`/login?error=${encodeURIComponent(errorMessage)}`);
         }
         if (!user) {
+          // Raw info (which may embed another user's email or DB error text via
+          // info.message) is logged here for CloudWatch only. The audit reason and
+          // redirect below must never read anything but the whitelisted code.
           console.error('Passport Authenticate User Not Found Info:', info);
+          const reason = resolveOAuthFailureReason((info as { code?: unknown } | undefined)?.code);
           try {
             await authFailLogRepository.create({
               strategy,
               ip,
               userAgent,
-              reason: 'OAuth user not returned',
+              reason,
               email,
               headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
               meta: { path: req.url, status: 500 },
@@ -82,7 +87,7 @@ const handler = baseApi({ auth: false })
           } catch (logErr) {
             console.error('Failed to write AuthFailLog (oauth no user):', logErr);
           }
-          return res.redirect('/login?error=Authentication%20failed');
+          return res.redirect(`/login?error=${encodeURIComponent(oauthFailureRedirectMessage(reason))}`);
         }
 
         const tokens = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
