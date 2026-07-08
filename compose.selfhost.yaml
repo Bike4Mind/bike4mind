@@ -169,6 +169,8 @@ services:
   # endpoint. Same code + code path as hosted; only the config source differs (the alias
   # hook in the Dockerfile maps `sst` -> the env-backed @bike4mind/resource shim).
   chatcompletion:
+    # Built locally from source (like `ws`); there is no published pull-only image yet, so
+    # `up` builds it on first run. Add `--build` to rebuild after code changes.
     build:
       context: .
       dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
