@@ -587,17 +587,17 @@ jobs:
           ref = os.environ['REF']
 
           deploy = []
-          is_push_main = event == 'push' and ref == 'refs/heads/main'
           is_push_prod = event == 'push' and ref == 'refs/heads/prod'
 
-          # PR previews no longer deploy from this repo: maintainers create
-          # them on demand via the internal deployer (CONTRIBUTING.md). PR and
-          # merge_group runs emit an empty plan — CI still runs and the
-          # required Deploy check reports green via deploy-status.
+          # Neither PR previews nor main->staging deploy from this repo anymore:
+          # both moved to the internal deployer (bike4mind-deployer). Previews are
+          # created on demand by maintainers; staging (dev) is deployed by the
+          # deployer's reconciler when main moves. Only push-to-prod still deploys
+          # from here (until Phase 3 moves production too). PR / merge_group /
+          # push-main emit an empty plan — CI still runs and the required Deploy
+          # check reports green via deploy-status.
           for tenant, tc in config['tenants'].items():
-              if is_push_main:
-                  deploy.append({"tenant": tenant, "tier": "dev", "pr_number": ""})
-              elif is_push_prod:
+              if is_push_prod:
                   deploy.append({"tenant": tenant, "tier": "production", "pr_number": ""})
 
           deploy_json = json.dumps(deploy)
@@ -866,118 +866,10 @@ jobs:
           pnpm sst unlock --stage "$STAGE"
           echo "Unlock complete."
 
-  e2e:
-    needs: [deploy]
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: E2E Tests
-    timeout-minutes: 20
-    # Run E2E on push to main only (staging gate). The deploy job never runs on PR
-    # events (empty plan, see the `plan` job above), so needs.deploy.outputs.* are
-    # empty there and the old run-e2e-label-on-PR path was dead; PR E2E is handled
-    # separately by e2e-on-label.yml. The `stage == 'dev'` guard also excludes push
-    # to prod (stage == 'production'), where E2E should not run.
-    if: needs.deploy.outputs.stage == 'dev' && github.event_name == 'push'
-    # Staging gate: runs only on push to main (dev), and a failure here is a
-    # hard failure. PR-triggered E2E is handled separately by e2e-on-label.yml.
-    permissions:
-      contents: read
-      id-token: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Download core build artifacts
-        id: download-core
-        uses: actions/download-artifact@v7
-        with:
-          name: core-build-${{ needs.deploy.outputs.core-content-hash }}
-          path: .
-        continue-on-error: true
-
-      - name: Build core packages (fallback)
-        if: steps.download-core.outcome == 'failure'
-        run: pnpm core:build
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
-
-      - name: Wait for deployment to be healthy
-        env:
-          # Probe /api/ping (a real Lambda route) rather than the bare origin:
-          # CloudFront can answer the apex with 200/302 before the function is
-          # warm, so a bare-origin check passes against a not-yet-ready deploy.
-          TARGET_URL: https://app.${{ needs.deploy.outputs.preview-url }}/api/ping
-        run: |
-          echo "Waiting for $TARGET_URL to be healthy..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
-            if [ "$STATUS" = "200" ]; then
-              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
-              exit 0
-            fi
-            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
-            sleep 10
-          done
-          echo "Deployment did not become healthy within 300s"
-          exit 1
-
-      - name: Run E2E tests
-        id: e2e
-        env:
-          API_URL: https://app.${{ needs.deploy.outputs.preview-url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
-          AI_LATENCY_RUN: 'false'
-          PW_WORKERS: '1'
-          CI: 'true'
-        run: |
-          set -o pipefail
-          pnpm sst shell --stage ${{ needs.deploy.outputs.stage }} -- pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-report-${{ needs.deploy.outputs.stage }}
-          path: apps/client/playwright-report/
-          retention-days: 7
-
-      - name: Fail if E2E tests failed
-        if: steps.e2e.outcome == 'failure'
-        run: exit 1
+  # E2E (staging gate) removed: staging is no longer deployed from this repo
+  # (push-main -> dev moved to the internal deployer, see the `plan` job). The
+  # deployer runs staging E2E as an advisory, non-blocking step after its own
+  # deploy. PR-triggered E2E still lives in e2e-on-label.yml.
 
   notify-production-failure:
     name: Notify Production Failure
