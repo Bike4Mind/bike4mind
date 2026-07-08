@@ -1303,7 +1303,11 @@ export class OpenAIBackend implements ICompletionBackend {
 
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        // Capture cached tokens if available in streaming response
+        // Capture cached tokens if available in streaming response.
+        // Do NOT forward this to CompletionInfo.cacheReadInputTokens: OpenAI's
+        // prompt_tokens INCLUDE cached tokens (unlike Anthropic, where the fields
+        // are disjoint), so forwarding without subtracting from inputTokens would
+        // double-bill the cached portion in provider-basis settlement.
         if (chunk.usage.prompt_tokens_details?.cached_tokens !== undefined) {
           cachedTokensFromStream = chunk.usage.prompt_tokens_details.cached_tokens;
           if (cachedTokensFromStream > 0) {

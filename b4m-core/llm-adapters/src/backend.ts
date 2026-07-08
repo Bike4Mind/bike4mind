@@ -169,6 +169,13 @@ export interface ICompletionOptions {
     accumInputTokens?: number;
     accumOutputTokens?: number;
     /**
+     * Cache token accumulators (Anthropic family): the provider bills cache
+     * read/write PER API call, so multi-turn tool sessions must sum them like
+     * input/output or settlement undercounts every turn before the last.
+     */
+    accumCacheReadTokens?: number;
+    accumCacheWriteTokens?: number;
+    /**
      * Multi-turn tool-call accumulator threaded through recursive complete() calls
      * (Ollama). Consumers assign rather than append functionCalls on each callback,
      * so the terminal turn must emit the full accumulated list or earlier tool

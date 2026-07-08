@@ -724,6 +724,10 @@ export class GeminiBackend implements ICompletionBackend {
             }
           }
 
+          // Do NOT forward cachedContentTokenCount to CompletionInfo.cacheReadInputTokens:
+          // Gemini's promptTokenCount INCLUDES cached tokens (unlike Anthropic, where the
+          // fields are disjoint), so forwarding without subtracting from inputTokens would
+          // double-bill the cached portion in provider-basis settlement.
           turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
           turnOutputTokens = lastChunk.usageMetadata?.candidatesTokenCount ?? 0;
           // Emit accum + this turn's tokens. When the call recurses below,

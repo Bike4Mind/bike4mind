@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ChatCompletionProcess,
   addPairedTool,
+  computeSettlementDelta,
   isAbortError,
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
@@ -326,14 +327,11 @@ describe('ChatCompletionProcess', () => {
       );
     });
 
-    // Billing comes from our local tokenizer, not the provider's reported usage.
-    // Provider counts are captured separately (actualInputTokens / actualOutputTokens)
-    // for audit and drift detection only, since provider accounting can change without
-    // notice (new cache semantics, dropped usage chunks) and would silently shift what
-    // users pay. Provider cache token counts are NOT added on top of the local input:
-    // the local count already covers the whole prompt, so adding them double-billed the
-    // cached portion (see the cache-discount regression test below).
-    it('bills from the local tokenizer, not from provider-reported counts', async () => {
+    // Settlement bills from the provider-reported usage when present (the true
+    // COGS basis, matching the cliCompletions path). The local tokenizer count
+    // remains the pre-reservation estimate and the fallback when the provider
+    // omits usage; provider counts also land in actualInputTokens/-OutputTokens.
+    it('settles on provider-reported usage, not the local tokenizer estimate', async () => {
       const localInputTokens = 80;
       const localOutputTokens = 40;
       const apiInputTokens = 100; // intentionally different from local
@@ -388,28 +386,175 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
 
-      // Billing math uses the LOCAL counts:
-      //   80 * 10/1M + 40 * 30/1M = $0.0008 + $0.0012 = $0.002
-      //   0.002 * 2000 = 4 credits (whole number - no rounding involved)
-      expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
-      expect(tokenUsage.creditsUsed).toBe(4);
+      // Billing math uses the PROVIDER counts:
+      //   100 * 10/1M + 50 * 30/1M = $0.001 + $0.0015 = $0.0025
+      //   0.0025 * 2000 = 5 credits (whole number - no rounding involved)
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.0025, 6);
+      expect(tokenUsage.creditsUsed).toBe(5);
       expect(tokenUsage.totalTokens).toBe(localInputTokens + localOutputTokens);
 
-      // Audit fields preserve the PROVIDER counts so we can detect drift.
+      // Provider counts recorded; with provider-basis settlement they ARE the billing basis.
       expect(tokenUsage.actualInputTokens).toBe(apiInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(apiOutputTokens);
+      expect(tokenUsage.settledBasis).toBe('provider');
+    });
+
+    // Adapters coerce missing usage to zero (e.g. DeepSeek and Llama-on-Bedrock
+    // streaming never populate usage), so {0,0} means "provider reported nothing",
+    // not "the call was free". Settlement must fall back to the local estimate.
+    it('falls back to the local estimate when the provider reports zero usage', async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { inputTokens: 0, outputTokens: 0 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+
+      // Local basis (80 in, 40 out at $10/$30 per 1M): $0.002 -> 4 credits, not free.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
+      expect(tokenUsage.creditsUsed).toBe(4);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    // Partial provider usage (cache read reported without input/output counts) also
+    // falls back to the local path, where the cache-read discount caps at the local
+    // input so a huge provider cache count can never produce a negative cost.
+    it('caps the fallback cache-read discount at the local input on partial provider usage', async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!'], { cacheReadInputTokens: 3000 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+
+      // cache_read (3000) caps at local input (80); credited input = 80 - 80*0.9 = 8.
+      //   8 * 10/1M + 40 * 30/1M = $0.00128; 2.56 raw -> 3 credits (pinned draw). Never negative.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00128, 6);
+      expect(tokenUsage.creditsUsed).toBe(3);
+      expect(tokenUsage.settledBasis).toBe('local');
+    });
+
+    // When the provider omits usage entirely, settlement falls back to the local
+    // tokenizer estimate, byte-for-byte the pre-provider-basis behavior.
+    it('falls back to the local estimate when the provider omits usage', async () => {
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          await cb(['Hi!']); // no usage info
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      await service.process({
+        body: { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined },
+        logger: mockLogger,
+      });
+
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+
+      // Local basis: 80 * 10/1M + 40 * 30/1M = $0.002; whole 4.0 raw -> 4 credits.
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.002, 6);
+      expect(tokenUsage.creditsUsed).toBe(4);
+      expect(tokenUsage.actualInputTokens).toBeUndefined();
+      expect(tokenUsage.actualOutputTokens).toBeUndefined();
+      expect(tokenUsage.settledBasis).toBe('local');
     });
 
     // With prompt caching the provider reports the cached part of the prompt as
     // cache_read / cache_creation and shrinks its own `input_tokens` to the uncached
-    // tail. Our local tokenizer still counts the whole prompt. Two guarantees:
-    //   1. Provider cache counts must never be added on top of the local input (that
-    //      double-billed the cached prompt: a trivial Opus call hit 85cr).
-    //   2. The cache-read portion is instead discounted to 0.1x of the local input
-    //      rate, capped at the local count, so cache only ever lowers the bill.
-    // Here cache_read (3000) exceeds the local input (80) so it caps at 80: the whole
-    // input is re-rated to 0.1x. cache_creation is ignored entirely.
-    it('discounts cached input (capped) and never inflates the bill from provider cache tokens', async () => {
+    // tail. On the provider basis there is no double-count: the four components are
+    // the provider's own disjoint accounting of one prompt, each billed at its rate
+    // (read 0.1x input, write 1.25x input unless the model overrides). This matches
+    // cliCompletions and the provider invoice.
+    it('bills provider cache reads and writes at their per-model rates', async () => {
       const localInputTokens = 80;
       const localOutputTokens = 40;
 
@@ -463,20 +608,23 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall).toBeDefined();
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
 
-      // cache_read (3000) caps at local input (80); credited input = 80 - 80*0.9 = 8.
-      //   8 * 10/1M + 40 * 30/1M = $0.00008 + $0.0012 = $0.00128; 2.56 raw -> 3 credits (pinned draw).
-      // Strictly cheaper than the un-discounted full local cost ($0.002, 10cr), and far
-      // below the previously double-billed ~60+ credits.
-      expect(tokenUsage.estimatedCost).toBeCloseTo(0.00128, 6);
-      expect(tokenUsage.creditsUsed).toBe(3);
-      // Capped value recorded for audit.
-      expect(tokenUsage.cacheReadInputTokens).toBe(localInputTokens);
+      // Provider basis, all four components at their rates:
+      //   input    2 * 10/1M            = $0.00002
+      //   output  14 * 30/1M            = $0.00042
+      //   read  3000 * 10/1M * 0.1      = $0.003
+      //   write 5000 * 10/1M * 1.25     = $0.0625
+      //   total $0.06594; 131.88 raw -> 132 credits (pinned draw).
+      expect(tokenUsage.estimatedCost).toBeCloseTo(0.06594, 6);
+      expect(tokenUsage.creditsUsed).toBe(132);
+      // Provider-reported cache read recorded as billed (no local cap on this basis).
+      expect(tokenUsage.cacheReadInputTokens).toBe(3000);
     });
 
-    // A cold turn (provider reports no cache read) bills the full local input; the
-    // discount only kicks in on warm follow-ups, and a partial cache read discounts
-    // proportionally. Guards that the common cold first-turn cost is unchanged.
-    it('bills full local input on a cold turn and discounts proportionally on a partial cache read', async () => {
+    // A cold turn (provider reports the full prompt as fresh input) and a warm
+    // follow-up (most of it served from cache) on the provider basis: the warm
+    // turn is far cheaper, and the local count is ignored on both (set to a
+    // deliberately wrong 9999 to prove it).
+    it('bills the cold turn in full and the warm cache-read turn far cheaper, ignoring the local count', async () => {
       const localOutputTokens = 10;
       mockTokenizer.countTokens.mockResolvedValue(localOutputTokens);
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
@@ -484,12 +632,12 @@ describe('ChatCompletionProcess', () => {
       // making the stochastic charge a deterministic ceil for assertions.
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
 
-      const runWithCacheRead = async (localInputTokens: number, cacheReadInputTokens?: number) => {
+      const runWithProviderUsage = async (apiInputTokens: number, cacheReadInputTokens?: number) => {
         mockDb.quests.update.mockClear();
-        mockedCalculateTotalTokenLength.mockResolvedValue(localInputTokens);
+        mockedCalculateTotalTokenLength.mockResolvedValue(9999);
         mockedGetLlmByModel.mockReturnValue({
           complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
-            await cb(['Hi!'], { inputTokens: 5, outputTokens: 10, cacheReadInputTokens });
+            await cb(['Hi!'], { inputTokens: apiInputTokens, outputTokens: 10, cacheReadInputTokens });
           }),
           getModelInfo: vi.fn().mockResolvedValue([]),
           currentModel: ChatModels.GPT4,
@@ -520,16 +668,16 @@ describe('ChatCompletionProcess', () => {
         return updateCall[0].promptMeta.tokenUsage;
       };
 
-      // Cold turn: no cache read, full local input billed.
+      // Cold turn: provider reports the full 3000-token prompt as fresh input.
       //   3000 * 10/1M + 10 * 30/1M = $0.0300 + $0.0003 = $0.0303; 60.6 raw -> 61 credits (pinned draw).
-      const cold = await runWithCacheRead(3000, undefined);
+      const cold = await runWithProviderUsage(3000, undefined);
       expect(cold.estimatedCost).toBeCloseTo(0.0303, 6);
       expect(cold.creditsUsed).toBe(61);
 
-      // Warm turn: 2800 of the 3000 local input served from cache; credited input
-      //   = 3000 - 2800*0.9 = 480. 480 * 10/1M + 10 * 30/1M = $0.0048 + $0.0003 = $0.0051
-      //   10.2 raw -> 11 credits (pinned draw). ~6x cheaper than the cold turn, prompt unchanged.
-      const warm = await runWithCacheRead(3000, 2800);
+      // Warm turn: 2800 of the prompt served from cache, 200 fresh.
+      //   200 * 10/1M + 10 * 30/1M + 2800 * 10/1M * 0.1 = $0.002 + $0.0003 + $0.0028
+      //   = $0.0051; 10.2 raw -> 11 credits (pinned draw). ~6x cheaper than the cold turn.
+      const warm = await runWithProviderUsage(200, 2800);
       expect(warm.estimatedCost).toBeCloseTo(0.0051, 6);
       expect(warm.creditsUsed).toBe(11);
       expect(warm.creditsUsed).toBeLessThan(cold.creditsUsed);
@@ -1038,5 +1186,31 @@ describe('addPairedTool', () => {
       'image_generation',
       'edit_image',
     ]);
+  });
+});
+
+describe('computeSettlementDelta (zero-balance shortfall clamp)', () => {
+  it('refunds the excess on over-reservation', () => {
+    expect(computeSettlementDelta(100, 60, 500)).toEqual({ delta: 40, writtenOffCredits: 0 });
+  });
+
+  it('is a no-op on exact settlement', () => {
+    expect(computeSettlementDelta(100, 100, 500)).toEqual({ delta: 0, writtenOffCredits: 0 });
+  });
+
+  it('charges a shortfall the balance can cover in full', () => {
+    expect(computeSettlementDelta(100, 130, 500)).toEqual({ delta: -30, writtenOffCredits: 0 });
+  });
+
+  it('clamps the shortfall to the balance and reports the write-off', () => {
+    expect(computeSettlementDelta(100, 130, 10)).toEqual({ delta: -10, writtenOffCredits: 20 });
+  });
+
+  it('writes off the whole shortfall at zero balance', () => {
+    expect(computeSettlementDelta(100, 130, 0)).toEqual({ delta: 0, writtenOffCredits: 30 });
+  });
+
+  it('treats a negative balance snapshot as zero', () => {
+    expect(computeSettlementDelta(100, 130, -50)).toEqual({ delta: 0, writtenOffCredits: 30 });
   });
 });

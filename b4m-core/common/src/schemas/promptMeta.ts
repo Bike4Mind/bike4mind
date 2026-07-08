@@ -55,9 +55,12 @@ const PromptMetaTokenUsageSchema = z.object({
   actualInputTokens: z.number().optional(),
   actualOutputTokens: z.number().optional(),
   actualTotalTokens: z.number().optional(),
-  // Provider-reported prompt-cache reads, capped at our local inputTokens. Used to
-  // apply the cache-read discount in billing; recorded for transparency/audit.
+  // Billed cache-read count: raw provider value on provider-basis settlement,
+  // capped-at-local-input discount value on local fallback.
   cacheReadInputTokens: z.number().optional(),
+  // Which basis priced estimatedCost/creditsUsed: provider-reported usage or
+  // the local tokenizer estimate (fallback when the provider omits usage).
+  settledBasis: z.enum(['provider', 'local']).optional(),
   estimatedCost: z.number().optional(),
   creditsUsed: z.number().optional(),
 });
