@@ -56,7 +56,7 @@
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
-    "@faker-js/faker": "^10.4.0",
+    "@faker-js/faker": "^10.5.0",
     "@inquirer/prompts": "^8.5.2",
     "axios": "1.16.1",
     "bcryptjs": "^3.0.2",

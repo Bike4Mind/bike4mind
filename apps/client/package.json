@@ -231,7 +231,7 @@
   "devDependencies": {
     "@bike4mind/eslint-config": "workspace:*",
     "@bike4mind/typescript-config": "workspace:*",
-    "@playwright/test": "^1.60.0",
+    "@playwright/test": "^1.61.1",
     "@serwist/turbopack": "9.5.3",
     "@tanstack/react-query-devtools": "^5.101.2",
     "@tanstack/router-cli": "^1.167.18",
@@ -277,7 +277,7 @@
     "eslint-plugin-next": "^0.0.0",
     "fs-extra": "^11.3.5",
     "jsdom": "^29.1.1",
-    "mongodb-memory-server": "^11.1.0",
+    "mongodb-memory-server": "^11.2.0",
     "node-mocks-http": "^1.17.2",
     "ora": "^9.4.1",
     "serwist": "9.5.3",
