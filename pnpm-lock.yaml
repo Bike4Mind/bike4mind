@@ -234,8 +234,8 @@ importers:
         specifier: ^8.0.5
         version: 8.0.5(@casl/ability@6.8.1)(mongoose@8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6))
       '@elevenlabs/client':
-        specifier: ^1.7.0
-        version: 1.8.0(@types/dom-mediacapture-record@1.0.22)
+        specifier: ^1.14.1
+        version: 1.14.1(@types/dom-mediacapture-record@1.0.22)
       '@emotion/cache':
         specifier: ^11.14.0
         version: 11.14.0
@@ -2711,11 +2711,11 @@ packages:
     resolution: {integrity: sha512-QxULHAm7cNu72w97JUNCBFODFaXpbDg+dP8b/oWFAZ2MTRppA3U00Y2L1HqaS4J6yBqxwa/Y3nMBaxVKbB/NsA==}
     engines: {node: '>=20.19.0'}
 
-  '@elevenlabs/client@1.8.0':
-    resolution: {integrity: sha512-LAJ55cNrcwyen+hkBusRL2//BNYyw7yHhSSE3kaS7iF9YR657ylhub7zpC8zc4xaRz4m+BdD7bRwa78vkHjwYA==}
+  '@elevenlabs/client@1.14.1':
+    resolution: {integrity: sha512-aTd2Dfd9E8UfwKoJhepDe7SjIwsB7UwfloYrsnQIyBrhfqjSouU0tqE1Y8nE+G2BdVUt4eLqxtc2yifYxqkhuQ==}
 
-  '@elevenlabs/types@0.14.0':
-    resolution: {integrity: sha512-CfpxFyNtTq9Iwm1/Hfxk+FK0QlFgsHpXcNM9jMPYrjP/kAYMFi9rgFoosdJcBGYbgkvzUL7hwT9I6WzHyNyxDg==}
+  '@elevenlabs/types@0.17.0':
+    resolution: {integrity: sha512-6Dw8yVJC2uzomwDLwVCoq5VLfcLdLVemLE7A+7rmqnV50fK+U5G61t+oYY42800pq4jxfmrgkPMm3blw8DY/ng==}
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -4592,8 +4592,16 @@ packages:
     resolution: {integrity: sha512-B2WQ/PV/H6Jeg3lrIq6bKUfa6Hy01mtK7CGs6lhjzHA6k4aagldH6T6eEjnzKl4HI0cJnAsxfJ19pgb5PV+CVQ==}
     engines: {node: '>=18.0.0'}
 
+  '@smithy/credential-provider-imds@4.4.7':
+    resolution: {integrity: sha512-UEMLOoA0Fl4uYBxh6l0uN0H6EJe/A89OGeDNTteQeXpJ20BcpfIr4wlCY9pel1jEAUHAxaYwuqrYlrKdXE1GKQ==}
+    engines: {node: '>=18.0.0'}
+
   '@smithy/fetch-http-handler@5.6.3':
     resolution: {integrity: sha512-CwCc/7SMTj45y97MUnDTbTaxvtAsiNNRm81z3abROIuMbMsC2Iy5EKfkkVdsKrz8WExQAAMx1EJapq+9j4fFTQ==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/fetch-http-handler@5.6.4':
+    resolution: {integrity: sha512-psnst7NZWdAEvJvyW8YZEE7xNVMyLrQFfHtyrVFrxNyy+dKWkQ+rqC6oI5ZhxThpUy9RSfEshgm34zqbOxzsRw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/is-array-buffer@2.2.0':
@@ -4608,8 +4616,16 @@ packages:
     resolution: {integrity: sha512-qZTa4gQFUo8RM02rk6q5UVTDLNrQ1oS20LsepBzqq1QBVc/EHJ03OOUADcqMZiXHArW+Y7+OGY0BpdTwZRq/Yg==}
     engines: {node: '>=18.0.0'}
 
+  '@smithy/node-http-handler@4.9.4':
+    resolution: {integrity: sha512-BNTop/fSOptmoVk8g+efwHCofFh37g70OWGAFES1TeAAJja1K5aAI8rTE26ETSc5k8IQuWY2kAIoPla01NgYrA==}
+    engines: {node: '>=18.0.0'}
+
   '@smithy/signature-v4@5.6.2':
     resolution: {integrity: sha512-QgHflghMoPxCJ9axiCVh8KZfbC9fuP6vkXXyK//E3cq7nLaSSyyLj0GAoqVWezYeDQmXIZhmlRvLE16jsqDK6g==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/signature-v4@5.6.3':
+    resolution: {integrity: sha512-8qVKKzqh7naF27ePmx0SkUfnGP/wBI9dyaeAmhHvopnbIlItUAmB/e6PkPCU3rRb2v9BY8D4EZXSoydSibatvw==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/types@4.15.1':
@@ -8527,6 +8543,9 @@ packages:
   jose@6.2.2:
     resolution: {integrity: sha512-d7kPDd34KO/YnzaDOlikGpOurfF0ByC2sEV4cANCtdqLlTfBlw2p14O/5d/zv40gJPbIQxfES3nSx1/oYNyuZQ==}
 
+  jose@6.2.3:
+    resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
+
   jpeg-js@0.4.4:
     resolution: {integrity: sha512-WZzeDOEtTOBK4Mdsar0IqEU5sMr3vSV2RqkAIzUEV2BHnUfKGyswWFPFwK5EeDo93K3FohSHbLAjj0s1Wzd+dg==}
 
@@ -11696,8 +11715,8 @@ packages:
     resolution: {integrity: sha512-BMhLD/Sw+GbJC21C/UgyaZX41nPt8bUTg+jWyDeg7e7YN4xOM05YPSIXceACnXVtqyEw/LMClUQMtMZ+PGGpqQ==}
     engines: {node: '>=20'}
 
-  webrtc-adapter@9.0.5:
-    resolution: {integrity: sha512-U9vjByy/sK2OMXu5mmfuZFKTMIUQe34c0JXRO+oDrxJTsntdYT2iIFwYMOV7HhMTuktcZLGf2W1N/OcSf9ssWg==}
+  webrtc-adapter@9.0.6:
+    resolution: {integrity: sha512-CHbl2ZQbxx164IgWRgzJno4hWtM4tFbRam1QfI3Yxhs3w/DvqluVxVWeXs3oL5/fbGkSNLKo0Ty5MgUWceNhog==}
     engines: {node: '>=6.0.0', npm: '>=3.10.0'}
 
   whatwg-encoding@3.1.1:
@@ -12194,8 +12213,8 @@ snapshots:
       '@aws-sdk/credential-provider-node': 3.972.64
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/fetch-http-handler': 5.6.3
-      '@smithy/node-http-handler': 4.9.3
+      '@smithy/fetch-http-handler': 5.6.4
+      '@smithy/node-http-handler': 4.9.4
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -12355,7 +12374,7 @@ snapshots:
       '@aws-sdk/xml-builder': 3.972.33
       '@aws/lambda-invoke-store': 0.3.0
       '@smithy/core': 3.29.0
-      '@smithy/signature-v4': 5.6.2
+      '@smithy/signature-v4': 5.6.3
       '@smithy/types': 4.15.1
       bowser: 2.14.1
       tslib: 2.8.1
@@ -12402,8 +12421,8 @@ snapshots:
       '@aws-sdk/core': 3.974.29
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/fetch-http-handler': 5.6.3
-      '@smithy/node-http-handler': 4.9.3
+      '@smithy/fetch-http-handler': 5.6.4
+      '@smithy/node-http-handler': 4.9.4
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -12436,7 +12455,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.29
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/credential-provider-imds': 4.4.6
+      '@smithy/credential-provider-imds': 4.4.7
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -12484,7 +12503,7 @@ snapshots:
       '@aws-sdk/credential-provider-web-identity': 3.972.61
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/credential-provider-imds': 4.4.6
+      '@smithy/credential-provider-imds': 4.4.7
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -12562,7 +12581,7 @@ snapshots:
       '@aws-sdk/nested-clients': 3.997.29
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/credential-provider-imds': 4.4.6
+      '@smithy/credential-provider-imds': 4.4.7
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -12633,8 +12652,8 @@ snapshots:
       '@aws-sdk/signature-v4-multi-region': 3.996.38
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.0
-      '@smithy/fetch-http-handler': 5.6.3
-      '@smithy/node-http-handler': 4.9.3
+      '@smithy/fetch-http-handler': 5.6.4
+      '@smithy/node-http-handler': 4.9.4
       '@smithy/types': 4.15.1
       tslib: 2.8.1
     optional: true
@@ -13241,14 +13260,14 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.0': {}
 
-  '@elevenlabs/client@1.8.0(@types/dom-mediacapture-record@1.0.22)':
+  '@elevenlabs/client@1.14.1(@types/dom-mediacapture-record@1.0.22)':
     dependencies:
-      '@elevenlabs/types': 0.14.0
+      '@elevenlabs/types': 0.17.0
       livekit-client: 2.16.1(@types/dom-mediacapture-record@1.0.22)
     transitivePeerDependencies:
       - '@types/dom-mediacapture-record'
 
-  '@elevenlabs/types@0.14.0': {}
+  '@elevenlabs/types@0.17.0': {}
 
   '@emnapi/core@1.10.0':
     dependencies:
@@ -15397,11 +15416,25 @@ snapshots:
       '@smithy/types': 4.15.1
       tslib: 2.8.1
 
+  '@smithy/credential-provider-imds@4.4.7':
+    dependencies:
+      '@smithy/core': 3.29.0
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    optional: true
+
   '@smithy/fetch-http-handler@5.6.3':
     dependencies:
       '@smithy/core': 3.29.0
       '@smithy/types': 4.15.1
       tslib: 2.8.1
+
+  '@smithy/fetch-http-handler@5.6.4':
+    dependencies:
+      '@smithy/core': 3.29.0
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    optional: true
 
   '@smithy/is-array-buffer@2.2.0':
     dependencies:
@@ -15421,11 +15454,25 @@ snapshots:
       '@smithy/types': 4.15.1
       tslib: 2.8.1
 
+  '@smithy/node-http-handler@4.9.4':
+    dependencies:
+      '@smithy/core': 3.29.0
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    optional: true
+
   '@smithy/signature-v4@5.6.2':
     dependencies:
       '@smithy/core': 3.29.0
       '@smithy/types': 4.15.1
       tslib: 2.8.1
+
+  '@smithy/signature-v4@5.6.3':
+    dependencies:
+      '@smithy/core': 3.29.0
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+    optional: true
 
   '@smithy/types@4.15.1':
     dependencies:
@@ -19882,6 +19929,8 @@ snapshots:
 
   jose@6.2.2: {}
 
+  jose@6.2.3: {}
+
   jpeg-js@0.4.4: {}
 
   js-tokens@10.0.0: {}
@@ -20188,13 +20237,13 @@ snapshots:
       '@livekit/protocol': 1.42.2
       '@types/dom-mediacapture-record': 1.0.22
       events: 3.3.0
-      jose: 6.2.2
+      jose: 6.2.3
       loglevel: 1.9.2
       sdp-transform: 2.15.0
       ts-debounce: 4.0.0
       tslib: 2.8.1
       typed-emitter: 2.1.0
-      webrtc-adapter: 9.0.5
+      webrtc-adapter: 9.0.6
 
   locate-path@5.0.0:
     dependencies:
@@ -23621,7 +23670,7 @@ snapshots:
 
   webidl-conversions@8.0.1: {}
 
-  webrtc-adapter@9.0.5:
+  webrtc-adapter@9.0.6:
     dependencies:
       sdp: 3.2.2
 
