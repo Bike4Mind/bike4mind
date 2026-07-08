@@ -61,7 +61,7 @@
     "axios": "1.16.1",
     "bcryptjs": "^3.0.2",
     "csv-parser": "^3.2.1",
-    "dayjs": "^1.11.20",
+    "dayjs": "^1.11.21",
     "dotenv": "^17.4.2",
     "glob": "^13.0.0",
     "gray-matter": "^4.0.3",
