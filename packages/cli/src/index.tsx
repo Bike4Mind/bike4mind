@@ -46,6 +46,7 @@ import {
   extractCompactInstructions,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
+import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
@@ -1222,14 +1223,13 @@ function CliApp() {
       };
       setStoreSession(sessionWithMessages);
 
-      // Build conversation history
-      const recentMessages = session.messages.slice(-20);
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+      // Build conversation history through the one owner of turn assembly:
+      // token-aware windowing + lossless mapping, replacing the old slice(-20).
+      const contextWindow = getTokenCounter().getContextWindow(session.model, state.availableModels);
+      const previousMessages = ConversationContext.fromSession(session).buildPreviousMessages(messageContent, {
+        model: session.model,
+        contextWindow,
+      });
 
       // Run agent with FULL template (not the display message)
       const cliConfig = await state.configStore.get();
@@ -1272,10 +1272,14 @@ function CliApp() {
       // Update the pending assistant message with the actual response
       const updatedMessages = [...currentSession.messages];
       const lastMessage = updatedMessages[updatedMessages.length - 1];
+      // Lossless tool trace so the next turn can replay tool results, not just
+      // the final prose (see ConversationContext).
+      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       updatedMessages[updatedMessages.length - 1] = {
         id: lastMessage.id, // Preserve the original message ID
         role: 'assistant',
         content: result.finalAnswer,
+        ...(richContent ? { richContent } : {}),
         timestamp: new Date().toISOString(),
         metadata: {
           steps: result.steps.map(formatStep),
@@ -1451,7 +1455,6 @@ function CliApp() {
     if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
       const tokenCounter = getTokenCounter();
       const contextWindow = tokenCounter.getContextWindow(activeSession.model, state.availableModels);
-      const threshold = contextWindow * 0.8;
 
       const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
         contextContent: state.contextContent,
@@ -1462,9 +1465,19 @@ function CliApp() {
         featureModulePrompts: state.featureRegistry?.getSystemPromptSections() || undefined,
         deferredToolNames: deferredToolRegistry.getDirectoryNames(),
       });
-      const contextUsage = tokenCounter.countSessionTokens(activeSession, systemPrompt);
 
-      if (contextUsage.totalTokens >= threshold) {
+      // ConversationContext owns the compaction trigger: it measures the full
+      // session as it would actually be replayed (bounded tool traces included)
+      // plus the system prompt, so a session whose weight lives in tool traces
+      // still compacts at the 80% mark.
+      const systemPromptTokens = tokenCounter.countTokens(systemPrompt);
+      const shouldCompact = ConversationContext.fromSession(activeSession).needsCompaction(
+        systemPromptTokens,
+        { model: activeSession.model, contextWindow },
+        0.8
+      );
+
+      if (shouldCompact) {
         console.log('\n\u26A0\uFE0F  Context window 80% full. Auto-compacting...\n');
 
         // Set thinking state for compaction
@@ -1550,15 +1563,14 @@ function CliApp() {
       // Add pending assistant message to pendingMessages (dynamic, will update in real-time)
       useCliStore.getState().addPendingMessage(pendingAssistantMessage);
 
-      // Build conversation history from previous messages (last 10 exchanges to avoid token limits)
-      // Use only the original messages (before pending assistant), not including user message we just added
-      const recentMessages = activeSession.messages.slice(-20); // Last 20 messages = 10 exchanges
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+      // Build conversation history through the one owner of turn assembly:
+      // token-aware windowing + lossless mapping, replacing the old slice(-20).
+      // Built from activeSession (before the user message just added).
+      const contextWindow = getTokenCounter().getContextWindow(activeSession.model, state.availableModels);
+      const previousMessages = ConversationContext.fromSession(activeSession).buildPreviousMessages(messageContent, {
+        model: activeSession.model,
+        contextWindow,
+      });
 
       // Run agent with conversation history, using multimodal content if images present
       const cliConfig = await state.configStore.get();
@@ -1590,11 +1602,14 @@ function CliApp() {
       // Count successful tool calls from result.steps (observations = completed tools)
       const successfulToolCalls = result.steps.filter(s => s.type === 'observation').length;
 
-      // Create the final assistant message
+      // Create the final assistant message. richContent carries the lossless
+      // tool trace so the next turn can replay tool results, not just the prose.
+      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       const finalAssistantMessage: Message = {
         id: pendingAssistantMessage.id, // Preserve the original message ID
         role: 'assistant',
         content: result.finalAnswer,
+        ...(richContent ? { richContent } : {}),
         timestamp: pendingAssistantMessage.timestamp,
         metadata: {
           tokenUsage: {
@@ -1767,28 +1782,25 @@ function CliApp() {
 
       useCliStore.getState().addPendingMessage(pendingAssistantMessage);
 
-      // Build conversation history from previous messages
-      const recentMessages = session.messages.slice(-20);
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+      // Build conversation history through the one owner of turn assembly:
+      // token-aware windowing + lossless mapping, replacing the old slice(-20).
+      const backgroundPrompt = '[System: Background agents have completed. Review and summarize the results.]';
+      const contextWindow = getTokenCounter().getContextWindow(session.model, state.availableModels);
+      const previousMessages = ConversationContext.fromSession(session).buildPreviousMessages(backgroundPrompt, {
+        model: session.model,
+        contextWindow,
+      });
 
       // Run agent with a system prompt to process background results
       // The actual notification will be injected by NotifyingLlmBackend
       const cliConfig = await state.configStore.get();
 
-      const result = await state.agent.run(
-        '[System: Background agents have completed. Review and summarize the results.]',
-        {
-          previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
-          signal: abortController.signal,
-          parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
-        }
-      );
+      const result = await state.agent.run(backgroundPrompt, {
+        previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
+        signal: abortController.signal,
+        parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
+        isReadOnlyTool,
+      });
 
       // Count successful tool calls
       const successfulToolCalls = result.steps.filter(s => s.type === 'observation').length;
@@ -1799,10 +1811,12 @@ function CliApp() {
 
       // Create a continuation message (renders without header due to isContinuation flag)
       // This works with Ink's Static component which doesn't re-render existing items
+      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       const continuationMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
         content: '---\n\n**Background Agent Results:**\n\n' + result.finalAnswer,
+        ...(richContent ? { richContent } : {}),
         timestamp: new Date().toISOString(),
         metadata: {
           isContinuation: true, // Flag to skip "Assistant" header in MessageItem

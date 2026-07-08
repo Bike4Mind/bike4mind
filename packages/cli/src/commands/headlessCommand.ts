@@ -15,6 +15,7 @@ import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
 import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
@@ -430,12 +431,21 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       backgroundManager.setCurrentTurn(null);
     }
 
-    // Save minimal session record
+    // Save minimal session record. The assistant message keeps its lossless tool
+    // trace on richContent so a later `--resume` of this session replays tool
+    // results, not just the final prose (same rule as the interactive paths).
+    const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
     const finalSession: Session = {
       ...session,
       messages: [
         { id: uuidv4(), role: 'user', content: fullPrompt, timestamp: new Date().toISOString() },
-        { id: uuidv4(), role: 'assistant', content: result.finalAnswer, timestamp: new Date().toISOString() },
+        {
+          id: uuidv4(),
+          role: 'assistant',
+          content: result.finalAnswer,
+          ...(richContent ? { richContent } : {}),
+          timestamp: new Date().toISOString(),
+        },
       ],
       updatedAt: new Date().toISOString(),
       metadata: {
