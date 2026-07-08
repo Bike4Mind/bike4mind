@@ -49,14 +49,17 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
     pattern: /\bsk-(?:ant-|proj-)?[A-Za-z0-9_-]{20,}/g,
     replacement: REDACTED,
   },
-  // Stripe secret/publishable/restricted/webhook keys.
+  // Stripe secret/publishable/restricted keys carry a test|live infix; webhook
+  // signing secrets (whsec_) do NOT - they are a bare token, so match separately.
   {
-    pattern: /\b(?:sk|pk|rk|whsec)_(?:test|live)_[0-9A-Za-z]{16,}/g,
+    pattern: /\b(?:(?:sk|pk|rk)_(?:test|live)|whsec)_[0-9A-Za-z]{16,}/g,
     replacement: REDACTED,
   },
-  // Google / Gemini API keys.
+  // Google / Gemini API keys. A negative lookahead (not a trailing \b) ends the
+  // match: a key whose 35th char is `-` would defeat \b, since `-` is already a
+  // non-word char and no boundary exists when the next char is also non-word.
   {
-    pattern: /\bAIza[0-9A-Za-z_-]{35}\b/g,
+    pattern: /\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])/g,
     replacement: REDACTED,
   },
   // AWS access key IDs.

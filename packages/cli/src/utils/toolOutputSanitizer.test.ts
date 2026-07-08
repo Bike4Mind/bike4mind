@@ -31,6 +31,18 @@ describe('redactSecrets', () => {
     expect(out).not.toContain(gh);
   });
 
+  it('redacts a Gemini key whose 35th char is a hyphen next to punctuation', () => {
+    const out = redactSecrets('leak: AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ012345- oh no');
+    expect(out).not.toContain('AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ012345-');
+    expect(out).toContain('[REDACTED]');
+  });
+
+  it('redacts a bare Stripe webhook signing secret (no test/live infix)', () => {
+    const out = redactSecrets('seen in error: whsec_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p');
+    expect(out).not.toContain('whsec_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p');
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('redacts a JWT', () => {
     const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.' + 'x'.repeat(30);
     expect(redactSecrets(jwt)).not.toContain(jwt);
