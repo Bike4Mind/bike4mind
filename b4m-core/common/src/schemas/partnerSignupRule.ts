@@ -41,7 +41,9 @@ const domainSchema = z
   .toLowerCase()
   .min(3, 'Domain is required')
   .max(253, 'Domain is too long')
-  .regex(/^(?!-)[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}$/, 'Enter a bare domain like partner.com (no @ or path)')
+  // Each label is [a-z0-9] bounded (no leading/trailing hyphen, so `partner-.com` is rejected),
+  // one or more labels, then a 2+ letter TLD. Rejects full emails, paths, and edge-hyphens.
+  .regex(/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/, 'Enter a bare domain like partner.com (no @ or path)')
   .refine(domain => !DISALLOWED_SIGNUP_RULE_DOMAINS.includes(domain), {
     message: 'Public mail providers (gmail.com, etc.) cannot be a partner domain',
   });

@@ -37,6 +37,7 @@ describe('createPartnerSignupRuleSchema', () => {
     ['a path', 'partner.com/signup'],
     ['a leading hyphen', '-partner.com'],
     ['a trailing dot', 'partner.com.'],
+    ['a trailing-hyphen label', 'partner-.com'],
   ])('rejects %s', (_label, domain) => {
     expect(createPartnerSignupRuleSchema.safeParse({ ...base, domain }).success).toBe(false);
   });

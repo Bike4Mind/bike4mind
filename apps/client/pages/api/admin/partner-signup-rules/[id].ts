@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { updatePartnerSignupRuleSchema } from '@bike4mind/common';
@@ -14,9 +14,7 @@ interface RequestQuery {
 const handler = baseApi()
   .put(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      ensureAdmin(req.user?.isAdmin);
       const { id } = req.query as unknown as RequestQuery;
       if (!id) throw new BadRequestError('Rule id required');
 
@@ -44,9 +42,7 @@ const handler = baseApi()
   )
   .delete(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      ensureAdmin(req.user?.isAdmin);
       const { id } = req.query as unknown as RequestQuery;
       if (!id) throw new BadRequestError('Rule id required');
 

@@ -28,8 +28,6 @@ export interface IPartnerSignupRule {
   /** Admin user id who created the rule. */
   createdBy?: string;
   createdAt: Date;
-  // Soft delete support (mirrors SubscriberModel).
-  deletedAt?: Date | null;
 }
 
 export interface IPartnerSignupRuleDocument extends IPartnerSignupRule, IMongoDocument {}

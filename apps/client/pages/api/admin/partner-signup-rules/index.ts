@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { createPartnerSignupRuleSchema } from '@bike4mind/common';
 import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
@@ -23,9 +23,7 @@ function toBadRequest(error: unknown): never {
 const handler = baseApi()
   .get(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      ensureAdmin(req.user?.isAdmin);
       let query: z.infer<typeof listQuerySchema>;
       try {
         query = listQuerySchema.parse(req.query);
@@ -38,9 +36,7 @@ const handler = baseApi()
   )
   .post(
     asyncHandler(async (req, res) => {
-      if (!req.user?.isAdmin) {
-        throw new ForbiddenError('Unauthorized. Admin access required.');
-      }
+      ensureAdmin(req.user?.isAdmin);
       let data: ReturnType<typeof createPartnerSignupRuleSchema.parse>;
       try {
         data = createPartnerSignupRuleSchema.parse(req.body);

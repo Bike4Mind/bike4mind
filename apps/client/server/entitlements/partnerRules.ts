@@ -66,7 +66,13 @@ async function getRulesMap(): Promise<Map<string, ResolvedRule>> {
   // recovers. loadRules only assigns `cache` on success, so a transient error can't
   // pin a stale/empty map.
   inflight ??= loadRules()
-    .catch(() => new Map<string, ResolvedRule>())
+    .catch(error => {
+      // Fail closed, but never silently: a DB outage degrades every partner to zero grants,
+      // so surface it for alerting. No req-scoped logger here (module-level cache) - console
+      // is picked up by the Lambda log pipeline.
+      console.error('[partnerRules] failed to load signup rules; failing closed to no grants', error);
+      return new Map<string, ResolvedRule>();
+    })
     .finally(() => {
       inflight = null;
     });

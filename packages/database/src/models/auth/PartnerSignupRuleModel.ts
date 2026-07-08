@@ -15,15 +15,12 @@ export class PartnerSignupRuleRepository
   }
 
   async findByDomain(domain: string) {
-    const result = await this.model.findOne({
-      domain: normalizeSignupRuleDomain(domain),
-      deletedAt: null,
-    });
+    const result = await this.model.findOne({ domain: normalizeSignupRuleDomain(domain) });
     return result?.toJSON() ?? null;
   }
 
   async findActiveRules() {
-    const results = await this.model.find({ enabled: true, deletedAt: null });
+    const results = await this.model.find({ enabled: true });
     return results.map(doc => doc.toJSON());
   }
 
@@ -32,7 +29,6 @@ export class PartnerSignupRuleRepository
     const skip = (page - 1) * limit;
 
     const query = {
-      deletedAt: null,
       ...(search && {
         $or: [
           { domain: { $regex: escapeRegex(search), $options: 'i' } },
@@ -69,7 +65,6 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
     label: { type: String, default: null },
     notes: { type: String, default: null },
     createdBy: { type: String, default: null },
-    deletedAt: { type: Date, default: null },
   },
   {
     timestamps: true,
@@ -83,8 +78,7 @@ export const PartnerSignupRuleSchema = new Schema<IPartnerSignupRuleDocument, IP
 );
 
 // Performance indexes (unique domain is declared on the field as a data constraint).
-PartnerSignupRuleSchema.index({ deletedAt: 1 });
-PartnerSignupRuleSchema.index({ enabled: 1, deletedAt: 1 });
+PartnerSignupRuleSchema.index({ enabled: 1 });
 
 export const PartnerSignupRule =
   (mongoose.models.PartnerSignupRule as unknown as IPartnerSignupRuleModel) ??
