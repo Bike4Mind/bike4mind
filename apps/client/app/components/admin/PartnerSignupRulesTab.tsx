@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -31,6 +32,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
+import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
 import {
   fetchPartnerSignupRules,
   createPartnerSignupRule,
@@ -38,13 +40,16 @@ import {
   deletePartnerSignupRule,
 } from '@client/app/utils/partnerSignupRuleAPICalls';
 
+// Options for the entitlements picker; spread to a mutable array for Joy Autocomplete.
+const ENTITLEMENT_OPTIONS = [...KNOWN_ENTITLEMENT_KEYS];
+
 const QUERY_KEY = 'partner-signup-rules';
 const PAGE_LIMIT = 25;
 
 type FormState = {
   domain: string;
   label: string;
-  entitlements: string; // comma/space separated in the form; parsed to string[] on submit
+  entitlements: string[];
   signupCredits: string;
   notes: string;
   enabled: boolean;
@@ -53,26 +58,16 @@ type FormState = {
 const emptyForm: FormState = {
   domain: '',
   label: '',
-  entitlements: '',
+  entitlements: [],
   signupCredits: '0',
   notes: '',
   enabled: true,
 };
 
-/** Parse the comma/space separated entitlements field into a normalized, de-duplicated list. */
-const parseEntitlements = (raw: string): string[] => [
-  ...new Set(
-    raw
-      .split(/[,\s]+/)
-      .map(token => token.trim().toLowerCase())
-      .filter(Boolean)
-  ),
-];
-
 const ruleToForm = (rule: IPartnerSignupRuleDocument): FormState => ({
   domain: rule.domain,
   label: rule.label ?? '',
-  entitlements: (rule.entitlements ?? []).join(', '),
+  entitlements: rule.entitlements ?? [],
   signupCredits: String(rule.signupCredits ?? 0),
   notes: rule.notes ?? '',
   enabled: rule.enabled,
@@ -105,7 +100,7 @@ export default function PartnerSignupRulesTab() {
       // and the API only $sets keys it receives, so coalescing to undefined would make a
       // cleared field un-clearable (the old value would persist on update).
       const payload = {
-        entitlements: parseEntitlements(form.entitlements),
+        entitlements: form.entitlements,
         signupCredits: Number(form.signupCredits),
         label: form.label.trim(),
         notes: form.notes.trim(),
@@ -387,13 +382,18 @@ export default function PartnerSignupRulesTab() {
 
             <FormControl>
               <FormLabel>Entitlements</FormLabel>
-              <Input
-                placeholder="optihashi:pro, another:pro"
+              <Autocomplete
+                multiple
+                options={ENTITLEMENT_OPTIONS}
                 value={form.entitlements}
-                onChange={e => setForm(f => ({ ...f, entitlements: e.target.value }))}
+                onChange={(_event, value) => setForm(f => ({ ...f, entitlements: value }))}
+                placeholder={form.entitlements.length ? '' : 'Select entitlements to grant'}
                 data-testid="partner-rule-entitlements-input"
               />
-              <FormHelperText>Comma or space separated. Lowercased on save.</FormHelperText>
+              <FormHelperText>
+                Pick from the products the registry recognizes. A new product key must be added to the entitlement
+                registry before it appears here.
+              </FormHelperText>
             </FormControl>
 
             <FormControl>
