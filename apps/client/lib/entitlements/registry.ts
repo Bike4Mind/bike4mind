@@ -93,12 +93,14 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // The `opti` tag confers local OptiHashi access via `optihashi:pro` (solver
   // race, problem/run CRUD, UI/routing).
   { tag: 'opti', entitlements: ['optihashi:pro'] },
-  // Remote external-compute (hardware-bridge) is a SEPARATE, stricter tier from
-  // local OptiHashi: the `opti-compute` tag bridges to `optihashi:compute`.
-  // Holding `optihashi:pro` alone does NOT confer remote compute. Granted-only
-  // for now (no Stripe price yet); deliberately absent from DOMAIN_GRANT_ROWS /
-  // INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS - internal users reach it via
-  // admin/developer bypass, and no signup credits attach to the compute tier.
+  // Remote compute is a SEPARATE, stricter tier from local OptiHashi: the
+  // `opti-compute` tag bridges to `optihashi:compute`. Holding `optihashi:pro`
+  // alone will NOT confer remote compute once the server gate checks
+  // `optihashi:compute` (see M2) - until then this row is inert (no gate reads
+  // the key yet). Granted-only for now (no Stripe price yet); deliberately absent
+  // from DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS -
+  // internal users reach it via admin/developer bypass, and no signup credits
+  // attach to the compute tier.
   { tag: 'opti-compute', entitlements: ['optihashi:compute'] },
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
