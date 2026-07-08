@@ -4,6 +4,7 @@ export * from './decisionMaker';
 export * from './file';
 export * from './openai';
 export * from './password';
+export * from './partnerSignupRule';
 export * from './query';
 export * from './user';
 export * from './settings';

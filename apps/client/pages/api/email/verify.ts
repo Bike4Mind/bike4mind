@@ -14,6 +14,7 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { AuthEvents } from '@bike4mind/common';
 import { logAuditEvent, EmailAuditEvents, calculateTokenAge } from '@server/utils/auditLog';
 import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
+import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
 import { pushEntitlementInvalidation } from '@server/entitlements/invalidate';
 import { z } from 'zod';
 
@@ -124,11 +125,27 @@ const handler = baseApi({ auth: false })
         }
       }
 
-      // Resolve the now-verified email's domain-grant entitlement keys ONCE - both the
-      // signup-credit grant (Phase 2b) and the cache-invalidation gate (below) need them.
-      // Passing `true` is accurate: verifyEmailToken just succeeded and doesn't touch `email`,
-      // so userBeforeVerify.email IS the now-verified address.
-      const domainGrantKeys = userBeforeVerify ? entitlementsForEmail(userBeforeVerify.email, true) : new Set<string>();
+      // Resolve the now-verified email's domain grant ONCE - both the signup-credit grant
+      // (Phase 2b) and the cache-invalidation gate (below) need the keys, and Phase 2b needs
+      // the credit amount. Passing `true` is accurate: verifyEmailToken just succeeded and
+      // doesn't touch `email`, so userBeforeVerify.email IS the now-verified address.
+      //
+      // Source precedence (issue #293): a DB-backed PartnerSignupRule wins; the env registry
+      // (`entitlementsForEmail` / `signupCreditsForKeys`) is the migration fallback for a
+      // domain not yet in the collection. `matched` lets a DB rule intentionally grant access
+      // with 0 bonus credits without falling through to the env amount.
+      let domainGrantKeys = new Set<string>();
+      let signupCredits = 0;
+      if (userBeforeVerify) {
+        const partnerGrant = await partnerSignupGrantForEmail(userBeforeVerify.email, true);
+        if (partnerGrant.matched) {
+          domainGrantKeys = partnerGrant.entitlements;
+          signupCredits = partnerGrant.signupCredits;
+        } else {
+          domainGrantKeys = entitlementsForEmail(userBeforeVerify.email, true);
+          signupCredits = signupCreditsForKeys(domainGrantKeys);
+        }
+      }
 
       // Phase 2b: one-time domain-grant signup credits. Fires whenever the now-verified
       // email confers a domain grant (e.g. a partner-domain or internal-staff address), INDEPENDENT
@@ -139,7 +156,6 @@ const handler = baseApi({ auth: false })
       // the flat grant above) can't skip the other.
       if (userBeforeVerify) {
         try {
-          const signupCredits = signupCreditsForKeys(domainGrantKeys);
           if (signupCredits > 0) {
             await creditService.addCredits(
               {
