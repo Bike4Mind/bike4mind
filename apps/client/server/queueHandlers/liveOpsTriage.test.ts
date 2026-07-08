@@ -1,4 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Context } from 'aws-lambda';
+import type { Logger } from '@bike4mind/observability';
 import { dispatch } from './liveOpsTriage';
 
 const mockFindOne = vi.fn();
@@ -73,8 +75,14 @@ function makeSqsEvent(body: Record<string, unknown>) {
   return { Records: [{ body: JSON.stringify(body) }] };
 }
 
-const mockContext = {} as never;
-const mockLogger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), log: vi.fn(), updateMetadata: vi.fn() } as never;
+const mockContext = {} as unknown as Context;
+const mockLogger = {
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+  log: vi.fn(),
+  updateMetadata: vi.fn(),
+} as unknown as Logger;
 
 describe('liveOpsTriage handler', () => {
   beforeEach(() => {
