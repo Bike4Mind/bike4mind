@@ -1900,7 +1900,7 @@ export class OpenAIBackend implements ICompletionBackend {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
-        stopReason,
+        ...(stopReason ? { stopReason } : {}),
       });
       return;
     }

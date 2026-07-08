@@ -146,6 +146,32 @@ describe('OpenAIBackend surfaces stopReason on the /v1/responses path', () => {
     expect(stopReason).not.toBe('stop');
     expect(stopReason).toBe('content_filter');
   });
+
+  it('carries the synthesis turn stopReason through tool-call recursion', async () => {
+    const backend = new OpenAIBackend('test-key');
+    (backend as unknown as { _api: unknown })._api = {
+      // Turn 1: responses.create returns a function_call (not terminal - no stopReason set).
+      responses: {
+        create: async () => ({
+          output: [{ type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"NYC"}' }],
+          usage: { input_tokens: 10, output_tokens: 4 },
+        }),
+      },
+      // Turn 2: the tool executes, non-MCP tools are dropped, and recursion falls through
+      // to chat.completions.create for the synthesis turn - its finish_reason is what
+      // should ultimately surface, proving the multi-turn hop doesn't lose or stale it.
+      chat: {
+        completions: {
+          create: async () => ({
+            choices: [{ index: 0, message: { role: 'assistant', content: 'partial' }, finish_reason: 'length' }],
+            usage: { prompt_tokens: 5, completion_tokens: 3 },
+          }),
+        },
+      },
+    };
+    const stopReason = await runAndCaptureStopReason(backend, ChatModels.GPT5, { tools: [sampleTool] });
+    expect(stopReason).toBe('max_tokens');
+  });
 });
 
 describe('XAIBackend surfaces stopReason', () => {
