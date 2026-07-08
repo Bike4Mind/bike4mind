@@ -81,7 +81,6 @@
     "diff": "^9.0.0",
     "dotenv": "^17.4.2",
     "eventsource-parser": "^3.0.8",
-    "exceljs": "^4.4.0",
     "fdir": "^6.5.0",
     "file-type": "^22.0.1",
     "fuse.js": "^7.3.0",
