@@ -502,8 +502,18 @@ export class ServerSubagentOrchestrator {
       if (!result.completionInfo.totalCredits && this.deps.availableModels) {
         const modelInfo = this.deps.availableModels.find(m => m.id === effectiveModel);
         if (modelInfo) {
-          const { totalInputTokens, totalOutputTokens } = result.completionInfo;
-          const usdCost = getTextModelCost(modelInfo, totalInputTokens, totalOutputTokens);
+          const { totalInputTokens, totalOutputTokens, totalCacheReadTokens, totalCacheWriteTokens } =
+            result.completionInfo;
+          // Cache-aware so this fallback stays on the same basis as the cache-aware
+          // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
+          // fallback-computed credit sits next to a cache-aware cost in the same row.
+          const usdCost = getTextModelCost(
+            modelInfo,
+            totalInputTokens,
+            totalOutputTokens,
+            totalCacheReadTokens ?? 0,
+            totalCacheWriteTokens ?? 0
+          );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
         }
       }
