@@ -63,6 +63,36 @@ describe('buildToolUsageEvent', () => {
     expect(event.outputTokens).toBe(300);
     expect(event.units).toBeUndefined();
   });
+
+  it('carries subagent cache token counts when provided', () => {
+    const event = buildToolUsageEvent({
+      quest,
+      user,
+      provider: 'bedrock',
+      model: 'm',
+      costUsd: 0.01,
+      creditsCharged: 50,
+      inputTokens: 1200,
+      outputTokens: 300,
+      cachedInputTokens: 8000,
+      cacheWriteTokens: 400,
+    });
+    expect(event.cachedInputTokens).toBe(8000);
+    expect(event.cacheWriteTokens).toBe(400);
+  });
+
+  it('defaults cache token counts to 0 when omitted', () => {
+    const event = buildToolUsageEvent({
+      quest,
+      user,
+      provider: 'bedrock',
+      model: 'm',
+      costUsd: 0.01,
+      creditsCharged: 50,
+    });
+    expect(event.cachedInputTokens).toBe(0);
+    expect(event.cacheWriteTokens).toBe(0);
+  });
 });
 
 describe('recordToolUsageEvent', () => {
