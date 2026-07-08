@@ -1582,6 +1582,9 @@ importers:
 
   packages/cli:
     dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.2.0
+        version: 1.2.0(zod@4.4.3)
       '@anthropic-ai/sdk':
         specifier: ^0.97.1
         version: 0.97.1(zod@4.4.3)
@@ -2037,6 +2040,11 @@ packages:
 
   '@adobe/css-tools@4.4.4':
     resolution: {integrity: sha512-Elp+iwUx5rN5+Y8xLt5/GRoG20WGoDCQ/1Fb+1LiGtvwbDavuSk0jhD/eZdckHAuzcDzccnkv+rEjyWfRx18gg==}
+
+  '@agentclientprotocol/sdk@1.2.0':
+    resolution: {integrity: sha512-rJ3766M2eouZsNCaK21JbPD++JLBZ0PWq38dzj1sA4/i0njaQEkiC2F5v7MlizFW6akX+qu5Ks8R00Xw+YMHKA==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@alcalzone/ansi-tokenize@0.3.0':
     resolution: {integrity: sha512-p+CMKJ93HFmLkjXKlXiVGlMQEuRb6H0MokBSwUsX+S6BRX8eV5naFZpQJFfJHjRZY0Hmnqy1/r6UWl3x+19zYA==}
@@ -12006,6 +12014,10 @@ packages:
 snapshots:
 
   '@adobe/css-tools@4.4.4': {}
+
+  '@agentclientprotocol/sdk@1.2.0(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
 
   '@alcalzone/ansi-tokenize@0.3.0':
     dependencies:
