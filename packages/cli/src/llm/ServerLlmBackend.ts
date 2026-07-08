@@ -9,6 +9,7 @@ import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import { createTransientRetryPolicy } from './retryPolicy';
+import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 
 /**
@@ -98,123 +99,94 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
 
   /**
    * Bridge the push-based eventsource-parser + Node response stream into a
-   * pull-based async iterator of {@link StreamEvent}s. Parsed events queue up and
-   * the generator drains them; `[DONE]` / stream `end` ends iteration, and a
-   * server `error` event or stream `error` throws. The abort listener and socket
-   * teardown are cleaned up in `finally`, so an early `break` by the core (on
-   * cancel) also destroys the socket.
+   * pull-based iterable of {@link StreamEvent}s. `[DONE]` / stream `end` ends
+   * iteration, a server `error` event or stream `error` throws. The abort
+   * listener and socket teardown run in the bridge's teardown, so an early
+   * `break` by the core (on cancel) also destroys the socket.
    */
-  private async *readSseStream(response: AxiosResponse, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+  private readSseStream(response: AxiosResponse, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
     const isVerbose = process.env.B4M_VERBOSE === '1';
     const isUltraVerbose = process.env.B4M_DEBUG_STREAM === '1';
     const streamLogger = new StreamLogger(logger, 'ServerLlmBackend', isVerbose, isUltraVerbose);
     streamLogger.streamStart();
-
-    const queue: StreamEvent[] = [];
-    let ended = false;
-    let failure: Error | undefined;
-    let wake: (() => void) | undefined;
-    const signalReady = () => {
-      wake?.();
-      wake = undefined;
-    };
 
     // A running copy of the text purely so the verbose StreamLogger can report
     // accumulated length / preview; the core owns the real accumulation.
     let loggedText = '';
     let eventCount = 0;
 
-    const parser = createParser({
-      onEvent: event => {
-        eventCount++;
-        const data = event.data;
-        streamLogger.onEvent(eventCount, data || '');
+    return bridgeToAsyncIterable<StreamEvent>(sink => {
+      const parser = createParser({
+        onEvent: event => {
+          eventCount++;
+          const data = event.data;
+          streamLogger.onEvent(eventCount, data || '');
 
-        if (data === '[DONE]') {
-          streamLogger.streamComplete(loggedText);
-          ended = true;
-          signalReady();
-          return;
-        }
-
-        try {
-          const parsed = parseStreamEvent(JSON.parse(data));
-          // Unknown event shape - silently skip, preserving prior fall-through.
-          if (!parsed) return;
-
-          if (parsed.type === 'error') {
-            streamLogger.onCriticalEvent(eventCount, 'ERROR', parsed.message || 'Server error');
-            failure = new Error(parsed.message || 'Server error');
-            ended = true;
-            signalReady();
+          if (data === '[DONE]') {
+            streamLogger.streamComplete(loggedText);
+            sink.end();
             return;
           }
 
-          if (parsed.type === 'content') {
-            loggedText += parsed.text ?? '';
-            streamLogger.onContent(eventCount, parsed.text || '', loggedText);
-          } else if (parsed.type === 'tool_use') {
-            streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${parsed.tools?.length}`);
-            if (parsed.text) loggedText += parsed.text;
+          try {
+            const parsed = parseStreamEvent(JSON.parse(data));
+            // Unknown event shape - silently skip, preserving prior fall-through.
+            if (!parsed) return;
+
+            if (parsed.type === 'error') {
+              streamLogger.onCriticalEvent(eventCount, 'ERROR', parsed.message || 'Server error');
+              sink.fail(new Error(parsed.message || 'Server error'));
+              return;
+            }
+
+            if (parsed.type === 'content') {
+              loggedText += parsed.text ?? '';
+              streamLogger.onContent(eventCount, parsed.text || '', loggedText);
+            } else if (parsed.type === 'tool_use') {
+              streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${parsed.tools?.length}`);
+              if (parsed.text) loggedText += parsed.text;
+            }
+
+            sink.push(parsed);
+          } catch (parseError) {
+            streamLogger.streamError(parseError);
+            // Continue processing other events (matches prior behavior).
           }
+        },
+      });
 
-          queue.push(parsed);
-          signalReady();
-        } catch (parseError) {
-          streamLogger.streamError(parseError);
-          // Continue processing other events (matches prior behavior).
-        }
-      },
-    });
-
-    const onData = (chunk: Buffer) => {
-      if (signal?.aborted) return;
-      parser.feed(chunk.toString());
-    };
-    const onEnd = () => {
+      const onData = (chunk: Buffer) => {
+        if (signal?.aborted) return;
+        parser.feed(chunk.toString());
+      };
       // Stream closed. If we never saw [DONE] and accumulated nothing, the core's
       // empty-completion handling retries; if we accumulated content, it delivers.
-      ended = true;
-      signalReady();
-    };
-    const onError = (error: Error) => {
+      const onEnd = () => sink.end();
       // An abort-caused stream error is benign - end gracefully; the core sees the
       // aborted signal and settles without the callback. Otherwise surface it.
-      if (!signal?.aborted) failure = error;
-      ended = true;
-      signalReady();
-    };
-    const onAbort = () => {
-      logger.debug('[ServerLlmBackend] Abort signal received, destroying stream');
-      response.data.destroy();
-      ended = true;
-      signalReady();
-    };
+      const onError = (error: Error) => (signal?.aborted ? sink.end() : sink.fail(error));
+      const onAbort = () => {
+        logger.debug('[ServerLlmBackend] Abort signal received, destroying stream');
+        response.data.destroy();
+        sink.end();
+      };
 
-    response.data.on('data', onData);
-    response.data.on('end', onEnd);
-    response.data.on('error', onError);
-    if (signal) {
-      if (signal.aborted) onAbort();
-      else signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    try {
-      while (true) {
-        while (queue.length > 0) yield queue.shift() as StreamEvent;
-        if (failure) throw failure;
-        if (ended) return;
-        await new Promise<void>(resolve => {
-          wake = resolve;
-        });
+      response.data.on('data', onData);
+      response.data.on('end', onEnd);
+      response.data.on('error', onError);
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
       }
-    } finally {
-      signal?.removeEventListener('abort', onAbort);
-      response.data.off?.('data', onData);
-      response.data.off?.('end', onEnd);
-      response.data.off?.('error', onError);
-      response.data.destroy?.();
-    }
+
+      return () => {
+        signal?.removeEventListener('abort', onAbort);
+        response.data.off?.('data', onData);
+        response.data.off?.('end', onEnd);
+        response.data.off?.('error', onError);
+        response.data.destroy?.();
+      };
+    });
   }
 
   /**

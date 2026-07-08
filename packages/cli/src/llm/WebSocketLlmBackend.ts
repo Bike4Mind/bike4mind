@@ -7,6 +7,7 @@ import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
 import { createTransientRetryPolicy } from './retryPolicy';
+import { bridgeToAsyncIterable } from './streamBridge';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -93,123 +94,94 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
     streamLogger.streamStart();
 
     const requestId = uuidv4();
-    const queue: StreamEvent[] = [];
-    let ended = false;
-    let failure: Error | undefined;
-    let wake: (() => void) | undefined;
-    const signalReady = () => {
-      wake?.();
-      wake = undefined;
-    };
-
     // Running text copy for the verbose StreamLogger only; the core accumulates.
     let loggedText = '';
     let eventCount = 0;
 
-    const onMessage = (message: Record<string, unknown>) => {
-      if (signal?.aborted) return;
-      const action = message.action as string;
+    yield* bridgeToAsyncIterable<StreamEvent>(sink => {
+      const onMessage = (message: Record<string, unknown>) => {
+        if (signal?.aborted) return;
+        const action = message.action as string;
 
-      if (action === 'cli_completion_chunk') {
-        eventCount++;
-        const chunk = message.chunk;
-        streamLogger.onEvent(eventCount, JSON.stringify(chunk));
+        if (action === 'cli_completion_chunk') {
+          eventCount++;
+          const chunk = message.chunk;
+          streamLogger.onEvent(eventCount, JSON.stringify(chunk));
 
-        // Unknown chunk shape - skip, matching the SSE fall-through. (WebSocket
-        // errors arrive as a cli_completion_error action, not an error chunk.)
-        const event = parseStreamEvent(chunk);
-        if (!event) return;
+          // Unknown chunk shape - skip, matching the SSE fall-through. (WebSocket
+          // errors arrive as a cli_completion_error action, not an error chunk.)
+          const event = parseStreamEvent(chunk);
+          if (!event) return;
 
-        if (event.type === 'content') {
-          loggedText += event.text ?? '';
-          streamLogger.onContent(eventCount, event.text || '', loggedText);
-          queue.push(event);
-          signalReady();
-        } else if (event.type === 'tool_use') {
-          streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${event.tools?.length}`);
-          if (event.text) loggedText += event.text;
-          queue.push(event);
-          signalReady();
+          if (event.type === 'content') {
+            loggedText += event.text ?? '';
+            streamLogger.onContent(eventCount, event.text || '', loggedText);
+            sink.push(event);
+          } else if (event.type === 'tool_use') {
+            streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${event.tools?.length}`);
+            if (event.text) loggedText += event.text;
+            sink.push(event);
+          }
+        } else if (action === 'cli_completion_done') {
+          streamLogger.streamComplete(loggedText);
+          sink.end();
+        } else if (action === 'cli_completion_error') {
+          const errorMsg = (message.error as string) || 'Server error';
+          streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
+          sink.fail(new Error(errorMsg));
         }
-      } else if (action === 'cli_completion_done') {
-        streamLogger.streamComplete(loggedText);
-        ended = true;
-        signalReady();
-      } else if (action === 'cli_completion_error') {
-        const errorMsg = (message.error as string) || 'Server error';
-        streamLogger.onCriticalEvent(eventCount, 'ERROR', errorMsg);
-        failure = new Error(errorMsg);
-        ended = true;
-        signalReady();
+      };
+
+      // A mid-stream disconnect is a transient wire failure - phrase it so the
+      // retry policy (isTransientNetworkError) classifies it as retryable, giving
+      // the WebSocket path the retries the SSE path already had.
+      const onDisconnect = () => {
+        logger.debug('[WebSocketLlmBackend] Connection dropped during completion');
+        sink.fail(new Error('WebSocket connection closed during completion'));
+      };
+      // Abort settles without a failure; the core drops partial content.
+      const onAbort = () => {
+        logger.debug('[WebSocketLlmBackend] Abort signal received');
+        sink.end();
+      };
+
+      this.wsManager.onRequest(requestId, onMessage);
+      this.wsManager.onDisconnect(onDisconnect);
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
       }
-    };
 
-    // A mid-stream disconnect is a transient wire failure - phrase it so the
-    // retry policy (isTransientNetworkError) classifies it as retryable, giving
-    // the WebSocket path the retries the SSE path already had.
-    const onDisconnect = () => {
-      logger.debug('[WebSocketLlmBackend] Connection dropped during completion');
-      failure = new Error('WebSocket connection closed during completion');
-      ended = true;
-      signalReady();
-    };
-    const onAbort = () => {
-      logger.debug('[WebSocketLlmBackend] Abort signal received');
-      ended = true; // settle without a failure; the core drops partial content
-      signalReady();
-    };
+      // Send the request via HTTP POST (avoids the 32KB WebSocket frame limit);
+      // response chunks arrive over the socket, routed by requestId.
+      this.apiClient
+        .getAxiosInstance()
+        .post(
+          this.wsCompletionUrl,
+          {
+            requestId,
+            model: req.model,
+            messages: req.messages,
+            options: {
+              temperature: req.options.temperature,
+              maxTokens: req.options.maxTokens,
+              stream: true,
+              tools: req.options.tools || [],
+            },
+          },
+          { signal: req.options.abortSignal }
+        )
+        .catch(err => {
+          if (signal?.aborted) return;
+          sink.fail(new Error(`HTTP request failed: ${err instanceof Error ? err.message : String(err)}`));
+        });
 
-    this.wsManager.onRequest(requestId, onMessage);
-    this.wsManager.onDisconnect(onDisconnect);
-    if (signal) {
-      if (signal.aborted) {
+      return () => {
         this.wsManager.offRequest(requestId);
         this.wsManager.offDisconnect(onDisconnect);
-        return;
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-
-    // Send the request via HTTP POST (avoids the 32KB WebSocket frame limit);
-    // response chunks arrive over the socket, routed by requestId.
-    this.apiClient
-      .getAxiosInstance()
-      .post(
-        this.wsCompletionUrl,
-        {
-          requestId,
-          model: req.model,
-          messages: req.messages,
-          options: {
-            temperature: req.options.temperature,
-            maxTokens: req.options.maxTokens,
-            stream: true,
-            tools: req.options.tools || [],
-          },
-        },
-        { signal: req.options.abortSignal }
-      )
-      .catch(err => {
-        if (signal?.aborted) return;
-        failure = new Error(`HTTP request failed: ${err instanceof Error ? err.message : String(err)}`);
-        ended = true;
-        signalReady();
-      });
-
-    try {
-      while (true) {
-        while (queue.length > 0) yield queue.shift() as StreamEvent;
-        if (failure) throw failure;
-        if (ended) return;
-        await new Promise<void>(resolve => {
-          wake = resolve;
-        });
-      }
-    } finally {
-      this.wsManager.offRequest(requestId);
-      this.wsManager.offDisconnect(onDisconnect);
-      signal?.removeEventListener('abort', onAbort);
-    }
+        signal?.removeEventListener('abort', onAbort);
+      };
+    });
   }
 
   pushToolMessages(
