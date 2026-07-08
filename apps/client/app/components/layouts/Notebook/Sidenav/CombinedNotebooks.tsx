@@ -648,7 +648,21 @@ const CombinedNotebooks = () => {
                   };
                 }}
               >
-                <BookOpen size={18} style={{ color: 'inherit' }} />
+                {/* 20x20 frame around an 18px SVG, matching the top SidenavNav icon slots.
+                    Pin the child svg to 18px so it can't stretch to fill the 20px frame. */}
+                <Box
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    '& svg': { width: '18px', height: '18px' },
+                  }}
+                >
+                  <BookOpen style={{ color: 'inherit' }} />
+                </Box>
                 <Typography
                   level="body-xs"
                   sx={theme => ({
