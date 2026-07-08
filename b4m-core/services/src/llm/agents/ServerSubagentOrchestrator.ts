@@ -507,6 +507,11 @@ export class ServerSubagentOrchestrator {
           // Cache-aware so this fallback stays on the same basis as the cache-aware
           // costUsd recorded by delegateToAgent's onCredits (see #151) - otherwise a
           // fallback-computed credit sits next to a cache-aware cost in the same row.
+          // NB (OpenAI): OpenAI's prompt_tokens already includes cached_tokens, so
+          // passing the cache-read count again here double-counts the cached portion.
+          // That shape is shared with the main cliCompletions credit path, so credits
+          // stay consistent across the two paths rather than diverging - matching the
+          // primary path is deliberate; do not "fix" it here in isolation.
           const usdCost = getTextModelCost(
             modelInfo,
             totalInputTokens,
