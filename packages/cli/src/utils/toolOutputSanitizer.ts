@@ -11,6 +11,10 @@
  * SECRET scrubber, deliberately narrow - unlike the PII-focused
  * `sanitizeTelemetryError`, it must not redact ordinary tool content (file paths,
  * source code, IDs) that the model needs to do its job.
+ *
+ * Scope limit: this matches known secret SHAPES, not entropy. An opaque token with
+ * no recognized prefix that isn't on the RHS of a secret-named assignment can slip
+ * through. Add a pattern here (and to `.gitleaks.toml`) when a new shape appears.
  */
 
 const REDACTED = '[REDACTED]';
