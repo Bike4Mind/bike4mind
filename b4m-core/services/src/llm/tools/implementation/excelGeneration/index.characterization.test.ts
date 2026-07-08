@@ -145,12 +145,33 @@ describe('excel_generation characterization (re-parsed workbook)', () => {
       expect(cell.formula).toBe('SUM(A1:A2)');
     });
 
-    it('adds a leading = to a formula supplied without one', async () => {
+    it('normalizes a formula supplied without a leading = to a single = at render', async () => {
       const { wb } = await generate({
         filename: 'formula-noeq',
         sheets: [{ name: 'F', data: [{ row: 1, col: 1, formula: 'AVERAGE(B1:B9)' }] }],
       });
       expect(wb.sheet('F')!.cell('A1')!.formula).toBe('AVERAGE(B1:B9)');
+    });
+
+    // Regression: the OOXML <f> element must not carry a leading "=" (Excel prepends its own).
+    // A formula supplied WITH a "=" must not produce "==<expr>", which Excel renders as an error.
+    it('does not double the = when a formula is supplied with a leading =', async () => {
+      const { wb } = await generate({
+        filename: 'formula-eq',
+        sheets: [
+          {
+            name: 'F',
+            data: [
+              { row: 1, col: 2, value: 3 },
+              { row: 1, col: 3, value: 4 },
+              { row: 2, col: 1, formula: '=B1*C1' },
+            ],
+          },
+        ],
+      });
+      const formula = wb.sheet('F')!.cell('A2')!.formula;
+      expect(formula).toBe('B1*C1');
+      expect(formula?.startsWith('=')).toBe(false);
     });
   });
 

@@ -306,9 +306,10 @@ function decodeCellValue(
 ): { value: string | number | boolean | null; formula?: string } {
   const type = attr(cellTag, 't');
   const formulaMatch = body.match(/<f[^>]*>([\s\S]*?)<\/f>/);
-  // OOXML <f> holds the expression WITHOUT a leading "=", but exceljs stores it with one.
-  // Normalize so formula assertions are parity-safe across writers.
-  const formula = formulaMatch ? decodeXml(formulaMatch[1]).replace(/^=/, '') : undefined;
+  // Report the raw OOXML <f> content verbatim (no normalization). A correct formula cell holds
+  // the expression WITHOUT a leading "=" (Excel prepends it); a leading "=" here is the "=="
+  // writer bug, so assertions must be able to see it rather than have it silently stripped.
+  const formula = formulaMatch ? decodeXml(formulaMatch[1]) : undefined;
 
   const vMatch = body.match(/<v>([\s\S]*?)<\/v>/);
   const rawV = vMatch ? decodeXml(vMatch[1]) : undefined;

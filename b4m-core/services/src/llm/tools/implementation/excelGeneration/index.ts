@@ -366,7 +366,10 @@ function formatIsCompatibleWithType(type: CellObject['type'], format: string): b
 function buildCellContent(cellData: z.infer<typeof CellDataSchema>): Partial<CellObject> | null {
   if (cellData.formula) {
     // Validate and sanitize the formula, then hand it to write-excel-file as a Formula cell.
-    return { type: 'Formula', value: validateFormula(cellData.formula) };
+    // write-excel-file writes the value verbatim into the OOXML <f> element, which must NOT
+    // carry a leading "=" (Excel prepends it - a leading "=" here renders as "==" and errors).
+    // validateFormula guarantees a leading "=", so strip it at this library boundary.
+    return { type: 'Formula', value: validateFormula(cellData.formula).replace(/^=/, '') };
   }
   if (cellData.value === null || cellData.value === undefined) {
     return null;
