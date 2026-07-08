@@ -278,10 +278,16 @@ export type CompletionInfo = {
    */
   responseFormatMode?: 'native' | 'tool_use' | 'best-effort';
   /**
-   * The provider's reason for ending generation, normalized to the Anthropic
-   * vocabulary: 'end_turn' | 'max_tokens' | 'tool_use' | 'stop_sequence' | 'pause_turn'.
+   * The provider's reason for ending generation. Anthropic emits its native vocabulary
+   * directly: 'end_turn' | 'max_tokens' | 'tool_use' | 'stop_sequence' | 'pause_turn'.
+   * Every other backend normalizes its own native value onto this same vocabulary via
+   * the helpers in stopReason.ts, which also emit the OpenAI/Gemini/Ollama-native
+   * 'stop' as a first-class clean-finish value alongside Anthropic's 'end_turn'.
    * 'max_tokens' means the output was truncated against the token ceiling - used
-   * downstream to flag truncated artifacts and surface a recovery UI.
+   * downstream to flag truncated artifacts and surface a recovery UI. The client's
+   * CLEAN_FINISH_REASONS (apps/client/.../PromptReplies.tsx) is the authoritative set
+   * of values treated as a clean finish; anything else - including an unrecognized
+   * provider value passed through unchanged - falls through to the truncation heuristic.
    */
   stopReason?: string;
 };
