@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useCliStore } from './index.js';
+import { useCliStore, selectActiveBackgroundShells, selectCompletedBackgroundShells } from './index.js';
 import type { PermissionResponse } from '../components';
+import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
 
 describe('interactionMode cycle', () => {
   beforeEach(() => {
@@ -155,5 +156,66 @@ describe('resolvePermissionPromptById', () => {
     // New queue is a fresh array with perm-2 removed.
     expect(queueAfter).not.toBe(queueBefore);
     expect(queueAfter.map(p => p.id)).toEqual(['perm-3']);
+  });
+});
+
+describe('background shell sessions', () => {
+  const makeShell = (id: string, status: ShellSessionStatus, exitCode: number | null = null): ShellSession => ({
+    id,
+    command: `sleep ${id}`,
+    cwd: '/tmp',
+    status,
+    exitCode,
+    startTime: 0,
+    totalOutputChars: 0,
+  });
+
+  beforeEach(() => {
+    useCliStore.setState({ backgroundShells: [] });
+  });
+
+  it('adds a new session on first upsert', () => {
+    useCliStore.getState().upsertBackgroundShell(makeShell('a', 'running'));
+    expect(useCliStore.getState().backgroundShells).toHaveLength(1);
+  });
+
+  it('updates an existing session in place (by id) instead of duplicating', () => {
+    const { upsertBackgroundShell } = useCliStore.getState();
+    upsertBackgroundShell(makeShell('a', 'running'));
+    upsertBackgroundShell(makeShell('a', 'exited', 0));
+
+    const shells = useCliStore.getState().backgroundShells;
+    expect(shells).toHaveLength(1);
+    expect(shells[0].status).toBe('exited');
+    expect(shells[0].exitCode).toBe(0);
+  });
+
+  it('selects only running sessions as active', () => {
+    const { upsertBackgroundShell } = useCliStore.getState();
+    upsertBackgroundShell(makeShell('a', 'running'));
+    upsertBackgroundShell(makeShell('b', 'exited', 0));
+    upsertBackgroundShell(makeShell('c', 'killed'));
+
+    const active = selectActiveBackgroundShells(useCliStore.getState());
+    const completed = selectCompletedBackgroundShells(useCliStore.getState());
+    expect(active.map(s => s.id)).toEqual(['a']);
+    expect(completed.map(s => s.id)).toEqual(['b', 'c']);
+  });
+
+  it('cleanup removes terminal sessions but keeps running ones', () => {
+    const { upsertBackgroundShell, cleanupCompletedBackgroundShells } = useCliStore.getState();
+    upsertBackgroundShell(makeShell('a', 'running'));
+    upsertBackgroundShell(makeShell('b', 'exited', 0));
+    upsertBackgroundShell(makeShell('c', 'timed_out'));
+
+    cleanupCompletedBackgroundShells();
+    expect(useCliStore.getState().backgroundShells.map(s => s.id)).toEqual(['a']);
+  });
+
+  it('returns stable empty references when there is nothing to select', () => {
+    const active = selectActiveBackgroundShells(useCliStore.getState());
+    expect(active).toEqual([]);
+    // Same reference across calls so useShallow does not re-render.
+    expect(selectActiveBackgroundShells(useCliStore.getState())).toBe(active);
   });
 });
