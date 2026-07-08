@@ -655,9 +655,7 @@ const CombinedNotebooks = () => {
                     display: 'flex',
                     alignItems: 'center',
                     cursor: 'pointer',
-                    backgroundColor: isSelected
-                      ? theme.palette.notebooklist.focusedBackground
-                      : theme.palette.background.panel,
+                    backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
                     '&:hover': {
                       backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
                     },
