@@ -74,7 +74,7 @@ function flattenHeaders(headers: Request['headers']): Record<string, string | un
  * @param track - registers the request's completion promise with the service's SIGTERM
  *   drain set, so an in-flight stream finishes (bounded by DRAIN_TIMEOUT_MS) before exit.
  */
-export function registerCompletionsV2Route(app: Express, track: (p: Promise<void>) => void): void {
+export function registerExternalRoutes(app: Express, track: (p: Promise<void>) => void): void {
   app.post(V2_ENDPOINT, express.json({ limit: '25mb' }), async (req: Request, res: Response) => {
     // Resolve when the response finishes or the client disconnects - tracked for drain.
     const done = new Promise<void>(resolve => {

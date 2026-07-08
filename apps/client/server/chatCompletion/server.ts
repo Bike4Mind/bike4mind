@@ -3,8 +3,8 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { registerProcessRoute } from './internal/route';
-import { registerCompletionsV2Route } from './external/route';
+import { registerInternalRoutes } from './internal/route';
+import { registerExternalRoutes } from './external/route';
 
 /**
  * QuestProcessorService - always-on HTTP worker (Fargate). Lives under `chatCompletion/`
@@ -68,12 +68,12 @@ export function createApp() {
   });
 
   // Internal quest-processing surface (frontend Lambda -> WebSocket streaming).
-  registerProcessRoute(app, track);
+  registerInternalRoutes(app, track);
 
   // External CLI/3rd-party completions endpoint (user-authenticated SSE stream). Registered on
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
-  registerCompletionsV2Route(app, track);
+  registerExternalRoutes(app, track);
 
   return app;
 }
