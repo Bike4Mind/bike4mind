@@ -20,16 +20,9 @@ import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
 import type { IChatHistoryItemDocument } from '@bike4mind/common';
 import { convertSessionToMarkdown } from '@client/app/utils/sessionMarkdownExport';
 
-// Type assertion for Draggable component (same pattern as PromptMetaInspector)
-const DraggableComponent = Draggable as React.ComponentType<{
-  nodeRef: React.RefObject<HTMLElement | null>;
-  handle: string;
-  position: { x: number; y: number };
-  onDrag: (e: DraggableEvent, data: DraggableData) => void;
-  onStop: (e: DraggableEvent, data: DraggableData) => void;
-  bounds: string | { left: number; top: number; right: number; bottom: number };
-  children: React.ReactNode;
-}>;
+// react-draggable v4.7 types DraggableProps to cover nodeRef/handle/position/
+// bounds/onDrag/onStop directly, so no cast is needed.
+const DraggableComponent = Draggable;
 
 interface FloatingChatWindowProps {
   children: React.ReactNode;

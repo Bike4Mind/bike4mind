@@ -210,7 +210,7 @@
     "bcryptjs": "^3.0.2",
     "cheerio": "1.2.0",
     "chess.js": "^1.0.0-beta.8",
-    "dayjs": "^1.11.20",
+    "dayjs": "^1.11.21",
     "diff": "^9.0.0",
     "disposable-email-domains": "^1.0.62",
     "file-type": "^22.0.1",

@@ -32,8 +32,8 @@ export class SignupPage extends BasePage {
    * until both are checked. Must be called before submit() on the OTC request step.
    */
   async acceptPolicies() {
-    await this.page.getByTestId('register-aup-tos-checkbox').getByRole('checkbox').check();
-    await this.page.getByTestId('register-age-checkbox').getByRole('checkbox').check();
+    await this.checkMuiCheckbox(this.page.getByTestId('register-aup-tos-checkbox').getByRole('checkbox'));
+    await this.checkMuiCheckbox(this.page.getByTestId('register-age-checkbox').getByRole('checkbox'));
   }
 
   /** Submit the first step (username + email) to request a one-time code. */

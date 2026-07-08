@@ -6,7 +6,6 @@ export * from './dataSyncer';
 export * from './emailIngestion';
 export * from './bus';
 export * from './mcp';
-export * from './cliLlmHandler';
 export * from './cliWsCompletionHandler';
 export * from './cliToolHandler';
 export * from './queues';
@@ -19,7 +18,7 @@ export * from './subscriberFanout';
 export * from './vpc';
 export * from './warmer';
 export * from './websocket';
-export * from './questProcessorService';
+export * from './chatCompletion';
 export * from './web';
 export * from './llm';
 // agentExecutor must come after websocket (it adds a route to websocketApi)
