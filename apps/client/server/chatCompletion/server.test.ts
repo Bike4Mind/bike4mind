@@ -2,9 +2,9 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 
-// SST Resource - the shared-secret bearer the service checks.
+// SST Resource - the dedicated internal shared-secret bearer /process checks.
 const mockResource = vi.hoisted(() => ({
-  SECRET_ENCRYPTION_KEY: { value: 'test-shared-secret' },
+  CHAT_COMPLETION_INTERNAL_SECRET: { value: 'test-shared-secret' },
 }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 
@@ -78,7 +78,7 @@ vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%ST
 import { createApp } from './server';
 
 const VALID_BODY = { questId: 'q1', sessionId: 's1', userId: 'u1', message: 'hello' };
-const AUTH = `Bearer ${mockResource.SECRET_ENCRYPTION_KEY.value}`;
+const AUTH = `Bearer ${mockResource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
 
 let server: Server;
 let baseUrl: string;

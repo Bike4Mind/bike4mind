@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockResource = vi.hoisted(() => ({
   ChatCompletion: { url: 'http://chat-completion.internal' },
-  SECRET_ENCRYPTION_KEY: { value: 'test-shared-secret' },
+  CHAT_COMPLETION_INTERNAL_SECRET: { value: 'test-shared-secret' },
 }));
 vi.mock('sst', () => ({ Resource: mockResource }));
 

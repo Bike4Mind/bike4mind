@@ -48,8 +48,9 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          // Shared-secret bearer - defense-in-depth on top of the VPC-internal boundary.
-          authorization: `Bearer ${Resource.SECRET_ENCRYPTION_KEY.value}`,
+          // Dedicated internal shared-secret bearer (NOT the AES encryption key) proving this
+          // dispatch is the frontend; must match the check in chatCompletion/internal/route.ts.
+          authorization: `Bearer ${Resource.CHAT_COMPLETION_INTERNAL_SECRET.value}`,
         },
         body,
         signal: controller.signal,

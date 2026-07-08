@@ -205,6 +205,10 @@ declare module "sst" {
       "type": "sst.aws.Service"
       "url": string
     }
+    "CHAT_COMPLETION_INTERNAL_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
+    }
     "RATE_LIMIT_INGEST_TOKEN": {
       "type": "sst.sst.Secret"
       "value": string

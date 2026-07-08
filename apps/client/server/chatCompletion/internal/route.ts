@@ -20,13 +20,14 @@ import { processQuest } from '@server/queueHandlers/questProcessor';
 
 /**
  * Shared-secret bearer check. Both the frontend Lambda and this service link
- * SECRET_ENCRYPTION_KEY, so the caller proves it's the frontend (not arbitrary internet
- * traffic that can reach the public ALB) by presenting it.
+ * CHAT_COMPLETION_INTERNAL_SECRET (a dedicated internal-dispatch secret, NOT the AES
+ * SECRET_ENCRYPTION_KEY), so the caller proves it's the frontend (not arbitrary internet
+ * traffic that can reach the public ALB) by presenting it. Must match dispatchQuest.ts.
  */
 export function authorize(req: Request): boolean {
   const provided = req.headers.authorization;
   if (typeof provided !== 'string') return false;
-  const expected = `Bearer ${Resource.SECRET_ENCRYPTION_KEY.value}`;
+  const expected = `Bearer ${Resource.CHAT_COMPLETION_INTERNAL_SECRET.value}`;
   // Constant-time compare so a timing side-channel can't be used to recover the secret.
   // timingSafeEqual requires equal-length buffers, so guard on length first.
   const providedBuf = Buffer.from(provided);
