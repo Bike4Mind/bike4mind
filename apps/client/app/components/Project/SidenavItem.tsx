@@ -17,6 +17,11 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
   const textRef = useRef<HTMLDivElement>(null);
   const [isTextTruncated, setIsTextTruncated] = useState(false);
 
+  // A project with no member notebooks has nothing to expand into, so we drop the chevron
+  // and show a muted "No notebooks" label in its place. Derived from sessionIds (always
+  // present on the document) so we know it without the lazy per-project session fetch.
+  const isEmpty = (project.sessionIds?.length ?? 0) === 0;
+
   const handleClick = () => {
     if (onClick) {
       onClick();
@@ -44,7 +49,8 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
       onClick={handleClick}
       sx={theme => ({
         borderRadius: '8px',
-        padding: onToggleExpand !== undefined ? '6px 6px 6px 12px' : '6px 12px',
+        // Tighter right padding only when the 24px chevron occupies the right slot.
+        padding: onToggleExpand !== undefined && !isEmpty ? '6px 6px 6px 12px' : '6px 12px',
         minHeight: '36px',
         display: 'flex',
         alignItems: 'center',
@@ -80,7 +86,7 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
           >
             <HubOutlinedIcon
               sx={theme => ({
-                fontSize: '14px',
+                fontSize: '12px',
                 color: theme.palette.mode === 'dark' ? '#81C784' : '#388E3C',
               })}
             />
@@ -105,46 +111,54 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
           </Typography>
         </Tooltip>
       </Box>
-      {onToggleExpand !== undefined && (
-        <IconButton
-          data-testid="project-expand-btn"
-          aria-label={isExpanded ? 'Collapse project' : 'Expand project'}
-          aria-expanded={isExpanded}
-          variant="plain"
-          color="neutral"
-          size="sm"
-          onClick={e => {
-            e.stopPropagation();
-            onToggleExpand();
-          }}
-          sx={{
-            minWidth: '24px',
-            minHeight: '24px',
-            width: '24px',
-            height: '24px',
-            p: 0,
-            ml: '4px',
-            flexShrink: 0,
-            '--IconButton-size': '24px',
-            // Always visible (unlike the notebook three-dot, which is hover-gated), but reuse the
-            // notebook button's color logic: icon at 50% by default, full on hover, no bg change.
-            '& .MuiSvgIcon-root': {
-              opacity: 0.5,
-              transition: 'opacity 0.3s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-              // Points down when collapsed, flips up when expanded.
-              transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-            },
-            '&:hover, &:focus-visible, &:active': {
-              backgroundColor: 'transparent',
+      {onToggleExpand !== undefined &&
+        (isEmpty ? (
+          <Typography
+            level="body-xs"
+            sx={{ color: 'text.tertiary', fontSize: '11px', flexShrink: 0, ml: '8px', whiteSpace: 'nowrap' }}
+          >
+            No notebooks
+          </Typography>
+        ) : (
+          <IconButton
+            data-testid="project-expand-btn"
+            aria-label={isExpanded ? 'Collapse project' : 'Expand project'}
+            aria-expanded={isExpanded}
+            variant="plain"
+            color="neutral"
+            size="sm"
+            onClick={e => {
+              e.stopPropagation();
+              onToggleExpand();
+            }}
+            sx={{
+              minWidth: '24px',
+              minHeight: '24px',
+              width: '24px',
+              height: '24px',
+              p: 0,
+              ml: '4px',
+              flexShrink: 0,
+              '--IconButton-size': '24px',
+              // Always visible (unlike the notebook three-dot, which is hover-gated), but reuse the
+              // notebook button's color logic: icon at 50% by default, full on hover, no bg change.
               '& .MuiSvgIcon-root': {
-                opacity: 1,
+                opacity: 0.5,
+                transition: 'opacity 0.3s ease, transform 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                // Points down when collapsed, flips up when expanded.
+                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
               },
-            },
-          }}
-        >
-          <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
-        </IconButton>
-      )}
+              '&:hover, &:focus-visible, &:active': {
+                backgroundColor: 'transparent',
+                '& .MuiSvgIcon-root': {
+                  opacity: 1,
+                },
+              },
+            }}
+          >
+            <KeyboardArrowDownIcon sx={{ fontSize: '16px' }} />
+          </IconButton>
+        ))}
     </Box>
   );
 };
