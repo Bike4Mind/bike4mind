@@ -216,7 +216,12 @@ const FTUESlider: React.FC<FTUESliderProps> = ({ onComplete }) => {
         backgroundColor: theme => (theme.palette.mode === 'dark' ? theme.palette.background.surface2 : undefined),
         borderRadius: '12px',
         overflow: 'hidden',
-        boxShadow: 'lg',
+        // Soft, diffuse lift: a wide low-opacity ambient layer plus a tighter contact layer.
+        // Stronger in dark mode, where light shadows all but disappear against the background.
+        boxShadow: theme =>
+          theme.palette.mode === 'dark'
+            ? '0 24px 70px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.14)'
+            : '0 24px 30px rgba(0, 0, 0, 0.03), 0 8px 20px rgba(0, 0, 0, 0.02)',
         display: 'flex',
         flexDirection: 'column',
         m: isMobile ? '16px' : 'auto',
