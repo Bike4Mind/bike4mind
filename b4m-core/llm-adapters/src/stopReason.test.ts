@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeGeminiFinishReason, normalizeOllamaDoneReason, normalizeOpenAIFinishReason } from './stopReason';
+import {
+  normalizeGeminiFinishReason,
+  normalizeOllamaDoneReason,
+  normalizeOpenAIFinishReason,
+  normalizeOpenAIResponsesStopReason,
+} from './stopReason';
 
 describe('normalizeOpenAIFinishReason', () => {
   it('maps a truncated completion to max_tokens', () => {
@@ -46,5 +51,20 @@ describe('normalizeOllamaDoneReason', () => {
 
   it('returns undefined for a missing reason', () => {
     expect(normalizeOllamaDoneReason(undefined)).toBeUndefined();
+  });
+});
+
+describe('normalizeOpenAIResponsesStopReason', () => {
+  it('maps a missing incomplete reason to stop (a genuinely completed response)', () => {
+    expect(normalizeOpenAIResponsesStopReason(undefined)).toBe('stop');
+    expect(normalizeOpenAIResponsesStopReason(null)).toBe('stop');
+  });
+
+  it('maps max_output_tokens to max_tokens', () => {
+    expect(normalizeOpenAIResponsesStopReason('max_output_tokens')).toBe('max_tokens');
+  });
+
+  it('does not collapse content_filter (or any other incomplete reason) to stop', () => {
+    expect(normalizeOpenAIResponsesStopReason('content_filter')).toBe('content_filter');
   });
 });

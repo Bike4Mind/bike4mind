@@ -39,7 +39,7 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
-import { normalizeOpenAIFinishReason } from './stopReason';
+import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1895,7 +1895,7 @@ export class OpenAIBackend implements ICompletionBackend {
       // The Responses API reports truncation via incomplete_details rather than a
       // per-choice finish_reason string; map it onto the same stopReason vocabulary
       // the chat-completions path uses.
-      const stopReason = response.incomplete_details?.reason === 'max_output_tokens' ? 'max_tokens' : 'stop';
+      const stopReason = normalizeOpenAIResponsesStopReason(response.incomplete_details?.reason);
       await callback([this.extractResponsesText(response.output)], {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,

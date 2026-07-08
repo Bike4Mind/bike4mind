@@ -43,3 +43,17 @@ export function normalizeOllamaDoneReason(reason: string | null | undefined): st
       return reason;
   }
 }
+
+/**
+ * OpenAI Responses API `incomplete_details.reason` (documented values:
+ * 'max_output_tokens' | 'content_filter'). Unlike the other normalizers, absence of a
+ * reason is itself meaningful here: `incomplete_details` is only present at all when the
+ * response is incomplete, so no reason means a genuinely completed response - 'stop'.
+ * A present-but-unrecognized reason (e.g. 'content_filter', or a future value) must NOT
+ * default to 'stop' - that would wrongly mark an incomplete response as clean.
+ */
+export function normalizeOpenAIResponsesStopReason(incompleteReason: string | null | undefined): string {
+  if (!incompleteReason) return 'stop';
+  if (incompleteReason === 'max_output_tokens') return 'max_tokens';
+  return incompleteReason;
+}
