@@ -2,7 +2,7 @@
 #
 # Self-host chatCompletion service image. Runs apps/client/server/chatCompletion/server.ts
 # via tsx as a standalone always-on HTTP worker, so the self-host `app` container dispatches
-# quests to it over HTTP (`/process`) exactly like the hosted Fargate ChatCompletionService -
+# quests to it over HTTP (`/process`) exactly like the hosted Fargate ChatCompletion service -
 # same code path in every environment (see apps/client/server/utils/dispatchQuest.ts).
 #
 # Differs from the hosted Dockerfile.chatcompletion in exactly two ways:

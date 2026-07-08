@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1.7-labs
 #
-# ChatCompletionService image — always-on quest processor that replaces the
+# ChatCompletion image — always-on quest processor that replaces the
 # EventBridge → questProcessor Lambda. Runs apps/client/server/chatCompletion/server.ts
 # via tsx with the full workspace installed (no cold start, no 15-min timeout).
 #
 # Built & pushed to ECR by the deploy workflow (.github/workflows/_deploy-env.yml) with a
-# plain `docker build`, NOT by `sst deploy` — infra/chatCompletionService.ts references the
+# plain `docker build`, NOT by `sst deploy` — infra/chatCompletion.ts references the
 # pushed URI via CHAT_COMPLETION_IMAGE. The build context is the monorepo root (`docker build
 # … .`). The root .dockerignore excludes node_modules / dist / .turbo / .sst / .env* / .git /
 # .next / ios / android / tests / docs-site.
