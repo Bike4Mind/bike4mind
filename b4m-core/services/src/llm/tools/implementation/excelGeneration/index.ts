@@ -1,5 +1,6 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import ExcelJS from 'exceljs';
+import writeXlsxFile from 'write-excel-file/node';
+import type { CellObject, Sheet, SheetData } from 'write-excel-file/node';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 import { persistGeneratedFileAsFabFile } from '../../helpers/persistGeneratedFile';
@@ -199,11 +200,11 @@ function sanitizeCellValue(value: string | number | boolean | null): string | nu
 }
 
 /**
- * Converts color input to ARGB format for ExcelJS.
- * Handles 6-digit hex (#RRGGBB), 3-digit hex (#RGB), and provides fallback.
+ * Converts color input to the `#RRGGBB` hex format write-excel-file expects.
+ * Handles 6-digit hex (#RRGGBB), 3-digit hex (#RGB), and provides a fallback.
  */
-function colorToArgb(color: string): string {
-  if (!color) return 'FF000000'; // Default black
+function colorToHex(color: string): string {
+  if (!color) return '#000000'; // Default black
 
   // Remove # if present
   let hex = color.replace('#', '');
@@ -219,11 +220,10 @@ function colorToArgb(color: string): string {
   // Validate it's a valid 6-character hex
   if (!/^[0-9A-Fa-f]{6}$/.test(hex)) {
     // Return default black for invalid colors (named colors, etc.)
-    return 'FF000000';
+    return '#000000';
   }
 
-  // Prepend FF for full opacity
-  return `FF${hex.toUpperCase()}`;
+  return `#${hex.toUpperCase()}`;
 }
 
 // Zod schemas for input validation
@@ -301,123 +301,165 @@ const ExcelGenerationParamsSchema = z.object({
 type CellStyle = z.infer<typeof CellStyleSchema>;
 type ExcelGenerationParams = z.infer<typeof ExcelGenerationParamsSchema>;
 
+// Maps the tool's vertical-alignment vocabulary to write-excel-file's `alignVertical`.
+const VERTICAL_ALIGNMENT_MAP: Record<
+  NonNullable<NonNullable<CellStyle>['verticalAlignment']>,
+  'top' | 'center' | 'bottom'
+> = {
+  top: 'top',
+  middle: 'center',
+  bottom: 'bottom',
+};
+
 /**
- * Applies cell styling to an ExcelJS cell
+ * Translates the tool's style object into the subset of write-excel-file cell-style
+ * properties. Returned as a partial cell so it can be merged onto the value/formula cell.
  */
-function applyCellStyle(cell: ExcelJS.Cell, style: NonNullable<CellStyle>): void {
-  // Font styling
-  const font: Partial<ExcelJS.Font> = {};
-  if (style.bold !== undefined) font.bold = style.bold;
-  if (style.italic !== undefined) font.italic = style.italic;
-  if (style.fontSize !== undefined) font.size = style.fontSize;
-  if (style.fontColor) {
-    font.color = { argb: colorToArgb(style.fontColor) };
-  }
-  if (Object.keys(font).length > 0) {
-    cell.font = font;
-  }
+function buildCellStyle(style: NonNullable<CellStyle>): Partial<CellObject> {
+  const styled: Partial<CellObject> = {};
+
+  // Font styling. write-excel-file only models bold/italic as presence flags
+  // (`fontWeight: 'bold'` / `fontStyle: 'italic'`); there is no explicit "normal", so a
+  // `false` value is simply left unset (equivalent to Excel's default).
+  if (style.bold) styled.fontWeight = 'bold';
+  if (style.italic) styled.fontStyle = 'italic';
+  if (style.fontSize !== undefined) styled.fontSize = style.fontSize;
+  if (style.fontColor) styled.textColor = colorToHex(style.fontColor);
 
   // Fill/background
-  if (style.backgroundColor) {
-    cell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: colorToArgb(style.backgroundColor) },
-    };
-  }
+  if (style.backgroundColor) styled.backgroundColor = colorToHex(style.backgroundColor);
 
   // Alignment
-  const alignment: Partial<ExcelJS.Alignment> = {};
-  if (style.horizontalAlignment) alignment.horizontal = style.horizontalAlignment;
-  if (style.verticalAlignment) alignment.vertical = style.verticalAlignment;
-  if (Object.keys(alignment).length > 0) {
-    cell.alignment = alignment;
-  }
+  if (style.horizontalAlignment) styled.align = style.horizontalAlignment;
+  if (style.verticalAlignment) styled.alignVertical = VERTICAL_ALIGNMENT_MAP[style.verticalAlignment];
 
   // Number format
-  if (style.numberFormat) {
-    cell.numFmt = style.numberFormat;
+  if (style.numberFormat) styled.format = style.numberFormat;
+
+  // Borders (thin, per requested side)
+  if (style.border) {
+    if (style.border.top) styled.topBorderStyle = 'thin';
+    if (style.border.bottom) styled.bottomBorderStyle = 'thin';
+    if (style.border.left) styled.leftBorderStyle = 'thin';
+    if (style.border.right) styled.rightBorderStyle = 'thin';
   }
 
-  // Borders
-  if (style.border) {
-    const borderStyle: Partial<ExcelJS.Border> = { style: 'thin' };
-    const borders: Partial<ExcelJS.Borders> = {};
-    if (style.border.top) borders.top = borderStyle;
-    if (style.border.bottom) borders.bottom = borderStyle;
-    if (style.border.left) borders.left = borderStyle;
-    if (style.border.right) borders.right = borderStyle;
-    if (Object.keys(borders).length > 0) {
-      cell.border = borders;
+  return styled;
+}
+
+/**
+ * Builds the value/type portion of a cell from a sparse cell definition. Returns null when the
+ * cell carries no value and no formula (an empty cell), so callers can skip it.
+ */
+function buildCellContent(cellData: z.infer<typeof CellDataSchema>): Partial<CellObject> | null {
+  if (cellData.formula) {
+    // Validate and sanitize the formula, then hand it to write-excel-file as a Formula cell.
+    return { type: 'Formula', value: validateFormula(cellData.formula) };
+  }
+  if (cellData.value === null || cellData.value === undefined) {
+    return null;
+  }
+  // Sanitize cell values to prevent formula injection, then tag the concrete cell type.
+  const value = sanitizeCellValue(cellData.value);
+  if (typeof value === 'number') return { type: Number, value };
+  if (typeof value === 'boolean') return { type: Boolean, value };
+  return { type: String, value: String(value) };
+}
+
+/**
+ * Builds a single write-excel-file sheet from the tool's sparse cell definitions.
+ *
+ * write-excel-file uses a dense, row-major model (an array of rows, each an array of cells)
+ * rather than exceljs's addressable getCell(row, col). We size a rectangular grid, drop each
+ * sparse cell into place, and express merges as columnSpan/rowSpan on the top-left anchor while
+ * nulling the covered cells (as the library requires).
+ */
+function buildSheet(sheetData: ExcelGenerationParams['sheets'][number]): Sheet<Buffer> {
+  // Size the grid to cover data, merges, and any row/column that only carries a dimension.
+  let maxRow = 1;
+  let maxCol = 1;
+  for (const c of sheetData.data) {
+    maxRow = Math.max(maxRow, c.row);
+    maxCol = Math.max(maxCol, c.col);
+  }
+  for (const mc of sheetData.mergedCells ?? []) {
+    maxRow = Math.max(maxRow, mc.endRow);
+    maxCol = Math.max(maxCol, mc.endCol);
+  }
+  for (const rh of sheetData.rowHeights ?? []) maxRow = Math.max(maxRow, rh.row);
+  for (const cw of sheetData.columnWidths ?? []) maxCol = Math.max(maxCol, cw.col);
+
+  const grid: (CellObject | null)[][] = Array.from({ length: maxRow }, () =>
+    Array.from({ length: maxCol }, () => null)
+  );
+
+  // Place data + styling. Last write wins if the same coordinate is provided twice.
+  for (const cellData of sheetData.data) {
+    const content = buildCellContent(cellData);
+    const style = cellData.style ? buildCellStyle(cellData.style) : undefined;
+    if (!content && !style) continue;
+    grid[cellData.row - 1][cellData.col - 1] = { ...content, ...style };
+  }
+
+  // Merged cells: put the span on the anchor cell, null out the rest of the range.
+  for (const mc of sheetData.mergedCells ?? []) {
+    const anchorRow = mc.startRow - 1;
+    const anchorCol = mc.startCol - 1;
+    const columnSpan = mc.endCol - mc.startCol + 1;
+    const rowSpan = mc.endRow - mc.startRow + 1;
+    const anchor: CellObject = grid[anchorRow][anchorCol] ?? {};
+    if (columnSpan > 1) anchor.columnSpan = columnSpan;
+    if (rowSpan > 1) anchor.rowSpan = rowSpan;
+    grid[anchorRow][anchorCol] = anchor;
+    for (let r = mc.startRow - 1; r <= mc.endRow - 1; r++) {
+      for (let c = mc.startCol - 1; c <= mc.endCol - 1; c++) {
+        if (r !== anchorRow || c !== anchorCol) grid[r][c] = null;
+      }
     }
   }
+
+  // Row heights: write-excel-file reads the height from a cell in the row, so attach it to the
+  // first populated cell (or an otherwise-empty anchor cell) in that row.
+  for (const rh of sheetData.rowHeights ?? []) {
+    const row = grid[rh.row - 1];
+    let target = row.find((cell): cell is CellObject => cell !== null);
+    if (!target) {
+      target = {};
+      row[0] = target;
+    }
+    target.height = rh.height;
+  }
+
+  const sheet: Sheet<Buffer> = {
+    sheet: sheetData.name.slice(0, LIMITS.MAX_SHEET_NAME_LENGTH),
+    data: grid as SheetData,
+  };
+
+  // Column widths: a dense array indexed by column position; untouched columns stay empty.
+  if (sheetData.columnWidths?.length) {
+    const columns: { width?: number }[] = Array.from({ length: maxCol }, () => ({}));
+    for (const cw of sheetData.columnWidths) columns[cw.col - 1] = { width: cw.width };
+    sheet.columns = columns;
+  }
+
+  // Freeze panes: freezePane.row/col are 1-indexed "first non-frozen" positions, so the number
+  // of sticky rows/columns is one less. Only set an axis when it actually freezes something.
+  if (sheetData.freezePane) {
+    const stickyColumnsCount = sheetData.freezePane.col - 1;
+    const stickyRowsCount = sheetData.freezePane.row - 1;
+    if (stickyColumnsCount > 0) sheet.stickyColumnsCount = stickyColumnsCount;
+    if (stickyRowsCount > 0) sheet.stickyRowsCount = stickyRowsCount;
+  }
+
+  return sheet;
 }
 
 /**
  * Generates an Excel workbook buffer from the provided parameters
  */
 async function generateExcel(params: ExcelGenerationParams): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook();
-  // Generic "AI" creator when APP_NAME is unset (brand is externalized).
-  const brand = process.env.APP_NAME || '';
-  workbook.creator = brand ? `${brand} AI` : 'AI';
-  workbook.created = new Date();
-
-  for (const sheetData of params.sheets) {
-    // Excel sheet names are limited to 31 characters
-    const worksheet = workbook.addWorksheet(sheetData.name.slice(0, LIMITS.MAX_SHEET_NAME_LENGTH));
-
-    // Set column widths
-    if (sheetData.columnWidths) {
-      for (const cw of sheetData.columnWidths) {
-        worksheet.getColumn(cw.col).width = cw.width;
-      }
-    }
-
-    // Set row heights
-    if (sheetData.rowHeights) {
-      for (const rh of sheetData.rowHeights) {
-        worksheet.getRow(rh.row).height = rh.height;
-      }
-    }
-
-    // Add data and styling
-    for (const cellData of sheetData.data) {
-      const cell = worksheet.getCell(cellData.row, cellData.col);
-
-      if (cellData.formula) {
-        // Validate and sanitize formula before using
-        const sanitizedFormula = validateFormula(cellData.formula);
-        cell.value = { formula: sanitizedFormula };
-      } else if (cellData.value !== null && cellData.value !== undefined) {
-        // Sanitize cell values to prevent formula injection
-        cell.value = sanitizeCellValue(cellData.value);
-      }
-
-      if (cellData.style) {
-        applyCellStyle(cell, cellData.style);
-      }
-    }
-
-    // Merged cells
-    if (sheetData.mergedCells) {
-      for (const mc of sheetData.mergedCells) {
-        worksheet.mergeCells(mc.startRow, mc.startCol, mc.endRow, mc.endCol);
-      }
-    }
-
-    // Freeze panes (only apply if at least one axis actually freezes)
-    if (sheetData.freezePane) {
-      const xSplit = sheetData.freezePane.col - 1;
-      const ySplit = sheetData.freezePane.row - 1;
-      if (xSplit > 0 || ySplit > 0) {
-        worksheet.views = [{ state: 'frozen', xSplit, ySplit }];
-      }
-    }
-  }
-
-  const buffer = await workbook.xlsx.writeBuffer();
-  return Buffer.from(buffer);
+  const sheets = params.sheets.map(buildSheet);
+  return writeXlsxFile(sheets).toBuffer();
 }
 
 /**
