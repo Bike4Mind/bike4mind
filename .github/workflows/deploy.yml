@@ -114,6 +114,9 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
+      - name: Check deploy image manifest matches infra
+        run: python3 scripts/check-deploy-image-manifest.py
+
 
 
 

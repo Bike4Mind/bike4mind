@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "images": [
+    {
+      "name": "quest-processor",
+      "dockerfile": "apps/client/Dockerfile.quest-service",
+      "env": "QUEST_PROCESSOR_IMAGE"
+    }
+  ]
+}
