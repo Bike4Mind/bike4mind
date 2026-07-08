@@ -43,7 +43,7 @@ describe('useEffectiveCredits', () => {
     expect(result.current).toBe(1327);
   });
 
-  it('releases the freeze on error and on abort/cancel, not just on normal completion', () => {
+  it('releases the freeze on reset/abort (session removed from the map)', () => {
     const { result, rerender } = renderHook(() => useEffectiveCredits());
 
     act(() => useStreamingState.getState().startStreaming('session-1'));
@@ -55,6 +55,40 @@ describe('useEffectiveCredits', () => {
     mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1400 } });
     rerender();
     expect(result.current).toBe(1400);
+  });
+
+  // The error/cancel paths (`useSubscribeChatCompletion`) do NOT delete the
+  // session - they leave the entry in the map with status 'error'/'cancelled'.
+  // Release therefore relies on `isAnyStreaming()` filtering on 'streaming'
+  // only; assert the freeze still lifts with the terminal entry still present.
+  it('releases the freeze on error, even though the errored session lingers in the map', () => {
+    const { result, rerender } = renderHook(() => useEffectiveCredits());
+
+    act(() => useStreamingState.getState().startStreaming('session-1'));
+    mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+    rerender();
+    expect(result.current).toBe(1500);
+
+    act(() => useStreamingState.getState().errorStreaming('session-1'));
+    mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1400 } });
+    rerender();
+    expect(result.current).toBe(1400); // released despite the 'error' entry still in the map
+    expect(useStreamingState.getState().getStreamingStatus('session-1')).toBe('error');
+  });
+
+  it('releases the freeze on cancel, even though the cancelled session lingers in the map', () => {
+    const { result, rerender } = renderHook(() => useEffectiveCredits());
+
+    act(() => useStreamingState.getState().startStreaming('session-1'));
+    mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 227 } });
+    rerender();
+    expect(result.current).toBe(1500);
+
+    act(() => useStreamingState.getState().cancelStreaming('session-1'));
+    mockUseUser.mockReturnValue({ currentUser: { id: 'user-1', currentCredits: 1400 } });
+    rerender();
+    expect(result.current).toBe(1400); // released despite the 'cancelled' entry still in the map
+    expect(useStreamingState.getState().getStreamingStatus('session-1')).toBe('cancelled');
   });
 
   it('stays frozen until the last of several concurrent sessions finishes', () => {
