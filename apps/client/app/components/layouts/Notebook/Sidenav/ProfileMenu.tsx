@@ -267,7 +267,12 @@ const ProfileMenu = () => {
     backgroundColor: t2.palette.background.popup,
     border: `1px solid ${t2.palette.divider}`,
     borderRadius: '12px',
-    boxShadow: t2.shadow.lg,
+    // Soft, diffuse lift (same recipe as the tutorial frame): a wide low-opacity ambient layer
+    // plus a tighter contact layer, stronger in dark mode where light shadows disappear.
+    boxShadow:
+      t2.palette.mode === 'dark'
+        ? '0 24px 70px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.14)'
+        : '0 24px 30px rgba(0, 0, 0, 0.03), 0 8px 20px rgba(0, 0, 0, 0.02)',
     p: 1,
   });
 
@@ -281,7 +286,6 @@ const ProfileMenu = () => {
             ...panelSx(theme2),
             backgroundColor: theme2.palette.background.surface, // #0E1214 in dark
             borderRadius: '8px',
-            boxShadow: 'none',
             position: 'absolute',
             bottom: 'calc(100% + 8px)',
             left: 0,
@@ -467,7 +471,6 @@ const ProfileMenu = () => {
                 sx={theme2 => ({
                   ...panelSx(theme2),
                   backgroundColor: theme2.palette.background.surface, // match the panel surface (#0E1214 in dark)
-                  boxShadow: 'none',
                   position: 'absolute',
                   left: 'calc(100% + 16px)',
                   bottom: 0,
