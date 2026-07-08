@@ -85,6 +85,9 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
       return;
     }
     if (!this.wsManager.isConnected) {
+      // Retryable by design: on a retry that races auto-reconnect this lets the
+      // core wait out another backoff window rather than surface a dead-end error.
+      // The wording must stay in sync with retryPolicy's transient patterns.
       throw new Error('WebSocket is not connected');
     }
 

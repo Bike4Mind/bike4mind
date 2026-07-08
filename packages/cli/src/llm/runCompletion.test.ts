@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { runCompletion, EmptyCompletionError } from './runCompletion';
 import { InMemoryStreamTransport, type ScriptedStep } from './InMemoryStreamTransport';
+import { createTransientRetryPolicy } from './retryPolicy';
 import type { CompletionRequest, RetryPolicy } from './streamTransport';
 import type { StreamEvent } from './streamEvents';
 
@@ -85,6 +86,19 @@ describe('runCompletion', () => {
     );
     await expect(promise).resolves.toBeUndefined();
     expect(callback).not.toHaveBeenCalled();
+  });
+
+  it('recovers under the real policy when a retry races WebSocket auto-reconnect', async () => {
+    // Attempt 1 opens before the socket has reconnected ("not connected"); the
+    // real transient policy must treat that as retryable so attempt 2 recovers.
+    const realPolicy: RetryPolicy = { ...createTransientRetryPolicy(), backoffMs: 0 };
+    const { transport, callback, promise } = run(
+      [[{ fail: new Error('WebSocket is not connected') }], [{ emit: content('recovered') }]],
+      realPolicy
+    );
+    await promise;
+    expect(transport.attempts).toBe(2);
+    expect(callback).toHaveBeenCalledWith(['recovered'], expect.anything());
   });
 
   it('settles without opening the stream when already aborted', async () => {

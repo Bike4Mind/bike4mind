@@ -28,6 +28,9 @@ describe('isTransientNetworkError', () => {
       // The WebSocket path's mid-stream disconnect must classify as transient so
       // it retries like the SSE path - see WebSocketLlmBackend.streamCompletion.
       'WebSocket connection closed during completion',
+      // A retry that races auto-reconnect hits this at open(); it must be retryable
+      // so the core waits out another backoff window instead of short-circuiting.
+      'WebSocket is not connected',
     ];
     for (const message of transient) {
       expect(isTransientNetworkError(new Error(message)), message).toBe(true);

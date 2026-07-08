@@ -129,7 +129,7 @@ describe('WebSocketLlmBackend transport (open)', () => {
     await expect(consumer).rejects.toThrow('model overloaded');
   });
 
-  it('throws immediately when the socket is not connected', async () => {
+  it('throws a retryable error when the socket is not connected', async () => {
     const ws = new FakeWsManager();
     ws.connected = false;
     const backend = makeBackend(ws);
@@ -137,5 +137,7 @@ describe('WebSocketLlmBackend transport (open)', () => {
       for await (const _event of backend.open(req)) void _event;
     })();
     await expect(consumer).rejects.toThrow('WebSocket is not connected');
+    // Retryable so a retry racing auto-reconnect waits out another backoff window.
+    expect(isTransientNetworkError(new Error('WebSocket is not connected'))).toBe(true);
   });
 });

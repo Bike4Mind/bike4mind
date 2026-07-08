@@ -25,6 +25,11 @@ const TRANSIENT_NETWORK_ERROR_PATTERNS = [
   'network error',
   'fetch failed',
   'und_err_socket',
+  // A WebSocketLlmBackend only exists once the socket has connected (bootstrap
+  // falls back to SSE otherwise), so a mid-session "not connected" is a transient
+  // drop with auto-reconnect in flight. Classing it retryable lets a retry that
+  // races the reconnect wait out another backoff window instead of short-circuiting.
+  'websocket is not connected',
 ];
 
 export function isTransientNetworkError(error: Error): boolean {
