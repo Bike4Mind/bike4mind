@@ -190,8 +190,8 @@ export const useGetApiUsage = () => {
 export interface SecurityBehavioralSummary {
   /** Short natural-language overview of the user's security posture. */
   summary: string;
-  /** 0-100 numeric risk score (0 = no risk, 100 = critical). */
-  riskScore: number;
+  /** 0-100 security posture score (0 = critical risk, 100 = excellent posture). */
+  securityScore: number;
   /** Categorical risk level derived from the score. */
   riskLevel: 'low' | 'medium' | 'high';
   /** 2-5 short, actionable recommendations for the user. */

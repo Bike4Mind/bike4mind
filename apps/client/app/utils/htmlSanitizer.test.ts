@@ -96,6 +96,23 @@ describe('sanitizeHtmlForIframe', () => {
       const config = mockSanitize.mock.calls[0][1];
       expect(config.ALLOWED_URI_REGEXP).toBeUndefined();
     });
+
+    // Regression: DOMPurify's SAFE_FOR_XML mXSS guard force-removes any <script>
+    // whose body contains `<` glued to a word char (`for(i=0;i<n;i++)`, `if(x<0)`),
+    // silently deleting the script and leaving interactive artifacts inert. The
+    // sandbox iframe + route CSP are the real boundary on this path, so the guard
+    // must be off here.
+    it('disables SAFE_FOR_XML so scripts with `<` comparisons survive', () => {
+      sanitizeHtmlForIframe('<p>hi</p>', { allowScripts: true });
+      const config = mockSanitize.mock.calls[0][1];
+      expect(config.SAFE_FOR_XML).toBe(false);
+    });
+  });
+
+  it('does NOT disable SAFE_FOR_XML when allowScripts is omitted (default guard stays on)', () => {
+    sanitizeHtmlForIframe('<p>hi</p>');
+    const config = mockSanitize.mock.calls[0][1];
+    expect(config.SAFE_FOR_XML).toBeUndefined();
   });
 
   it('does not add script to ADD_TAGS when allowScripts is omitted', () => {

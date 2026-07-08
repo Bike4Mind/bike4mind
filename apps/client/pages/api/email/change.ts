@@ -51,6 +51,9 @@ const handler = baseApi({ auth: true })
                 const brand = process.env.APP_NAME || '';
                 const logoUrl = getLogoUrl();
                 const baseUrl = requireEnv('APP_URL', process.env.APP_URL);
+                // The `action=cancel-email-change` param is handled client-side by
+                // ChangeEmailCard (CANCEL_EMAIL_CHANGE_ACTION), which opens the cancel
+                // confirmation dialog. Keep the literal in sync with that handler.
                 const cancelUrl = `${baseUrl}/profile?action=cancel-email-change`;
 
                 const notificationBody = `

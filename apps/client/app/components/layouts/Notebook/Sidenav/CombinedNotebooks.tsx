@@ -724,7 +724,6 @@ const CombinedNotebooks = () => {
                         isShared={false}
                         favoriteSessions={favoriteSessions}
                         showMessageCount={false}
-                        disableExportOps
                         onNavigate={handleItemNavigate}
                         onNotebookClick={handleNotebookClick}
                         onToggle={handleToggleItemSelection}

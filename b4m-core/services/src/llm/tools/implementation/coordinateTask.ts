@@ -112,6 +112,12 @@ export interface CoordinateTaskToolDeps {
   llm: ICompletionBackend;
   logger: Logger;
   parentTools: ICompletionOptionTools[];
+  /**
+   * Tools the coordinator subagent can OPT INTO by explicitly naming them in
+   * `allowedTools` (never granted by the allow-all default). Forwarded to the
+   * orchestrator's `optInTools` channel. See `ServerOrchestratorDeps.optInTools`.
+   */
+  optInTools?: ICompletionOptionTools[];
   getSignal?: () => AbortSignal | undefined;
   availableModels?: ModelInfo[];
   onStatusUpdate?: (status: string) => Promise<void>;
@@ -216,6 +222,7 @@ export function createCoordinateTaskTool(deps: CoordinateTaskToolDeps): IComplet
         tracker: deps.tracker,
         getRemainingTimeMs: deps.getRemainingTimeMs,
         handoffSignal: deps.subagentHandoffSignal,
+        optInTools: deps.optInTools,
       });
 
       try {

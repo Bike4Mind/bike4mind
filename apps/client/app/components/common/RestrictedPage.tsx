@@ -1,8 +1,6 @@
 import { useUser } from '@client/app/contexts/UserContext';
-import { useEntitlements } from '@client/app/hooks/data/entitlements';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { useEntitlementGate, EntitlementGateState } from '@client/app/hooks/useEntitlementGate';
 import { applyRedirect, buildRedirectTo } from '@client/app/utils/authRedirect';
-import { userIsDeveloper } from '@client/app/utils/user';
 import { useRouter, useNavigate } from '@tanstack/react-router';
 import { FC, PropsWithChildren, useEffect } from 'react';
 
@@ -28,9 +26,6 @@ interface RestrictedPageProps {
   fallbackPath?: string;
 }
 
-/** A set requirement is satisfied, definitively unsatisfied, or still resolving. */
-type GateState = 'satisfied' | 'denied' | 'pending';
-
 const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   children,
   requireAdmin = false,
@@ -43,41 +38,23 @@ const RestrictedPage: FC<PropsWithChildren<RestrictedPageProps>> = ({
   const navigate = useNavigate();
   const pathname = router.state.location.pathname;
 
-  const bypass = !!currentUser && (currentUser.isAdmin || userIsDeveloper(currentUser));
+  // Membership decision (bypass, normalized-key compare, fail-open on query
+  // error) lives in the shared hook so nav-visibility checks match this gate.
+  const { state: entitlementState, bypass } = useEntitlementGate(requireEntitlement);
 
-  const entitlementQuery = useEntitlements({
-    enabled: !!requireEntitlement && !!currentUser && !bypass,
-  });
-
-  const tagState: GateState | undefined = !requireFeatureTag
+  const tagState: EntitlementGateState | undefined = !requireFeatureTag
     ? undefined
     : bypass || (currentUser?.tags ?? []).some(tag => tag.toLowerCase() === requireFeatureTag.toLowerCase())
       ? 'satisfied'
       : 'denied';
 
-  let entitlementState: GateState | undefined;
-  if (requireEntitlement) {
-    if (bypass) {
-      entitlementState = 'satisfied';
-    } else if (entitlementQuery.isSuccess) {
-      entitlementState = (entitlementQuery.data ?? []).includes(normalizeTag(requireEntitlement))
-        ? 'satisfied'
-        : 'denied';
-    } else if (entitlementQuery.isError) {
-      // Fail-open by design: this gate is UX, not a security control - the
-      // server enforces entitlements on the APIs behind it. A transient
-      // /api/entitlements failure must not eject a paying user.
-      entitlementState = 'satisfied';
-    } else {
-      entitlementState = 'pending';
-    }
-  }
-
   // No requirements set = login-only mode. With requirements, satisfying any
   // one grants (OR); a pending entitlement query holds (render null, no
   // redirect); only an all-requirements-denied state ejects.
-  const requirementStates = [tagState, entitlementState].filter((state): state is GateState => state !== undefined);
-  const accessState: GateState =
+  const requirementStates = [tagState, entitlementState].filter(
+    (state): state is EntitlementGateState => state !== undefined
+  );
+  const accessState: EntitlementGateState =
     requirementStates.length === 0 || requirementStates.includes('satisfied')
       ? 'satisfied'
       : requirementStates.includes('pending')

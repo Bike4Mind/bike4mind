@@ -42,6 +42,8 @@ export type { ToolUseInfo, ToolResult, ToolExecutionPlan, IsReadOnlyToolFn } fro
 // Tool filtering utilities for agent tool access control
 export {
   filterToolsByPatterns,
+  filterOptInTools,
+  selectSubagentTools,
   matchesToolPattern,
   matchesAnyPattern,
   getToolNames,

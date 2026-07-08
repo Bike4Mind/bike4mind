@@ -20,8 +20,9 @@
 # with TLS, and keep the backing ports unpublished. Do not expose
 # 27017/9000/9324/8025 to the internet.
 #
-# KNOWN LIMITATION: the realtime websocket gateway is not in this stack yet,
-# so live streaming updates degrade (chat replies appear on refresh).
+# Realtime: the `ws` gateway + `subscriber-fanout` services provide live
+# streaming updates (chat, notebooks, sync) without AWS API Gateway. See the
+# `ws` service below and selfhost/ws-gateway/.
 
 name: bike4mind-selfhost
 
@@ -149,8 +150,74 @@ services:
     # when unused. The bundled `ollama` service below is reached as `ollama`.
     extra_hosts:
       - 'host.docker.internal:host-gateway'
-    # NOTE: the realtime websocket gateway is not in this stack yet. The app
-    # serves HTTP without it; live streaming updates degrade.
+    # Realtime: the app reads the browser URL + management endpoint from
+    # WEBSOCKET_URL / WEBSOCKET_MANAGEMENT_ENDPOINT (.env.selfhost, -> the `ws`
+    # gateway below) and uses INTERNAL_WS_SECRET to authenticate the gateway's
+    # internal handler calls. Both come from the env file.
+
+  # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
+  # WebSocket. One port (3001) with two faces: a browser-facing socket server
+  # (WEBSOCKET_URL=ws://localhost:3001) and an API Gateway Management API
+  # emulator (WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001) that the app and the
+  # subscriber-fanout push to. It holds no auth/model logic; it delegates
+  # connect/subscribe/unsubscribe to the app over an internal shared-secret
+  # endpoint. Source: selfhost/ws-gateway/.
+  ws:
+    build:
+      context: ./selfhost/ws-gateway
+      dockerfile: Dockerfile
+    env_file:
+      - .env.selfhost
+    environment:
+      PORT: '3001'
+      APP_INTERNAL_URL: http://app:3000
+    # Browser connects to ws://localhost:3001; app + fanout reach it as
+    # http://ws:3001 over the compose network. Override WS_HOST_PORT if 3001 is
+    # taken on your host (also update WEBSOCKET_URL to match).
+    ports:
+      - '${WS_HOST_PORT:-3001}:3001'
+    depends_on:
+      app:
+        condition: service_started
+    healthcheck:
+      test:
+        [
+          'CMD-SHELL',
+          'node -e "fetch(\"http://localhost:3001/health\").then(r=>{process.exit(r.ok?0:1)}).catch(()=>process.exit(1))"',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 5s
+
+  # MongoDB change-stream -> WebSocket fan-out. Watches the collections clients
+  # subscribe to (recorded in the querySubscriptions collection) and pushes
+  # matching changes through the ws gateway's management endpoint, restoring live
+  # data updates (notebooks, chat, sync) in self-host. Published image; build it
+  # from source in its own repo and tag it the same to run local edits.
+  subscriber-fanout:
+    image: ${SUBSCRIBER_FANOUT_IMAGE:-ghcr.io/bike4mind/subscriber-fanout:latest}
+    env_file:
+      - .env.selfhost
+    environment:
+      # The fanout logs the stage and pushes to the management endpoint below.
+      STAGE: ${APP_STAGE:-selfhost}
+      WEBSOCKET_MANAGEMENT_ENDPOINT: http://ws:3001
+      # Browsers have no 128KB frame cap and don't reassemble chunks, so send whole.
+      WEBSOCKET_DISABLE_CHUNKING: 'true'
+      # Dummy creds satisfy the AWS SDK; the ws gateway ignores the SigV4 signature.
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-minioadmin}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-minioadmin}
+      # No EC2/ECS metadata service in plain Docker; skip it so the credential
+      # chain resolves from env immediately instead of waiting on an IMDS timeout.
+      AWS_EC2_METADATA_DISABLED: 'true'
+    depends_on:
+      mongo:
+        condition: service_healthy
+      ws:
+        condition: service_started
+    restart: unless-stopped
 
   # Local LLMs via Ollama (optional).
   # Run local open-weight models (e.g. Qwen) with NO provider API keys and, once
