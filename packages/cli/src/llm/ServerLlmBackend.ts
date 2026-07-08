@@ -8,38 +8,8 @@ import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
+import { createTransientRetryPolicy } from './retryPolicy';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
-
-/**
- * Connection-level failures that should be retried rather than surfaced to the
- * user. Mirrors the canonical retryable-error list in `@bike4mind/llm-adapters`
- * (retry.ts): the most common offender is a TLS socket
- * close mid-stream, which Node surfaces as `Error: aborted` thrown from
- * `node:_http_client` `socketCloseListener`. This happens when the SSE
- * connection sits idle during a long extended-thinking step and an intermediary
- * (or the socket itself) times out the idle connection.
- *
- * Crucially this is NOT a user cancel - those are detected separately via
- * `options.abortSignal` before this classifier is consulted. Matching is on the
- * lowercased message so we catch the various wordings undici/Node emit.
- */
-const TRANSIENT_NETWORK_ERROR_PATTERNS = [
-  'aborted', // TLS socket close (node:_http_client socketCloseListener)
-  'socket closed',
-  'socket hang up',
-  'connection closed',
-  'econnreset',
-  'etimedout',
-  'terminated',
-  'network error',
-  'fetch failed',
-  'und_err_socket',
-];
-
-export function isTransientNetworkError(error: Error): boolean {
-  const message = error.message?.toLowerCase() ?? '';
-  return TRANSIENT_NETWORK_ERROR_PATTERNS.some(pattern => message.includes(pattern));
-}
 
 /**
  * Server-side LLM backend that proxies requests through the Bike4Mind API over
@@ -54,8 +24,6 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private apiClient: ApiClient;
   public currentModel: string;
   private readonly completionsEndpoint: string;
-  /** Max retries for transient stream failures (e.g. missing [DONE]) */
-  private static readonly MAX_STREAM_RETRIES = 2;
 
   constructor(options: { apiClient: ApiClient; model: string; completionsUrl?: string }) {
     this.apiClient = options.apiClient;
@@ -84,10 +52,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
       this,
       { model, messages, options },
       callback,
-      {
-        maxRetries: ServerLlmBackend.MAX_STREAM_RETRIES,
-        isRetryable: error => error instanceof Error && isTransientNetworkError(error),
-      },
+      createTransientRetryPolicy(),
       options.abortSignal
     );
   }

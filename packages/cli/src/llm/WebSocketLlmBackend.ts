@@ -6,7 +6,7 @@ import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
 import { parseStreamEvent, type StreamEvent } from './streamEvents';
 import { runCompletion } from './runCompletion';
-import { isTransientNetworkError } from './ServerLlmBackend';
+import { createTransientRetryPolicy } from './retryPolicy';
 import type { CompletionRequest, StreamTransport } from './streamTransport';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -30,8 +30,6 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
   private tokenGetter: () => Promise<string | null>;
   private wsCompletionUrl: string;
   public currentModel: string;
-  /** Max retries for transient stream failures (a mid-stream socket drop). */
-  private static readonly MAX_STREAM_RETRIES = 2;
 
   constructor(options: {
     wsManager: WebSocketConnectionManager;
@@ -62,10 +60,7 @@ export class WebSocketLlmBackend implements ICompletionBackend, StreamTransport 
       this,
       { model, messages, options },
       callback,
-      {
-        maxRetries: WebSocketLlmBackend.MAX_STREAM_RETRIES,
-        isRetryable: error => error instanceof Error && isTransientNetworkError(error),
-      },
+      createTransientRetryPolicy(),
       options.abortSignal
     );
   }

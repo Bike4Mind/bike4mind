@@ -113,7 +113,8 @@ function renderBanner(startupLog: string[] = []): void {
 }
 
 import { useCliStore } from './store';
-import { ServerLlmBackend, isTransientNetworkError } from './llm/ServerLlmBackend';
+import { ServerLlmBackend } from './llm/ServerLlmBackend';
+import { isTransientNetworkError } from './llm/retryPolicy';
 import { WebSocketLlmBackend } from './llm/WebSocketLlmBackend';
 import { NotifyingLlmBackend } from './llm/NotifyingLlmBackend.js';
 import { MultiLlmBackend } from './llm/MultiLlmBackend.js';

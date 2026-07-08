@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WebSocketLlmBackend } from './WebSocketLlmBackend';
-import { isTransientNetworkError } from './ServerLlmBackend';
+import { isTransientNetworkError } from './retryPolicy';
 import type { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
 import type { ApiClient } from '../auth/ApiClient';
 import type { CompletionRequest } from './streamTransport';
