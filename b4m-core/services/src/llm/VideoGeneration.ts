@@ -560,11 +560,20 @@ export class VideoGenerationService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
-      // Propagate the machine-readable classifier (e.g. 'insufficient_credits') so the client
-      // renders the inline "Add Credits" CTA instead of the dead-end raw error text. Unset for
-      // untagged failures, mirroring the chat reservation path's errorCode handling.
+      // Tag genuine out-of-credits failures so the client renders the "Add Credits" CTA.
       quest.errorCode = getQuestErrorCode(error);
-      await this.db.quests.update(quest);
+      // Targeted partial update (mirrors ImageGeneration/ImageEdit): a full-object update would
+      // re-send a poisoned numeric field (e.g. a non-finite creditsUsed) and throw a CastError,
+      // swallowing the error and leaving the quest stuck forever. This guarantees the error surfaces.
+      await this.db.quests.update({
+        id: quest.id,
+        prompt: quest.prompt,
+        reply: quest.reply,
+        type: quest.type,
+        status: quest.status,
+        errorCode: quest.errorCode,
+        promptMeta: quest.promptMeta,
+      });
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),

@@ -590,9 +590,7 @@ export class ImageEditService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
-      // Propagate the machine-readable classifier (e.g. 'insufficient_credits') so the client
-      // renders the inline "Add Credits" CTA instead of the dead-end raw error text. Unset for
-      // untagged failures, mirroring the chat reservation path's errorCode handling.
+      // Tag genuine out-of-credits failures so the client renders the "Add Credits" CTA.
       quest.errorCode = getQuestErrorCode(error);
       // Targeted partial update (mirrors ImageGeneration's catch): a full-object update would
       // re-send a poisoned numeric field (e.g. a non-finite creditsUsed) and throw a CastError,
