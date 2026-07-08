@@ -47,6 +47,14 @@ vi.mock('@client/lib/entitlements/registry', async () => {
   };
 });
 
+// DB-backed partner rules (issue #293) are resolved through this server module. Mock it so
+// the resolver test stays a pure unit (no DB); the module's own behavior is covered by
+// partnerRules.test.ts. Default: no partner keys, so existing cases are unaffected.
+const mockPartnerEntitlements = vi.fn();
+vi.mock('@server/entitlements/partnerRules', () => ({
+  partnerEntitlementsForEmail: (...args: unknown[]) => mockPartnerEntitlements(...args),
+}));
+
 const findActive = subscriptionRepository.findActiveUserSubscriptions as ReturnType<typeof vi.fn>;
 
 const user = { id: 'u1', tags: ['SomeTag'], isAdmin: false };
@@ -54,6 +62,7 @@ const user = { id: 'u1', tags: ['SomeTag'], isAdmin: false };
 describe('getUserEntitlements', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPartnerEntitlements.mockResolvedValue(new Set<string>());
   });
 
   it('grants keys mapped from active subscription prices, unioned with tag-derived keys', async () => {
@@ -89,6 +98,16 @@ describe('getUserEntitlements', () => {
     await expect(
       getUserEntitlements({ id: 'u5', tags: [], email: 'person@granted.example', emailVerified: false })
     ).resolves.toEqual([]);
+  });
+
+  it('unions DB-backed partner-rule keys on top of the registry grants (issue #293)', async () => {
+    findActive.mockResolvedValue([]);
+    mockPartnerEntitlements.mockResolvedValue(new Set(['partnerproduct:pro']));
+
+    await expect(
+      getUserEntitlements({ id: 'u6', tags: ['SomeTag'], email: 'person@partner.com', emailVerified: true })
+    ).resolves.toEqual(expect.arrayContaining(['sometag', 'partnerproduct:pro']));
+    expect(mockPartnerEntitlements).toHaveBeenCalledWith('person@partner.com', true);
   });
 });
 

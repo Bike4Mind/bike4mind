@@ -35,6 +35,7 @@ export * from './FriendshipTypes';
 export * from './ActivityTypes';
 export * from './BaseTypes';
 export * from './SubscriberTypes';
+export * from './PartnerSignupRuleTypes';
 export * from './ReportTypes';
 export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
