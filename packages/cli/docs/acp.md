@@ -21,6 +21,15 @@ all logging is redirected to stderr. You must be logged in first (`b4m /login`);
 an unauthenticated start fails the first `session/new` with an `auth_required`
 error.
 
+The shared agent stack is bootstrapped once, lazily, on the first session and
+then cached for the life of the process. If that first bootstrap fails - not
+authenticated, or a transient network error reaching the backend - the failure
+is cached too, so every subsequent `session/new` returns the same error until
+the process is restarted. This is deliberate under the fail-closed posture (a
+half-initialized stack is never reused). If sessions keep failing after you fix
+the underlying cause (e.g. you ran `b4m /login`), restart `b4m acp` so it can
+bootstrap again.
+
 ### Zed
 
 Add to your Zed `settings.json`:

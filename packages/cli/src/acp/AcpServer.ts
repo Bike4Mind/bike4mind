@@ -261,15 +261,20 @@ export class AcpServer {
 
       this.activeTurn = { client: ctx, sessionId: params.sessionId, signal: abortController.signal };
 
-      // Confine file tools to this session's cwd, and align the system prompt
-      // with the session's interaction mode.
-      process.chdir(session.cwd);
-      stack.agent.setSystemPrompt(stack.buildPromptForMode(session.mode));
-
-      const detachEvents = this.wireTurnEvents(stack.agent, ctx, params.sessionId, abortController.signal);
-
+      let detachEvents: (() => void) | null = null;
       let result: AgentResult | null = null;
       try {
+        // Confine file tools to this session's cwd, and align the system prompt
+        // with the session's interaction mode. chdir sits inside the try: the
+        // cwd is validated at session/new but can be removed before a later
+        // session/prompt, in which case it throws synchronously - keeping it
+        // here ensures the finally still detaches listeners and clears turn
+        // state instead of leaking them, and the failure surfaces as a clean
+        // RequestError via the catch below.
+        process.chdir(session.cwd);
+        stack.agent.setSystemPrompt(stack.buildPromptForMode(session.mode));
+        detachEvents = this.wireTurnEvents(stack.agent, ctx, params.sessionId, abortController.signal);
+
         result = await stack.agent.run(userText, {
           signal: abortController.signal,
           previousMessages: session.history,
@@ -288,7 +293,7 @@ export class AcpServer {
         );
         throw RequestError.internalError(undefined, error instanceof Error ? error.message : String(error));
       } finally {
-        detachEvents();
+        detachEvents?.();
         requestSignal.removeEventListener('abort', onExternalAbort);
         this.connectionSignal.removeEventListener('abort', onExternalAbort);
         session.abortController = null;
@@ -463,7 +468,11 @@ export class AcpServer {
       kind: toolKind(toolName),
       status: 'pending',
       rawInput: args,
-      content: preview ? [{ type: 'content', content: { type: 'text', text: preview.slice(0, 4000) } }] : undefined,
+      // Slice by code points (spread) rather than UTF-16 code units so the
+      // 4000-char cap never splits a multi-byte character into a lone surrogate.
+      content: preview
+        ? [{ type: 'content', content: { type: 'text', text: [...preview].slice(0, 4000).join('') } }]
+        : undefined,
     };
 
     const decisionController = new AbortController();
