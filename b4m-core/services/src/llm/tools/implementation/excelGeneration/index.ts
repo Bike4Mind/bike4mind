@@ -348,6 +348,18 @@ function buildCellStyle(style: NonNullable<CellStyle>): Partial<CellObject> {
 }
 
 /**
+ * Whether write-excel-file allows a `format` on a cell of the given type. The library THROWS
+ * (rather than ignoring it, as exceljs did) if `format` is set on a String cell with anything
+ * but '@', on a Boolean cell, or on a style-only cell with no type. Number/Date/Formula accept
+ * any format; String accepts only '@'. We never emit Date cells.
+ */
+function formatIsCompatibleWithType(type: CellObject['type'], format: string): boolean {
+  if (type === Number || type === 'Formula') return true;
+  if (type === String) return format === '@';
+  return false;
+}
+
+/**
  * Builds the value/type portion of a cell from a sparse cell definition. Returns null when the
  * cell carries no value and no formula (an empty cell), so callers can skip it.
  */
@@ -398,10 +410,18 @@ function buildSheet(sheetData: ExcelGenerationParams['sheets'][number]): Sheet<B
     const content = buildCellContent(cellData);
     const style = cellData.style ? buildCellStyle(cellData.style) : undefined;
     if (!content && !style) continue;
-    grid[cellData.row - 1][cellData.col - 1] = { ...content, ...style };
+    const cell: CellObject = { ...content, ...style };
+    // Drop a format the cell's type can't carry so a text/boolean cell with a number format
+    // doesn't make write-excel-file throw (exceljs silently ignored it, so this preserves parity).
+    if (cell.format !== undefined && !formatIsCompatibleWithType(cell.type, cell.format)) {
+      delete cell.format;
+    }
+    grid[cellData.row - 1][cellData.col - 1] = cell;
   }
 
-  // Merged cells: put the span on the anchor cell, null out the rest of the range.
+  // Merged cells: put the span on the anchor cell, null out the rest of the range. Track the
+  // covered (hidden) cells: write-excel-file requires them to stay null/undefined.
+  const coveredCells = new Set<string>();
   for (const mc of sheetData.mergedCells ?? []) {
     const anchorRow = mc.startRow - 1;
     const anchorCol = mc.startCol - 1;
@@ -413,19 +433,29 @@ function buildSheet(sheetData: ExcelGenerationParams['sheets'][number]): Sheet<B
     grid[anchorRow][anchorCol] = anchor;
     for (let r = mc.startRow - 1; r <= mc.endRow - 1; r++) {
       for (let c = mc.startCol - 1; c <= mc.endCol - 1; c++) {
-        if (r !== anchorRow || c !== anchorCol) grid[r][c] = null;
+        if (r !== anchorRow || c !== anchorCol) {
+          grid[r][c] = null;
+          coveredCells.add(`${r},${c}`);
+        }
       }
     }
   }
 
-  // Row heights: write-excel-file reads the height from a cell in the row, so attach it to the
-  // first populated cell (or an otherwise-empty anchor cell) in that row.
+  // Row heights: write-excel-file reads the height from a cell in the row, so attach it to a cell
+  // it will actually emit. Prefer an existing populated cell (never a covered one - those were
+  // nulled above). Otherwise create an empty anchor in the first column that is NOT hidden by a
+  // merge; writing into a covered cell would make the library throw. If every column in the row is
+  // covered, there is no cell to carry the height, so skip it rather than crash.
   for (const rh of sheetData.rowHeights ?? []) {
-    const row = grid[rh.row - 1];
+    const rowIndex = rh.row - 1;
+    const row = grid[rowIndex];
     let target = row.find((cell): cell is CellObject => cell !== null);
     if (!target) {
+      let col = 0;
+      while (col < row.length && coveredCells.has(`${rowIndex},${col}`)) col++;
+      if (col >= row.length) continue;
       target = {};
-      row[0] = target;
+      row[col] = target;
     }
     target.height = rh.height;
   }

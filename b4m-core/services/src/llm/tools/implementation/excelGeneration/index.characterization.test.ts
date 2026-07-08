@@ -110,14 +110,19 @@ describe('excel_generation characterization (re-parsed workbook)', () => {
       expect(wb.sheet('Third')!.cell('A1')!.value).toBe('C');
     });
 
-    it('truncates sheet names to 31 characters', async () => {
-      const longName = 'X'.repeat(31); // schema max; longer is rejected before this point
+    it('accepts a sheet name at the 31-character maximum', async () => {
+      const maxName = 'X'.repeat(31); // 31 = MAX_SHEET_NAME_LENGTH (Excel's hard limit)
       const { wb } = await generate({
-        filename: 'longname',
-        sheets: [{ name: longName, data: [{ row: 1, col: 1, value: 'v' }] }],
+        filename: 'maxname',
+        sheets: [{ name: maxName, data: [{ row: 1, col: 1, value: 'v' }] }],
       });
-      expect(wb.sheets[0].name).toBe(longName);
-      expect(wb.sheets[0].name.length).toBe(31);
+      expect(wb.sheets[0].name).toBe(maxName);
+    });
+
+    it('rejects a sheet name longer than 31 characters', async () => {
+      await expect(
+        generate({ filename: 'overname', sheets: [{ name: 'X'.repeat(32), data: [{ row: 1, col: 1, value: 'v' }] }] })
+      ).rejects.toThrow('Invalid parameters');
     });
   });
 
@@ -255,6 +260,36 @@ describe('excel_generation characterization (re-parsed workbook)', () => {
       });
       expect(rgb6(wb.sheet('S')!.cell('A1')!.style!.fontColor)).toBe('000000');
     });
+
+    // write-excel-file throws if a number format lands on a String/Boolean cell (exceljs ignored
+    // it). The tool must drop the incompatible format instead of failing the whole workbook.
+    it('drops a number format on a string cell without crashing', async () => {
+      const { wb } = await generate({
+        filename: 'strfmt',
+        sheets: [{ name: 'S', data: [{ row: 1, col: 1, value: 'label', style: { numberFormat: '#,##0.00' } }] }],
+      });
+      const cell = wb.sheet('S')!.cell('A1')!;
+      expect(cell.value).toBe('label');
+      expect(cell.style?.numberFormat).toBeUndefined();
+    });
+
+    it('drops a number format on a boolean cell without crashing', async () => {
+      const { wb } = await generate({
+        filename: 'boolfmt',
+        sheets: [{ name: 'S', data: [{ row: 1, col: 1, value: true, style: { numberFormat: '0%' } }] }],
+      });
+      const cell = wb.sheet('S')!.cell('A1')!;
+      expect(cell.value).toBe(true);
+      expect(cell.style?.numberFormat).toBeUndefined();
+    });
+
+    it('keeps a number format on a numeric cell', async () => {
+      const { wb } = await generate({
+        filename: 'numfmt',
+        sheets: [{ name: 'S', data: [{ row: 1, col: 1, value: 0.25, style: { numberFormat: '0%' } }] }],
+      });
+      expect(wb.sheet('S')!.cell('A1')!.style!.numberFormat).toBe('0%');
+    });
   });
 
   describe('layout features', () => {
@@ -291,6 +326,26 @@ describe('excel_generation characterization (re-parsed workbook)', () => {
         ],
       });
       expect(wb.sheet('S')!.merges).toContain('A1:C3');
+    });
+
+    // A row height on a row whose only column-1 cell is hidden by a vertical merge used to write a
+    // non-null cell into the covered position, which makes write-excel-file throw. It must not.
+    it('sets a row height on a row whose first column is merge-covered', async () => {
+      const { wb } = await generate({
+        filename: 'merge-rowheight',
+        sheets: [
+          {
+            name: 'S',
+            data: [{ row: 1, col: 1, value: 'label' }],
+            mergedCells: [{ startRow: 1, startCol: 1, endRow: 3, endCol: 1 }], // A1:A3, so A3 is covered
+            rowHeights: [{ row: 3, height: 40 }], // row 3 has no other populated cell
+          },
+        ],
+      });
+      const s = wb.sheet('S')!;
+      expect(s.merges).toContain('A1:A3');
+      // The merge and its anchor value survive; generation did not throw.
+      expect(s.cell('A1')!.value).toBe('label');
     });
 
     it('freezes both axes', async () => {
