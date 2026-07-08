@@ -10,9 +10,17 @@ interface ProjectSidenavItemProps {
   onClick?: () => void;
   isExpanded?: boolean;
   onToggleExpand?: () => void;
+  /** Highlights the row (blue bar + focused bg) when its dedicated project screen is open. */
+  isSelected?: boolean;
 }
 
-const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isExpanded, onToggleExpand }) => {
+const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({
+  project,
+  onClick,
+  isExpanded,
+  onToggleExpand,
+  isSelected,
+}) => {
   const navigate = useNavigate();
   const textRef = useRef<HTMLDivElement>(null);
   const [isTextTruncated, setIsTextTruncated] = useState(false);
@@ -48,6 +56,7 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
       className="project-sidenav-item"
       onClick={handleClick}
       sx={theme => ({
+        position: 'relative',
         borderRadius: '8px',
         // Tighter right padding only when the 24px chevron occupies the right slot.
         padding: onToggleExpand !== undefined && !isEmpty ? '6px 6px 6px 12px' : '6px 12px',
@@ -55,9 +64,24 @@ const ProjectSidenavItem: FC<ProjectSidenavItemProps> = ({ project, onClick, isE
         display: 'flex',
         alignItems: 'center',
         cursor: 'pointer',
-        backgroundColor: 'transparent',
+        backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
+        // Left active-indicator bar, matching the notebook row's selected state.
+        '&::before': isSelected
+          ? {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '2px',
+              height: '80%',
+              // Match the project tag icon's green.
+              backgroundColor: theme.palette.mode === 'dark' ? '#81C784' : '#388E3C',
+              borderRadius: '1px',
+            }
+          : {},
         '&:hover': {
-          backgroundColor: theme.palette.notebooklist.hoverBg,
+          backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
         },
         transition: 'background 0.2s',
       })}

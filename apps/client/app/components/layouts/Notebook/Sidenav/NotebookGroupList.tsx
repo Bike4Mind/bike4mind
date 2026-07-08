@@ -14,6 +14,8 @@ interface NotebookGroupListProps {
   selectedItems: Set<string>;
   favoriteSessions?: ISessionFavoriteItem[];
   showMessageCount: boolean;
+  /** Force all session rows unselected (e.g. while a dedicated project screen is open). */
+  suppressActive?: boolean;
   onNavigate: (path: string) => void;
   onNotebookClick: (session: ISessionDocument) => void;
   onToggle: (id: string) => void;
@@ -31,6 +33,7 @@ export default function NotebookGroupList({
   selectedItems,
   favoriteSessions,
   showMessageCount,
+  suppressActive,
   onNavigate,
   onNotebookClick,
   onToggle,
@@ -83,6 +86,7 @@ export default function NotebookGroupList({
                   isShared={'isShared' in d ? d.isShared : false}
                   favoriteSessions={favoriteSessions}
                   showMessageCount={showMessageCount}
+                  suppressActive={suppressActive}
                   onNavigate={onNavigate}
                   onNotebookClick={onNotebookClick}
                   onToggle={onToggle}
