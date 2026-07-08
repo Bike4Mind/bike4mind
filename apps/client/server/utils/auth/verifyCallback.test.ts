@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AuthStrategy } from '@bike4mind/common';
 import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from './oauthAccountLink';
+import { ForbiddenError } from '@server/utils/errors';
 
 const mockFindOne = vi.fn();
 const mockUpdateOne = vi.fn();
@@ -350,10 +351,14 @@ describe('verifyCallback - new user creation username field', () => {
 });
 
 describe('verifyCallback - catch block surfaces the error', () => {
-  it('logs the exception and passes an info message instead of swallowing silently', async () => {
+  it("logs the exception and attaches a canonical duplicate_account code - raw E11000 text (which can embed another user's identifier) stays in info.message for CloudWatch only, never as the reason itself", async () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-    mockCreate.mockRejectedValueOnce(Object.assign(new Error('E11000 duplicate key error: username'), { code: 11000 }));
+    mockCreate.mockRejectedValueOnce(
+      Object.assign(new Error('E11000 duplicate key error: dup key: { username: "victim@example.com" }'), {
+        code: 11000,
+      })
+    );
 
     const { err, user, info } = await runStandard(AuthStrategy.Github, {
       id: 'github-id-789',
@@ -361,12 +366,41 @@ describe('verifyCallback - catch block surfaces the error', () => {
       emails: [{ value: 'dupe@example.com', verified: true }],
     });
 
-    // done(null, undefined, { message }) - no user, but a non-empty reason
+    // done(null, undefined, { code, message }) - no user, but a canonical reason
     expect(err).toBeNull();
     expect(user).toBeUndefined();
+    expect((info as { code: string }).code).toBe('duplicate_account');
     expect((info as { message: string }).message).toContain('E11000');
     expect(errorSpy).toHaveBeenCalledWith('[verifyCallback] authenticateUser threw:', expect.any(Error));
     // Spy restored failure-safely by the file-level afterEach.
+  });
+
+  it('attaches forbidden_system_user for a ForbiddenError thrown mid-authentication', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockRejectedValueOnce(new ForbiddenError('Cannot authenticate as a system account'));
+
+    const { err, info } = await runStandard(AuthStrategy.Github, {
+      id: 'github-id-sys',
+      username: 'system-handle',
+    });
+
+    expect(err).toBeNull();
+    expect((info as { code: string }).code).toBe('forbidden_system_user');
+  });
+
+  it('default-denies any other thrown error to internal', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockFindOne.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    mockCreate.mockRejectedValueOnce(new Error('connection reset'));
+
+    const { err, info } = await runStandard(AuthStrategy.Github, {
+      id: 'github-id-other',
+      username: 'other-handle',
+    });
+
+    expect(err).toBeNull();
+    expect((info as { code: string }).code).toBe('internal');
   });
 });
 
