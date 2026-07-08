@@ -5,7 +5,7 @@ import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { allSecrets } from './secrets';
-import { cluster, resolvedVpcId } from './vpc';
+import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 
 /**
@@ -24,8 +24,10 @@ import { websocketApi } from './websocket';
  * with the stopTimeout set below.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
- * service's VPC-internal load balancer and gets a 202 back immediately; the service
- * processes the quest in-process and streams results over the existing WebSocket path.
+ * service's load balancer and gets a 202 back immediately; the service processes the quest
+ * in-process and streams results over the existing WebSocket path. The ALB is internet-facing
+ * (CloudFront needs a public origin for the completions path) but its SG ingress is locked to
+ * CloudFront + the VPC NAT egress IP, so /process is not reachable from the open internet.
  *
  * Links/permissions mirror the old Lambda so `processQuest`'s static options resolve
  * identically (DB repos, storage, websocket management endpoint, MCP handler, etc.).
@@ -56,12 +58,15 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
   // out-of-band keeps `sst deploy` build-free, matching subscriberFanout.
   image: chatCompletionImage,
-  // Internet-facing load balancer. Public so the CLI/3rd-party completions endpoint
-  // (/api/ai/v1/completions) can be exposed under the bike4mind domain via the shared
-  // CloudFront router (route added below). /process is also reachable on this ALB but is
-  // NOT routed through CloudFront and stays guarded by the shared-secret bearer checked in
-  // server.ts. NOTE: the frontend Lambda's /process dispatch now targets the public ALB DNS
-  // (Resource.ChatCompletion.url) and egresses via NAT rather than staying VPC-internal.
+  // Internet-facing load balancer. Must be public so CloudFront can reach it as an origin:
+  // the completions endpoint (/api/ai/v1/completions) is served via the shared CloudFront
+  // router (route below), and SST's router uses a standard custom origin - CloudFront's edge
+  // connects to the ALB's public DNS over the internet, so an `internal` ALB is unreachable.
+  // /process rides the same ALB (NOT routed through CloudFront). To keep /process off the open
+  // internet despite the public ALB, its SG ingress is locked (transform.loadBalancerSecurityGroup
+  // below) to exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend
+  // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
+  // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
   loadBalancer: {
     public: true,
     rules: [{ listen: '80/http', forward: '8080/http' }],
@@ -133,6 +138,48 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
         for (const def of defs) def.stopTimeout = 120;
         return JSON.stringify(defs);
       });
+    },
+    // Lock the public ALB's ingress to its two legitimate sources so /process is NOT reachable
+    // from the open internet (defense-in-depth on top of the CHAT_COMPLETION_INTERNAL_SECRET
+    // bearer). SST's default SG opens 0.0.0.0/0; replace its ingress on the listener port with:
+    //   1. CloudFront's origin-facing edge IPs -> /api/ai/v1/completions (the only route CloudFront
+    //      forwards here; CF terminates TLS + fronts WAF at the edge).
+    //   2. The VPC NAT egress IP -> the frontend Lambda's /process dispatch (it hairpins out through
+    //      NAT to the ALB's public DNS - see the loadBalancer note above).
+    // Health checks hit the tasks on 8080 via a separate SG rule, so they are unaffected.
+    loadBalancerSecurityGroup: sgArgs => {
+      const cloudfrontPrefixListId = aws.ec2.getManagedPrefixListOutput({
+        name: 'com.amazonaws.global.cloudfront.origin-facing',
+      }).id;
+
+      // NAT public IP(s): a managed NAT Gateway in the shared env VPC (VPC_ID set), or the EC2
+      // NAT instance's Elastic IP in a self-provisioned VPC (VPC_ID unset). See infra/vpc.ts.
+      const natCidrs = vpcId
+        ? aws.ec2
+            .getNatGatewaysOutput({ filters: [{ name: 'vpc-id', values: [resolvedVpcId] }] })
+            .ids.apply(ids => $util.all(ids.map(id => aws.ec2.getNatGatewayOutput({ id }).publicIp)))
+            .apply(ips => ips.map(ip => `${ip}/32`))
+        : vpc!.nodes.elasticIps
+            .apply(eips => $util.all(eips.map(e => e.publicIp)))
+            .apply(ips => ips.map(ip => `${ip}/32`));
+
+      sgArgs.ingress = $util.all([cloudfrontPrefixListId, natCidrs]).apply(([plId, cidrs]) => [
+        {
+          protocol: 'tcp',
+          fromPort: 80,
+          toPort: 80,
+          prefixListIds: [plId],
+          description: 'CloudFront edge -> public /api/ai/v1/completions',
+        },
+        {
+          protocol: 'tcp',
+          fromPort: 80,
+          toPort: 80,
+          cidrBlocks: cidrs,
+          description: 'VPC NAT egress -> internal /process dispatch',
+        },
+      ]);
+      // egress left at SST's default (0.0.0.0/0): the ALB must reach the tasks.
     },
   },
   // Local `sst dev`: run the server directly with tsx instead of building the image.
