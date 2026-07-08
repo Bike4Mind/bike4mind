@@ -79,6 +79,10 @@ export const DEFAULT_WRITE_TOOLS = new Set([
   'delete_file',
   'shell_execute',
   'bash_execute',
+  // Background-shell mutators (writing stdin / killing a process are actions, not reads).
+  // check_shell_output and list_background_shells are read-only and stay parallelizable.
+  'write_shell_stdin',
+  'kill_background_shell',
   'git_commit',
   'git_push',
 ]);

@@ -22,6 +22,12 @@ import { editLocalFileTool } from './implementation/editLocalFile';
 import { recentChangesTool } from './implementation/recentChanges';
 import { askUserQuestionTool } from './implementation/askUserQuestion';
 import {
+  checkShellOutputTool,
+  writeShellStdinTool,
+  listBackgroundShellsTool,
+  killBackgroundShellTool,
+} from './implementation/shellSession';
+import {
   latticeCreateModelTool,
   latticeAddEntityTool,
   latticeSetValueTool,
@@ -80,6 +86,11 @@ export const getCliOnlyTools = async (): Promise<{
     delete_file: deleteFileTool,
     // Shell execution
     bash_execute: bashExecuteTool,
+    // Background shell sessions (poll/stdin/list/kill for backgrounded bash_execute)
+    check_shell_output: checkShellOutputTool,
+    write_shell_stdin: writeShellStdinTool,
+    list_background_shells: listBackgroundShellsTool,
+    kill_background_shell: killBackgroundShellTool,
     // Git operations
     recent_changes: recentChangesTool,
 
