@@ -10,7 +10,9 @@ const COMPLETED_DISPLAY_MS = 4000;
 
 const MAX_COMMAND_LENGTH = 60;
 
-const TERMINAL_ICON: Record<Exclude<ShellSessionStatus, 'running'>, { symbol: string; color: string }> = {
+type TerminalShellStatus = Exclude<ShellSessionStatus, 'running'>;
+
+const TERMINAL_ICON: Record<TerminalShellStatus, { symbol: string; color: string }> = {
   exited: { symbol: '✔', color: 'green' }, // check
   killed: { symbol: '✕', color: 'yellow' }, // x
   timed_out: { symbol: '⏱', color: 'yellow' }, // stopwatch
@@ -39,7 +41,8 @@ const RunningItem = React.memo(function RunningItem({ session }: { session: Shel
 
 /** A finished session: status icon + command + exit code, shown briefly. */
 const CompletedItem = React.memo(function CompletedItem({ session }: { session: ShellSession }) {
-  const icon = session.status === 'running' ? { symbol: '?', color: 'gray' } : TERMINAL_ICON[session.status];
+  // Only ever rendered for terminal sessions (selectCompletedBackgroundShells).
+  const icon = TERMINAL_ICON[session.status as TerminalShellStatus];
   const outcome = session.exitCode !== null ? `exit ${session.exitCode}` : session.status;
   return (
     <Box>

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render } from 'ink-testing-library';
 import { BackgroundShellStatus } from './BackgroundShellStatus';
@@ -72,6 +72,22 @@ describe('BackgroundShellStatus', () => {
     expect(lastFrame()).toContain('2 shells running');
     // No per-command spinner lines while the prompt owns the keyboard.
     expect(lastFrame()).not.toContain('$ pnpm dev');
+  });
+
+  it('auto-clears finished sessions from the store after the display window', () => {
+    vi.useFakeTimers();
+    try {
+      useCliStore.setState({
+        backgroundShells: [makeSession({ id: 'sh-done', status: 'exited', command: 'ls', exitCode: 0, endTime: 0 })],
+      });
+      render(<BackgroundShellStatus />);
+      expect(useCliStore.getState().backgroundShells).toHaveLength(1);
+
+      vi.advanceTimersByTime(4000);
+      expect(useCliStore.getState().backgroundShells).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('truncates long commands', () => {
