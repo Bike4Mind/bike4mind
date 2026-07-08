@@ -1,11 +1,10 @@
 import { useCallback, useMemo, useRef } from 'react';
 import perfLogger from '../utils/performanceLogger';
 import {
-  parseArtifacts,
+  parseArtifactsWithFallback,
   extractReactDependencies,
   checkHasDefaultExport,
   generateCompleteArtifactId,
-  convertCodeBlocksToArtifacts,
   getArtifactTimestamp,
 } from '../utils/artifactParser';
 import { persistArtifacts } from '../utils/artifactPersistence';
@@ -37,16 +36,9 @@ export function useStreamingArtifactPersistence() {
 
       const allReplies = quest.replies.join('\n');
 
-      // First try to parse existing artifact tags
-      let parseResult = parseArtifacts(allReplies);
-
-      // If no artifacts found, try converting code blocks to artifacts
-      if (parseResult.artifacts.length === 0) {
-        const convertedContent = convertCodeBlocksToArtifacts(allReplies);
-        parseResult = parseArtifacts(convertedContent);
-      }
-
-      const { artifacts } = parseResult;
+      // Parse explicit artifact tags, then promote any bare/fenced HTML document left in the
+      // prose and merge it in, so persistence matches what the render path shows.
+      const { artifacts } = parseArtifactsWithFallback(allReplies);
 
       if (artifacts.length === 0) {
         return;
