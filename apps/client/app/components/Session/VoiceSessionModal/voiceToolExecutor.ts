@@ -152,7 +152,7 @@ async function executeCurrentDateTime(): Promise<string> {
 }
 
 /**
- * Route request through the full ChatCompletionService agent loop, giving voice
+ * Route request through the full ChatCompletion agent loop, giving voice
  * users access to the same tools, RAG, QuestMaster, and MCP integrations as text chat.
  *
  * Uses wait=false to dispatch through the normal async pipeline, then awaits the

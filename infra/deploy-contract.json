@@ -2,9 +2,9 @@
   "schemaVersion": 1,
   "builtImages": [
     {
-      "name": "quest-processor",
-      "dockerfile": "apps/client/Dockerfile.quest-service",
-      "env": "QUEST_PROCESSOR_IMAGE"
+      "name": "chat-completion",
+      "dockerfile": "apps/client/Dockerfile.chatcompletion",
+      "env": "CHAT_COMPLETION_IMAGE"
     }
   ],
   "externalImages": [

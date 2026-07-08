@@ -17,8 +17,8 @@ export { imageProcessor };
  *
  * Handles Slack-originated completion requests routed via SlackEventBus.
  * Owns all Slack-specific logic (tools, pending actions, async notification).
- * Web-originated completions are handled by the always-on QuestProcessorService
- * (infra/questProcessorService.ts), not a Lambda.
+ * Web-originated completions are handled by the always-on ChatCompletion
+ * (infra/chatCompletion.ts), not a Lambda.
  */
 export const slackQuestProcessor = new sst.aws.Function('SlackQuestProcessor', {
   handler: 'apps/client/server/queueHandlers/slackQuestProcessor.handler',

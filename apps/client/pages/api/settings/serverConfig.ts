@@ -19,7 +19,11 @@ export type ToolAvailability = Partial<Record<B4MLLMTools, boolean>>;
 export type ServerConfig = {
   websocketUrl: string;
   wsCompletionUrl: string;
-  /** Direct Lambda function URL for SSE completions. Empty when CliLlmHandler is not linked. */
+  /**
+   * Optional direct URL for SSE completions. Always empty now that completions are served by
+   * the always-on ChatCompletion service under the app domain: the CLI falls back to the
+   * CloudFront-fronted `/api/ai/v1/completions` path (HTTPS + WAF). Kept for wire-compat.
+   */
   completionsUrl: string;
   appfileBucketName: string;
   fabfileBucketName: string;
@@ -44,8 +48,9 @@ const handler = baseApi({ auth: true }).get(
         'CliWsCompletionHandler' in Resource
           ? (Resource as unknown as Record<string, { url: string }>).CliWsCompletionHandler.url
           : '',
-      completionsUrl:
-        'CliLlmHandler' in Resource ? (Resource as unknown as Record<string, { url: string }>).CliLlmHandler.url : '',
+      // Served by the ChatCompletion service via CloudFront at /api/ai/v1/completions; no
+      // direct function URL to advertise. Empty -> the CLI uses that same-origin path.
+      completionsUrl: '',
       appfileBucketName: Resource.appFilesBucket.name,
       fabfileBucketName: Resource.fabFileBucket.name,
       // Sanitize placeholder values - don't expose 'not-configured' to frontend

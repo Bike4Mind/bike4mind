@@ -40,6 +40,12 @@ export const secrets = {
   SECRET_ENCRYPTION_KEY: new sst.Secret('SECRET_ENCRYPTION_KEY', 'my-secret-placeholder-value'),
   // Previous encryption key for key rotation — set this to the old key when rotating
   SECRET_ENCRYPTION_KEY_PREVIOUS: new sst.Secret('SECRET_ENCRYPTION_KEY_PREVIOUS', 'not-configured'),
+  // Shared-secret bearer authenticating the frontend's internal /process dispatch to the
+  // always-on ChatCompletion service (see server/utils/dispatchQuest.ts +
+  // server/chatCompletion/internal/route.ts). Dedicated so the AES encryption key
+  // (SECRET_ENCRYPTION_KEY) is never presented as a network auth token. Rotate freely.
+  // Generate with: openssl rand -hex 32
+  CHAT_COMPLETION_INTERNAL_SECRET: new sst.Secret('CHAT_COMPLETION_INTERNAL_SECRET', 'my-secret-placeholder-value'),
   // Secrets for Website Security (OWASP ZAP) integration
   // Configure these per environment using `sst secret set` and mirror them
   // into the corresponding GitHub environment secrets.
