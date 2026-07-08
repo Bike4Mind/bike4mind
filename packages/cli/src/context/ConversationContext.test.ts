@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
 import type { MessageContentObject } from '@bike4mind/common';
-import { ConversationContext, DEFAULT_TOOL_TRACE_REPLAY_TOKENS } from './ConversationContext.js';
+import { ConversationContext, DEFAULT_TOOL_TRACE_REPLAY_TOKENS, reconstructTurnBlocks } from './ConversationContext.js';
 import { getTokenCounter } from '../utils/tokenCounter.js';
 import type { Message, Session } from '../storage/types.js';
 
@@ -247,6 +247,85 @@ describe('ConversationContext', () => {
       const built = ctx.buildTurnMessages('follow up', OPTS);
       const replayedUser = built.find(m => Array.isArray(m.content))!;
       expect(replayedUser.content).toEqual(blocks);
+    });
+  });
+
+  describe('buildPreviousMessages (host integration seam)', () => {
+    it('returns the windowed history WITHOUT the current input appended', () => {
+      const ctx = ConversationContext.fromSession(
+        session([msg('user', 'first', 0), msg('assistant', 'first reply', 1)])
+      );
+      const prev = ctx.buildPreviousMessages('next', OPTS);
+      // Same as buildTurnMessages minus the trailing current-input message.
+      expect(prev).toEqual([
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'first reply' },
+      ]);
+      expect(ctx.buildTurnMessages('next', OPTS)).toEqual([...prev, { role: 'user', content: 'next' }]);
+    });
+
+    it('reserves room for the current input when windowing', () => {
+      const ctx = ConversationContext.fromSession(
+        session([msg('user', 'old question with padding words here', 0), msg('assistant', 'old answer', 1)])
+      );
+      const hugeInput = 'word '.repeat(200);
+      const prev = ctx.buildPreviousMessages(hugeInput, { model: 'm', contextWindow: 60, reservedTokens: 0 });
+      // The current input alone blows the budget, so no history survives.
+      expect(prev).toHaveLength(0);
+    });
+  });
+
+  describe('needsCompaction (compaction trigger)', () => {
+    function bigSession(): Session {
+      const messages: Message[] = [];
+      for (let i = 0; i < 20; i++) {
+        messages.push(msg('user', `question ${i} ${'padding '.repeat(20)}`, i * 2));
+        messages.push(msg('assistant', `answer ${i} ${'padding '.repeat(20)}`, i * 2 + 1));
+      }
+      return session(messages);
+    }
+
+    it('fires when the full session plus system prompt crosses the threshold', () => {
+      const ctx = ConversationContext.fromSession(bigSession());
+      // Measured session is well over 80% of a tiny window.
+      expect(ctx.needsCompaction(0, { model: 'm', contextWindow: 500 }, 0.8)).toBe(true);
+    });
+
+    it('does not fire for a small session in a large window', () => {
+      const ctx = ConversationContext.fromSession(session([msg('user', 'hi', 0), msg('assistant', 'hello', 1)]));
+      expect(ctx.needsCompaction(100, { model: 'm', contextWindow: 200_000 }, 0.8)).toBe(false);
+    });
+
+    it('counts the system prompt toward the threshold', () => {
+      const ctx = ConversationContext.fromSession(session([msg('user', 'hi', 0), msg('assistant', 'hello', 1)]));
+      const window = 1_000;
+      // Tiny message body alone is under 80%, but a large system prompt pushes it over.
+      expect(ctx.needsCompaction(0, { model: 'm', contextWindow: window }, 0.8)).toBe(false);
+      expect(ctx.needsCompaction(900, { model: 'm', contextWindow: window }, 0.8)).toBe(true);
+    });
+  });
+
+  describe('reconstructTurnBlocks (exported for host write paths)', () => {
+    it('pairs actions to observations by FIFO order and appends the final answer', () => {
+      const r = result('summary', [
+        { name: 'first_tool', input: { a: 1 }, result: 'r1' },
+        { name: 'second_tool', input: { b: 2 }, result: 'r2' },
+      ]);
+      const blocks = reconstructTurnBlocks(r.steps, r.finalAnswer)!;
+      const uses = blocks.filter(b => b.type === 'tool_use');
+      const results = blocks.filter(b => b.type === 'tool_result');
+      expect(uses).toHaveLength(2);
+      expect(results).toHaveLength(2);
+      // FIFO: first result pairs to first use.
+      expect(results[0].type === 'tool_result' && results[0].tool_use_id).toBe(
+        uses[0].type === 'tool_use' && uses[0].id
+      );
+      expect(blocks[blocks.length - 1]).toEqual({ type: 'text', text: 'summary' });
+    });
+
+    it('returns undefined when the turn used no tools', () => {
+      const r = result('just talking');
+      expect(reconstructTurnBlocks(r.steps, r.finalAnswer)).toBeUndefined();
     });
   });
 });

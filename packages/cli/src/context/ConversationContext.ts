@@ -96,29 +96,41 @@ export class ConversationContext {
    * dropped (the protected suffix).
    */
   buildTurnMessages(newInput: UserInput, opts: BuildOptions): IMessage[] {
-    const reserved = opts.reservedTokens ?? DEFAULT_RESERVED_TOKENS;
-    const budget = opts.contextWindow - reserved;
+    return [...this.windowedHistory(newInput, opts), this.inputToIMessage(newInput)];
+  }
 
-    const currentMessage = this.inputToIMessage(newInput);
-    const currentTokens = this.estimateTokens(currentMessage);
+  /**
+   * The windowed history only, WITHOUT the current input appended. Convenience
+   * for hosts whose agent API takes the current input as a separate query and
+   * the history as `previousMessages` (e.g. the CLI's `agent.run`). Budgeting
+   * still reserves room for `newInput`, so the two together fit the window.
+   */
+  buildPreviousMessages(newInput: UserInput, opts: BuildOptions): IMessage[] {
+    return this.windowedHistory(newInput, opts);
+  }
 
-    const history = this.messages
+  /**
+   * Whether the session should be compacted before the next turn. Measures the
+   * FULL session (not the windowed subset) as it would actually be sent -
+   * rendering each turn's bounded tool trace - plus the system prompt, and
+   * compares against `thresholdRatio` of the context window. Rich-content aware:
+   * replaces the old string-only `content` sum so a session whose weight lives
+   * in tool traces still triggers compaction.
+   */
+  needsCompaction(systemPromptTokens: number, opts: BuildOptions, thresholdRatio = 0.8): boolean {
+    return this.estimateSessionTokens(systemPromptTokens, opts) >= opts.contextWindow * thresholdRatio;
+  }
+
+  /**
+   * Rich-aware token estimate for the whole session as it would be replayed:
+   * every user/assistant turn rendered (bounded tool traces included) plus the
+   * system prompt. Used by `needsCompaction`.
+   */
+  estimateSessionTokens(systemPromptTokens: number, opts: BuildOptions): number {
+    const rendered = this.messages
       .filter(m => m.role === 'user' || m.role === 'assistant')
-      .map(m => this.renderHistoryMessage(m, opts));
-
-    // Fill from newest to oldest while the budget (after reserving the current
-    // input) holds. Stop at the first turn that no longer fits so the kept set
-    // is always the most-recent contiguous window.
-    let remaining = budget - currentTokens;
-    const kept: IMessage[] = [];
-    for (let i = history.length - 1; i >= 0; i--) {
-      const cost = this.estimateTokens(history[i]);
-      if (cost > remaining) break;
-      remaining -= cost;
-      kept.unshift(history[i]);
-    }
-
-    return [...kept, currentMessage];
+      .reduce((sum, m) => sum + this.estimateTokens(this.renderHistoryMessage(m, opts)), 0);
+    return systemPromptTokens + rendered;
   }
 
   /** Serialize back to a Session for on-disk persistence (rich content preserved). */
@@ -131,6 +143,32 @@ export class ConversationContext {
   }
 
   // --- internals -----------------------------------------------------------
+
+  /**
+   * The most-recent contiguous window of history that fits the token budget
+   * after reserving room for the system prompt, the response, and the current
+   * input. Fills newest-first and stops at the first turn that no longer fits,
+   * so the oldest turns are dropped first and the current input is never
+   * crowded out.
+   */
+  private windowedHistory(newInput: UserInput, opts: BuildOptions): IMessage[] {
+    const reserved = opts.reservedTokens ?? DEFAULT_RESERVED_TOKENS;
+    const currentTokens = this.estimateTokens(this.inputToIMessage(newInput));
+
+    const history = this.messages
+      .filter(m => m.role === 'user' || m.role === 'assistant')
+      .map(m => this.renderHistoryMessage(m, opts));
+
+    let remaining = opts.contextWindow - reserved - currentTokens;
+    const kept: IMessage[] = [];
+    for (let i = history.length - 1; i >= 0; i--) {
+      const cost = this.estimateTokens(history[i]);
+      if (cost > remaining) break;
+      remaining -= cost;
+      kept.unshift(history[i]);
+    }
+    return kept;
+  }
 
   private buildUserMessage(input: UserInput): Message {
     const base = {
@@ -150,7 +188,7 @@ export class ConversationContext {
   }
 
   private buildAssistantMessage(result: AgentResult): Message {
-    const richContent = this.stepsToBlocks(result.steps, result.finalAnswer);
+    const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
     return {
       id: uuidv4(),
       role: 'assistant',
@@ -160,64 +198,6 @@ export class ConversationContext {
       // stays string-only so it round-trips identically to a legacy message.
       ...(richContent ? { richContent } : {}),
     };
-  }
-
-  /**
-   * Reconstruct tool_use / tool_result blocks from the agent's steps, pairing
-   * each observation to the earliest still-unmatched action (FIFO). This is
-   * exact for sequential tool use; with parallel execution the pairing is
-   * best-effort by order, which is fine for context replay. Returns undefined
-   * when the turn used no tools (so the message stays string-only).
-   */
-  private stepsToBlocks(steps: AgentStep[], finalAnswer: string): MessageContentObject[] | undefined {
-    const blocks: MessageContentObject[] = [];
-    const pendingIds: string[] = [];
-    let toolCounter = 0;
-
-    for (const step of steps) {
-      if (step.type === 'action') {
-        const id = `tu_${toolCounter++}`;
-        pendingIds.push(id);
-        const toolUse: MessageContentToolUse = {
-          type: 'tool_use',
-          id,
-          name: step.metadata?.toolName ?? 'unknown',
-          input: this.normalizeToolInput(step.metadata?.toolInput),
-        };
-        blocks.push(toolUse);
-      } else if (step.type === 'observation') {
-        const id = pendingIds.shift() ?? `tu_${toolCounter++}`;
-        const toolResult: MessageContentToolResult = {
-          type: 'tool_result',
-          tool_use_id: id,
-          content: typeof step.content === 'string' ? step.content : String(step.content ?? ''),
-        };
-        blocks.push(toolResult);
-      }
-    }
-
-    if (blocks.length === 0) return undefined;
-
-    blocks.push({ type: 'text', text: finalAnswer });
-    return blocks;
-  }
-
-  private normalizeToolInput(input: unknown): { [key: string]: unknown } {
-    if (input && typeof input === 'object' && !Array.isArray(input)) {
-      return input as { [key: string]: unknown };
-    }
-    if (typeof input === 'string') {
-      try {
-        const parsed = JSON.parse(input);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          return parsed as { [key: string]: unknown };
-        }
-      } catch {
-        // fall through to wrapping the raw string
-      }
-      return { value: input };
-    }
-    return {};
   }
 
   /** Map a persisted message to the IMessage the agent replays as history. */
@@ -286,4 +266,66 @@ export class ConversationContext {
   private estimateTokens(message: IMessage): number {
     return this.counter.countMessageContent(message.content as MessageContent);
   }
+}
+
+/**
+ * Reconstruct tool_use / tool_result blocks from the agent's steps, pairing
+ * each observation to the earliest still-unmatched action (FIFO). This is exact
+ * for sequential tool use; with parallel execution the pairing is best-effort by
+ * order, which is fine for context replay. Returns undefined when the turn used
+ * no tools (so the message stays string-only and round-trips like a legacy one).
+ *
+ * Exported so hosts that manage their own message store (e.g. the CLI's live
+ * pending-message UI) can attach the rich trace to their assistant message
+ * without going through `recordTurn`.
+ */
+export function reconstructTurnBlocks(steps: AgentStep[], finalAnswer: string): MessageContentObject[] | undefined {
+  const blocks: MessageContentObject[] = [];
+  const pendingIds: string[] = [];
+  let toolCounter = 0;
+
+  for (const step of steps) {
+    if (step.type === 'action') {
+      const id = `tu_${toolCounter++}`;
+      pendingIds.push(id);
+      const toolUse: MessageContentToolUse = {
+        type: 'tool_use',
+        id,
+        name: step.metadata?.toolName ?? 'unknown',
+        input: normalizeToolInput(step.metadata?.toolInput),
+      };
+      blocks.push(toolUse);
+    } else if (step.type === 'observation') {
+      const id = pendingIds.shift() ?? `tu_${toolCounter++}`;
+      const toolResult: MessageContentToolResult = {
+        type: 'tool_result',
+        tool_use_id: id,
+        content: typeof step.content === 'string' ? step.content : String(step.content ?? ''),
+      };
+      blocks.push(toolResult);
+    }
+  }
+
+  if (blocks.length === 0) return undefined;
+
+  blocks.push({ type: 'text', text: finalAnswer });
+  return blocks;
+}
+
+function normalizeToolInput(input: unknown): { [key: string]: unknown } {
+  if (input && typeof input === 'object' && !Array.isArray(input)) {
+    return input as { [key: string]: unknown };
+  }
+  if (typeof input === 'string') {
+    try {
+      const parsed = JSON.parse(input);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return parsed as { [key: string]: unknown };
+      }
+    } catch {
+      // fall through to wrapping the raw string
+    }
+    return { value: input };
+  }
+  return {};
 }
