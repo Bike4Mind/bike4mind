@@ -1,4 +1,4 @@
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Avatar, Box, Chip, CircularProgress, Divider, IconButton, Radio, Stack, Typography } from '@mui/joy';
 import { useColorScheme, useTheme } from '@mui/joy/styles';
 import { useNavigate } from '@tanstack/react-router';
@@ -226,6 +226,7 @@ const ProfileMenu = () => {
   const { mutate: logout, isPending: isPendingLogout } = useUserLogout();
   const appVersion = useAppVersion();
 
+  const rootRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [isCreditsModalOpen, setIsCreditsModalOpen] = useState(false);
@@ -235,6 +236,29 @@ const ProfileMenu = () => {
     setOpen(false);
     setMoreOpen(false);
   };
+
+  // Dismiss the menu on any pointer-down outside the whole profile control, or on Escape.
+  // A DOM-level listener is used instead of a fixed-position overlay: the sidebar wrapper
+  // carries a `transform` (see Sidenav index.tsx), which traps `position: fixed` to the
+  // sidebar box, so an overlay would only cover the sidebar and leave clicks in the main
+  // content area unable to close the menu.
+  useEffect(() => {
+    if (!open) return;
+    const handlePointerDown = (e: MouseEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) {
+        closeAll();
+      }
+    };
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') closeAll();
+    };
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [open]);
 
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
@@ -248,322 +272,319 @@ const ProfileMenu = () => {
   });
 
   return (
-    <Box sx={{ position: 'relative' }}>
+    <Box ref={rootRef} sx={{ position: 'relative' }}>
       {open && (
-        <>
-          <Box onClick={closeAll} sx={{ position: 'fixed', inset: 0, zIndex: 10000 }} />
-          <Box
-            data-testid="profile-menu-panel"
-            role="menu"
-            sx={theme2 => ({
-              ...panelSx(theme2),
-              backgroundColor: theme2.palette.background.surface, // #0E1214 in dark
-              borderRadius: '8px',
-              boxShadow: 'none',
-              position: 'absolute',
-              bottom: 'calc(100% + 8px)',
-              left: 0,
-              right: 0,
-              zIndex: 10001,
-            })}
-          >
-            <Stack sx={{ gap: 1, p: 0.5 }}>
-              {accounts.map(account => (
-                <AccountCard
-                  key={account.id}
-                  name={stripPersonalSuffix(account.name)}
-                  typeLabel={showAccountType ? (account.personal ? '(Personal)' : '(Team)') : null}
-                  credits={account.credits}
-                  selected={selectedAccount?.id === account.id}
-                  onSelect={() => setSelectedAccount(account)}
-                  bare={accounts.length === 1}
-                />
-              ))}
-            </Stack>
-
-            <Divider sx={{ my: 1 }} />
-
-            {isAdmin && (
-              <MenuRow
-                testId="profile-menu-admin"
-                icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
-                label={t('admin.title', 'Admin')}
-                onClick={() => {
-                  navigate({ to: '/admin' });
-                  setOpen(false);
-                }}
+        <Box
+          data-testid="profile-menu-panel"
+          role="menu"
+          sx={theme2 => ({
+            ...panelSx(theme2),
+            backgroundColor: theme2.palette.background.surface, // #0E1214 in dark
+            borderRadius: '8px',
+            boxShadow: 'none',
+            position: 'absolute',
+            bottom: 'calc(100% + 8px)',
+            left: 0,
+            right: 0,
+            zIndex: 10001,
+          })}
+        >
+          <Stack sx={{ gap: 1, p: 0.5 }}>
+            {accounts.map(account => (
+              <AccountCard
+                key={account.id}
+                name={stripPersonalSuffix(account.name)}
+                typeLabel={showAccountType ? (account.personal ? '(Personal)' : '(Team)') : null}
+                credits={account.credits}
+                selected={selectedAccount?.id === account.id}
+                onSelect={() => setSelectedAccount(account)}
+                bare={accounts.length === 1}
               />
-            )}
-            <MenuRow
-              testId="profile-menu-profile"
-              icon={<ManageAccountsIcon sx={{ fontSize: '18px' }} />}
-              label={t('profile.title', 'Profile')}
-              endDecorator={
-                friendRequests?.length ? (
-                  <Chip size="sm" color="danger" variant="solid">
-                    {friendRequests.length}
-                  </Chip>
-                ) : undefined
-              }
-              onClick={() => {
-                navigate({ to: '/profile' });
-                setOpen(false);
-              }}
-            />
-            <MenuRow
-              testId="profile-menu-skills"
-              icon={<ExtensionIcon sx={{ fontSize: '18px' }} />}
-              label={t('skills.title', 'Skills')}
-              onClick={() => {
-                navigate({ to: '/skills' });
-                setOpen(false);
-              }}
-            />
-            <MenuRow
-              testId="profile-menu-teams"
-              icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
-              label={t('organization.teams', 'Teams')}
-              onClick={() => {
-                navigate({ to: '/organizations' });
-                setOpen(false);
-              }}
-            />
-            {isCreditsEnabled && (
-              <MenuRow
-                testId="profile-menu-credits"
-                icon={<Bike4MindIcon size="18" />}
-                label={t('credits.title', 'Credits')}
-                onClick={() => {
-                  logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
-                  setIsCreditsModalOpen(true);
-                  setOpen(false);
-                }}
-              />
-            )}
-            {isCreditsEnabled && (
-              <MenuRow
-                testId="profile-menu-subscriptions"
-                icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
-                label={t('subscriptions.title', 'Subscriptions')}
-                onClick={() => {
-                  setIsSubscriptionModalOpen(true);
-                  setOpen(false);
-                }}
-              />
-            )}
-            <MenuRow
-              testId="profile-menu-help"
-              icon={<HelpCenterIcon sx={{ fontSize: '18px' }} />}
-              label={t('help.center', 'Help Center')}
-              onClick={() => {
-                openHelpPanel();
-                setOpen(false);
-              }}
-            />
+            ))}
+          </Stack>
 
-            {modeToggleEnabled && (
+          <Divider sx={{ my: 1 }} />
+
+          {isAdmin && (
+            <MenuRow
+              testId="profile-menu-admin"
+              icon={<AdminPanelSettingsIcon sx={{ fontSize: '18px' }} />}
+              label={t('admin.title', 'Admin')}
+              onClick={() => {
+                navigate({ to: '/admin' });
+                setOpen(false);
+              }}
+            />
+          )}
+          <MenuRow
+            testId="profile-menu-profile"
+            icon={<ManageAccountsIcon sx={{ fontSize: '18px' }} />}
+            label={t('profile.title', 'Profile')}
+            endDecorator={
+              friendRequests?.length ? (
+                <Chip size="sm" color="danger" variant="solid">
+                  {friendRequests.length}
+                </Chip>
+              ) : undefined
+            }
+            onClick={() => {
+              navigate({ to: '/profile' });
+              setOpen(false);
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-skills"
+            icon={<ExtensionIcon sx={{ fontSize: '18px' }} />}
+            label={t('skills.title', 'Skills')}
+            onClick={() => {
+              navigate({ to: '/skills' });
+              setOpen(false);
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-teams"
+            icon={<BusinessIcon sx={{ fontSize: '18px' }} />}
+            label={t('organization.teams', 'Teams')}
+            onClick={() => {
+              navigate({ to: '/organizations' });
+              setOpen(false);
+            }}
+          />
+          {isCreditsEnabled && (
+            <MenuRow
+              testId="profile-menu-credits"
+              icon={<Bike4MindIcon size="18" />}
+              label={t('credits.title', 'Credits')}
+              onClick={() => {
+                logEvent.mutate({ type: UiNavigationEvents.MORE_CREDITS_CLICKED });
+                setIsCreditsModalOpen(true);
+                setOpen(false);
+              }}
+            />
+          )}
+          {isCreditsEnabled && (
+            <MenuRow
+              testId="profile-menu-subscriptions"
+              icon={<MonetizationOnIcon sx={{ fontSize: '18px' }} />}
+              label={t('subscriptions.title', 'Subscriptions')}
+              onClick={() => {
+                setIsSubscriptionModalOpen(true);
+                setOpen(false);
+              }}
+            />
+          )}
+          <MenuRow
+            testId="profile-menu-help"
+            icon={<HelpCenterIcon sx={{ fontSize: '18px' }} />}
+            label={t('help.center', 'Help Center')}
+            onClick={() => {
+              openHelpPanel();
+              setOpen(false);
+            }}
+          />
+
+          {modeToggleEnabled && (
+            <Box
+              sx={theme2 => ({
+                display: 'flex',
+                alignItems: 'center',
+                gap: '12px',
+                px: '10px',
+                height: '40px',
+                color: theme2.palette.sidenav?.navItemText,
+              })}
+            >
+              <Box
+                sx={theme2 => ({
+                  width: 22,
+                  height: 22,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  '--Icon-color': theme2.palette.text.tertiary,
+                })}
+              >
+                <Brightness4Icon sx={{ fontSize: '18px' }} />
+              </Box>
+              <Typography level="body-sm" sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }}>
+                {t('theme.title', 'Theme')}
+              </Typography>
               <Box
                 sx={theme2 => ({
                   display: 'flex',
-                  alignItems: 'center',
-                  gap: '12px',
-                  px: '10px',
-                  height: '40px',
-                  color: theme2.palette.sidenav?.navItemText,
+                  gap: '2px',
+                  p: '2px',
+                  border: `1px solid ${theme2.palette.neutral.outlinedBorder}`,
+                  borderRadius: '999px',
                 })}
               >
-                <Box
-                  sx={theme2 => ({
-                    width: 22,
-                    height: 22,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    '--Icon-color': theme2.palette.text.tertiary,
-                  })}
+                <IconButton
+                  size="sm"
+                  variant={mode === 'dark' ? 'soft' : 'plain'}
+                  color={mode === 'dark' ? 'primary' : 'neutral'}
+                  onClick={() => setMode('dark')}
+                  sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
+                  aria-label="Dark mode"
                 >
-                  <Brightness4Icon sx={{ fontSize: '18px' }} />
-                </Box>
-                <Typography level="body-sm" sx={{ flex: 1, color: 'inherit', fontSize: '14px', fontWeight: 400 }}>
-                  {t('theme.title', 'Theme')}
-                </Typography>
-                <Box
-                  sx={theme2 => ({
-                    display: 'flex',
-                    gap: '2px',
-                    p: '2px',
-                    border: `1px solid ${theme2.palette.neutral.outlinedBorder}`,
-                    borderRadius: '999px',
-                  })}
+                  <DarkModeIcon sx={{ fontSize: '15px' }} />
+                </IconButton>
+                <IconButton
+                  size="sm"
+                  variant={mode === 'light' ? 'soft' : 'plain'}
+                  color={mode === 'light' ? 'warning' : 'neutral'}
+                  onClick={() => setMode('light')}
+                  sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
+                  aria-label="Light mode"
                 >
-                  <IconButton
-                    size="sm"
-                    variant={mode === 'dark' ? 'soft' : 'plain'}
-                    color={mode === 'dark' ? 'primary' : 'neutral'}
-                    onClick={() => setMode('dark')}
-                    sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
-                    aria-label="Dark mode"
-                  >
-                    <DarkModeIcon sx={{ fontSize: '15px' }} />
-                  </IconButton>
-                  <IconButton
-                    size="sm"
-                    variant={mode === 'light' ? 'soft' : 'plain'}
-                    color={mode === 'light' ? 'warning' : 'neutral'}
-                    onClick={() => setMode('light')}
-                    sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
-                    aria-label="Light mode"
-                  >
-                    <LightModeIcon sx={{ fontSize: '15px' }} />
-                  </IconButton>
-                </Box>
+                  <LightModeIcon sx={{ fontSize: '15px' }} />
+                </IconButton>
+              </Box>
+            </Box>
+          )}
+
+          <Box sx={{ position: 'relative' }}>
+            <MenuRow
+              testId="profile-menu-more"
+              icon={<FormatListBulletedIcon sx={{ fontSize: '18px' }} />}
+              label={t('common.more', 'More')}
+              endDecorator={
+                <ChevronLeftIcon
+                  sx={{
+                    fontSize: '18px',
+                    color: 'text.tertiary',
+                    transition: 'transform 0.2s ease',
+                    // Points right when closed; rotates to the open (left) state on expand.
+                    transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
+                  }}
+                />
+              }
+              onClick={() => setMoreOpen(v => !v)}
+            />
+            {moreOpen && (
+              <Box
+                data-testid="profile-menu-more-flyout"
+                role="menu"
+                sx={theme2 => ({
+                  ...panelSx(theme2),
+                  backgroundColor: theme2.palette.background.surface, // match the panel surface (#0E1214 in dark)
+                  boxShadow: 'none',
+                  position: 'absolute',
+                  left: 'calc(100% + 16px)',
+                  bottom: 0,
+                  minWidth: 220,
+                  zIndex: 10002,
+                })}
+              >
+                <MenuRow
+                  testId="profile-more-inbox"
+                  icon={
+                    <InboxBadge>
+                      <MailOutlineIcon sx={{ fontSize: '18px' }} />
+                    </InboxBadge>
+                  }
+                  label={t('inbox.title', 'Inbox')}
+                  onClick={() => {
+                    setInboxOpen(true);
+                    closeAll();
+                  }}
+                />
+                <MenuRow
+                  testId="profile-more-invite"
+                  icon={<PersonAddIcon sx={{ fontSize: '18px' }} />}
+                  label={t('inviteShort', 'Invite')}
+                  onClick={() => {
+                    toggleReferralModal();
+                    closeAll();
+                  }}
+                />
+                <MenuRow
+                  testId="profile-more-about"
+                  icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
+                  label={t('intro.title', 'About Us')}
+                  onClick={() => {
+                    openExternalLinkByKey('about');
+                    closeAll();
+                  }}
+                />
+                <MenuRow
+                  testId="profile-more-terms"
+                  icon={<GavelIcon sx={{ fontSize: '18px' }} />}
+                  label={t('terms_policies', 'Terms & Policies')}
+                  onClick={() => {
+                    openExternalLinkByKey('terms');
+                    closeAll();
+                  }}
+                />
+                {isQuestMasterEnabled && (
+                  <MenuRow
+                    testId="profile-more-quests"
+                    icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
+                    label={t('quests.my_quests', 'My Quests')}
+                    onClick={() => {
+                      navigate({ to: '/quests' });
+                      closeAll();
+                    }}
+                  />
+                )}
+                {visiblePremiumNavItems.map(item => (
+                  <MenuRow
+                    key={item.path}
+                    testId={item.testId}
+                    icon={item.icon ? <item.icon /> : undefined}
+                    label={item.label}
+                    onClick={() => {
+                      // Premium routes are registered at runtime via the codegen
+                      // glue, so their paths can't appear in the static route-tree
+                      // union - erase the typed `to` here.
+                      navigate({ to: item.path as never });
+                      closeAll();
+                    }}
+                  />
+                ))}
+                <MenuRow
+                  testId="profile-more-changelog"
+                  icon={<LogoDevIcon sx={{ fontSize: '18px' }} />}
+                  label={t('changelog.title', 'Changelog')}
+                  onClick={() => {
+                    openExternalLinkByKey('changelog');
+                    closeAll();
+                  }}
+                />
               </Box>
             )}
+          </Box>
 
-            <Box sx={{ position: 'relative' }}>
-              <MenuRow
-                testId="profile-menu-more"
-                icon={<FormatListBulletedIcon sx={{ fontSize: '18px' }} />}
-                label={t('common.more', 'More')}
-                endDecorator={
-                  <ChevronLeftIcon
-                    sx={{
-                      fontSize: '18px',
-                      color: 'text.tertiary',
-                      transition: 'transform 0.2s ease',
-                      // Points right when closed; rotates to the open (left) state on expand.
-                      transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
-                    }}
-                  />
-                }
-                onClick={() => setMoreOpen(v => !v)}
-              />
-              {moreOpen && (
-                <Box
-                  data-testid="profile-menu-more-flyout"
-                  role="menu"
-                  sx={theme2 => ({
-                    ...panelSx(theme2),
-                    backgroundColor: theme2.palette.background.surface, // match the panel surface (#0E1214 in dark)
-                    boxShadow: 'none',
-                    position: 'absolute',
-                    left: 'calc(100% + 16px)',
-                    bottom: 0,
-                    minWidth: 220,
-                    zIndex: 10002,
-                  })}
-                >
-                  <MenuRow
-                    testId="profile-more-inbox"
-                    icon={
-                      <InboxBadge>
-                        <MailOutlineIcon sx={{ fontSize: '18px' }} />
-                      </InboxBadge>
-                    }
-                    label={t('inbox.title', 'Inbox')}
-                    onClick={() => {
-                      setInboxOpen(true);
-                      closeAll();
-                    }}
-                  />
-                  <MenuRow
-                    testId="profile-more-invite"
-                    icon={<PersonAddIcon sx={{ fontSize: '18px' }} />}
-                    label={t('inviteShort', 'Invite')}
-                    onClick={() => {
-                      toggleReferralModal();
-                      closeAll();
-                    }}
-                  />
-                  <MenuRow
-                    testId="profile-more-about"
-                    icon={<InfoOutlinedIcon sx={{ fontSize: '18px' }} />}
-                    label={t('intro.title', 'About Us')}
-                    onClick={() => {
-                      openExternalLinkByKey('about');
-                      closeAll();
-                    }}
-                  />
-                  <MenuRow
-                    testId="profile-more-terms"
-                    icon={<GavelIcon sx={{ fontSize: '18px' }} />}
-                    label={t('terms_policies', 'Terms & Policies')}
-                    onClick={() => {
-                      openExternalLinkByKey('terms');
-                      closeAll();
-                    }}
-                  />
-                  {isQuestMasterEnabled && (
-                    <MenuRow
-                      testId="profile-more-quests"
-                      icon={<AutoAwesomeIcon sx={{ fontSize: '18px' }} />}
-                      label={t('quests.my_quests', 'My Quests')}
-                      onClick={() => {
-                        navigate({ to: '/quests' });
-                        closeAll();
-                      }}
-                    />
-                  )}
-                  {visiblePremiumNavItems.map(item => (
-                    <MenuRow
-                      key={item.path}
-                      testId={item.testId}
-                      icon={item.icon ? <item.icon /> : undefined}
-                      label={item.label}
-                      onClick={() => {
-                        // Premium routes are registered at runtime via the codegen
-                        // glue, so their paths can't appear in the static route-tree
-                        // union - erase the typed `to` here.
-                        navigate({ to: item.path as never });
-                        closeAll();
-                      }}
-                    />
-                  ))}
-                  <MenuRow
-                    testId="profile-more-changelog"
-                    icon={<LogoDevIcon sx={{ fontSize: '18px' }} />}
-                    label={t('changelog.title', 'Changelog')}
-                    onClick={() => {
-                      openExternalLinkByKey('changelog');
-                      closeAll();
-                    }}
-                  />
-                </Box>
-              )}
-            </Box>
+          <Divider sx={{ my: 1 }} />
 
-            <Divider sx={{ my: 1 }} />
-
-            {hasReturnToken && (
-              <MenuRow
-                testId="profile-menu-return"
-                danger
-                icon={<RefreshIcon sx={{ fontSize: '18px' }} />}
-                label={t('return_to_safety', 'Return to safety')}
-                onClick={() => {
-                  returnToAdmin.mutate();
-                  setOpen(false);
-                }}
-              />
-            )}
+          {hasReturnToken && (
             <MenuRow
-              testId="logout-btn"
-              icon={isPendingLogout ? <CircularProgress size="sm" /> : <LogoutIcon sx={{ fontSize: '18px' }} />}
-              label={t('logout', 'Log Out')}
-              // Version sits opposite the Logout label (trimmed to major.minor.patch, e.g. v0.7.25).
-              endDecorator={
-                <Typography level="body-xs" sx={{ color: 'text.tertiary', fontSize: '11px' }}>
-                  v{appVersion.data?.version?.split('.').slice(0, 3).join('.')}
-                </Typography>
-              }
-              // Guard against re-firing the logout mutation while one is already in flight
-              // (the old footer used disabled={isPendingLogout}; MenuRow has no disabled prop).
+              testId="profile-menu-return"
+              danger
+              icon={<RefreshIcon sx={{ fontSize: '18px' }} />}
+              label={t('return_to_safety', 'Return to safety')}
               onClick={() => {
-                if (!isPendingLogout) logout();
+                returnToAdmin.mutate();
+                setOpen(false);
               }}
             />
-          </Box>
-        </>
+          )}
+          <MenuRow
+            testId="logout-btn"
+            icon={isPendingLogout ? <CircularProgress size="sm" /> : <LogoutIcon sx={{ fontSize: '18px' }} />}
+            label={t('logout', 'Log Out')}
+            // Version sits opposite the Logout label (trimmed to major.minor.patch, e.g. v0.7.25).
+            endDecorator={
+              <Typography level="body-xs" sx={{ color: 'text.tertiary', fontSize: '11px' }}>
+                v{appVersion.data?.version?.split('.').slice(0, 3).join('.')}
+              </Typography>
+            }
+            // Guard against re-firing the logout mutation while one is already in flight
+            // (the old footer used disabled={isPendingLogout}; MenuRow has no disabled prop).
+            onClick={() => {
+              if (!isPendingLogout) logout();
+            }}
+          />
+        </Box>
       )}
 
       <Box
