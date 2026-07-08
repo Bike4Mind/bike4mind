@@ -67,4 +67,9 @@ export interface RetryPolicy {
   maxRetries: number;
   /** True when a thrown error is a transient wire failure worth retrying. */
   isRetryable(error: unknown): boolean;
+  /**
+   * Base linear backoff between attempts, in ms; the wait before retry N is
+   * `backoffMs * (N + 1)`. Defaults to 500. Set 0 in tests for instant retries.
+   */
+  backoffMs?: number;
 }
