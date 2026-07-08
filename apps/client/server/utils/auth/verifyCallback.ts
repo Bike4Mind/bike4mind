@@ -4,12 +4,15 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { randomUUID } from 'crypto';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { ForbiddenError } from '@server/utils/errors';
 import {
   isProviderEmailVerified,
   selectProviderEmail,
   ACCOUNT_LINK_VERIFICATION_REQUIRED,
   ACCOUNT_LINK_EMAIL_MISMATCH,
 } from './oauthAccountLink';
+import { OAuthFailureReason } from './oauthFailureReason';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -249,9 +252,17 @@ const authenticateUser = async (
     // exception before it could reach [strategy]/callback.ts, surfacing every
     // failure (duplicate-key writes, system-user rejection, DB errors) as an
     // opaque "OAuth user not returned" with no reason. Log the real error and
-    // pass a non-empty info message so the callback can record something useful.
+    // attach a canonical, data-free `code` the callback can safely record -
+    // the raw `message` rides along only for the callback's console.error
+    // (CloudWatch), never for the audit reason or redirect.
     console.error('[verifyCallback] authenticateUser threw:', e);
+    const code: OAuthFailureReason = isDuplicateKeyError(e)
+      ? 'duplicate_account'
+      : e instanceof ForbiddenError
+        ? 'forbidden_system_user'
+        : 'internal';
     done(null, undefined, {
+      code,
       message: e instanceof Error ? e.message : 'Internal error during authentication',
     });
   }

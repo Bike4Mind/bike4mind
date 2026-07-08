@@ -132,6 +132,7 @@ describe('PassportOAuthStateStore', () => {
       expect(err).toBeNull();
       expect(ok).toBe(false);
       expect((info as { message: string }).message).toBeDefined();
+      expect((info as { code: string }).code).toBe('state_invalid');
     });
 
     it('rejects an expired token', async () => {
@@ -140,9 +141,10 @@ describe('PassportOAuthStateStore', () => {
         'test-jwt-secret-for-state-store',
         { expiresIn: '-1s', algorithm: 'HS256' }
       );
-      const { err, ok } = await callVerify(store, mockReq, expired);
+      const { err, ok, info } = await callVerify(store, mockReq, expired);
       expect(err).toBeNull();
       expect(ok).toBe(false);
+      expect((info as { code: string }).code).toBe('state_expired');
     });
 
     it('rejects a token with wrong audience', async () => {
@@ -151,15 +153,17 @@ describe('PassportOAuthStateStore', () => {
         'test-jwt-secret-for-state-store',
         { expiresIn: '5m', algorithm: 'HS256' }
       );
-      const { err, ok } = await callVerify(store, mockReq, wrongAud);
+      const { err, ok, info } = await callVerify(store, mockReq, wrongAud);
       expect(err).toBeNull();
       expect(ok).toBe(false);
+      expect((info as { code: string }).code).toBe('state_invalid');
     });
 
     it('rejects an empty state string', async () => {
-      const { err, ok } = await callVerify(store, mockReq, '');
+      const { err, ok, info } = await callVerify(store, mockReq, '');
       expect(err).toBeNull();
       expect(ok).toBe(false);
+      expect((info as { code: string }).code).toBe('state_missing');
     });
   });
 });
