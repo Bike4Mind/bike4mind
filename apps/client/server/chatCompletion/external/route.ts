@@ -24,6 +24,7 @@ import {
   creditTransactionRepository,
   userRepository,
   userApiKeyRepository,
+  usageEventRepository,
 } from '@bike4mind/database';
 import {
   verifyJwtToken,
@@ -211,8 +212,14 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           apiKeys: apiKeyRepository,
           creditTransactions: creditTransactionRepository,
           users: userRepository,
+          // Required for the UsageEvent dual-write (executeCompletion does
+          // `db.usageEvents?.record(...)` - optional-chained, so omitting this silently drops
+          // billing/usage analytics for the public completions path, as the old Lambda did NOT).
+          usageEvents: usageEventRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
+        // Correlation id for the usage-event dual write (synthesized downstream if absent).
+        requestId,
         source,
         logger,
         onChunk: async (text, info) => {

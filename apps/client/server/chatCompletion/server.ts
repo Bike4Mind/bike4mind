@@ -25,7 +25,7 @@ import { registerExternalRoutes } from './external/route';
  * Reachability: served on a PUBLIC load balancer (so /api/ai/v1/completions can be exposed
  * under the bike4mind domain via CloudFront - see infra/chatCompletion.ts). /process is
  * reachable on the same ALB but is NOT routed through CloudFront and stays behind the
- * shared-secret bearer (see internal/route.ts); the v2 endpoint uses its own user auth.
+ * shared-secret bearer (see internal/route.ts); the endpoint uses its own user auth.
  */
 
 // Default to 8788 for local dev (8080 is commonly taken on dev machines, e.g. Docker

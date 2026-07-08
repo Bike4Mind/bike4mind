@@ -142,12 +142,13 @@ services:
         condition: service_started
       mail:
         condition: service_started
-      # The app dispatches quests to this service over HTTP (see dispatchQuest.ts). It only
-      # needs it at chat time, not to boot, so `service_started` is enough (and dispatch
-      # retries) - and it avoids a cycle, since `chatcompletion` must not depend on `ws`
-      # (which depends on `app`).
+      # The app dispatches quests to this service over HTTP (see dispatchQuest.ts). Wait for
+      # `service_healthy` (not just started): its /health only passes once Mongo is connected
+      # (~20s), and dispatchQuest retries only 2x @ 300ms - far short of a cold boot, so a
+      # message sent in that window would fail. No cycle: `chatcompletion` depends on mongo/etc.,
+      # not on `app` (and it deliberately does NOT depend on `ws`, which depends on `app`).
       chatcompletion:
-        condition: service_started
+        condition: service_healthy
     # Override APP_HOST_PORT to serve the app on a different host port.
     ports:
       - '${APP_HOST_PORT:-3000}:3000'
@@ -165,7 +166,7 @@ services:
   # ChatCompletion. The `app` container POSTs created quests to `/process` here
   # (dispatchQuest -> ${CHAT_COMPLETION}/process); this container runs
   # ChatCompletionProcess in-process and streams replies through the `ws` gateway
-  # (WEBSOCKET_MANAGEMENT_ENDPOINT). It also serves the public /api/ai/v2/completions SSE
+  # (WEBSOCKET_MANAGEMENT_ENDPOINT). It also serves the public /api/ai/v1/completions SSE
   # endpoint. Same code + code path as hosted; only the config source differs (the alias
   # hook in the Dockerfile maps `sst` -> the env-backed @bike4mind/resource shim).
   chatcompletion:
@@ -185,7 +186,7 @@ services:
         condition: service_started
       mail:
         condition: service_started
-    # Exposes the container's :8080 on the host so the external /api/ai/v2/completions route
+    # Exposes the container's :8080 on the host so the external /api/ai/v1/completions route
     # is reachable at http://localhost:${CHATCOMPLETION_HOST_PORT:-8788}. The `app` container
     # reaches it over the compose network as http://chatcompletion:8080 (CHAT_COMPLETION).
     ports:

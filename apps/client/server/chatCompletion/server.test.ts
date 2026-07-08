@@ -14,7 +14,7 @@ const mockProcessQuest = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/queueHandlers/questProcessor', () => ({ processQuest: mockProcessQuest }));
 
 // questRepository.update - used in the error path; connectDB/mongoose unused by /process.
-// The remaining repos are pulled in by the v2 completions route (executeCompletion + credit
+// The remaining repos are pulled in by the completions route (executeCompletion + credit
 // attribution); stubbed so importing the route doesn't drag in real DB models.
 const mockQuestUpdate = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/database', () => ({
@@ -26,9 +26,10 @@ vi.mock('@bike4mind/database', () => ({
   apiKeyRepository: {},
   creditTransactionRepository: {},
   userRepository: {},
+  usageEventRepository: { record: vi.fn() },
 }));
 
-// executeCompletion - the v2 route's LLM execution seam. Mock so tests drive its onChunk
+// executeCompletion - the route's LLM execution seam. Mock so tests drive its onChunk
 // callback without a real model call.
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 
@@ -47,7 +48,7 @@ vi.mock('@bike4mind/services', async () => {
   };
 });
 
-// Auth is exercised by the v2 route; mock the whole module so we can drive the API-key /
+// Auth is exercised by the route; mock the whole module so we can drive the API-key /
 // JWT cascade and rate-limit branches without real key validation or JWT verification.
 const mockAuth = vi.hoisted(() => ({
   verifyApiKey: vi.fn(),
@@ -193,6 +194,11 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
 
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u1', model: 'claude-test' });
+    // Regression guard: the route must pass usageEvents (the UsageEvent dual-write seam) and a
+    // requestId to executeCompletion, else public-path billing/usage analytics silently vanish.
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.db.usageEvents).toBeDefined();
+    expect(typeof params.requestId).toBe('string');
     expect(text).toContain('data: [DONE]');
   });
 
