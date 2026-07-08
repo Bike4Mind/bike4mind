@@ -18,8 +18,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PassThrough } from 'stream';
 import { ReActAgent } from '@bike4mind/agents';
+import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { ApiClient } from '../../src/auth/ApiClient';
+import type { WebSocketConnectionManager } from '../../src/ws/WebSocketConnectionManager';
 import { ServerLlmBackend } from '../../src/llm/ServerLlmBackend';
+import { WebSocketLlmBackend } from '../../src/llm/WebSocketLlmBackend';
 
 const sse = (obj: unknown): string => `data: ${JSON.stringify(obj)}\n\n`;
 
@@ -45,7 +48,7 @@ function makeSseBackend(producers: Array<(stream: PassThrough) => void>): Server
   return new ServerLlmBackend({ apiClient, model: 'faux-model', completionsUrl: '/completions' });
 }
 
-function makeAgent(llm: ServerLlmBackend): ReActAgent {
+function makeAgent(llm: ICompletionBackend): ReActAgent {
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   return new ReActAgent({
     userId: 'e2e-test-user',
@@ -95,6 +98,106 @@ describe('streaming completion (real ServerLlmBackend + real ReActAgent)', () =>
     // Every attempt ends the stream with no content - the old WS path would have
     // silently delivered a blank turn; the shared core retries then surfaces.
     const llm = makeSseBackend([stream => stream.end()]);
+    await expect(makeAgent(llm).run('hi', { parallelExecution: false })).rejects.toThrow(
+      /without producing any content/i
+    );
+  });
+});
+
+/** Context a scripted WebSocket attempt uses to drive the backend's handler. */
+interface WsResponderCtx {
+  /** Deliver a socket frame to the backend's message handler. */
+  emit: (message: Record<string, unknown>) => void;
+  /** Simulate a mid-stream connection drop. */
+  drop: () => void;
+}
+type WsResponder = (ctx: WsResponderCtx) => void;
+
+/**
+ * Fake WebSocketConnectionManager: one scripted responder per attempt (the last
+ * repeats). Each `onRequest` registration schedules that attempt's responder on
+ * a macrotask, so the backend's handlers are wired before frames arrive - which
+ * is how a retry (a fresh onRequest with a new requestId) gets a fresh script.
+ */
+class FakeWsManager {
+  connected = true;
+  private attempt = 0;
+  private handler?: (m: Record<string, unknown>) => void;
+  private disconnectHandlers: Array<() => void> = [];
+
+  constructor(private readonly responders: WsResponder[]) {}
+
+  get isConnected() {
+    return this.connected;
+  }
+  onRequest(_id: string, handler: (m: Record<string, unknown>) => void) {
+    this.handler = handler;
+    const responder = this.responders[Math.min(this.attempt, this.responders.length - 1)];
+    this.attempt++;
+    setTimeout(
+      () =>
+        responder({
+          emit: m => this.handler?.(m),
+          drop: () => this.disconnectHandlers.forEach(h => h()),
+        }),
+      0
+    );
+  }
+  offRequest() {
+    this.handler = undefined;
+  }
+  onDisconnect(h: () => void) {
+    this.disconnectHandlers.push(h);
+  }
+  offDisconnect(h: () => void) {
+    this.disconnectHandlers = this.disconnectHandlers.filter(x => x !== h);
+  }
+}
+
+function makeWsBackend(responders: WsResponder[]): WebSocketLlmBackend {
+  const wsManager = new FakeWsManager(responders) as unknown as WebSocketConnectionManager;
+  const apiClient = {
+    getAxiosInstance: () => ({ post: () => Promise.resolve({}) }),
+  } as unknown as ApiClient;
+  return new WebSocketLlmBackend({
+    wsManager,
+    apiClient,
+    model: 'faux-model',
+    tokenGetter: async () => 'token',
+    wsCompletionUrl: '/ws-completions',
+  });
+}
+
+describe('streaming completion (real WebSocketLlmBackend + real ReActAgent)', () => {
+  it('delivers a normal WebSocket turn to the agent', async () => {
+    const llm = makeWsBackend([
+      ({ emit }) => {
+        emit({ action: 'cli_completion_chunk', chunk: { type: 'content', text: 'Hello from WS' } });
+        emit({ action: 'cli_completion_done' });
+      },
+    ]);
+    const result = await makeAgent(llm).run('hi', { parallelExecution: false });
+    expect(result.finalAnswer).toBe('Hello from WS');
+  });
+
+  it('retries a mid-stream disconnect and delivers the turn (the WS parity fix)', async () => {
+    const llm = makeWsBackend([
+      // Attempt 1: drop the connection mid-stream. Old WS rejected outright here.
+      ({ drop }) => drop(),
+      // Attempt 2 (retry): the full turn.
+      ({ emit }) => {
+        emit({ action: 'cli_completion_chunk', chunk: { type: 'content', text: 'recovered answer' } });
+        emit({ action: 'cli_completion_done' });
+      },
+    ]);
+    const result = await makeAgent(llm).run('hi', { parallelExecution: false });
+    expect(result.finalAnswer).toBe('recovered answer');
+  });
+
+  it('surfaces an empty done as an error instead of a silent blank turn', async () => {
+    // The headline bug: old WS silently resolved an empty cli_completion_done into
+    // a blank assistant turn. The shared core now retries, then surfaces.
+    const llm = makeWsBackend([({ emit }) => emit({ action: 'cli_completion_done' })]);
     await expect(makeAgent(llm).run('hi', { parallelExecution: false })).rejects.toThrow(
       /without producing any content/i
     );
