@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7-labs
 #
 # QuestProcessorService image — always-on quest processor that replaces the
-# EventBridge → questProcessor Lambda. Runs apps/client/server/quest/server.ts
+# EventBridge → questProcessor Lambda. Runs apps/client/server/chatCompletion/server.ts
 # via tsx with the full workspace installed (no cold start, no 15-min timeout).
 #
 # Built & pushed to ECR by the deploy workflow (.github/workflows/_deploy-env.yml) with a
@@ -60,4 +60,4 @@ EXPOSE 8080
 WORKDIR /app/apps/client
 
 # tsx resolves the @server/* and @/* path aliases from apps/client/tsconfig.json (cwd here).
-CMD ["pnpm", "exec", "tsx", "server/quest/server.ts"]
+CMD ["pnpm", "exec", "tsx", "server/chatCompletion/server.ts"]

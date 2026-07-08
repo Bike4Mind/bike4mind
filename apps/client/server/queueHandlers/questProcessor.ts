@@ -223,7 +223,7 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
  * long-running container pays the setup cost once and every quest after is warm.
  *
  * Invoked by the always-on QuestProcessorService HTTP server (see
- * `apps/client/server/quest/server.ts`). The caller has already validated
+ * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */
 export async function processQuest(params: z.infer<typeof QuestStartBodySchema>, logger: Logger): Promise<void> {
