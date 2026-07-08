@@ -1,4 +1,5 @@
 import { Resource } from 'sst';
+import { chatCompletionBaseUrl } from './chatCompletionTarget';
 import type { z } from 'zod';
 import type { QuestStartBodySchema } from '@bike4mind/services';
 import type { Logger } from '@bike4mind/observability';
@@ -26,13 +27,13 @@ const RETRY_BACKOFF_MS = 300;
  * overall DISPATCH_TIMEOUT_MS budget. Does NOT retry deterministic 4xx (401 auth / 400
  * validation) - retrying those just burns the budget.
  *
- * Single path for every environment: hosted resolves `Resource.ChatCompletion.url`
- * from the SST link; self-host resolves it from the `@bike4mind/resource` shim (env
- * `CHAT_COMPLETION`, pointing at the `chatcompletion` compose service). No
- * per-environment branching - the only difference is how the URL/secret resolve.
+ * Host resolves per stage via `chatCompletionBaseUrl()`: the ALB `.url` on hosted prod/dev
+ * (and self-host, from the `@bike4mind/resource` shim env `CHAT_COMPLETION`, pointing at the
+ * `chatcompletion` compose service), or the Cloud Map `.service` host on previews. Only the
+ * host resolution differs; the dispatch itself is identical everywhere.
  */
 export async function dispatchQuest(params: QuestStartBody, logger: Logger): Promise<void> {
-  const url = `${Resource.ChatCompletion.url}/process`;
+  const url = `${chatCompletionBaseUrl()}/process`;
   const body = JSON.stringify(params);
   const deadline = Date.now() + DISPATCH_TIMEOUT_MS;
   let lastError: Error | undefined;

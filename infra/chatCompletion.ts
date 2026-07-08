@@ -5,7 +5,7 @@ import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
 import { allSecrets } from './secrets';
-import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
+import { cluster, resolvedVpcId, useCloudmap, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 
 /**
@@ -24,10 +24,14 @@ import { websocketApi } from './websocket';
  * with the stopTimeout set below.
  *
  * Ingress: the frontend (`/api/ai/llm`, `/api/chat`) POSTs the QuestStartBody to this
- * service's load balancer and gets a 202 back immediately; the service processes the quest
- * in-process and streams results over the existing WebSocket path. The ALB is internet-facing
- * (CloudFront needs a public origin for the completions path) but its SG ingress is locked to
- * CloudFront + the VPC NAT egress IP, so /process is not reachable from the open internet.
+ * service and gets a 202 back immediately; the service processes the quest in-process and
+ * streams results over the existing WebSocket path. prod/dev/self-host reach it via an
+ * internet-facing ALB (CloudFront needs a public origin for the completions path) whose SG
+ * ingress is locked to CloudFront + the VPC NAT egress IP, so /process is not reachable from
+ * the open internet. Preview stages drop the ALB and reach it over Cloud Map (see the
+ * loadBalancer vs serviceRegistry split below); the public completions route is ALB-only, so
+ * previews do not expose /api/ai/v1/completions. chatCompletionBaseUrl resolves the right host
+ * per stage.
  *
  * Links/permissions mirror the old Lambda so `processQuest`'s static options resolve
  * identically (DB repos, storage, websocket management endpoint, MCP handler, etc.).
@@ -58,28 +62,42 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
   // out-of-band keeps `sst deploy` build-free, matching subscriberFanout.
   image: chatCompletionImage,
-  // Internet-facing load balancer. Must be public so CloudFront can reach it as an origin:
-  // the completions endpoint (/api/ai/v1/completions) is served via the shared CloudFront
-  // router (route below), and SST's router uses a standard custom origin - CloudFront's edge
-  // connects to the ALB's public DNS over the internet, so an `internal` ALB is unreachable.
-  // /process rides the same ALB (NOT routed through CloudFront). To keep /process off the open
-  // internet despite the public ALB, its SG ingress is locked (transform.loadBalancerSecurityGroup
-  // below) to exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend
-  // Lambda's /process dispatch, which hairpins out through NAT to the ALB's public DNS). The
-  // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is then defense-in-depth.
-  loadBalancer: {
-    public: true,
-    rules: [{ listen: '80/http', forward: '8080/http' }],
-    health: {
-      '8080/http': {
-        path: '/health',
-        interval: '15 seconds',
-        timeout: '5 seconds',
-        healthyThreshold: 2,
-        unhealthyThreshold: 5,
-      },
-    },
-  },
+  // Ingress differs by stage (useCloudmap is preview + a Cloud Map namespace present).
+  // ALB path (prod/dev/self-host, and any stage without the namespace): an internet-facing
+  // ALB. Must be public so CloudFront can reach it as an origin - the completions endpoint
+  // (/api/ai/v1/completions) is served via the shared CloudFront router (route below), and
+  // SST's router uses a standard custom origin, so CloudFront's edge connects to the ALB's
+  // public DNS over the internet and an `internal` ALB is unreachable. /process rides the
+  // same ALB (NOT routed through CloudFront). To keep /process off the open internet despite
+  // the public ALB, its SG ingress is locked (transform.loadBalancerSecurityGroup below) to
+  // exactly CloudFront's edge (completions) + the VPC NAT egress IP (the frontend Lambda's
+  // /process dispatch, which hairpins out through NAT to the ALB's public DNS).
+  // Cloud Map path (previews): no ALB, register in the shared namespace and run on Fargate
+  // Spot. Dropping the per-preview ALB removes the ALB-to-security-group teardown chain that
+  // breaks preview cleanup, and the per-preview ALB cost. Previews reach /process over Cloud
+  // Map DNS; the public completions route is skipped there (it needs the ALB origin). The
+  // CHAT_COMPLETION_INTERNAL_SECRET bearer checked in internal/route.ts is defense-in-depth
+  // on the VPC-internal boundary in both cases.
+  ...(useCloudmap
+    ? {
+        serviceRegistry: { port: 8080 },
+        capacity: 'spot' as const,
+      }
+    : {
+        loadBalancer: {
+          public: true,
+          rules: [{ listen: '80/http', forward: '8080/http' }],
+          health: {
+            '8080/http': {
+              path: '/health',
+              interval: '15 seconds',
+              timeout: '5 seconds',
+              healthyThreshold: 2,
+              unhealthyThreshold: 5,
+            },
+          },
+        },
+      }),
   // Match the old Lambda's compute (2048 MB ≈ 1 vCPU on Fargate). 0.5 vCPU needs 1–4 GB;
   // 1 vCPU needs 2–8 GB — both combos below are valid Fargate sizes.
   cpu: isProd ? '1 vCPU' : '0.5 vCPU',
@@ -194,15 +212,18 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   },
 });
 
-// Allow the service's internal ALB to reach the task on the container port (8080).
+// Allow the service's ALB to reach the task on the container port (8080).
 // The cluster pins the VPC's shared `default` security group for tasks (see infra/vpc.ts),
 // which has no ingress for 8080 — so the ALB's health checks time out, the target is marked
 // unhealthy, and ECS restart-loops the task (quests then never get dispatched). SST doesn't
 // add this rule because the `default` SG is user-provided, not SST-managed. Source is the
 // ALB's own (per-stage, SST-created) SG, so each stage adds a distinct rule and there's no
 // conflict on the shared `default` SG. Guarded on !$dev: in `sst dev` the Service runs via
-// dev.command with no load balancer, and accessing nodes.loadBalancer would throw.
-if (!$dev) {
+// dev.command with no load balancer, and accessing nodes.loadBalancer would throw. Also
+// skipped on the Cloud Map path (!useCloudmap): previews have no ALB, so there is no
+// `.url` to route and no ALB SG to source from — the frontend Lambda and the task both sit
+// on the shared `default` SG, which already permits intra-SG traffic on 8080.
+if (!$dev && !useCloudmap) {
   // Expose the CLI/3rd-party completions endpoint under the bike4mind domain via the shared
   // CloudFront router (same distribution as the app). This replaced the former `cliLlmHandler`
   // Lambda, which owned this same `/api/ai/v1/completions` path and has been removed.
@@ -211,7 +232,10 @@ if (!$dev) {
   // via the ALB directly. routePrefix namespaces the path per-stage on the shared dev
   // distribution (empty on deployed dev/production). Guarded on !$dev because the load balancer
   // (and thus `.url`) only exists when the Service runs in the cloud - under `sst dev` it runs
-  // via dev.command with no ALB, and the CLI reaches it on localhost:8788.
+  // via dev.command with no ALB, and the CLI reaches it on localhost:8788. Also skipped on the
+  // Cloud Map path (!useCloudmap, above): previews have no ALB origin for CloudFront to reach,
+  // so previews do not expose the public completions endpoint (external CLI/3rd-party clients
+  // target prod/staging; a preview only needs the internal /process path over Cloud Map).
   router.route(`${routePrefix}/api/ai/v1/completions`, chatCompletion.url);
 
   const defaultSecurityGroupId = aws.ec2

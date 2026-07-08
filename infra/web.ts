@@ -177,7 +177,8 @@ export const web = new sst.aws.Nextjs(
       ...Object.values(secrets),
       websocketApi,
       historyImportBucket,
-      // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
+      // Linked so the frontend can resolve the ChatCompletion host (ALB url or Cloud Map
+      // service, via chatCompletionBaseUrl) to POST quests.
       chatCompletion,
       imageProcessor,
       mcpHandler,
