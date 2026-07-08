@@ -323,8 +323,9 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
           const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
           // Thread the subagent's cache tokens through so the recorded provider
           // cost is computed on the same basis as `creditsCharged` (which already
-          // reflects the cache-read discount). Without these, costUsd overstates
-          // true cost for any multi-iteration delegation and skews margin analytics.
+          // reflects cache accounting). The cache buckets are additive, so dropping
+          // them makes costUsd understate true cost for any multi-iteration
+          // delegation, inflating the margins the dashboard reports above reality.
           const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
           const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
           deps.onCredits(
