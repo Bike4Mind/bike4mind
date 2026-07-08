@@ -19,6 +19,7 @@ import type { ISessionDocument } from '@bike4mind/common';
 import type { SkyGreetingResponse } from '@client/pages/api/sky-greeting/index';
 import { brandAlpha, gray } from '@client/app/utils/themes/colors';
 import { APP_NAME } from '@client/config/general';
+import { useUserSettings } from '@client/app/contexts/UserSettingsContext';
 
 // Shake animation for the magic 8-ball logo
 const shakeAnimation = keyframes`
@@ -522,6 +523,7 @@ function generateConnectTheDotsPrompts(sessions: ISessionDocument[], count: numb
 
 const NotebookSplash: React.FC = () => {
   const { currentUser } = useUser();
+  const { settings } = useUserSettings();
   const isMobile = useIsMobile();
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
   const queryClient = useQueryClient();
@@ -841,139 +843,140 @@ const NotebookSplash: React.FC = () => {
       </Box>
 
       {/* Prompt Cards */}
-      {(() => {
-        // Map each card slot type to its card definition
-        const cardForSlot = (slot: CardSlotType): SplashCardProps => {
-          switch (slot) {
-            case 'connect':
-              return connectPrompts[0]
-                ? {
-                    icon: '&#x1F517;',
-                    title: 'Connect the dots',
-                    description: connectPrompts[0].text,
-                    onClick: () => handleCardClick(connectPrompts[0].text),
-                  }
-                : {
-                    icon: '&#x1F3AF;',
-                    title: 'Focus',
-                    description: splashContent.agencyPrompt,
-                    onClick: () => handleCardClick(splashContent.agencyPrompt),
-                  };
-            case 'remix':
-              return singleNotebookPrompts.remix
-                ? {
-                    icon: '&#x1F500;',
-                    title: 'Remix',
-                    description: singleNotebookPrompts.remix,
-                    onClick: () => handleCardClick(singleNotebookPrompts.remix!),
-                  }
-                : {
-                    icon: '&#x2728;',
-                    title: 'Right now',
-                    description: splashContent.contextualQuip,
-                    onClick: () => handleCardClick(splashContent.contextualQuip),
-                  };
-            case 'synthesis':
-              return singleNotebookPrompts.synthesis
-                ? {
-                    icon: '&#x1F4A1;',
-                    title: 'Synthesis',
-                    description: singleNotebookPrompts.synthesis,
-                    onClick: () => handleCardClick(singleNotebookPrompts.synthesis!),
-                  }
-                : {
-                    icon: '&#x1F4A1;',
-                    title: 'Explore',
-                    description: splashContent.explorePrompt,
-                    onClick: () => handleCardClick(splashContent.explorePrompt),
-                  };
-            case 'oblique':
-              return {
-                icon: '&#x1F3B2;',
-                title: 'Oblique Strategy',
-                description: splashContent.obliqueStrategy,
-                onClick: () => handleCardClick(splashContent.obliqueStrategy),
-                source: "Brian Eno's Oblique Strategies",
-                sourceUrl: 'https://www.enoshop.co.uk/product/oblique-strategies.html',
-              };
-            case 'focus':
-              return {
+      {settings.showSplashCards &&
+        (() => {
+          // Map each card slot type to its card definition
+          const cardForSlot = (slot: CardSlotType): SplashCardProps => {
+            switch (slot) {
+              case 'connect':
+                return connectPrompts[0]
+                  ? {
+                      icon: '&#x1F517;',
+                      title: 'Connect the dots',
+                      description: connectPrompts[0].text,
+                      onClick: () => handleCardClick(connectPrompts[0].text),
+                    }
+                  : {
+                      icon: '&#x1F3AF;',
+                      title: 'Focus',
+                      description: splashContent.agencyPrompt,
+                      onClick: () => handleCardClick(splashContent.agencyPrompt),
+                    };
+              case 'remix':
+                return singleNotebookPrompts.remix
+                  ? {
+                      icon: '&#x1F500;',
+                      title: 'Remix',
+                      description: singleNotebookPrompts.remix,
+                      onClick: () => handleCardClick(singleNotebookPrompts.remix!),
+                    }
+                  : {
+                      icon: '&#x2728;',
+                      title: 'Right now',
+                      description: splashContent.contextualQuip,
+                      onClick: () => handleCardClick(splashContent.contextualQuip),
+                    };
+              case 'synthesis':
+                return singleNotebookPrompts.synthesis
+                  ? {
+                      icon: '&#x1F4A1;',
+                      title: 'Synthesis',
+                      description: singleNotebookPrompts.synthesis,
+                      onClick: () => handleCardClick(singleNotebookPrompts.synthesis!),
+                    }
+                  : {
+                      icon: '&#x1F4A1;',
+                      title: 'Explore',
+                      description: splashContent.explorePrompt,
+                      onClick: () => handleCardClick(splashContent.explorePrompt),
+                    };
+              case 'oblique':
+                return {
+                  icon: '&#x1F3B2;',
+                  title: 'Oblique Strategy',
+                  description: splashContent.obliqueStrategy,
+                  onClick: () => handleCardClick(splashContent.obliqueStrategy),
+                  source: "Brian Eno's Oblique Strategies",
+                  sourceUrl: 'https://www.enoshop.co.uk/product/oblique-strategies.html',
+                };
+              case 'focus':
+                return {
+                  icon: '&#x1F3AF;',
+                  title: 'Focus',
+                  description: splashContent.agencyPrompt,
+                  onClick: () => handleCardClick(splashContent.agencyPrompt),
+                };
+              case 'rightNow':
+                return {
+                  icon: '&#x2728;',
+                  title: 'Right now',
+                  description: splashContent.contextualQuip,
+                  onClick: () => handleCardClick(splashContent.contextualQuip),
+                };
+            }
+          };
+
+          // Build 4 cards from the randomly selected slot types
+          // Deduplicate fallback titles (e.g. if 'connect' falls back to 'Focus' and 'focus' is also selected)
+          const seen = new Set<string>();
+          const cards: SplashCardProps[] = [];
+          for (const slot of cardSlotTypes) {
+            const card = cardForSlot(slot);
+            if (!seen.has(card.title)) {
+              seen.add(card.title);
+              cards.push(card);
+            }
+          }
+          // If deduplication removed cards, fill remaining from unused standalone types
+          if (cards.length < 4) {
+            const fillers: SplashCardProps[] = [
+              {
                 icon: '&#x1F3AF;',
                 title: 'Focus',
                 description: splashContent.agencyPrompt,
                 onClick: () => handleCardClick(splashContent.agencyPrompt),
-              };
-            case 'rightNow':
-              return {
+              },
+              {
                 icon: '&#x2728;',
                 title: 'Right now',
                 description: splashContent.contextualQuip,
                 onClick: () => handleCardClick(splashContent.contextualQuip),
-              };
-          }
-        };
-
-        // Build 4 cards from the randomly selected slot types
-        // Deduplicate fallback titles (e.g. if 'connect' falls back to 'Focus' and 'focus' is also selected)
-        const seen = new Set<string>();
-        const cards: SplashCardProps[] = [];
-        for (const slot of cardSlotTypes) {
-          const card = cardForSlot(slot);
-          if (!seen.has(card.title)) {
-            seen.add(card.title);
-            cards.push(card);
-          }
-        }
-        // If deduplication removed cards, fill remaining from unused standalone types
-        if (cards.length < 4) {
-          const fillers: SplashCardProps[] = [
-            {
-              icon: '&#x1F3AF;',
-              title: 'Focus',
-              description: splashContent.agencyPrompt,
-              onClick: () => handleCardClick(splashContent.agencyPrompt),
-            },
-            {
-              icon: '&#x2728;',
-              title: 'Right now',
-              description: splashContent.contextualQuip,
-              onClick: () => handleCardClick(splashContent.contextualQuip),
-            },
-            {
-              icon: '&#x1F4A1;',
-              title: 'Explore',
-              description: splashContent.explorePrompt,
-              onClick: () => handleCardClick(splashContent.explorePrompt),
-            },
-          ];
-          for (const filler of fillers) {
-            if (cards.length >= 4) break;
-            if (!seen.has(filler.title)) {
-              seen.add(filler.title);
-              cards.push(filler);
+              },
+              {
+                icon: '&#x1F4A1;',
+                title: 'Explore',
+                description: splashContent.explorePrompt,
+                onClick: () => handleCardClick(splashContent.explorePrompt),
+              },
+            ];
+            for (const filler of fillers) {
+              if (cards.length >= 4) break;
+              if (!seen.has(filler.title)) {
+                seen.add(filler.title);
+                cards.push(filler);
+              }
             }
           }
-        }
 
-        if (isMobile) {
-          return <MobileSplashCarousel cards={cards} />;
-        }
+          if (isMobile) {
+            return <MobileSplashCarousel cards={cards} />;
+          }
 
-        return (
-          <Box
-            sx={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(2, 1fr)',
-              gap: 2,
-              width: '100%',
-            }}
-          >
-            {cards.map((card, i) => (
-              <SplashCard key={i} {...card} />
-            ))}
-          </Box>
-        );
-      })()}
+          return (
+            <Box
+              sx={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: 2,
+                width: '100%',
+              }}
+            >
+              {cards.map((card, i) => (
+                <SplashCard key={i} {...card} />
+              ))}
+            </Box>
+          );
+        })()}
     </Box>
   );
 };
