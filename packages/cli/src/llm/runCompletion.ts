@@ -41,9 +41,9 @@ const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(r
  * stream returns cleanly, and we return immediately after it, so no attempt that
  * reached delivery is ever retried. Each retry opens a fresh stream and a fresh
  * accumulator, so a mid-stream drop discards its partial content rather than
- * double-appending. (This is why the transport MUST return on its terminal frame
- * and swallow any post-terminal teardown noise instead of throwing it - see the
- * StreamTransport contract.)
+ * double-appending. A post-terminal socket error (e.g. teardown noise after an
+ * SSE `[DONE]`) can't resurrect a delivered turn into a retry because the bridge
+ * is first-settle-wins (see streamBridge.ts).
  *
  * `signal` is the caller's `options.abortSignal`; it is threaded to the transport
  * and consulted between events so a cancel stops promptly without delivering.

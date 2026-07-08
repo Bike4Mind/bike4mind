@@ -1678,9 +1678,9 @@ function CliApp() {
       // The streaming backend retries these and rewrites the message, but if a
       // bare one ever reaches here from another path (other backends, etc.),
       // surface something the user can act on rather than a one-word error.
-      // Reuse the backend's classifier so this stays in lockstep with the full
-      // set of transient patterns it retries (ETIMEDOUT, terminated, fetch
-      // failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
+      // Reuse the shared retry-policy classifier so this stays in lockstep with
+      // the full set of transient patterns both transports retry (ETIMEDOUT,
+      // terminated, fetch failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
       const rawMessage = error instanceof Error ? error.message : String(error);
       if (error instanceof Error && isTransientNetworkError(error)) {
         console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');

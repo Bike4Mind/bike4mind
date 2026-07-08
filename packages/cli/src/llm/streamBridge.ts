@@ -29,16 +29,23 @@ export async function* bridgeToAsyncIterable<T>(wire: (sink: EventSink<T>) => ((
     wake = undefined;
   };
 
+  // First settlement wins (promise-like): once ended, further push/end/fail are
+  // ignored. This is what makes a post-terminal socket error benign - e.g. an SSE
+  // stream that emits `[DONE]` (end) then errors during teardown must NOT turn a
+  // delivered turn into a thrown error (which the core would retry -> double-bill).
   const sink: EventSink<T> = {
     push: value => {
+      if (ended) return;
       queue.push(value);
       signalReady();
     },
     end: () => {
+      if (ended) return;
       ended = true;
       signalReady();
     },
     fail: error => {
+      if (ended) return;
       failure = error;
       ended = true;
       signalReady();

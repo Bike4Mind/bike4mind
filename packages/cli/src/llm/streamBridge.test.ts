@@ -42,6 +42,25 @@ describe('bridgeToAsyncIterable', () => {
     expect(out).toEqual([1]);
   });
 
+  it('ignores fail() after end() (first settlement wins)', async () => {
+    let sink!: EventSink<number>;
+    const gen = bridgeToAsyncIterable<number>(s => {
+      sink = s;
+    });
+    const out: number[] = [];
+    const consumer = (async () => {
+      for await (const value of gen) out.push(value);
+    })();
+
+    await tick();
+    sink.push(1);
+    sink.end();
+    // A post-terminal teardown error must not turn the completed stream into a throw.
+    sink.fail(new Error('late teardown error'));
+    await expect(consumer).resolves.toBeUndefined();
+    expect(out).toEqual([1]);
+  });
+
   it('runs teardown once when iteration ends normally', async () => {
     const teardown = vi.fn();
     let sink!: EventSink<number>;
