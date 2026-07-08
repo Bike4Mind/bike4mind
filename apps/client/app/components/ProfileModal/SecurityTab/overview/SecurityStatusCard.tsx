@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Sheet, Typography, useTheme } from '@mui/joy';
 
 export interface SecurityStatusCardProps {
-  riskScore: number;
+  securityScore: number;
   riskLevel: 'low' | 'medium' | 'high';
   passedChecks: number;
   totalChecks: number;
@@ -17,7 +17,7 @@ interface BadgeColors {
 }
 
 export const getUserBadgeColors = (
-  riskScore: number,
+  securityScore: number,
   riskLevel: 'low' | 'medium' | 'high',
   palette: ReturnType<typeof useTheme>['palette']
 ): BadgeColors => {
@@ -28,21 +28,21 @@ export const getUserBadgeColors = (
       textShadow: 'none',
     };
   }
-  if (riskLevel === 'medium' || riskScore < 50) {
+  if (riskLevel === 'medium' || securityScore < 50) {
     return {
       gradient: `linear-gradient(135deg, ${palette.security.high.gradientStart}, ${palette.security.high.gradientEnd})`,
       shadow: `0 8px 24px ${palette.security.high.shadow}`,
       textShadow: 'none',
     };
   }
-  if (riskScore < 70) {
+  if (securityScore < 70) {
     return {
       gradient: `linear-gradient(135deg, ${palette.security.moderate.gradientStart}, ${palette.security.moderate.gradientEnd})`,
       shadow: `0 8px 24px ${palette.security.moderate.shadow}`,
       textShadow: 'none',
     };
   }
-  if (riskScore < 85) {
+  if (securityScore < 85) {
     return {
       gradient: `linear-gradient(135deg, ${palette.security.good.gradientStart}, ${palette.security.good.gradientEnd})`,
       shadow: `0 8px 24px ${palette.security.good.shadow}`,
@@ -56,16 +56,16 @@ export const getUserBadgeColors = (
   };
 };
 
-export const getUserStatusLabel = (riskScore: number, riskLevel: 'low' | 'medium' | 'high'): string => {
+export const getUserStatusLabel = (securityScore: number, riskLevel: 'low' | 'medium' | 'high'): string => {
   if (riskLevel === 'high') return 'High Risk';
   if (riskLevel === 'medium') return 'Moderate Risk';
-  if (riskScore >= 85) return 'Excellent';
-  if (riskScore >= 70) return 'Good';
+  if (securityScore >= 85) return 'Excellent';
+  if (securityScore >= 70) return 'Good';
   return 'At Risk';
 };
 
 const SecurityStatusCard: React.FC<SecurityStatusCardProps> = ({
-  riskScore,
+  securityScore,
   riskLevel,
   passedChecks,
   totalChecks,
@@ -79,9 +79,9 @@ const SecurityStatusCard: React.FC<SecurityStatusCardProps> = ({
         shadow: `0 8px 24px ${theme.palette.security.neutral.shadow}`,
         textShadow: 'none',
       }
-    : getUserBadgeColors(riskScore, riskLevel, theme.palette);
+    : getUserBadgeColors(securityScore, riskLevel, theme.palette);
 
-  const statusLabel = isLoading ? 'Loading…' : getUserStatusLabel(riskScore, riskLevel);
+  const statusLabel = isLoading ? 'Loading…' : getUserStatusLabel(securityScore, riskLevel);
   const allPassed = passedChecks === totalChecks;
 
   const lastDetectionText = lastDetection

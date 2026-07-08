@@ -8,7 +8,8 @@ An open-core AI knowledge platform — a multi-model workspace where notebooks, 
 
 [![Chat on Bike4Mind](https://img.shields.io/badge/chat-Bike4Mind-6d28d9)](https://app.bike4mind.com) &nbsp;
 [![License: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](./LICENSE) &nbsp;
-[![Discussions](https://img.shields.io/badge/community-Discussions-24292f)](https://github.com/bike4mind/bike4mind/discussions)
+[![Discussions](https://img.shields.io/badge/community-Discussions-24292f)](https://github.com/bike4mind/bike4mind/discussions) &nbsp;
+[![GitHub stars](https://img.shields.io/github/stars/bike4mind/bike4mind?style=flat&label=stars&color=6d28d9)](https://github.com/bike4mind/bike4mind)
 
 </div>
 
@@ -83,15 +84,5 @@ Bike4Mind is licensed under the **[Business Source License 1.1](./LICENSE)** wit
 - 🕓 Each released version **converts to Apache-2.0** two years after its public release. This license will never be tightened.
 
 For alternative licensing, contact **licensing@bike4mind.com**.
-
-## Star History
-
-<a href="https://www.star-history.com/?repos=bike4mind%2Fbike4mind&type=date&legend=top-left">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&theme=dark&legend=top-left" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&legend=top-left" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=bike4mind/bike4mind&type=date&legend=top-left" />
- </picture>
-</a>
 
 © 2026 Bike4Mind, Inc.

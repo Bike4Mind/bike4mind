@@ -1,0 +1,14 @@
+{
+  "name": "b4m-selfhost-ws-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Self-host WebSocket gateway: browser socket server + API Gateway Management API emulator for the Bike4Mind Docker Compose stack.",
+  "main": "gateway.mjs",
+  "scripts": {
+    "start": "node gateway.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  }
+}

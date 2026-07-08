@@ -55,7 +55,10 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useBrandingSettings: () => ({}) }));
 vi.mock('next/image', () => ({ default: () => null }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k: string) => k }),
+  Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
+}));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });

@@ -87,6 +87,17 @@ export interface ToolBuilderDeps {
   depth?: number;
 
   /**
+   * Tools a subagent can OPT INTO by explicitly naming them (or a matching
+   * wildcard) in its `allowedTools`. Forwarded to `delegate_to_agent` /
+   * `coordinate_task` and merged into the subagent's toolset via the
+   * orchestrator's `optInTools` channel. Kept out of the parent's own toolbelt
+   * (never added to `tools`), so launch-gated capabilities like Lattice reach a
+   * delegated agent that asked for them without being forced on every run. Omit
+   * for callers that expose no opt-in-only tools.
+   */
+  optInTools?: ICompletionOptionTools[];
+
+  /**
    * Returns the current top-level execution id (used by `coordinate_task` to
    * persist DAG children with `parentExecutionId`). Required when
    * `dagDispatcher` is provided.
@@ -346,6 +357,7 @@ export function buildSharedTools(
     getRemainingTimeMs: deps.getRemainingTimeMs,
     handoffSignal: deps.handoffSignal,
     depth: deps.depth,
+    optInTools: deps.optInTools,
   });
   tools.push(delegateTool);
 
@@ -372,6 +384,7 @@ export function buildSharedTools(
       dagDispatcher: deps.dagDispatcher,
       getParentExecutionId: deps.getCurrentExecutionId,
       dagHandoffSignal: deps.dagHandoffSignal,
+      optInTools: deps.optInTools,
     });
     tools.push(coordinateTool);
   }
