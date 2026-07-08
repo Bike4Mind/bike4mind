@@ -50,6 +50,7 @@ export interface UserSettings {
   toolsCatalogCollapsed: boolean;
   /** Layer-2 Agent-mode preference. Default `'off'` per `IUserPreferences`. */
   agentModeDefault: 'off' | 'auto' | 'on';
+  showSplashCards: boolean;
 }
 
 interface UserSettingsContextProps {
@@ -96,6 +97,7 @@ const defaultSettings: UserSettings = {
   rechartsDisplayMode: 'inline',
   toolsCatalogCollapsed: false,
   agentModeDefault: 'off',
+  showSplashCards: true,
 };
 
 /** Scalar keys shared between IUserPreferences and UserSettings. */
@@ -110,6 +112,7 @@ const SCALAR_PREF_KEYS = [
   'rechartsDisplayMode',
   'toolsCatalogCollapsed',
   'agentModeDefault',
+  'showSplashCards',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */
