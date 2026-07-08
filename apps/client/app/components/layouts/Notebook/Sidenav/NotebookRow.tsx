@@ -25,6 +25,7 @@ const NotebookRow = memo(function NotebookRow({
   favoriteSessions,
   showMessageCount,
   suppressActive,
+  activeAgentId,
   onNavigate,
   onNotebookClick,
   onToggle,
@@ -38,13 +39,21 @@ const NotebookRow = memo(function NotebookRow({
   /** When true, force this session row unselected (e.g. while a dedicated project screen is
    *  open, so the stale current-session highlight doesn't linger). */
   suppressActive?: boolean;
+  /** Id of the agent whose dedicated screen is open, so its row highlights. */
+  activeAgentId?: string | null;
   onNavigate: (path: string) => void;
   onNotebookClick: (session: ISessionDocument) => void;
   onToggle: (id: string) => void;
 }) {
   if ('isAgent' in item && item.isAgent) {
     // any: CombinedItem's agent variant is structurally looser than AgentSidenavItem's prop
-    return <AgentSidenavItem agent={item as any} onClick={() => onNavigate(`/agents/${item.id}`)} />;
+    return (
+      <AgentSidenavItem
+        agent={item as any}
+        onClick={() => onNavigate(`/agents/${item.id}`)}
+        isSelected={item.id === activeAgentId}
+      />
+    );
   }
   if ('isProject' in item && item.isProject) {
     // any: CombinedItem's project variant is structurally looser than IProjectDocument

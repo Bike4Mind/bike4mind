@@ -45,14 +45,20 @@ const CombinedNotebooks = () => {
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   const location = useLocation();
 
-  // Route-driven sidebar selection. Anywhere in the projects section (the /projects grid or a
-  // specific /projects/:id screen) the stale current-session highlight should be dropped
-  // (currentSessionId is a persisted store value that isn't cleared on project navigation).
-  // A specific project screen additionally highlights its own row. Computed once here so the
-  // hot per-notebook rows don't each subscribe to the router.
+  // Route-driven sidebar selection. Anywhere in the projects/agents sections (the grid or a
+  // specific /:id screen) the stale current-session highlight should be dropped (currentSessionId
+  // is a persisted store value that isn't cleared on navigation). A specific project/agent screen
+  // additionally highlights its own row. Computed once here so the hot per-notebook rows don't
+  // each subscribe to the router.
   const onProjectsSection = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
+  const onAgentsSection = location.pathname === '/agents' || location.pathname.startsWith('/agents/');
+  const suppressNotebookHighlight = onProjectsSection || onAgentsSection;
   const activeProjectId = useMemo(() => {
     const match = location.pathname.match(/^\/projects\/([^/]+)/);
+    return match ? match[1] : null;
+  }, [location.pathname]);
+  const activeAgentId = useMemo(() => {
+    const match = location.pathname.match(/^\/agents\/([^/]+)/);
     return match ? match[1] : null;
   }, [location.pathname]);
 
@@ -749,7 +755,8 @@ const CombinedNotebooks = () => {
                         isShared={false}
                         favoriteSessions={favoriteSessions}
                         showMessageCount={false}
-                        suppressActive={onProjectsSection}
+                        suppressActive={suppressNotebookHighlight}
+                        activeAgentId={activeAgentId}
                         onNavigate={handleItemNavigate}
                         onNotebookClick={handleNotebookClick}
                         onToggle={handleToggleItemSelection}
@@ -785,7 +792,7 @@ const CombinedNotebooks = () => {
                       project={project as IProjectDocument}
                       onNotebookClick={handleNotebookClick}
                       favoriteSessions={favoriteSessions}
-                      suppressActive={onProjectsSection}
+                      suppressActive={suppressNotebookHighlight}
                     />
                   )}
                 </Box>
@@ -801,7 +808,8 @@ const CombinedNotebooks = () => {
             selectedItems={selectedItems}
             favoriteSessions={favoriteSessions}
             showMessageCount={showMessageCounts}
-            suppressActive={onProjectsSection}
+            suppressActive={suppressNotebookHighlight}
+            activeAgentId={activeAgentId}
             onNavigate={handleItemNavigate}
             onNotebookClick={handleNotebookClick}
             onToggle={handleToggleItemSelection}

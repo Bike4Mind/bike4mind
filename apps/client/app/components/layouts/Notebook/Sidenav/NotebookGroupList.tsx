@@ -16,6 +16,8 @@ interface NotebookGroupListProps {
   showMessageCount: boolean;
   /** Force all session rows unselected (e.g. while a dedicated project screen is open). */
   suppressActive?: boolean;
+  /** Id of the agent whose dedicated screen is open, so its row highlights. */
+  activeAgentId?: string | null;
   onNavigate: (path: string) => void;
   onNotebookClick: (session: ISessionDocument) => void;
   onToggle: (id: string) => void;
@@ -34,6 +36,7 @@ export default function NotebookGroupList({
   favoriteSessions,
   showMessageCount,
   suppressActive,
+  activeAgentId,
   onNavigate,
   onNotebookClick,
   onToggle,
@@ -87,6 +90,7 @@ export default function NotebookGroupList({
                   favoriteSessions={favoriteSessions}
                   showMessageCount={showMessageCount}
                   suppressActive={suppressActive}
+                  activeAgentId={activeAgentId}
                   onNavigate={onNavigate}
                   onNotebookClick={onNotebookClick}
                   onToggle={onToggle}
