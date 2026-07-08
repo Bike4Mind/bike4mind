@@ -145,11 +145,11 @@ describe('ChatCompletion /health', () => {
   });
 });
 
-describe('ChatCompletion /api/ai/v2/completions', () => {
+describe('ChatCompletion /api/ai/v1/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
   const postCompletion = (body: unknown, headers: Record<string, string> = {}) =>
-    fetch(`${baseUrl}/api/ai/v2/completions`, {
+    fetch(`${baseUrl}/api/ai/v1/completions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: JSON.stringify(body),

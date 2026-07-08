@@ -20,7 +20,6 @@ import {
 import { eventBus } from './eventBus';
 import { slackEventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { cliLlmHandler } from './cliLlmHandler';
 import { cliWsCompletionHandler } from './cliWsCompletionHandler';
 import {
   fabFileChunkQueue,
@@ -182,7 +181,6 @@ export const web = new sst.aws.Nextjs(
       chatCompletion,
       imageProcessor,
       mcpHandler,
-      cliLlmHandler,
       cliWsCompletionHandler,
       fabFileBucket,
       generatedImagesBucket,

@@ -15,7 +15,7 @@ import { processQuest } from '@server/queueHandlers/questProcessor';
  *
  * Not routed through CloudFront - reachable only on the ALB directly - and guarded by the
  * shared-secret bearer (`authorize`) as defense-in-depth. Contrast with the external
- * `/api/ai/v2/completions` route, which is public and uses its own user auth (API key / JWT).
+ * `/api/ai/v1/completions` route, which is public and uses its own user auth (API key / JWT).
  */
 
 /**

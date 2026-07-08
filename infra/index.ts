@@ -6,7 +6,6 @@ export * from './dataSyncer';
 export * from './emailIngestion';
 export * from './bus';
 export * from './mcp';
-export * from './cliLlmHandler';
 export * from './cliWsCompletionHandler';
 export * from './cliToolHandler';
 export * from './queues';

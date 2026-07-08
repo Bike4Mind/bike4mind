@@ -37,20 +37,20 @@ import { Config } from '@server/utils/config';
 import { z } from 'zod';
 
 /**
- * v2 CLI/3rd-party completions - served by the always-on ChatCompletion (Fargate)
- * instead of the v1 `cliLlmHandler` Lambda. Same wire contract (OpenAI-ish SSE), same auth
- * (user API key or JWT - NOT the shared-secret `/process` gate), same request schema and
- * analytics. The only difference from v1 is the transport: Express `res` streaming here vs
- * Lambda response streaming there. v1 is kept alongside for A/B comparison and to serve
- * existing clients; once v2 is validated the shared orchestration can be unified.
+ * Public CLI/3rd-party completions endpoint (`/api/ai/v1/completions`), served by the always-on
+ * ChatCompletion service (Fargate). This is the sole implementation - it replaced the former
+ * `cliLlmHandler` Lambda, which has been removed; the public path/version (`v1`) is unchanged, so
+ * existing clients need no change. User auth (API key or JWT - NOT the shared-secret `/process`
+ * gate), OpenAI-ish SSE wire contract, request schema, and analytics all match what the Lambda did.
  *
- * Why Fargate: no cold start and no 15-minute Lambda ceiling on the steady-state path.
- * Trade-off inherited from the service: a deploy/scale-in SIGTERM drains for up to 120s
- * (DRAIN_TIMEOUT_MS in server.ts) before SIGKILL, so a completion still streaming past that
- * window is cut off - the v1 Lambda allowed up to 15 minutes.
+ * Why the always-on service: no cold start, and no 15-minute Lambda ceiling on the steady-state
+ * path (a long stream is bounded only by client/idle limits, not a hard function timeout).
+ * Trade-off: a deploy/scale-in SIGTERM drains for up to 120s (DRAIN_TIMEOUT_MS in server.ts)
+ * before SIGKILL, so a completion still streaming across a deploy is cut off - the old Lambda
+ * allowed up to 15 minutes regardless.
  */
 
-const V2_ENDPOINT = '/api/ai/v2/completions';
+const COMPLETIONS_ENDPOINT = '/api/ai/v1/completions';
 
 // Periodic SSE comment so an intermediary (CloudFront / socket layer) doesn't close the
 // connection during a token-less gap (e.g. extended thinking). Matches the v1 cadence.
@@ -69,13 +69,13 @@ function flattenHeaders(headers: Request['headers']): Record<string, string | un
 }
 
 /**
- * Register `POST /api/ai/v2/completions` on the ChatCompletion Express app.
+ * Register `POST /api/ai/v1/completions` on the ChatCompletion Express app.
  *
  * @param track - registers the request's completion promise with the service's SIGTERM
  *   drain set, so an in-flight stream finishes (bounded by DRAIN_TIMEOUT_MS) before exit.
  */
 export function registerExternalRoutes(app: Express, track: (p: Promise<void>) => void): void {
-  app.post(V2_ENDPOINT, express.json({ limit: '25mb' }), async (req: Request, res: Response) => {
+  app.post(COMPLETIONS_ENDPOINT, express.json({ limit: '25mb' }), async (req: Request, res: Response) => {
     // Resolve when the response finishes or the client disconnects - tracked for drain.
     const done = new Promise<void>(resolve => {
       res.on('finish', resolve);
@@ -85,7 +85,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const startTime = Date.now();
     const headers = flattenHeaders(req.headers);
-    const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: V2_ENDPOINT } });
+    const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: COMPLETIONS_ENDPOINT } });
 
     // Correlation ID - accept the caller's value (sanitized) or generate one. #8439
     const requestId = resolveRequestId(
@@ -146,11 +146,11 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       try {
         apiKeyInfo = await verifyApiKey(headers);
         userId = apiKeyInfo.userId;
-        logger.info('[CLI_LLM_V2] Authenticated via API key', { keyId: apiKeyInfo.keyId });
+        logger.info('[CLI_LLM] Authenticated via API key', { keyId: apiKeyInfo.keyId });
 
         await checkApiKeyRateLimitOrThrow(apiKeyInfo, {
           userId: apiKeyInfo.userId,
-          endpoint: V2_ENDPOINT,
+          endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
         });
       } catch (apiKeyError) {
@@ -170,7 +170,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         try {
           const user = await verifyJwtToken(token);
           userId = user.id;
-          logger.info('[CLI_LLM_V2] Authenticated via JWT', { userId });
+          logger.info('[CLI_LLM] Authenticated via JWT', { userId });
           await checkRateLimit(userId, source);
         } catch (jwtError) {
           write(
@@ -184,7 +184,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       }
 
       logger.updateMetadata({ userId, model: body.model, apiKeyId: apiKeyInfo?.keyId });
-      logger.info(`[CLI_LLM_V2] Starting completion for user ${userId}, model: ${body.model}`, {
+      logger.info(`[CLI_LLM] Starting completion for user ${userId}, model: ${body.model}`, {
         authMethod: apiKeyInfo ? 'api_key' : 'jwt',
       });
 
@@ -226,7 +226,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
       // 6. Close the stream and log success analytics.
       write(SSE_DONE_SIGNAL);
       end();
-      logger.info('[CLI_LLM_V2] Completion stream finished successfully');
+      logger.info('[CLI_LLM] Completion stream finished successfully');
 
       await logCompletionAnalytics({
         type: 'success',
@@ -236,7 +236,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         apiKeyInfo: apiKeyInfoForCompletion,
         source,
         startTime,
-        endpoint: V2_ENDPOINT,
+        endpoint: COMPLETIONS_ENDPOINT,
         method: req.method,
         finalInputTokens,
         finalOutputTokens,
@@ -245,7 +245,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         logger,
       });
     } catch (error) {
-      logger.error('[CLI_LLM_V2] Handler error', { error: error instanceof Error ? error.message : String(error) });
+      logger.error('[CLI_LLM] Handler error', { error: error instanceof Error ? error.message : String(error) });
 
       if (userId && body) {
         await logCompletionAnalytics({
@@ -256,7 +256,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           apiKeyInfo: apiKeyInfoForCompletion,
           source,
           startTime,
-          endpoint: V2_ENDPOINT,
+          endpoint: COMPLETIONS_ENDPOINT,
           method: req.method,
           error,
           db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
@@ -268,7 +268,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
         write(serializeSSEEvent(formatSSEError(error, requestId)));
         end();
       } catch (streamError) {
-        logger.error('[CLI_LLM_V2] Failed to write error to stream', {
+        logger.error('[CLI_LLM] Failed to write error to stream', {
           error: streamError instanceof Error ? streamError.message : String(streamError),
         });
       }

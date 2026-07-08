@@ -27,11 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "CliLlmHandler": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"

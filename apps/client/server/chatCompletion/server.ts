@@ -8,7 +8,7 @@ import { registerExternalRoutes } from './external/route';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
- * processing (/process) and external chat completions (/api/ai/v2/completions), which is why
+ * processing (/process) and external chat completions (/api/ai/v1/completions), which is why
  * it's named for the general capability rather than quests specifically.
  *
  * Replaces the old EventBridge -> questProcessor Lambda. Serves two surfaces, split by folder:
@@ -16,13 +16,13 @@ import { registerExternalRoutes } from './external/route';
  *     creates the quest, POSTs the QuestStartBody here, and gets a 202 back in ~milliseconds;
  *     we process it in-process (the container outlives the request, unlike a Lambda) and stream
  *     results over WebSocket. Guarded by a shared-secret bearer.
- *   - external/route.ts -> POST /api/ai/v2/completions: the user-authenticated
+ *   - external/route.ts -> POST /api/ai/v1/completions: the user-authenticated
  *     CLI/3rd-party SSE completions endpoint (own API-key / JWT auth).
  *
  * Why this exists: a long-running container has no cold start and no 15-minute Lambda
  * timeout - the two problems the Lambda path suffered from.
  *
- * Reachability: served on a PUBLIC load balancer (so /api/ai/v2/completions can be exposed
+ * Reachability: served on a PUBLIC load balancer (so /api/ai/v1/completions can be exposed
  * under the bike4mind domain via CloudFront - see infra/chatCompletion.ts). /process is
  * reachable on the same ALB but is NOT routed through CloudFront and stays behind the
  * shared-secret bearer (see internal/route.ts); the v2 endpoint uses its own user auth.
