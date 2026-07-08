@@ -119,6 +119,8 @@ export interface IUserPreferences {
    * - `on`: agent_executor used by default; toggle starts in the ON state
    */
   agentModeDefault?: 'off' | 'auto' | 'on';
+  /** Whether to show the prompt suggestion cards on the splash screen. Default: true. */
+  showSplashCards?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */

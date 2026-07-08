@@ -8497,6 +8497,105 @@
       "accessLevel": "public"
     },
     {
+      "slug": "features/data-lakes",
+      "title": "Data Lakes",
+      "description": "Curated knowledge collections for AI-powered retrieval",
+      "category": "features",
+      "sidebarPosition": 17,
+      "tags": [],
+      "headings": [
+        {
+          "level": 1,
+          "text": "Data Lakes",
+          "anchor": "data-lakes"
+        },
+        {
+          "level": 2,
+          "text": "How It Works",
+          "anchor": "how-it-works"
+        },
+        {
+          "level": 2,
+          "text": "Access Control",
+          "anchor": "access-control"
+        },
+        {
+          "level": 2,
+          "text": "Lifecycle",
+          "anchor": "lifecycle"
+        },
+        {
+          "level": 2,
+          "text": "Use Cases",
+          "anchor": "use-cases"
+        },
+        {
+          "level": 2,
+          "text": "FAQ",
+          "anchor": "faq"
+        },
+        {
+          "level": 2,
+          "text": "Related",
+          "anchor": "related"
+        }
+      ],
+      "filePath": "features/data-lakes.md",
+      "accessLevel": "public"
+    },
+    {
+      "slug": "features/optihashi",
+      "title": "OptiHashi",
+      "description": "AI-driven optimization engine for scheduling and resource allocation",
+      "category": "features",
+      "sidebarPosition": 18,
+      "tags": [],
+      "headings": [
+        {
+          "level": 1,
+          "text": "OptiHashi",
+          "anchor": "optihashi"
+        },
+        {
+          "level": 2,
+          "text": "Features",
+          "anchor": "features"
+        },
+        {
+          "level": 3,
+          "text": "Schedule Optimization",
+          "anchor": "schedule-optimization"
+        },
+        {
+          "level": 3,
+          "text": "Problem Formulation",
+          "anchor": "problem-formulation"
+        },
+        {
+          "level": 3,
+          "text": "Dashboard",
+          "anchor": "dashboard"
+        },
+        {
+          "level": 2,
+          "text": "Smart Tools Integration",
+          "anchor": "smart-tools-integration"
+        },
+        {
+          "level": 2,
+          "text": "FAQ",
+          "anchor": "faq"
+        },
+        {
+          "level": 2,
+          "text": "Related",
+          "anchor": "related"
+        }
+      ],
+      "filePath": "features/optihashi.md",
+      "accessLevel": "public"
+    },
+    {
       "slug": "features/lattice",
       "title": "Lattice - Financial Modeling",
       "description": "Create and manipulate financial pro-forma models using natural language conversation",
@@ -17929,6 +18028,105 @@
           "accessLevel": "public"
         },
         {
+          "slug": "features/data-lakes",
+          "title": "Data Lakes",
+          "description": "Curated knowledge collections for AI-powered retrieval",
+          "category": "features",
+          "sidebarPosition": 17,
+          "tags": [],
+          "headings": [
+            {
+              "level": 1,
+              "text": "Data Lakes",
+              "anchor": "data-lakes"
+            },
+            {
+              "level": 2,
+              "text": "How It Works",
+              "anchor": "how-it-works"
+            },
+            {
+              "level": 2,
+              "text": "Access Control",
+              "anchor": "access-control"
+            },
+            {
+              "level": 2,
+              "text": "Lifecycle",
+              "anchor": "lifecycle"
+            },
+            {
+              "level": 2,
+              "text": "Use Cases",
+              "anchor": "use-cases"
+            },
+            {
+              "level": 2,
+              "text": "FAQ",
+              "anchor": "faq"
+            },
+            {
+              "level": 2,
+              "text": "Related",
+              "anchor": "related"
+            }
+          ],
+          "filePath": "features/data-lakes.md",
+          "accessLevel": "public"
+        },
+        {
+          "slug": "features/optihashi",
+          "title": "OptiHashi",
+          "description": "AI-driven optimization engine for scheduling and resource allocation",
+          "category": "features",
+          "sidebarPosition": 18,
+          "tags": [],
+          "headings": [
+            {
+              "level": 1,
+              "text": "OptiHashi",
+              "anchor": "optihashi"
+            },
+            {
+              "level": 2,
+              "text": "Features",
+              "anchor": "features"
+            },
+            {
+              "level": 3,
+              "text": "Schedule Optimization",
+              "anchor": "schedule-optimization"
+            },
+            {
+              "level": 3,
+              "text": "Problem Formulation",
+              "anchor": "problem-formulation"
+            },
+            {
+              "level": 3,
+              "text": "Dashboard",
+              "anchor": "dashboard"
+            },
+            {
+              "level": 2,
+              "text": "Smart Tools Integration",
+              "anchor": "smart-tools-integration"
+            },
+            {
+              "level": 2,
+              "text": "FAQ",
+              "anchor": "faq"
+            },
+            {
+              "level": 2,
+              "text": "Related",
+              "anchor": "related"
+            }
+          ],
+          "filePath": "features/optihashi.md",
+          "accessLevel": "public"
+        },
+        {
           "slug": "features/lattice",
           "title": "Lattice - Financial Modeling",
           "description": "Create and manipulate financial pro-forma models using natural language conversation",
@@ -18855,5 +19053,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-04T06:30:22.519Z"
+  "version": "2026-07-07T23:54:20.800Z"
 }
