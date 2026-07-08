@@ -473,10 +473,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                         setShowSlashSuggestions(shouldShowSlashSuggestions);
                       }}
                       onSubmit={async () => {
-                        // Block Enter-to-send while a response is still streaming (the toolbar
-                        // shows Stop, not Send, so the button path is already gated). Without
-                        // this, a second prompt sent mid-response makes the two quests' status
-                        // timers fight in the progress area. See #285.
+                        // Block Enter-to-send while a response is still streaming.
                         if (shouldShowStopButton || submitting) return;
                         await handleSendClick();
                       }}
