@@ -20,7 +20,9 @@ const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
-    findOne: (...a: any[]) => mockFindOne(...a),
+    // findOne returns a chainable stub so production code's `.select('+password')`
+    // works; the underlying resolved value (set via mockFindOne) is unaffected.
+    findOne: (...a: any[]) => ({ select: () => mockFindOne(...a) }),
     updateOne: (...a: any[]) => mockUpdateOne(...a),
     create: (...a: any[]) => mockCreate(...a),
   },
@@ -164,14 +166,16 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(updateArg).not.toHaveProperty('$inc');
   });
 
-  it('still enforces the both-verified gate before reaching the equality check (regression)', async () => {
+  it('still enforces the local-verified gate when the account HAS a password (regression)', async () => {
+    // Local email unverified AND account has a password (reverse-takeover risk) -
+    // must be refused even though the emails match.
     const res = await runCallback({
-      // Local email unverified - must be refused even though the emails match.
       user: {
         id: 'u4',
         _id: 'u4',
         email: 'user@example.com',
         emailVerified: false,
+        password: 'bcrypt-hash',
         authProviders: [],
         tokenVersion: 0,
       },
@@ -181,6 +185,28 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(res._getRedirectUrl()).toContain(ACCOUNT_LINK_VERIFICATION_REQUIRED);
     expect(res._getRedirectUrl()).not.toContain(ACCOUNT_LINK_EMAIL_MISMATCH);
     expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('links AND promotes emailVerified when the local account has no password (pure-OAuth shell)', async () => {
+    const res = await runCallback({
+      user: {
+        id: 'u5',
+        _id: 'u5',
+        email: 'user@example.com',
+        emailVerified: false,
+        password: null,
+        authProviders: [],
+        tokenVersion: 0,
+      },
+      userInfo: { sub: 'okta-3', email: 'user@example.com', email_verified: true, preferred_username: 'user' },
+    });
+
+    expect(res._getRedirectUrl()).toMatch(/^\/auth\/success#token=/);
+    expect(mockAuthFailCreate).not.toHaveBeenCalled();
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.$set.emailVerified).toBe(true);
+    expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
   });
 
   it('creates a brand-new user when no existing account matches (gate does not apply)', async () => {

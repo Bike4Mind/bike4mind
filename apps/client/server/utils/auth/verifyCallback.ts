@@ -28,7 +28,10 @@ const authenticateUser = async (
     // Stage 1: match by immutable (strategy, providerId).
     // Guard: only when id is truthy - $elemMatch with id:null would match other
     // users' legacy null-id rows and introduce a new null-collision takeover.
-    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }) : null;
+    // .select('+password') - `password` is `select: false` in the schema, and the
+    // auto-link gate below needs to tell a pure-OAuth shell (no password) from a
+    // password-protected account; without this every user would look passwordless.
+    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }).select('+password') : null;
 
     // Stage 2: fallback to mutable email/username only when stage 1 missed.
     // The Missing Identifier guard lives here (between stages) because a stage-1
@@ -42,7 +45,7 @@ const authenticateUser = async (
       const conditions: { [field: string]: { $regex: string; $options: string } }[] = [];
       if (email) conditions.push({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
       if (username) conditions.push({ username: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } });
-      user = await User.findOne({ $or: conditions });
+      user = await User.findOne({ $or: conditions }).select('+password');
     }
 
     const oauthCredentials = {
@@ -81,22 +84,38 @@ const authenticateUser = async (
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
         const providerEmailVerified = isProviderEmailVerified(profile);
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
+        if (!providerEmailVerified) {
           // Propagate the targeted email so [strategy]/callback.ts can write
           // it onto the auth-fail log row for forensic review during attacks.
           done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
           return;
         }
-        // Both emails are verified but they must also match (case-insensitive).
-        // Verification alone is not sufficient: an attacker with a verified email
-        // on a colliding username/email could otherwise link into a victim account.
+        // The provider email is verified but it must also match the local
+        // account's email (case-insensitive). Verification alone is not sufficient:
+        // an attacker with a verified email on a colliding username could otherwise
+        // link into a victim account.
         const localEmail = user.email ?? null;
         if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
           done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
           return;
+        }
+        // Local-verified half: required UNLESS the local account is a pure-OAuth
+        // shell (no password). A password-protected account with an unverified
+        // email is a classic reverse-takeover setup - an attacker pre-creates the
+        // victim's email locally (unverified, password known only to the attacker)
+        // and waits for the victim to SSO in and get absorbed. A passwordless shell
+        // can't be squatted that way, and the provider round-trip above just
+        // cryptographically attested control of this email, so linking is safe -
+        // promote the local email to verified instead of dead-ending the user.
+        if (user.emailVerified !== true) {
+          if (user.password) {
+            done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
+            return;
+          }
+          promoteEmailVerified = true;
         }
       }
 
@@ -113,15 +132,33 @@ const authenticateUser = async (
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;
         isNewOAuthLink?: boolean;
+        emailVerified?: boolean;
+        emailVerifiedAt?: Date;
+        email?: string;
       };
+      // Promotion write rides the SAME updateOne as the provider link - no second
+      // round-trip, and it can never persist without the link (or vice versa).
+      // If the shell had no email at all (matched by username), backfill it from
+      // the now-verified provider assertion rather than leaving emailVerified:true
+      // paired with an empty email.
+      const emailVerifiedAt = new Date();
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date; email?: string } =
+        promoteEmailVerified
+          ? { emailVerified: true, emailVerifiedAt, ...(!user.email && email ? { email } : {}) }
+          : {};
       if (isNewProvider) {
         await User.updateOne(
           { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
+          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
         );
         linkedUser.tokenVersion = (user.tokenVersion ?? 0) + 1;
       } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
+        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
+      }
+      if (promoteEmailVerified) {
+        linkedUser.emailVerified = true;
+        linkedUser.emailVerifiedAt = emailVerifiedAt;
+        if (emailVerifiedFields.email) linkedUser.email = emailVerifiedFields.email;
       }
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.

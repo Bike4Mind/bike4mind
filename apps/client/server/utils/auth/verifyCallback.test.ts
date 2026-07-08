@@ -8,7 +8,9 @@ const mockCreate = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: {
-    findOne: (...args: unknown[]) => mockFindOne(...args),
+    // findOne returns a chainable stub so production code's `.select('+password')`
+    // works; the underlying resolved value (set via mockFindOne) is unaffected.
+    findOne: (...args: unknown[]) => ({ select: () => mockFindOne(...args) }),
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
     create: (...args: unknown[]) => mockCreate(...args),
   },
@@ -52,8 +54,15 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     emails: [{ value: 'victim@example.com', verified: true }],
   };
 
-  it('refuses to link when local user emailVerified is false', async () => {
-    stage2Hit({ _id: 'u1', email: 'victim@example.com', emailVerified: false, authProviders: [] });
+  it('refuses to link when local user emailVerified is false AND the account has a password', async () => {
+    // Password present -> reverse-takeover risk retained -> gate stays closed.
+    stage2Hit({
+      _id: 'u1',
+      email: 'victim@example.com',
+      emailVerified: false,
+      password: 'bcrypt-hash',
+      authProviders: [],
+    });
 
     const { err, user } = await runStandard(AuthStrategy.Google, baseProfile);
 
@@ -61,6 +70,55 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(user).toBeUndefined();
     expect(mockUpdateOne).not.toHaveBeenCalled();
     expect(mockFindOne).toHaveBeenCalledTimes(2);
+  });
+
+  it('links AND promotes emailVerified when local user has no password (pure-OAuth shell)', async () => {
+    // No password -> can't be a password-squatter's account -> the provider's
+    // verified-email assertion is sufficient; link and promote in one write.
+    stage2Hit({ _id: 'u1', email: 'victim@example.com', emailVerified: false, password: null, authProviders: [] });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, baseProfile);
+
+    expect(err).toBeNull();
+    expect(user).toBeDefined();
+    expect((user as { emailVerified?: boolean }).emailVerified).toBe(true);
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.$set.emailVerified).toBe(true);
+    expect(updateArg.$set.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
+  });
+
+  it('does NOT promote emailVerified when it was already true (no-op on the happy path)', async () => {
+    stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, password: null, authProviders: [] });
+
+    await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      emails: [{ value: 'user@example.com', verified: true }],
+    });
+
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.$set.emailVerified).toBeUndefined();
+    expect(updateArg.$set.emailVerifiedAt).toBeUndefined();
+  });
+
+  it('backfills a null local email from the verified provider email when promoting (username-matched shell)', async () => {
+    // Matched by username, not email (local email is empty) - the email-match check is
+    // skipped when either side is null, so promotion proceeds; the recommended default
+    // is to also populate the previously-empty local email from the provider assertion.
+    stage2Hit({ _id: 'u1', email: null, username: 'victim', emailVerified: false, password: null, authProviders: [] });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-real',
+      username: 'victim',
+      emails: [{ value: 'victim@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect((user as { email?: string }).email).toBe('victim@example.com');
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.$set.email).toBe('victim@example.com');
+    expect(updateArg.$set.emailVerified).toBe(true);
   });
 
   it('refuses to link when provider email_verified is false', async () => {
@@ -111,10 +169,12 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
 
   it('refuses when existing provider entry has DIFFERENT sub (impersonation via takeover of same strategy)', async () => {
     // Stage-1 queries by (strategy, 'google-sub-attacker') - stored id is different so it misses.
+    // Password present so the passwordless-shell relaxation doesn't mask this case.
     stage2Hit({
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
+      password: 'bcrypt-hash',
       authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-original' }],
     });
 
@@ -125,6 +185,35 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
 
     expect(err).toBe(ACCOUNT_LINK_VERIFICATION_REQUIRED);
     expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
+  it('re-links a DIFFERENT sub for an already-linked strategy and promotes when passwordless (stage-1 miss recovery)', async () => {
+    // Same shape as the impersonation test above, but no password: the legacy stored
+    // sub no longer matches (e.g. a changed Google sub) - AC2's "stage-1 match missed"
+    // dead-end. This is the existingProviderIndex!==-1 branch, whose update call is NOT
+    // wrapped in $set (unlike the new-provider path), so it exercises a distinct write shape.
+    stage2Hit({
+      _id: 'u1',
+      email: 'victim@example.com',
+      emailVerified: false,
+      password: null,
+      authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-old' }],
+    });
+
+    const { err, user } = await runStandard(AuthStrategy.Google, {
+      id: 'google-sub-new',
+      emails: [{ value: 'victim@example.com', verified: true }],
+    });
+
+    expect(err).toBeNull();
+    expect((user as { emailVerified?: boolean }).emailVerified).toBe(true);
+    expect(mockUpdateOne).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdateOne.mock.calls[0][1];
+    expect(updateArg.authProviders[0].id).toBe('google-sub-new');
+    expect(updateArg.emailVerified).toBe(true);
+    expect(updateArg.emailVerifiedAt).toBeInstanceOf(Date);
+    // Replacing an existing strategy entry is not a NEW link -> no tokenVersion bump.
+    expect(updateArg.$inc).toBeUndefined();
   });
 
   it('refreshes tokens without gate when SAME sub re-authenticates (stage-1 hit)', async () => {
@@ -216,7 +305,14 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   });
 
   it('forwards the target email to passport info so the auth-fail log can record it', async () => {
-    stage2Hit({ _id: 'u1', email: 'victim@example.com', emailVerified: false, authProviders: [] });
+    // Password present so this exercises the retained (password-account) refusal path.
+    stage2Hit({
+      _id: 'u1',
+      email: 'victim@example.com',
+      emailVerified: false,
+      password: 'bcrypt-hash',
+      authProviders: [],
+    });
 
     const { err, info } = await runStandard(AuthStrategy.Google, {
       id: 'google-sub-attacker',
@@ -230,11 +326,13 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   it('does NOT bypass gate when both stored and incoming id are null (legacy row safety)', async () => {
     // Profile has neither id nor sub -> incoming id = null -> stage-1 guard skips it entirely.
     // Stage-2 finds the user by email/username. The null-id guard on existingSameIdentity
-    // then prevents the null===null bypass.
+    // then prevents the null===null bypass. Password present so the passwordless-shell
+    // relaxation doesn't mask the bypass this test is guarding against.
     mockFindOne.mockResolvedValueOnce({
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
+      password: 'bcrypt-hash',
       authProviders: [{ strategy: AuthStrategy.Google, id: null }],
     });
 
