@@ -424,20 +424,48 @@ const ProfileMenu = () => {
               >
                 <IconButton
                   size="sm"
-                  variant={mode === 'dark' ? 'soft' : 'plain'}
-                  color={mode === 'dark' ? 'primary' : 'neutral'}
+                  variant="plain"
+                  color="neutral"
                   onClick={() => setMode('dark')}
-                  sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
+                  // Selected circle matches a selected notebook/project; non-selected uses the same
+                  // hover background as a notebook row.
+                  sx={theme2 => ({
+                    borderRadius: '999px',
+                    minHeight: 26,
+                    minWidth: 26,
+                    ...(mode === 'dark'
+                      ? {
+                          backgroundColor: theme2.palette.notebooklist.focusedBackground,
+                          '&:hover': { backgroundColor: theme2.palette.notebooklist.focusedBackground },
+                        }
+                      : {
+                          '&:hover': { backgroundColor: theme2.palette.notebooklist.hoverBg },
+                        }),
+                  })}
                   aria-label="Dark mode"
                 >
                   <DarkModeIcon sx={{ fontSize: '15px' }} />
                 </IconButton>
                 <IconButton
                   size="sm"
-                  variant={mode === 'light' ? 'soft' : 'plain'}
-                  color={mode === 'light' ? 'warning' : 'neutral'}
+                  variant="plain"
+                  color="neutral"
                   onClick={() => setMode('light')}
-                  sx={{ borderRadius: '999px', minHeight: 26, minWidth: 26 }}
+                  // Selected circle matches a selected notebook/project; non-selected uses the same
+                  // hover background as a notebook row.
+                  sx={theme2 => ({
+                    borderRadius: '999px',
+                    minHeight: 26,
+                    minWidth: 26,
+                    ...(mode === 'light'
+                      ? {
+                          backgroundColor: theme2.palette.notebooklist.focusedBackground,
+                          '&:hover': { backgroundColor: theme2.palette.notebooklist.focusedBackground },
+                        }
+                      : {
+                          '&:hover': { backgroundColor: theme2.palette.notebooklist.hoverBg },
+                        }),
+                  })}
                   aria-label="Light mode"
                 >
                   <LightModeIcon sx={{ fontSize: '15px' }} />
