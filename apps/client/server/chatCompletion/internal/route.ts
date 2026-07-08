@@ -7,7 +7,7 @@ import { Logger } from '@bike4mind/observability';
 import { processQuest } from '@server/queueHandlers/questProcessor';
 
 /**
- * Internal `/process` surface of the always-on QuestProcessorService.
+ * Internal `/process` surface of the always-on ChatCompletion.
  *
  * Called only by the frontend Lambda (`/api/ai/llm`, `/api/chat`): it creates the quest, POSTs
  * the QuestStartBody here, and gets a 202 back in ~milliseconds; we process the quest in-process
@@ -35,13 +35,13 @@ export function authorize(req: Request): boolean {
 }
 
 /**
- * Register `POST /process` on the QuestProcessorService Express app.
+ * Register `POST /process` on the ChatCompletion Express app.
  *
  * @param track - registers the quest's processing promise with the service's SIGTERM drain
  *   set, so in-flight work finishes (bounded by DRAIN_TIMEOUT_MS) before exit.
  */
 export function registerInternalRoutes(app: Express, track: (p: Promise<void>) => void): void {
-  const routeLogger = new Logger({ metadata: { service: 'questProcessorService' } });
+  const routeLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
   // Auth gate. Runs BEFORE the 25MB JSON body parser so an unauthenticated caller can't
   // force a large-body parse - only an authorized /process request reaches express.json.
@@ -64,7 +64,7 @@ export function registerInternalRoutes(app: Express, track: (p: Promise<void>) =
     const params = parsed.data;
     const logger = new Logger({
       metadata: {
-        service: 'questProcessorService',
+        service: 'chatCompletion',
         questId: params.questId,
         sessionId: params.sessionId,
         userId: params.userId,

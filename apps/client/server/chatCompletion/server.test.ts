@@ -108,7 +108,7 @@ const post = (body: unknown, headers: Record<string, string> = {}) =>
     body: JSON.stringify(body),
   });
 
-describe('QuestProcessorService /process', () => {
+describe('ChatCompletion /process', () => {
   it('returns 401 when the bearer token is missing', async () => {
     const res = await post(VALID_BODY);
     expect(res.status).toBe(401);
@@ -137,7 +137,7 @@ describe('QuestProcessorService /process', () => {
   });
 });
 
-describe('QuestProcessorService /health', () => {
+describe('ChatCompletion /health', () => {
   it('returns 200 when Mongo is connected', async () => {
     const res = await fetch(`${baseUrl}/health`);
     expect(res.status).toBe(200);
@@ -145,7 +145,7 @@ describe('QuestProcessorService /health', () => {
   });
 });
 
-describe('QuestProcessorService /api/ai/v2/completions', () => {
+describe('ChatCompletion /api/ai/v2/completions', () => {
   const VALID_COMPLETION = { model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] };
 
   const postCompletion = (body: unknown, headers: Record<string, string> = {}) =>

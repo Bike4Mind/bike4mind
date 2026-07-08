@@ -37,7 +37,7 @@ import { Config } from '@server/utils/config';
 import { z } from 'zod';
 
 /**
- * v2 CLI/3rd-party completions - served by the always-on QuestProcessorService (Fargate)
+ * v2 CLI/3rd-party completions - served by the always-on ChatCompletion (Fargate)
  * instead of the v1 `cliLlmHandler` Lambda. Same wire contract (OpenAI-ish SSE), same auth
  * (user API key or JWT - NOT the shared-secret `/process` gate), same request schema and
  * analytics. The only difference from v1 is the transport: Express `res` streaming here vs
@@ -69,7 +69,7 @@ function flattenHeaders(headers: Request['headers']): Record<string, string | un
 }
 
 /**
- * Register `POST /api/ai/v2/completions` on the QuestProcessorService Express app.
+ * Register `POST /api/ai/v2/completions` on the ChatCompletion Express app.
  *
  * @param track - registers the request's completion promise with the service's SIGTERM
  *   drain set, so an in-flight stream finishes (bounded by DRAIN_TIMEOUT_MS) before exit.
@@ -85,7 +85,7 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
 
     const startTime = Date.now();
     const headers = flattenHeaders(req.headers);
-    const logger = new Logger({ metadata: { service: 'questProcessorService', endpoint: V2_ENDPOINT } });
+    const logger = new Logger({ metadata: { service: 'chatCompletion', endpoint: V2_ENDPOINT } });
 
     // Correlation ID - accept the caller's value (sanitized) or generate one. #8439
     const requestId = resolveRequestId(

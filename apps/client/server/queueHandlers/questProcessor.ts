@@ -222,7 +222,7 @@ const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promis
  * reuse: the static options and DB connection are module-level singletons, so a
  * long-running container pays the setup cost once and every quest after is warm.
  *
- * Invoked by the always-on QuestProcessorService HTTP server (see
+ * Invoked by the always-on ChatCompletion HTTP server (see
  * `apps/client/server/chatCompletion/server.ts`). The caller has already validated
  * `params` against `QuestStartBodySchema` (= `LLMEvents.CompletionStart.schema`).
  */

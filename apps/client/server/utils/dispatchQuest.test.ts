@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mockResource = vi.hoisted(() => ({
-  QuestProcessorService: { url: 'http://quest-processor.internal' },
+  ChatCompletion: { url: 'http://chat-completion.internal' },
   SECRET_ENCRYPTION_KEY: { value: 'test-shared-secret' },
 }));
 vi.mock('sst', () => ({ Resource: mockResource }));
@@ -43,7 +43,7 @@ describe('dispatchQuest', () => {
     await dispatchQuest(params, logger);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toBe('http://quest-processor.internal/process');
+    expect(url).toBe('http://chat-completion.internal/process');
     expect((init.headers as Record<string, string>).authorization).toBe('Bearer test-shared-secret');
   });
 

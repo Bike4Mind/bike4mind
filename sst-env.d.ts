@@ -206,7 +206,7 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "QuestProcessorService": {
+    "ChatCompletion": {
       "type": "sst.aws.Service"
       "url": string
     }

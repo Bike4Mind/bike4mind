@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 
 /**
- * GET /api/quest-processor-status - connectivity probe for the always-on QuestProcessorService.
+ * GET /api/chat-completion-status - connectivity probe for the always-on ChatCompletion.
  *
  * The service sits behind a VPC-internal ALB, so the browser cannot reach its /health endpoint
  * directly. This route runs in the frontend Lambda (same VPC) and proxies the check, returning a
@@ -30,7 +30,7 @@ const handler = baseApi()
     if (process.env.B4M_SELF_HOST === 'true') {
       return res.status(200).json({ connected: true });
     }
-    const url = `${Resource.QuestProcessorService.url}/health`;
+    const url = `${Resource.ChatCompletion.url}/health`;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
     try {

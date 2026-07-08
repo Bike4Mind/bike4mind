@@ -19,7 +19,7 @@ export * from './subscriberFanout';
 export * from './vpc';
 export * from './warmer';
 export * from './websocket';
-export * from './questProcessorService';
+export * from './chatCompletion';
 export * from './web';
 export * from './llm';
 // agentExecutor must come after websocket (it adds a route to websocketApi)

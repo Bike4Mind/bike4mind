@@ -7,9 +7,9 @@ import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/route';
 
 /**
- * QuestProcessorService - always-on HTTP worker (Fargate). Lives under `chatCompletion/`
- * because it now serves both internal quest processing and external chat completions; the
- * SST service, image, and infra keep the QuestProcessorService name.
+ * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
+ * processing (/process) and external chat completions (/api/ai/v2/completions), which is why
+ * it's named for the general capability rather than quests specifically.
  *
  * Replaces the old EventBridge -> questProcessor Lambda. Serves two surfaces, split by folder:
  *   - internal/route.ts  -> POST /process: the frontend (`/api/ai/llm`, `/api/chat`)
@@ -23,7 +23,7 @@ import { registerExternalRoutes } from './external/route';
  * timeout - the two problems the Lambda path suffered from.
  *
  * Reachability: served on a PUBLIC load balancer (so /api/ai/v2/completions can be exposed
- * under the bike4mind domain via CloudFront - see infra/questProcessorService.ts). /process is
+ * under the bike4mind domain via CloudFront - see infra/chatCompletion.ts). /process is
  * reachable on the same ALB but is NOT routed through CloudFront and stays behind the
  * shared-secret bearer (see internal/route.ts); the v2 endpoint uses its own user auth.
  */
@@ -32,10 +32,10 @@ import { registerExternalRoutes } from './external/route';
 // Desktop). The cloud container pins PORT=8080 via the Dockerfile ENV, and the ALB
 // forwards 80->8080, so production is unaffected by this default.
 const PORT = Number(process.env.PORT) || 8788;
-const bootLogger = new Logger({ metadata: { service: 'questProcessorService' } });
+const bootLogger = new Logger({ metadata: { service: 'chatCompletion' } });
 
 // How long SIGTERM lets in-flight work finish before the process exits. Kept in
-// lock-step with the ECS task `stopTimeout` (infra/questProcessorService.ts) - ECS
+// lock-step with the ECS task `stopTimeout` (infra/chatCompletion.ts) - ECS
 // sends SIGKILL at stopTimeout, so draining any longer is pointless. 120s is the ECS
 // stopTimeout ceiling. NOTE: work still running past this window (e.g. a multi-minute
 // deep-research generation) is still cut off by a deploy/scale-in SIGTERM - see the PR
@@ -83,12 +83,12 @@ async function main() {
   // rejection must NOT take Node's default uncaughtException path and kill the whole container
   // along with every other in-flight request. Registers global handlers that log + swallow the
   // network-error class without exiting. Must run before any request is served.
-  registerProcessErrorHandlers(bootLogger, 'QuestProcessorService');
+  registerProcessErrorHandlers(bootLogger, 'ChatCompletion');
 
   const app = createApp();
 
   const server = app.listen(PORT, () => {
-    bootLogger.info(`QuestProcessorService listening on :${PORT}`);
+    bootLogger.info(`ChatCompletion listening on :${PORT}`);
   });
 
   // Connect Mongo in the BACKGROUND, after we're already listening. This makes :8080
@@ -124,7 +124,7 @@ async function main() {
 // start listening / connect Mongo / install signal handlers (vitest sets VITEST=true).
 if (!process.env.VITEST) {
   main().catch(err => {
-    bootLogger.error('QuestProcessorService failed to start', {
+    bootLogger.error('ChatCompletion failed to start', {
       error: err instanceof Error ? err.message : String(err),
     });
     process.exit(1);

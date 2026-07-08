@@ -15,7 +15,7 @@ const MAX_ATTEMPTS = 2;
 const RETRY_BACKOFF_MS = 300;
 
 /**
- * Hand a created quest to the always-on QuestProcessorService for processing.
+ * Hand a created quest to the always-on ChatCompletion for processing.
  *
  * Replaces the old `LLMEvents.CompletionStart.publish()` (EventBridge -> Lambda) path.
  * POSTs the QuestStartBody to the service's VPC-internal load balancer; the service ACKs
@@ -25,18 +25,14 @@ const RETRY_BACKOFF_MS = 300;
  * Retries once on transient failures (5xx, connection error, abort/timeout) within the
  * overall DISPATCH_TIMEOUT_MS budget. Does NOT retry deterministic 4xx (401 auth / 400
  * validation) - retrying those just burns the budget.
+ *
+ * Single path for every environment: hosted resolves `Resource.ChatCompletion.url`
+ * from the SST link; self-host resolves it from the `@bike4mind/resource` shim (env
+ * `CHAT_COMPLETION`, pointing at the `chatcompletion` compose service). No
+ * per-environment branching - the only difference is how the URL/secret resolve.
  */
 export async function dispatchQuest(params: QuestStartBody, logger: Logger): Promise<void> {
-  // Self-host runs without the separate quest service: process in this container.
-  // The runner module is resolved via a build-time alias (next.config.mjs) so
-  // hosted builds bundle only a stub and stay under the Lambda size cap.
-  if (process.env.B4M_SELF_HOST === 'true') {
-    const { runQuestSelfHost } = await import('@selfhost/quest-runner');
-    runQuestSelfHost(params, logger);
-    return;
-  }
-
-  const url = `${Resource.QuestProcessorService.url}/process`;
+  const url = `${Resource.ChatCompletion.url}/process`;
   const body = JSON.stringify(params);
   const deadline = Date.now() + DISPATCH_TIMEOUT_MS;
   let lastError: Error | undefined;
@@ -60,12 +56,12 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
       });
 
       if (res.status === 202) {
-        logger.debug('Quest dispatched to QuestProcessorService', { questId: params.questId, attempt });
+        logger.debug('Quest dispatched to ChatCompletion', { questId: params.questId, attempt });
         return;
       }
 
       const detail = await res.text().catch(() => '');
-      lastError = new Error(`QuestProcessorService dispatch failed: ${res.status} ${detail}`);
+      lastError = new Error(`ChatCompletion dispatch failed: ${res.status} ${detail}`);
       // 4xx (auth/validation) is deterministic - fail fast instead of retrying. Throwing
       // here lets the catch below distinguish it by reference identity from network errors.
       if (res.status < 500) throw lastError;
@@ -79,7 +75,7 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
     }
 
     if (attempt < MAX_ATTEMPTS && deadline - Date.now() > RETRY_BACKOFF_MS) {
-      logger.warn('Retrying QuestProcessorService dispatch', {
+      logger.warn('Retrying ChatCompletion dispatch', {
         questId: params.questId,
         error: lastError?.message,
       });
@@ -87,5 +83,5 @@ export async function dispatchQuest(params: QuestStartBody, logger: Logger): Pro
     }
   }
 
-  throw lastError ?? new Error('QuestProcessorService dispatch failed: exhausted retries');
+  throw lastError ?? new Error('ChatCompletion dispatch failed: exhausted retries');
 }

@@ -32,9 +32,9 @@ import { websocketApi } from './websocket';
  */
 const isProd = PRODUCTION_STAGES.includes($app.stage);
 
-// Image source: the deploy workflow builds `apps/client/Dockerfile.quest-service` with a
+// Image source: the deploy workflow builds `apps/client/Dockerfile.chatcompletion` with a
 // plain `docker build` and pushes it to the target account's ECR, then references it here
-// by URI via QUEST_PROCESSOR_IMAGE. This keeps `sst deploy` build-free (same pattern as
+// by URI via CHAT_COMPLETION_IMAGE. This keeps `sst deploy` build-free (same pattern as
 // subscriberFanout) and — critically — avoids SST's docker-build provider booting a
 // `buildx_buildkit` builder container, which times out on the self-hosted deploy runner
 // (`booting builder: … context deadline exceeded`). CI must set it (throws otherwise). For
@@ -42,26 +42,26 @@ const isProd = PRODUCTION_STAGES.includes($app.stage);
 // a neutral public placeholder keeps the SST graph valid without a build.
 const LOCAL_PLACEHOLDER_IMAGE = 'public.ecr.aws/docker/library/busybox:latest';
 const isCI = process.env.CI === 'true';
-const questProcessorImage = process.env.QUEST_PROCESSOR_IMAGE || (isCI ? '' : LOCAL_PLACEHOLDER_IMAGE);
-if (isCI && !questProcessorImage) {
+const chatCompletionImage = process.env.CHAT_COMPLETION_IMAGE || (isCI ? '' : LOCAL_PLACEHOLDER_IMAGE);
+if (isCI && !chatCompletionImage) {
   throw new Error(
-    'QUEST_PROCESSOR_IMAGE must be set in CI — the deploy workflow builds & pushes the ' +
-      'quest-processor image to ECR before `sst deploy` (see .github/workflows/_deploy-env.yml). ' +
+    'CHAT_COMPLETION_IMAGE must be set in CI — the deploy workflow builds & pushes the ' +
+      'chat-completion image to ECR before `sst deploy` (see .github/workflows/_deploy-env.yml). ' +
       'For local `sst dev` (no CI=true) a neutral public placeholder is used automatically.'
   );
 }
 
-export const questProcessorService = new sst.aws.Service('QuestProcessorService', {
+export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   cluster,
   // Prebuilt image referenced by URI (built & pushed by CI — see note above). Building
   // out-of-band keeps `sst deploy` build-free, matching subscriberFanout.
-  image: questProcessorImage,
+  image: chatCompletionImage,
   // Internet-facing load balancer. Public so the v2 CLI/3rd-party completions endpoint
   // (/api/ai/v2/completions) can be exposed under the bike4mind domain via the shared
   // CloudFront router (route added below). /process is also reachable on this ALB but is
   // NOT routed through CloudFront and stays guarded by the shared-secret bearer checked in
   // server.ts. NOTE: the frontend Lambda's /process dispatch now targets the public ALB DNS
-  // (Resource.QuestProcessorService.url) and egresses via NAT rather than staying VPC-internal.
+  // (Resource.ChatCompletion.url) and egresses via NAT rather than staying VPC-internal.
   loadBalancer: {
     public: true,
     rules: [{ listen: '80/http', forward: '8080/http' }],
@@ -164,7 +164,7 @@ if (!$dev) {
   // shared dev distribution (empty on deployed dev/production). Guarded on !$dev because the
   // load balancer (and thus `.url`) only exists when the Service runs in the cloud - under
   // `sst dev` it runs via dev.command with no ALB, and the CLI reaches it on localhost:8788.
-  router.route(`${routePrefix}/api/ai/v2/completions`, questProcessorService.url);
+  router.route(`${routePrefix}/api/ai/v2/completions`, chatCompletion.url);
 
   const defaultSecurityGroupId = aws.ec2
     .getSecurityGroupsOutput({
@@ -175,13 +175,13 @@ if (!$dev) {
     })
     .ids.apply(ids => ids[0]);
 
-  new aws.ec2.SecurityGroupRule('QuestProcessorAlbToTask', {
+  new aws.ec2.SecurityGroupRule('ChatCompletionAlbToTask', {
     type: 'ingress',
     protocol: 'tcp',
     fromPort: 8080,
     toPort: 8080,
     securityGroupId: defaultSecurityGroupId,
-    sourceSecurityGroupId: questProcessorService.nodes.loadBalancer.securityGroups.apply(sgs => sgs[0]),
-    description: 'QuestProcessorService ALB to task :8080 (health checks + traffic)',
+    sourceSecurityGroupId: chatCompletion.nodes.loadBalancer.securityGroups.apply(sgs => sgs[0]),
+    description: 'ChatCompletion ALB to task :8080 (health checks + traffic)',
   });
 }

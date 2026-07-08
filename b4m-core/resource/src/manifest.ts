@@ -89,6 +89,10 @@ export const DEFAULT_MANIFEST = {
   NotebookImportCompleteFunction: { kind: 'function' },
   SlackEventBus: { kind: 'function' },
   mcpHandler: { kind: 'function', optional: true },
+  // --- service ---
+  // Always-on chatCompletion HTTP service the frontend dispatches quests to
+  // (`${CHAT_COMPLETION}/process`). Required: chat is broken without it.
+  ChatCompletion: { kind: 'service' },
   // --- websocket ---
   websocket: { kind: 'websocket' },
   // --- record ---
