@@ -4,6 +4,7 @@ import {
   Box,
   Button,
   Chip,
+  Divider,
   FormControl,
   FormHelperText,
   FormLabel,
@@ -24,7 +25,10 @@ import {
 import AddIcon from '@mui/icons-material/Add';
 import EditIcon from '@mui/icons-material/Edit';
 import DeleteIcon from '@mui/icons-material/Delete';
+import HandshakeIcon from '@mui/icons-material/Handshake';
+import WarningRoundedIcon from '@mui/icons-material/WarningRounded';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import type { IPartnerSignupRuleDocument } from '@bike4mind/common';
 import {
@@ -85,6 +89,8 @@ export default function PartnerSignupRulesTab() {
   const [editing, setEditing] = useState<IPartnerSignupRuleDocument | null>(null);
   const [form, setForm] = useState<FormState>(emptyForm);
   const [formError, setFormError] = useState<string | null>(null);
+  // Rule pending deletion (drives the confirm dialog); null when closed.
+  const [deleteTarget, setDeleteTarget] = useState<IPartnerSignupRuleDocument | null>(null);
 
   const { data, isPending } = useQuery({
     queryKey: [QUERY_KEY, { page, search }],
@@ -110,9 +116,10 @@ export default function PartnerSignupRulesTab() {
       }
       return createPartnerSignupRule({ domain: form.domain, ...payload });
     },
-    onSuccess: () => {
+    onSuccess: rule => {
       invalidate();
       setModalOpen(false);
+      toast.success(editing ? `Updated rule for ${rule.domain}` : `Created signup rule for ${rule.domain}`);
     },
     onError: (error: unknown) => {
       setFormError(extractApiError(error));
@@ -121,12 +128,21 @@ export default function PartnerSignupRulesTab() {
 
   const toggleMutation = useMutation({
     mutationFn: (rule: IPartnerSignupRuleDocument) => updatePartnerSignupRule(rule.id, { enabled: !rule.enabled }),
-    onSuccess: invalidate,
+    onSuccess: rule => {
+      invalidate();
+      toast.success(`${rule.domain} ${rule.enabled ? 'enabled' : 'disabled'}`);
+    },
+    onError: (error: unknown) => toast.error(extractApiError(error)),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deletePartnerSignupRule(id),
-    onSuccess: invalidate,
+    mutationFn: (rule: IPartnerSignupRuleDocument) => deletePartnerSignupRule(rule.id),
+    onSuccess: (_result, rule) => {
+      invalidate();
+      setDeleteTarget(null);
+      toast.success(`Deleted signup rule for ${rule.domain}`);
+    },
+    onError: (error: unknown) => toast.error(extractApiError(error)),
   });
 
   const openCreate = () => {
@@ -143,22 +159,26 @@ export default function PartnerSignupRulesTab() {
     setModalOpen(true);
   };
 
-  const handleDelete = (rule: IPartnerSignupRuleDocument) => {
-    if (window.confirm(`Delete the signup rule for "${rule.domain}"? Future signups on this domain lose the grant.`)) {
-      deleteMutation.mutate(rule.id);
-    }
-  };
-
   const rules = data?.data ?? [];
+  const total = data?.meta.total ?? 0;
   const totalPages = data?.meta.totalPages ?? 1;
+  const isEmpty = rules.length === 0 && !isPending;
 
   return (
     <Box sx={{ p: 2 }} data-testid="partner-signup-rules-tab">
-      <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
+      <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ mb: 2 }} gap={2}>
         <Box>
-          <Typography level="h4">Partner Signup Rules</Typography>
-          <Typography level="body-sm" sx={{ color: 'neutral.500' }}>
-            Auto-grant entitlements and one-time signup credits to verified emails on a partner domain.
+          <Stack direction="row" alignItems="center" gap={1}>
+            <Typography level="h4">Partner Signup Rules</Typography>
+            {total > 0 && (
+              <Chip size="sm" variant="soft" color="primary" data-testid="partner-rule-count">
+                {total}
+              </Chip>
+            )}
+          </Stack>
+          <Typography level="body-sm" sx={{ color: 'text.tertiary', maxWidth: 620 }}>
+            Auto-grant entitlements and a one-time signup-credit bonus to anyone who registers with a verified email on
+            a partner domain. Applied at email verification; disabled rules confer nothing.
           </Typography>
         </Box>
         <Button startDecorator={<AddIcon />} onClick={openCreate} data-testid="partner-rule-add-btn">
@@ -179,89 +199,139 @@ export default function PartnerSignupRulesTab() {
 
       {isPending && <LinearProgress sx={{ mb: 1 }} />}
 
-      <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
-        <Table stickyHeader hoverRow>
-          <thead>
-            <tr>
-              <th>Domain</th>
-              <th>Label</th>
-              <th>Entitlements</th>
-              <th style={{ width: 120 }}>Signup credits</th>
-              <th style={{ width: 90 }}>Enabled</th>
-              <th style={{ width: 110 }}>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rules.length === 0 && !isPending && (
+      {isEmpty ? (
+        <Sheet
+          variant="soft"
+          sx={{
+            borderRadius: 'md',
+            py: 6,
+            px: 3,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 1.5,
+          }}
+        >
+          <HandshakeIcon sx={{ fontSize: 44, color: 'neutral.400' }} />
+          <Typography level="title-md">{search ? 'No matching rules' : 'No partner signup rules yet'}</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.tertiary', textAlign: 'center', maxWidth: 420 }}>
+            {search
+              ? 'Try a different domain or label.'
+              : 'Create a rule to auto-grant entitlements and bonus credits to a partner’s verified signups.'}
+          </Typography>
+          {!search && (
+            <Button
+              startDecorator={<AddIcon />}
+              onClick={openCreate}
+              sx={{ mt: 1 }}
+              data-testid="partner-rule-empty-add-btn"
+            >
+              Add your first rule
+            </Button>
+          )}
+        </Sheet>
+      ) : (
+        <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
+          <Table stickyHeader hoverRow sx={{ '--TableCell-headBackground': 'var(--joy-palette-background-level1)' }}>
+            <thead>
               <tr>
-                <td colSpan={6}>
-                  <Typography level="body-sm" sx={{ p: 2, textAlign: 'center', color: 'neutral.500' }}>
-                    No partner signup rules yet.
-                  </Typography>
-                </td>
+                <th>Domain</th>
+                <th>Label</th>
+                <th>Entitlements</th>
+                <th style={{ width: 140, textAlign: 'right' }}>Signup credits</th>
+                <th style={{ width: 90, textAlign: 'center' }}>Enabled</th>
+                <th style={{ width: 110, textAlign: 'right' }}>Actions</th>
               </tr>
-            )}
-            {rules.map(rule => (
-              <tr key={rule.id} data-testid={`partner-rule-row-${rule.domain}`}>
-                <td>
-                  <Typography level="body-sm" fontWeight="lg">
-                    {rule.domain}
-                  </Typography>
-                </td>
-                <td>
-                  {rule.label || (
-                    <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
-                      -
-                    </Typography>
-                  )}
-                </td>
-                <td>
-                  <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                    {rule.entitlements.map(key => (
-                      <Chip key={key} size="sm" variant="soft">
-                        {key}
-                      </Chip>
-                    ))}
-                  </Stack>
-                </td>
-                <td>{rule.signupCredits.toLocaleString()}</td>
-                <td>
-                  <Switch
-                    checked={rule.enabled}
-                    onChange={() => toggleMutation.mutate(rule)}
-                    data-testid={`partner-rule-toggle-${rule.domain}`}
-                  />
-                </td>
-                <td>
-                  <Stack direction="row" spacing={0.5}>
-                    <Tooltip title="Edit">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        onClick={() => openEdit(rule)}
-                        data-testid={`partner-rule-edit-${rule.domain}`}
-                      >
-                        <EditIcon />
-                      </IconButton>
-                    </Tooltip>
-                    <Tooltip title="Delete">
-                      <IconButton
-                        size="sm"
-                        variant="plain"
-                        color="danger"
-                        onClick={() => handleDelete(rule)}
-                        data-testid={`partner-rule-delete-${rule.domain}`}
-                      >
-                        <DeleteIcon />
-                      </IconButton>
-                    </Tooltip>
-                  </Stack>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      </Sheet>
+            </thead>
+            <tbody>
+              {rules.map(rule => {
+                const toggling = toggleMutation.isPending && toggleMutation.variables?.id === rule.id;
+                return (
+                  <tr
+                    key={rule.id}
+                    data-testid={`partner-rule-row-${rule.domain}`}
+                    style={{ opacity: rule.enabled ? 1 : 0.55, transition: 'opacity 120ms ease' }}
+                  >
+                    <td>
+                      <Typography level="body-sm" fontWeight="lg">
+                        {rule.domain}
+                      </Typography>
+                    </td>
+                    <td>
+                      {rule.label || (
+                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                          -
+                        </Typography>
+                      )}
+                    </td>
+                    <td>
+                      {rule.entitlements.length ? (
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                          {rule.entitlements.map(key => (
+                            <Chip key={key} size="sm" variant="soft" color="primary">
+                              {key}
+                            </Chip>
+                          ))}
+                        </Stack>
+                      ) : (
+                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                          none
+                        </Typography>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {rule.signupCredits > 0 ? (
+                        <Typography level="body-sm">{rule.signupCredits.toLocaleString()}</Typography>
+                      ) : (
+                        <Typography level="body-xs" sx={{ color: 'neutral.400' }}>
+                          none
+                        </Typography>
+                      )}
+                    </td>
+                    <td style={{ textAlign: 'center' }}>
+                      <Tooltip title={rule.enabled ? 'Enabled - click to disable' : 'Disabled - click to enable'}>
+                        <Switch
+                          size="sm"
+                          color={rule.enabled ? 'success' : 'neutral'}
+                          checked={rule.enabled}
+                          disabled={toggling}
+                          onChange={() => toggleMutation.mutate(rule)}
+                          data-testid={`partner-rule-toggle-${rule.domain}`}
+                        />
+                      </Tooltip>
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                        <Tooltip title="Edit">
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            onClick={() => openEdit(rule)}
+                            data-testid={`partner-rule-edit-${rule.domain}`}
+                          >
+                            <EditIcon />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title="Delete">
+                          <IconButton
+                            size="sm"
+                            variant="plain"
+                            color="danger"
+                            onClick={() => setDeleteTarget(rule)}
+                            data-testid={`partner-rule-delete-${rule.domain}`}
+                          >
+                            <DeleteIcon />
+                          </IconButton>
+                        </Tooltip>
+                      </Stack>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </Table>
+        </Sheet>
+      )}
 
       {totalPages > 1 && (
         <Stack direction="row" spacing={1} justifyContent="center" alignItems="center" sx={{ mt: 2 }}>
@@ -277,24 +347,32 @@ export default function PartnerSignupRulesTab() {
         </Stack>
       )}
 
+      {/* Create / edit modal */}
       <Modal open={modalOpen} onClose={() => setModalOpen(false)}>
-        <ModalDialog sx={{ minWidth: 420, maxWidth: 520 }} data-testid="partner-rule-modal">
+        <ModalDialog sx={{ minWidth: 440, maxWidth: 540 }} data-testid="partner-rule-modal">
           <ModalClose />
           <Typography level="h4">{editing ? 'Edit signup rule' : 'Add signup rule'}</Typography>
+          <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: -0.5 }}>
+            {editing ? editing.domain : 'Grant entitlements and bonus credits to a partner domain.'}
+          </Typography>
+          <Divider sx={{ my: 1 }} />
 
-          <Stack spacing={1.5} sx={{ mt: 1 }}>
+          <Stack spacing={1.5}>
             <FormControl required>
               <FormLabel>Domain</FormLabel>
               <Input
                 placeholder="partner.com"
+                autoFocus={!editing}
                 value={form.domain}
                 disabled={!!editing}
                 onChange={e => setForm(f => ({ ...f, domain: e.target.value }))}
                 data-testid="partner-rule-domain-input"
               />
-              {editing && (
-                <FormHelperText>Domain is the key and cannot be changed. Delete and re-add to move it.</FormHelperText>
-              )}
+              <FormHelperText>
+                {editing
+                  ? 'Domain is the key and cannot be changed. Delete and re-add to move it.'
+                  : 'Bare domain only (no @ or path). Public mail providers are rejected.'}
+              </FormHelperText>
             </FormControl>
 
             <FormControl>
@@ -323,6 +401,7 @@ export default function PartnerSignupRulesTab() {
               <Input
                 type="number"
                 slotProps={{ input: { min: 0 } }}
+                endDecorator={<Typography level="body-xs">credits</Typography>}
                 value={form.signupCredits}
                 onChange={e => setForm(f => ({ ...f, signupCredits: e.target.value }))}
                 data-testid="partner-rule-credits-input"
@@ -341,9 +420,13 @@ export default function PartnerSignupRulesTab() {
               />
             </FormControl>
 
-            <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
-              <FormLabel>Enabled</FormLabel>
+            <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between', alignItems: 'center' }}>
+              <Box>
+                <FormLabel>Enabled</FormLabel>
+                <FormHelperText sx={{ mt: 0 }}>Turn off to stage a rule without granting anything.</FormHelperText>
+              </Box>
               <Switch
+                color={form.enabled ? 'success' : 'neutral'}
                 checked={form.enabled}
                 onChange={e => setForm(f => ({ ...f, enabled: e.target.checked }))}
                 data-testid="partner-rule-enabled-switch"
@@ -351,20 +434,62 @@ export default function PartnerSignupRulesTab() {
             </FormControl>
 
             {formError && (
-              <Alert color="danger" data-testid="partner-rule-form-error">
+              <Alert
+                color="danger"
+                variant="soft"
+                startDecorator={<WarningRoundedIcon />}
+                data-testid="partner-rule-form-error"
+              >
                 {formError}
               </Alert>
             )}
 
+            <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 0.5 }}>
+              <Button variant="plain" color="neutral" onClick={() => setModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={() => {
+                  setFormError(null);
+                  saveMutation.mutate();
+                }}
+                loading={saveMutation.isPending}
+                data-testid="partner-rule-save-btn"
+              >
+                {editing ? 'Save changes' : 'Create rule'}
+              </Button>
+            </Stack>
+          </Stack>
+        </ModalDialog>
+      </Modal>
+
+      {/* Delete confirmation */}
+      <Modal open={!!deleteTarget} onClose={() => setDeleteTarget(null)}>
+        <ModalDialog role="alertdialog" variant="outlined" data-testid="partner-rule-delete-modal">
+          <Typography level="h4" startDecorator={<WarningRoundedIcon sx={{ color: 'danger.500' }} />}>
+            Delete signup rule
+          </Typography>
+          <Divider sx={{ my: 1 }} />
+          <Typography level="body-sm">
+            Delete the rule for <b>{deleteTarget?.domain}</b>? New signups on this domain will stop receiving its
+            entitlements and bonus credits. Existing users keep what they already have.
+          </Typography>
+          <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ mt: 2 }}>
             <Button
-              onClick={() => {
-                setFormError(null);
-                saveMutation.mutate();
-              }}
-              loading={saveMutation.isPending}
-              data-testid="partner-rule-save-btn"
+              variant="plain"
+              color="neutral"
+              onClick={() => setDeleteTarget(null)}
+              data-testid="partner-rule-delete-cancel-btn"
             >
-              {editing ? 'Save changes' : 'Create rule'}
+              Cancel
+            </Button>
+            <Button
+              color="danger"
+              loading={deleteMutation.isPending}
+              onClick={() => deleteTarget && deleteMutation.mutate(deleteTarget)}
+              data-testid="partner-rule-delete-confirm-btn"
+            >
+              Delete rule
             </Button>
           </Stack>
         </ModalDialog>
