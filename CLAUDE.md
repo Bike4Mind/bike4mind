@@ -9,6 +9,11 @@ Everything committed here is public and permanent. Before you commit, ask: *"Wou
 - **Never commit secrets** (API keys, tokens, connection strings, `.env`). The gitleaks pre-commit hook + CI scans are a backstop, not the guard. If you leak one: **rotate first, delete second** — history is permanent.
 - No customer/partner names, cloud identifiers (AWS account IDs, ARNs, bucket names — resolve at runtime), internal-tracker issue numbers, or teammate names in code, comments, commits, or branch names.
 - **ASCII only** in code and comments — no curly quotes, em-dashes, or other smart punctuation.
+- **CRITICAL — premium overlay pin bumps must have minimal, generic messages.** When changing an overlay SHA in `premium-overlay.lock.json`, the commit message, PR title, PR body, and any issue MUST describe *only* the mechanical pin change and nothing about *what* the overlay is changing. The premium overlay repos are private and their change details (features, integrations, fixes, internal codenames) may be sensitive — never describe them in this public repo. Squash-merge copies the PR body into permanent public history, so keep it to a single line, e.g.:
+  - ✅ `Sets the b4m-<name> overlay pin to <40-char-sha>. Overlay-pin-only change; no application source changes.`
+  - ❌ Anything naming the overlay's features, integrations, providers, fix details, or internal codenames.
+
+  Put the real "why" (what changed and how it was verified) in the **private** overlay repo's own PR, not here.
 
 ## Commit identity
 
