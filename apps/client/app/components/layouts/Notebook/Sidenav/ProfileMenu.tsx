@@ -20,31 +20,29 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
-import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { openExternalLinkByKey } from '@client/app/utils/externalLinks';
 import { greenAlpha } from '@client/app/utils/themes/colors';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
-import ManageAccountsIcon from '@mui/icons-material/ManageAccounts';
+import ManageAccountsIcon from '@mui/icons-material/ManageAccountsOutlined';
 import MailOutlineIcon from '@mui/icons-material/MailOutline';
-import BusinessIcon from '@mui/icons-material/Business';
-import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
-import HelpCenterIcon from '@mui/icons-material/HelpCenter';
-import Brightness4Icon from '@mui/icons-material/Brightness4';
-import DarkModeIcon from '@mui/icons-material/DarkMode';
-import LightModeIcon from '@mui/icons-material/LightMode';
+import BusinessIcon from '@mui/icons-material/BusinessOutlined';
+import MonetizationOnIcon from '@mui/icons-material/MonetizationOnOutlined';
+import Brightness4Icon from '@mui/icons-material/Brightness4Outlined';
+import DarkModeIcon from '@mui/icons-material/DarkModeOutlined';
+import LightModeIcon from '@mui/icons-material/LightModeOutlined';
 import FormatListBulletedIcon from '@mui/icons-material/FormatListBulleted';
-import PersonAddIcon from '@mui/icons-material/PersonAdd';
-import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettings';
+import PersonAddIcon from '@mui/icons-material/PersonAddOutlined';
+import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlined';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
-import GavelIcon from '@mui/icons-material/Gavel';
-import ExtensionIcon from '@mui/icons-material/Extension';
-import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
+import GavelIcon from '@mui/icons-material/GavelOutlined';
+import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
-import LogoutIcon from '@mui/icons-material/Logout';
-import RefreshIcon from '@mui/icons-material/Refresh';
+import LogoutIcon from '@mui/icons-material/LogoutOutlined';
+import RefreshIcon from '@mui/icons-material/RefreshOutlined';
 
 // Strip the trailing " (Personal)" suffix that useAccounts appends to the personal account name.
 const stripPersonalSuffix = (name: string) => name.replace(/ \(Personal\)$/, '');
@@ -377,16 +375,6 @@ const ProfileMenu = () => {
               }}
             />
           )}
-          <MenuRow
-            testId="profile-menu-help"
-            icon={<HelpCenterIcon sx={{ fontSize: '18px' }} />}
-            label={t('help.center', 'Help Center')}
-            onClick={() => {
-              openHelpPanel();
-              setOpen(false);
-            }}
-          />
-
           {modeToggleEnabled && (
             <Box
               sx={theme2 => ({
