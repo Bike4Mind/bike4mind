@@ -3,8 +3,8 @@ import { connectDB, mongoose } from '@bike4mind/database';
 import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
-import { registerProcessRoute } from './internal/processRoute';
-import { registerCompletionsV2Route } from './external/completionsRoute';
+import { registerProcessRoute } from './internal/route';
+import { registerCompletionsV2Route } from './external/route';
 
 /**
  * QuestProcessorService - always-on HTTP worker (Fargate). Lives under `chatCompletion/`
@@ -12,11 +12,11 @@ import { registerCompletionsV2Route } from './external/completionsRoute';
  * SST service, image, and infra keep the QuestProcessorService name.
  *
  * Replaces the old EventBridge -> questProcessor Lambda. Serves two surfaces, split by folder:
- *   - internal/processRoute.ts  -> POST /process: the frontend (`/api/ai/llm`, `/api/chat`)
+ *   - internal/route.ts  -> POST /process: the frontend (`/api/ai/llm`, `/api/chat`)
  *     creates the quest, POSTs the QuestStartBody here, and gets a 202 back in ~milliseconds;
  *     we process it in-process (the container outlives the request, unlike a Lambda) and stream
  *     results over WebSocket. Guarded by a shared-secret bearer.
- *   - external/completionsRoute.ts -> POST /api/ai/v2/completions: the user-authenticated
+ *   - external/route.ts -> POST /api/ai/v2/completions: the user-authenticated
  *     CLI/3rd-party SSE completions endpoint (own API-key / JWT auth).
  *
  * Why this exists: a long-running container has no cold start and no 15-minute Lambda
@@ -25,7 +25,7 @@ import { registerCompletionsV2Route } from './external/completionsRoute';
  * Reachability: served on a PUBLIC load balancer (so /api/ai/v2/completions can be exposed
  * under the bike4mind domain via CloudFront - see infra/questProcessorService.ts). /process is
  * reachable on the same ALB but is NOT routed through CloudFront and stays behind the
- * shared-secret bearer (see internal/processRoute.ts); the v2 endpoint uses its own user auth.
+ * shared-secret bearer (see internal/route.ts); the v2 endpoint uses its own user auth.
  */
 
 // Default to 8788 for local dev (8080 is commonly taken on dev machines, e.g. Docker
