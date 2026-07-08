@@ -210,6 +210,22 @@ export class BasePage {
     await uiAssertion();
   }
 
+  /**
+   * Tick a MUI Joy `Checkbox` whose label contains policy links.
+   *
+   * MUI Joy overlays a transparent full-width `<input>` (the "action" area) at `zIndex: 1` over the
+   * whole control, but consent labels promote their policy `<Link>`s ABOVE that overlay
+   * (`CHECKBOX_LABEL_LINK_SX`, see app/utils/externalLinks.ts). Playwright's `.check()` clicks the
+   * input's center, which on a multi-line consent label lands on a link - Playwright reads that as
+   * an intercepted click and retries until it times out. Click the top-left instead (the checkbox
+   * square, never covered by a link), and only when not already checked so the toggle is idempotent.
+   */
+  async checkMuiCheckbox(checkbox: Locator) {
+    if (await checkbox.isChecked()) return;
+    await checkbox.click({ position: { x: 6, y: 6 } });
+    await expect(checkbox).toBeChecked({ timeout: TIMEOUTS.ELEMENT_STATE });
+  }
+
   async waitForLoaderToDisappear(selector: string) {
     // Wait directly for the hidden state. Playwright treats a not-yet-attached
     // element as already 'hidden', so this resolves immediately when the loader
