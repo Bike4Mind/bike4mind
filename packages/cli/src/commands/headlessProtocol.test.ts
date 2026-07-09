@@ -34,6 +34,16 @@ describe('headless protocol envelope', () => {
     expect(stamped.runId).toBe('run-2');
   });
 
+  it('envelope always wins over a stray schemaVersion/runId on the event', () => {
+    const stamped = stampEvent('real-run', {
+      type: 'thought',
+      schemaVersion: 'fake',
+      runId: 'fake',
+    } as never);
+    expect(stamped.schemaVersion).toBe(HEADLESS_SCHEMA_VERSION);
+    expect(stamped.runId).toBe('real-run');
+  });
+
   it('emitter writes one newline-terminated JSON line per event', () => {
     const lines: string[] = [];
     const emit = createHeadlessEmitter('run-3', line => lines.push(line));

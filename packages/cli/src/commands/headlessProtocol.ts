@@ -12,6 +12,7 @@
 
 import { classifyCommandRisk, type CommandRiskLevel } from '../config/commandRisk.js';
 import { type ToolCategory } from '../config/toolSafety.js';
+import { SHELL_LIKE_TOOL_COMMAND_FIELDS } from '../config/shellCommandFields.js';
 
 /**
  * Protocol schema version (semver). Bump the MAJOR when removing/renaming a
@@ -36,9 +37,9 @@ export type StampedHeadlessEvent = HeadlessEvent & {
 
 /** Serialize an event with the protocol envelope stamped on. Exposed for tests. */
 export function stampEvent(runId: string, event: HeadlessEvent): StampedHeadlessEvent {
-  // Envelope first, then event fields. Events never carry schemaVersion/runId
-  // themselves, so there is no collision.
-  return { schemaVersion: HEADLESS_SCHEMA_VERSION, runId, ...event };
+  // Envelope spread LAST so it always wins: a caller that mistakenly puts a
+  // schemaVersion/runId key on the event can never override the wire contract.
+  return { ...event, schemaVersion: HEADLESS_SCHEMA_VERSION, runId };
 }
 
 /**
@@ -109,15 +110,6 @@ export function parseStringArray(raw: string, inputType: string): string[] {
   return decoded as string[];
 }
 
-/**
- * Tools whose risk depends on their command text rather than the tool name.
- * Must stay in sync with SHELL_LIKE_TOOL_COMMAND_FIELDS in utils/toolsAdapter.ts,
- * which is the interactive permission gate's copy of the same mapping.
- */
-const SHELL_LIKE_COMMAND_FIELDS: Record<string, string> = {
-  bash_execute: 'command',
-};
-
 /** A tool invocation's risk, surfaced in permission events. */
 export interface ToolRiskAssessment {
   level: CommandRiskLevel;
@@ -132,7 +124,7 @@ export interface ToolRiskAssessment {
  * medium). Never throws: a classifier failure fails closed at `high`.
  */
 export function classifyToolRisk(toolName: string, args: unknown, category: ToolCategory): ToolRiskAssessment {
-  const field = SHELL_LIKE_COMMAND_FIELDS[toolName];
+  const field = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
   const command =
     field && args !== null && typeof args === 'object' ? (args as Record<string, unknown>)[field] : undefined;
 
