@@ -6,6 +6,7 @@ import { apiKeyAnomalyDetection } from '@server/middlewares/apiKeyAnomalyDetecti
 import { apiKeyRateLimit } from '@server/middlewares/apiKeyRateLimit';
 import { analyticsMiddleware } from '@server/analytics/analyticsMiddleware';
 import { connectDB } from '@bike4mind/database';
+import { ensureModelPriceCatalog } from '@server/utils/modelPriceCatalogInit';
 import { ApiKeyScope } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
@@ -102,6 +103,10 @@ export function baseApi<Req extends Request = Request, Res extends Response = Re
       // path still shows up in req-timing instead of as a null. Rethrow is preserved.
       req.__connectMs = Date.now() - connectStart;
     }
+
+    // One-time per process: wire the versioned model-price catalog (needs the
+    // connection established above).
+    ensureModelPriceCatalog();
 
     next();
   });

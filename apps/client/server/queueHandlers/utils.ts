@@ -1,4 +1,5 @@
 import { connectDB } from '@bike4mind/database';
+import { ensureModelPriceCatalog } from '@server/utils/modelPriceCatalogInit';
 import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
@@ -39,6 +40,9 @@ export const dispatchWithLogger = (handler: (event: SQSEvent, context: Context, 
     }
 
     await connectDB(Config.MONGODB_URI.replace('%STAGE%', Config.STAGE), logger);
+
+    // One-time per process: wire the versioned model-price catalog.
+    ensureModelPriceCatalog();
 
     try {
       // logger.info(`Starting Queue Handler: ${context.functionName}`);
