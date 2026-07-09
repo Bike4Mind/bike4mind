@@ -7,7 +7,8 @@ import type { IChatHistoryItem } from '@bike4mind/common';
  * fresh well before this; only a genuinely dead run (Lambda hard-killed/OOM, execution-timeout, or a
  * lost terminal WebSocket frame) ages past it.
  *
- * 120s = 2x the heartbeat's effective worst case, leaving headroom for a single missed beat.
+ * 120s = 12x the 10s streaming heartbeat, so a live run survives many missed beats before it can
+ * ever look stuck; only a genuinely dead run (no heartbeat at all) crosses it.
  */
 export const QUEST_TIMEOUT_THRESHOLD_MS = 120_000;
 
