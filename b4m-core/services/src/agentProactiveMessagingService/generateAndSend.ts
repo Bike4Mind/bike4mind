@@ -20,6 +20,8 @@ import {
   IApiKeyRepository,
   IAdminSettingsRepository,
   ImageModerationIncident,
+  IUsageEventRepository,
+  IOrganizationRepository,
 } from '@bike4mind/common';
 import { generateTools } from '../llm';
 
@@ -42,6 +44,13 @@ interface GenerateAndSendProactiveMessageAdapters {
      * inline in the tool); a missing repo only drops the incident audit record.
      */
     imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+    /**
+     * Analytics sink + owner lookup so tool-internal operational spend (blog draft, deep
+     * research, file edit, notebook gen) is recorded on the proactive-message path too.
+     * Optional: recording degrades to a no-op when a caller leaves them unwired.
+     */
+    usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    organizations?: Pick<IOrganizationRepository, 'findById'>;
   };
   apiKeyTable: ApiKeyTable;
   /**
@@ -106,6 +115,9 @@ export async function generateAndSendProactiveMessage({
           // edit_image tools' ToolContext.db - the block itself is unconditional regardless
           // of this wiring (see moderateToolImage in the tool implementations).
           imageModerationIncidents: db.imageModerationIncidents,
+          // Operational-usage recording for tool-internal llm.complete calls (recordToolOperationalUsage).
+          usageEvents: db.usageEvents,
+          organizations: db.organizations,
         },
       },
       storage,
@@ -117,7 +129,14 @@ export async function generateAndSendProactiveMessage({
       async () => {},
       llm,
       {},
-      model
+      model,
+      undefined, // imageProcessorLambdaName
+      undefined, // tools (defaults to b4mTools)
+      undefined, // allowedDirectories
+      undefined, // entitlementKeys
+      undefined, // sessionId
+      undefined, // codeMinifier - CLI-only (web-tree-sitter); not wired on the proactive path
+      models // availableModels: resolve COGS pricing for tool-internal operational calls
     );
 
     const tools = Object.values(toolDefinitions);

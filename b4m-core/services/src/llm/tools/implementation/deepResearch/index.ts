@@ -1,6 +1,7 @@
 import { ChatModels } from '@bike4mind/common';
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { OpenAIBackend, toProviderEndUserId } from '@bike4mind/llm-adapters';
+import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
+import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { FirecrawlApp } from '../webfetch/firecrawlApp';
 
 interface DeepResearchParams {
@@ -265,14 +266,19 @@ export async function performDeepResearch(
       log(`🔬 Deep Research: No OpenAI key available, using selected model ${config.model || 'default'} for analysis`);
     }
 
+    let completionInfo: CompletionInfo | undefined;
+    const startTime = Date.now();
     await analysisLlm.complete(
       analysisModel,
       [{ role: 'user', content: prompt }],
       { temperature: 0.1, stream: false },
-      async chunks => {
+      async (chunks, info) => {
         result += chunks[0] || '';
+        if (info) completionInfo = info;
       }
     );
+
+    await recordToolOperationalUsage(context, { model: analysisModel, completionInfo, startTime });
     return result;
   };
 
