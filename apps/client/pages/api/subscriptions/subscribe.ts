@@ -33,7 +33,10 @@ const handler = baseApi()
     // comp-grants go through a different route and are intentionally unaffected.
     const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
     if (requestedPlan?.availabilityFlag) {
-      const isLaunched = await adminSettingsRepository.getSettingsValue(requestedPlan.availabilityFlag);
+      // Read strictly as `=== true`: `availabilityFlag` is typed as any SettingKey, so if a
+      // plan ever points it at a non-boolean setting, "not exactly true" fails closed here
+      // rather than coercing a number/string into a truthy "launched".
+      const isLaunched = (await adminSettingsRepository.getSettingsValue(requestedPlan.availabilityFlag)) === true;
       if (!isLaunched) {
         throw new BadRequestError('This plan is not available yet');
       }
