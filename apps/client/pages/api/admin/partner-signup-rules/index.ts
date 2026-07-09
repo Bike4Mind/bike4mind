@@ -3,8 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { createPartnerSignupRuleSchema } from '@bike4mind/common';
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
-import { assertKnownEntitlements } from '@server/entitlements/partnerRules';
+import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
