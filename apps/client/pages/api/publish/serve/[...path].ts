@@ -178,15 +178,19 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Visibility gate - runs on the HTML AND every asset request.
   const vis = await checkVisibility(artifact, req.user as PublishUser | undefined);
   if (!vis.ok) {
-    // Gated bundle INDEX navigated with NO credential -> return the PUBLIC client-side loader
+    // Gated INDEX/page navigated with NO credential -> return the PUBLIC client-side loader
     // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
-    // `?raw=1` with Authorization: Bearer. The discriminator is `!req.user` (no usable
-    // credential on this request): re-fetching only helps when none was presented. A request
-    // that DID carry a credential and still failed (403 - authed-but-unauthorized) re-fetches
-    // to no avail, so it falls through to the hard status below. NOT for: assets (gated bundles
-    // inline their assets, so the opaque iframe never requests them) or `?raw=1` (the loader's
-    // own fetch - a shell there would loop).
-    const wantsLoaderShell = resolved.kind === 'bundle' && !resolved.assetPath && !isRaw && !req.user;
+    // `?raw=1` with Authorization: Bearer, then injects the result as the iframe srcdoc. The
+    // discriminator is `!req.user` (no usable credential on this request): re-fetching only
+    // helps when none was presented. A request that DID carry a credential and still failed
+    // (403 - authed-but-unauthorized) re-fetches to no avail, so it falls through to the hard
+    // status below. NOT for: bundle ASSETS (gated bundles inline their assets, so the opaque
+    // iframe never requests them) or `?raw=1` (the loader's own fetch - a shell there would
+    // loop). Applies to bundle indexes AND reply/fabfile pages: all three are top-level
+    // navigations that carry no Authorization header, so the same token-recovery works. The
+    // reply/fabfile `?raw=1` render carries its own `script-src 'none'` meta (renderViewerPage),
+    // so it stays script-free even inside the shell's allow-scripts iframe.
+    const wantsLoaderShell = !isRaw && !req.user && (resolved.kind === 'bundle' ? !resolved.assetPath : true);
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Security-Policy', buildWrapperCsp(req));
@@ -668,6 +672,10 @@ function renderViewerPage(artifact: PublishedArtifactLean): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CSP as a meta so the no-JS posture survives when this page is injected as the loader
+     shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
+     sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>

@@ -487,11 +487,14 @@ describe('GET /api/publish/serve - reply/fabfile organization visibility', () =>
     expect(res._getStatusCode()).toBe(403);
   });
 
-  it('401s an org reply for an anonymous viewer (no loader shell on the reply path)', async () => {
+  it('serves the loader shell (not 401) for an anonymous nav to a gated org reply', async () => {
+    // A top-level nav carries no Authorization header; the shell recovers the localStorage
+    // JWT and re-fetches ?raw=1 - same path bundles use. See the loader-shell describe below.
     mockArtifactFindOne.mockReturnValue(orgReply());
     const { res, promise } = run(['r', 'r-org']);
     await promise;
-    expect(res._getStatusCode()).toBe(401);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
   });
 
   it('serves an org fabfile to a same-org member (200)', async () => {
@@ -511,6 +514,79 @@ describe('GET /api/publish/serve - reply/fabfile organization visibility', () =>
     const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
+  });
+});
+
+describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
+  // Gated reply/fabfile pages are top-level navigations that carry no Authorization header, so
+  // (like bundles) they get the public loader shell, whose script re-fetches ?raw=1 with the
+  // localStorage JWT. This is what makes an org-shared reply/fabfile actually viewable in a
+  // browser after being authorized by the gate.
+  const gatedReply = (over = {}) => ({
+    publicId: 'r-gated',
+    title: 'Gated reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Secret org reply',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-gated',
+    ...over,
+  });
+
+  it('returns the loader shell (not 401) for an anonymous nav to a gated reply', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(data).not.toContain('allow-same-origin');
+    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("'raw=1'");
+    // Shell must NOT leak the gated reply's content or title.
+    expect(data).not.toContain('Secret org reply');
+  });
+
+  it('returns the loader shell for an anonymous nav to a gated fabfile', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      gatedReply({ publicId: 'f-gated', source: { kind: 'fabfile' }, slug: 'f-gated' })
+    );
+    const { res, promise } = run(['f', 'f-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  });
+
+  it('does NOT return the shell for a gated reply ?raw=1 with no credential (stays 401, no loop)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getData() as string).not.toContain('b4m-frame');
+  });
+
+  it('renders the reply for a gated ?raw=1 fetch from a same-org member (the shell re-fetch)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true, user: { id: 'member', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Secret org reply');
+    // The srcdoc-injected page keeps script-src 'none' via its own CSP meta (the shell's iframe
+    // is allow-scripts, so this backstop must ride along in the HTML, not just the HTTP header).
+    expect(data).toContain("script-src 'none'");
+  });
+
+  it('does NOT return the shell for a gated reply when authed-but-outside-org (stays 403)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { user: { id: 'outsider', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getData() as string).not.toContain('b4m-frame');
   });
 });
 
