@@ -311,11 +311,9 @@ describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
   it('is the sorted union of every grant source, deduped (matches allKnownEntitlementKeys)', () => {
     const expected = Array.from(
       new Set(
-        [
-          ...__registryRows.priceRows,
-          ...__registryRows.tagGrantRows,
-          ...__registryRows.domainGrantRows,
-        ].flatMap(r => r.entitlements)
+        [...__registryRows.priceRows, ...__registryRows.tagGrantRows, ...__registryRows.domainGrantRows].flatMap(
+          r => r.entitlements
+        )
       )
     ).sort();
     expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual(expected);

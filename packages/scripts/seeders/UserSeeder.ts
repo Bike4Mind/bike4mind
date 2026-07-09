@@ -73,6 +73,8 @@ export class UserSeeder {
               initialCredits: 10_000,
               record: {
                 password,
+                // Shared seeder secret, not a personal credential - sign-in is via OTC.
+                hasUsablePassword: false,
               },
             },
             {
@@ -111,6 +113,8 @@ export class UserSeeder {
             name: 'Super Admin',
             record: {
               password,
+              // Shared seeder secret, not a personal credential - sign-in is via OTC.
+              hasUsablePassword: false,
             },
             tags: ['Developer', 'Analyst'],
             isAdmin: true,
@@ -144,7 +148,7 @@ export class UserSeeder {
             name: qa.name,
             // Passwordless: sign-in is via OTC. The password field is unused for login
             // but createUser requires a record; reuse the seeder password.
-            record: { password },
+            record: { password, hasUsablePassword: false },
             tags: ['Developer', 'Analyst'],
             isAdmin: qa.isAdmin,
             emailVerified: true,

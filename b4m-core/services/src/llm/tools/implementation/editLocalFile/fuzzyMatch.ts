@@ -43,11 +43,7 @@ export class DisproportionateMatchError extends Error {
 
 /** The matchers in the fuzzy cascade, in the order they are attempted. */
 export type FuzzyStrategy =
-  | 'escape-normalized'
-  | 'line-trimmed'
-  | 'whitespace-normalized'
-  | 'blank-line-boundary'
-  | 'block-anchor';
+  'escape-normalized' | 'line-trimmed' | 'whitespace-normalized' | 'blank-line-boundary' | 'block-anchor';
 
 export interface FuzzyMatchResult {
   /** The exact substring of `content` that will be replaced (present verbatim). */
