@@ -113,6 +113,7 @@ const UserPreferencesSchema = new Schema(
     // without persistence, the Smart Routing tri-state in
     // ExperimentalFeatureToggle silently reverts to 'off' on reload.
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
+    showFunTools: { type: Boolean },
   },
   { _id: false }
 );

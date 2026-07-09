@@ -69,6 +69,7 @@ export const updateUserSchema = z.object({
       // (UserModel.ts) but unknown keys never reach repo.update without being
       // listed here.
       agentModeDefault: z.enum(['off', 'auto', 'on']).optional(),
+      showFunTools: z.boolean().optional(),
     })
     .nullable()
     .optional(),
