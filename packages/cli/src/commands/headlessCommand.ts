@@ -46,6 +46,7 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
+import { HEADLESS_SCHEMA_VERSION, createHeadlessEmitter } from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -58,6 +59,8 @@ export interface HeadlessOptions {
 }
 
 interface HeadlessJsonResult {
+  schemaVersion: string;
+  runId: string;
   result: string;
   steps: Array<{
     type: string;
@@ -109,6 +112,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
   const configStore = new ConfigStore();
   const sessionStore = new SessionStore();
   const customCommandStore = new CustomCommandStore();
+
+  // Stable per-run id stamped on every stream-json event (including a fatal
+  // error emitted from the catch below), so consumers can correlate a run.
+  const runId = uuidv4();
 
   try {
     const config = await configStore.load();
@@ -394,16 +401,16 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
 
-    // Set up step streaming for stream-json format
+    // Set up step streaming for stream-json format. Every event is stamped with
+    // schemaVersion + runId by the emitter (see headlessProtocol.ts).
+    const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
     if (outputFormat === 'stream-json') {
-      const emitNdjson = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + '\n');
-
       agent.on('thought', (step: AgentStep) => {
-        emitNdjson({ type: 'thought', content: step.content });
+        emit({ type: 'thought', content: step.content });
       });
 
       agent.on('action', (step: AgentStep) => {
-        emitNdjson({
+        emit({
           type: 'action',
           content: step.content,
           toolName: step.metadata?.toolName,
@@ -412,7 +419,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       });
 
       agent.on('observation', (step: AgentStep) => {
-        emitNdjson({ type: 'observation', content: step.content, toolName: step.metadata?.toolName });
+        emit({ type: 'observation', content: step.content, toolName: step.metadata?.toolName });
       });
     }
 
@@ -464,6 +471,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
       case 'json': {
         const jsonResult: HeadlessJsonResult = {
+          schemaVersion: HEADLESS_SCHEMA_VERSION,
+          runId,
           result: result.finalAnswer,
           steps: result.steps.map(s => ({
             type: s.type,
@@ -485,19 +494,17 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
       case 'stream-json':
         // Emit final result line (steps already emitted in real-time above)
-        process.stdout.write(
-          JSON.stringify({
-            type: 'result',
-            content: result.finalAnswer,
-            tokenUsage: {
-              totalTokens: result.completionInfo.totalTokens,
-              inputTokens: result.completionInfo.totalInputTokens,
-              outputTokens: result.completionInfo.totalOutputTokens,
-            },
-            iterations: result.completionInfo.iterations,
-            toolCalls: result.completionInfo.toolCalls,
-          }) + '\n'
-        );
+        emit({
+          type: 'result',
+          content: result.finalAnswer,
+          tokenUsage: {
+            totalTokens: result.completionInfo.totalTokens,
+            inputTokens: result.completionInfo.totalInputTokens,
+            outputTokens: result.completionInfo.totalOutputTokens,
+          },
+          iterations: result.completionInfo.iterations,
+          toolCalls: result.completionInfo.toolCalls,
+        });
         break;
     }
 
@@ -512,9 +519,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const message = error instanceof Error ? error.message : String(error);
 
     if (outputFormat === 'json') {
-      process.stdout.write(JSON.stringify({ error: message }) + '\n');
+      process.stdout.write(JSON.stringify({ schemaVersion: HEADLESS_SCHEMA_VERSION, runId, error: message }) + '\n');
     } else if (outputFormat === 'stream-json') {
-      process.stdout.write(JSON.stringify({ type: 'error', error: message }) + '\n');
+      createHeadlessEmitter(runId, line => process.stdout.write(line))({ type: 'error', error: message });
     } else {
       process.stderr.write(`Error: ${message}\n`);
     }
