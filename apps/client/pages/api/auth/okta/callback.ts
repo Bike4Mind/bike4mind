@@ -260,6 +260,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         authProviders[existingProviderIndex].id === incomingSub &&
         authProviders[existingProviderIndex].oktaIdentityProviderId === incomingIdpId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
         // Read `email_verified` straight off the OIDC userinfo as a boolean - the OIDC
         // spec types it as a JSON boolean, so (unlike the passport-shaped profiles in
@@ -267,12 +268,10 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         // Do NOT swap in isProviderEmailVerified() here; that helper exists for the wider
         // passport email-array shape this OIDC path never receives.
         const providerEmailVerified = userInfo.email_verified === true;
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
+        if (!providerEmailVerified) {
           Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: verification required', {
             userId: user.id,
             providerEmailVerified,
-            localEmailVerified,
           });
           await authFailLogRepository.create({
             strategy: 'okta',
@@ -286,12 +285,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
           return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_VERIFICATION_REQUIRED)}`);
         }
 
-        // Email-equality gate (mirrors verifyCallback.ts): both emails
-        // are verified, but they must also MATCH (case-insensitive). Verification
-        // alone is insufficient - the user lookup above matches on email OR username,
-        // so an attacker holding a verified Okta email on a colliding username could
-        // otherwise auto-link into a victim's account. Okta assertions are IdP-signed,
-        // but the per-tenant username/email split makes mismatch a real vector, not a
+        // Email-equality gate (mirrors verifyCallback.ts): the provider email
+        // is verified, but it must also MATCH the local account's email
+        // (case-insensitive). Verification alone is insufficient - the user
+        // lookup above matches on email OR username, so an attacker holding a
+        // verified Okta email on a colliding username could otherwise auto-link
+        // into a victim's account. Okta assertions are IdP-signed, but the
+        // per-tenant username/email split makes mismatch a real vector, not a
         // false-positive edge case, so the gate applies here as it does for the
         // generic OAuth path.
         const localEmail = user.email ?? null;
@@ -310,6 +310,42 @@ const handleOktaCallback = async (req: Request, res: Response) => {
           });
           return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_EMAIL_MISMATCH)}`);
         }
+
+        // Local-verified half: required UNLESS the local account has no usable password
+        // (hasUsablePassword === false) - mirrors verifyCallback.ts. An account with a
+        // real password and an unverified email is a reverse-takeover setup (attacker
+        // pre-creates the victim's email locally with a password only they know).
+        // `hasUsablePassword` is the discriminator (NOT `!user.password`): admin/migration
+        // "shell" accounts store an auto-generated, unusable password that is
+        // bcrypt-hashed and therefore indistinguishable from a real one - see
+        // UserModel.ts's field comment. A genuinely passwordless account can't be
+        // squatted that way, and Okta's assertion above just attested control of this
+        // email, so promote instead of dead-ending the user. Promote ONLY on a real
+        // verified-email match: a username-only match (local email null) is not an
+        // identity assertion, so promoting on it would let a colliding username take an
+        // emailless shell.
+        if (user.emailVerified !== true) {
+          const promotable =
+            !user.hasUsablePassword && !!email && !!localEmail && email.toLowerCase() === localEmail.toLowerCase();
+          if (!promotable) {
+            Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: verification required', {
+              userId: user.id,
+              providerEmailVerified,
+              localEmailVerified: false,
+            });
+            await authFailLogRepository.create({
+              strategy: 'okta',
+              ip,
+              userAgent,
+              email,
+              reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+              headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
+              meta: { path: req.url, status: 401 },
+            });
+            return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_VERIFICATION_REQUIRED)}`);
+          }
+          promoteEmailVerified = true;
+        }
       }
 
       if (existingProviderIndex !== -1) {
@@ -318,6 +354,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         authProviders.push(oauthCredentials);
       }
 
+      // Promotion write rides the SAME updateOne as the provider link - no second
+      // round-trip, and it can never persist without the link (or vice versa).
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
+      const emailVerifiedAt = new Date();
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProviderLink) {
         // Linking a NEW auth provider to an existing account is a security-relevant
         // change: bump tokenVersion to invalidate any other active sessions. The
@@ -325,11 +369,15 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         // version on the in-memory user, so the token minted below matches.
         await User.updateOne(
           { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
+          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
         );
         user.tokenVersion = (user.tokenVersion ?? 0) + 1;
       } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
+        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
+      }
+      if (promoteEmailVerified) {
+        user.emailVerified = true;
+        user.emailVerifiedAt = emailVerifiedAt;
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
@@ -339,6 +387,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         name,
         username: name,
         email,
+        hasUsablePassword: false,
         isAdmin: false,
         oauthCredentials,
         authProviders: [oauthCredentials],

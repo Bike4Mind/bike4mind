@@ -65,6 +65,10 @@ const handler = baseApi().post(
             // No usable password in passwordless mode; store a random unusable
             // value when the admin doesn't supply one. The user signs in via OTC.
             password: validatedData.password ?? randomUUID(), // Will be hashed by the service
+            // hasUsablePassword tracks whether the admin actually supplied a real
+            // password, NOT whether `password` is truthy - the randomUUID() fallback
+            // above is always non-empty but nobody knows it.
+            hasUsablePassword: !!validatedData.password,
             storageLimit: validatedData.storageLimit,
           },
         },

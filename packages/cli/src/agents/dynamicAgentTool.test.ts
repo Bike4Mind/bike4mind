@@ -131,6 +131,24 @@ describe('createDynamicAgentTool', () => {
       expect(callArgs.agentDefinition.description).toBe('Dynamic agent: security-auditor');
     });
 
+    it('spawns at depth 1 when owned by the main agent (default parentDepth 0)', async () => {
+      const orchestrator = createMockOrchestrator();
+      const tool = createDynamicAgentTool(orchestrator as never, sessionId);
+
+      await tool.toolFn({ task: 't', name: 'a', systemPrompt: 'p' });
+
+      expect(orchestrator.delegateToAgent.mock.calls[0][0].depth).toBe(1);
+    });
+
+    it('spawns at parentDepth + 1 so the depth cap tracks nested spawns', async () => {
+      const orchestrator = createMockOrchestrator();
+      const tool = createDynamicAgentTool(orchestrator as never, sessionId, undefined, 2);
+
+      await tool.toolFn({ task: 't', name: 'a', systemPrompt: 'p' });
+
+      expect(orchestrator.delegateToAgent.mock.calls[0][0].depth).toBe(3);
+    });
+
     it('returns the summary from the orchestrator result', async () => {
       const orchestrator = createMockOrchestrator();
       const tool = createDynamicAgentTool(orchestrator as never, sessionId);

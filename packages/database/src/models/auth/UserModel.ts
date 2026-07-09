@@ -113,6 +113,7 @@ const UserPreferencesSchema = new Schema(
     // without persistence, the Smart Routing tri-state in
     // ExperimentalFeatureToggle silently reverts to 'off' on reload.
     agentModeDefault: { type: String, enum: ['off', 'auto', 'on'] },
+    showFunTools: { type: Boolean },
   },
   { _id: false }
 );
@@ -494,6 +495,14 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     name: { type: String, required: true },
     email: { type: String }, // uniqueness enforced via the partial index below (allows multiple emailless accounts)
     password: { type: String, required: false, select: false },
+    // Credential-state flag, NOT inferred from `password` truthiness: admin/migration
+    // "shell" accounts store an auto-generated, unusable password (see
+    // admin/create-user.ts, reg-invites/migrate.ts) that is bcrypt-hashed and therefore
+    // indistinguishable from a real one once written. Passwordless-first (default false);
+    // each creation site sets this explicitly based on whether a human actually knows a
+    // working password. Gates the SSO auto-link local-email-verified requirement in
+    // verifyCallback.ts / okta/callback.ts.
+    hasUsablePassword: { type: Boolean, default: false },
     groups: { type: [String], default: [] },
     isAdmin: { type: Boolean, default: false },
     storageLimit: { type: Number, default: 1000 }, // MBs
