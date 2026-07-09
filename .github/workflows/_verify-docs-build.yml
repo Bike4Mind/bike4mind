@@ -61,20 +61,36 @@ jobs:
             echo "✅ This job will report success (skip is OK for deploy to proceed)"
           fi
 
+          # This repo commits only docs-site/docs/**; the Docusaurus build
+          # project (package.json, lockfile, config) is synced in elsewhere.
+          # Only attempt a build when that project is actually present here,
+          # otherwise setup-node/pnpm install hard-fail on the missing lockfile.
+          if [ -f docs-site/package.json ]; then
+            echo "buildable=true" >> $GITHUB_OUTPUT
+          else
+            echo "buildable=false" >> $GITHUB_OUTPUT
+            echo "No docs-site/package.json in this checkout - build verification not applicable; reporting success."
+          fi
+
       - name: Skip message
         if: steps.docs-changes.outputs.has_changes == 'false'
         run: |
           echo "::notice::No docs-site changes in this PR - build verification skipped"
           echo "Deploy job will proceed normally since this is expected behavior"
 
+      - name: Skip build (docs project not present in this checkout)
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable != 'true'
+        run: |
+          echo "::notice::docs-site changes detected, but no docs-site/package.json is present in this checkout. The Docusaurus project is built elsewhere, so build verification is skipped and reported as success."
+
       - name: Setup pnpm
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         uses: pnpm/action-setup@v5
         with:
           run_install: false
 
       - name: Setup Node.js
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -82,7 +98,7 @@ jobs:
           cache-dependency-path: 'docs-site/pnpm-lock.yaml'
 
       - name: Cache docs dependencies
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         uses: actions/cache@v5
         with:
           path: |
@@ -93,12 +109,12 @@ jobs:
             ${{ runner.os }}-docs-deps-
 
       - name: Install dependencies
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         working-directory: docs-site
         run: pnpm install --frozen-lockfile --ignore-workspace
 
       - name: Build Docusaurus site
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         working-directory: docs-site
         env:
           DOCS_URL: 'https://docs.preview.bike4mind.com'
@@ -106,7 +122,7 @@ jobs:
         run: pnpm build
 
       - name: Verify build output
-        if: steps.docs-changes.outputs.has_changes == 'true'
+        if: steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         working-directory: docs-site
         run: |
           if [ ! -d "build" ]; then
@@ -123,7 +139,7 @@ jobs:
           du -sh build/
 
       - name: Comment PR with build success
-        if: success() && steps.docs-changes.outputs.has_changes == 'true'
+        if: success() && steps.docs-changes.outputs.has_changes == 'true' && steps.docs-changes.outputs.buildable == 'true'
         # Fork PRs get a read-only GITHUB_TOKEN, so createComment 403s. Non-fatal:
         # never let a cosmetic PR comment fail the required Deploy check on forks.
         continue-on-error: true
