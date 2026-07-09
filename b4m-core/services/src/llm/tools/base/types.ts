@@ -13,6 +13,8 @@ import {
   IDataLakeRepository,
   ISkillRepository,
   ImageModerationIncident,
+  IUsageEventRepository,
+  IOrganizationRepository,
 } from '@bike4mind/common';
 
 export interface ToolContext {
@@ -46,6 +48,14 @@ export interface ToolContext {
      * incident audit record, not the block.
      */
     imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+    /**
+     * Analytics sink for recording non-chat AI spend (e.g. KB query embeddings). Present on
+     * the chat/agent paths (the full service db flows in); absent on lean tool harnesses,
+     * where recording degrades to a no-op.
+     */
+    usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    /** Owner lookup for usage attribution; findById is all the recorder needs. */
+    organizations?: Pick<IOrganizationRepository, 'findById'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
