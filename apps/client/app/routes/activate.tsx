@@ -36,6 +36,14 @@ export default function ActivatePage() {
     }
   }, [currentUser, prefilledCode, navigate]);
 
+  // The code is valid but the account has not accepted the AUP/ToS. Route to the acceptance
+  // interstitial with a return path back here so the user can finish authorizing. Normally the
+  // route's beforeLoad guard catches this before the form renders (see router.tsx); this is the
+  // backstop for when consent state hydrates only after the page is already open. See issue #369.
+  const goToAcceptPolicies = () => {
+    navigate({ to: '/accept-policies', search: { redirectTo: `/activate?code=${userCode.toUpperCase()}` } });
+  };
+
   const handleApprove = () => {
     verifyMutation.mutate(
       { user_code: userCode.toUpperCase(), action: 'approve' },
@@ -43,6 +51,11 @@ export default function ActivatePage() {
         onSuccess: () => {
           // Show success state for 2 seconds, then redirect
           setTimeout(() => navigate({ to: '/' }), 2000);
+        },
+        onError: error => {
+          if (error.response?.data?.policyAcceptanceRequired) {
+            goToAcceptPolicies();
+          }
         },
       }
     );
@@ -209,9 +222,23 @@ export default function ActivatePage() {
                 <Typography level="title-sm" sx={{ mb: 0.5 }}>
                   Authorization Failed
                 </Typography>
-                <Typography level="body-sm">
-                  {verifyMutation.error.response?.data?.error_description || 'Invalid code'}
-                </Typography>
+                {verifyMutation.error.response?.data?.policyAcceptanceRequired ? (
+                  <>
+                    <Typography level="body-sm" sx={{ mb: 1 }}>
+                      Your account needs to accept the Terms of Service and Acceptable Use Policy before you can
+                      authorize a device.
+                    </Typography>
+                    <Button size="sm" variant="soft" color="danger" onClick={goToAcceptPolicies}>
+                      Review and accept policies
+                    </Button>
+                  </>
+                ) : (
+                  <Typography level="body-sm">
+                    {verifyMutation.error.response?.data?.error_description ||
+                      verifyMutation.error.response?.data?.error ||
+                      'Invalid code'}
+                  </Typography>
+                )}
               </Box>
             </Alert>
           )}

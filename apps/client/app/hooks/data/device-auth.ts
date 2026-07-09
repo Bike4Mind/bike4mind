@@ -19,7 +19,12 @@ interface VerifyDeviceResponse {
 
 interface DeviceAuthError {
   error: string;
-  error_description: string;
+  // Absent on the auth-middleware consent 403 (see apps/client/server/auth/auth.ts) - read `error`
+  // as the fallback there.
+  error_description?: string;
+  // Set by the server consent gate when the account has not accepted the AUP/ToS. The code is
+  // valid; the account must accept policies first. Callers route to /accept-policies. See issue #369.
+  policyAcceptanceRequired?: boolean;
 }
 
 /**
@@ -39,7 +44,10 @@ export function useVerifyDevice() {
       }
     },
     onError: error => {
-      const message = error.response?.data?.error_description || 'Action failed';
+      const data = error.response?.data;
+      const message = data?.policyAcceptanceRequired
+        ? 'Accept the Terms of Service and Acceptable Use Policy to continue.'
+        : data?.error_description || data?.error || 'Action failed';
       toast.error(message);
     },
   });
