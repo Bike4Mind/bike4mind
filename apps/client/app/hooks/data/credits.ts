@@ -2,6 +2,22 @@ import { ICreditTransactionDocument } from '@bike4mind/database';
 import { api } from '@client/app/contexts/ApiContext';
 import { useQuery } from '@tanstack/react-query';
 
+export interface CreditsBalance {
+  currentCredits: number;
+  expiringSoon: { amount: number; expiresAt: string }[];
+}
+
+export function useGetCreditsBalance(options: { enabled?: boolean } = {}) {
+  return useQuery<CreditsBalance>({
+    queryKey: ['credits-balance'],
+    queryFn: async () => {
+      const response = await api.get('/api/credits/balance');
+      return response.data;
+    },
+    enabled: options.enabled,
+  });
+}
+
 export function useGetCreditTransactions(
   options: {
     enabled?: boolean;

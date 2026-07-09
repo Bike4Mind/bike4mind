@@ -119,6 +119,8 @@ export interface IUserPreferences {
    * - `on`: agent_executor used by default; toggle starts in the ON state
    */
   agentModeDefault?: 'off' | 'auto' | 'on';
+  /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
+  showFunTools?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */

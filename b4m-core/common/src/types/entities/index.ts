@@ -42,6 +42,7 @@ export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
 export * from './CreditHolderTypes';
+export * from './CreditLotTypes';
 export * from './EmbeddingCacheTypes';
 export * from './CurationTypes';
 export * from './McpServerTypes';

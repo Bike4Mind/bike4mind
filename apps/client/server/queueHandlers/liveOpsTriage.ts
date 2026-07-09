@@ -142,10 +142,25 @@ export const dispatch = dispatchWithLogger(async (event: SQSEvent, context: Cont
 
     await updateProgress(10, 'Connecting to GitHub...');
 
-    // Get GitHub service
+    // Get GitHub service. forSystem() returns null only for permanent config states
+    // (no connection / disabled / suspended) - swallow those here (log, markFailed,
+    // return) so SQS doesn't retry a message that can never succeed. It already logged
+    // the specific reason. Transient failures (DB error, auth init) throw from
+    // forSystem() itself and fall through to the outer catch for SQS retry.
     const githubService = await GitHubService.forSystem(logger);
     if (!githubService) {
-      throw new Error('No system GitHub connection configured');
+      logger.warn('No system GitHub connection configured - failing job without retry', { jobId });
+      await liveOpsTriageJobRepository.markFailed(jobId, {
+        errorMessage: 'No system GitHub connection configured',
+      });
+      await emitMetric(
+        CLOUDWATCH_NAMESPACE,
+        'ManualRunFailure',
+        1,
+        { DryRun: String(dryRun), ErrorType: 'NoGitHubConnection' },
+        StandardUnit.Count
+      );
+      return;
     }
 
     await updateProgress(15, 'Fetching alerts from Slack...');

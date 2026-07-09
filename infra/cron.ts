@@ -318,6 +318,25 @@ const telemetryCleanupCron = new sst.aws.Cron('telemetryCleanup', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+// Credit Lot Sweep — reconciles the CreditLot parallel ledger against
+// currentCredits: assigns cumulative consumption soonest-to-expire-first and
+// expires stale remainders (see #190 design).
+const creditLotSweepCron = new sst.aws.Cron('creditLotSweep', {
+  schedule: 'cron(0 4 * * ? *)', // Daily at 4am UTC
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/creditLotSweep.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: { ...DEFAULT_LAMBDA_ENVIRONMENT },
+    logging: {
+      retention: '1 week',
+    },
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 // Integration Health Check - runs every 5 minutes to probe external APIs
 // Probes: Slack, GitHub, Jira, Confluence
 const integrationHealthCheckCron = new sst.aws.Cron('integrationHealthCheck', {
@@ -589,6 +608,7 @@ export {
   securityScanSchedulerCron,
   deepAgentWakeCron,
   telemetryCleanupCron,
+  creditLotSweepCron,
   sreStaleDispatchCron,
   attackSimulationFunction,
   attackSimulationCron,

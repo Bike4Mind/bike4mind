@@ -2,6 +2,7 @@ import {
   GenericCreditAddTransaction,
   ICreditHolder,
   ICreditHolderMethods,
+  ICreditLotRepository,
   ICreditTransactionRepository,
   PurchaseTransaction,
   ReceivedCreditTransaction,
@@ -9,10 +10,17 @@ import {
 } from '@bike4mind/common';
 import { BadRequestError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { stampCreditLot } from './stampCreditLot';
 
 export interface AddCreditsAdapters {
   db: {
     creditTransactions: ICreditTransactionRepository;
+    /**
+     * Optional: when provided, addCredits stamps a dated-expiry CreditLot
+     * for the grant (best-effort - see stampCreditLot). Omit to leave the
+     * grant unstamped; the daily sweep's drift-tolerant clamp absorbs it.
+     */
+    creditLots?: ICreditLotRepository;
   };
   creditHolderMethods: ICreditHolderMethods;
 }
@@ -110,6 +118,19 @@ export async function addCredits(
   });
   if (!updatedEntity) {
     throw new BadRequestError('Failed to update credits');
+  }
+
+  if (db.creditLots) {
+    await stampCreditLot(
+      {
+        ownerId,
+        ownerType,
+        amount: Math.abs(credits),
+        grantType: type,
+        stripeRef: 'stripePaymentIntentId' in params ? params.stripePaymentIntentId : undefined,
+      },
+      { db: { creditLots: db.creditLots } }
+    );
   }
 
   return updatedEntity;

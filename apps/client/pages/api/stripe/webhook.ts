@@ -1,6 +1,11 @@
 /* Stripe webhook ingest */
 
-import { creditTransactionRepository, organizationRepository, userRepository } from '@bike4mind/database';
+import {
+  creditLotRepository,
+  creditTransactionRepository,
+  organizationRepository,
+  userRepository,
+} from '@bike4mind/database';
 import { CreditHolderType, CreditPurchaseStatus, isPlaceholderValue } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -109,6 +114,20 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
         // Update user's credit balance
         user.currentCredits += Number(intent.metadata.credits);
         await userRepository.update(user);
+
+        // Bypasses addCredits (this path predates it), so stamp the pack lot
+        // inline here rather than through the central seam. Best-effort - see
+        // stampCreditLot.
+        await creditService.stampCreditLot(
+          {
+            ownerId: user.id,
+            ownerType: CreditHolderType.User,
+            amount: Number(intent.metadata.credits),
+            grantType: 'purchase',
+            stripeRef: intent.id,
+          },
+          { db: { creditLots: creditLotRepository } }
+        );
       }
       break;
     }
@@ -251,6 +270,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
                 }
               );
               req.logger.info(`Clawback of ${originalTx.credits} credits completed for dispute ${dispute.id}`);
+
+              // Kill the matching pack lot's remaining balance. No-op if no lot
+              // matches (e.g. a subscription grant stamped with an invoice-id ref).
+              await creditService.clawbackCreditLotsByStripeRef(paymentIntentId, 'full', originalTx.credits, {
+                db: { creditLots: creditLotRepository },
+              });
             } catch (err: unknown) {
               // Duplicate key (code 11000) = already processed - idempotent no-op
               if (err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000) {
@@ -408,6 +433,12 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             }
           );
           req.logger.info(`Clawback of ${creditsToClawback} credits completed for refund ${refund.id}`);
+
+          // Proportionally shrink the matching pack lot's remaining balance.
+          // No-op if no lot matches.
+          await creditService.clawbackCreditLotsByStripeRef(refundPaymentIntentId, 'proportional', creditsToClawback, {
+            db: { creditLots: creditLotRepository },
+          });
 
           await postMessageToSlack(
             `ℹ️ *Stripe Refund* — refund ${refund.id}\n*User:* ${user.name || user.email} (${user.id})\n*Refund Amount:* $${(refund.amount / 100).toFixed(2)}\n*Credits Clawed Back:* ${creditsToClawback} (${Math.round(refundRatio * 100)}% of purchase)`
