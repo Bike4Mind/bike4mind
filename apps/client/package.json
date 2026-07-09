@@ -78,7 +78,7 @@
     "@bike4mind/voice": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@casl/mongoose": "^8.0.5",
-    "@elevenlabs/client": "^1.7.0",
+    "@elevenlabs/client": "^1.14.1",
     "@emotion/cache": "^11.14.0",
     "@google-analytics/data": "^5.2.1",
     "@hookform/resolvers": "^5.4.0",
