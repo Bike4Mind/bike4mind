@@ -168,14 +168,13 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
 
   async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
     const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-    // Only rows with both provider counts contribute to the delta - a row settled
-    // 'local' because the provider never returned usage has nothing to compare.
-    // $ifNull normalizes a missing field to null first: a bare $ne against a
-    // missing field does not reliably equal $ne against null in $group expressions.
+    // Both provider counts must be real positive counts to compare against the
+    // local estimate. A row settled 'local' can still carry a partial provider
+    // report (one axis zero); gating on > 0 keeps those out of the delta.
     const hasProviderCounts = {
       $and: [
-        { $ne: [{ $ifNull: ['$providerInputTokens', null] }, null] },
-        { $ne: [{ $ifNull: ['$providerOutputTokens', null] }, null] },
+        { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
+        { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
       ],
     };
     return this.model.aggregate<ISettlementBreakdown>([

@@ -155,8 +155,9 @@ describe('UsageEventRepository', () => {
         writtenOffCredits: 2,
       });
       // Provider reported input but not output (e.g. a stream that dropped before
-      // completion): settledBasis stays 'local' since hasProviderUsage requires both,
-      // but the counts are still present, so this row DOES contribute to the delta.
+      // completion): settledBasis stays 'local' since hasProviderUsage requires both.
+      // The literal 0 is a partial report, not a real comparison point, so this row
+      // must NOT contribute to the delta despite having a providerInputTokens value.
       await record({
         settledBasis: 'local',
         inputTokens: 300,
@@ -185,11 +186,11 @@ describe('UsageEventRepository', () => {
         requests: 2,
         creditsCharged: 25,
         writtenOffCredits: 2,
-        // Only the second local row has both provider counts present.
-        deltaSampleSize: 1,
+        // Neither local row has both provider counts as real positive values.
+        deltaSampleSize: 0,
+        inputTokenDelta: 0,
+        outputTokenDelta: 0,
       });
-      expect(local!.inputTokenDelta).toBe(290 - 300);
-      expect(local!.outputTokenDelta).toBe(0 - 140);
     });
 
     it('excludes events with no settledBasis (rows predating the field)', async () => {

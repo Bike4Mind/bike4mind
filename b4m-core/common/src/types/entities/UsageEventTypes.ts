@@ -128,11 +128,11 @@ export interface ISettlementBreakdown {
   requests: number;
   creditsCharged: number;
   writtenOffCredits: number;
-  /** Total (providerInputTokens - inputTokens) across bucketed rows; only rows with both set contribute. */
+  /** Total (providerInputTokens - inputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
   inputTokenDelta: number;
-  /** Total (providerOutputTokens - outputTokens) across bucketed rows; only rows with both set contribute. */
+  /** Total (providerOutputTokens - outputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
   outputTokenDelta: number;
-  /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both present). */
+  /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
   deltaSampleSize: number;
 }
 
