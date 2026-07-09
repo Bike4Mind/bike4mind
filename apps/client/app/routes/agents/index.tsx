@@ -18,16 +18,27 @@ const AgentsPage: FC = () => {
   const [agents, setAgents] = useState<IAgent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [search, setSearch] = useState('');
+  // Latches true once any load returns agents, and never drops back. Gating the search UI on
+  // the live `agents.length` instead flickered the search bar + Create off for a frame when
+  // clearing a no-result search: `search` clears (hasSearch false) while `agents` is still the
+  // stale 0 from that search and the refetch hasn't repopulated. This keeps the affordance
+  // stable for anyone who has agents; only a genuine first-run (never loaded any) hides it.
+  const [hasEverHadAgents, setHasEverHadAgents] = useState(false);
   const { currentUser } = useUser();
   const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const hasAgents = !isLoading && agents.length > 0;
+  const hasSearch = search.trim().length > 0;
+  const showSearchUI = hasEverHadAgents || hasSearch;
 
   useEffect(() => {
     const fetchAgents = async () => {
       setIsLoading(true);
       try {
-        const response = await getAgentsFromServer(search);
+        // Query the trimmed value so a whitespace-only search agrees with the UI gate
+        // (which uses `hasSearch = search.trim()`); otherwise "   " could refetch to [] and
+        // re-trigger the collapse-to-first-run this fix prevents.
+        const response = await getAgentsFromServer(search.trim());
         setAgents(response.data);
+        if (response.data.length > 0) setHasEverHadAgents(true);
       } catch (error) {
         console.error('Error fetching agents:', error);
       } finally {
@@ -73,7 +84,7 @@ const AgentsPage: FC = () => {
         }
         rightActions={
           <>
-            {hasAgents && (
+            {showSearchUI && (
               <>
                 <Box
                   sx={{
@@ -100,18 +111,18 @@ const AgentsPage: FC = () => {
             )}
 
             <ContextHelpButton helpId="features/agents" tooltipText="Learn about AI Agents" />
-            {hasAgents && <CreateAgentButton variant="header" />}
+            {showSearchUI && <CreateAgentButton variant="header" />}
           </>
         }
       />
 
-      <Box display="flex" flexDirection="column" flexGrow={1} px={hasAgents ? 1 : 0} py={hasAgents ? 2 : 0}>
+      <Box display="flex" flexDirection="column" flexGrow={1} px={showSearchUI ? 1 : 0} py={showSearchUI ? 2 : 0}>
         {isLoading ? (
           <Box display="flex" justifyContent="center" alignItems="center" flex={1}>
             <CircularProgress />
           </Box>
         ) : agents.length === 0 ? (
-          <NoAgentsState />
+          <NoAgentsState variant={hasSearch ? 'no-results' : 'empty'} query={search} />
         ) : (
           <AgentsGrid
             agents={agents}

@@ -26,6 +26,7 @@ import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import { classifyCommandRisk } from '../config/commandRisk.js';
+import { SHELL_LIKE_TOOL_COMMAND_FIELDS } from '../config/shellCommandFields.js';
 import { getPlanModeFileDir, isWriteTargetingPlanFile } from './planMode.js';
 import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
@@ -49,18 +50,6 @@ function getAllowedToolPatterns(): string[] {
   }
   return cachedAllowedTools;
 }
-
-/**
- * Shell-like tools whose free-text command argument must be run through the
- * command-risk classifier before the permission decision. Maps tool name -> the
- * arg field holding the command string. `bash_execute` is the only shell-exec tool
- * today; any new one (e.g. `shell_execute`, an MCP `run_shell`, a code-exec tool)
- * MUST be added here or it will silently skip the classifier and can auto-run
- * destructive strings via `--allowedTools` / sandbox auto-allow / auto-accept.
- */
-const SHELL_LIKE_TOOL_COMMAND_FIELDS: Record<string, string> = {
-  bash_execute: 'command',
-};
 
 /**
  * Simple CLI-friendly storage adapter

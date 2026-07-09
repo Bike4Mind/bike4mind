@@ -246,6 +246,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
             }
           : {}),
       };
+      // Write through to the store, not just the server: otherwise the stale value is persisted and
+      // reseeded as identify initialData (5-min staleTime skips the refetch), reverting on reload when
+      // the `users` socket is silent. See useGetIdentify initialData guard.
+      useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
       updateUserToServer(currentUser.id, { preferences: fullPreferences }).catch(() => {
         console.warn('[UserSettings] Failed to write preferences to server');
       });

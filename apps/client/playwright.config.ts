@@ -64,6 +64,12 @@ const specProjects = [
     testMatch: /(?:^|\/)search\.spec\.ts$/,
     auth: './e2e/.auth/search-user.json',
   },
+  {
+    name: 'skills',
+    setupMatch: /(?:^|\/)skills\.setup\.ts$/,
+    testMatch: /(?:^|\/)skills\.spec\.ts$/,
+    auth: './e2e/.auth/skills-user.json',
+  },
   // AI latency suites: only included when AI_LATENCY_RUN=true (e2e-ai-latency workflow)
   ...(process.env.AI_LATENCY_RUN === 'true'
     ? [

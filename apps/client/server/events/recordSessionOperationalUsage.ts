@@ -1,4 +1,4 @@
-import { getTextModelCost, ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, IUserDocument, ModelInfo } from '@bike4mind/common';
 import { recordOperationalUsage } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -13,6 +13,8 @@ import type { Logger } from '@bike4mind/observability';
 export interface RecordSessionOperationalUsageArgs {
   /** Owner of the session; attribution rolls up to their org when they have one. */
   userId?: string;
+  /** Preloaded user doc, if the caller already fetched it - avoids a redundant read. */
+  user?: IUserDocument;
   sessionId: string;
   modelId: string;
   modelInfo: ModelInfo;
@@ -35,8 +37,9 @@ export interface RecordSessionOperationalUsageArgs {
 export async function recordSessionOperationalUsage(args: RecordSessionOperationalUsageArgs): Promise<void> {
   const { userId, completionInfo, modelInfo, modelId, sessionId, logger } = args;
 
-  if (!userId) {
-    logger.debug('[recordSessionOperationalUsage] no userId on session; skipping usage record');
+  const ownerId = args.user?.id ?? userId;
+  if (!ownerId) {
+    logger.debug('[recordSessionOperationalUsage] no user on session; skipping usage record');
     return;
   }
 
@@ -51,9 +54,9 @@ export async function recordSessionOperationalUsage(args: RecordSessionOperation
   }
 
   try {
-    const user = await userRepository.findById(userId);
+    const user = args.user ?? (await userRepository.findById(ownerId));
     if (!user) {
-      logger.debug(`[recordSessionOperationalUsage] user ${userId} not found; skipping usage record`);
+      logger.debug(`[recordSessionOperationalUsage] user ${ownerId} not found; skipping usage record`);
       return;
     }
     const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;

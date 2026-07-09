@@ -23,6 +23,16 @@ describe('renderBundleLoaderShell', () => {
     expect(shell).toContain('<noscript>');
   });
 
+  it('noscript copy names the auth barrier, not a JS requirement', () => {
+    // The loader shell is only served for GATED bundles - the barrier is authorization,
+    // not client-side rendering. Prior copy said "requires JavaScript to view" and conflated
+    // the two; agents (and humans) hitting a private share with JS off couldn't tell that
+    // signing in was the fix.
+    expect(shell).toContain('This is a private item');
+    expect(shell).toContain('<a href="/login">Sign in</a>');
+    expect(shell).not.toContain('requires JavaScript');
+  });
+
   it('contains no external script source (only the inline bootstrap)', () => {
     expect(shell).not.toContain('<script src');
     expect(shell).not.toContain('<script type="module"');
