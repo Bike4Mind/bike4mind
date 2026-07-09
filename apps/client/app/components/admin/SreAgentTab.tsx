@@ -1263,7 +1263,11 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
     staleTime: 30_000,
   });
 
-  const isGithubIssue = doc.source === 'GITHUB_ISSUE' && !!doc.githubIssueNumber;
+  // Fire the issue-state self-heal for any GitHub-issue doc, even one whose issue
+  // number is not yet backfilled onto githubIssueNumber (it still lives in the
+  // server-side sourceRef URL, which the endpoint parses and backfills). Gating on
+  // githubIssueNumber here would leave such a doc unable to reconcile from its card.
+  const isGithubIssue = doc.source === 'GITHUB_ISSUE';
 
   const { data: issueState } = useQuery({
     queryKey: ['sre-issue-state', docId],

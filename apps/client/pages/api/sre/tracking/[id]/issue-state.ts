@@ -72,6 +72,13 @@ const handler = baseApi().get(
       if (issue.state === 'open' || issue.state === 'closed') {
         try {
           await sreErrorTrackingRepository.setGithubIssueState(systemRepo, issueNumber, issue.state);
+          // The bulk update above is scoped by repoSlug; a doc missing repoSlug is
+          // silently skipped (systemRepo fell back to the default, which won't match
+          // an absent field). We hold this doc's id, so reconcile it directly as a
+          // backstop for that edge - otherwise the viewed doc never self-heals.
+          if (!doc.repoSlug) {
+            await sreErrorTrackingRepository.setGithubIssueStateById(doc.id, issue.state);
+          }
         } catch (err) {
           logger.warn('[SRE-ISSUE-STATE] Failed to persist githubIssueState', { id: doc.id, err });
         }

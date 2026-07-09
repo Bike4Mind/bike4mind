@@ -434,6 +434,17 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 
   /**
+   * Backstop for the on-view self-heal: reconcile githubIssueState on a single
+   * doc by its _id. setGithubIssueState scopes its bulk update by repoSlug, so a
+   * doc missing repoSlug is silently skipped there (the fallback repoSlug won't
+   * match an absent field). The issue-state endpoint holds the viewed doc's id
+   * and calls this to guarantee that doc is reconciled regardless of repoSlug.
+   */
+  async setGithubIssueStateById(id: string, state: 'open' | 'closed'): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { githubIssueState: state } });
+  }
+
+  /**
    * Atomic state transition: only updates if current status matches expectedStatus.
    * Returns the updated document, or null if the transition was not possible.
    */

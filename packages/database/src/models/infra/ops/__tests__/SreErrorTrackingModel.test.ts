@@ -516,4 +516,46 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
       expect(updated).toBe(0);
     });
   });
+
+  describe('setGithubIssueStateById', () => {
+    it('reconciles a doc by id even when the repoSlug-scoped bulk update misses it', async () => {
+      // Simulate a legacy doc with no repoSlug field (raw insert bypasses the
+      // schema default) - the exact case the repoSlug-scoped bulk update skips.
+      const inserted = await SreErrorTrackingModel.collection.insertOne({
+        errorFingerprint: 'fp-no-reposlug',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/55',
+        status: 'detected',
+        githubIssueNumber: 55,
+        affectedUserIds: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+      const id = String(inserted.insertedId);
+
+      // The bulk update (fallback repoSlug) silently matches nothing...
+      const bulk = await sreErrorTrackingRepository.setGithubIssueState('MillionOnMars/lumina5', 55, 'closed');
+      expect(bulk).toBe(0);
+      expect((await SreErrorTrackingModel.findById(id).lean())?.githubIssueState).toBeUndefined();
+
+      // ...but the id-anchored backstop reconciles the viewed doc.
+      await sreErrorTrackingRepository.setGithubIssueStateById(id, 'closed');
+      expect((await SreErrorTrackingModel.findById(id).lean())?.githubIssueState).toBe('closed');
+    });
+
+    it('flips state back to open', async () => {
+      const doc = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-byid-reopen',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/8',
+        status: 'fixed',
+        githubIssueNumber: 8,
+        githubIssueState: 'closed',
+      });
+
+      await sreErrorTrackingRepository.setGithubIssueStateById(doc.id, 'open');
+      expect((await SreErrorTrackingModel.findById(doc.id).lean())?.githubIssueState).toBe('open');
+    });
+  });
 });

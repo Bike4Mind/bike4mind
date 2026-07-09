@@ -182,6 +182,39 @@ describe('PipelineStatusPanel - closed-issue filter', () => {
     await waitFor(() => expect(window.sessionStorage.getItem(STORAGE_KEY)).toBe('true'));
   });
 
+  it('fires the issue-state self-heal for a GitHub-issue doc whose number is not yet backfilled', async () => {
+    // GITHUB_ISSUE doc with githubIssueNumber absent - its number lives only in the
+    // server-side sourceRef. The card must still call the issue-state endpoint so
+    // the server can parse sourceRef, backfill, and reconcile githubIssueState.
+    const numberless: TrackingDocSummary = {
+      id: 'E',
+      _id: 'E',
+      errorFingerprint: 'fpEEEEEEEEEE',
+      repoSlug: 'owner/repo',
+      source: 'GITHUB_ISSUE',
+      status: 'detected',
+      // githubIssueNumber intentionally absent
+      errorMessage: 'Numberless issue error',
+      createdAt: new Date('2026-07-05T00:00:00.000Z'),
+      updatedAt: new Date('2026-07-05T00:00:00.000Z'),
+    };
+    mockGet.mockImplementation((url: string) => {
+      if (url.endsWith('/issue-state')) return Promise.resolve({ data: { state: 'open' } });
+      if (url === '/api/sre/tracking' || url.startsWith('/api/sre/tracking?')) {
+        return Promise.resolve({ data: [numberless, docs[2]] }); // numberless GH doc + a CloudWatch doc
+      }
+      return Promise.resolve({ data: {} });
+    });
+
+    renderPanel();
+    await screen.findByTestId('sre-tracking-card-E');
+
+    // The numberless GitHub-issue doc still triggers the self-heal fetch...
+    await waitFor(() => expect(mockGet).toHaveBeenCalledWith('/api/sre/tracking/E/issue-state'));
+    // ...while the CloudWatch doc (no linked issue) never does.
+    expect(mockGet).not.toHaveBeenCalledWith('/api/sre/tracking/C/issue-state');
+  });
+
   it('shows an explanatory message when every doc is filtered out', async () => {
     mockGet.mockImplementation((url: string) => {
       if (url.endsWith('/issue-state')) return Promise.resolve({ data: { state: 'closed' } });
