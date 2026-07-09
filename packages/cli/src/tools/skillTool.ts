@@ -41,6 +41,11 @@ export interface SkillToolDependencies {
    * parent. Undefined for the main agent (the fork inherits the live store mode).
    */
   parentInteractionMode?: InteractionMode;
+  /**
+   * Effective model of the agent that owns this tool. A forked subagent inherits
+   * it unless the skill declares its own model.
+   */
+  parentModel?: string;
 }
 
 /**
@@ -240,6 +245,7 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
             allowedTools: command.allowedTools,
             depth: (deps.parentDepth ?? 0) + 1,
             parentInteractionMode: deps.parentInteractionMode,
+            parentModel: deps.parentModel,
           });
           const agentName = agentConfig.name;
 

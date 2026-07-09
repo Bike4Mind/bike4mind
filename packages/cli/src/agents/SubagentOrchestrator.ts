@@ -21,6 +21,7 @@ import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
 import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
 import { clampInteractionMode } from './interactionModeClamp.js';
+import { resolveEffectiveModel } from './resolveEffectiveModel.js';
 import type { InteractionMode } from '../bootstrap/types.js';
 import type { SharedContextAccess } from './types.js';
 import type { SharedAgentContext } from './SharedAgentContext.js';
@@ -91,6 +92,11 @@ export interface SpawnAgentOptions {
    * the parent's mode when omitted.
    */
   interactionMode?: InteractionMode;
+  /**
+   * Parent agent's effective model. A child with no explicit or agent-declared
+   * model inherits this rather than silently defaulting to a different model.
+   */
+  parentModel?: string;
 }
 
 /**
@@ -207,18 +213,18 @@ export class SubagentOrchestrator {
       agentDef = storedDef;
     }
 
-    // Determine model (options > agent default > main session model if unresolved)
-    let effectiveModel = model || agentDef.model;
-    if (!model && !agentDef.modelResolved) {
-      // Agent's model wasn't resolved - inherit the main session's model
-      const config = await this.deps.configStore.get();
-      if (config?.defaultModel) {
-        this.deps.logger.debug(
-          `Agent "${agentName}" model unresolved, inheriting main session model: ${config.defaultModel}`
-        );
-        effectiveModel = config.defaultModel;
-      }
-    }
+    // Resolve the model through the explicit inherit path (see resolveEffectiveModel):
+    // an unresolved agent inherits the parent's model - or the main session model -
+    // rather than silently defaulting to a possibly-stronger model.
+    const sessionDefaultModel =
+      !model && !agentDef.modelResolved ? (await this.deps.configStore.get())?.defaultModel : undefined;
+    const effectiveModel = resolveEffectiveModel({
+      requestedModel: model,
+      agentModel: agentDef.model,
+      agentModelResolved: agentDef.modelResolved,
+      parentModel: options.parentModel,
+      sessionDefaultModel,
+    });
 
     // Determine thoroughness (param > agent default > medium)
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
@@ -294,6 +300,8 @@ export class SubagentOrchestrator {
         parentDepth: depth,
         // Onward forks inherit this agent's clamped mode as their ceiling.
         parentInteractionMode: effectiveInteractionMode,
+        // Onward forks inherit this agent's model unless they declare their own.
+        parentModel: effectiveModel,
       });
       filteredTools.push(skillTool);
 
