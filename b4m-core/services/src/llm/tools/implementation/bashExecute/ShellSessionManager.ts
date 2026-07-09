@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'child_process';
+import { StringDecoder } from 'string_decoder';
 
 /**
  * Lifecycle state of a background shell session.
@@ -91,6 +92,9 @@ interface InternalSession {
   child: ChildProcessWithoutNullStreams;
   /** Last <= maxOutputChars chars of combined stdout+stderr. */
   buffer: string;
+  /** Per-stream UTF-8 decoders so a multibyte char split across chunks isn't garbled. */
+  stdoutDecoder: StringDecoder;
+  stderrDecoder: StringDecoder;
 }
 
 /**
@@ -171,16 +175,28 @@ export class ShellSessionManager {
       totalOutputChars: 0,
     };
 
-    const session: InternalSession = { snapshot, child, buffer: '' };
+    const session: InternalSession = {
+      snapshot,
+      child,
+      buffer: '',
+      stdoutDecoder: new StringDecoder('utf8'),
+      stderrDecoder: new StringDecoder('utf8'),
+    };
     this.sessions.set(id, session);
 
     // stdout and stderr share one interleaved buffer - session output is meant to
     // read like a terminal, where the two streams are already merged. (Foreground
-    // bash_execute keeps them separate; session mode deliberately does not.)
-    child.stdout.on('data', (data: Buffer) => this.append(session, data.toString()));
-    child.stderr.on('data', (data: Buffer) => this.append(session, data.toString()));
+    // bash_execute keeps them separate; session mode deliberately does not.) Each
+    // stream keeps its own decoder so a multibyte char split across chunk boundaries
+    // is reassembled rather than emitted as replacement characters.
+    child.stdout.on('data', (data: Buffer) => this.append(session, session.stdoutDecoder.write(data)));
+    child.stderr.on('data', (data: Buffer) => this.append(session, session.stderrDecoder.write(data)));
 
     child.on('close', exitCode => {
+      // Flush any bytes buffered mid-codepoint before the terminal-status guard, so
+      // it runs for exited and killed/timed-out sessions alike.
+      const tail = session.stdoutDecoder.end() + session.stderrDecoder.end();
+      if (tail) this.append(session, tail);
       // A kill()/timeout already set a terminal status; don't clobber it.
       if (isTerminal(session.snapshot.status)) return;
       this.transition(session, 'exited', exitCode);
