@@ -2,6 +2,7 @@ import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import type { AgentConfig } from '../storage/types.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 import { substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
@@ -34,6 +35,12 @@ export interface SkillToolDependencies {
    * to skills invoked from within a subagent, not just the delegation tools.
    */
   parentDepth?: number;
+  /**
+   * Effective interaction mode of the agent that owns this tool. Passed as the
+   * ceiling for a forked subagent so it never runs more permissively than its
+   * parent. Undefined for the main agent (the fork inherits the live store mode).
+   */
+  parentInteractionMode?: InteractionMode;
 }
 
 /**
@@ -232,6 +239,7 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
             model: command.model,
             allowedTools: command.allowedTools,
             depth: (deps.parentDepth ?? 0) + 1,
+            parentInteractionMode: deps.parentInteractionMode,
           });
           const agentName = agentConfig.name;
 

@@ -20,6 +20,8 @@ import {
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
 import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
+import { clampInteractionMode } from './interactionModeClamp.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 import type { SharedContextAccess } from './types.js';
 import type { SharedAgentContext } from './SharedAgentContext.js';
 import { filterToolsByPatterns } from './toolFilter.js';
@@ -77,6 +79,18 @@ export interface SpawnAgentOptions {
    * of the main agent) when a caller omits it.
    */
   depth?: number;
+  /**
+   * Parent agent's effective interaction mode - the ceiling the child cannot
+   * exceed. Defaults to the live store mode (the main agent's mode) when omitted,
+   * so direct children inherit the main agent's authority.
+   */
+  parentInteractionMode?: InteractionMode;
+  /**
+   * Interaction mode requested for the child. Clamped to parentInteractionMode,
+   * so a request more permissive than the parent is capped. Defaults to inheriting
+   * the parent's mode when omitted.
+   */
+  interactionMode?: InteractionMode;
 }
 
 /**
@@ -170,6 +184,16 @@ export class SubagentOrchestrator {
       );
     }
 
+    // Clamp the child's interaction mode so it never runs more permissively than
+    // its parent. The parent ceiling defaults to the live store mode (the main
+    // agent's mode) for a direct child; nested spawns pass it explicitly.
+    const { useCliStore } = await import('../store/index.js');
+    const parentInteractionMode = options.parentInteractionMode ?? useCliStore.getState().interactionMode;
+    const effectiveInteractionMode = clampInteractionMode(
+      options.interactionMode ?? parentInteractionMode,
+      parentInteractionMode
+    );
+
     // Get agent definition: use inline definition if provided, otherwise look up from store
     let agentDef: AgentDefinition;
     if (options.agentDefinition) {
@@ -241,7 +265,10 @@ export class SubagentOrchestrator {
       this.deps.apiClient,
       undefined, // toolFilter (applied below via filterToolsByPatterns)
       this.deps.showUserQuestion,
-      this.deps.checkpointStore
+      this.deps.checkpointStore,
+      undefined, // sandboxOrchestrator (not wired for subagents)
+      undefined, // allowedDirectories (not wired for subagents)
+      effectiveInteractionMode
     );
 
     // Apply wildcard filtering
@@ -265,6 +292,8 @@ export class SubagentOrchestrator {
         allowedSkills: agentDef.skills,
         // This agent runs at `depth`; a skill it forks must spawn one level deeper.
         parentDepth: depth,
+        // Onward forks inherit this agent's clamped mode as their ceiling.
+        parentInteractionMode: effectiveInteractionMode,
       });
       filteredTools.push(skillTool);
 
