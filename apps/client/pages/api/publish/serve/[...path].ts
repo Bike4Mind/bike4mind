@@ -191,9 +191,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // credential on this request): re-fetching only helps when none was presented. A request
     // that DID carry a credential and still failed (403 - authed-but-unauthorized) re-fetches
     // to no avail, so it falls through to the hard status below. NOT for: assets (gated bundles
-    // inline their assets, so the opaque iframe never requests them) or `?raw=1` (the loader's
-    // own fetch - a shell there would loop).
-    const wantsLoaderShell = resolved.kind === 'bundle' && !resolved.assetPath && !isRaw && !req.user;
+    // inline their assets, so the opaque iframe never requests them), `?raw=1` (the loader's
+    // own fetch - a shell there would loop), or `?format=raw` (a plain-text API surface -
+    // returning an HTML shell would violate the caller's Accept expectation, and format=raw
+    // is public-only anyway, so we fall through to the visibility gate's hard status).
+    const wantsLoaderShell = resolved.kind === 'bundle' && !resolved.assetPath && !isRaw && !isFormatRaw && !req.user;
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Security-Policy', buildWrapperCsp(req));

@@ -638,6 +638,20 @@ describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
     expect(mockDownload).not.toHaveBeenCalled();
   });
 
+  it('does NOT return the loader shell for anonymous ?format=raw on a private bundle', async () => {
+    // The loader shell is a UI surface; ?format=raw is a text/plain API surface. An anonymous
+    // caller asking for the raw variant of a private artifact should get the visibility gate's
+    // hard status (401), not an HTML shell that violates the Accept contract. Also ensures we
+    // never accidentally set up a code path where the shell could carry artifact bytes.
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    const body = res._getData() as string;
+    expect(body).not.toContain('<iframe');
+    expect(body).not.toContain('<html');
+  });
+
   it('returns 404 for ?format=raw on a private reply', async () => {
     mockArtifactFindOne.mockReturnValue({
       publicId: 'r1',
