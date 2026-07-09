@@ -61,10 +61,13 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
  * served as inert text/plain so direct navigation can't execute it on the app origin.
  *
- * The loader shell is scoped to bundles. Gated reply/fabfile
- * snapshots are standalone top-level pages (working links, `script-src 'none'`, no iframe),
- * so browser-session viewing of a GATED reply/fabfile still requires a credential (-> 401);
- * the iframe-srcdoc model would change their sandboxing and break link navigation.
+ * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
+ * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
+ * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
+ * script-free inside the shell's `allow-scripts` iframe. Tradeoff: inside the shelled (gated)
+ * render, links obey the iframe sandbox (no `allow-popups`/`allow-top-navigation`), so
+ * `target=_blank`/top-nav links won't open - acceptable versus the prior hard 401, and the
+ * direct (public, non-shelled) render is unaffected (its links work normally).
  */
 
 const TIER_BY_PREFIX: Record<string, PublishScopeTier> = { u: 'user', pj: 'project', o: 'organization' };
@@ -675,7 +678,7 @@ function renderViewerPage(artifact: PublishedArtifactLean): string {
 <!-- CSP as a meta so the no-JS posture survives when this page is injected as the loader
      shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
      sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost("img-src 'self' data:")}; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>
