@@ -6,12 +6,28 @@ import type { Request } from 'express';
 
 const PRIVATE_IPV4_RANGES: RegExp[] = [/^10\./, /^127\./, /^169\.254\./, /^172\.(1[6-9]|2\d|3[0-1])\./, /^192\.168\./];
 
-// Loopback (::1), link-local (fe80::/10 -> fe80..febf), and unique-local (fc00::/7 -> fc00..fdff).
+// Loopback (::1 and its fully-expanded 0:0:0:0:0:0:0:1 form), unspecified (::),
+// link-local (fe80::/10 -> fe80..febf), and unique-local (fc00::/7 -> fc00..fdff).
 // Matched case-insensitively on the leading hextets.
-const PRIVATE_IPV6_RANGES: RegExp[] = [/^::1$/i, /^fe[89ab][0-9a-f]:/i, /^f[cd][0-9a-f]{2}:/i];
+const PRIVATE_IPV6_RANGES: RegExp[] = [
+  /^::1$/i,
+  /^(?:0{1,4}:){7}0{0,3}1$/i,
+  /^::$/,
+  /^fe[89ab][0-9a-f]:/i,
+  /^f[cd][0-9a-f]{2}:/i,
+];
+
+// Matches the ::ffff:<IPv4> mapped prefix so we can re-check the embedded dotted
+// IPv4 against the private ranges. The exotic hex-encoded mapped form
+// (::ffff:0a00:0001) is intentionally not normalized - see follow-up.
+const IPV4_MAPPED_PREFIX = /^::ffff:/i;
 
 function isPrivateIp(ip: string): boolean {
-  return PRIVATE_IPV4_RANGES.some(r => r.test(ip)) || PRIVATE_IPV6_RANGES.some(r => r.test(ip));
+  if (PRIVATE_IPV4_RANGES.some(r => r.test(ip))) return true;
+  if (PRIVATE_IPV6_RANGES.some(r => r.test(ip))) return true;
+  // IPv4-mapped IPv6 (e.g. ::ffff:10.0.0.1): strip the prefix and re-test as IPv4.
+  const mapped = ip.replace(IPV4_MAPPED_PREFIX, '');
+  return mapped !== ip && PRIVATE_IPV4_RANGES.some(r => r.test(mapped));
 }
 
 function cleanIp(raw: string | undefined | null): string | null {
