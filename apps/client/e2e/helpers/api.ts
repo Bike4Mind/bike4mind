@@ -463,17 +463,12 @@ export async function apiUpdateDataLake(
 }
 
 /**
- * Best-effort teardown for a created lake. Tries the hard DELETE first; if the env only
- * exposes lifecycle transitions, falls back to soft-delete → cleanup (purge). Never throws
- * so an afterAll cleanup can't fail a green run.
+ * Best-effort teardown for a created lake. Purges via the lifecycle: soft-delete (phase 1)
+ * then irreversible cleanup (phase 2). The DELETE route only *archives* (reversible), which
+ * would leave test lakes accumulating on the shared stage, so we drive the purge directly.
+ * Never throws so an afterAll cleanup can't fail a green run.
  */
 export async function apiDeleteDataLake(request: APIRequestContext, token: string, dataLakeId: string): Promise<void> {
-  const baseURL = process.env.API_URL || 'http://localhost:3000';
-  const del = await request
-    .delete(`${baseURL}/api/data-lakes/${dataLakeId}`, { headers: { Authorization: `Bearer ${token}` } })
-    .catch(() => null);
-  if (del && del.ok()) return;
-  // Fallback: soft-delete then irreversible purge.
   await apiLakeLifecycle(request, token, dataLakeId, 'delete').catch(() => 0);
   await apiLakeLifecycle(request, token, dataLakeId, 'cleanup').catch(() => 0);
 }

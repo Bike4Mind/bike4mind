@@ -345,8 +345,8 @@ test.describe('Data Lake - sharing & permissions', () => {
     request,
   }) => {
     // The seeded owner is in a personal context only, so promotion to organization visibility
-    // has no target org and the server rejects it. (Full cross-org member-visibility is a
-    // multi-org fixture not modeled here — see data-lake.scenarios.md N1/N10.)
+    // has no target org and the server rejects it. (Full cross-org member-visibility needs a
+    // multi-org fixture not modeled here.)
     const lake = await seedLake(request, ownerToken(), {
       name: `E2E OrgShare ${RUN}`,
       fileTagPrefix: `e2eorg${RUN}:`,
@@ -512,9 +512,9 @@ test.describe('Data Lake - explorer article', () => {
     await dataLakePage.gotoDataLakes();
     await expect(dataLakePage.sortToggle).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
 
-    // No dedicated hook for sort state; the Joy IconButton variant flips plain -> soft on toggle.
-    await expect(dataLakePage.sortToggle).toHaveClass(/variantPlain/);
+    // Sort state is exposed via the stable data-sort attribute (defaults to count, flips to alpha).
+    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'count');
     await dataLakePage.sortToggle.click();
-    await expect(dataLakePage.sortToggle).toHaveClass(/variantSoft/);
+    await expect(dataLakePage.sortToggle).toHaveAttribute('data-sort', 'alpha');
   });
 });
