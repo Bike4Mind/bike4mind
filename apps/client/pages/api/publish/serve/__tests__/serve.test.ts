@@ -454,7 +454,7 @@ describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
   });
 });
 
-describe('GET /api/publish/serve — reply/fabfile organization visibility', () => {
+describe('GET /api/publish/serve - reply/fabfile organization visibility', () => {
   // Org-tier reply/fabfile records store the org id as scopeId; the gate authorizes a viewer
   // whose organizationId matches. This is the path #174 re-enables for reply/fabfile shares.
   const orgReply = (over: Record<string, unknown> = {}) => ({

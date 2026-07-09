@@ -362,7 +362,7 @@ function postedBodyTo(url: string): Record<string, unknown> {
   return (call?.[1] as Record<string, unknown>) ?? {};
 }
 
-describe('publishReply / publishFabFile — scope pass-through', () => {
+describe('publishReply / publishFabFile - scope pass-through', () => {
   beforeEach(() => {
     apiPost.mockResolvedValue({ data: { ...RESULT, url: '/p/r/pub-1' } });
   });
@@ -389,7 +389,7 @@ describe('publishReply / publishFabFile — scope pass-through', () => {
   });
 });
 
-describe('replyPublisher / fabFilePublisher — org-tier mapping', () => {
+describe('replyPublisher / fabFilePublisher - org-tier mapping', () => {
   beforeEach(() => {
     apiPost.mockResolvedValue({ data: { ...RESULT, url: '/p/r/pub-1' } });
   });
