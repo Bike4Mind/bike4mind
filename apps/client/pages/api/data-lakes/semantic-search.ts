@@ -26,8 +26,16 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer } from '@bike4mind/utils';
+import { createTokenizer, type ITokenizer } from '@bike4mind/utils';
+import type { Logger } from '@bike4mind/observability';
 import { getRequestEntitlements } from '@server/entitlements';
+
+// Reused across requests so the tiktoken encoder is resolved once, not per search.
+let sharedTokenizer: ITokenizer | undefined;
+function getSharedTokenizer(logger: Logger): ITokenizer {
+  if (!sharedTokenizer) sharedTokenizer = createTokenizer({ logger });
+  return sharedTokenizer;
+}
 
 /**
  * POST /api/data-lakes/semantic-search
@@ -186,7 +194,7 @@ const handler = baseApi()
         const user = await userRepository.findById(req.user.id);
         if (user) {
           const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
-          const queryTokens = await createTokenizer({ logger: req.logger }).countTokens(query, embedding_model);
+          const queryTokens = await getSharedTokenizer(req.logger).countTokens(query, embedding_model);
           await recordOperationalUsage(
             {
               requestId: req.user.id,
