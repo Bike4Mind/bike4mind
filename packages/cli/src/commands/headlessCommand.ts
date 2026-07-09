@@ -46,7 +46,12 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
-import { HEADLESS_SCHEMA_VERSION, createHeadlessEmitter, classifyToolRisk } from './headlessProtocol.js';
+import {
+  HEADLESS_SCHEMA_VERSION,
+  createHeadlessEmitter,
+  classifyToolRisk,
+  parseStringArray,
+} from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -120,9 +125,12 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
   try {
     const config = await configStore.load();
 
-    // Load additional directories from all sources
+    // Load additional directories from all sources. The B4M_ADDITIONAL_DIRS
+    // bridge is validated strictly (array of strings) rather than blindly cast.
     const configDirs = await configStore.getAdditionalDirectories();
-    const flagDirs = process.env.B4M_ADDITIONAL_DIRS ? (JSON.parse(process.env.B4M_ADDITIONAL_DIRS) as string[]) : [];
+    const flagDirs = process.env.B4M_ADDITIONAL_DIRS
+      ? parseStringArray(process.env.B4M_ADDITIONAL_DIRS, 'B4M_ADDITIONAL_DIRS')
+      : [];
     const additionalDirectories = [...new Set([...configDirs, ...flagDirs, ...addDirs])];
 
     // Load custom commands (non-critical)

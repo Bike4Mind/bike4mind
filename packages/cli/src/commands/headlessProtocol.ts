@@ -52,6 +52,64 @@ export function createHeadlessEmitter(runId: string, write: (line: string) => vo
 }
 
 /**
+ * Raised when a structured headless input is malformed or carries a field
+ * outside its allowlist. Headless input fails loud on protocol drift rather
+ * than silently ignoring unknown fields.
+ */
+export class HeadlessInputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HeadlessInputError';
+  }
+}
+
+/**
+ * Decode a JSON string to a plain object and reject any key outside
+ * `allowedKeys`. `inputType` names the input in error messages. Throws
+ * HeadlessInputError on invalid JSON, a non-object payload, or an unknown key.
+ */
+export function parseStrictObject(
+  raw: string,
+  allowedKeys: readonly string[],
+  inputType: string
+): Record<string, unknown> {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (e) {
+    throw new HeadlessInputError(`${inputType}: invalid JSON (${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (decoded === null || typeof decoded !== 'object' || Array.isArray(decoded)) {
+    throw new HeadlessInputError(`${inputType}: expected a JSON object`);
+  }
+  const allowed = new Set(allowedKeys);
+  const unknownKeys = Object.keys(decoded).filter(k => !allowed.has(k));
+  if (unknownKeys.length > 0) {
+    throw new HeadlessInputError(
+      `${inputType}: unknown field(s): ${unknownKeys.join(', ')}. Allowed: ${allowedKeys.join(', ')}`
+    );
+  }
+  return decoded as Record<string, unknown>;
+}
+
+/**
+ * Decode a JSON string to an array of strings, rejecting any other shape.
+ * Used for list-shaped inputs such as the B4M_ADDITIONAL_DIRS bridge.
+ */
+export function parseStringArray(raw: string, inputType: string): string[] {
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(raw);
+  } catch (e) {
+    throw new HeadlessInputError(`${inputType}: invalid JSON (${e instanceof Error ? e.message : String(e)})`);
+  }
+  if (!Array.isArray(decoded) || decoded.some(v => typeof v !== 'string')) {
+    throw new HeadlessInputError(`${inputType}: expected a JSON array of strings`);
+  }
+  return decoded as string[];
+}
+
+/**
  * Tools whose risk depends on their command text rather than the tool name.
  * Must stay in sync with SHELL_LIKE_TOOL_COMMAND_FIELDS in utils/toolsAdapter.ts,
  * which is the interactive permission gate's copy of the same mapping.

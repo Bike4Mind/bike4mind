@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { HEADLESS_SCHEMA_VERSION, stampEvent, createHeadlessEmitter, classifyToolRisk } from './headlessProtocol.js';
+import {
+  HEADLESS_SCHEMA_VERSION,
+  stampEvent,
+  createHeadlessEmitter,
+  classifyToolRisk,
+  parseStrictObject,
+  parseStringArray,
+  HeadlessInputError,
+} from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
   it('stamps schemaVersion and runId onto every event', () => {
@@ -63,5 +71,43 @@ describe('classifyToolRisk', () => {
   it('does not throw on non-object args', () => {
     expect(() => classifyToolRisk('bash_execute', undefined, 'prompt_default')).not.toThrow();
     expect(classifyToolRisk('bash_execute', null, 'prompt_default').level).toBe('medium');
+  });
+});
+
+describe('parseStrictObject', () => {
+  const KEYS = ['allow', 'deny'] as const;
+
+  it('accepts an object with only allowlisted keys', () => {
+    expect(parseStrictObject('{"allow":["a"],"deny":[]}', KEYS, 'policy')).toEqual({ allow: ['a'], deny: [] });
+  });
+
+  it('rejects an unknown field with a clear, listing error', () => {
+    expect(() => parseStrictObject('{"allow":[],"bogus":1}', KEYS, 'policy')).toThrow(HeadlessInputError);
+    expect(() => parseStrictObject('{"allow":[],"bogus":1}', KEYS, 'policy')).toThrow(/unknown field\(s\): bogus/);
+  });
+
+  it('rejects invalid JSON', () => {
+    expect(() => parseStrictObject('{not json', KEYS, 'policy')).toThrow(/invalid JSON/);
+  });
+
+  it('rejects non-object payloads (array, null, scalar)', () => {
+    expect(() => parseStrictObject('[]', KEYS, 'policy')).toThrow(/expected a JSON object/);
+    expect(() => parseStrictObject('null', KEYS, 'policy')).toThrow(/expected a JSON object/);
+    expect(() => parseStrictObject('42', KEYS, 'policy')).toThrow(/expected a JSON object/);
+  });
+});
+
+describe('parseStringArray', () => {
+  it('accepts a JSON array of strings', () => {
+    expect(parseStringArray('["/a","/b"]', 'dirs')).toEqual(['/a', '/b']);
+  });
+
+  it('rejects a non-array or an array with non-string elements', () => {
+    expect(() => parseStringArray('{"a":1}', 'dirs')).toThrow(/expected a JSON array of strings/);
+    expect(() => parseStringArray('["/a",2]', 'dirs')).toThrow(/expected a JSON array of strings/);
+  });
+
+  it('rejects invalid JSON', () => {
+    expect(() => parseStringArray('nope', 'dirs')).toThrow(/invalid JSON/);
   });
 });
