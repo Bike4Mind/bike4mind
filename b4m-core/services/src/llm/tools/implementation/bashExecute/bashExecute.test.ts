@@ -111,6 +111,21 @@ describe('bash_execute foreground mode', () => {
     expect(result.stdout).not.toContain('�');
     expect(result.exitCode).toBe(0);
   });
+
+  it('flushes an incomplete trailing byte at close as a single replacement char', async () => {
+    const child = new MockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeBashCommand({ command: 'printf partial' });
+
+    // First byte of 'é' (0xC3) with no continuation; decoder.end() in the close
+    // handler flushes it as one U+FFFD.
+    child.stdout.emit('data', Buffer.from([0xc3]));
+    child.close(0);
+
+    const result = await promise;
+    expect(result.stdout).toBe('�');
+  });
 });
 
 describe('formatSessionResult', () => {
