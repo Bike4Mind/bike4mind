@@ -52,6 +52,8 @@ export interface SubagentUsageMeta {
   model: string;
   inputTokens: number;
   outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
 }
 
 /**
@@ -327,15 +329,24 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
           const modelInfo = deps.availableModels?.find(m => m.id === result.model);
           const inputTokens = result.completionInfo.totalInputTokens ?? 0;
           const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
+          // Thread the subagent's cache tokens through so the recorded provider
+          // cost is computed on the same basis as `creditsCharged` (which already
+          // reflects cache accounting). The cache buckets are additive, so dropping
+          // them makes costUsd understate true cost for any multi-iteration
+          // delegation, inflating the margins the dashboard reports above reality.
+          const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
+          const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
           deps.onCredits(
             result.completionInfo.totalCredits,
             modelInfo
               ? {
-                  usdCost: getTextModelCost(modelInfo, inputTokens, outputTokens),
+                  usdCost: getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
                   provider: modelInfo.backend,
                   model: result.model,
                   inputTokens,
                   outputTokens,
+                  cacheReadTokens,
+                  cacheWriteTokens,
                 }
               : undefined
           );

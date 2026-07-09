@@ -4,7 +4,7 @@
 #
 # Manually clean up a preview stage whose `sst remove` failed with:
 #   DependencyViolation: resource sg-... has a dependent object
-# on QuestProcessorServiceLoadBalancerSecurityGroup.
+# on ChatCompletionLoadBalancerSecurityGroup (legacy stacks: QuestProcessorServiceLoadBalancerSecurityGroup).
 #
 # Root cause (confirmed from the pr9702 cleanup log): `sst remove` tears down the
 # target group and then the ALB's security group, but it never deletes the ALB
@@ -45,7 +45,7 @@ run() {
 alb_arns_for_stage() {
   local stage="$1" arn s
   for arn in $(aws elbv2 describe-load-balancers --region "$AWS_REGION" \
-      --query "LoadBalancers[?contains(LoadBalancerName,'QuestProcessor')].LoadBalancerArn" \
+      --query "LoadBalancers[?contains(LoadBalancerName,'ChatCompletion') || contains(LoadBalancerName,'QuestProcessor')].LoadBalancerArn" \
       --output text 2>/dev/null); do
     s=$(aws elbv2 describe-tags --region "$AWS_REGION" --resource-arns "$arn" \
         --query "TagDescriptions[0].Tags[?Key=='sst:stage']|[0].Value" --output text 2>/dev/null || true)
@@ -99,7 +99,9 @@ cleanup_stage() {
   # in state as deletable, so `sst remove` tries to delete it and AWS rejects with
   # CachePolicyInUse (it's in use by other previews). Dropping it from state retains the
   # shared policy in AWS. Harmless no-op for previews that already retain it.
-  for name in QuestProcessorServiceListenerHTTP80 QuestProcessorServiceLoadBalancer RouterServerCachePolicy; do
+  # ChatCompletion* = current SST logical id; QuestProcessorService* = legacy (pre-rename)
+  # orphans. Both are listed so this works across the rename window; absent names no-op.
+  for name in ChatCompletionListenerHTTP80 ChatCompletionLoadBalancer QuestProcessorServiceListenerHTTP80 QuestProcessorServiceLoadBalancer RouterServerCachePolicy; do
     if [ "$DRY_RUN" = "1" ]; then
       echo "  DRY-RUN: (echo Y | sst state remove --stage $stage $name)"
     else
@@ -122,7 +124,7 @@ cleanup_stage() {
 # --auto: every QuestProcessor ALB SG whose stage tag maps to a CLOSED/MERGED PR.
 auto_find_orphans() {
   aws ec2 describe-security-groups --region "$AWS_REGION" \
-    --filters Name=group-name,Values='QuestProcessorServiceLoadBalancer*' \
+    --filters Name=group-name,Values='ChatCompletionLoadBalancer*','QuestProcessorServiceLoadBalancer*' \
     --query "SecurityGroups[].[Tags[?Key=='sst:stage']|[0].Value]" --output text 2>/dev/null \
   | tr '\t' '\n' | sed '/^$/d' | sort -u | while read -r stage; do
     num="${stage#pr}"

@@ -1,0 +1,53 @@
+# syntax=docker/dockerfile:1.7-labs
+#
+# Self-host chatCompletion service image. Runs apps/client/server/chatCompletion/server.ts
+# via tsx as a standalone always-on HTTP worker, so the self-host `app` container dispatches
+# quests to it over HTTP (`/process`) exactly like the hosted Fargate ChatCompletion service -
+# same code path in every environment (see apps/client/server/utils/dispatchQuest.ts).
+#
+# Differs from the hosted Dockerfile.chatcompletion in exactly two ways:
+#   1. ENV B4M_SELF_HOST=true.
+#   2. CMD prepends `--import ./server/chatCompletion/selfhostSstAlias.mjs`, which aliases the
+#      bare `sst` specifier to the env-backed `@bike4mind/resource` shim (the runtime analog of
+#      the app's turbopack build alias) so `config.ts`'s eager `Resource.*` reads resolve from
+#      plain env vars instead of SST links. The hosted image keeps real SST and is untouched.
+#
+# Build context is the monorepo root. Layer ordering (manifests -> install -> source -> build)
+# mirrors the hosted image so the native-compile install layer stays cached across source edits.
+
+FROM public.ecr.aws/docker/library/node:24-slim@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS base
+
+# Toolchain for any native addons in the dependency graph (node-gyp et al).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN corepack enable
+WORKDIR /app
+
+# 1) Manifests only (cache key = lockfile + workspace package.json files, not app source).
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY --parents **/package.json ./
+
+# 1a) apps/client's postinstall needs its scripts present before install.
+COPY apps/client/scripts ./apps/client/scripts
+
+# 2) Install the client workspace + all workspace deps INCLUDING devDeps (tsx). No --prod.
+RUN pnpm install --frozen-lockfile --filter @bike4mind/client...
+
+# 3) Source.
+COPY . .
+
+# 4) Build the client's upstream @bike4mind/* packages (incl. @bike4mind/resource, the shim
+#    the alias hook redirects to). `^...` builds the client's deps without the Next.js app.
+RUN pnpm turbo build --filter=@bike4mind/client^...
+
+ENV NODE_ENV=production
+ENV B4M_SELF_HOST=true
+ENV PORT=8080
+EXPOSE 8080
+WORKDIR /app/apps/client
+
+# tsx resolves @server/* and @/* from apps/client/tsconfig.json (cwd here); the --import hook
+# aliases `sst` -> @bike4mind/resource so Resource.* resolves from env.
+CMD ["pnpm", "exec", "tsx", "--import", "./server/chatCompletion/selfhostSstAlias.mjs", "server/chatCompletion/server.ts"]

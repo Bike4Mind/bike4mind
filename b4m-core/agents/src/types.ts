@@ -215,8 +215,13 @@ export interface AgentRunOptions {
   maxTotalTokens?: number;
   /** Additional context to include in the prompt */
   context?: string;
-  /** Previous conversation messages to maintain context */
-  previousMessages?: ConversationMessage[];
+  /**
+   * Previous conversation messages to maintain context. Typed as IMessage[] so
+   * callers can replay rich content (tool_use / tool_result / image blocks), not
+   * just plain strings. Plain { role, content: string } objects still satisfy
+   * this, so existing callers are unaffected.
+   */
+  previousMessages?: IMessage[];
   signal?: AbortSignal;
   /** Enable parallel execution of read-only tools for performance improvement */
   parallelExecution?: boolean;

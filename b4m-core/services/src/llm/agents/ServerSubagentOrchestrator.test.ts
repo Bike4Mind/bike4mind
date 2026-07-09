@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import type { ServerAgentDefinition } from '@bike4mind/agents';
+import { ReActAgent } from '@bike4mind/agents';
+import type { AgentResult, ServerAgentDefinition } from '@bike4mind/agents';
+import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
+import { usdToCredits } from '@bike4mind/utils';
 import {
   ServerSubagentOrchestrator,
   type ServerSubagentTracker,
@@ -372,6 +375,107 @@ describe('ServerSubagentOrchestrator', () => {
         });
 
       expect(tracker.onLambdaDispatch).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('in-process credit fallback — cache-aware basis (#151)', () => {
+    // Numeric-keyed tier: no explicit cache rates, so getTextModelCost derives them
+    // from `input` via the cache multipliers (0.1x read, 1.25x write). Mirrors the
+    // model shape used in delegateToAgent.test.ts.
+    const MODEL_ID = 'claude-sonnet-4-6';
+    const model: ModelInfo = {
+      id: MODEL_ID,
+      backend: 'bedrock',
+      pricing: { 1_000_000: { input: 0.000003, output: 0.000015 } },
+    } as unknown as ModelInfo;
+
+    // Spy on the prototype so the real orchestrator (and ReActAgent constructor)
+    // still run; only the network-bound `run()` is stubbed.
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    function stubAgentRun(completionInfo: AgentResult['completionInfo']): void {
+      vi.spyOn(ReActAgent.prototype, 'run').mockResolvedValue({
+        finalAnswer: 'done',
+        steps: [],
+        completionInfo,
+      } satisfies AgentResult);
+    }
+
+    it('computes fallback totalCredits on the same cache-aware basis as the recorded cost', async () => {
+      const inputTokens = 12_000;
+      const outputTokens = 3_000;
+      const cacheReadTokens = 40_000;
+      const cacheWriteTokens = 5_000;
+      // totalCredits absent -> the orchestrator's fallback computes it from tokens.
+      stubAgentRun({
+        totalTokens: inputTokens + outputTokens,
+        totalInputTokens: inputTokens,
+        totalOutputTokens: outputTokens,
+        totalCacheReadTokens: cacheReadTokens,
+        totalCacheWriteTokens: cacheWriteTokens,
+        iterations: 3,
+        toolCalls: 2,
+        reachedMaxIterations: false,
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      // The fallback credit sits on the cache-aware basis (input/output PLUS the
+      // additive cache buckets) - the same basis as the costUsd recorded by
+      // delegateToAgent's onCredits, so the two numbers in a usage-event row agree.
+      expect(result.completionInfo.totalCredits).toBeCloseTo(
+        usdToCredits(getTextModelCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens)),
+        10
+      );
+      // Strictly higher than the cache-blind value PR #132 would have produced: the
+      // cache buckets are additive positive costs, so this is the ~+36% correction.
+      expect(result.completionInfo.totalCredits!).toBeGreaterThan(
+        usdToCredits(getTextModelCost(model, inputTokens, outputTokens))
+      );
+    });
+
+    it('does not overwrite totalCredits when the subagent already reported them', async () => {
+      stubAgentRun({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCacheReadTokens: 40_000,
+        totalCacheWriteTokens: 5_000,
+        totalCredits: 99,
+        iterations: 3,
+        toolCalls: 2,
+        reachedMaxIterations: false,
+      });
+
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger: makeLogger(),
+        parentTools: [],
+        availableModels: [model],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.completionInfo.totalCredits).toBe(99);
     });
   });
 });

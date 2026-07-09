@@ -115,10 +115,10 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
       invokeLambda: async (params: any) => {
         if (simplifiedRequest.wait) {
           // wait=true: the quest is processed inline below (ChatCompletionProcess). Do NOT
-          // dispatch to the QuestProcessorService - that would double-process the quest.
+          // dispatch to the ChatCompletion - that would double-process the quest.
           return;
         }
-        // wait=false: hand off to the always-on QuestProcessorService (HTTP, 202 ACK).
+        // wait=false: hand off to the always-on ChatCompletion (HTTP, 202 ACK).
         await dispatchQuest(params, req.logger);
       },
     };

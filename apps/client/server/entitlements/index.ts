@@ -19,6 +19,7 @@
 import { resolveEntitlements, normalizeTag } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { subscriptionRepository } from '@server/models/Subscription';
+import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
 import type { IUserDocument } from '@bike4mind/common';
 
 /**
@@ -54,13 +55,26 @@ export interface EntitlementUser {
  * pattern) at the call site.
  */
 export async function getUserEntitlements(user: EntitlementUser): Promise<EntitlementKey[]> {
-  const activeSubscriptions = await subscriptionRepository.findActiveUserSubscriptions(user.id);
-  return resolveEntitlements({
-    tags: user.tags ?? [],
-    activePriceIds: activeSubscriptions.map(subscription => subscription.priceId),
-    email: user.email,
-    emailVerified: user.emailVerified,
-  });
+  // Both reads are independent - run them together to avoid serializing two round-trips.
+  const [activeSubscriptions, partnerKeys] = await Promise.all([
+    subscriptionRepository.findActiveUserSubscriptions(user.id),
+    partnerEntitlementsForEmail(user.email, user.emailVerified),
+  ]);
+  // DB-backed partner rules (issue #293) union with the pure registry grants
+  // (subscription + tag + env-domain). Additive so an env-configured domain
+  // keeps working until it is migrated into the PartnerSignupRule collection.
+  const keys = new Set(
+    resolveEntitlements({
+      tags: user.tags ?? [],
+      activePriceIds: activeSubscriptions.map(subscription => subscription.priceId),
+      email: user.email,
+      emailVerified: user.emailVerified,
+    })
+  );
+  for (const key of partnerKeys) {
+    keys.add(key);
+  }
+  return [...keys];
 }
 
 /**

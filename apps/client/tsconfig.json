@@ -7,7 +7,6 @@
       "@pages/*": ["./pages/*"],
       "@public/*": ["./public/*"],
       "@server/*": ["./server/*"],
-      "@selfhost/quest-runner": ["./server/utils/selfhostQuestRunner"],
       "@client/*": ["./*"],
       "@/*": ["./*"]
     }

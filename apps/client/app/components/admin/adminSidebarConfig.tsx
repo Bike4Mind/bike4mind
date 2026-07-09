@@ -32,6 +32,7 @@ import ApiIcon from '@mui/icons-material/Api';
 import SchemaIcon from '@mui/icons-material/Schema';
 import InventoryIcon from '@mui/icons-material/Inventory';
 import MenuBookIcon from '@mui/icons-material/MenuBook';
+import HandshakeIcon from '@mui/icons-material/Handshake';
 
 export enum AdminTab {
   Users = 0,
@@ -87,6 +88,7 @@ export enum AdminTab {
   VoiceSettings = 52,
   AgentExecutions = 53,
   PublishedPages = 54,
+  PartnerSignupRules = 55,
 }
 
 /**
@@ -139,6 +141,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
         testid: 'admin-invite-center-tab-btn',
       },
       { Icon: PeopleIcon, tab: AdminTab.Subscribers, label: 'Subscribers', badge: 'waitingSubscribers' },
+      { Icon: HandshakeIcon, tab: AdminTab.PartnerSignupRules, label: 'Partner Signup Rules' },
       { Icon: EmailIcon, tab: AdminTab.EmailMarketing, label: 'Email Marketing' },
       { Icon: PeopleIcon, tab: AdminTab.Subscriptions, label: 'Subscriptions' },
       { Icon: BusinessIcon, tab: AdminTab.Organizations, label: 'Organizations' },

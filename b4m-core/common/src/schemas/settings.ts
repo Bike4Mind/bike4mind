@@ -359,6 +359,9 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_local_file',
     'delete_file',
     'bash_execute',
+    // Background-shell mutators (poll/list are read-only and stay allowed)
+    'write_shell_stdin',
+    'kill_background_shell',
     // Blog authoring / external publish
     'blog_draft',
     'blog_edit',

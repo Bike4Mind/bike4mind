@@ -62,6 +62,17 @@ Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work
 - ✅ `const data: unknown = await fetch(); if (typeof data === 'object') { … }`
 - ⚠️ `const legacy: any = …; // any: third-party lib ships no types`
 
+## Comment hygiene
+
+Code describes *what* it does and comments explain the *why* that the code can't.
+
+- **Clear code gets zero comments.** Add concise comments only for a real reason like a non-obvious constraint, a gotcha, unique context, a unit (e.g. ms).
+- **Never restate the code.** No multi-line preamble on a simple statement; no long essay on a simple function. If the comment just re-says the code, delete it.
+- **Complex code gets 1-2 lines** covering what isn't visible from the code itself: the reasoning, the tradeoff, the edge case. Go longer only when genuinely justified.
+- **Function/block comments: as descriptive as needed, and no more.** State the contract (purpose, non-obvious inputs/outputs, side effects) concisely; skip the play-by-play.
+- **Keep cross-references.** A comment that points to a related module, spells out an invariant across areas, or warns "must stay in sync with X" saves the reader a hunt. This is the one kind of comment to be generous with.
+- **Don't cite tickets for routine changes.** Reference an external source only when it carries context that can't live in the code and a future reader will actually need. Reminder: this is a public repo, so internal tracker numbers are never allowed regardless.
+
 ## Testing guidelines
 
 **File placement:**

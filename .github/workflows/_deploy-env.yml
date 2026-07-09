@@ -576,8 +576,8 @@ jobs:
           VALUE=$(openssl rand -hex 32)
           pnpm sst secret set E2E_CLEANUP_SECRET "$VALUE" --stage ${{ steps.cfg.outputs.stage }}
 
-      # Build & push the quest-processor container to the target account's ECR, then hand the
-      # URI to `sst deploy` via QUEST_PROCESSOR_IMAGE. A plain `docker build` (in-daemon
+      # Build & push the chat-completion container to the target account's ECR, then hand the
+      # URI to `sst deploy` via CHAT_COMPLETION_IMAGE. A plain `docker build` (in-daemon
       # buildkit) is used deliberately — NOT SST's docker-build provider, which boots a
       # separate buildx_buildkit builder container that times out on the self-hosted runner
       # (`booting builder: … context deadline exceeded`). This keeps `sst deploy` build-free.
@@ -589,9 +589,9 @@ jobs:
       # build is skipped when that tag already exists. Most pushes (infra/docs-only, CI retries,
       # rebases that don't touch the hashed paths) skip the build entirely; the ones that do
       # build warm their layers from the moving :cache tag instead of running cold.
-      - name: Build & push quest-processor image
+      - name: Build & push chat-completion image
         env:
-          REPO_NAME: ${{ steps.cfg.outputs.app_name }}-quest-processor
+          REPO_NAME: ${{ steps.cfg.outputs.app_name }}-chat-completion
         run: |
           set -euo pipefail
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -601,14 +601,14 @@ jobs:
           # content-addressed tree/blob SHA, so identical content produces an identical tag
           # regardless of commit history. The Dockerfile + .dockerignore live under apps/client,
           # so they're covered. This path set is a deliberate SUPERSET of the true import
-          # closure of `server/quest/server.ts`: under-scoping would silently ship a stale image
+          # closure of `server/chatCompletion/server.ts`: under-scoping would silently ship a stale image
           # ("my fix didn't deploy"); over-scoping only triggers an unnecessary build, which the
           # layer cache makes cheap. Narrow later (import-graph in hand) only if worth it.
           # The root install inputs the Dockerfile copies (pnpm-workspace.yaml, package.json,
           # .npmrc) are listed explicitly: a change to any of them that does NOT also move
           # pnpm-lock.yaml (e.g. an .npmrc node-linker/registry edit) would otherwise hash
           # identically and reuse a stale image. Keep this set in lockstep with the install
-          # layer's `COPY` in apps/client/Dockerfile.quest-service.
+          # layer's `COPY` in apps/client/Dockerfile.chatcompletion.
           IMAGE_HASH=$(for p in apps/client b4m-core packages pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc; do \
             git rev-parse "HEAD:${p}"; done | sha256sum | cut -c1-16)
           IMAGE_URI="${REGISTRY}/${REPO_NAME}:${IMAGE_HASH}"
@@ -649,7 +649,7 @@ jobs:
             # in an account) is tolerated — BuildKit warns and proceeds cold. Fargate runs
             # linux/amd64; the runner is amd64 so this is a native build.
             DOCKER_BUILDKIT=1 docker build \
-              -f apps/client/Dockerfile.quest-service \
+              -f apps/client/Dockerfile.chatcompletion \
               --cache-from "${CACHE_TAG}" \
               --build-arg BUILDKIT_INLINE_CACHE=1 \
               -t "${IMAGE_URI}" \
@@ -660,8 +660,8 @@ jobs:
             docker push "${CACHE_TAG}"
           fi
 
-          # Consumed by infra/questProcessorService.ts (image: questProcessorImage).
-          echo "QUEST_PROCESSOR_IMAGE=${IMAGE_URI}" >> "$GITHUB_ENV"
+          # Consumed by infra/chatCompletion.ts (image: chatCompletionImage).
+          echo "CHAT_COMPLETION_IMAGE=${IMAGE_URI}" >> "$GITHUB_ENV"
 
       - name: Deploy to AWS
         id: deploy
@@ -752,8 +752,8 @@ jobs:
           # fallback. Bump the variable to roll forward (no in-tree Dockerfile to maintain).
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           # Quest-processor image built & pushed to ECR in the previous step (build-free
-          # sst deploy). See infra/questProcessorService.ts.
-          QUEST_PROCESSOR_IMAGE: ${{ env.QUEST_PROCESSOR_IMAGE }}
+          # sst deploy). See infra/chatCompletion.ts.
+          CHAT_COMPLETION_IMAGE: ${{ env.CHAT_COMPLETION_IMAGE }}
           ENABLE_WHATS_NEW_DISTRIBUTION: ${{ github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && github.ref == 'refs/heads/prod' && 'true' || 'false' }}
           # Extra SSRF-allowlisted host suffix(es) for the What's New distribution URL (open-core
           # #9392). Account-tied, no brand fallback; empty == only CloudFront/S3 + SERVER_DOMAIN

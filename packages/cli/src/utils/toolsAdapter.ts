@@ -25,6 +25,7 @@ import type { AgentHooks } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import { classifyCommandRisk } from '../config/commandRisk.js';
 import { getPlanModeFileDir, isWriteTargetingPlanFile } from './planMode.js';
 import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
@@ -46,6 +47,18 @@ function getAllowedToolPatterns(): string[] {
   }
   return cachedAllowedTools;
 }
+
+/**
+ * Shell-like tools whose free-text command argument must be run through the
+ * command-risk classifier before the permission decision. Maps tool name -> the
+ * arg field holding the command string. `bash_execute` is the only shell-exec tool
+ * today; any new one (e.g. `shell_execute`, an MCP `run_shell`, a code-exec tool)
+ * MUST be added here or it will silently skip the classifier and can auto-run
+ * destructive strings via `--allowedTools` / sandbox auto-allow / auto-accept.
+ */
+const SHELL_LIKE_TOOL_COMMAND_FIELDS: Record<string, string> = {
+  bash_execute: 'command',
+};
 
 /**
  * Simple CLI-friendly storage adapter
@@ -229,25 +242,50 @@ function wrapToolWithPermission(
         return result;
       }
 
+      // Command-level risk gate: inspect the actual command text (not just the
+      // tool name) so a destructive command hidden behind a wrapper
+      // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
+      // silently auto-run. A high-risk command ALWAYS requires an explicit
+      // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
+      // auto-accept short-circuits below. It only ever tightens: benign commands
+      // keep their existing (possibly auto-approved) behavior.
+      const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
+      const commandText = commandField ? args?.[commandField] : undefined;
+      // `classifyCommandRisk` is documented never to throw, but this call sits on the
+      // security boundary for every shell command - if it ever does, treat that as a
+      // high-risk command (force the prompt) rather than letting the error escape the
+      // permission gate and skip classification entirely.
+      let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
+      if (typeof commandText === 'string') {
+        try {
+          commandRisk = classifyCommandRisk(commandText);
+        } catch {
+          commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+        }
+      }
+      const forcePromptForRisk = commandRisk?.level === 'high';
+
       // Host allowlist (claude --allowedTools): auto-approve tools matching an
       // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
       const allowedPatterns = getAllowedToolPatterns();
-      if (allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+      if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
         return executeAndRecord();
       }
 
       // Auto-approved, trusted, or sandbox auto-allowed
-      if (!permissionManager.needsPermission(toolName, { isSandboxed })) {
+      if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
         return executeAndRecord();
       }
 
       // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (interactionMode === 'auto-accept') {
+      if (!forcePromptForRisk && interactionMode === 'auto-accept') {
         return executeAndRecord();
       }
 
       // Generate preview for dangerous operations
-      const preview = await generateToolPreview(toolName, args, isSandboxed);
+      const basePreview = await generateToolPreview(toolName, args, isSandboxed);
+      const preview =
+        forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
 
       // Show permission prompt and wait indefinitely for response
       const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
@@ -441,6 +479,18 @@ async function captureViolations(
       await orchestrator.recordViolation(v).catch(() => {});
     }
   }
+}
+
+/**
+ * Prepend a high-risk warning banner (with the classifier's reasons) to a tool
+ * preview shown in the permission prompt. Explains WHY a normally auto-approved
+ * command is being surfaced for explicit confirmation.
+ */
+function prependRiskBanner(basePreview: string | undefined, reasons: string[]): string {
+  const details =
+    reasons.length > 0 ? reasons.map(reason => `- ${reason}`).join('\n') : '- flagged by command analysis';
+  const banner = `🛑 HIGH-RISK COMMAND — flagged by static command analysis:\n\n${details}`;
+  return basePreview ? `${banner}\n\n${basePreview}` : banner;
 }
 
 /**

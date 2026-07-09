@@ -1,11 +1,20 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { filterToolsByPatterns } from '@bike4mind/agents';
+import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
-import { MAX_SUBAGENT_DEPTH, PARENT_DEADLINE_BUFFER_MS } from '../../agents/ServerSubagentOrchestrator';
-import type { ServerSubagentTracker, ChildExecutionStatus } from '../../agents/ServerSubagentOrchestrator';
-import { createDelegateToAgentTool } from './delegateToAgent';
+import {
+  MAX_SUBAGENT_DEPTH,
+  PARENT_DEADLINE_BUFFER_MS,
+  ServerSubagentOrchestrator,
+} from '../../agents/ServerSubagentOrchestrator';
+import type {
+  ServerSubagentTracker,
+  ChildExecutionStatus,
+  ServerAgentExecutionResult,
+} from '../../agents/ServerSubagentOrchestrator';
+import { createDelegateToAgentTool, type SubagentUsageMeta } from './delegateToAgent';
 
 function makeLogger(): Logger {
   return {
@@ -299,5 +308,116 @@ describe('createDelegateToAgentTool — depth cap enforcement (#8577)', () => {
     // 'delegate_to_agent' to DEPTH_CAP_DENIED and passes it to filterToolsByPatterns.
     const capped = filterToolsByPatterns(allTools, undefined, ['delegate_to_agent']);
     expect(capped.some(t => t.toolSchema.name === 'delegate_to_agent')).toBe(false);
+  });
+});
+
+describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
+  const MODEL_ID = 'claude-sonnet-4-6';
+  // Numeric-keyed tier: inputTokens <= threshold selects this pricing. No explicit
+  // cache rates, so getTextModelCost derives them from `input` via the cache
+  // multipliers (0.1x read, 1.25x write).
+  const model: ModelInfo = {
+    id: MODEL_ID,
+    backend: 'bedrock',
+    pricing: { 1_000_000: { input: 0.000003, output: 0.000015 } },
+  } as unknown as ModelInfo;
+
+  function makeResult(overrides: Partial<ServerAgentExecutionResult['completionInfo']>): ServerAgentExecutionResult {
+    return {
+      agentName: 'researcher',
+      thoroughness: 'medium',
+      summary: 'done',
+      finalAnswer: 'done',
+      model: MODEL_ID,
+      steps: [],
+      completionInfo: {
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        totalCredits: 50,
+        iterations: 3,
+        toolCalls: 2,
+        reachedMaxIterations: false,
+        ...overrides,
+      },
+    } as ServerAgentExecutionResult;
+  }
+
+  // Spy on the prototype method so the real constructor still runs (background
+  // and depth tests elsewhere in this file depend on the un-mocked orchestrator).
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function mockDelegation(result: ServerAgentExecutionResult): void {
+    vi.spyOn(ServerSubagentOrchestrator.prototype, 'delegateToAgent').mockResolvedValue(result);
+  }
+
+  it('threads subagent cache tokens into the usage meta and computes cost on the cache-aware basis', async () => {
+    const inputTokens = 12_000;
+    const outputTokens = 3_000;
+    const cacheReadTokens = 40_000;
+    const cacheWriteTokens = 5_000;
+    mockDelegation(
+      makeResult({
+        totalInputTokens: inputTokens,
+        totalOutputTokens: outputTokens,
+        totalCacheReadTokens: cacheReadTokens,
+        totalCacheWriteTokens: cacheWriteTokens,
+      })
+    );
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [model],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(captured).toBeDefined();
+    expect(captured!.cacheReadTokens).toBe(cacheReadTokens);
+    expect(captured!.cacheWriteTokens).toBe(cacheWriteTokens);
+    // Cost matches getTextModelCost WITH the cache args - the same separate-bucket
+    // basis cliCompletions uses to compute the subagent's credits (input_tokens
+    // excludes cache tokens, so the cache buckets are additive). This is the whole
+    // point of #151: costUsd now sits on the same basis as creditsCharged.
+    expect(captured!.usdCost).toBeCloseTo(
+      getTextModelCost(model, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+      12
+    );
+    // PR #132 dropped the cache buckets, understating cost by exactly their
+    // contribution; the fixed cost is strictly higher than that cache-blind value.
+    expect(captured!.usdCost).toBeGreaterThan(getTextModelCost(model, inputTokens, outputTokens));
+  });
+
+  it('defaults cache tokens to 0 when the subagent reports none', async () => {
+    mockDelegation(makeResult({ totalCacheReadTokens: undefined, totalCacheWriteTokens: undefined }));
+
+    let captured: SubagentUsageMeta | undefined;
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger: makeLogger(),
+      parentTools: [],
+      agentStore: makeStore(),
+      availableModels: [model],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    expect(captured).toBeDefined();
+    expect(captured!.cacheReadTokens).toBe(0);
+    expect(captured!.cacheWriteTokens).toBe(0);
   });
 });
