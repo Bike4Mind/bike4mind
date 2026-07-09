@@ -3,12 +3,12 @@ import { usageEventRepository, userRepository } from '@bike4mind/database';
 import { usdToCredits } from '@bike4mind/utils';
 import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 
-const VIEWS = ['model-day', 'user', 'provider-month'] as const;
+const VIEWS = ['model-day', 'user', 'provider-month', 'settlement'] as const;
 type MarginView = (typeof VIEWS)[number];
 
 /**
  * Margin reporting over usage events.
- * GET ?view=model-day|user|provider-month&days=30
+ * GET ?view=model-day|user|provider-month|settlement&days=30
  *
  * Responses include targetCreditsPerUsd = usdToCredits(1): what current pricing
  * charges per $1 of COGS. Rows below it were charged under older pricing or
@@ -46,7 +46,12 @@ const handler = baseApi().get(async (req, res) => {
     return res.json({ targetCreditsPerUsd, rows: named });
   }
 
-  const rows = await usageEventRepository.monthlyCogsByProvider();
+  if (view === 'provider-month') {
+    const rows = await usageEventRepository.monthlyCogsByProvider();
+    return res.json({ targetCreditsPerUsd, rows });
+  }
+
+  const rows = await usageEventRepository.settlementBreakdown(days);
   return res.json({ targetCreditsPerUsd, rows });
 });
 

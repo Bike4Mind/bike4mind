@@ -5,6 +5,7 @@ import {
   IMongoDocument,
   IModelDayMargin,
   IProviderMonthCogs,
+  ISettlementBreakdown,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
@@ -160,6 +161,51 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         },
       },
       { $sort: { month: -1, provider: 1 } },
+    ]);
+  }
+
+  async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // Only rows with both provider counts contribute to the delta - a row settled
+    // 'local' because the provider never returned usage has nothing to compare.
+    // $ifNull normalizes a missing field to null first: a bare $ne against a
+    // missing field does not reliably equal $ne against null in $group expressions.
+    const hasProviderCounts = {
+      $and: [
+        { $ne: [{ $ifNull: ['$providerInputTokens', null] }, null] },
+        { $ne: [{ $ifNull: ['$providerOutputTokens', null] }, null] },
+      ],
+    };
+    return this.model.aggregate<ISettlementBreakdown>([
+      { $match: { createdAt: { $gte: from }, settledBasis: { $in: ['provider', 'local'] } } },
+      {
+        $group: {
+          _id: '$settledBasis',
+          requests: { $sum: 1 },
+          creditsCharged: { $sum: '$creditsCharged' },
+          writtenOffCredits: { $sum: { $ifNull: ['$writtenOffCredits', 0] } },
+          inputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerInputTokens', '$inputTokens'] }, 0] },
+          },
+          outputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerOutputTokens', '$outputTokens'] }, 0] },
+          },
+          deltaSampleSize: { $sum: { $cond: [hasProviderCounts, 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          settledBasis: '$_id',
+          requests: 1,
+          creditsCharged: 1,
+          writtenOffCredits: 1,
+          inputTokenDelta: 1,
+          outputTokenDelta: 1,
+          deltaSampleSize: 1,
+        },
+      },
+      { $sort: { settledBasis: 1 } },
     ]);
   }
 }

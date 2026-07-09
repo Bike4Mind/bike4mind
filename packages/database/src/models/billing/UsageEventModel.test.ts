@@ -127,4 +127,71 @@ describe('UsageEventRepository', () => {
       expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
     });
   });
+
+  describe('settlementBreakdown', () => {
+    it('buckets by settledBasis and sums credits, write-offs, and token deltas', async () => {
+      await record({
+        settledBasis: 'provider',
+        inputTokens: 1000,
+        outputTokens: 500,
+        providerInputTokens: 950,
+        providerOutputTokens: 480,
+        creditsCharged: 50,
+        writtenOffCredits: 5,
+      });
+      await record({
+        settledBasis: 'provider',
+        inputTokens: 800,
+        outputTokens: 400,
+        providerInputTokens: 820,
+        providerOutputTokens: 410,
+        creditsCharged: 40,
+      });
+      await record({
+        settledBasis: 'local',
+        inputTokens: 300,
+        outputTokens: 150,
+        creditsCharged: 15,
+        writtenOffCredits: 2,
+      });
+
+      const rows = await usageEventRepository.settlementBreakdown();
+
+      expect(rows).toHaveLength(2);
+      const provider = rows.find(r => r.settledBasis === 'provider');
+      expect(provider).toMatchObject({
+        requests: 2,
+        creditsCharged: 90,
+        writtenOffCredits: 5,
+        deltaSampleSize: 2,
+      });
+      // provider counts vs local estimate: (950-1000)+(820-800) = -30, (480-500)+(410-400) = -10
+      expect(provider!.inputTokenDelta).toBe(-30);
+      expect(provider!.outputTokenDelta).toBe(-10);
+
+      const local = rows.find(r => r.settledBasis === 'local');
+      expect(local).toMatchObject({
+        requests: 1,
+        creditsCharged: 15,
+        writtenOffCredits: 2,
+        // No provider counts on this row, so it contributes nothing to the delta.
+        deltaSampleSize: 0,
+        inputTokenDelta: 0,
+        outputTokenDelta: 0,
+      });
+    });
+
+    it('excludes events with no settledBasis (pre-#139 rows)', async () => {
+      await record();
+      const rows = await usageEventRepository.settlementBreakdown();
+      expect(rows).toHaveLength(0);
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await record({ settledBasis: 'local' });
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+      const rows = await usageEventRepository.settlementBreakdown(30);
+      expect(rows).toHaveLength(0);
+    });
+  });
 });
