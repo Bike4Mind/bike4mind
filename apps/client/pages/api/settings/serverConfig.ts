@@ -20,9 +20,11 @@ export type ServerConfig = {
   websocketUrl: string;
   wsCompletionUrl: string;
   /**
-   * Optional direct URL for SSE completions. Always empty now that completions are served by
-   * the always-on ChatCompletion service under the app domain: the CLI falls back to the
-   * CloudFront-fronted `/api/ai/v1/completions` path (HTTPS + WAF). Kept for wire-compat.
+   * Optional direct URL for SSE completions. Empty in hosted deploys, where completions are
+   * served by the always-on ChatCompletion service under the app domain: the CLI falls back to
+   * the CloudFront-fronted `/api/ai/v1/completions` path (HTTPS + WAF). Self-host has no CDN
+   * routing that path to the service, so CHAT_COMPLETION_PUBLIC_URL (the service's published
+   * origin, e.g. http://localhost:8788) advertises the direct endpoint instead.
    */
   completionsUrl: string;
   appfileBucketName: string;
@@ -48,9 +50,13 @@ const handler = baseApi({ auth: true }).get(
         'CliWsCompletionHandler' in Resource
           ? (Resource as unknown as Record<string, { url: string }>).CliWsCompletionHandler.url
           : '',
-      // Served by the ChatCompletion service via CloudFront at /api/ai/v1/completions; no
-      // direct function URL to advertise. Empty -> the CLI uses that same-origin path.
-      completionsUrl: '',
+      // Hosted: served by the ChatCompletion service via CloudFront at /api/ai/v1/completions,
+      // so there is no direct URL to advertise (empty -> the CLI uses that same-origin path).
+      // Self-host: nothing routes that path on the app origin, so advertise the service's
+      // published endpoint from CHAT_COMPLETION_PUBLIC_URL (see the ServerConfig type doc).
+      completionsUrl: process.env.CHAT_COMPLETION_PUBLIC_URL
+        ? `${process.env.CHAT_COMPLETION_PUBLIC_URL.replace(/\/+$/, '')}/api/ai/v1/completions`
+        : '',
       appfileBucketName: Resource.appFilesBucket.name,
       fabfileBucketName: Resource.fabFileBucket.name,
       // Sanitize placeholder values - don't expose 'not-configured' to frontend

@@ -31,6 +31,13 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
     this.currentModel = options.model;
     if (options.completionsUrl) {
       this.completionsEndpoint = options.completionsUrl;
+    } else if (process.env.B4M_COMPLETIONS_URL) {
+      // Escape hatch for stacks whose app origin doesn't route /api/ai/v1/* to the
+      // ChatCompletion service (e.g. a self-host compose stack, where the service is
+      // published on its own port). Point this at the full completions endpoint,
+      // e.g. http://localhost:8788/api/ai/v1/completions.
+      this.completionsEndpoint = process.env.B4M_COMPLETIONS_URL;
+      logger.debug(`[ServerLlmBackend] Using B4M_COMPLETIONS_URL override: ${this.completionsEndpoint}`);
     } else {
       logger.debug('[ServerLlmBackend] No completionsUrl from server - is sst dev running?');
       this.completionsEndpoint = '/api/ai/v1/completions';
