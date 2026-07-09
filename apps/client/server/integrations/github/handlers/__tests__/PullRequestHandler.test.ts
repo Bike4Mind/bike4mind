@@ -76,20 +76,29 @@ describe('PullRequestHandler - labeled (SRE fix verdict, #271)', () => {
     await handler.handle(createLabeledPayload({ labelName: 'sre-fix-correct', prNumber: 77, sender: 'alice' }));
 
     expect(mockSetFixVerdict).toHaveBeenCalledTimes(1);
+    // Scoped by repoSlug: PR numbers are unique per-repo, not globally.
     expect(mockSetFixVerdict).toHaveBeenCalledWith(
       77,
-      expect.objectContaining({ value: 'correct', by: 'alice', at: expect.any(Date) })
+      expect.objectContaining({ value: 'correct', by: 'alice', at: expect.any(Date) }),
+      'owner/repo'
     );
   });
 
   it('maps sre-fix-incorrect to an "incorrect" verdict (opposite label overrides via last-write-wins)', async () => {
     await handler.handle(createLabeledPayload({ labelName: 'sre-fix-incorrect', prNumber: 77 }));
 
-    expect(mockSetFixVerdict).toHaveBeenCalledWith(77, expect.objectContaining({ value: 'incorrect' }));
+    expect(mockSetFixVerdict).toHaveBeenCalledWith(77, expect.objectContaining({ value: 'incorrect' }), 'owner/repo');
   });
 
   it('ignores non-verdict labels (no persistence)', async () => {
     await handler.handle(createLabeledPayload({ labelName: 'bug' }));
+    expect(mockSetFixVerdict).not.toHaveBeenCalled();
+  });
+
+  it('ignores a labeled event with no label (webhook shape drift - no persistence)', async () => {
+    const payload = createLabeledPayload({ labelName: 'sre-fix-correct' });
+    delete (payload as { label?: unknown }).label;
+    await expect(handler.handle(payload)).resolves.toBeDefined();
     expect(mockSetFixVerdict).not.toHaveBeenCalled();
   });
 

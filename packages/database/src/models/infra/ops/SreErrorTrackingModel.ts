@@ -229,8 +229,14 @@ SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1, fixM
 // For staleness timeout detection
 SreErrorTrackingSchema.index({ repoSlug: 1, status: 1, dispatchedAt: 1 });
 // For querying recorded fix verdicts (#271) - feeds confidence tuning + dashboard.
-// Sparse: only the small subset of docs with a human verdict is indexed.
-SreErrorTrackingSchema.index({ repoSlug: 1, 'fixVerdict.value': 1 }, { sparse: true });
+// partialFilterExpression (not sparse): on a compound index sparse only skips a
+// doc when ALL keys are absent, and repoSlug is required, so a sparse index would
+// cover every doc. Filtering on fixVerdict.value indexes only the small subset of
+// docs that actually carry a human verdict.
+SreErrorTrackingSchema.index(
+  { repoSlug: 1, 'fixVerdict.value': 1 },
+  { partialFilterExpression: { 'fixVerdict.value': { $exists: true } } }
+);
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
@@ -543,7 +549,7 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
    */
   async setFixVerdict(
     prNumber: number,
-    verdict: ISreErrorTracking['fixVerdict'],
+    verdict: NonNullable<ISreErrorTracking['fixVerdict']>,
     repoSlug?: string
   ): Promise<ISreErrorTracking | null> {
     const filter: Record<string, unknown> = { fixPrNumber: prNumber };

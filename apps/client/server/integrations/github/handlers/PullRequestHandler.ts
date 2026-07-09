@@ -82,7 +82,7 @@ export class PullRequestHandler implements GitHubEventHandler {
         break;
 
       case 'labeled':
-        await this.handleLabeled(pr);
+        await this.handleLabeled(pr, repo);
         break;
     }
 
@@ -156,7 +156,7 @@ export class PullRequestHandler implements GitHubEventHandler {
       const branchName = pr.pull_request.head.ref;
       if (branchName.startsWith('sre-fix/')) {
         const prNumber = pr.pull_request.number;
-        const tracking = await sreErrorTrackingRepository.findByPrNumber(prNumber);
+        const tracking = await sreErrorTrackingRepository.findByPrNumber(prNumber, repo);
         if (tracking && tracking.affectedUserIds?.length > 0) {
           this.logger?.info('[SRE-CONCIERGE] SRE fix merged, notifying affected users', {
             prNumber,
@@ -219,7 +219,7 @@ export class PullRequestHandler implements GitHubEventHandler {
    * the verdict (last-write-wins, so the opposite label overrides a prior one).
    * Non-verdict labels and labels on non-SRE PRs are ignored gracefully.
    */
-  private async handleLabeled(pr: GitHubPullRequestPayload): Promise<void> {
+  private async handleLabeled(pr: GitHubPullRequestPayload, repo: string): Promise<void> {
     const labelName = pr.label?.name;
     if (!labelName) return;
 
@@ -234,11 +234,18 @@ export class PullRequestHandler implements GitHubEventHandler {
     const by = pr.sender?.login || 'unknown';
 
     try {
-      const updated = await sreErrorTrackingRepository.setFixVerdict(prNumber, {
-        value,
-        by,
-        at: new Date(),
-      });
+      // Scope the lookup by repoSlug: PR numbers are unique per-repo, not
+      // globally, so a labeled PR in one repo must not write a verdict onto a
+      // tracking doc for the same PR number in another repo.
+      const updated = await sreErrorTrackingRepository.setFixVerdict(
+        prNumber,
+        {
+          value,
+          by,
+          at: new Date(),
+        },
+        repo
+      );
       if (!updated) {
         // No tracking doc for this SRE-branch PR - nothing to record against.
         this.logger?.info('[SRE-VERDICT] No tracking doc for SRE PR, verdict skipped', { prNumber, labelName });
