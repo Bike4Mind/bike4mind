@@ -1,0 +1,10 @@
+{
+  "label": "Technical Docs",
+  "position": 20,
+  "collapsed": false,
+  "link": {
+    "type": "generated-index",
+    "title": "Technical Docs",
+    "description": "Architecture and design docs for Bike4Mind engineering: cross-cutting design decisions, migration plans, and the reasoning behind them."
+  }
+}
