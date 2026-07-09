@@ -1,6 +1,7 @@
 import { ToolDefinition } from '../../base/types';
 import { spawn } from 'child_process';
 import path from 'path';
+import { StringDecoder } from 'string_decoder';
 import {
   getShellSessionManager,
   isTerminalShellStatus,
@@ -274,7 +275,7 @@ function buildEnv(): NodeJS.ProcessEnv {
 /**
  * Execute a bash command with safety checks (foreground, blocking).
  */
-async function executeBashCommand(params: BashExecuteParams): Promise<BashExecuteResult> {
+export async function executeBashCommand(params: BashExecuteParams): Promise<BashExecuteResult> {
   const { command, cwd: relativeCwd, timeout = DEFAULT_TIMEOUT_MS } = params;
 
   const blocked = precheckCommand(command);
@@ -290,6 +291,9 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    // Per-stream decoders so a multibyte char split across data chunks isn't garbled.
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
 
     // Spawn bash process
     const proc = spawn('bash', ['-c', command], {
@@ -313,7 +317,7 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Collect stdout with size limit
     proc.stdout.on('data', (data: Buffer) => {
       if (stdout.length < MAX_OUTPUT_SIZE) {
-        stdout += data.toString();
+        stdout += outDecoder.write(data);
         if (stdout.length > MAX_OUTPUT_SIZE) {
           stdout = stdout.slice(0, MAX_OUTPUT_SIZE) + '\n... [output truncated]';
         }
@@ -323,7 +327,7 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Collect stderr with size limit
     proc.stderr.on('data', (data: Buffer) => {
       if (stderr.length < MAX_OUTPUT_SIZE) {
-        stderr += data.toString();
+        stderr += errDecoder.write(data);
         if (stderr.length > MAX_OUTPUT_SIZE) {
           stderr = stderr.slice(0, MAX_OUTPUT_SIZE) + '\n... [output truncated]';
         }
@@ -333,6 +337,9 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Handle process completion
     proc.on('close', exitCode => {
       clearTimeout(timeoutId);
+      // Flush any bytes buffered mid-codepoint at stream end.
+      stdout += outDecoder.end();
+      stderr += errDecoder.end();
       resolve({
         stdout: stdout.trim(),
         stderr: stderr.trim(),
