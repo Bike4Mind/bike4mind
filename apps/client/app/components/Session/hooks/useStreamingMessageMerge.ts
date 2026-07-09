@@ -166,23 +166,27 @@ export function useStreamingMessageMerge({
     return () => clearTimeout(timer);
   }, [flattenQuests, chatCompletion.quest?.id, sessionId, queryClient]);
 
-  // Streaming recovery poll: while a 'running' quest sits with no replies (the image-generation
-  // shape - text replies are empty and the only signal is the WebSocket stream), poll the server
-  // for its authoritative state. Two failure modes strand the client on an eternal "Running..."
-  // spinner, both invisible to the WebSocket stream:
-  //   1. A hung/killed generation Lambda that never emits its terminal frame. The backend running
-  //      heartbeat keeps updatedAt fresh while alive, so check-timeout only flips the quest
-  //      to done+error once it has genuinely stalled past the server's 120s threshold.
-  //   2. A successful generation whose terminal WebSocket frame was lost (e.g. the socket churned
-  //      during a multi-minute render). The quest is already 'done' in the DB with its images.
+  // Streaming recovery poll: while a quest sits at 'running', poll the server for its authoritative
+  // state. Two failure modes strand the client on an eternal "Running..." spinner, both invisible to
+  // the WebSocket stream:
+  //   1. A hung/killed Lambda (OOM on multi-MB base64, execution-timeout) that never emits its
+  //      terminal frame. The backend running heartbeat keeps updatedAt fresh while alive, so
+  //      check-timeout only flips the quest to done once it has genuinely stalled past the server's
+  //      120s threshold.
+  //   2. A successful run whose terminal WebSocket frame was lost (e.g. the socket churned during
+  //      the render). The quest is already 'done' in the DB with its images/replies.
   // In both cases the server's response is terminal (status === 'done'); applying it hands the quest
-  // off to ChatHistory and clears the spinner. A single one-shot check could never win here: it
-  // fired at 90s (< the server's 120s stuck threshold), so it always saw "not stuck" and then never
-  // retried. Polling until terminal is what actually recovers the quest.
+  // off to ChatHistory and clears the spinner.
+  //
+  // Deliberately NOT gated on empty replies. The gate was written for the dedicated image-only path
+  // (empty-reply quests), but the chat image_generation tool streams preamble text before the tool
+  // runs, so gating on replies locked out exactly the path that hangs (#313) - and any chat whose
+  // terminal frame is lost. Safety comes from liveness, not content: check-timeout only returns a
+  // terminal state for an already-done quest or one whose heartbeat has been stale >120s, so a live
+  // streaming chat (fresh heartbeat) is left untouched no matter how much text it has streamed.
   useEffect(() => {
     const questId = streamingMessageData?.id;
     if (!questId) return;
-    if (streamingMessageData.replies?.length) return;
     if (streamingMessageData.status !== 'running') return;
 
     let cancelled = false;

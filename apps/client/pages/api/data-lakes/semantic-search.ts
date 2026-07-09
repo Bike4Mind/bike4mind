@@ -8,11 +8,16 @@ import {
   fabFileChunkRepository,
   apiKeyRepository,
   adminSettingsRepository,
+  creditTransactionRepository,
+  organizationRepository,
+  usageEventRepository,
+  userRepository,
 } from '@bike4mind/database';
-import { apiKeyService, dataLakeService } from '@bike4mind/services';
+import { apiKeyService, dataLakeService, recordOperationalUsage } from '@bike4mind/services';
 import { getProviderFromModel } from '@bike4mind/fab-pipeline';
 import {
   ApiKeyType,
+  getEmbeddingModelCost,
   ModelBackend,
   OpenAIEmbeddingModel,
   DATA_LAKES,
@@ -21,6 +26,7 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
+import { createTokenizer } from '@bike4mind/utils';
 import { getRequestEntitlements } from '@server/entitlements';
 
 /**
@@ -173,6 +179,41 @@ const handler = baseApi()
         },
         { db: { fabfiles: fabFileRepository, fabfilechunks: fabFileChunkRepository } }
       );
+
+      // Record the query-embedding spend (the embed ran inside the search above).
+      // Best-effort: never let a recording failure fail the search response.
+      try {
+        const user = await userRepository.findById(req.user.id);
+        if (user) {
+          const organization = user.organizationId ? await organizationRepository.findById(user.organizationId) : null;
+          const queryTokens = await createTokenizer({ logger: req.logger }).countTokens(query, embedding_model);
+          await recordOperationalUsage(
+            {
+              requestId: req.user.id,
+              user,
+              organization,
+              feature: 'embedding',
+              provider: embeddingProvider,
+              model: embedding_model,
+              inputTokens: queryTokens,
+              costUsd: getEmbeddingModelCost(embedding_model, queryTokens),
+              source: 'api',
+            },
+            {
+              db: {
+                usageEvents: usageEventRepository,
+                adminSettings: adminSettingsRepository,
+                creditTransactions: creditTransactionRepository,
+                users: userRepository,
+                organizations: organizationRepository,
+              },
+              logger: req.logger,
+            }
+          );
+        }
+      } catch (recordErr) {
+        req.logger?.warn('[semantic-search] failed to record embedding usage', recordErr);
+      }
 
       if (isAborted()) return res.end();
 

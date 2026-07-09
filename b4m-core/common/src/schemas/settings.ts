@@ -168,6 +168,7 @@ export const SettingKeySchema = z.enum([
 
   // CREDITS RELATED SETTINGS
   'enforceCredits',
+  'billOperationalUsage',
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
@@ -1384,7 +1385,8 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'pricePerCredit', order: 1 },
       { key: 'enforceCredits', order: 2 },
-      { key: 'enableTeamPlan', order: 3 },
+      { key: 'billOperationalUsage', order: 3 },
+      { key: 'enableTeamPlan', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -2214,6 +2216,18 @@ export const settingsMap = {
     // client and server resolve the same default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description: 'Whether to enforce credits for users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  billOperationalUsage: makeBooleanSetting({
+    key: 'billOperationalUsage',
+    name: 'Bill Operational Usage',
+    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
+    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
+    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    defaultValue: false,
+    description:
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),

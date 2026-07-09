@@ -290,16 +290,50 @@ describe('useStreamingMessageMerge', () => {
     expect(resetStreaming).not.toHaveBeenCalled();
   });
 
-  it('does not poll once the streaming quest has replies (text/chat path)', async () => {
+  it('recovers a reply-bearing running quest whose terminal frame was lost (#313 chat image path)', async () => {
     vi.useFakeTimers();
+    // The chat image_generation tool streams preamble text before the tool runs, so the stuck quest
+    // has replies. The server recovers it (heartbeat stale >120s -> flipped to done, images
+    // preserved). The poll MUST fire despite the replies and hand it off - the old empty-replies
+    // gate is exactly what left this path stuck on an eternal "Running..." spinner.
+    checkQuestTimeout.mockResolvedValue({
+      id: 'q1',
+      status: 'done',
+      type: 'message',
+      replies: ['Here is your dog:'],
+      images: ['dog.png'],
+    });
+
     const chatCompletion = makeChatCompletion({
-      quest: makeStreamQuest({ id: 'q1', replies: ['partial answer'], status: 'running' }),
+      quest: makeStreamQuest({ id: 'q1', replies: ['Here is your dog:'], status: 'running' }),
+    });
+
+    renderHook(() => useStreamingMessageMerge(baseParams({ flattenQuests: [], chatCompletion })));
+
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    expect(checkQuestTimeout).toHaveBeenCalledWith('q1');
+    expect(updateAllQueryData).toHaveBeenCalled();
+    expect(setChatCompletion).toHaveBeenCalledWith({ quest: undefined, completed: true, stopped: false });
+    expect(resetStreaming).toHaveBeenCalledWith(SESSION_ID);
+  });
+
+  it('does not tear down a live reply-bearing quest the server still reports running', async () => {
+    vi.useFakeTimers();
+    // A legitimately-streaming chat with partial text: its heartbeat keeps the DB quest fresh, so
+    // check-timeout returns it as 'running'. Polling is fine; tearing it down is not.
+    checkQuestTimeout.mockResolvedValue({ id: 'q1', status: 'running', type: 'message', replies: ['partial'] });
+
+    const chatCompletion = makeChatCompletion({
+      quest: makeStreamQuest({ id: 'q1', replies: ['partial'], status: 'running' }),
     });
 
     renderHook(() => useStreamingMessageMerge(baseParams({ flattenQuests: [], chatCompletion })));
 
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(checkQuestTimeout).not.toHaveBeenCalled();
+    expect(checkQuestTimeout.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(setChatCompletion).not.toHaveBeenCalled();
+    expect(resetStreaming).not.toHaveBeenCalled();
   });
 });

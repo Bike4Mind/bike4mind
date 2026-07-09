@@ -16,6 +16,12 @@ export const USAGE_EVENT_FEATURES = [
   'agent_execution',
   'completion_api',
   'tool',
+  // Operational-model spend the app incurs on the user's behalf outside a direct
+  // chat turn (auto-naming, summarization, tagging, context summarization). Billed
+  // to the user/org only when the billOperationalUsage admin setting is on.
+  'operations',
+  // Query-embedding spend (e.g. every search_knowledge_base semantic search).
+  'embedding',
 ] as const;
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];

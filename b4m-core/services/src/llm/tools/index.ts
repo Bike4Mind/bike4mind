@@ -150,10 +150,9 @@ export const b4mTools = {
 } satisfies {
   // PremiumOverlayToolName: implemented by premium overlay packages, supplied at
   // runtime via the externalTools merge - core intentionally has no entry for them.
-  [key in Exclude<
-    LlmTools,
-    CliLlmTools | 'delegate_to_agent' | SlackLlmTools | PremiumOverlayToolName
-  >]: ToolDefinition;
+  [
+    key in Exclude<LlmTools, CliLlmTools | 'delegate_to_agent' | SlackLlmTools | PremiumOverlayToolName>
+  ]: ToolDefinition;
 };
 
 export const generateTools = (

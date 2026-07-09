@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
+import { resolveQuestTimeoutRecovery } from '@server/chatCompletion/questTimeoutRecovery';
 import type { Request } from 'express';
 
 const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, res) => {
@@ -27,29 +28,17 @@ const handler = baseApi().post(async (req: Request<{}, {}, {}, { id: string }>, 
     throw new NotFoundError('Quest not found');
   }
 
-  // Check if the quest is truly stuck: running status, old enough, and no reply content.
-  // Threshold is 120s (2x the client-side trigger of 90s). The server-side streaming heartbeat
-  // touches updatedAt every ~10s, so any actively-streaming quest will look fresh well before this.
-  const TIMEOUT_THRESHOLD_MS = 120_000;
-  const questAge = Date.now() - new Date(quest.updatedAt).getTime();
-  const isStuck =
-    quest.status === 'running' &&
-    questAge > TIMEOUT_THRESHOLD_MS &&
-    !quest.reply &&
-    (!quest.replies || quest.replies.length === 0 || quest.replies.every(r => !r));
-
-  if (!isStuck) {
+  // Recovery is a pure function of liveness (see resolveQuestTimeoutRecovery). A live quest keeps
+  // its updatedAt fresh via the streaming heartbeat, so only a genuinely dead run is recovered.
+  // Already-terminal quests return null here and are sent back as-is - that is how the client
+  // recovers a successful run whose terminal WebSocket frame was lost (DB already 'done', content
+  // intact).
+  const recovery = resolveQuestTimeoutRecovery(quest, Date.now());
+  if (!recovery) {
     return res.json(quest);
   }
 
-  // Mark the quest as a timeout error
-  const updatedQuest = await questRepository.update({
-    id: quest.id,
-    status: 'done',
-    type: 'error',
-    reply: 'This request timed out. The server did not respond in time. Please try again.',
-  });
-
+  const updatedQuest = await questRepository.update({ id: quest.id, ...recovery });
   return res.json(updatedQuest);
 });
 

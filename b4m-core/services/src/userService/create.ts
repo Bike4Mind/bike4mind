@@ -60,6 +60,10 @@ export async function createUser(
     atlassianConnect: null,
     notionConnect: null,
     password,
+    // Caller must pass explicit intent - `password` truthiness is NOT a safe signal
+    // (some callers store an auto-generated, unusable password to satisfy this
+    // record shape). Passwordless-first: defaults to false.
+    hasUsablePassword: record?.hasUsablePassword ?? false,
     username,
     email,
     // Normalize to [] (never null): a null tags list makes tag-gated UI (e.g.

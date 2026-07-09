@@ -493,8 +493,7 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
 
         // Check if there's a tool use in the response
         const toolChoice = chunk?.choices.find(choice => choice.statusEndReason === ChoiceEndReason.TOOL_USE) as
-          | IChoiceEndToolUse
-          | undefined;
+          IChoiceEndToolUse | undefined;
 
         if (toolChoice?.tool) {
           const { id, name, parameters } = toolChoice.tool;

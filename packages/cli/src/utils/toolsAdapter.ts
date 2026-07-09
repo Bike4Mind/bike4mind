@@ -29,6 +29,8 @@ import { classifyCommandRisk } from '../config/commandRisk.js';
 import { getPlanModeFileDir, isWriteTargetingPlanFile } from './planMode.js';
 import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
+import { clampInteractionMode } from '../agents/interactionModeClamp.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 
 /**
  * Tool-name patterns auto-approved without a permission prompt, from `--allowedTools`
@@ -136,7 +138,12 @@ function wrapToolWithPermission(
   /** Live, mutable allow-list shared with the core tool context. The path
    *  access-grant flow pushes onto this in place so grants take effect on the
    *  next call without rebuilding tools. */
-  allowedDirectories?: string[]
+  allowedDirectories?: string[],
+  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at
+   *  the less-permissive of this and the live store mode, so a subagent can never
+   *  exceed its parent's authority yet still tightens if the user switches to plan
+   *  mode mid-run. Undefined for the main agent (uses the live store mode). */
+  interactionModeOverride?: InteractionMode
 ): ICompletionOptionTools {
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
@@ -235,7 +242,12 @@ function wrapToolWithPermission(
       // except writes targeting the plan file. Plan-mode block runs BEFORE the
       // permission/trust check so it overrides previously trusted tools.
       const { useCliStore } = await import('../store/index.js');
-      const interactionMode = useCliStore.getState().interactionMode;
+      const liveInteractionMode = useCliStore.getState().interactionMode;
+      // Subagents carry a ceiling; clamp to the less-permissive of it and the live
+      // mode so they never exceed the parent but still honor a mid-run plan switch.
+      const interactionMode = interactionModeOverride
+        ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
+        : liveInteractionMode;
       if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
         const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only — research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
         agentContext.observationQueue.push({ toolName, result });
@@ -782,7 +794,10 @@ export async function generateCliTools(
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>,
   checkpointStore?: CheckpointStore | null,
   sandboxOrchestrator?: SandboxOrchestrator,
-  allowedDirectories?: string[]
+  allowedDirectories?: string[],
+  /** Ceiling interaction mode for a spawned subagent (see wrapToolWithPermission).
+   *  Omitted for the main agent, which follows the live store mode. */
+  interactionModeOverride?: InteractionMode
 ): Promise<{ tools: ICompletionOptionTools[]; agentContext: AgentContext }> {
   // Wire the ask_user_question callback into the tool's module-level setter
   if (showUserQuestion) {
@@ -890,7 +905,8 @@ export async function generateCliTools(
       configStore,
       apiClient,
       sandboxOrchestrator,
-      liveAllowedDirectories
+      liveAllowedDirectories,
+      interactionModeOverride
     );
     return wrapToolWithCheckpointing(permissionWrapped, checkpointStore ?? null);
   });

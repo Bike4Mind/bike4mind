@@ -3,7 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { createPartnerSignupRuleSchema } from '@bike4mind/common';
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
+import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
 import { z } from 'zod';
 
 const listQuerySchema = z.object({
@@ -43,6 +43,7 @@ const handler = baseApi()
       } catch (error) {
         toBadRequest(error);
       }
+      assertKnownEntitlements(data.entitlements);
 
       // Fast, friendly duplicate check. This is a TOCTOU pre-check, not the guarantee - the
       // unique domain index is (see the create catch below).

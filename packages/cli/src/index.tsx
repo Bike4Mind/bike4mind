@@ -152,13 +152,10 @@ import {
   createGetFileStructureTool,
   createDecisionLogTool,
   createDecisionStore,
-  formatDecisionsOutput,
   createBlockerTools,
   createBlockerStore,
-  formatBlockersOutput,
   createReviewGateTool,
   createReviewGateStore,
-  formatReviewGatesOutput,
 } from './tools';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
@@ -170,6 +167,8 @@ import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
+import { dispatch as dispatchCommand } from './commands/registry.js';
+import { printDecisions, printBlockers, printReviewGates } from './commands/handlers/workflowViews.js';
 
 interface PermissionPromptState {
   id: string;
@@ -2222,24 +2221,6 @@ function CliApp() {
     }
   };
 
-  const printDecisions = (): void => {
-    console.log('\n📋 Decision Log\n');
-    console.log(formatDecisionsOutput(decisionStoreRef.current.decisions));
-    console.log('');
-  };
-
-  const printBlockers = (): void => {
-    console.log('\n🚧 Blockers\n');
-    console.log(formatBlockersOutput(blockerStoreRef.current.blockers));
-    console.log('');
-  };
-
-  const printReviewGates = (): void => {
-    console.log('\n🛑 Review Gates\n');
-    console.log(formatReviewGatesOutput(reviewGateStoreRef.current.reviewGates));
-    console.log('');
-  };
-
   const printWorkflowOverview = (): void => {
     const decisionCount = decisionStoreRef.current.decisions.length;
     const blockers = blockerStoreRef.current.blockers;
@@ -2419,86 +2400,22 @@ function CliApp() {
       }
     }
 
+    // Registry-based commands (migrated out of the switch below).
+    // Tried after the custom-command check so user commands still take
+    // precedence; unmatched names fall through to the switch.
+    const handledByRegistry = await dispatchCommand(command, args, {
+      configStore: state.configStore,
+      customCommandStore: state.customCommandStore,
+      permissionManager: state.permissionManager,
+      decisionStore: decisionStoreRef.current,
+      blockerStore: blockerStoreRef.current,
+      reviewGateStore: reviewGateStoreRef.current,
+      openConfigEditor: () => setShowConfigEditor(true),
+    });
+    if (handledByRegistry) return;
+
     // Handle built-in commands
     switch (command) {
-      case 'help': {
-        const customCommands = state.customCommandStore.getAllCommands();
-        const hasCustomCommands = customCommands.length > 0;
-
-        console.log(`
-Available commands:
-  /help - Show this help message
-  /exit - Exit the CLI
-  /clear - Start a new session
-  /rewind - Rewind conversation to a previous point
-  /undo - Undo the last file change
-  /checkpoints - List available file restore points
-  /restore <n> - Restore files to a specific checkpoint
-  /diff [n] - Show diff between current state and a checkpoint
-  /login - Authenticate with your B4M account
-  /logout - Clear authentication and sign out
-  /whoami - Show current authenticated user
-  /usage - Show credit usage and balance
-  /save <name> - Save current session
-  /resume - List and resume saved sessions
-  /config - Show configuration
-
-API Configuration:
-  /set-api <url> - Connect to self-hosted Bike4Mind instance
-  /reset-api - Clear the custom API URL (falls back to the default, or prompts you to pick one)
-  /api-info - Show current API configuration
-
-Tool Permissions:
-  /trust <tool-name> - Trust a tool (won't ask permission again)
-  /untrust <tool-name> - Remove tool from trusted list
-  /trusted - List all trusted tools
-
-Project Configuration:
-  /project-config - Show merged project configuration
-
-Custom Commands:
-  /commands - List all custom commands
-  /commands:new <name> - Create a new custom command
-  /commands:reload - Reload custom commands from disk
-
-Terminal Setup:
-  /terminal-setup - Configure Shift+Enter for multi-line input
-
-Keyboard Shortcuts:
-  Ctrl+C          - Press twice to exit
-  Esc             - Abort current operation
-  Shift+Tab       - Toggle auto-accept edits
-  Ctrl+U          - Clear current line
-  Ctrl+K          - Clear from cursor to end of line
-  Ctrl+W          - Delete word before cursor
-  Ctrl+A          - Move cursor to beginning
-  Ctrl+E          - Move cursor to end
-  Ctrl+B / ←      - Move cursor left
-  Ctrl+F / →      - Move cursor right
-  Ctrl+D          - Delete character at cursor
-  Ctrl+L          - Clear input
-  ↑ / ↓           - Navigate history / autocomplete
-  Tab             - Accept autocomplete suggestion
-  Shift+Cmd+Click - Open links in browser
-
-Multi-line Input:
-  \\ + Enter       - Insert newline (works everywhere)
-  Option + Enter  - Insert newline (macOS standard terminals)
-  Shift + Enter   - Insert newline (iTerm2, WezTerm, Ghostty, Kitty)${hasCustomCommands ? '\n\n📝 Custom Commands Available:' : ''}${
-    hasCustomCommands
-      ? customCommands
-          .map(cmd => {
-            const source = cmd.source === 'global' ? '🏠' : '📁';
-            const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-            return `\n  ${source} /${cmd.name}${argHint} - ${cmd.description}`;
-          })
-          .join('')
-      : ''
-  }
-        `);
-        break;
-      }
-
       case 'exit':
       case 'quit':
         // If a Ctrl+C exit chain is already in flight, don't start a second
@@ -2631,12 +2548,6 @@ Multi-line Input:
         break;
       }
 
-      case 'config': {
-        // Open interactive configuration editor
-        setShowConfigEditor(true);
-        break;
-      }
-
       case 'set-api': {
         const rawUrl = args[0];
 
@@ -2689,18 +2600,6 @@ Multi-line Input:
         } else {
           console.log("💡 Restart the CLI and you'll be prompted to choose a backend.\n");
         }
-        break;
-      }
-
-      case 'api-info': {
-        const config = await state.configStore.get();
-        const endpoint = resolveApiEndpoint(config.apiConfig);
-        const apiType = getEnvironmentName(config.apiConfig);
-
-        console.log('\n🌍 API Configuration:\n');
-        console.log(`Type: ${apiType}`);
-        console.log(`URL: ${endpoint.status === 'configured' ? endpoint.url : '(not configured)'}`);
-        console.log('');
         break;
       }
 
@@ -2840,22 +2739,6 @@ Multi-line Input:
         state.permissionManager.untrustTool(toolToUntrust);
         await state.configStore.untrustTool(toolToUntrust);
         console.log(`✅ Tool '${toolToUntrust}' removed from trusted list`);
-        break;
-      }
-
-      case 'trusted': {
-        if (!state.permissionManager) {
-          console.log('Permission manager not initialized');
-          return;
-        }
-        const trustedTools = state.permissionManager.getTrustedTools();
-        console.log('\n🔒 Trusted Tools:\n');
-        if (trustedTools.length === 0) {
-          console.log('  (none)');
-        } else {
-          trustedTools.forEach(t => console.log(`  - ${t}`));
-        }
-        console.log('');
         break;
       }
 
@@ -3932,21 +3815,6 @@ Multi-line Input:
         break;
       }
 
-      case 'decisions': {
-        printDecisions();
-        break;
-      }
-
-      case 'blockers': {
-        printBlockers();
-        break;
-      }
-
-      case 'review-gates': {
-        printReviewGates();
-        break;
-      }
-
       case 'handoff': {
         await runHandoffCommand(args);
         break;
@@ -3961,14 +3829,14 @@ Multi-line Input:
             printWorkflowOverview();
             break;
           case 'decisions':
-            printDecisions();
+            printDecisions(decisionStoreRef.current);
             break;
           case 'blockers':
-            printBlockers();
+            printBlockers(blockerStoreRef.current);
             break;
           case 'review-gates':
           case 'gates':
-            printReviewGates();
+            printReviewGates(reviewGateStoreRef.current);
             break;
           case 'handoff':
             await runHandoffCommand(subArgs);
@@ -3978,27 +3846,6 @@ Multi-line Input:
             console.log('Available: decisions, blockers, handoff, review-gates (alias: gates)');
             break;
         }
-        break;
-      }
-
-      case 'dirs': {
-        const additionalDirs = await state.configStore.getAdditionalDirectories();
-        const cwd = process.cwd();
-
-        console.log('\n📂 Accessible Directories:\n');
-        console.log(`  📁 Working directory: ${cwd}`);
-
-        if (additionalDirs.length > 0) {
-          console.log('\n  📁 Additional directories:');
-          additionalDirs.forEach(d => {
-            console.log(`     ${d}`);
-          });
-        } else {
-          console.log('\n  No additional directories configured.');
-          console.log('  Use /add-dir <path> or --add-dir <path> flag to add directories.');
-        }
-
-        console.log('');
         break;
       }
 

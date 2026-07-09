@@ -82,6 +82,7 @@ async function createUniqueOAuthUser(params: {
     name: safeName,
     username,
     password: null,
+    hasUsablePassword: false,
     isAdmin: false,
     oauthCredentials,
     authProviders: [oauthCredentials],
@@ -190,22 +191,46 @@ const authenticateUser = async (
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
         const providerEmailVerified = isProviderEmailVerified(profile);
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
+        if (!providerEmailVerified) {
           // Propagate the targeted email so [strategy]/callback.ts can write
           // it onto the auth-fail log row for forensic review during attacks.
           done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
           return;
         }
-        // Both emails are verified but they must also match (case-insensitive).
-        // Verification alone is not sufficient: an attacker with a verified email
-        // on a colliding username/email could otherwise link into a victim account.
+        // The provider email is verified but it must also match the local
+        // account's email (case-insensitive). Verification alone is not sufficient:
+        // an attacker with a verified email on a colliding username could otherwise
+        // link into a victim account.
         const localEmail = user.email ?? null;
         if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
           done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
           return;
+        }
+        // Local-verified half: required UNLESS the local account has no usable password
+        // (hasUsablePassword === false). An account with a real password and an
+        // unverified email is a classic reverse-takeover setup - an attacker pre-creates
+        // the victim's email locally (unverified, password known only to the attacker)
+        // and waits for the victim to SSO in and get absorbed. `hasUsablePassword` is the
+        // discriminator (NOT `!user.password`): admin/migration "shell" accounts store an
+        // auto-generated, unusable password that is bcrypt-hashed and therefore
+        // indistinguishable from a real one - see UserModel.ts's field comment. A
+        // genuinely passwordless account can't be squatted that way, and the provider
+        // round-trip above just cryptographically attested control of this email, so
+        // linking is safe - promote the local email to verified instead of dead-ending
+        // the user. Promote ONLY on a real verified-email match, though: a username-only
+        // match (local email null) is not an identity assertion, so promoting on it
+        // would let a colliding username link into an emailless passwordless shell
+        // and stamp the attacker's email onto it.
+        if (user.emailVerified !== true) {
+          if (!user.hasUsablePassword && email && localEmail && email.toLowerCase() === localEmail.toLowerCase()) {
+            promoteEmailVerified = true;
+          } else {
+            done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
+            return;
+          }
         }
       }
 
@@ -222,15 +247,29 @@ const authenticateUser = async (
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;
         isNewOAuthLink?: boolean;
+        emailVerified?: boolean;
+        emailVerifiedAt?: Date;
       };
+      // Promotion write rides the SAME updateOne as the provider link - no second
+      // round-trip, and it can never persist without the link (or vice versa).
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
+      const emailVerifiedAt = new Date();
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProvider) {
         await User.updateOne(
           { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
+          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
         );
         linkedUser.tokenVersion = (user.tokenVersion ?? 0) + 1;
       } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
+        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
+      }
+      if (promoteEmailVerified) {
+        linkedUser.emailVerified = true;
+        linkedUser.emailVerifiedAt = emailVerifiedAt;
       }
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.
