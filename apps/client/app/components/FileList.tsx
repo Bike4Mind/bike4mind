@@ -33,7 +33,8 @@ import PublicIcon from '@mui/icons-material/Public';
 import { truncate } from 'lodash';
 import { GetFileIcon } from '../utils/fabFileUtils';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
-import { publishFabFile } from '@client/app/utils/publishApi';
+import { fabFilePublisher } from '@client/app/utils/publishApi';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import DeleteForeverIcon from '@mui/icons-material/DeleteForever';
 import SegmentIcon from '@mui/icons-material/Segment';
 import CompareArrowsIcon from '@mui/icons-material/CompareArrows';
@@ -1621,15 +1622,20 @@ const FileList: FC<FileListProps> = ({
 
   // Public publish-and-share for a file -> /p/f/{publicId} + social bar.
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
+  // Active account-switcher org (null in personal context). Enables the dialog's Team option
+  // and org-scoped publishing; the server re-validates membership before trusting it.
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const handlePublishShare = useCallback(
     (file: IFabFileDocument) => {
       void publishAndShare({
-        publish: visibility => publishFabFile({ fabFileId: file.id, visibility }),
+        publish: fabFilePublisher({ fabFileId: file.id, orgId: activeOrg?.id }),
+        ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
         // brand externalized
         title: file.fileName || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared'),
       });
     },
-    [publishAndShare]
+    [publishAndShare, activeOrg]
   );
 
   const canUpdateOrNewSession = useMemo(() => {

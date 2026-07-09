@@ -71,7 +71,10 @@ vi.mock('@client/app/utils/fabFileUtils', () => ({
   saveToFileAndWorkbench: vi.fn(),
 }));
 vi.mock('@client/app/utils/publishApi', () => ({
-  publishReply: vi.fn(),
+  replyPublisher: vi.fn(() => vi.fn()),
+}));
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: (selector: (s: { selectedAccount: null }) => unknown) => selector({ selectedAccount: null }),
 }));
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
