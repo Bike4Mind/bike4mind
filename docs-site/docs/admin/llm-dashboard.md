@@ -52,6 +52,8 @@ Custom tags are also supported. Tags assigned to users in the system are automat
 
 Admin users always have access to all enabled models regardless of tag assignments.
 
+An enabled model with **no** allowed user tags and **no** entitlement requirement is public: every authenticated user can access it. This is the default for newly discovered models, so a new account can use base models immediately. To restrict a model, add one or more allowed user tags (or an entitlement requirement); to hide it from everyone, disable it.
+
 ## Models Table
 
 The main table displays one row per model (speech-to-text models are excluded) with the following columns:
