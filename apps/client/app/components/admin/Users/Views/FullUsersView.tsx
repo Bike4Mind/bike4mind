@@ -292,6 +292,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
                   editedFields={editedFields}
                   onFieldChange={handleFormFieldChange}
                   handleUserLevelButtonChange={handleUserLevelButtonChange}
+                  isSelf={currentUser?.id === user.id}
                 />
               </Stack>
             </Grid>

@@ -1,8 +1,8 @@
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
 import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
 import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
-import { Button, FormLabel, Input, Radio, RadioGroup, Stack, Tooltip, IconButton } from '@mui/joy';
-import React, { useEffect, useState } from 'react';
+import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Tooltip, IconButton } from '@mui/joy';
+import React, { useState } from 'react';
 
 /**
  * Comp tags that grant a product entitlement (e.g. `opti`, `opti-compute`) -
@@ -27,6 +27,8 @@ interface UserPermissionsProps {
   handleUserLevelButtonChange: (userId: string) => void;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
+  /** True when this card is the currently-signed-in admin's own account. */
+  isSelf?: boolean;
 }
 
 /**
@@ -88,25 +90,30 @@ const userLevelDisplay = (user: IUserDocument) => {
 };
 
 const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
-  ({ user, editedFields, onFieldChange, handleUserLevelButtonChange }) => {
-    const [localTags, setLocalTags] = useState(user.tags || []);
+  ({ user, editedFields, onFieldChange, handleUserLevelButtonChange, isSelf }) => {
+    // Tags live in the parent's formState (the single source of truth); read them
+    // straight off the `user` prop rather than mirroring into local state, so a
+    // Product Access grant (which also writes formState.tags) can never be read
+    // stale here. `customTagsInput` is genuine local input state (the in-progress
+    // text), not a mirror.
     const [customTagsInput, setCustomTagsInput] = useState('');
+    const currentTags = user.tags ?? [];
 
-    const role = getRole(user.isAdmin, localTags);
-    const customTags = localTags.filter(tag => !isManagedTag(tag));
+    const role = getRole(user.isAdmin, currentTags);
+    const customTags = currentTags.filter(tag => !isManagedTag(tag));
 
-    useEffect(() => {
-      setLocalTags(user.tags || []);
-      setCustomTagsInput('');
-    }, [user]);
+    // Client-side preemption of the server lockout guard for the case the client
+    // can actually know: an admin demoting their OWN Super Admin. (The
+    // last-remaining-admin case needs a global count the client doesn't have, so
+    // it stays server-enforced with a clear error - see users/[id]/update.ts.)
+    const lockSelfDemote = !!isSelf && user.isAdmin;
 
     const handleRoleChange = (newRole: Role) => {
-      const strippedTags = withoutDeveloperTags(localTags);
+      const strippedTags = withoutDeveloperTags(currentTags);
       const newIsAdmin = newRole === 'super-admin';
       const newTags = newRole === 'developer' ? [...strippedTags, 'Developer'] : strippedTags;
 
       onFieldChange('isAdmin', newIsAdmin);
-      setLocalTags(newTags);
       onFieldChange('tags', newTags);
     };
 
@@ -119,18 +126,17 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
         const newCustomTags = customTagsInput
           .split(',')
           .map(tag => tag.trim())
-          .filter(tag => tag.length > 0 && !localTags.includes(tag));
-        const updatedTags = [...localTags, ...newCustomTags];
-        setLocalTags(updatedTags);
-        onFieldChange('tags', updatedTags);
+          .filter(tag => tag.length > 0 && !currentTags.includes(tag));
+        onFieldChange('tags', [...currentTags, ...newCustomTags]);
         setCustomTagsInput('');
       }
     };
 
     const handleRemoveTag = (tagToRemove: string) => {
-      const updatedTags = localTags.filter(tag => tag !== tagToRemove);
-      setLocalTags(updatedTags);
-      onFieldChange('tags', updatedTags);
+      onFieldChange(
+        'tags',
+        currentTags.filter(tag => tag !== tagToRemove)
+      );
     };
 
     return (
@@ -152,10 +158,14 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
                 key={option.value}
                 value={option.value}
                 label={option.label}
+                // Block demoting your own Super Admin at the UI too; the server is the
+                // real guard, this just avoids the round-trip + error toast.
+                disabled={lockSelfDemote && option.value !== 'super-admin'}
                 data-testid={`role-radio-${option.value}`}
               />
             ))}
           </RadioGroup>
+          {lockSelfDemote && <FormHelperText>You cannot remove your own Super Admin role.</FormHelperText>}
         </Stack>
         <Stack direction="column" spacing={1}>
           <Stack direction="row" spacing={2}>

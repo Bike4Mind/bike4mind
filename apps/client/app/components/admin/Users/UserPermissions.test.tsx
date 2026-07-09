@@ -196,3 +196,53 @@ describe('UserPermissions - Custom Tags', () => {
     expect(input).toHaveValue('');
   });
 });
+
+describe('UserPermissions - self-demote guard', () => {
+  it('disables the Customer and Developer options when editing your OWN Super Admin account', () => {
+    render(
+      <UserPermissions
+        user={baseUser({ isAdmin: true })}
+        editedFields={{}}
+        onFieldChange={noop}
+        handleUserLevelButtonChange={noop}
+        isSelf
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('role-radio-customer').querySelector('input')).toBeDisabled();
+    expect(screen.getByTestId('role-radio-developer').querySelector('input')).toBeDisabled();
+    // Super Admin (the current role) stays enabled.
+    expect(screen.getByTestId('role-radio-super-admin').querySelector('input')).not.toBeDisabled();
+    expect(screen.getByText('You cannot remove your own Super Admin role.')).toBeInTheDocument();
+  });
+
+  it('does NOT disable options for your own account when you are not a Super Admin', () => {
+    render(
+      <UserPermissions
+        user={baseUser({ isAdmin: false, tags: ['Developer'] })}
+        editedFields={{}}
+        onFieldChange={noop}
+        handleUserLevelButtonChange={noop}
+        isSelf
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('role-radio-customer').querySelector('input')).not.toBeDisabled();
+    expect(screen.queryByText('You cannot remove your own Super Admin role.')).not.toBeInTheDocument();
+  });
+
+  it('does NOT disable demotion of ANOTHER admin (last-admin case is server-enforced, not client-known)', () => {
+    render(
+      <UserPermissions
+        user={baseUser({ isAdmin: true })}
+        editedFields={{}}
+        onFieldChange={noop}
+        handleUserLevelButtonChange={noop}
+        isSelf={false}
+      />,
+      { wrapper: TestWrapper }
+    );
+    expect(screen.getByTestId('role-radio-customer').querySelector('input')).not.toBeDisabled();
+    expect(screen.getByTestId('role-radio-developer').querySelector('input')).not.toBeDisabled();
+  });
+});
