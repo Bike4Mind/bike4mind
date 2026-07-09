@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { HEADLESS_SCHEMA_VERSION, stampEvent, createHeadlessEmitter } from './headlessProtocol.js';
+import { HEADLESS_SCHEMA_VERSION, stampEvent, createHeadlessEmitter, classifyToolRisk } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
   it('stamps schemaVersion and runId onto every event', () => {
@@ -39,5 +39,29 @@ describe('headless protocol envelope', () => {
       expect(parsed.runId).toBe('run-3');
     }
     expect(JSON.parse(lines[1]).content).toBe('done');
+  });
+});
+
+describe('classifyToolRisk', () => {
+  it('classifies a shell tool from its command text (benign -> low)', () => {
+    const risk = classifyToolRisk('bash_execute', { command: 'ls -la' }, 'prompt_always');
+    expect(risk.level).toBe('low');
+  });
+
+  it('classifies a destructive shell command as high', () => {
+    const risk = classifyToolRisk('bash_execute', { command: 'rm -rf /' }, 'prompt_default');
+    expect(risk.level).toBe('high');
+    expect(risk.reasons.length).toBeGreaterThan(0);
+  });
+
+  it('falls back to the permission category for non-shell tools', () => {
+    expect(classifyToolRisk('read_file', {}, 'auto_approve').level).toBe('low');
+    expect(classifyToolRisk('some_tool', {}, 'prompt_default').level).toBe('medium');
+    expect(classifyToolRisk('write_file', {}, 'prompt_always').level).toBe('high');
+  });
+
+  it('does not throw on non-object args', () => {
+    expect(() => classifyToolRisk('bash_execute', undefined, 'prompt_default')).not.toThrow();
+    expect(classifyToolRisk('bash_execute', null, 'prompt_default').level).toBe('medium');
   });
 });

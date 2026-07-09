@@ -46,7 +46,7 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
-import { HEADLESS_SCHEMA_VERSION, createHeadlessEmitter } from './headlessProtocol.js';
+import { HEADLESS_SCHEMA_VERSION, createHeadlessEmitter, classifyToolRisk } from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -253,22 +253,47 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // Initialize permission manager
     const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled);
 
-    // Permission prompt function for headless mode.
-    // With --dangerously-skip-permissions: auto-allow-once.
-    // Without: auto-deny and print a warning to stderr.
+    // NDJSON emitter, stamped with schemaVersion + runId (see headlessProtocol.ts).
+    // Shared by the permission protocol below and the step stream further down.
+    const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
+    const streaming = outputFormat === 'stream-json';
+
+    // Permission prompt function for headless mode. Every gated tool surfaces a
+    // structured permission_request + permission_decision pair on the stream (so
+    // decisions are never silent), then resolves the decision:
+    //   --dangerously-skip-permissions -> allow-once; otherwise -> deny.
     const promptFn = (
       toolName: string,
-      _args: unknown,
+      args: unknown,
       _preview?: string
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      if (dangerouslySkipPermissions) {
-        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
-        return Promise.resolve({ action: 'allow-once' });
+      const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
+      if (streaming) {
+        emit({ type: 'permission_request', toolName, risk });
       }
-      process.stderr.write(
-        `Warning: Tool "${toolName}" requires permission and was denied. Use --dangerously-skip-permissions to auto-allow tools in headless mode.\n`
-      );
-      return Promise.resolve({ action: 'deny' });
+
+      const decision: { action: 'allow-once' | 'deny'; reason: string } = dangerouslySkipPermissions
+        ? { action: 'allow-once', reason: 'dangerously-skip-permissions' }
+        : { action: 'deny', reason: 'no permission policy; default deny' };
+
+      if (streaming) {
+        emit({
+          type: 'permission_decision',
+          toolName,
+          action: decision.action,
+          reason: decision.reason,
+          risk: risk.level,
+        });
+      } else if (decision.action === 'deny') {
+        process.stderr.write(
+          `Warning: Tool "${toolName}" requires permission and was denied. Use --dangerously-skip-permissions to auto-allow tools in headless mode.\n`
+        );
+      }
+
+      if (decision.action === 'allow-once') {
+        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
+      }
+      return Promise.resolve({ action: decision.action });
     };
 
     // User question function - headless mode cannot respond interactively
@@ -401,10 +426,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
 
-    // Set up step streaming for stream-json format. Every event is stamped with
-    // schemaVersion + runId by the emitter (see headlessProtocol.ts).
-    const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
-    if (outputFormat === 'stream-json') {
+    // Set up step streaming for stream-json format (emitter created above).
+    if (streaming) {
       agent.on('thought', (step: AgentStep) => {
         emit({ type: 'thought', content: step.content });
       });
