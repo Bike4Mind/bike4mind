@@ -123,6 +123,50 @@ runs:
           fi
         fi
 
+        # Desync self-heal. An interrupted or partial prior remove (CI job-timeout
+        # kill, runner death, or an out-of-band delete) leaves state out of sync
+        # with AWS, and the retry then fails two ways:
+        #   - a resource deleted out-of-band but still in state -> the delete errors
+        #     "not found" (e.g. ListenerNotFound after its ALB was deleted), or
+        #   - a resource live in AWS but dropped from state -> its SG delete hits
+        #     DependencyViolation (the live ALB's ENI + the AlbToTask rule on the
+        #     shared default SG still pin it).
+        # Tier 1 is cheap and non-destructive: `sst refresh` reconciles state with
+        # reality (drops the already-gone resources), then retry. Tier 2 runs only
+        # if a DependencyViolation persists: a strictly stage-scoped reconcile that
+        # deletes the live untracked ALB, revokes the dangling AlbToTask rule, and
+        # deletes the SG, then refresh + retry.
+        echo "⚠️  Remove failed; attempting self-heal (sst refresh, then retry)..."
+        pnpm sst refresh --stage "${STAGE}" 2>&1 | tail -5 || true
+        attempt_remove
+        EXIT_CODE=$?
+        if [ "$EXIT_CODE" -eq 0 ]; then
+          echo "✅ Preview environment removed after refresh"
+          echo "existed=true" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+        if echo "$OUTPUT" | grep -q "Stage not found"; then
+          echo "existed=false" >> $GITHUB_OUTPUT
+          exit 0
+        fi
+
+        if echo "$OUTPUT" | grep -qE "DependencyViolation|has a dependent object"; then
+          echo "⚠️  DependencyViolation persists; running stage-scoped orphaned-ALB reconcile..."
+          bash "${GITHUB_ACTION_PATH}/reconcile-orphaned-alb.sh" "${STAGE}" || true
+          pnpm sst refresh --stage "${STAGE}" 2>&1 | tail -5 || true
+          attempt_remove
+          EXIT_CODE=$?
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "✅ Preview environment removed after reconcile"
+            echo "existed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if echo "$OUTPUT" | grep -q "Stage not found"; then
+            echo "existed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        fi
+
         echo "❌ Failed to remove preview environment (exit code: $EXIT_CODE)"
         # Belt-and-suspenders: guarantee a non-zero exit even if EXIT_CODE
         # somehow ended up at 0. Without this, future regressions of the
