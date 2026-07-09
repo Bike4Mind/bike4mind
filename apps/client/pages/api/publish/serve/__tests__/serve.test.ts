@@ -454,6 +454,66 @@ describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
   });
 });
 
+describe('GET /api/publish/serve — reply/fabfile organization visibility', () => {
+  // Org-tier reply/fabfile records store the org id as scopeId; the gate authorizes a viewer
+  // whose organizationId matches. This is the path #174 re-enables for reply/fabfile shares.
+  const orgReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r-org',
+    title: 'Org reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Org only',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-org',
+    ...over,
+  });
+
+  it('serves an org reply to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Org only');
+  });
+
+  it('403s an org reply for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('401s an org reply for an anonymous viewer (no loader shell on the reply path)', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org']);
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+  });
+
+  it('serves an org fabfile to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('org file body');
+  });
+
+  it('403s an org fabfile for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+});
+
 describe('GET /api/publish/serve — version history (?v)', () => {
   const versioned = (over: Record<string, unknown> = {}) =>
     bundle({ sha256Index: 'curSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'curSHA' }], ...over });
