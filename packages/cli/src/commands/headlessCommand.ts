@@ -46,6 +46,16 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
+import { readFile } from 'fs/promises';
+import {
+  HEADLESS_SCHEMA_VERSION,
+  createHeadlessEmitter,
+  classifyToolRisk,
+  parseStringArray,
+  parsePermissionPolicy,
+  evaluatePermissionPolicy,
+  type HeadlessPermissionPolicy,
+} from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
 
@@ -55,9 +65,13 @@ export interface HeadlessOptions {
   dangerouslySkipPermissions: boolean;
   verbose: boolean;
   addDirs: string[];
+  /** Path to a JSON permission policy for unattended runs (see headlessProtocol.ts). */
+  permissionPolicyPath?: string;
 }
 
 interface HeadlessJsonResult {
+  schemaVersion: string;
+  runId: string;
   result: string;
   steps: Array<{
     type: string;
@@ -98,7 +112,7 @@ const silentLogger = {
 };
 
 export async function handleHeadlessCommand(options: HeadlessOptions): Promise<void> {
-  const { prompt, outputFormat, dangerouslySkipPermissions, addDirs } = options;
+  const { prompt, outputFormat, dangerouslySkipPermissions, addDirs, permissionPolicyPath } = options;
 
   logger.setVerbose(options.verbose);
 
@@ -110,13 +124,35 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
   const sessionStore = new SessionStore();
   const customCommandStore = new CustomCommandStore();
 
+  // Stable per-run id stamped on every stream-json event (including a fatal
+  // error emitted from the catch below), so consumers can correlate a run.
+  const runId = uuidv4();
+
   try {
     const config = await configStore.load();
 
-    // Load additional directories from all sources
+    // Load additional directories from all sources. The B4M_ADDITIONAL_DIRS
+    // bridge is validated strictly (array of strings) rather than blindly cast.
     const configDirs = await configStore.getAdditionalDirectories();
-    const flagDirs = process.env.B4M_ADDITIONAL_DIRS ? (JSON.parse(process.env.B4M_ADDITIONAL_DIRS) as string[]) : [];
+    const flagDirs = process.env.B4M_ADDITIONAL_DIRS
+      ? parseStringArray(process.env.B4M_ADDITIONAL_DIRS, 'B4M_ADDITIONAL_DIRS')
+      : [];
     const additionalDirectories = [...new Set([...configDirs, ...flagDirs, ...addDirs])];
+
+    // Load the permission policy for unattended runs, if one was supplied. A
+    // read or validation failure throws and is reported via the catch below.
+    let permissionPolicy: HeadlessPermissionPolicy | null = null;
+    if (permissionPolicyPath) {
+      let policyRaw: string;
+      try {
+        policyRaw = await readFile(permissionPolicyPath, 'utf-8');
+      } catch (e) {
+        throw new Error(
+          `Cannot read permission policy at "${permissionPolicyPath}": ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+      permissionPolicy = parsePermissionPolicy(policyRaw);
+    }
 
     // Load custom commands (non-critical)
     try {
@@ -246,22 +282,56 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     // Initialize permission manager
     const permissionManager = new PermissionManager(config.trustedTools ?? [], undefined, config.tools.disabled);
 
-    // Permission prompt function for headless mode.
-    // With --dangerously-skip-permissions: auto-allow-once.
-    // Without: auto-deny and print a warning to stderr.
+    // NDJSON emitter, stamped with schemaVersion + runId (see headlessProtocol.ts).
+    // Shared by the permission protocol below and the step stream further down.
+    const emit = createHeadlessEmitter(runId, line => process.stdout.write(line));
+    const streaming = outputFormat === 'stream-json';
+
+    // Permission prompt function for headless mode. Every gated tool surfaces a
+    // structured permission_request + permission_decision pair on the stream (so
+    // decisions are never silent), then resolves the decision. Precedence:
+    //   --dangerously-skip-permissions -> allow-once (explicit blanket override);
+    //   a --permission-policy -> its per-tool/per-risk verdict;
+    //   otherwise -> deny (safe default, no silent auto-approve).
     const promptFn = (
       toolName: string,
-      _args: unknown,
+      args: unknown,
       _preview?: string
     ): Promise<{ action: 'allow-once' | 'allow-session' | 'allow-always' | 'deny' }> => {
-      if (dangerouslySkipPermissions) {
-        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
-        return Promise.resolve({ action: 'allow-once' });
+      const risk = classifyToolRisk(toolName, args, permissionManager.getCategory(toolName));
+      if (streaming) {
+        emit({ type: 'permission_request', toolName, risk });
       }
-      process.stderr.write(
-        `Warning: Tool "${toolName}" requires permission and was denied. Use --dangerously-skip-permissions to auto-allow tools in headless mode.\n`
-      );
-      return Promise.resolve({ action: 'deny' });
+
+      let decision: { action: 'allow-once' | 'deny'; reason: string };
+      if (dangerouslySkipPermissions) {
+        decision = { action: 'allow-once', reason: 'dangerously-skip-permissions' };
+      } else if (permissionPolicy) {
+        const verdict = evaluatePermissionPolicy(permissionPolicy, toolName, risk.level);
+        decision = { action: verdict.action === 'allow' ? 'allow-once' : 'deny', reason: verdict.reason };
+      } else {
+        decision = { action: 'deny', reason: 'no permission policy; default deny' };
+      }
+
+      if (streaming) {
+        emit({
+          type: 'permission_decision',
+          toolName,
+          action: decision.action,
+          reason: decision.reason,
+          risk: risk.level,
+        });
+      } else if (decision.action === 'deny') {
+        process.stderr.write(
+          `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
+            `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
+        );
+      }
+
+      if (decision.action === 'allow-once') {
+        logger.debug(`[headless] Auto-allowing tool: ${toolName}`);
+      }
+      return Promise.resolve({ action: decision.action });
     };
 
     // User question function - headless mode cannot respond interactively
@@ -394,16 +464,14 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     (agent as unknown as Record<string, unknown>).observationQueue = agentContext.observationQueue;
 
-    // Set up step streaming for stream-json format
-    if (outputFormat === 'stream-json') {
-      const emitNdjson = (obj: unknown) => process.stdout.write(JSON.stringify(obj) + '\n');
-
+    // Set up step streaming for stream-json format (emitter created above).
+    if (streaming) {
       agent.on('thought', (step: AgentStep) => {
-        emitNdjson({ type: 'thought', content: step.content });
+        emit({ type: 'thought', content: step.content });
       });
 
       agent.on('action', (step: AgentStep) => {
-        emitNdjson({
+        emit({
           type: 'action',
           content: step.content,
           toolName: step.metadata?.toolName,
@@ -412,7 +480,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       });
 
       agent.on('observation', (step: AgentStep) => {
-        emitNdjson({ type: 'observation', content: step.content, toolName: step.metadata?.toolName });
+        emit({ type: 'observation', content: step.content, toolName: step.metadata?.toolName });
       });
     }
 
@@ -464,6 +532,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
       case 'json': {
         const jsonResult: HeadlessJsonResult = {
+          schemaVersion: HEADLESS_SCHEMA_VERSION,
+          runId,
           result: result.finalAnswer,
           steps: result.steps.map(s => ({
             type: s.type,
@@ -485,19 +555,17 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
       case 'stream-json':
         // Emit final result line (steps already emitted in real-time above)
-        process.stdout.write(
-          JSON.stringify({
-            type: 'result',
-            content: result.finalAnswer,
-            tokenUsage: {
-              totalTokens: result.completionInfo.totalTokens,
-              inputTokens: result.completionInfo.totalInputTokens,
-              outputTokens: result.completionInfo.totalOutputTokens,
-            },
-            iterations: result.completionInfo.iterations,
-            toolCalls: result.completionInfo.toolCalls,
-          }) + '\n'
-        );
+        emit({
+          type: 'result',
+          content: result.finalAnswer,
+          tokenUsage: {
+            totalTokens: result.completionInfo.totalTokens,
+            inputTokens: result.completionInfo.totalInputTokens,
+            outputTokens: result.completionInfo.totalOutputTokens,
+          },
+          iterations: result.completionInfo.iterations,
+          toolCalls: result.completionInfo.toolCalls,
+        });
         break;
     }
 
@@ -512,9 +580,9 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
     const message = error instanceof Error ? error.message : String(error);
 
     if (outputFormat === 'json') {
-      process.stdout.write(JSON.stringify({ error: message }) + '\n');
+      process.stdout.write(JSON.stringify({ schemaVersion: HEADLESS_SCHEMA_VERSION, runId, error: message }) + '\n');
     } else if (outputFormat === 'stream-json') {
-      process.stdout.write(JSON.stringify({ type: 'error', error: message }) + '\n');
+      createHeadlessEmitter(runId, line => process.stdout.write(line))({ type: 'error', error: message });
     } else {
       process.stderr.write(`Error: ${message}\n`);
     }
