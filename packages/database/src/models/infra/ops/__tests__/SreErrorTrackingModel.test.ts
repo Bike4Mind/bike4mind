@@ -424,4 +424,64 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
       }
     });
   });
+
+  describe('setFixVerdict (#271)', () => {
+    function makeFixDoc(overrides: Record<string, unknown> = {}) {
+      return SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-verdict',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/9',
+        status: 'fixed',
+        fixPrNumber: 8300,
+        fixMergedAt: new Date(),
+        ...overrides,
+      });
+    }
+
+    it('persists a verdict against the tracking doc matched by fixPrNumber', async () => {
+      await makeFixDoc({ fixPrNumber: 8300 });
+      const at = new Date();
+
+      const updated = await sreErrorTrackingRepository.setFixVerdict(8300, { value: 'correct', by: 'alice', at });
+
+      expect(updated).not.toBeNull();
+      expect(updated?.fixVerdict?.value).toBe('correct');
+      expect(updated?.fixVerdict?.by).toBe('alice');
+      expect(updated?.fixVerdict?.at?.getTime()).toBe(at.getTime());
+    });
+
+    it('overrides a prior verdict when the opposite label is applied (last-write-wins)', async () => {
+      await makeFixDoc({ fixPrNumber: 8301 });
+
+      await sreErrorTrackingRepository.setFixVerdict(8301, { value: 'correct', by: 'alice', at: new Date() });
+      const updated = await sreErrorTrackingRepository.setFixVerdict(8301, {
+        value: 'incorrect',
+        by: 'bob',
+        at: new Date(),
+      });
+
+      expect(updated?.fixVerdict?.value).toBe('incorrect');
+      expect(updated?.fixVerdict?.by).toBe('bob');
+    });
+
+    it('returns null when no tracking doc exists for the PR (non-SRE PR ignored)', async () => {
+      const updated = await sreErrorTrackingRepository.setFixVerdict(99999, {
+        value: 'correct',
+        by: 'alice',
+        at: new Date(),
+      });
+      expect(updated).toBeNull();
+    });
+
+    it('is queryable by verdict value', async () => {
+      await makeFixDoc({ fixPrNumber: 8302, errorFingerprint: 'fp-verdict-a' });
+      await makeFixDoc({ fixPrNumber: 8303, errorFingerprint: 'fp-verdict-b' });
+      await sreErrorTrackingRepository.setFixVerdict(8302, { value: 'incorrect', by: 'alice', at: new Date() });
+      await sreErrorTrackingRepository.setFixVerdict(8303, { value: 'correct', by: 'bob', at: new Date() });
+
+      const incorrect = await SreErrorTrackingModel.find({ 'fixVerdict.value': 'incorrect' }).lean();
+      expect(incorrect).toHaveLength(1);
+      expect(incorrect[0].fixPrNumber).toBe(8302);
+    });
+  });
 });

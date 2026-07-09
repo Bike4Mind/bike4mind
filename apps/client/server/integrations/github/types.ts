@@ -92,8 +92,10 @@ export interface GitHubPingPayload extends GitHubWebhookPayload {
  * Pull request event payload
  */
 export interface GitHubPullRequestPayload extends GitHubWebhookPayload {
-  action: 'opened' | 'closed' | 'reopened' | 'synchronize' | 'review_requested' | string;
+  action: 'opened' | 'closed' | 'reopened' | 'synchronize' | 'review_requested' | 'labeled' | 'unlabeled' | string;
   number: number;
+  /** Present on `labeled` / `unlabeled` actions - the label that was added/removed */
+  label?: { name: string; color?: string };
   pull_request: {
     number: number;
     title: string;

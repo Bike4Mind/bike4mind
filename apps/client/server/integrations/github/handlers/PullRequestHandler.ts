@@ -28,6 +28,16 @@ import { toHandlerResult } from './notifyResultUtils';
 
 const EMPTY_NOTIFY_RESULT: NotifyResult = { notifiedUserIds: [], failedNotifications: [] };
 
+/**
+ * PR labels a human applies to record whether a merged SRE fix was correct (#271),
+ * mapped to the verdict value persisted on the tracking doc. A merge alone is not
+ * proof the fix worked, so this captures the explicit thumbs up/down signal.
+ */
+const SRE_FIX_VERDICT_LABELS: Record<string, 'correct' | 'incorrect'> = {
+  'sre-fix-correct': 'correct',
+  'sre-fix-incorrect': 'incorrect',
+};
+
 export class PullRequestHandler implements GitHubEventHandler {
   eventType = 'pull_request' as const;
   private logger?: Logger;
@@ -69,6 +79,10 @@ export class PullRequestHandler implements GitHubEventHandler {
 
       case 'review_requested':
         result = await this.handleReviewRequested(pr, repo, notifyOptions);
+        break;
+
+      case 'labeled':
+        await this.handleLabeled(pr);
         break;
     }
 
@@ -196,5 +210,48 @@ export class PullRequestHandler implements GitHubEventHandler {
         }),
       options
     );
+  }
+
+  /**
+   * Handle 'labeled' - record a human verdict on whether a merged SRE fix was
+   * correct (#271). A reviewer applies `sre-fix-correct` / `sre-fix-incorrect` to
+   * the fix PR; we map it back to the tracking doc via its PR number and persist
+   * the verdict (last-write-wins, so the opposite label overrides a prior one).
+   * Non-verdict labels and labels on non-SRE PRs are ignored gracefully.
+   */
+  private async handleLabeled(pr: GitHubPullRequestPayload): Promise<void> {
+    const labelName = pr.label?.name;
+    if (!labelName) return;
+
+    const value = SRE_FIX_VERDICT_LABELS[labelName];
+    if (!value) return; // not a verdict label - ignore
+
+    // Only SRE fix PRs carry a verdict. Cheap branch-prefix gate (mirrors
+    // handleMerged) skips the DB hit for the vast majority of PRs.
+    if (!pr.pull_request.head.ref.startsWith('sre-fix/')) return;
+
+    const prNumber = pr.pull_request.number;
+    const by = pr.sender?.login || 'unknown';
+
+    try {
+      const updated = await sreErrorTrackingRepository.setFixVerdict(prNumber, {
+        value,
+        by,
+        at: new Date(),
+      });
+      if (!updated) {
+        // No tracking doc for this SRE-branch PR - nothing to record against.
+        this.logger?.info('[SRE-VERDICT] No tracking doc for SRE PR, verdict skipped', { prNumber, labelName });
+        return;
+      }
+      this.logger?.info('[SRE-VERDICT] Recorded fix verdict', {
+        prNumber,
+        value,
+        by,
+        trackingId: updated.id,
+      });
+    } catch (err) {
+      this.logger?.error('[SRE-VERDICT] Failed to record fix verdict', { prNumber, labelName, error: err });
+    }
   }
 }
