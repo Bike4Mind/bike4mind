@@ -102,23 +102,22 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     expect(updateArg.$set.emailVerifiedAt).toBeUndefined();
   });
 
-  it('backfills a null local email from the verified provider email when promoting (username-matched shell)', async () => {
-    // Matched by username, not email (local email is empty) - the email-match check is
-    // skipped when either side is null, so promotion proceeds; the recommended default
-    // is to also populate the previously-empty local email from the provider assertion.
+  it('refuses to promote/link on a username-only match with a null local email (takeover guard)', async () => {
+    // Matched by username, not email (local email is null). A cross-provider username
+    // collision is NOT an identity assertion, so promoting + backfilling the provider's
+    // email onto the emailless passwordless shell would be an account takeover. The link
+    // is refused - promotion requires a real verified-email match (present and equal).
     stage2Hit({ _id: 'u1', email: null, username: 'victim', emailVerified: false, password: null, authProviders: [] });
 
     const { err, user } = await runStandard(AuthStrategy.Google, {
       id: 'google-sub-real',
       username: 'victim',
-      emails: [{ value: 'victim@example.com', verified: true }],
+      emails: [{ value: 'attacker@example.com', verified: true }],
     });
 
-    expect(err).toBeNull();
-    expect((user as { email?: string }).email).toBe('victim@example.com');
-    const updateArg = mockUpdateOne.mock.calls[0][1];
-    expect(updateArg.$set.email).toBe('victim@example.com');
-    expect(updateArg.$set.emailVerified).toBe(true);
+    expect(err).toBe(ACCOUNT_LINK_VERIFICATION_REQUIRED);
+    expect(user).toBeUndefined();
+    expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
   it('refuses to link when provider email_verified is false', async () => {

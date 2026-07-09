@@ -110,12 +110,17 @@ const authenticateUser = async (
         // can't be squatted that way, and the provider round-trip above just
         // cryptographically attested control of this email, so linking is safe -
         // promote the local email to verified instead of dead-ending the user.
+        // Promote ONLY on a real verified-email match, though: a username-only
+        // match (local email null) is not an identity assertion, so promoting on it
+        // would let a colliding username link into an emailless passwordless shell
+        // and stamp the attacker's email onto it.
         if (user.emailVerified !== true) {
-          if (user.password) {
+          if (!user.password && email && localEmail && email.toLowerCase() === localEmail.toLowerCase()) {
+            promoteEmailVerified = true;
+          } else {
             done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
             return;
           }
-          promoteEmailVerified = true;
         }
       }
 
@@ -134,18 +139,15 @@ const authenticateUser = async (
         isNewOAuthLink?: boolean;
         emailVerified?: boolean;
         emailVerifiedAt?: Date;
-        email?: string;
       };
       // Promotion write rides the SAME updateOne as the provider link - no second
       // round-trip, and it can never persist without the link (or vice versa).
-      // If the shell had no email at all (matched by username), backfill it from
-      // the now-verified provider assertion rather than leaving emailVerified:true
-      // paired with an empty email.
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
       const emailVerifiedAt = new Date();
-      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date; email?: string } =
-        promoteEmailVerified
-          ? { emailVerified: true, emailVerifiedAt, ...(!user.email && email ? { email } : {}) }
-          : {};
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProvider) {
         await User.updateOne(
           { _id: user._id },
@@ -158,7 +160,6 @@ const authenticateUser = async (
       if (promoteEmailVerified) {
         linkedUser.emailVerified = true;
         linkedUser.emailVerifiedAt = emailVerifiedAt;
-        if (emailVerifiedFields.email) linkedUser.email = emailVerifiedFields.email;
       }
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.

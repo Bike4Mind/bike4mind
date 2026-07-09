@@ -209,6 +209,29 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
     expect(updateArg.$inc).toEqual({ tokenVersion: 1 });
   });
 
+  it('refuses to promote/link on a username-only match with a null local email (takeover guard)', async () => {
+    // Matched by preferred_username, not email (local email is null). A username
+    // collision is not an identity assertion, so promoting would let a colliding
+    // username take over the emailless passwordless shell - refuse.
+    const res = await runCallback({
+      user: {
+        id: 'u6',
+        _id: 'u6',
+        email: null,
+        username: 'victim',
+        emailVerified: false,
+        password: null,
+        authProviders: [],
+        tokenVersion: 0,
+      },
+      userInfo: { sub: 'okta-6', email: 'attacker@example.com', email_verified: true, preferred_username: 'victim' },
+    });
+
+    expect(res._getRedirectUrl()).toContain(ACCOUNT_LINK_VERIFICATION_REQUIRED);
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
   it('creates a brand-new user when no existing account matches (gate does not apply)', async () => {
     const res = await runCallback({
       user: null,

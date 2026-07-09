@@ -320,9 +320,13 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         // pre-creates the victim's email locally with a password only they know);
         // a passwordless shell can't be squatted that way, and Okta's assertion
         // above just attested control of this email, so promote instead of
-        // dead-ending the user.
+        // dead-ending the user. Promote ONLY on a real verified-email match: a
+        // username-only match (local email null) is not an identity assertion, so
+        // promoting on it would let a colliding username take an emailless shell.
         if (user.emailVerified !== true) {
-          if (user.password) {
+          const promotable =
+            !user.password && !!email && !!localEmail && email.toLowerCase() === localEmail.toLowerCase();
+          if (!promotable) {
             Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: verification required', {
               userId: user.id,
               providerEmailVerified,
@@ -351,14 +355,12 @@ const handleOktaCallback = async (req: Request, res: Response) => {
 
       // Promotion write rides the SAME updateOne as the provider link - no second
       // round-trip, and it can never persist without the link (or vice versa).
-      // If the shell had no email at all (matched by username), backfill it from
-      // the now-verified Okta assertion rather than leaving emailVerified:true
-      // paired with an empty email.
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
       const emailVerifiedAt = new Date();
-      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date; email?: string } =
-        promoteEmailVerified
-          ? { emailVerified: true, emailVerifiedAt, ...(!user.email && email ? { email } : {}) }
-          : {};
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProviderLink) {
         // Linking a NEW auth provider to an existing account is a security-relevant
         // change: bump tokenVersion to invalidate any other active sessions. The
@@ -375,7 +377,6 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       if (promoteEmailVerified) {
         user.emailVerified = true;
         user.emailVerifiedAt = emailVerifiedAt;
-        if (emailVerifiedFields.email) user.email = emailVerifiedFields.email;
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
