@@ -24,6 +24,7 @@ import LoginIcon from '@mui/icons-material/Login';
 import EmailIcon from '@mui/icons-material/Email';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DangerousIcon from '@mui/icons-material/Dangerous';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -36,6 +37,7 @@ import UserSubscriptionStatus from '../Details/UserSubscriptionStatus';
 import SpicyUserActions from '../SpicyUserActions';
 import { useComplianceModal } from '../ComplianceModal';
 import UserPermissions from '../UserPermissions';
+import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
@@ -251,7 +253,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
         <Box sx={{ p: { xs: 1, sm: 2 } }}>
           <Grid container spacing={3}>
             {/* User Details Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <PersonIcon fontSize="small" color="primary" />
@@ -269,13 +271,13 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
               </Stack>
             </Grid>
 
-            {/* User Permissions Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            {/* Roles Section */}
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SecurityIcon fontSize="small" color="primary" />
                   <Typography level="title-sm" fontWeight="bold">
-                    Permissions
+                    Roles
                   </Typography>
                 </Stack>
                 <Divider />
@@ -289,8 +291,23 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
               </Stack>
             </Grid>
 
+            {/* Product Access Section - separate axis from Role (what they ARE) vs
+                what products they can use, and where that access comes from. */}
+            <Grid xs={12} sm={6} md={2}>
+              <Stack spacing={2}>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <VerifiedUserIcon fontSize="small" color="primary" />
+                  <Typography level="title-sm" fontWeight="bold">
+                    Product Access
+                  </Typography>
+                </Stack>
+                <Divider />
+                <ProductAccess user={user} key={`product-access-${user.id}`} />
+              </Stack>
+            </Grid>
+
             {/* Subscription Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SubscriptionsIcon fontSize="small" color="primary" />
@@ -304,7 +321,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
             </Grid>
 
             {/* B4M Settings Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SettingsIcon fontSize="small" color="primary" />
@@ -349,7 +366,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
             </Grid>
 
             {/* Activity & Profile Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <AccessTimeIcon fontSize="small" color="primary" />

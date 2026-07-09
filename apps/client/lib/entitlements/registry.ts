@@ -332,6 +332,42 @@ export function resolveEntitlements(input: {
   return [...keys];
 }
 
+/**
+ * Every entitlement key any grant source can confer - derived from the row
+ * VALUES (tag remaps, domain grants, price grants), not a separately
+ * maintained list. Admin Product Access panel uses this to enumerate every
+ * product it should show, so a new product row here is picked up
+ * automatically with no second list to update.
+ */
+export function allKnownEntitlementKeys(): EntitlementKey[] {
+  const keys = new Set<EntitlementKey>();
+  for (const grantedKeys of TAG_GRANTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of DOMAIN_GRANTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of PRICE_ENTITLEMENTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  return [...keys];
+}
+
+/**
+ * The single comp tag that grants `key` via TAG_GRANTS, or undefined if the
+ * key has no tag-based grant path (e.g. `libreoncology:pro`, which is
+ * subscription-only post-retirement - see the TAG_GRANT_ROWS comment above).
+ * Assumes at most one granting tag per key (true of every row today); the
+ * registry invariant tests would need extending if that ever changes.
+ */
+export function grantTagForEntitlement(key: EntitlementKey): string | undefined {
+  const normalized = normalizeTag(key);
+  for (const [tag, grantedKeys] of TAG_GRANTS) {
+    if (grantedKeys.includes(normalized)) return tag;
+  }
+  return undefined;
+}
+
 /** Exposed for the registry invariant tests (not for feature code). */
 export const __registryRows = {
   priceRows: PRICE_ENTITLEMENT_ROWS as readonly PriceEntitlementRow[],
