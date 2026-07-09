@@ -29,12 +29,16 @@ vi.mock('@client/app/utils/react-query', () => ({
   },
 }));
 
-vi.mock('@client/app/utils/artifactPersistence', () => ({
+// artifactParser/artifactPersistence are imported by useStreamingArtifactPersistence
+// via RELATIVE specifiers ('../utils/...'), so mock them by a specifier that resolves to
+// the same module (mirror the sibling useStreamingArtifactPersistence.test.ts). react-query
+// stays aliased because sessions.ts imports it via the @client alias.
+vi.mock('../../../utils/artifactPersistence', () => ({
   persistArtifacts: (...args: unknown[]) => persistArtifacts(...args),
 }));
 
-vi.mock('@client/app/utils/artifactParser', () => ({
-  parseArtifacts: (content: string) => {
+vi.mock('../../../utils/artifactParser', () => ({
+  parseArtifactsWithFallback: (content: string) => {
     const matches = [...content.matchAll(/<artifact identifier="([^"]+)">([^<]*)<\/artifact>/g)];
     return {
       artifacts: matches.map(([, identifier, body]) => ({
@@ -45,9 +49,9 @@ vi.mock('@client/app/utils/artifactParser', () => ({
         operation: 'create',
         language: 'text',
       })),
+      cleanedContent: content,
     };
   },
-  convertCodeBlocksToArtifacts: (c: string) => c,
   getArtifactTimestamp: () => 1000,
   generateCompleteArtifactId: (type: string, identifier: string, _ts: number, index: number) =>
     `${type}-${identifier}-${index}`,
