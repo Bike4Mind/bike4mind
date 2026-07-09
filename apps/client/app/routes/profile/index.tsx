@@ -84,7 +84,11 @@ const ProfilePage = () => {
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
   const isAdmin = currentUser?.isAdmin ?? false;
-  const { data: publishedArtifacts, isPending: publishedPending } = useQuery({
+  const {
+    data: publishedArtifacts,
+    isPending: publishedPending,
+    isError: publishedError,
+  } = useQuery({
     queryKey: ['published-artifacts', 'mine'],
     queryFn: listMyPublishedArtifacts,
     enabled: !!currentUser,
@@ -118,11 +122,11 @@ const ProfilePage = () => {
       navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
       return;
     }
-    if (rawTab === ProfileTab.Published && !publishedPending && !hasPublishedArtifacts) {
+    if (rawTab === ProfileTab.Published && !publishedPending && !publishedError && !hasPublishedArtifacts) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
       return;
     }
-  }, [rawTab, rawSubtab, navigate, currentUser, isAdmin, publishedPending, hasPublishedArtifacts]);
+  }, [rawTab, rawSubtab, navigate, currentUser, isAdmin, publishedPending, publishedError, hasPublishedArtifacts]);
 
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
