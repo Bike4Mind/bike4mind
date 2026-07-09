@@ -16,6 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
+import { parseInternalStaffDomains } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -162,15 +163,12 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
  * -> no internal-domain grant, which is the correct default. Set the
  * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
  * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ *
+ * Parsed via the shared helper so analytics resolves the same domains (#172).
  */
-const INTERNAL_STAFF_DOMAINS: readonly string[] = [
-  ...new Set(
-    (process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ?? '')
-      .split(',')
-      .map(d => normalizeTag(d))
-      .filter(Boolean)
-  ),
-];
+const INTERNAL_STAFF_DOMAINS: readonly string[] = parseInternalStaffDomains(
+  process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+);
 
 /** Domains already covered by an external row (derived - no brand literals to keep in sync). */
 const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row.domain));
