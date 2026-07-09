@@ -51,8 +51,14 @@ const handler = baseApi().get(async (req, res) => {
     return res.json({ targetCreditsPerUsd, rows });
   }
 
-  const rows = await usageEventRepository.settlementBreakdown(days);
-  return res.json({ targetCreditsPerUsd, rows });
+  if (view === 'settlement') {
+    const rows = await usageEventRepository.settlementBreakdown(days);
+    return res.json({ targetCreditsPerUsd, rows });
+  }
+
+  // Compile error if VIEWS grows without a matching branch above.
+  const exhaustiveCheck: never = view;
+  throw new BadRequestError(`view must be one of: ${VIEWS.join(', ')}, got ${exhaustiveCheck as string}`);
 });
 
 export default handler;

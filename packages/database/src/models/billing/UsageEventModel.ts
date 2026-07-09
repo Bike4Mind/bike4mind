@@ -58,6 +58,8 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
 UsageEventSchema.index({ userId: 1, createdAt: -1 });
 UsageEventSchema.index({ provider: 1, model: 1, createdAt: -1 });
 UsageEventSchema.index({ createdAt: -1 });
+// Supports settlementBreakdown()'s $match on createdAt + settledBasis without an in-memory scan/filter.
+UsageEventSchema.index({ createdAt: -1, settledBasis: 1 });
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 

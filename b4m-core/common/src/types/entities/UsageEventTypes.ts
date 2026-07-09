@@ -120,8 +120,8 @@ export interface IProviderMonthCogs {
 
 /**
  * One aggregation bucket of settlement basis (provider vs local pricing).
- * Rows with settledBasis unset (pre-#139 events) are excluded, not bucketed
- * as a third basis - they predate the field and would misrepresent estimate quality.
+ * Rows with settledBasis unset (events predating this field) are excluded,
+ * not bucketed as a third basis - they'd misrepresent estimate quality.
  */
 export interface ISettlementBreakdown {
   settledBasis: 'provider' | 'local';

@@ -181,7 +181,7 @@ describe('UsageEventRepository', () => {
       });
     });
 
-    it('excludes events with no settledBasis (pre-#139 rows)', async () => {
+    it('excludes events with no settledBasis (rows predating the field)', async () => {
       await record();
       const rows = await usageEventRepository.settlementBreakdown();
       expect(rows).toHaveLength(0);
