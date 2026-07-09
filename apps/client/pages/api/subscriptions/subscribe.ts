@@ -26,7 +26,7 @@ const handler = baseApi()
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
     }
 
-    // Generic launch/availability gate (product-neutral — no per-product branch here).
+    // Generic launch/availability gate (product-neutral - no per-product branch here).
     // A plan may declare an admin-settings flag (`availabilityFlag`) that must be ON to
     // be publicly purchasable; when it's off we refuse checkout on the write path, so an
     // un-launched product can't be bought via a stale client OR a direct POST. Admin
