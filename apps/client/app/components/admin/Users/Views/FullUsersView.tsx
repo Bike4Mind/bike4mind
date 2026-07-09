@@ -44,6 +44,7 @@ import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/
 import { IUserDocument, UserLevelType, WithOrgRef } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useShallow } from 'zustand/shallow';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useNavigate } from '@tanstack/react-router';
@@ -63,6 +64,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
   const deleteUser = useDeleteUser();
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
+  const queryClient = useQueryClient();
   const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
   const { currentUser, setCurrentUser } = useUser(
@@ -130,6 +132,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
       { id: user.id, data },
       {
         onSuccess: async () => {
+          // Product Access reads server-resolved sources (bypass follows the Role/isAdmin
+          // just saved); refresh them so its chips aren't stale after a save.
+          queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', user.id] });
           // Check if the updated user is the current logged-in user
           if (currentUser && user.id === currentUser.id) {
             try {
@@ -302,7 +307,11 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
                   </Typography>
                 </Stack>
                 <Divider />
-                <ProductAccess user={user} key={`product-access-${user.id}`} />
+                <ProductAccess
+                  user={formState}
+                  key={`product-access-${user.id}`}
+                  onFieldChange={handleFormFieldChange}
+                />
               </Stack>
             </Grid>
 
