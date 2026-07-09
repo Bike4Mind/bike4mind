@@ -3,7 +3,7 @@ import { IUserDocument } from '@bike4mind/common';
 import React, { ReactNode, useCallback, useEffect, useMemo, useRef } from 'react';
 import { create } from 'zustand';
 import { useShallow } from 'zustand/react/shallow';
-import { userIsAnalyst, userIsCustomer, userIsDeveloper } from '../utils/user';
+import { userIsCustomer, userIsDeveloper } from '../utils/user';
 import { api, isPublicPath } from '@client/app/contexts/ApiContext';
 import { buildLoginRedirectUrl } from '@client/app/utils/authRedirect';
 import ExpiredSession from '../components/ExpiredSession';
@@ -68,7 +68,6 @@ export interface UserContextProps {
   isAdmin: boolean;
   isBanned: boolean;
   isModerated: boolean;
-  isAnalyst: boolean;
   isDeveloper: boolean;
   isCustomer: boolean;
   setCurrentUser: (value: IUserDocument | null) => void;
@@ -239,7 +238,6 @@ export const useUser = create<UserContextProps>()(
       isAdmin: false,
       isBanned: false,
       isModerated: false,
-      isAnalyst: false,
       isDeveloper: false,
       isCustomer: false,
       setCurrentUser: (currentUser: IUserDocument | null) => {
@@ -252,7 +250,6 @@ export const useUser = create<UserContextProps>()(
           isBanned: !!currentUser?.isBanned,
           isModerated: !!currentUser?.isModerated,
           isDeveloper: userIsDeveloper(currentUser),
-          isAnalyst: userIsAnalyst(currentUser),
           isCustomer: userIsCustomer(currentUser),
         });
       },
@@ -266,7 +263,6 @@ export const useUser = create<UserContextProps>()(
             isBanned: !!response.data.user?.isBanned,
             isModerated: !!response.data.user?.isModerated,
             isDeveloper: userIsDeveloper(response.data.user),
-            isAnalyst: userIsAnalyst(response.data.user),
             isCustomer: userIsCustomer(response.data.user),
           });
         } catch (error) {

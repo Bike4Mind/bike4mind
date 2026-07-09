@@ -1,7 +1,17 @@
 /**
- * Predefined user tags for role-based access control and model permissions
+ * Predefined user tags for role-based access control and model permissions.
+ *
+ * 'Analyst' was removed 2026-07-08 (admin-roles-product-access-redesign M3):
+ * the `isAnalyst`/`userIsAnalyst` helper gated no product feature, and this
+ * constant's OTHER consumer - the default `allowedUserTags` seed for a new LLM
+ * model config (`getDefaultModelConfig`), which `isModelAccessible` actually
+ * checks - confirmed via a production query that zero real users hold
+ * 'analyst' without ALSO being admin or developer (both already imply access).
+ * So dropping it changes default access for nobody today. If a genuine
+ * "analyst" persona is ever needed, mint a purpose-named tag then - this one's
+ * name never matched what it did.
  */
-export const PREDEFINED_USER_TAGS = ['Developer', 'Analyst', 'Customer', 'Opti'] as const;
+export const PREDEFINED_USER_TAGS = ['Developer', 'Customer', 'Opti'] as const;
 
 /**
  * Type for predefined user tags

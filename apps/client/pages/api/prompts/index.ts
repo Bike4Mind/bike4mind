@@ -71,6 +71,16 @@ const handler = baseApi()
    */
   .post(
     asyncHandler(async (req, res) => {
+      // Same Prompt permission model as GET (read) and PUT/DELETE (see ability.ts):
+      // admin or developer. Previously the create route had NO check at all, so any
+      // authenticated user could write to the shared prompt library.
+      if (!req.ability) {
+        throw new NotFoundError('Ability not found');
+      }
+      if (!req.ability.can('create', Prompt)) {
+        throw new NotFoundError('Permission denied');
+      }
+
       const newPromptData = CreatePromptRequestSchema.parse(req.body);
       const { type, name, promptText, tags } = newPromptData;
 

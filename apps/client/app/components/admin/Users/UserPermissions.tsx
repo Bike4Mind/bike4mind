@@ -1,14 +1,59 @@
 import { EditedFieldsState } from '@client/app/components/admin/Users/Views/FullUsersView';
-import { IUserDocument, PREDEFINED_USER_TAGS } from '@bike4mind/common';
-import { Button, Checkbox, Input, Stack, Tooltip, IconButton } from '@mui/joy';
-import React, { useEffect, useState } from 'react';
+import { allKnownEntitlementKeys, grantTagForEntitlement } from '@client/lib/entitlements/registry';
+import { DEVELOPER_USER_TAGS, IUserDocument, hasDeveloperUserTag } from '@bike4mind/common';
+import { Button, FormHelperText, FormLabel, Input, Radio, RadioGroup, Stack, Tooltip, IconButton } from '@mui/joy';
+import React, { useState } from 'react';
+
+/**
+ * Comp tags that grant a product entitlement (e.g. `opti`, `opti-compute`) -
+ * these have their own dedicated grant/revoke control in the Product Access
+ * section, so the freeform "Custom Tags" list below hides them to avoid two
+ * controls editing the same tag.
+ */
+const PRODUCT_GRANT_TAGS = allKnownEntitlementKeys()
+  .map(grantTagForEntitlement)
+  .filter((tag): tag is string => Boolean(tag));
+
+const isManagedTag = (tag: string): boolean => {
+  const normalized = tag.toLowerCase();
+  return (
+    (DEVELOPER_USER_TAGS as readonly string[]).some(t => t.toLowerCase() === normalized) ||
+    PRODUCT_GRANT_TAGS.some(t => t.toLowerCase() === normalized)
+  );
+};
 
 interface UserPermissionsProps {
   user: IUserDocument;
   handleUserLevelButtonChange: (userId: string) => void;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
+  /** True when this card is the currently-signed-in admin's own account. */
+  isSelf?: boolean;
 }
+
+/**
+ * The canonical auth ROLE, derived-on-read from `isAdmin` + the developer
+ * tag - NOT from `user.level` (that stays an Overwatch analytics
+ * classification, unrelated to authorization; see the "Demo User" button
+ * below). Precedence for pre-existing multi-valued users: Super Admin >
+ * Developer > Customer.
+ */
+type Role = 'super-admin' | 'developer' | 'customer';
+
+const getRole = (isAdmin: boolean, tags: readonly string[]): Role => {
+  if (isAdmin) return 'super-admin';
+  if (hasDeveloperUserTag(tags)) return 'developer';
+  return 'customer';
+};
+
+const ROLE_OPTIONS: { value: Role; label: string }[] = [
+  { value: 'customer', label: 'Customer' },
+  { value: 'developer', label: 'Developer' },
+  { value: 'super-admin', label: 'Super Admin' },
+];
+
+const withoutDeveloperTags = (tags: readonly string[]): string[] =>
+  tags.filter(tag => !(DEVELOPER_USER_TAGS as readonly string[]).includes(tag));
 
 const userLevelColor = (user: IUserDocument) => {
   switch (user.level) {
@@ -45,25 +90,30 @@ const userLevelDisplay = (user: IUserDocument) => {
 };
 
 const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
-  ({ user, editedFields, onFieldChange, handleUserLevelButtonChange }) => {
-    const [localTags, setLocalTags] = useState(user.tags || []);
+  ({ user, editedFields, onFieldChange, handleUserLevelButtonChange, isSelf }) => {
+    // Tags live in the parent's formState (the single source of truth); read them
+    // straight off the `user` prop rather than mirroring into local state, so a
+    // Product Access grant (which also writes formState.tags) can never be read
+    // stale here. `customTagsInput` is genuine local input state (the in-progress
+    // text), not a mirror.
     const [customTagsInput, setCustomTagsInput] = useState('');
+    const currentTags = user.tags ?? [];
 
-    const predefinedTags = [...PREDEFINED_USER_TAGS];
+    const role = getRole(user.isAdmin, currentTags);
+    const customTags = currentTags.filter(tag => !isManagedTag(tag));
 
-    useEffect(() => {
-      setLocalTags(user.tags || []);
-      setCustomTagsInput('');
-    }, [user]);
+    // Client-side preemption of the server lockout guard for the case the client
+    // can actually know: an admin demoting their OWN Super Admin. (The
+    // last-remaining-admin case needs a global count the client doesn't have, so
+    // it stays server-enforced with a clear error - see users/[id]/update.ts.)
+    const lockSelfDemote = !!isSelf && user.isAdmin;
 
-    const handleAdminChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newIsAdmin = e.target.checked;
+    const handleRoleChange = (newRole: Role) => {
+      const strippedTags = withoutDeveloperTags(currentTags);
+      const newIsAdmin = newRole === 'super-admin';
+      const newTags = newRole === 'developer' ? [...strippedTags, 'Developer'] : strippedTags;
+
       onFieldChange('isAdmin', newIsAdmin);
-    };
-
-    const handleTagChange = (tag: string) => (e: React.ChangeEvent<HTMLInputElement>) => {
-      const newTags = e.target.checked ? [...localTags, tag] : localTags.filter(t => t !== tag);
-      setLocalTags(newTags);
       onFieldChange('tags', newTags);
     };
 
@@ -76,18 +126,17 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
         const newCustomTags = customTagsInput
           .split(',')
           .map(tag => tag.trim())
-          .filter(tag => tag.length > 0 && !localTags.includes(tag));
-        const updatedTags = [...localTags, ...newCustomTags];
-        setLocalTags(updatedTags);
-        onFieldChange('tags', updatedTags);
+          .filter(tag => tag.length > 0 && !currentTags.includes(tag));
+        onFieldChange('tags', [...currentTags, ...newCustomTags]);
         setCustomTagsInput('');
       }
     };
 
     const handleRemoveTag = (tagToRemove: string) => {
-      const updatedTags = localTags.filter(tag => tag !== tagToRemove);
-      setLocalTags(updatedTags);
-      onFieldChange('tags', updatedTags);
+      onFieldChange(
+        'tags',
+        currentTags.filter(tag => tag !== tagToRemove)
+      );
     };
 
     return (
@@ -97,25 +146,27 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
             {userLevelDisplay(user)}
           </Button>
         </Tooltip>
-        <Checkbox
-          size="lg"
-          variant="outlined"
-          color={editedFields?.isAdmin ? 'primary' : 'neutral'}
-          checked={user.isAdmin}
-          onChange={handleAdminChange}
-          label="Super Admin"
-        />
-        {predefinedTags.map(tag => (
-          <Checkbox
-            key={tag}
-            size="lg"
-            variant="outlined"
-            color={editedFields?.tags ? 'primary' : 'neutral'}
-            checked={localTags.includes(tag)}
-            onChange={handleTagChange(tag)}
-            label={tag}
-          />
-        ))}
+        <Stack spacing={0.5}>
+          <FormLabel>Role</FormLabel>
+          <RadioGroup
+            value={role}
+            onChange={e => handleRoleChange(e.target.value as Role)}
+            sx={{ color: editedFields?.isAdmin || editedFields?.tags ? 'primary.plainColor' : undefined }}
+          >
+            {ROLE_OPTIONS.map(option => (
+              <Radio
+                key={option.value}
+                value={option.value}
+                label={option.label}
+                // Block demoting your own Super Admin at the UI too; the server is the
+                // real guard, this just avoids the round-trip + error toast.
+                disabled={lockSelfDemote && option.value !== 'super-admin'}
+                data-testid={`role-radio-${option.value}`}
+              />
+            ))}
+          </RadioGroup>
+          {lockSelfDemote && <FormHelperText>You cannot remove your own Super Admin role.</FormHelperText>}
+        </Stack>
         <Stack direction="column" spacing={1}>
           <Stack direction="row" spacing={2}>
             <span>Custom Tags:</span>
@@ -136,41 +187,40 @@ const UserPermissions: React.FC<UserPermissionsProps> = React.memo(
               Add
             </Button>
           </Stack>
-          {/* Display only custom tags (non-predefined) with remove option */}
-          {localTags.filter(tag => !(predefinedTags as readonly string[]).includes(tag)).length > 0 && (
+          {/* Display only custom tags (not the Role/Product-Access managed ones) with remove option */}
+          {customTags.length > 0 && (
             <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap', gap: 1 }}>
-              {localTags
-                .filter(tag => !(predefinedTags as readonly string[]).includes(tag))
-                .map(tag => (
-                  <Stack
-                    key={tag}
-                    direction="row"
-                    spacing={0.5}
+              {customTags.map(tag => (
+                <Stack
+                  key={tag}
+                  direction="row"
+                  spacing={0.5}
+                  sx={{
+                    backgroundColor: '#f0f0f0',
+                    padding: '2px 6px',
+                    borderRadius: '4px',
+                    fontSize: '0.8em',
+                    color: editedFields?.tags ? '#1976d2' : '#666',
+                    alignItems: 'center',
+                  }}
+                >
+                  <span>{tag}</span>
+                  <IconButton
+                    size="sm"
+                    color="neutral"
                     sx={{
-                      backgroundColor: '#f0f0f0',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontSize: '0.8em',
-                      color: editedFields?.tags ? '#1976d2' : '#666',
-                      alignItems: 'center',
+                      minHeight: '16px',
+                      minWidth: '16px',
+                      padding: '0',
+                      fontSize: '10px',
                     }}
+                    onClick={() => handleRemoveTag(tag)}
+                    data-testid={`remove-tag-${tag}`}
                   >
-                    <span>{tag}</span>
-                    <IconButton
-                      size="sm"
-                      color="neutral"
-                      sx={{
-                        minHeight: '16px',
-                        minWidth: '16px',
-                        padding: '0',
-                        fontSize: '10px',
-                      }}
-                      onClick={() => handleRemoveTag(tag)}
-                    >
-                      ×
-                    </IconButton>
-                  </Stack>
-                ))}
+                    ×
+                  </IconButton>
+                </Stack>
+              ))}
             </Stack>
           )}
         </Stack>

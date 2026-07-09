@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   __registryRows,
+  allKnownEntitlementKeys,
   entitlementsForEmail,
   entitlementsForPriceIds,
   entitlementsForTags,
+  grantTagForEntitlement,
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
+  KNOWN_ENTITLEMENT_KEYS,
+  unknownEntitlementKeys,
 } from './registry';
 
 // Behavior tests are table-driven over the real registry rows (no product
@@ -232,6 +236,46 @@ describe('signupCreditsForEmail', () => {
   });
 });
 
+describe('allKnownEntitlementKeys', () => {
+  it('includes every entitlement key granted by any tag, domain, or price row', () => {
+    const known = new Set(allKnownEntitlementKeys());
+    for (const row of __registryRows.tagGrantRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+    for (const row of __registryRows.domainGrantRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+    for (const row of __registryRows.priceRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+  });
+
+  it('has no duplicates', () => {
+    const known = allKnownEntitlementKeys();
+    expect(new Set(known).size).toBe(known.length);
+  });
+});
+
+describe('grantTagForEntitlement', () => {
+  it('resolves the granting tag for every key a tag-grant row confers', () => {
+    for (const row of __registryRows.tagGrantRows) {
+      for (const key of row.entitlements) {
+        expect(grantTagForEntitlement(key)).toBe(normalizeTag(row.tag));
+      }
+    }
+  });
+
+  it('is case-insensitive on the input key', () => {
+    const row = __registryRows.tagGrantRows[0];
+    if (!row?.entitlements[0]) return;
+    expect(grantTagForEntitlement(row.entitlements[0].toUpperCase())).toBe(normalizeTag(row.tag));
+  });
+
+  it('returns undefined for a key with no tag-based grant path', () => {
+    expect(grantTagForEntitlement('no-such-entitlement-key')).toBeUndefined();
+  });
+});
+
 describe('resolveEntitlements', () => {
   it('unions tag-derived and price-derived keys without duplicates', () => {
     const keys = resolveEntitlements({ tags: ['Analyst', 'analyst'], activePriceIds: [] });
@@ -260,5 +304,31 @@ describe('resolveEntitlements', () => {
 
   it('returns empty for a user with no tags, no subscriptions, and no email', () => {
     expect(resolveEntitlements({ tags: [], activePriceIds: [] })).toEqual([]);
+  });
+});
+
+describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
+  it('is the sorted union of every grant source, deduped (matches allKnownEntitlementKeys)', () => {
+    const expected = Array.from(
+      new Set(
+        [...__registryRows.priceRows, ...__registryRows.tagGrantRows, ...__registryRows.domainGrantRows].flatMap(
+          r => r.entitlements
+        )
+      )
+    ).sort();
+    expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual(expected);
+    expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual([...allKnownEntitlementKeys()].sort());
+    expect(new Set(KNOWN_ENTITLEMENT_KEYS).size).toBe(KNOWN_ENTITLEMENT_KEYS.length);
+  });
+
+  it('flags keys the registry does not recognize (normalized, de-duplicated)', () => {
+    const known = KNOWN_ENTITLEMENT_KEYS[0];
+    expect(unknownEntitlementKeys([known])).toEqual([]);
+    expect(unknownEntitlementKeys([`${known}`, ' BOGUS:key ', 'bogus:key'])).toEqual(['bogus:key']);
+  });
+
+  it('treats a known key as known regardless of case/whitespace', () => {
+    const known = KNOWN_ENTITLEMENT_KEYS[0];
+    expect(unknownEntitlementKeys([` ${known.toUpperCase()} `])).toEqual([]);
   });
 });
