@@ -84,7 +84,7 @@ const ProfilePage = () => {
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
   const isAdmin = currentUser?.isAdmin ?? false;
-  const { data: publishedArtifacts } = useQuery({
+  const { data: publishedArtifacts, isPending: publishedPending } = useQuery({
     queryKey: ['published-artifacts', 'mine'],
     queryFn: listMyPublishedArtifacts,
     enabled: !!currentUser,
@@ -110,16 +110,19 @@ const ProfilePage = () => {
       navigate({ to: '/profile', search: { tab: ProfileTab.Settings, subtab }, replace: true });
       return;
     }
-    // Redirect to Profile if user navigates to a hidden tab
+    // Redirect to Profile if user navigates to a hidden tab.
+    // Wait for currentUser to hydrate before checking admin status, and for
+    // the published query to settle, to avoid bouncing users who are still loading.
+    if (!currentUser) return;
     if (rawTab === ProfileTab.Security && !isAdmin) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
       return;
     }
-    if (rawTab === ProfileTab.Published && !hasPublishedArtifacts) {
+    if (rawTab === ProfileTab.Published && !publishedPending && !hasPublishedArtifacts) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
       return;
     }
-  }, [rawTab, rawSubtab, navigate, isAdmin, hasPublishedArtifacts]);
+  }, [rawTab, rawSubtab, navigate, currentUser, isAdmin, publishedPending, hasPublishedArtifacts]);
 
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
