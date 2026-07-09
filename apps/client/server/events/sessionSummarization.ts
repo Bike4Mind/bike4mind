@@ -124,7 +124,7 @@ export const handler = withEventContext(async (event, logger) => {
   });
 
   await recordSessionOperationalUsage({
-    userId: userId ?? session.userId,
+    user,
     sessionId,
     modelId,
     modelInfo,
