@@ -17,7 +17,9 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 
 // --- context / data hooks -------------------------------------------------
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user-1' } }),
+  // organizationId is the org the server (checkScopePermission) will accept a Team publish for;
+  // the Team option is gated on the selected org matching it.
+  useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42' } }),
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
@@ -214,6 +216,20 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
 
   it('omits the Team option in a personal account context', async () => {
     selectedAccountValue = null;
+    renderAndOpenActionsMenu();
+
+    fireEvent.click(screen.getByTestId('message-share-reply'));
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
+    expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: undefined }));
+  });
+
+  it("omits Team when the selected org is NOT the user's publishable org (multi-org member)", async () => {
+    // The account switcher lists every org the user belongs to, but checkScopePermission only
+    // accepts a Team publish for user.organizationId. Selecting a different (still valid) org must
+    // not offer Team, or the publish would 403.
+    selectedAccountValue = { id: 'org_OTHER', name: 'Other Org', personal: false };
     renderAndOpenActionsMenu();
 
     fireEvent.click(screen.getByTestId('message-share-reply'));

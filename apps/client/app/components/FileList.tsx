@@ -1626,16 +1626,21 @@ const FileList: FC<FileListProps> = ({
   // and org-scoped publishing; the server re-validates membership before trusting it.
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+  // Only offer Team for the org the server will accept: checkScopePermission gates org publishing
+  // on user.organizationId, so a multi-org member who selected a different (still valid) org would
+  // be offered Team but 403 on publish. Gate the option on the match so the UI never invites a
+  // rejected action.
+  const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
   const handlePublishShare = useCallback(
     (file: IFabFileDocument) => {
       void publishAndShare({
-        publish: fabFilePublisher({ fabFileId: file.id, orgId: activeOrg?.id }),
-        ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+        publish: fabFilePublisher({ fabFileId: file.id, orgId: teamOrg?.id }),
+        ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         // brand externalized
         title: file.fileName || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared'),
       });
     },
-    [publishAndShare, activeOrg]
+    [publishAndShare, teamOrg]
   );
 
   const canUpdateOrNewSession = useMemo(() => {

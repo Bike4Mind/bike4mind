@@ -442,12 +442,17 @@ const MessageContent: React.FC<ContentProps> = memo(
     // and org-scoped publishing; the server re-validates membership before trusting it.
     const selectedAccount = useSelectedAccount(s => s.selectedAccount);
     const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+    // Only offer Team for the org the server will accept: checkScopePermission gates org
+    // publishing on user.organizationId, so a multi-org member who selected a different (still
+    // valid) org would be offered Team but 403 on publish. Gate the option on the match so the
+    // UI never invites a rejected action (fails closed either way).
+    const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
     const hasShareableReply = !!(extractedReplies[0] || messageData.reply);
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
       void publishAndShareReply({
-        publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: activeOrg?.id }),
-        ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+        publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
+        ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown: extractedReplies[0] || messageData.reply || undefined,
       });
@@ -457,7 +462,7 @@ const MessageContent: React.FC<ContentProps> = memo(
       messageData.reply,
       sessionId,
       extractedReplies,
-      activeOrg,
+      teamOrg,
       publishAndShareReply,
     ]);
 
