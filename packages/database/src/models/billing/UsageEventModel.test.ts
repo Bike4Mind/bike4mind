@@ -154,6 +154,17 @@ describe('UsageEventRepository', () => {
         creditsCharged: 15,
         writtenOffCredits: 2,
       });
+      // Provider reported input but not output (e.g. a stream that dropped before
+      // completion): settledBasis stays 'local' since hasProviderUsage requires both,
+      // but the counts are still present, so this row DOES contribute to the delta.
+      await record({
+        settledBasis: 'local',
+        inputTokens: 300,
+        outputTokens: 140,
+        providerInputTokens: 290,
+        providerOutputTokens: 0,
+        creditsCharged: 10,
+      });
 
       const rows = await usageEventRepository.settlementBreakdown();
 
@@ -171,14 +182,14 @@ describe('UsageEventRepository', () => {
 
       const local = rows.find(r => r.settledBasis === 'local');
       expect(local).toMatchObject({
-        requests: 1,
-        creditsCharged: 15,
+        requests: 2,
+        creditsCharged: 25,
         writtenOffCredits: 2,
-        // No provider counts on this row, so it contributes nothing to the delta.
-        deltaSampleSize: 0,
-        inputTokenDelta: 0,
-        outputTokenDelta: 0,
+        // Only the second local row has both provider counts present.
+        deltaSampleSize: 1,
       });
+      expect(local!.inputTokenDelta).toBe(290 - 300);
+      expect(local!.outputTokenDelta).toBe(0 - 140);
     });
 
     it('excludes events with no settledBasis (rows predating the field)', async () => {
