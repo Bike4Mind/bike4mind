@@ -29,6 +29,7 @@ on:
           - Profile
           - Tavern
           - Search
+          - Data Lake
           - Skills
         default: All tests
       pr_number:
@@ -197,6 +198,7 @@ jobs:
             "Profile")         PW_ARGS="--project=profile" ;;
             "Tavern")          PW_ARGS="--project=tavern" ;;
             "Search")          PW_ARGS="--project=search" ;;
+            "Data Lake")       PW_ARGS="--project=data-lake" ;;
             "Skills")          PW_ARGS="--project=skills" ;;
             *)                 echo "Unknown test selection: '$TEST_PROJECT' — running full suite" ;;
           esac
