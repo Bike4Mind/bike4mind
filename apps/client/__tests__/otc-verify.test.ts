@@ -43,11 +43,14 @@ vi.mock('@bike4mind/common', () => ({
   HTTPError,
   InternalServerError,
   // Used by entitlements/registry.ts (reached transitively via the verify handler).
-  parseInternalStaffDomains: (raw?: string) =>
-    (raw ?? '')
-      .split(',')
-      .map(d => d.trim().toLowerCase())
-      .filter(Boolean),
+  parseInternalStaffDomains: (raw?: string) => [
+    ...new Set(
+      (raw ?? '')
+        .split(',')
+        .map(d => d.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ],
 }));
 
 vi.mock('@bike4mind/database', () => ({
