@@ -129,6 +129,20 @@ describe('ShellSessionManager', () => {
     expect(out?.output).not.toContain('�');
   });
 
+  it('flushes an incomplete trailing byte at close as a single replacement char', () => {
+    const child = new MockChild();
+    const { manager } = buildManager({ children: [child] });
+    const { id } = manager.spawn('echo', '/tmp', ENV);
+
+    // First byte of 'é' (0xC3) with no continuation byte; the decoder buffers it.
+    child.stdout.emit('data', Buffer.from([0xc3]));
+    expect(manager.getOutput(id)?.output).toBe(''); // buffered, nothing emitted yet
+
+    // The close handler's decoder.end() flushes the dangling byte as one U+FFFD.
+    child.close(0);
+    expect(manager.getOutput(id)?.output).toBe('�');
+  });
+
   it('drops old output past the buffer cap and flags truncation', () => {
     const child = new MockChild();
     const { manager } = buildManager({ children: [child], maxOutputChars: 10 });
