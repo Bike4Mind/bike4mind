@@ -503,7 +503,8 @@ function renderBundleWrapper(
 ${iframeTag}
 ${overlay}
 ${versionBar}
-<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>${noscriptBody}
+<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
+${noscriptBody}
 </body>
 </html>`;
 }

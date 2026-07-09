@@ -510,7 +510,7 @@ describe('GET /api/publish/serve — version history (?v)', () => {
   });
 });
 
-describe('GET /api/publish/serve — public share agent readability', () => {
+describe('GET /api/publish/serve - public share agent readability', () => {
   it('injects og:*, twitter:*, description, canonical, and a link rel="alternate" on the public wrapper', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ description: 'A concise summary.' }));
     mockDownload.mockResolvedValue(
@@ -575,7 +575,7 @@ describe('GET /api/publish/serve — public share agent readability', () => {
   });
 });
 
-describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
+describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
   it('serves a public bundle as text/plain with title + description + body excerpt', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ description: 'A summary.' }));
     mockDownload.mockResolvedValue(
