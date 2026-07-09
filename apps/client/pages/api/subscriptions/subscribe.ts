@@ -1,6 +1,7 @@
-import { userRepository } from '@bike4mind/database';
+import { adminSettingsRepository, userRepository } from '@bike4mind/database';
 import { BadRequestError } from '@bike4mind/utils';
 import { subscriptionPlanSchema } from '@client/lib/userSubscriptions/schemas';
+import { SUBSCRIPTION_PLANS } from '@client/lib/userSubscriptions/constants';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
 import { subscriptionRepository } from '@server/models/Subscription';
@@ -23,6 +24,19 @@ const handler = baseApi()
     // checkout page (mirrors pages/api/stripe/portal.ts).
     if (!isAllowedCallbackOrigin(callbackUrl)) {
       throw new BadRequestError('callbackUrl must point to the deployed application origin');
+    }
+
+    // Generic launch/availability gate (product-neutral — no per-product branch here).
+    // A plan may declare an admin-settings flag (`availabilityFlag`) that must be ON to
+    // be publicly purchasable; when it's off we refuse checkout on the write path, so an
+    // un-launched product can't be bought via a stale client OR a direct POST. Admin
+    // comp-grants go through a different route and are intentionally unaffected.
+    const requestedPlan = SUBSCRIPTION_PLANS.find(plan => plan.priceId === priceId);
+    if (requestedPlan?.availabilityFlag) {
+      const isLaunched = await adminSettingsRepository.getSettingsValue(requestedPlan.availabilityFlag);
+      if (!isLaunched) {
+        throw new BadRequestError('This plan is not available yet');
+      }
     }
 
     const planSubscription = await subscriptionRepository.findUserSubscriptionByPriceId(priceId, req.user.id);
