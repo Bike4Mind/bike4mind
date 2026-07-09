@@ -9,6 +9,7 @@ import {
   buildPublishUrlPath,
   checkVisibility,
   collectInlineAssets,
+  MAX_RAW_BODY_LEN,
   prepareShareMeta,
   renderBundleLoaderShell,
   renderSandboxedBundle,
@@ -302,7 +303,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     if (artifact.visibility !== 'public') {
       return res.status(404).json({ error: 'Not found' });
     }
-    return sendRawArtifact(res, artifact, stripToText(indexHtml, 50000));
+    return sendRawArtifact(res, artifact, stripToText(indexHtml, MAX_RAW_BODY_LEN));
   }
 
   // Approach B: on the per-artifact isolated origin the bundle is served at a

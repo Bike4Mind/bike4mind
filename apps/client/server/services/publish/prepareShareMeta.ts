@@ -12,6 +12,10 @@ import { escapeHtml } from './viewerSecurity';
 
 const MAX_DESCRIPTION_LEN = 300;
 const MAX_EXCERPT_LEN = 1500;
+/** Cap for the ?format=raw body. Comfortably beyond an unfurler's typical read
+ *  budget yet safely within the response-size limits configured for the serve
+ *  handler; also bounds the extraction regex over a bundle's index.html. */
+export const MAX_RAW_BODY_LEN = 50000;
 
 /** Strip HTML tags, drop script/style/comment contents, decode common entities, collapse whitespace. */
 export function stripToText(input: string, max: number): string {
