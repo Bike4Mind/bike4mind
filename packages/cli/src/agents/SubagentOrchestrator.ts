@@ -19,7 +19,7 @@ import {
 } from '../utils/toolsAdapter.js';
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
-import { ALWAYS_DENIED_FOR_AGENTS, HookBlockedError } from './types.js';
+import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
 import type { SharedContextAccess } from './types.js';
 import type { SharedAgentContext } from './SharedAgentContext.js';
 import { filterToolsByPatterns } from './toolFilter.js';
@@ -71,6 +71,12 @@ export interface SpawnAgentOptions {
   additionalTools?: ICompletionOptionTools[];
   /** Shared context for inter-agent communication within a pipeline */
   sharedContext?: SharedAgentContext;
+  /**
+   * Nesting depth of the agent being spawned (main agent = 0, its subagents = 1, ...).
+   * Spawns at/above MAX_SUBAGENT_DEPTH are rejected. Defaults to 1 (a direct child
+   * of the main agent) when a caller omits it.
+   */
+  depth?: number;
 }
 
 /**
@@ -153,6 +159,16 @@ export class SubagentOrchestrator {
    */
   async delegateToAgent(options: SpawnAgentOptions): Promise<AgentExecutionResult> {
     const { task, agentName, thoroughness, variables, parentSessionId, model, allowedTools, abortSignal } = options;
+
+    // Recursion-depth cap (fail closed). A spawned agent is at least depth 1;
+    // reject anything at/above the cap before doing any work.
+    const depth = options.depth ?? 1;
+    if (depth >= MAX_SUBAGENT_DEPTH) {
+      throw new Error(
+        `Cannot spawn agent "${agentName}": subagent nesting depth ${depth} reached the limit ` +
+          `of ${MAX_SUBAGENT_DEPTH}. Deeper delegation is blocked to prevent unbounded recursion.`
+      );
+    }
 
     // Get agent definition: use inline definition if provided, otherwise look up from store
     let agentDef: AgentDefinition;
