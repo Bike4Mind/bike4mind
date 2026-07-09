@@ -28,6 +28,12 @@ export interface SkillToolDependencies {
   sessionId?: string;
   /** Optional skill restrictions for this agent context */
   allowedSkills?: string[];
+  /**
+   * Nesting depth of the agent that owns this tool (main agent = 0). A forking
+   * skill spawns its subagent at parentDepth + 1 so the recursion cap applies
+   * to skills invoked from within a subagent, not just the delegation tools.
+   */
+  parentDepth?: number;
 }
 
 /**
@@ -225,6 +231,7 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
             // Pass skill-level overrides
             model: command.model,
             allowedTools: command.allowedTools,
+            depth: (deps.parentDepth ?? 0) + 1,
           });
           const agentName = agentConfig.name;
 

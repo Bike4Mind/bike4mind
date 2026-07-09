@@ -263,6 +263,8 @@ export class SubagentOrchestrator {
         subagentOrchestrator: this,
         sessionId: parentSessionId,
         allowedSkills: agentDef.skills,
+        // This agent runs at `depth`; a skill it forks must spawn one level deeper.
+        parentDepth: depth,
       });
       filteredTools.push(skillTool);
 
