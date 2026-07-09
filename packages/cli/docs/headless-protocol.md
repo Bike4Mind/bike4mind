@@ -79,6 +79,11 @@ The `json` format emits a single object (not a stream):
 
 On failure it emits `{ "schemaVersion", "runId", "error": "<message>" }` instead.
 
+Note: `permission_request` / `permission_decision` events are emitted only in
+`stream-json` mode. In `text` and `json` modes a denied tool is reported on
+stderr but leaves no record in the `json` result object, so a consumer that
+needs to observe permission decisions programmatically should use `stream-json`.
+
 ## Inputs
 
 Structured inputs are validated strictly: an unknown field or a malformed value
@@ -107,6 +112,11 @@ Two mechanisms grant access:
 
   Precedence per tool: `deny` list > `allow` list > `maxAutoAllowRisk`
   threshold > `defaultAction`.
+
+  Note: `maxAutoAllowRisk` combined with `defaultAction: "allow"` is rejected at
+  load time - the threshold would be meaningless (a tool above it is allowed by
+  the default anyway), so that contradiction fails loud instead of silently
+  allowing everything. Pair `maxAutoAllowRisk` with `defaultAction: "deny"`.
 
   Example - allow reads and low-risk commands, deny shell, otherwise deny:
 

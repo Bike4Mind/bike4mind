@@ -26,11 +26,16 @@ export const HEADLESS_SCHEMA_VERSION = '1.0.0';
 export type HeadlessEventType =
   'thought' | 'action' | 'observation' | 'permission_request' | 'permission_decision' | 'result' | 'error';
 
-/** An event before the envelope (schemaVersion/runId) is stamped on. */
-export type HeadlessEvent = { type: HeadlessEventType } & Record<string, unknown>;
+/**
+ * An event before the envelope (schemaVersion/runId) is stamped on. The
+ * `?: never` on the envelope keys makes a bad emit site that sets one fail to
+ * compile; `stampEvent` also enforces this at runtime (envelope spread last).
+ */
+export type HeadlessEvent = { type: HeadlessEventType; schemaVersion?: never; runId?: never } & Record<string, unknown>;
 
 /** A single emitted line: the event plus the stamped protocol envelope. */
-export type StampedHeadlessEvent = HeadlessEvent & {
+export type StampedHeadlessEvent = Record<string, unknown> & {
+  type: HeadlessEventType;
   schemaVersion: string;
   runId: string;
 };
@@ -196,6 +201,17 @@ export function parsePermissionPolicy(raw: string): HeadlessPermissionPolicy {
       throw new HeadlessInputError('permission policy: defaultAction must be one of allow|deny');
     }
     defaultAction = obj.defaultAction;
+  }
+
+  // A risk threshold is meaningless when everything falls through to allow: a
+  // tool above the threshold would be auto-allowed by defaultAction anyway.
+  // Reject the contradiction so "only auto-allow low risk" can't silently
+  // become "allow everything".
+  if (maxAutoAllowRisk !== undefined && defaultAction === 'allow') {
+    throw new HeadlessInputError(
+      "permission policy: maxAutoAllowRisk has no effect with defaultAction 'allow' (tools above the " +
+        "threshold are allowed anyway); set defaultAction to 'deny' or remove maxAutoAllowRisk"
+    );
   }
 
   return { allow, deny, maxAutoAllowRisk, defaultAction };

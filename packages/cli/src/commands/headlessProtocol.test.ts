@@ -136,13 +136,13 @@ describe('parsePermissionPolicy', () => {
 
   it('parses a full policy', () => {
     const policy = parsePermissionPolicy(
-      '{"allow":["read_file"],"deny":["bash_execute"],"maxAutoAllowRisk":"low","defaultAction":"allow"}'
+      '{"allow":["read_file"],"deny":["bash_execute"],"maxAutoAllowRisk":"low","defaultAction":"deny"}'
     );
     expect(policy).toEqual({
       allow: ['read_file'],
       deny: ['bash_execute'],
       maxAutoAllowRisk: 'low',
-      defaultAction: 'allow',
+      defaultAction: 'deny',
     });
   });
 
@@ -151,6 +151,14 @@ describe('parsePermissionPolicy', () => {
     expect(() => parsePermissionPolicy('{"maxAutoAllowRisk":"extreme"}')).toThrow(/maxAutoAllowRisk/);
     expect(() => parsePermissionPolicy('{"defaultAction":"maybe"}')).toThrow(/defaultAction/);
     expect(() => parsePermissionPolicy('{"allow":"read_file"}')).toThrow(/must be an array of strings/);
+  });
+
+  it('rejects the contradictory maxAutoAllowRisk + defaultAction:allow combination', () => {
+    expect(() => parsePermissionPolicy('{"maxAutoAllowRisk":"low","defaultAction":"allow"}')).toThrow(
+      /maxAutoAllowRisk has no effect with defaultAction 'allow'/
+    );
+    // defaultAction:allow on its own (no threshold) is still valid.
+    expect(parsePermissionPolicy('{"defaultAction":"allow"}').defaultAction).toBe('allow');
   });
 });
 
