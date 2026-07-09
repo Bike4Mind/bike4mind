@@ -6,8 +6,12 @@ import type { Request } from 'express';
 
 const PRIVATE_IPV4_RANGES: RegExp[] = [/^10\./, /^127\./, /^169\.254\./, /^172\.(1[6-9]|2\d|3[0-1])\./, /^192\.168\./];
 
-function isPrivateIpv4(ip: string): boolean {
-  return PRIVATE_IPV4_RANGES.some(r => r.test(ip));
+// Loopback (::1), link-local (fe80::/10 -> fe80..febf), and unique-local (fc00::/7 -> fc00..fdff).
+// Matched case-insensitively on the leading hextets.
+const PRIVATE_IPV6_RANGES: RegExp[] = [/^::1$/i, /^fe[89ab][0-9a-f]:/i, /^f[cd][0-9a-f]{2}:/i];
+
+function isPrivateIp(ip: string): boolean {
+  return PRIVATE_IPV4_RANGES.some(r => r.test(ip)) || PRIVATE_IPV6_RANGES.some(r => r.test(ip));
 }
 
 function cleanIp(raw: string | undefined | null): string | null {
@@ -30,6 +34,9 @@ export function getClientIp(req: Request): string {
   // The port is always the trailing `:<digits>` for both IPv4 and IPv6 forms.
   const cfViewer = req.headers?.['cloudfront-viewer-address'];
   if (typeof cfViewer === 'string' && cfViewer.trim()) {
+    // CloudFront delivers this as unbracketed IPv6/IPv4 plus a decimal ephemeral
+    // port, so the trailing `:<digits>` is always the port. Do not reuse this
+    // regex on a port-less value - it would strip a final IPv6 hextet.
     const ip = cfViewer.trim().replace(/:\d+$/, '');
     if (ip) return ip;
   }
@@ -47,7 +54,7 @@ export function getClientIp(req: Request): string {
     // Callers may pass a NextApiRequest-like object whose `headers` is absent
     // (e.g. some handler/test contexts); without this guard the loop throws.
     const ip = cleanIp(req.headers?.[header] as string | undefined);
-    if (ip && !isPrivateIpv4(ip)) return ip;
+    if (ip && !isPrivateIp(ip)) return ip;
   }
 
   const socketIp = cleanIp((req.socket as any)?.remoteAddress || (req.connection as any)?.remoteAddress);
