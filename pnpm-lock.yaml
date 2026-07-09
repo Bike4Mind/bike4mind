@@ -1615,15 +1615,6 @@ importers:
       '@aws-sdk/s3-request-presigner':
         specifier: ^3.1080.0
         version: 3.1080.0
-      '@bike4mind/fab-pipeline':
-        specifier: workspace:*
-        version: link:../../b4m-core/fab-pipeline
-      '@bike4mind/llm-adapters':
-        specifier: workspace:*
-        version: link:../../b4m-core/llm-adapters
-      '@bike4mind/observability':
-        specifier: workspace:*
-        version: link:../../b4m-core/observability
       '@casl/ability':
         specifier: ^6.8.1
         version: 6.8.1
@@ -1720,6 +1711,9 @@ importers:
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       lodash:
         specifier: ^4.18.1
         version: 4.18.1
@@ -1820,9 +1814,18 @@ importers:
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../../b4m-core/common
+      '@bike4mind/fab-pipeline':
+        specifier: workspace:*
+        version: link:../../b4m-core/fab-pipeline
+      '@bike4mind/llm-adapters':
+        specifier: workspace:*
+        version: link:../../b4m-core/llm-adapters
       '@bike4mind/mcp':
         specifier: workspace:*
         version: link:../../b4m-core/mcp
+      '@bike4mind/observability':
+        specifier: workspace:*
+        version: link:../../b4m-core/observability
       '@bike4mind/services':
         specifier: workspace:*
         version: link:../../b4m-core/services
