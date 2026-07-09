@@ -47,7 +47,7 @@ export function useVerifyDevice() {
       const data = error.response?.data;
       const message = data?.policyAcceptanceRequired
         ? 'Accept the Terms of Service and Acceptable Use Policy to continue.'
-        : data?.error_description || data?.error || 'Action failed';
+        : data?.error_description || 'Action failed';
       toast.error(message);
     },
   });

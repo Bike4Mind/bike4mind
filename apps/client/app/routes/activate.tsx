@@ -234,9 +234,7 @@ export default function ActivatePage() {
                   </>
                 ) : (
                   <Typography level="body-sm">
-                    {verifyMutation.error.response?.data?.error_description ||
-                      verifyMutation.error.response?.data?.error ||
-                      'Invalid code'}
+                    {verifyMutation.error.response?.data?.error_description || 'Invalid code'}
                   </Typography>
                 )}
               </Box>
