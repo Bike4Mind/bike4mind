@@ -577,6 +577,17 @@ export const useSubscribeToSessionQuests = (sessionId?: string, isStreaming?: bo
   const agentArtifactPersistence = useStreamingArtifactPersistence();
   const callback = useCallback(
     (type: string, data: IChatHistoryItemDocument) => {
+      // TEMP DIAGNOSTIC (ticket #335 rework, remove before merge): confirm whether
+      // this callback fires at all for agent quests on a real deploy, and inspect
+      // the shape of the delivered change-stream doc.
+      console.log('[335-diag] useSubscribeToSessionQuests callback', {
+        type,
+        questId: data.id,
+        agentExecutionId: data.agentExecutionId,
+        status: data.status,
+        repliesLength: data.replies?.length,
+        isStreaming,
+      });
       // PERFORMANCE FIX: Skip updates during active streaming to prevent double pipeline conflict
       if (isStreaming) {
         console.log(
