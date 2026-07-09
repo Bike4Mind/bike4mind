@@ -377,12 +377,19 @@ export class ShellSessionManager {
   }
 }
 
-let singleton: ShellSessionManager | null = null;
+// Pin the singleton to globalThis (not a module-level `let`) so there is exactly
+// ONE manager per process even if this module is duplicated across bundle chunks -
+// bash_execute is dynamically imported while the CLI subscribes statically, and a
+// split instance would mean the UI never sees the tool's sessions and killAll() on
+// exit would miss the real children (silently orphaning them).
+const SINGLETON_KEY = Symbol.for('@bike4mind/services:ShellSessionManager');
+type SingletonHost = { [SINGLETON_KEY]?: ShellSessionManager };
 
 /** Lazily-created process-global manager used by the bash_execute tool family. */
 export function getShellSessionManager(): ShellSessionManager {
-  if (!singleton) {
-    singleton = new ShellSessionManager();
+  const host = globalThis as SingletonHost;
+  if (!host[SINGLETON_KEY]) {
+    host[SINGLETON_KEY] = new ShellSessionManager();
   }
-  return singleton;
+  return host[SINGLETON_KEY];
 }

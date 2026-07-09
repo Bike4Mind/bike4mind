@@ -36,6 +36,14 @@ import {
   latticeExplainTool,
 } from './implementation/lattice';
 
+// Re-export the shell-session manager through this CLI-only entry so the CLI can
+// subscribe to / reap the SAME singleton the tools use, without a deep import.
+export {
+  getShellSessionManager,
+  type ShellSession,
+  type ShellSessionStatus,
+} from './implementation/bashExecute/ShellSessionManager';
+
 /**
  * The 6 Lattice tool implementations as a resolvable map keyed by tool name.
  * `buildSharedTools`/`generateTools` only resolve names present in their
