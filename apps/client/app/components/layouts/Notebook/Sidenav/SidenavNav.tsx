@@ -168,7 +168,9 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             key: 'agents',
             label: t('agents.title'),
             icon: iconSlot(<SmartToyOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/agents'),
+            // Active only on the overall agents grid, not a specific agent screen (/agents/:id),
+            // which highlights its own row in the list below instead.
+            isActive: location.pathname === '/agents',
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/agents' });
@@ -179,8 +181,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     {
       key: 'projects',
       label: t('projects.projects'),
+      // Active only on the overall projects grid, not a specific project screen (/projects/:id),
+      // which highlights its own row in the list below instead.
       icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
-      isActive: location.pathname.startsWith('/projects'),
+      isActive: location.pathname === '/projects',
       onClick: () => {
         closeOnMobile();
         navigate({ to: '/projects' });

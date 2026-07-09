@@ -1,8 +1,9 @@
 import { grayAlpha, brandAlpha } from '../colors';
 
 // Custom values with unique opacity not in theme defaults.
-// Selected (focusedBackground) matches hover so both share one highlight color:
-// #2A2C38 @ 70% (grayAlpha[775][70]) in dark, the light-blue tint in light mode.
+// Dark: selected (focusedBackground) matches hover, both #2A2C38 @ 70% (grayAlpha[775][70]).
+// Light: hover is the light-blue tint @ 30%; selected is the same blue @ 50% so it reads a bit
+// stronger than hover (brand[100] = #D1E4F4).
 export const notebooklistTheme = {
   dark: {
     hoverBg: grayAlpha[775][70],
@@ -10,6 +11,6 @@ export const notebooklistTheme = {
   },
   light: {
     hoverBg: brandAlpha[100][30],
-    focusedBackground: brandAlpha[100][30],
+    focusedBackground: brandAlpha[100][50],
   },
 };
