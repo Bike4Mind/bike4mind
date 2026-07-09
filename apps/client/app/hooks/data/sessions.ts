@@ -586,6 +586,9 @@ export const useSubscribeToSessionQuests = (sessionId?: string, isStreaming?: bo
         agentExecutionId: data.agentExecutionId,
         status: data.status,
         repliesLength: data.replies?.length,
+        // Does the DELIVERED change-stream doc actually carry an <artifact> block?
+        // Splits "gate passed but replies lack the artifact" from a downstream persist bug.
+        hasArtifactMarker: data.replies?.some(r => typeof r === 'string' && r.includes('<artifact')),
         isStreaming,
       });
       // PERFORMANCE FIX: Skip updates during active streaming to prevent double pipeline conflict
