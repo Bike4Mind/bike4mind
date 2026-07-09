@@ -10,25 +10,27 @@ import { COMMANDS } from '../config/commands.js';
  */
 
 function makeContext(overrides: Partial<CommandContext> = {}): CommandContext {
-  const base = {
+  // Each fake implements only the slice its handler touches, so the store
+  // fields are cast per-field. Keeping `base` typed as CommandContext (rather
+  // than casting the whole object) means adding a new required field to the
+  // interface fails this test until a fake is provided for it.
+  const base: CommandContext = {
     configStore: {
       get: vi.fn(async () => ({ apiConfig: undefined })),
       getAdditionalDirectories: vi.fn(async () => [] as string[]),
-    },
+    } as unknown as CommandContext['configStore'],
     customCommandStore: {
       getAllCommands: vi.fn(() => []),
-    },
+    } as unknown as CommandContext['customCommandStore'],
     permissionManager: {
       getTrustedTools: vi.fn(() => [] as string[]),
-    },
-    decisionStore: { decisions: [] },
-    blockerStore: { blockers: [] },
-    reviewGateStore: { reviewGates: [] },
+    } as unknown as CommandContext['permissionManager'],
+    decisionStore: { decisions: [] } as unknown as CommandContext['decisionStore'],
+    blockerStore: { blockers: [] } as unknown as CommandContext['blockerStore'],
+    reviewGateStore: { reviewGates: [] } as unknown as CommandContext['reviewGateStore'],
     openConfigEditor: vi.fn(),
   };
-  // The fakes only implement the slice each handler touches; cast through
-  // unknown so the test doesn't have to stub entire store classes.
-  return { ...base, ...overrides } as unknown as CommandContext;
+  return { ...base, ...overrides };
 }
 
 describe('command registry dispatch', () => {
