@@ -424,4 +424,96 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
       }
     });
   });
+
+  describe('setGithubIssueState', () => {
+    it('updates every tracking doc for the (repoSlug, issueNumber) pair and returns the count', async () => {
+      // Two docs for the same issue (distinct fingerprint/status to satisfy the unique index).
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-issue42-a',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/42',
+        status: 'fixed',
+        githubIssueNumber: 42,
+      });
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-issue42-b',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/42',
+        status: 'dismissed',
+        githubIssueNumber: 42,
+      });
+
+      const updated = await sreErrorTrackingRepository.setGithubIssueState('owner/repo', 42, 'closed');
+
+      expect(updated).toBe(2);
+      const docs = await SreErrorTrackingModel.find({ repoSlug: 'owner/repo', githubIssueNumber: 42 }).lean();
+      expect(docs.map(d => d.githubIssueState)).toEqual(['closed', 'closed']);
+    });
+
+    it('does not touch docs for a different issue, a different repo, or CloudWatch docs', async () => {
+      const otherIssue = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-issue99',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/99',
+        status: 'fixed',
+        githubIssueNumber: 99,
+      });
+      const otherRepo = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-otherrepo',
+        repoSlug: 'other/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/other/repo/issues/42',
+        status: 'fixed',
+        githubIssueNumber: 42,
+      });
+      const cloudwatch = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-cw',
+        repoSlug: 'owner/repo',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log-group',
+        status: 'analyzing',
+      });
+      const target = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-issue42-target',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/42',
+        status: 'fixed',
+        githubIssueNumber: 42,
+      });
+
+      const updated = await sreErrorTrackingRepository.setGithubIssueState('owner/repo', 42, 'closed');
+
+      expect(updated).toBe(1);
+      expect((await SreErrorTrackingModel.findById(target.id).lean())?.githubIssueState).toBe('closed');
+      expect((await SreErrorTrackingModel.findById(otherIssue.id).lean())?.githubIssueState).toBeUndefined();
+      expect((await SreErrorTrackingModel.findById(otherRepo.id).lean())?.githubIssueState).toBeUndefined();
+      expect((await SreErrorTrackingModel.findById(cloudwatch.id).lean())?.githubIssueState).toBeUndefined();
+    });
+
+    it('flips state back to open on reopen', async () => {
+      const doc = await SreErrorTrackingModel.create({
+        errorFingerprint: 'fp-reopen',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/7',
+        status: 'fixed',
+        githubIssueNumber: 7,
+        githubIssueState: 'closed',
+      });
+
+      const updated = await sreErrorTrackingRepository.setGithubIssueState('owner/repo', 7, 'open');
+
+      expect(updated).toBe(1);
+      expect((await SreErrorTrackingModel.findById(doc.id).lean())?.githubIssueState).toBe('open');
+    });
+
+    it('returns 0 when no tracking doc exists for the issue', async () => {
+      const updated = await sreErrorTrackingRepository.setGithubIssueState('owner/repo', 12345, 'closed');
+      expect(updated).toBe(0);
+    });
+  });
 });

@@ -64,6 +64,19 @@ const handler = baseApi().get(
         return;
       }
 
+      // Self-heal the denormalized githubIssueState the admin filter relies on.
+      // The webhook handlers are the primary freshness source, but this backfills
+      // docs created before webhooks fired (or that missed a delivery): every time
+      // a GitHub-issue card renders it fetches live state here, so viewing the
+      // pipeline eventually reconciles stale/absent state without a cron sweep.
+      if (issue.state === 'open' || issue.state === 'closed') {
+        try {
+          await sreErrorTrackingRepository.setGithubIssueState(systemRepo, issueNumber, issue.state);
+        } catch (err) {
+          logger.warn('[SRE-ISSUE-STATE] Failed to persist githubIssueState', { id: doc.id, err });
+        }
+      }
+
       res.status(200).json({ state: issue.state, closedAt: issue.closed_at });
     } catch {
       res.status(200).json({ state: 'unknown', error: 'github-unavailable' });

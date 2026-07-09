@@ -6,6 +6,7 @@ const mockSendToQueue = vi.fn();
 const mockGetSourceQueueUrl = vi.fn(() => 'https://sqs.example.com/sreJobQueue');
 const mockResolveFullConfig = vi.fn();
 const mockGetConfiguredRepoSlugs = vi.fn();
+const mockSetGithubIssueState = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {
@@ -13,6 +14,9 @@ vi.mock('@bike4mind/database', () => ({
   },
   cacheRepository: {
     incrementCounterConditional: (...args: unknown[]) => mockIncrementCounterConditional(...args),
+  },
+  sreErrorTrackingRepository: {
+    setGithubIssueState: (...args: unknown[]) => mockSetGithubIssueState(...args),
   },
 }));
 
@@ -32,7 +36,7 @@ vi.mock('@server/utils/sqs', () => ({
   sendToQueue: (...args: unknown[]) => mockSendToQueue(...args),
 }));
 
-import { dispatchIssueToSre, type SreIssuePayload } from './sreWebhookDispatch';
+import { dispatchIssueToSre, syncSreIssueStateFromWebhook, type SreIssuePayload } from './sreWebhookDispatch';
 
 function makePayload(overrides: Partial<SreIssuePayload> = {}): SreIssuePayload {
   return {
@@ -237,5 +241,50 @@ describe('dispatchIssueToSre', () => {
       expect(result).toEqual({ dispatched: false, reason: 'already-dispatched' });
       expect(mockSendToQueue).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('syncSreIssueStateFromWebhook', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSetGithubIssueState.mockResolvedValue(1);
+  });
+
+  it('sets githubIssueState to `closed` on a `closed` action', async () => {
+    await syncSreIssueStateFromWebhook(makePayload({ action: 'closed' }));
+
+    expect(mockSetGithubIssueState).toHaveBeenCalledTimes(1);
+    expect(mockSetGithubIssueState).toHaveBeenCalledWith('MillionOnMars/lumina5', 42, 'closed');
+  });
+
+  it('sets githubIssueState to `open` on a `reopened` action', async () => {
+    await syncSreIssueStateFromWebhook(makePayload({ action: 'reopened' }));
+
+    expect(mockSetGithubIssueState).toHaveBeenCalledTimes(1);
+    expect(mockSetGithubIssueState).toHaveBeenCalledWith('MillionOnMars/lumina5', 42, 'open');
+  });
+
+  it.each(['opened', 'labeled', 'edited', 'assigned', 'manual-trigger'])(
+    'no-ops for the non-state-changing `%s` action',
+    async action => {
+      await syncSreIssueStateFromWebhook(makePayload({ action }));
+
+      expect(mockSetGithubIssueState).not.toHaveBeenCalled();
+    }
+  );
+
+  it('no-ops when the repository is missing (cannot scope the update)', async () => {
+    const payload = makePayload({ action: 'closed' });
+    delete (payload as { repository?: unknown }).repository;
+
+    await syncSreIssueStateFromWebhook(payload);
+
+    expect(mockSetGithubIssueState).not.toHaveBeenCalled();
+  });
+
+  it('swallows repository errors so the webhook is never failed by a state write', async () => {
+    mockSetGithubIssueState.mockRejectedValue(new Error('DB down'));
+
+    await expect(syncSreIssueStateFromWebhook(makePayload({ action: 'closed' }))).resolves.toBeUndefined();
   });
 });
