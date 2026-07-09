@@ -46,11 +46,15 @@ import { createSandboxRuntime } from '../sandbox/runtime/SandboxRuntimeAdapter.j
 import { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { DEFAULT_SANDBOX_CONFIG } from '../sandbox/types.js';
 import { ProxyManager } from '../sandbox/proxy/ProxyManager.js';
+import { readFile } from 'fs/promises';
 import {
   HEADLESS_SCHEMA_VERSION,
   createHeadlessEmitter,
   classifyToolRisk,
   parseStringArray,
+  parsePermissionPolicy,
+  evaluatePermissionPolicy,
+  type HeadlessPermissionPolicy,
 } from './headlessProtocol.js';
 
 export type OutputFormat = 'text' | 'json' | 'stream-json';
@@ -61,6 +65,8 @@ export interface HeadlessOptions {
   dangerouslySkipPermissions: boolean;
   verbose: boolean;
   addDirs: string[];
+  /** Path to a JSON permission policy for unattended runs (see headlessProtocol.ts). */
+  permissionPolicyPath?: string;
 }
 
 interface HeadlessJsonResult {
@@ -106,7 +112,7 @@ const silentLogger = {
 };
 
 export async function handleHeadlessCommand(options: HeadlessOptions): Promise<void> {
-  const { prompt, outputFormat, dangerouslySkipPermissions, addDirs } = options;
+  const { prompt, outputFormat, dangerouslySkipPermissions, addDirs, permissionPolicyPath } = options;
 
   logger.setVerbose(options.verbose);
 
@@ -132,6 +138,21 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       ? parseStringArray(process.env.B4M_ADDITIONAL_DIRS, 'B4M_ADDITIONAL_DIRS')
       : [];
     const additionalDirectories = [...new Set([...configDirs, ...flagDirs, ...addDirs])];
+
+    // Load the permission policy for unattended runs, if one was supplied. A
+    // read or validation failure throws and is reported via the catch below.
+    let permissionPolicy: HeadlessPermissionPolicy | null = null;
+    if (permissionPolicyPath) {
+      let policyRaw: string;
+      try {
+        policyRaw = await readFile(permissionPolicyPath, 'utf-8');
+      } catch (e) {
+        throw new Error(
+          `Cannot read permission policy at "${permissionPolicyPath}": ${e instanceof Error ? e.message : String(e)}`
+        );
+      }
+      permissionPolicy = parsePermissionPolicy(policyRaw);
+    }
 
     // Load custom commands (non-critical)
     try {
@@ -268,8 +289,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     // Permission prompt function for headless mode. Every gated tool surfaces a
     // structured permission_request + permission_decision pair on the stream (so
-    // decisions are never silent), then resolves the decision:
-    //   --dangerously-skip-permissions -> allow-once; otherwise -> deny.
+    // decisions are never silent), then resolves the decision. Precedence:
+    //   --dangerously-skip-permissions -> allow-once (explicit blanket override);
+    //   a --permission-policy -> its per-tool/per-risk verdict;
+    //   otherwise -> deny (safe default, no silent auto-approve).
     const promptFn = (
       toolName: string,
       args: unknown,
@@ -280,9 +303,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         emit({ type: 'permission_request', toolName, risk });
       }
 
-      const decision: { action: 'allow-once' | 'deny'; reason: string } = dangerouslySkipPermissions
-        ? { action: 'allow-once', reason: 'dangerously-skip-permissions' }
-        : { action: 'deny', reason: 'no permission policy; default deny' };
+      let decision: { action: 'allow-once' | 'deny'; reason: string };
+      if (dangerouslySkipPermissions) {
+        decision = { action: 'allow-once', reason: 'dangerously-skip-permissions' };
+      } else if (permissionPolicy) {
+        const verdict = evaluatePermissionPolicy(permissionPolicy, toolName, risk.level);
+        decision = { action: verdict.action === 'allow' ? 'allow-once' : 'deny', reason: verdict.reason };
+      } else {
+        decision = { action: 'deny', reason: 'no permission policy; default deny' };
+      }
 
       if (streaming) {
         emit({
@@ -294,7 +323,8 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         });
       } else if (decision.action === 'deny') {
         process.stderr.write(
-          `Warning: Tool "${toolName}" requires permission and was denied. Use --dangerously-skip-permissions to auto-allow tools in headless mode.\n`
+          `Warning: Tool "${toolName}" requires permission and was denied (${decision.reason}). ` +
+            `Grant it via --permission-policy, or --dangerously-skip-permissions to allow all tools.\n`
         );
       }
 

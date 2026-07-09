@@ -102,6 +102,10 @@ const argv = await yargs(hideBin(process.argv))
     description: 'When using -p, auto-allow all tool permission prompts (use with caution in CI/CD)',
     default: false,
   })
+  .option('permission-policy', {
+    type: 'string',
+    description: 'When using -p, path to a JSON permission policy for unattended runs (allow/deny/risk rules)',
+  })
   .option('ollama-host', {
     type: 'string',
     description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434)',
@@ -365,6 +369,7 @@ if (argv.prompt !== undefined) {
       dangerouslySkipPermissions: argv['dangerously-skip-permissions'] || false,
       verbose: argv.verbose || false,
       addDirs: rawAddDirs.map(d => resolve(d)),
+      permissionPolicyPath: argv['permission-policy'] ? resolve(argv['permission-policy']) : undefined,
     });
     // handleHeadlessCommand calls process.exit internally, but handle the case it doesn't
     process.exit(0);

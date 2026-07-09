@@ -7,6 +7,8 @@ import {
   parseStrictObject,
   parseStringArray,
   HeadlessInputError,
+  parsePermissionPolicy,
+  evaluatePermissionPolicy,
 } from './headlessProtocol.js';
 
 describe('headless protocol envelope', () => {
@@ -109,5 +111,62 @@ describe('parseStringArray', () => {
 
   it('rejects invalid JSON', () => {
     expect(() => parseStringArray('nope', 'dirs')).toThrow(/invalid JSON/);
+  });
+});
+
+describe('parsePermissionPolicy', () => {
+  it('applies defaults for omitted fields', () => {
+    expect(parsePermissionPolicy('{}')).toEqual({
+      allow: [],
+      deny: [],
+      maxAutoAllowRisk: undefined,
+      defaultAction: 'deny',
+    });
+  });
+
+  it('parses a full policy', () => {
+    const policy = parsePermissionPolicy(
+      '{"allow":["read_file"],"deny":["bash_execute"],"maxAutoAllowRisk":"low","defaultAction":"allow"}'
+    );
+    expect(policy).toEqual({
+      allow: ['read_file'],
+      deny: ['bash_execute'],
+      maxAutoAllowRisk: 'low',
+      defaultAction: 'allow',
+    });
+  });
+
+  it('rejects unknown fields and invalid enum values', () => {
+    expect(() => parsePermissionPolicy('{"nope":true}')).toThrow(/unknown field/);
+    expect(() => parsePermissionPolicy('{"maxAutoAllowRisk":"extreme"}')).toThrow(/maxAutoAllowRisk/);
+    expect(() => parsePermissionPolicy('{"defaultAction":"maybe"}')).toThrow(/defaultAction/);
+    expect(() => parsePermissionPolicy('{"allow":"read_file"}')).toThrow(/must be an array of strings/);
+  });
+});
+
+describe('evaluatePermissionPolicy', () => {
+  const policy = parsePermissionPolicy(
+    '{"allow":["read_file"],"deny":["bash_execute"],"maxAutoAllowRisk":"low","defaultAction":"deny"}'
+  );
+
+  it('denies a tool on the deny list even if it would otherwise be low risk', () => {
+    expect(evaluatePermissionPolicy(policy, 'bash_execute', 'low')).toEqual({
+      action: 'deny',
+      reason: 'tool in policy deny list',
+    });
+  });
+
+  it('allows a tool on the allow list', () => {
+    expect(evaluatePermissionPolicy(policy, 'read_file', 'high').action).toBe('allow');
+  });
+
+  it('auto-allows within the risk threshold and denies above it', () => {
+    expect(evaluatePermissionPolicy(policy, 'other_tool', 'low').action).toBe('allow');
+    expect(evaluatePermissionPolicy(policy, 'other_tool', 'medium').action).toBe('deny');
+  });
+
+  it('falls back to defaultAction when no rule matches and no threshold applies', () => {
+    const allowByDefault = parsePermissionPolicy('{"defaultAction":"allow"}');
+    expect(evaluatePermissionPolicy(allowByDefault, 'x', 'high').action).toBe('allow');
   });
 });

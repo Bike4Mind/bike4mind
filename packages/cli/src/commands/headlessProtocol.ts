@@ -148,3 +148,87 @@ export function classifyToolRisk(toolName: string, args: unknown, category: Tool
     category === 'auto_approve' ? 'low' : category === 'prompt_always' ? 'high' : 'medium';
   return { level, reasons: [] };
 }
+
+/** A policy verdict for a single tool: allow it or deny it. */
+export type PermissionPolicyAction = 'allow' | 'deny';
+
+/**
+ * Declarative permission policy for unattended headless runs. Consulted per
+ * gated tool so CI can run without the blanket --dangerously-skip-permissions
+ * override. Precedence: deny list > allow list > risk threshold > defaultAction.
+ */
+export interface HeadlessPermissionPolicy {
+  /** Exact tool names always allowed. */
+  allow: string[];
+  /** Exact tool names always denied; deny wins over allow. */
+  deny: string[];
+  /** Auto-allow any tool whose risk is at or below this level. Omit to disable. */
+  maxAutoAllowRisk?: CommandRiskLevel;
+  /** Verdict when no rule matches. Defaults to 'deny' (safe for unattended CI). */
+  defaultAction: PermissionPolicyAction;
+}
+
+export const HEADLESS_PERMISSION_POLICY_KEYS = ['allow', 'deny', 'maxAutoAllowRisk', 'defaultAction'] as const;
+
+const RISK_RANK: Record<CommandRiskLevel, number> = { low: 0, medium: 1, high: 2 };
+
+function readOptionalStringArray(value: unknown, label: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some(v => typeof v !== 'string')) {
+    throw new HeadlessInputError(`${label} must be an array of strings`);
+  }
+  return value as string[];
+}
+
+/**
+ * Parse and strictly validate a permission policy from its JSON text. Rejects
+ * unknown fields and malformed values with HeadlessInputError. Missing lists
+ * default to empty and a missing defaultAction defaults to 'deny'.
+ */
+export function parsePermissionPolicy(raw: string): HeadlessPermissionPolicy {
+  const obj = parseStrictObject(raw, HEADLESS_PERMISSION_POLICY_KEYS, 'permission policy');
+  const allow = readOptionalStringArray(obj.allow, 'permission policy: allow');
+  const deny = readOptionalStringArray(obj.deny, 'permission policy: deny');
+
+  let maxAutoAllowRisk: CommandRiskLevel | undefined;
+  if (obj.maxAutoAllowRisk !== undefined) {
+    if (obj.maxAutoAllowRisk !== 'low' && obj.maxAutoAllowRisk !== 'medium' && obj.maxAutoAllowRisk !== 'high') {
+      throw new HeadlessInputError('permission policy: maxAutoAllowRisk must be one of low|medium|high');
+    }
+    maxAutoAllowRisk = obj.maxAutoAllowRisk;
+  }
+
+  let defaultAction: PermissionPolicyAction = 'deny';
+  if (obj.defaultAction !== undefined) {
+    if (obj.defaultAction !== 'allow' && obj.defaultAction !== 'deny') {
+      throw new HeadlessInputError('permission policy: defaultAction must be one of allow|deny');
+    }
+    defaultAction = obj.defaultAction;
+  }
+
+  return { allow, deny, maxAutoAllowRisk, defaultAction };
+}
+
+/** The policy's verdict for one tool invocation, with a human-readable reason. */
+export interface PolicyDecision {
+  action: PermissionPolicyAction;
+  reason: string;
+}
+
+/** Evaluate a policy against a tool and its classified risk. Never throws. */
+export function evaluatePermissionPolicy(
+  policy: HeadlessPermissionPolicy,
+  toolName: string,
+  riskLevel: CommandRiskLevel
+): PolicyDecision {
+  if (policy.deny.includes(toolName)) {
+    return { action: 'deny', reason: 'tool in policy deny list' };
+  }
+  if (policy.allow.includes(toolName)) {
+    return { action: 'allow', reason: 'tool in policy allow list' };
+  }
+  if (policy.maxAutoAllowRisk && RISK_RANK[riskLevel] <= RISK_RANK[policy.maxAutoAllowRisk]) {
+    return { action: 'allow', reason: `risk ${riskLevel} <= maxAutoAllowRisk ${policy.maxAutoAllowRisk}` };
+  }
+  return { action: policy.defaultAction, reason: `policy default (${policy.defaultAction})` };
+}
