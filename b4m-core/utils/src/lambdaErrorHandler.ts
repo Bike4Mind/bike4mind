@@ -3,11 +3,7 @@ import type { ILogger } from '@bike4mind/observability';
 let isRegistered = false;
 
 type ErrorCategory =
-  | 'network_terminated'
-  | 'network_timeout'
-  | 'network_connection'
-  | 'unhandled_rejection'
-  | 'uncaught_exception';
+  'network_terminated' | 'network_timeout' | 'network_connection' | 'unhandled_rejection' | 'uncaught_exception';
 
 /**
  * Classifies an error into a category for structured logging and metrics.
