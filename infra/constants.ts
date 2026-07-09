@@ -40,6 +40,10 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // the Stripe ids above: build-time inlined and runtime-read. Empty == in-source defaults.
   NEXT_PUBLIC_PRICE_MARGIN: process.env.NEXT_PUBLIC_PRICE_MARGIN || '',
   NEXT_PUBLIC_USD_TO_CREDITS_RATE: process.env.NEXT_PUBLIC_USD_TO_CREDITS_RATE || '',
+  // Internal-staff domains for the analytics internal-user count (#172). Runtime-read in
+  // @bike4mind/database (not inlined by next build), so the report cron + web lambdas need
+  // it here — else it reads undefined and internalUsers=0. No brand fallback.
+  NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS: process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS || '',
   // Enable What's New modal distribution (S3 upload) for main production only
   // Fork environments should NOT set this - they consume via WHATS_NEW_DISTRIBUTION_URL
   ENABLE_WHATS_NEW_DISTRIBUTION: process.env.ENABLE_WHATS_NEW_DISTRIBUTION || '',

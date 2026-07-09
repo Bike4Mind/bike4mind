@@ -38,6 +38,7 @@ export * from './schemas/curation';
 export * from './schemas/imageModerationIncident';
 export * from './utils/artifactHelpers';
 export * from './utils/requireEnv';
+export * from './utils/internalStaffDomains';
 export * from './utils/modelHelpers';
 export * from './utils/activity';
 export * from './utils/sseEvents';
