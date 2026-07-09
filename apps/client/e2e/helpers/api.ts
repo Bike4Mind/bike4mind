@@ -271,3 +271,64 @@ export async function apiUpdateUser(
     throw new Error(`Update user failed: ${response.status()} ${response.statusText()}`);
   }
 }
+
+interface SkillSeed {
+  name: string;
+  description: string;
+  body: string;
+  argumentHint?: string;
+  disableModelInvocation?: boolean;
+}
+
+/** Create a user-scoped skill via the API - for fast pre-seed of list/search/detail specs. */
+export async function apiCreateSkill(
+  request: APIRequestContext,
+  token: string,
+  params: SkillSeed
+): Promise<{ id: string; name: string }> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.post(`${baseURL}/api/skills`, {
+    headers: { Authorization: `Bearer ${token}` },
+    data: params,
+  });
+
+  if (!response.ok()) {
+    throw new Error(`Create skill failed: ${response.status()} ${response.statusText()}`);
+  }
+
+  const body = await response.json();
+  return { id: (body.id || body._id) as string, name: body.name };
+}
+
+/** List the caller's accessible skills (owned + shared + global-read). */
+export async function apiListSkills(
+  request: APIRequestContext,
+  token: string
+): Promise<Array<{ id: string; name: string }>> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  const response = await request.get(`${baseURL}/api/skills?limit=100&page=1`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+
+  if (!response.ok()) {
+    return [];
+  }
+
+  const body = await response.json();
+  return (body.data || []).map((s: Record<string, unknown>) => ({ id: (s.id || s._id) as string, name: s.name }));
+}
+
+export async function apiDeleteSkill(request: APIRequestContext, token: string, skillId: string): Promise<void> {
+  const baseURL = process.env.API_URL || 'http://localhost:3000';
+  await request.delete(`${baseURL}/api/skills/${skillId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+/** Delete every skill the caller owns - idempotent teardown so a shared preview stays clean. */
+export async function apiDeleteAllSkills(request: APIRequestContext, token: string): Promise<void> {
+  const skills = await apiListSkills(request, token);
+  for (const skill of skills) {
+    await apiDeleteSkill(request, token, skill.id);
+  }
+}

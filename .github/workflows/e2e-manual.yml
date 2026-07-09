@@ -29,6 +29,7 @@ on:
           - Profile
           - Tavern
           - Search
+          - Skills
         default: All tests
       pr_number:
         description: 'PR number for preview env (overrides stage, e.g. 123)'
@@ -196,6 +197,7 @@ jobs:
             "Profile")         PW_ARGS="--project=profile" ;;
             "Tavern")          PW_ARGS="--project=tavern" ;;
             "Search")          PW_ARGS="--project=search" ;;
+            "Skills")          PW_ARGS="--project=skills" ;;
             *)                 echo "Unknown test selection: '$TEST_PROJECT' — running full suite" ;;
           esac
           [ -n "$PW_ARGS" ] && echo "Running specific test: $TEST_PROJECT ($PW_ARGS)"
