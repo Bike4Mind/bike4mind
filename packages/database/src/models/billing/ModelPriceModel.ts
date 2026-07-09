@@ -7,6 +7,7 @@ import {
   IModelPriceRepository,
   IMongoDocument,
   MODEL_PRICE_UNITS,
+  ModelPriceInput,
 } from '@bike4mind/common';
 
 export type IModelPriceMongoDocument = IModelPrice & IMongoDocument;
@@ -58,7 +59,18 @@ export class ModelPriceRepository extends BaseRepository<IModelPriceDocument> im
   }
 
   async append(row: IModelPriceInput): Promise<IModelPriceDocument | null> {
-    return this.create(row as IModelPriceDocument);
+    // Zod first: Mongoose alone accepts empty maps and non-numeric tier keys.
+    const parsed = ModelPriceInput.parse(row);
+    if (Object.keys(parsed.pricing).length === 0) {
+      throw new Error(`ModelPrice.append rejected ${parsed.modelId}: empty pricing map would settle calls free`);
+    }
+    const hasNonzeroTier = Object.values(parsed.pricing).some(tier => tier.input > 0 || tier.output > 0);
+    if (!hasNonzeroTier) {
+      throw new Error(
+        `ModelPrice.append rejected ${parsed.modelId}: all-zero pricing would settle calls free (mark the model freeToRun instead)`
+      );
+    }
+    return this.create(parsed as IModelPriceDocument);
   }
 
   async rowsInForce(at: Date = new Date()): Promise<IModelPrice[]> {

@@ -143,6 +143,10 @@ export function getLlmByModel(
 // warm Lambda instances from re-fetching every request (admin model changes still take
 // effect within 5 minutes, and a cold start always rebuilds the list).
 const MODEL_CACHE_TTL_MS = 5 * 60_000;
+// When the price-catalog fetch fails, cache the literal-priced fallback only
+// briefly: a transient DB blip should cost seconds of superseded prices, not
+// a full TTL window.
+const MODEL_CACHE_RETRY_TTL_MS = 30_000;
 let _modelCache: { key: string; models: ModelInfo[]; expiresAt: number } | null = null;
 
 /**
@@ -226,6 +230,7 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
 
   // Overlay versioned catalog prices when the app wired a provider.
   let priced = filtered;
+  let catalogFetchFailed = false;
   if (_priceRowsProvider) {
     try {
       const rows = await _priceRowsProvider();
@@ -233,12 +238,14 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
       const overlaid = priced.filter((m, i) => m !== filtered[i]).length;
       Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${filtered.length} models`);
     } catch (error) {
+      catalogFetchFailed = true;
       Logger.globalInstance.warn('[getAvailableModels] price catalog unavailable; using adapter literals', error);
     }
   }
 
-  // Store in module-level cache
-  _modelCache = { key: cacheKey, models: priced, expiresAt: Date.now() + MODEL_CACHE_TTL_MS };
+  // Store in module-level cache (short-lived when the catalog fetch failed).
+  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  _modelCache = { key: cacheKey, models: priced, expiresAt: Date.now() + ttl };
 
   return priced;
 };

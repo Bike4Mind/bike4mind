@@ -34,8 +34,10 @@ export const ModelPrice = z.object({
    * Tier map mirroring ModelInfo.pricing: keys are input-token thresholds
    * (stringified numbers - JSON/Mongo map keys), values in USD per token
    * (per minute/image for non-token units, using `input` as the unit rate).
+   * Keys must be digits: Number('anything else') is NaN, which scrambles
+   * getTextModelCost tier selection.
    */
-  pricing: z.record(z.string(), ModelPriceTier),
+  pricing: z.record(z.string().regex(/^\d+$/, 'tier keys must be numeric token thresholds'), ModelPriceTier),
   /** The row prices calls made at or after this instant, until a newer row starts. */
   effectiveFrom: z.date(),
   /** Provenance: 'adapter-seed', an invoice reference, a price-page URL, etc. */
@@ -48,8 +50,12 @@ export type IModelPrice = z.infer<typeof ModelPrice>;
 
 export type IModelPriceDocument = IModelPrice & IMongoDocument;
 
-/** Input for appending a row (server sets id/timestamps). */
-export type IModelPriceInput = Omit<IModelPrice, 'id' | 'createdAt' | 'updatedAt'>;
+/** Zod schema for appending a row (server sets id/timestamps). Repositories
+ * must parse against this before persisting: Mongoose alone accepts empty
+ * maps and non-numeric tier keys, both of which corrupt billing. */
+export const ModelPriceInput = ModelPrice.omit({ id: true, createdAt: true, updatedAt: true });
+
+export type IModelPriceInput = z.infer<typeof ModelPriceInput>;
 
 export interface IModelPriceRepository extends IBaseRepository<IModelPriceDocument> {
   /** Append one price row (append-only: never edits an existing row). */

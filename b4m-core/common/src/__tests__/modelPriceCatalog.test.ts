@@ -34,17 +34,17 @@ describe('resolveModelPriceRow', () => {
       row('gpt-x', { effectiveFrom: new Date('2026-07-01T00:00:00Z'), note: 'july' }),
       row('gpt-x', { effectiveFrom: new Date('2026-08-01T00:00:00Z'), note: 'august' }),
     ];
-    const resolved = resolveModelPriceRow(rows, 'gpt-x', new Date('2026-07-15T00:00:00Z'));
+    const resolved = resolveModelPriceRow(rows, 'gpt-x', 'per_token', new Date('2026-07-15T00:00:00Z'));
     expect(resolved?.note).toBe('july');
   });
 
   it('returns undefined when every row is still in the future', () => {
     const rows = [row('gpt-x', { effectiveFrom: new Date('2026-08-01T00:00:00Z') })];
-    expect(resolveModelPriceRow(rows, 'gpt-x', new Date('2026-07-15T00:00:00Z'))).toBeUndefined();
+    expect(resolveModelPriceRow(rows, 'gpt-x', 'per_token', new Date('2026-07-15T00:00:00Z'))).toBeUndefined();
   });
 
   it('returns undefined for a model with no rows', () => {
-    expect(resolveModelPriceRow([row('other')], 'gpt-x', new Date())).toBeUndefined();
+    expect(resolveModelPriceRow([row('other')], 'gpt-x', 'per_token', new Date())).toBeUndefined();
   });
 });
 
@@ -69,6 +69,19 @@ describe('applyModelPriceCatalog', () => {
     const rows = [row('gpt-x', { unit: 'per_minute', pricing: { '1': { input: 0.06, output: 0 } } })];
     const [unpriced] = applyModelPriceCatalog([model('gpt-x')], rows, new Date('2026-07-15T00:00:00Z'));
     expect(unpriced.pricing[200_000].input).toBe(10 / 1_000_000);
+  });
+
+  it('a newer row of another unit never shadows the in-force per_token row', () => {
+    const rows = [
+      row('gpt-x', { effectiveFrom: new Date('2026-03-01T00:00:00Z') }),
+      row('gpt-x', {
+        unit: 'per_minute',
+        pricing: { '1': { input: 0.06, output: 0 } },
+        effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      }),
+    ];
+    const [priced] = applyModelPriceCatalog([model('gpt-x')], rows, new Date('2026-07-15T00:00:00Z'));
+    expect(priced.pricing[200_000]).toEqual({ input: 2 / 1_000_000, output: 8 / 1_000_000 });
   });
 
   it('preserves cache_read/cache_write overrides from the row', () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { ChatModels, type IModelPrice } from '@bike4mind/common';
 import { getAvailableModels, setModelPriceRowsProvider } from './index';
 
@@ -57,5 +57,33 @@ describe('getAvailableModels price catalog provider', () => {
     await getAvailableModels(null);
     await getAvailableModels(null);
     expect(calls).toBe(1);
+  });
+
+  it('caches a failed catalog fetch briefly, not for the full TTL (transient blip recovers in seconds)', async () => {
+    vi.useFakeTimers();
+    try {
+      let calls = 0;
+      setModelPriceRowsProvider(async () => {
+        calls += 1;
+        if (calls === 1) throw new Error('transient mongo blip');
+        return [row];
+      });
+
+      const literal = await getAvailableModels(null);
+      expect(literal.find(m => m.id === TARGET)!.pricing[200_000].input).not.toBe(42 / 1_000_000);
+
+      // Still inside the retry window: serves the cached literal fallback.
+      vi.advanceTimersByTime(10_000);
+      await getAvailableModels(null);
+      expect(calls).toBe(1);
+
+      // Past the 30s retry window (but far inside the normal 5min TTL): refetches and overlays.
+      vi.advanceTimersByTime(25_000);
+      const recovered = await getAvailableModels(null);
+      expect(calls).toBe(2);
+      expect(recovered.find(m => m.id === TARGET)!.pricing[200_000].input).toBe(42 / 1_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
