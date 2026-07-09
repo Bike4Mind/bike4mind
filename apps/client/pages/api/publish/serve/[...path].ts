@@ -238,6 +238,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(200).send(page);
   }
 
+  // ?format=raw is a public-only surface; reject before touching storage on gated bundles
+  // so a private artifact can never be pulled from S3 by a raw request (defense in depth on
+  // top of the format=raw text-extraction gate later).
+  if (isFormatRaw && artifact.visibility !== 'public') {
+    return res.status(404).json({ error: 'Not found' });
+  }
+
   // ── Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. ──
   const storage = getPublishedArtifactsStorage();
 

@@ -509,6 +509,179 @@ describe('GET /api/publish/serve — version history (?v)', () => {
   });
 });
 
+describe('GET /api/publish/serve — public share agent readability', () => {
+  it('injects og:*, twitter:*, description, canonical, and a link rel="alternate" on the public wrapper', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'A concise summary.' }));
+    mockDownload.mockResolvedValue(
+      Buffer.from('<html><head></head><body><p>Article body text for the noscript excerpt.</p></body></html>')
+    );
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<meta name="description" content="A concise summary.">');
+    expect(data).toContain('<meta property="og:title" content="My Artifact">');
+    expect(data).toContain('<meta property="og:description" content="A concise summary.">');
+    expect(data).toContain('<meta property="og:type" content="article">');
+    expect(data).toContain('<meta property="og:url" content="https://app.bike4mind.com/p/u/scope123/my-slug">');
+    expect(data).toContain('<meta name="twitter:card" content="summary">');
+    expect(data).toContain('<link rel="canonical" href="https://app.bike4mind.com/p/u/scope123/my-slug">');
+    expect(data).toContain(
+      '<link rel="alternate" type="text/plain" href="https://app.bike4mind.com/p/u/scope123/my-slug?format=raw"'
+    );
+    // noscript body carries a title + the extracted body text (no author HTML) for non-JS clients.
+    expect(data).toContain('<noscript>');
+    expect(data).toContain('Article body text for the noscript excerpt.');
+  });
+
+  it('falls back to a body-derived description when the artifact has no description', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle()); // no description
+    mockDownload.mockResolvedValue(Buffer.from('<html><body><p>Body-derived summary text.</p></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<meta property="og:description" content="Body-derived summary text.">');
+  });
+
+  it('does NOT emit agent-readable meta or noscript for a gated share (loader shell must stay blank)', async () => {
+    // No credential -> gated bundle returns the loader shell. The shell must not leak the
+    // artifact title/description; a request that DID have a credential goes through the
+    // wrapper path but is still non-public, so we also assert no og:description leaks there.
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ visibility: 'private', ownerId: 'owner1', description: 'secret summary' })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><body>ok</body></html>'));
+
+    // Anonymous -> loader shell.
+    const anon = run(['u', 'scope123', 'my-slug']);
+    await anon.promise;
+    const anonBody = anon.res._getData() as string;
+    expect(anonBody).not.toContain('secret summary');
+    expect(anonBody).not.toContain('og:description');
+    expect(anonBody).not.toContain('link rel="alternate"');
+
+    // Authorized owner -> wrapper. Still no agent-readable meta (gated shares aren't
+    // an agent surface); the loader shell path is the only public disclosure surface.
+    const owner = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await owner.promise;
+    const ownerBody = owner.res._getData() as string;
+    expect(ownerBody).not.toContain('og:description');
+    expect(ownerBody).not.toContain('link rel="alternate"');
+  });
+});
+
+describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
+  it('serves a public bundle as text/plain with title + description + body excerpt', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ description: 'A summary.' }));
+    mockDownload.mockResolvedValue(
+      Buffer.from(
+        '<html><head><style>.a{}</style></head><body><script>evil()</script><h1>Ignore</h1><p>The article body.</p></body></html>'
+      )
+    );
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    const rawReq = createMocks({
+      method: 'GET',
+      query: { path: ['u', 'scope123', 'my-slug'], format: 'raw' },
+      headers: { host: 'app.bike4mind.com' },
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
+    // discard the initial call (was for scaffolding)
+    void res;
+    void promise;
+
+    expect(rawReq.res._getStatusCode()).toBe(200);
+    expect(rawReq.res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+    expect(rawReq.res.getHeader('X-Content-Type-Options')).toBe('nosniff');
+    const csp = rawReq.res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain('sandbox');
+    const body = rawReq.res._getData() as string;
+    expect(body).toContain('# My Artifact');
+    expect(body).toContain('A summary.');
+    expect(body).toContain('The article body.');
+    // Script/style contents were stripped, not surfaced as text.
+    expect(body).not.toContain('evil()');
+    expect(body).not.toContain('.a{}');
+  });
+
+  it('serves a public reply as text/plain with renderedBody', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r1',
+      title: 'A reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody: '# Hello world\n\nBody markdown.',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'x',
+    });
+
+    const rawReq = createMocks({
+      method: 'GET',
+      query: { path: ['r', 'r1'], format: 'raw' },
+      headers: { host: 'app.bike4mind.com' },
+    });
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
+
+    expect(rawReq.res._getStatusCode()).toBe(200);
+    expect(rawReq.res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+    const body = rawReq.res._getData() as string;
+    expect(body).toContain('# A reply');
+    expect(body).toContain('# Hello world');
+    expect(body).toContain('Body markdown.');
+  });
+
+  it('returns 404 for ?format=raw on a private bundle (never a raw leak of gated content)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
+
+    // Even the owner (who could otherwise view it) gets 404 - format=raw is a public surface only.
+    const rawReq = createMocks({
+      method: 'GET',
+      query: { path: ['u', 'scope123', 'my-slug'], format: 'raw' },
+      headers: { host: 'app.bike4mind.com' },
+    });
+    (rawReq.req as Record<string, unknown>).user = { id: 'owner1' };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
+    expect(rawReq.res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for ?format=raw on a private reply', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r1',
+      title: 'private reply',
+      visibility: 'private',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody: 'secret',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'x',
+    });
+
+    const rawReq = createMocks({
+      method: 'GET',
+      query: { path: ['r', 'r1'], format: 'raw' },
+      headers: { host: 'app.bike4mind.com' },
+    });
+    (rawReq.req as Record<string, unknown>).user = { id: 'owner1' };
+    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
+    expect(rawReq.res._getStatusCode()).toBe(404);
+    const body = rawReq.res._getData() as string;
+    expect(body).not.toContain('secret');
+  });
+});
+
 describe('GET /api/publish/serve — comment pin bridge', () => {
   const BRIDGE_MARKER = 'pin-dropped'; // distinctive to the injected pin-bridge script
   const WIDGET_MOUNT = 'b4m-annotate-root'; // the wrapper comment-overlay mount node
