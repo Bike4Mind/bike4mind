@@ -2,6 +2,7 @@ import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import type { AgentConfig } from '../storage/types.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 import { substituteArguments } from '../utils/argumentSubstitution.js';
 import { processFileReferences } from '../utils/processFileReferences.js';
 import { logger } from '../utils/Logger.js';
@@ -28,6 +29,23 @@ export interface SkillToolDependencies {
   sessionId?: string;
   /** Optional skill restrictions for this agent context */
   allowedSkills?: string[];
+  /**
+   * Nesting depth of the agent that owns this tool (main agent = 0). A forking
+   * skill spawns its subagent at parentDepth + 1 so the recursion cap applies
+   * to skills invoked from within a subagent, not just the delegation tools.
+   */
+  parentDepth?: number;
+  /**
+   * Effective interaction mode of the agent that owns this tool. Passed as the
+   * ceiling for a forked subagent so it never runs more permissively than its
+   * parent. Undefined for the main agent (the fork inherits the live store mode).
+   */
+  parentInteractionMode?: InteractionMode;
+  /**
+   * Effective model of the agent that owns this tool. A forked subagent inherits
+   * it unless the skill declares its own model.
+   */
+  parentModel?: string;
 }
 
 /**
@@ -225,6 +243,9 @@ export function createSkillTool(deps: SkillToolDependencies): ICompletionOptionT
             // Pass skill-level overrides
             model: command.model,
             allowedTools: command.allowedTools,
+            depth: (deps.parentDepth ?? 0) + 1,
+            parentInteractionMode: deps.parentInteractionMode,
+            parentModel: deps.parentModel,
           });
           const agentName = agentConfig.name;
 
