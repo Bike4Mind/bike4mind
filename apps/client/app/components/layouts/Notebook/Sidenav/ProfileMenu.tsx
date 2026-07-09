@@ -468,15 +468,17 @@ const ProfileMenu = () => {
               icon={<FormatListBulletedIcon sx={{ fontSize: '18px' }} />}
               label={t('common.more', 'More')}
               endDecorator={
-                <ChevronLeftIcon
-                  sx={{
-                    fontSize: '18px',
-                    color: 'text.tertiary',
-                    transition: 'transform 0.2s ease',
-                    // Points right when closed; rotates to the open (left) state on expand.
-                    transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
-                  }}
-                />
+                <InboxBadge>
+                  <ChevronLeftIcon
+                    sx={{
+                      fontSize: '18px',
+                      color: 'text.tertiary',
+                      transition: 'transform 0.2s ease',
+                      // Points right when closed; rotates to the open (left) state on expand.
+                      transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
+                    }}
+                  />
+                </InboxBadge>
               }
               onClick={() => setMoreOpen(v => !v)}
             />
