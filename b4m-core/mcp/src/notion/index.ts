@@ -14,6 +14,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 
 import { registerSearchTools } from './tools/search.js';
 import { registerPageTools } from './tools/pages.js';
+import { debug } from './logger.js';
 
 const server = new McpServer({
   name: 'notion',
@@ -25,7 +26,9 @@ registerSearchTools(server);
 registerPageTools(server);
 
 const transport = new StdioServerTransport();
+debug('starting Notion MCP Server');
 await server.connect(transport);
+debug('Notion MCP Server connected via stdio');
 
 // Handle graceful shutdown
 const shutdown = async () => {

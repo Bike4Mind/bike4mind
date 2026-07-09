@@ -45,10 +45,10 @@
     "tavern:upload-icons": "tsx src/uploadTavernIcons.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-lambda": "^3.1069.0",
-    "@aws-sdk/client-s3": "^3.1069.0",
-    "@aws-sdk/client-sqs": "^3.1069.0",
-    "@aws-sdk/client-ssm": "^3.1069.0",
+    "@aws-sdk/client-lambda": "^3.1080.0",
+    "@aws-sdk/client-s3": "^3.1080.0",
+    "@aws-sdk/client-sqs": "^3.1080.0",
+    "@aws-sdk/client-ssm": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
     "@bike4mind/database": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
@@ -56,12 +56,12 @@
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
-    "@faker-js/faker": "^10.4.0",
-    "@inquirer/prompts": "^8.4.3",
+    "@faker-js/faker": "^10.5.0",
+    "@inquirer/prompts": "^8.5.2",
     "axios": "1.16.1",
     "bcryptjs": "^3.0.2",
     "csv-parser": "^3.2.1",
-    "dayjs": "^1.11.20",
+    "dayjs": "^1.11.21",
     "dotenv": "^17.4.2",
     "glob": "^13.0.0",
     "gray-matter": "^4.0.3",
@@ -75,9 +75,9 @@
   "devDependencies": {
     "@types/mailparser": "^3.4.6",
     "@types/yargs": "^17.0.35",
-    "mailparser": "^3.9.12",
-    "ora": "^9.4.0",
-    "tsx": "^4.22.3",
+    "mailparser": "^3.9.14",
+    "ora": "^9.4.1",
+    "tsx": "^4.23.0",
     "vitest": "^4.1.9"
   }
 }

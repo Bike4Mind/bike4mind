@@ -54,8 +54,14 @@ import {
   type IterationResult,
   type ServerAgentDefinition,
 } from '@bike4mind/agents';
-import { getTextModelCost, CreditHolderType, type IAgent, type IUserDocument } from '@bike4mind/common';
-import { usdToCredits } from '@bike4mind/utils';
+import {
+  getTextModelCost,
+  CreditHolderType,
+  ARTIFACT_EMISSION_PROMPT,
+  type IAgent,
+  type IUserDocument,
+} from '@bike4mind/common';
+import { usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   buildSharedTools,
   ServerAgentStore,
@@ -72,9 +78,10 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 // resolution and the Lattice tool contribution (names + `externalTools`
 // definitions); see that module's header for the Next-tracing split and the
 // continuation-fallback rationale.
-import { resolveLatticeTools } from './agentExecutor.latticeTools';
+import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
+import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
 // `buildFirstIterationQuery` lives in its own module so it can be
 // unit-tested without dragging in this file's server-only dependency graph
@@ -1134,16 +1141,27 @@ async function processExecution(
       executionEnableLattice: execution.enableLattice,
     });
 
-    const tools = buildSharedTools(toolDeps, toolCallbacks, {
+    const subagentToolConfig = buildSubagentToolConfig({
+      model: execution.model,
+      apiKeyTable: apiKeyTable as ApiKeyTable,
+      imageConfig: execution.imageConfig,
+    });
+
+    // Lattice opt-in pool for delegated subagents. Built UNCONDITIONALLY (unlike
+    // the parent's own Lattice toolbelt above, which is gated on `enableLattice`)
+    // and threaded to `delegate_to_agent` / `coordinate_task` via `optInTools`. A
+    // subagent whose IAgent `allowedTools` names `lattice_*` then gets Lattice
+    // even when the parent run didn't enable it — and Lattice never leaks into the
+    // parent's own toolbelt because this pool is kept out of `tools`. See
+    // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
+    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+
+    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       // Dedupe: a caller may already have enabled create_mission/mission_status;
       // a raw append would make buildSharedTools wrap the same tool twice.
       enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       externalTools: { ...premiumLlmTools, ...missionChatTools, ...latticeExternalTools },
-      config: buildSubagentToolConfig({
-        model: execution.model,
-        apiKeyTable: apiKeyTable as ApiKeyTable,
-        imageConfig: execution.imageConfig,
-      }),
+      config: subagentToolConfig,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -1158,6 +1176,26 @@ async function processExecution(
         hasCoordinateTask: tools.some(t => t.toolSchema?.name === 'coordinate_task'),
       });
     }
+
+    // Artifact-emission parity with chat completions. When the admin
+    // `EnableArtifacts` setting is on, inject the SAME guidance chat injects
+    // (`ArtifactEmissionPrompt`, falling back to the built-in
+    // `ARTIFACT_EMISSION_PROMPT`) so the agent wraps chart/code/HTML/SVG/Mermaid
+    // output in `<artifact>` tags in its final answer - which the existing client
+    // machinery renders as a card and durably persists, no client change needed.
+    //
+    // Resolved only on NEW executions: continuations already carry the composed
+    // system message in the checkpoint (messages[0]), same as `personaPrompt`.
+    // `enableArtifacts` is read on every invocation (new + continuation) because
+    // the DAG bubble-up at persist-time gates on it too, and reading it here
+    // avoids a second settings round-trip further down.
+    // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
+    // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
+    const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+    const artifactEmissionPrompt =
+      isNewExecution && enableArtifacts
+        ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
+        : undefined;
 
     // Create or restore ReActAgent. LLM runtime knobs are merged via
     // `buildReActAgentRuntimeConfig` - a pure helper that conditionally spreads
@@ -1177,6 +1215,9 @@ async function processExecution(
       // baked into the checkpointed system message (messages[0]), so it carries
       // forward without re-resolving the profile.
       ...(orchestrationProfile?.systemPrompt && { personaPrompt: orchestrationProfile.systemPrompt }),
+      // Appended after persona/base in getSystemPrompt(); undefined on
+      // continuations (baked into the checkpoint) and when artifacts are off.
+      ...(artifactEmissionPrompt && { artifactEmissionPrompt }),
       ...buildReActAgentRuntimeConfig(execution),
     });
 
@@ -1327,28 +1368,33 @@ async function processExecution(
       counters.outputTokens = checkpoint.totalOutputTokens;
       counters.cacheReadTokens = checkpoint.totalCacheReadTokens;
       counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
-      const credits = usdToCredits(costDelta);
-      if (credits <= 0) return;
-      await creditService.deductCreditsWithOrgSupport(
-        {
-          type: 'text_generation_usage',
-          user: user as IUserDocument,
-          organization,
-          credits,
-          sessionId: execution.sessionId,
-          questId: execution.questId,
-          model: execution.model,
-          inputTokens: inputTokensDelta,
-          outputTokens: outputTokensDelta,
-        },
-        {
-          db: {
-            creditTransactions: creditTransactionRepository,
-            users: userRepository,
-            organizations: organizationRepository,
+      // Stochastic settlement: a sub-credit delta legitimately rounds to 0
+      // (paid in expectation across iterations), so only skip the ledger
+      // deduction - the usage event below still records the COGS delta,
+      // otherwise margin reporting would silently under-count cost.
+      const credits = usdToCreditsStochastic(costDelta);
+      if (credits > 0) {
+        await creditService.deductCreditsWithOrgSupport(
+          {
+            type: 'text_generation_usage',
+            user: user as IUserDocument,
+            organization,
+            credits,
+            sessionId: execution.sessionId,
+            questId: execution.questId,
+            model: execution.model,
+            inputTokens: inputTokensDelta,
+            outputTokens: outputTokensDelta,
           },
-        }
-      );
+          {
+            db: {
+              creditTransactions: creditTransactionRepository,
+              users: userRepository,
+              organizations: organizationRepository,
+            },
+          }
+        );
+      }
       // Dual-write usage event: analytics only, never billing. One per billed iteration.
       usageEventRepository
         .record({
@@ -1857,6 +1903,14 @@ async function processExecution(
       // checked on non-terminal iterations (a final_answer iteration is
       // complete by definition; pausing it would discard the answer).
       const gate = readLastIterationConfidence();
+      if (gate !== null) {
+        // Telemetry (#56 M1.1): record every iteration the gate evaluates -
+        // including ones that complete in the same turn (isComplete=true) or
+        // clear the threshold - so `evaluatedCount` is the true denominator for
+        // fire rate. `recordGateEmitted` below increments the numerator only on
+        // a real pause. Baseline observability before touching signal quality.
+        await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
+      }
       if (
         gate !== null &&
         !iterationResult.isComplete &&
@@ -1887,6 +1941,9 @@ async function processExecution(
           await sendWs('failed', { executionId, reason: 'aborted' });
           return;
         }
+        // Telemetry (#56 M1.1): count this real pause only after `setPendingGate`
+        // confirms it landed (i.e. not raced by a concurrent abort).
+        await agentExecutionRepository.recordGateEmitted(executionId);
         await sendWs('confidence_gate', { executionId, ...gatePayload });
         // Emit a `progress` event with the paused status so the client's
         // existing `progress` subscriber flips `ExecutionStatusBanner` to
@@ -1939,12 +1996,38 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    await persistRunAsQuest(
-      executionId,
-      finalAnswer ?? 'Agent execution completed without a final answer.',
-      logger,
-      generatedImages
-    );
+    let replyText = finalAnswer ?? 'Agent execution completed without a final answer.';
+
+    // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
+    // child report and may drop the raw `<artifact>` blocks the workers emitted,
+    // so append the ones the parent didn't reproduce to the reply text - the
+    // client renders cards from the text (see collectDagChildArtifactBlocks).
+    // Re-read children here (rather than carrying from the DAG-resume block)
+    // so it survives a parent self-dispatch after resume; gated on the same
+    // `EnableArtifacts` flag as emission. Best-effort - never fails the run.
+    if (enableArtifacts && execution.dagSpec) {
+      try {
+        const dagChildren = await agentExecutionRepository.findDagChildrenLean(executionId);
+        const childAnswers = dagChildren
+          .filter(c => c.status === 'completed')
+          .map(c => (c.result as { answer?: string } | undefined)?.answer ?? '');
+        const extraBlocks = collectDagChildArtifactBlocks({ parentAnswer: replyText, childAnswers });
+        if (extraBlocks.length > 0) {
+          replyText = `${replyText}\n\n${extraBlocks.join('\n\n')}`;
+          logger.info('[Artifacts] Surfaced DAG subagent artifacts on parent completion', {
+            executionId,
+            count: extraBlocks.length,
+          });
+        }
+      } catch (bubbleErr) {
+        logger.warn('[Artifacts] Failed to bubble up DAG subagent artifacts — continuing', {
+          executionId,
+          error: bubbleErr instanceof Error ? bubbleErr.message : String(bubbleErr),
+        });
+      }
+    }
+
+    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
@@ -2163,6 +2246,12 @@ async function processSubagentDispatch(
         users: userRepository,
         projects: projectRepository,
         dataLakes: dataLakeRepository,
+        // Required for the Lattice opt-in pool below to actually work: the
+        // Lattice tools persist models to Mongo and reload them by ObjectId on
+        // subsequent calls. Without this adapter they fall back to an in-memory
+        // id that fails the ObjectId guard, silently breaking the
+        // create->populate->query chain (same wiring as the top-level path).
+        latticeModels: latticeModelRepository,
         // Audit trail for images blocked by the image_generation/edit_image tools'
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
@@ -2206,12 +2295,20 @@ async function processSubagentDispatch(
       onToolFinish: async () => {},
       sessionId: child.sessionId,
     };
-    const tools = buildSharedTools(toolDeps, toolCallbacks, {
-      config: buildSubagentToolConfig({
-        model: child.model,
-        apiKeyTable: apiKeyTable as ApiKeyTable,
-        imageConfig: child.imageConfig,
-      }),
+    const subagentToolConfig = buildSubagentToolConfig({
+      model: child.model,
+      apiKeyTable: apiKeyTable as ApiKeyTable,
+      imageConfig: child.imageConfig,
+    });
+
+    // Lattice opt-in pool for this subagent (and any grandchildren it delegates
+    // to). Built unconditionally and granted only when the agent's `allowedTools`
+    // names `lattice_*`; mirrors the top-level path so Lattice availability is
+    // identical whether a subagent runs in-process or in its own Lambda.
+    const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
+
+    const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
+      config: subagentToolConfig,
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 
@@ -2304,11 +2401,27 @@ async function processSubagentDispatch(
     // browser-like runtimes where `Timer.unref` doesn't exist.
     abortPoller.unref?.();
 
+    // Artifact-emission parity for dispatched subagents (DAG worker nodes and
+    // Lambda-dispatched delegates). Give them the same `<artifact>` guidance as
+    // the top-level agent so their answers carry tags the parent can surface on
+    // the completion. Gated on the admin `EnableArtifacts` setting; dispatched
+    // children are always fresh in-process runs (no checkpoint), so no
+    // isNewExecution guard is needed.
+    // Hoist the gate into a local (mirrors the top-level path) so we only read
+    // ArtifactEmissionPrompt when artifacts are actually on.
+    const childArtifactsEnabled = await adminSettingsRepository.getSettingsValue('EnableArtifacts');
+    const childArtifactEmissionPrompt = childArtifactsEnabled
+      ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
+      : undefined;
+
     const orchestrator = new ServerSubagentOrchestrator({
       userId: child.userId,
       llm,
       logger,
       parentTools: tools,
+      // Granted to this dispatched subagent only when its `allowedTools` names
+      // `lattice_*`; the orchestrator dedupes against `parentTools`.
+      optInTools: subagentLatticeTools,
       availableModels: models,
       signal: abortController.signal,
       onProgress: async (status: string) => {
@@ -2319,6 +2432,8 @@ async function processSubagentDispatch(
       // Without this, the orchestrator defaults to depth=1 and allows 3 more
       // levels of delegation below itself regardless of actual chain depth.
       depth,
+      // Only present when artifacts are on; makes subagents emit <artifact> tags.
+      ...(childArtifactEmissionPrompt && { artifactEmissionPrompt: childArtifactEmissionPrompt }),
     });
 
     try {

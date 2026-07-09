@@ -2,12 +2,10 @@ import { userRepository } from '@bike4mind/database';
 import { transactionSchema } from '@client/lib/credits/schemas';
 import { PaymentDetails, TransactionType } from '@client/lib/credits/types';
 import { handlePackageTransaction, handlePerCreditTransaction } from '@client/lib/credits/utils';
-import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireStripeWebhook } from '@server/middlewares/requireStripeWebhook';
-import { subscriptionRepository } from '@server/models/Subscription';
 import { Config } from '@server/utils/config';
-import { BadRequestError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { createCustomer, CustomerType, stripe } from '@server/integrations/stripe/stripe';
 
 const handler = baseApi()
@@ -15,12 +13,11 @@ const handler = baseApi()
   .post(async (req, res) => {
     const parsedBody = transactionSchema.parse(req.body);
 
-    const activeSubscriptions = await subscriptionRepository.findActiveSubscriptionsByOwner(
-      SubscriptionOwnerType.User,
-      req.user.id
-    );
-    if (activeSubscriptions.length < 1) {
-      throw new BadRequestError('You must be subscribed to a plan to purchase credits');
+    // Credit purchases are pay-as-you-go and do not require an active subscription.
+    // We still block accounts with an open payment dispute (mirrors the API-key auth
+    // guard) so a flagged chargeback fraudster cannot keep buying credits.
+    if (req.user.disputePending) {
+      throw new ForbiddenError('Account suspended pending dispute resolution. Please contact support.');
     }
 
     const metadata: PaymentDetails['metadata'] = {

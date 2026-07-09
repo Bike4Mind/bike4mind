@@ -55,7 +55,7 @@ const handler = baseApi()
       sessionId,
       logger: req.logger,
       invokeLambda: async params => {
-        // Hand the quest to the always-on QuestProcessorService (HTTP, 202 ACK).
+        // Hand the quest to the always-on ChatCompletion (HTTP, 202 ACK).
         // Replaces the EventBridge -> Lambda path to eliminate cold starts.
         await dispatchQuest(params, req.logger);
       },

@@ -14,17 +14,6 @@ const monorepoRoot = new URL('../../', import.meta.url).pathname;
 // B4M_SELF_HOST so the normal SST build (staging/prod) is completely unaffected.
 const selfHostResolveAlias = process.env.B4M_SELF_HOST === 'true' ? { sst: '@bike4mind/resource' } : {};
 
-// The self-host quest runner statically imports the whole quest-processing
-// chain. Hosted builds alias it to a stub so that chain never enters the Next
-// server bundle (which must stay under the Lambda unzipped-size cap); the
-// self-host build resolves the real runner.
-const questRunnerAlias = {
-  '@selfhost/quest-runner':
-    process.env.B4M_SELF_HOST === 'true'
-      ? './server/utils/selfhostQuestRunner.ts'
-      : './server/utils/selfhostQuestRunner.hosted.ts',
-};
-
 // NEXT_PUBLIC_CDN_URL is an absolute URL on deployed stages, but on personal
 // `sst dev` stages it is the relative local file-proxy base ('/api/app-files/serve'),
 // which is same-origin and needs no remote-image pattern. Only derive a hostname
@@ -174,7 +163,6 @@ const nextConfig = {
     // Stub Node.js modules for browser builds (e.g., HiGHS WASM loader uses require('fs'))
     resolveAlias: {
       ...selfHostResolveAlias,
-      ...questRunnerAlias,
       canvas: { browser: './empty-module.js' },
       fs: { browser: './empty-module.js' },
       path: { browser: './empty-module.js' },

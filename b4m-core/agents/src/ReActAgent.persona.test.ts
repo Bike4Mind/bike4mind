@@ -90,3 +90,42 @@ describe('ReActAgent getSystemPrompt() persona composition', () => {
     expect(prompt.startsWith('\n\n')).toBe(false);
   });
 });
+
+describe('ReActAgent getSystemPrompt() artifact-emission composition', () => {
+  const EMISSION = 'ARTIFACT OUTPUT: wrap substantial output in <artifact> tags.';
+
+  it('appends the artifact prompt AFTER the default operational prompt', async () => {
+    const prompt = await captureSystemPrompt({ artifactEmissionPrompt: EMISSION });
+    expect(prompt).toContain('You are an autonomous AI agent with access to tools');
+    expect(prompt.endsWith(`\n\n${EMISSION}`)).toBe(true);
+  });
+
+  it('composes persona (leads) + base + artifact (trails) in order', async () => {
+    const persona = 'You are Nova, a stoic navigator.';
+    const prompt = await captureSystemPrompt({ personaPrompt: persona, artifactEmissionPrompt: EMISSION });
+    expect(prompt.startsWith(`${persona}\n\n`)).toBe(true);
+    expect(prompt.endsWith(`\n\n${EMISSION}`)).toBe(true);
+    expect(prompt).toContain('You are an autonomous AI agent with access to tools');
+    // Persona precedes the operational prompt, which precedes the artifact guidance.
+    expect(prompt.indexOf(persona)).toBeLessThan(prompt.indexOf('autonomous AI agent'));
+    expect(prompt.indexOf('autonomous AI agent')).toBeLessThan(prompt.indexOf(EMISSION));
+  });
+
+  it('appends the artifact prompt after a systemPrompt override', async () => {
+    const override = 'CUSTOM OPERATIONAL PROMPT.';
+    const prompt = await captureSystemPrompt({ systemPrompt: override, artifactEmissionPrompt: EMISSION });
+    expect(prompt).toBe(`${override}\n\n${EMISSION}`);
+  });
+
+  it('leaves the prompt unchanged when no artifact prompt is set', async () => {
+    const prompt = await captureSystemPrompt({});
+    expect(prompt).not.toContain('<artifact>');
+    expect(prompt).toContain('You are an autonomous AI agent with access to tools');
+  });
+
+  it('trims a whitespace-only artifact prompt to nothing (no stray suffix)', async () => {
+    const prompt = await captureSystemPrompt({ artifactEmissionPrompt: '   ' });
+    expect(prompt).toContain('You are an autonomous AI agent with access to tools');
+    expect(prompt.endsWith('\n\n')).toBe(false);
+  });
+});

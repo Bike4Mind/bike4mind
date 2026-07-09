@@ -61,6 +61,7 @@ import { APP_NAME } from '@client/config/general'; // brand externalized
 import EmailStatusSummary from './EmailStatusSummary';
 import EmailActivityHistory from './EmailActivityHistory';
 import EmailPreviewModal from './EmailPreviewModal';
+import { parseTestEmailAddresses } from './parseTestEmailAddresses';
 
 // Email attempt for Activity History
 interface EmailAttempt {
@@ -307,12 +308,7 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
     }
   };
 
-  const parseTestEmails = () => {
-    return formData.testEmailAddresses
-      .split(/[\n,]+/)
-      .map(e => e.trim())
-      .filter(e => e.length > 0 && e.includes('@'));
-  };
+  const parseTestEmails = () => parseTestEmailAddresses(formData.testEmailAddresses);
 
   const handleSave = async () => {
     const recipientFilter = buildRecipientFilter();
@@ -838,9 +834,10 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                       </FormControl>
 
                       <Alert color="warning" variant="soft">
-                        Test Mode is enabled. Emails will be composed as if sending to{' '}
-                        {recipientPreviewData?.eligibleCount || 0} recipients, but will be delivered to the test address
-                        instead.
+                        Test Mode is enabled.{' '}
+                        {Math.min(recipientPreviewData?.eligibleCount || 0, parseTestEmails().length)} test email(s)
+                        will be sent (one per test address below), composed using real recipient data for a
+                        personalization preview.
                       </Alert>
                     </>
                   )}
@@ -982,9 +979,9 @@ export default function EmailJobDetail({ jobId, onBack }: EmailJobDetailProps) {
                   {/* Recipient count reminder */}
                   {recipientPreviewData && (
                     <Alert color="primary" variant="soft">
-                      Will send to {recipientPreviewData.eligibleCount} recipients
-                      {formData.isTestMode &&
-                        ` (test mode - will redirect to ${parseTestEmails().length} test address(es))`}
+                      {formData.isTestMode
+                        ? `Will send ${Math.min(recipientPreviewData.eligibleCount, parseTestEmails().length)} test email(s) (one per test address)`
+                        : `Will send to ${recipientPreviewData.eligibleCount} recipients`}
                     </Alert>
                   )}
 

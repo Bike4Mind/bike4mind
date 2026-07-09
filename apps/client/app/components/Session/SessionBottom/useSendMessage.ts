@@ -24,6 +24,7 @@ import { useSessions, useWorkBenchFiles } from '@client/app/contexts/SessionsCon
 import { handleLLMCommand } from '@client/app/components/commands/LLMCommand';
 import { commandHandlers } from './sessionBottomConstants';
 import { pickRoutingSource } from './pickRoutingSource';
+import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
@@ -60,6 +61,7 @@ import { useAdvancedAISettings } from '@client/app/components/Session/AdvancedAI
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
 import { useAccessibleModels } from '../../../hooks/useAccessibleModels';
 import perfLogger from '../../../utils/performanceLogger';
+import { consumeQuestLaunchIntent } from '../../../utils/questLaunchIntent';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 
 // Sentinel statusMessage written by `handleSendClick` to render the Stop
@@ -130,7 +132,10 @@ export function useSendMessage({
 
   const workBenchFiles = useWorkBenchFiles(currentSessionId || undefined);
   const { currentUser } = useUser();
-  const effectiveCredits = useEffectiveCredits();
+  // Send-time validation must see the live balance - the server enforces
+  // credits on the reservation regardless, but the frozen display value
+  // would let this client-side check miss a genuine mid-turn exhaustion.
+  const effectiveCredits = useEffectiveCredits({ live: true });
   const { sendJsonMessage, readyState, resetLastJsonMessage } = useWebsocket();
   const queryClient = useQueryClient();
   const { migrateQuests, migrateSession, cleanupOptimistic } = useSessionCacheMigration();
@@ -256,29 +261,18 @@ export function useSendMessage({
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
 
-  // Check for new quest goal from /quests page (auto-submit)
+  // Consume a quest launch intent from the /quests page (auto-submit).
+  // The /new route records it in a useLayoutEffect, which runs before this
+  // effect; consume-once semantics prevent replay on refresh or remount.
   useEffect(() => {
-    const newQuestGoal = localStorage.getItem('newQuestGoal');
-    const autoSubmit = localStorage.getItem('autoSubmitQuest');
-    const shouldEnableQuestMaster = localStorage.getItem('enableQuestMasterOnSubmit');
-    if (newQuestGoal) {
-      console.log(
-        '🎯 Found quest goal:',
-        newQuestGoal,
-        'autoSubmit:',
-        autoSubmit,
-        'enableQM:',
-        shouldEnableQuestMaster
-      );
-      localStorage.removeItem('newQuestGoal');
-      localStorage.removeItem('autoSubmitQuest');
-      localStorage.removeItem('enableQuestMasterOnSubmit');
-      setChatInputValue(newQuestGoal);
+    const intent = consumeQuestLaunchIntent();
+    if (intent) {
+      setChatInputValue(intent.goal);
 
-      if (autoSubmit === 'true') {
+      if (intent.autoSubmit) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
-        setPendingAutoSubmitGoal(newQuestGoal);
-        if (shouldEnableQuestMaster === 'true') {
+        setPendingAutoSubmitGoal(intent.goal);
+        if (intent.enableQuestMaster) {
           setEnableQuestMasterOnSubmit(true);
         }
       }
@@ -758,7 +752,8 @@ export function useSendMessage({
     // L251), so the optimistic client-side ID won't work - we must create
     // the session first. The dispatch payload differs by mode:
     //   - With `orchestrationAgent`: use its preferred model + tool whitelist
-    //     (preserves the earlier `@specific-agent` UX).
+    //     (preserves the earlier `@specific-agent` UX). A briefcase
+    //     `toolsOverride` still wins the whitelist (see `enabledTools` below).
     //   - Without (toggle ON or `@agent` literal): dispatch agentless and let
     //     the executor build a synthetic profile from admin defaults.
     if (routeTarget === 'agent_executor') {
@@ -826,14 +821,17 @@ export function useSendMessage({
         // optimistic bubble instead of waiting for the persisted Quest on reload.
         createOptimisticPromptBubble(queryClient, dispatchSessionId, prompt, routingSource);
 
-        // When dispatched with a specific orchestration agent, source the
-        // per-thoroughness iteration cap + tool whitelist from the agent doc.
-        // When dispatched agentless (toggle / `@agent` literal), leave both
-        // unset so the executor's synthetic-profile builder fills them from
-        // admin defaults.
+        // Iteration cap comes from the agent doc; left unset when agentless so
+        // the executor fills it from admin defaults.
         const thoroughness = orchestrationAgent?.defaultThoroughness ?? 'medium';
         const maxIters = orchestrationAgent?.maxIterations?.[thoroughness];
-        const enabledTools = orchestrationAgent?.allowedTools;
+        // A briefcase `toolsOverride` wins the whitelist so an `@`-mention can't
+        // drop the tools the prompt needs (see `resolveDispatchTools`).
+        const enabledTools = resolveDispatchTools(
+          options?.toolsOverride,
+          effectiveTools,
+          orchestrationAgent?.allowedTools
+        );
         // Per-message file attachments - dedupe against the session-level set
         // so the same fabFileId isn't materialized twice into the first
         // iteration. Mirrors the dedup the `chat_completion` flow does in

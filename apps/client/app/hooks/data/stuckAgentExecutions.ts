@@ -29,6 +29,16 @@ export type StuckExecutionItem = {
   updatedAt: string;
   totalIterations?: number;
   errorMessage?: string;
+  /**
+   * Confidence-gate telemetry (#56 M1.1); omitted when the gate never evaluated.
+   * `avgConfidence` is derived server-side from the stored confidence sum.
+   */
+  confidenceTelemetry?: {
+    evaluatedCount: number;
+    emittedCount: number;
+    minConfidence: number;
+    avgConfidence: number;
+  };
 };
 
 export type StuckExecutionsResponse = {

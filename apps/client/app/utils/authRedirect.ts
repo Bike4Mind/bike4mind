@@ -100,6 +100,32 @@ export function applyRedirect(
 }
 
 /**
+ * Decides whether the layout `beforeLoad` guard should bounce an authenticated
+ * user to the /accept-policies interstitial.
+ *
+ * Redirect ONLY when the user has been confirmed by the server this page load
+ * (`isHydrated` - flipped true the first time /api/identify, refreshUser, or a
+ * WebSocket push writes a non-null user) AND still lacks an accepted policy
+ * version. Gating on `isHydrated` is what fixes the post-deploy edge case: a
+ * session that was already logged in when the consent feature shipped rehydrates
+ * from a persisted `user-context` stub that predates `aupAcceptedVersion`, so the
+ * field reads as missing. Before identify refetches (which honors a 5-min
+ * `staleTime` when the stub is seeded as react-query `initialData`), that stub
+ * would otherwise trip a spurious interstitial flash on hard reload. Deferring
+ * until `isHydrated` lets the server-authoritative (grandfathered) value land
+ * first. A genuinely un-consented account is still gated: after login, identify
+ * sets the user (isHydrated true) with no `aupAcceptedVersion`, so the guard
+ * fires on the next protected navigation. This client redirect is UX only - the
+ * server consent-gate middleware is the real enforcement and fails closed.
+ */
+export function shouldRedirectToConsent(params: {
+  currentUser: { aupAcceptedVersion?: unknown } | null;
+  isHydrated: boolean;
+}): boolean {
+  return !!params.currentUser && params.isHydrated && !params.currentUser.aupAcceptedVersion;
+}
+
+/**
  * Merges a `redirectTo` value onto a relative provider auth URL so social/SSO
  * login can round-trip it through the IdP `state`/`RelayState` param instead of
  * stashing it (the full-page navigation to the provider drops the SPA's in-URL

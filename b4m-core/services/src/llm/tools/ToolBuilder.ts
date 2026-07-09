@@ -1,4 +1,12 @@
-import { IChatHistoryItemDocument, IMessage, IUserDocument, IOrganizationDocument, ModelInfo } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  IChatHistoryItemDocument,
+  IMessage,
+  IUserDocument,
+  IOrganizationDocument,
+  IUsageEventInput,
+  ModelInfo,
+} from '@bike4mind/common';
 import { type ApiKeyTable, type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { z } from 'zod';
@@ -14,6 +22,52 @@ import {
 import { buildSharedTools } from '../sharedToolBuilder';
 import type { SubagentTelemetryData } from './implementation/delegateToAgent';
 import type { IChatCompletionServiceOptions, QuestStartBodySchema } from '../ChatCompletionFeatures';
+
+/** Usage-event input shared by both tool settlement sites. Analytics only, never billing. */
+export function buildToolUsageEvent(params: {
+  quest: IChatHistoryItemDocument;
+  user: IUserDocument;
+  organization?: IOrganizationDocument | null;
+  provider: string;
+  model: string;
+  costUsd: number;
+  creditsCharged: number;
+  units?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+}): IUsageEventInput {
+  const { quest, user, organization } = params;
+  return {
+    requestId: quest.id,
+    userId: user.id,
+    ownerId: organization ? organization.id : user.id,
+    ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
+    sessionId: quest.sessionId,
+    feature: 'tool',
+    provider: params.provider,
+    model: params.model,
+    inputTokens: params.inputTokens ?? 0,
+    outputTokens: params.outputTokens ?? 0,
+    cachedInputTokens: params.cachedInputTokens ?? 0,
+    cacheWriteTokens: params.cacheWriteTokens ?? 0,
+    units: params.units,
+    costUsd: params.costUsd,
+    creditsCharged: params.creditsCharged,
+    status: 'ok',
+  };
+}
+
+/** Fire-and-forget dual-write: a failed analytics record must never throw into billing. */
+export function recordToolUsageEvent(
+  db: IChatCompletionServiceOptions['db'],
+  logger: Logger,
+  toolName: string,
+  event: IUsageEventInput
+): void {
+  db.usageEvents?.record(event).catch(err => logger.warn(`[toolUsageEvent] failed for ${toolName}:`, err));
+}
 
 type SendStatusUpdate = (
   q: IChatHistoryItemDocument,
@@ -421,7 +475,7 @@ export class ToolBuilder {
               const modelInfo = availableModels.find(m => m.id === toolModel);
               if (!modelInfo) return;
 
-              const creditsUsed = await validateUserCredits(
+              const { requiredCredits: creditsUsed, usdCost } = await validateUserCredits(
                 this.deps.user,
                 modelInfo,
                 n || 1,
@@ -433,6 +487,21 @@ export class ToolBuilder {
               this.deps.toolCreditsMap.set(toolName, creditsUsed);
               quest.creditsUsed = (quest.creditsUsed ?? 0) + creditsUsed;
               await saveQuest(quest);
+              recordToolUsageEvent(
+                this.deps.db,
+                this.deps.logger,
+                toolName,
+                buildToolUsageEvent({
+                  quest,
+                  user: this.deps.user,
+                  organization,
+                  provider: modelInfo.backend,
+                  model: toolModel,
+                  costUsd: usdCost,
+                  creditsCharged: creditsUsed,
+                  units: n || 1,
+                })
+              );
             }
           }
         },
@@ -482,8 +551,29 @@ export class ToolBuilder {
           return undefined; // Use default simplified result
         },
         sessionId: quest.sessionId,
-        onSubagentCredits: credits => {
+        onSubagentCredits: (credits, meta) => {
           this.deps.toolCreditsMap.set('delegate_to_agent', credits);
+          // No meta == model unresolvable; skip rather than fabricate a zero-cost event.
+          if (meta) {
+            recordToolUsageEvent(
+              this.deps.db,
+              this.deps.logger,
+              'delegate_to_agent',
+              buildToolUsageEvent({
+                quest,
+                user: this.deps.user,
+                organization,
+                provider: meta.provider,
+                model: meta.model,
+                costUsd: meta.usdCost,
+                creditsCharged: credits,
+                inputTokens: meta.inputTokens,
+                outputTokens: meta.outputTokens,
+                cachedInputTokens: meta.cacheReadTokens,
+                cacheWriteTokens: meta.cacheWriteTokens,
+              })
+            );
+          }
         },
         onSubagentTelemetry: telemetryData => {
           const typed = telemetryData as SubagentTelemetryData;

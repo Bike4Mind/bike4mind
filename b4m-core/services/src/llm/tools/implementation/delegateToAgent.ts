@@ -2,7 +2,7 @@ import type { ApiKeyTable, ICompletionBackend, ICompletionOptionTools } from '@b
 import { getLlmByModel } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { ThoroughnessLevel } from '@bike4mind/agents';
-import type { ModelInfo } from '@bike4mind/common';
+import { getTextModelCost, type ModelInfo } from '@bike4mind/common';
 import { ServerSubagentOrchestrator } from '../../agents/ServerSubagentOrchestrator';
 import type { ServerSubagentTracker, SubagentHandoffSignal } from '../../agents/ServerSubagentOrchestrator';
 import { ServerAgentStore } from '../../agents/ServerAgentStore';
@@ -42,6 +42,21 @@ export interface SubagentTelemetryData {
 }
 
 /**
+ * Cost attribution for a completed delegation, so the caller can record a
+ * usage event. Absent when the model can't be resolved; callers must not
+ * fabricate an event from zeros.
+ */
+export interface SubagentUsageMeta {
+  usdCost: number;
+  provider: string;
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
  * Dependencies for creating the delegate_to_agent tool
  */
 export interface DelegateToAgentToolDeps {
@@ -51,13 +66,20 @@ export interface DelegateToAgentToolDeps {
   /** All parent tools (the subagent will receive a filtered subset) */
   parentTools: ICompletionOptionTools[];
   /**
+   * Tools the subagent can OPT INTO by explicitly naming them in `allowedTools`
+   * (never granted by the allow-all default). Forwarded to the orchestrator's
+   * `optInTools` channel and propagated to grandchildren so opt-in capabilities
+   * like Lattice are available at every nesting level. See `ServerOrchestratorDeps.optInTools`.
+   */
+  optInTools?: ICompletionOptionTools[];
+  /**
    * Getter for the parent's abort signal. Uses a getter because the AbortController
    * is created after buildTools() returns - the signal isn't available at tool
    * construction time but will be available when the tool is actually invoked.
    */
   getSignal?: () => AbortSignal | undefined;
   /** Callback to report credits used by the agent delegation */
-  onCredits?: (credits: number) => void;
+  onCredits?: (credits: number, meta?: SubagentUsageMeta) => void;
   /** Available models for credit computation */
   availableModels?: ModelInfo[];
   /** Callback to send status updates to the client during subagent execution */
@@ -231,6 +253,7 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         getRemainingTimeMs: deps.getRemainingTimeMs,
         handoffSignal: deps.handoffSignal,
         depth: childDepth,
+        optInTools: deps.optInTools,
       });
 
       // Background mode: dispatch + return a structured payload immediately. The LLM
@@ -303,7 +326,30 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
         const durationMs = Date.now() - startTime;
 
         if (result.completionInfo.totalCredits && deps.onCredits) {
-          deps.onCredits(result.completionInfo.totalCredits);
+          const modelInfo = deps.availableModels?.find(m => m.id === result.model);
+          const inputTokens = result.completionInfo.totalInputTokens ?? 0;
+          const outputTokens = result.completionInfo.totalOutputTokens ?? 0;
+          // Thread the subagent's cache tokens through so the recorded provider
+          // cost is computed on the same basis as `creditsCharged` (which already
+          // reflects cache accounting). The cache buckets are additive, so dropping
+          // them makes costUsd understate true cost for any multi-iteration
+          // delegation, inflating the margins the dashboard reports above reality.
+          const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
+          const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
+          deps.onCredits(
+            result.completionInfo.totalCredits,
+            modelInfo
+              ? {
+                  usdCost: getTextModelCost(modelInfo, inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens),
+                  provider: modelInfo.backend,
+                  model: result.model,
+                  inputTokens,
+                  outputTokens,
+                  cacheReadTokens,
+                  cacheWriteTokens,
+                }
+              : undefined
+          );
         }
 
         // Report telemetry for successful execution

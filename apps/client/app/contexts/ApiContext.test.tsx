@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render } from '@testing-library/react';
 import { AxiosError, type AxiosAdapter, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
-import { ApiProvider, api, resetRefreshPromise } from './ApiContext';
+import { ApiProvider, api, resetRefreshPromise, resetRedirectingGuard } from './ApiContext';
 import { useAccessToken } from '../hooks/useAccessToken';
 
 // clearClientCaches touches localStorage/IndexedDB; the redirect chain doesn't depend
@@ -20,6 +20,21 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
 const ok = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse =>
   ({ data, status: 200, statusText: 'OK', headers: {}, config }) as AxiosResponse;
 
+// A non-auth failure (e.g. 503 from a cold/hanging refresh Lambda) - transient, NOT a
+// revocation, so the interceptor must reject-and-retry rather than force a logout.
+const makeStatus = (config: InternalAxiosRequestConfig, status: number): AxiosError =>
+  new AxiosError(`Error ${status}`, 'ERR_BAD_RESPONSE', config, {}, {
+    status,
+    statusText: 'Error',
+    data: {},
+    headers: {},
+    config,
+  } as AxiosResponse);
+
+// A bare network error carries no response (isAxiosError true, response undefined) - also transient.
+const makeNetworkError = (config: InternalAxiosRequestConfig): AxiosError =>
+  new AxiosError('Network Error', 'ERR_NETWORK', config, {});
+
 describe('ApiProvider 401 interceptor -> login redirect', () => {
   const realLocation = window.location;
   let replace: ReturnType<typeof vi.fn>;
@@ -27,6 +42,7 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
 
   beforeEach(() => {
     resetRefreshPromise();
+    resetRedirectingGuard();
     replace = vi.fn();
     // Replace window.location with a plain stub so the interceptor reads a known,
     // non-public pathname and its window.location.replace is observable. jsdom's
@@ -104,5 +120,161 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(replace).not.toHaveBeenCalled();
     expect(useAccessToken.getState().accessToken).toBe('new-access');
     expect(useAccessToken.getState().expired).toBe(false);
+  });
+
+  it('does NOT log out when the refresh fails with a transient 5xx (cold Lambda / outage)', async () => {
+    // The original request 401s (token expired) so a refresh is attempted, but the
+    // refresh endpoint returns 503 - a transient outage, not a rejected refresh token.
+    // Logging the user out here would be a false positive; this is the exact deploy-time
+    // correlation the WebsocketContext probe can trigger through this interceptor.
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') return Promise.reject(makeStatus(config, 503));
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    // Transient - no redirect, session preserved so the client keeps retrying.
+    expect(replace).not.toHaveBeenCalled();
+    const state = useAccessToken.getState();
+    expect(state.accessToken).toBe('stale');
+    expect(state.expired).toBe(false);
+  });
+
+  it('does NOT log out when the refresh fails with a bare network error (transient)', async () => {
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') return Promise.reject(makeNetworkError(config));
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().accessToken).toBe('stale');
+    expect(useAccessToken.getState().expired).toBe(false);
+  });
+
+  it('redirects to /login on a 401 when the session is already marked expired (no refresh attempted)', async () => {
+    // Before the fix, this branch silently rejected with no redirect - the "flood of
+    // 401s with no prompt" bug. It must now resolve to the same clean sign-out as the
+    // refresh-fails path, without ever attempting a refresh (no refreshToken call).
+    useAccessToken.setState({ expired: true, expiredReason: null, accessToken: null, refreshToken: null });
+    let refreshCalls = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') refreshCalls += 1;
+      return Promise.reject(make401(config));
+    }) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    expect(refreshCalls).toBe(0);
+    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace).toHaveBeenCalledWith('/login?error=session_expired&redirectTo=%2Fnew');
+    expect(useAccessToken.getState().expiredReason).toBe('expired');
+  });
+
+  it('redirects to /login on a 401 with no refresh token at all', async () => {
+    useAccessToken.setState({ expired: false, expiredReason: null, accessToken: 'stale', refreshToken: null });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT redirect on a 401 during mfaPending, even with no refresh token', async () => {
+    // During mfaPending the login stage issues no refresh token by design - a
+    // non-allowlisted 401 here means the user is mid-MFA-setup, not locked out.
+    // Force-redirecting them to /login would break the MFA flow.
+    useAccessToken.setState({
+      expired: false,
+      expiredReason: null,
+      accessToken: 'mfa-token',
+      refreshToken: null,
+      mfaPending: true,
+    });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+
+    expect(replace).not.toHaveBeenCalled();
+    // No forced teardown either - mfaPending session state must be left alone.
+    expect(useAccessToken.getState().mfaPending).toBe(true);
+  });
+
+  it('fires exactly one redirect when a burst of concurrent 401s are all unrecoverable', async () => {
+    useAccessToken.setState({ expired: true, expiredReason: null, accessToken: null, refreshToken: null });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    const results = await Promise.allSettled([
+      api.get('/api/mcp-servers'),
+      api.get('/api/models'),
+      api.get('/api/settings/fetch'),
+    ]);
+
+    expect(results.every(r => r.status === 'rejected')).toBe(true);
+    expect(replace).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not redirect when the pathname is already public', async () => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: {
+        pathname: '/login',
+        search: '',
+        hash: '',
+        href: 'http://localhost/login',
+        origin: 'http://localhost',
+        replace,
+      },
+    });
+    useAccessToken.setState({ expired: true, expiredReason: null, accessToken: null, refreshToken: null });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+
+    render(
+      <ApiProvider>
+        <div />
+      </ApiProvider>
+    );
+
+    // The interceptor's own top-level isPublicPath gate skips the whole 401 branch.
+    await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
+    expect(replace).not.toHaveBeenCalled();
   });
 });

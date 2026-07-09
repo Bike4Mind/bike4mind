@@ -57,4 +57,25 @@ describe('deferredToolRegistry', () => {
     deferredToolRegistry.register([makeTool('charlie'), makeTool('alpha'), makeTool('bravo')]);
     expect(deferredToolRegistry.getDirectoryNames()).toEqual(['alpha', 'bravo', 'charlie']);
   });
+
+  it('getDirectoryNames returns a defensive copy (caller mutation does not leak)', () => {
+    deferredToolRegistry.register([makeTool('alpha'), makeTool('bravo')]);
+    const first = deferredToolRegistry.getDirectoryNames();
+    first.push('injected');
+    expect(deferredToolRegistry.getDirectoryNames()).toEqual(['alpha', 'bravo']);
+  });
+
+  // #213: the directory is a frozen snapshot from register(), decoupled from
+  // the live tool map. If a tool is evicted from `byName` mid-session (e.g. a
+  // future load-eviction optimization), the cache-stamped system-prompt
+  // directory must NOT change a byte. Simulate eviction via the private map.
+  it('getDirectoryNames stays byte-stable when the live tool map diverges', () => {
+    deferredToolRegistry.register([makeTool('alpha'), makeTool('bravo'), makeTool('charlie')]);
+    const before = deferredToolRegistry.getDirectoryNames();
+
+    (deferredToolRegistry as unknown as { byName: Map<string, unknown> }).byName.delete('bravo');
+
+    expect(deferredToolRegistry.has('bravo')).toBe(false);
+    expect(deferredToolRegistry.getDirectoryNames()).toEqual(before);
+  });
 });

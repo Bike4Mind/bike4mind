@@ -24,7 +24,7 @@ import { PermissionManager } from '../utils/PermissionManager.js';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import { ApiClient } from '../auth/ApiClient.js';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend.js';
-import { getApiUrl } from '../utils/apiUrl.js';
+import { requireApiUrl } from '../utils/apiUrl.js';
 import { Logger } from '@bike4mind/observability';
 import { getPromptVariant, type PromptVariant } from './prompts.js';
 
@@ -32,6 +32,8 @@ import { getPromptVariant, type PromptVariant } from './prompts.js';
 const EVAL_MODE_DENIED_TOOLS: readonly string[] = [
   'bash_execute',
   'bash_execute_async',
+  'write_shell_stdin',
+  'kill_background_shell',
   'web_search',
   'web_fetch',
   'ask_user_question',
@@ -90,7 +92,7 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
   }
 
   const config = await configStore.load();
-  const apiBaseURL = getApiUrl(config.apiConfig);
+  const apiBaseURL = requireApiUrl(config.apiConfig);
   const apiClient = new ApiClient(apiBaseURL, configStore);
 
   // Discover the completions URL from server config (matches index.tsx pattern).
@@ -227,6 +229,10 @@ async function listAllToolNames(): Promise<string[]> {
     'grep_search',
     'bash_execute',
     'bash_execute_async',
+    'check_shell_output',
+    'write_shell_stdin',
+    'list_background_shells',
+    'kill_background_shell',
     'find_definition',
     'get_file_structure',
     'log_decision',

@@ -197,6 +197,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
+  .command('acp', 'Run as an Agent Client Protocol (ACP) stdio server for editors like Zed')
   .help()
   .alias('help', 'h')
   .version(cliVersion)
@@ -261,7 +262,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'update', 'doctor']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'update', 'doctor', 'acp']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -278,6 +279,15 @@ const hasDist = existsSync(distPath);
 // Otherwise: use production mode (this is what npm users will run)
 const isDev = process.env.NODE_ENV === 'development' ||
               (!hasDist && hasSource);
+
+// Signal source mode to the app so endpoint resolution can default an
+// otherwise-unconfigured run to the local dev server (build-time brand
+// defaults are never injected into a source run). Set before any command
+// dispatch below so --reset-api messaging and the app both observe it.
+// See resolveApiEndpoint() / isSourceMode() in src/utils/apiUrl.ts.
+if (isDev) {
+  process.env.B4M_SOURCE_MODE = '1';
+}
 
 // Handle --api-url / --reset-api flags
 // These mutate ~/.bike4mind/config.json and exit before any auth flow runs,
@@ -415,6 +425,31 @@ if (argv._[0] === 'update') {
   }
 }
 
+// Handle ACP server command (external command)
+// stdio is the JSON-RPC transport, so this never returns until the client
+// disconnects. Errors go to stderr to keep stdout as a clean protocol stream.
+if (argv._[0] === 'acp') {
+  try {
+    let handleAcpCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/acpCommand.ts');
+      handleAcpCommand = module.handleAcpCommand;
+    } else {
+      const module = await import('../dist/commands/acpCommand.mjs');
+      handleAcpCommand = module.handleAcpCommand;
+    }
+
+    await handleAcpCommand({ verbose: argv.verbose || false, version: cliVersion });
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`Error: ${error.message}\n`);
+    process.exit(1);
+  }
+}
+
 // Handle doctor command (external command)
 if (argv._[0] === 'doctor') {
   try {
@@ -439,7 +474,9 @@ if (argv._[0] === 'doctor') {
 }
 
 if (isDev) {
-  console.log('🔧 Running in development mode (using TypeScript source)\n');
+  // Note: this is about *how the CLI runs* (unbuilt TypeScript source), which is
+  // distinct from the `--dev` flag (which selects the local dev *backend*).
+  console.log('🔧 Running from TypeScript source (no dist build)\n');
   // Development: use tsx to run TypeScript
   try {
     const { register } = require('tsx/esm/api');

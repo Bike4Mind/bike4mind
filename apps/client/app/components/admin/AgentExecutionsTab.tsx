@@ -45,6 +45,9 @@ const formatAge = (updatedAt: string): string => {
 
 const truncate = (s: string, max = 80): string => (s.length <= max ? s : `${s.slice(0, max)}…`);
 
+const formatConfidenceTooltip = (t: NonNullable<StuckExecutionItem['confidenceTelemetry']>): string =>
+  `${t.evaluatedCount} evaluated · ${t.emittedCount} gated · avg ${t.avgConfidence.toFixed(2)} · min ${t.minConfidence.toFixed(2)}`;
+
 const USER_ID_DEBOUNCE_MS = 300;
 
 const AgentExecutionsTab: React.FC = () => {
@@ -222,12 +225,13 @@ const AgentExecutionsTab: React.FC = () => {
                 <th>Query</th>
                 <th style={{ width: 140 }}>Model</th>
                 <th style={{ width: 100 }}>Credits</th>
+                <th style={{ width: 150 }}>Confidence (avg/min)</th>
               </tr>
             </thead>
             <tbody>
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <Typography level="body-sm" sx={{ textAlign: 'center', py: 3 }}>
                       No stuck executions match these filters.
                     </Typography>
@@ -270,6 +274,27 @@ const AgentExecutionsTab: React.FC = () => {
                       </td>
                       <td>
                         <Typography level="body-sm">{item.totalCreditsUsed.toFixed(2)}</Typography>
+                      </td>
+                      <td data-testid={`stuck-execution-confidence-${item.id}`}>
+                        {item.confidenceTelemetry ? (
+                          <Tooltip title={formatConfidenceTooltip(item.confidenceTelemetry)} placement="top">
+                            <Stack direction="row" spacing={0.5} alignItems="center">
+                              <Typography level="body-xs">
+                                {item.confidenceTelemetry.avgConfidence.toFixed(2)} /{' '}
+                                {item.confidenceTelemetry.minConfidence.toFixed(2)}
+                              </Typography>
+                              {item.confidenceTelemetry.emittedCount > 0 && (
+                                <Chip size="sm" variant="soft" color="warning">
+                                  {item.confidenceTelemetry.emittedCount} gated
+                                </Chip>
+                              )}
+                            </Stack>
+                          </Tooltip>
+                        ) : (
+                          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                            —
+                          </Typography>
+                        )}
                       </td>
                     </tr>
                   );

@@ -112,6 +112,7 @@ jobs:
             ["b4m-core/services"]="@bike4mind/services"
             ["b4m-core/utils"]="@bike4mind/utils"
             ["b4m-core/mcp"]="@bike4mind/mcp"
+            ["b4m-core/slack"]="@bike4mind/slack"
             ["packages/cli"]="@bike4mind/cli"
           )
 

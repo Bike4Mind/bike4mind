@@ -4,20 +4,12 @@ on:
   push:
     branches: [main, prod]
   pull_request:
-    # Allow stacked PRs (e.g. PR2 → PR1 → main) to get a preview env. The
-    # preview URL is derived from the PR number, not the base branch, so the
-    # rest of the workflow handles arbitrary base refs correctly. Exclude
-    # prod-targeted PRs — those are the staging→production promotion and
-    # `main` already validates them; a separate preview would be redundant.
+    # Exclude prod-targeted PRs — those are the staging→production promotion
+    # and `main` already validates them; a redundant CI run isn't worth it.
     branches-ignore: [prod]
-    # `labeled` is included so applying the opt-in `preview` label deploys a
-    # preview immediately, without waiting for the next commit push. Previews
-    # are OFF by default (DEPLOY_TENANTS.<tenant>.preview_label = "preview"):
-    # with the label absent the `plan` job emits an empty matrix and the deploy
-    # is skipped. To avoid spinning up full CI on unrelated label churn (e.g.
-    # `run-e2e`, `stale`), the root `changes` job below skips `labeled` events
-    # whose label is not `preview`.
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # `labeled` was removed with the preview tier: previews are created on
+    # demand by maintainers via the internal deployer, not by PR events.
+    types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips test + deploy on non-deployable
     # changes, while still reporting the required Deploy/Run Tests checks (a
@@ -35,9 +27,8 @@ env:
 # concurrency (jobs were waiting ~15 min for a runner while executing in ~3 min).
 # PR-only: pushes to main/prod and merge_group runs are NEVER cancelled, so
 # in-flight staging/production deploys can't be interrupted.
-# NOTE: a PR push that supersedes a run mid-`sst deploy` is the same hard-cancel
-# scenario the `unlock` job's orphaned-lock backstop already covers (#8633/#8749);
-# net effect is fewer concurrent preview deploys, which reduces lock contention.
+# PR runs no longer deploy (previews moved to the internal deployer), so
+# cancelling superseded PR runs no longer touches any SST lock.
 concurrency:
   group: deploy-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -50,13 +41,7 @@ jobs:
   # required checks always have a status to report. Logic + the default
   # exclude list live in the local composite action. Fails open on both.
   changes:
-    # Root of the whole DAG. On a `labeled` event only proceed when the added
-    # label is `preview` (the opt-in gate) — any other label add skips this job,
-    # which cascades to every downstream job (they all transitively need
-    # `changes`), so unrelated label churn doesn't burn a full CI + deploy run.
-    # Non-labeled events (opened/synchronize/reopened/ready_for_review, push,
-    # merge_group) have action != 'labeled' and always run.
-    if: github.event.action != 'labeled' || github.event.label.name == 'preview'
+    # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
@@ -104,7 +89,9 @@ jobs:
       # for direct pushes to main/prod.
       # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
       # covered without editing this step. Mirrors the post-merge guard in
-      # _deploy-env.yml.
+      # _deploy-env.yml, and the same [0-9a-f]{40} check `pnpm premium:pin --check`
+      # (scripts/premium-pin.mjs) runs locally - keep the two in sync if this
+      # regex ever changes.
       - name: Verify premium overlay pins are SHAs (merge-queue gate)
         if: github.event_name == 'merge_group'
         run: |
@@ -126,6 +113,9 @@ jobs:
 
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
+
+      - name: Check deploy contract matches infra
+        run: python3 scripts/check-deploy-contract.py
 
 
 
@@ -570,17 +560,6 @@ jobs:
           # tenants.yml's `tenants:` mapping (e.g. {"bike4mind": {}}). #9853.
           DEPLOY_TENANTS: ${{ vars.DEPLOY_TENANTS }}
           REF: ${{ github.ref }}
-          PR_NUMBER: ${{ github.event.number }}
-          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
-          PR_USER: ${{ github.event.pull_request.user.login }}
-          PR_AUTHOR_ASSOCIATION: ${{ github.event.pull_request.author_association }}
-          # Fork PRs have no secret access; same-repo PRs are trusted (pushing the
-          # head branch requires write). Mirrors is_trusted_context below / the
-          # deploy job's fork check. Empty/null on non-PR events → treated as fork.
-          PR_IS_FORK: ${{ github.event.pull_request.head.repo.fork == true && 'true' || 'false' }}
-          ACTOR: ${{ github.actor }}
-          HEAD_REF: ${{ github.head_ref }}
-          BASE_REF: ${{ github.base_ref }}
         run: |
           python3 - <<'PYEOF'
           import yaml, json, os
@@ -609,54 +588,20 @@ jobs:
 
           event = os.environ['EVENT_NAME']
           ref = os.environ['REF']
-          pr_number = os.environ['PR_NUMBER']
-          pr_labels = json.loads(os.environ['PR_LABELS']) if os.environ['PR_LABELS'] not in ('', 'null') else []
-          pr_user = os.environ['PR_USER']
-          pr_author_association = os.environ['PR_AUTHOR_ASSOCIATION']
-          actor = os.environ['ACTOR']
-          head_ref = os.environ['HEAD_REF']
-          base_ref = os.environ['BASE_REF']
 
           deploy = []
-
-          is_dependabot = actor == 'dependabot[bot]' or pr_user == 'dependabot[bot]'
-          is_changeset_release = head_ref.startswith('changeset-release/')
-          # Belt-and-suspenders: prod-targeted PRs are already excluded by the
-          # workflow's branches-ignore:[prod], but skip here too.
-          is_promotion_pr = head_ref == 'main' and base_ref == 'prod'
-          is_push_main = event == 'push' and ref == 'refs/heads/main'
           is_push_prod = event == 'push' and ref == 'refs/heads/prod'
-          is_pr = event == 'pull_request'
-          is_fork = os.environ.get('PR_IS_FORK', 'false') == 'true'
-          # A trusted author gets a preview deploy; the gate stays to keep untrusted
-          # actors from spawning a real preview stack. Same-repo (non-fork) PRs are
-          # trusted because pushing the head branch requires write access - and this
-          # matches the secret-access boundary GitHub itself enforces (fork PRs get
-          # no secrets/OIDC, so they can't deploy anyway; see is_trusted_context).
-          # Fork PRs fall back to author_association, so a public org member working
-          # from a fork still deploys while an external fork does not. Using the fork
-          # signal (not association alone) is what fixes previews for internal authors
-          # whose org membership is private - GitHub reports those as CONTRIBUTOR, so
-          # the old association-only check skipped their previews. CI runs for everyone.
-          is_trusted_author = (is_pr and not is_fork) or pr_author_association in ('OWNER', 'MEMBER', 'COLLABORATOR')
 
-          skip_pr = is_dependabot or is_changeset_release or is_promotion_pr or (is_pr and not is_trusted_author)
-
+          # Neither PR previews nor main->staging deploy from this repo anymore:
+          # both moved to the internal deployer (bike4mind-deployer). Previews are
+          # created on demand by maintainers; staging (dev) is deployed by the
+          # deployer's reconciler when main moves. Only push-to-prod still deploys
+          # from here (until Phase 3 moves production too). PR / merge_group /
+          # push-main emit an empty plan — CI still runs and the required Deploy
+          # check reports green via deploy-status.
           for tenant, tc in config['tenants'].items():
-              label = tc.get('preview_label')
-              if is_push_main:
-                  deploy.append({"tenant": tenant, "tier": "dev", "pr_number": ""})
-              elif is_push_prod:
+              if is_push_prod:
                   deploy.append({"tenant": tenant, "tier": "production", "pr_number": ""})
-              elif is_pr and not skip_pr:
-                  # Tenants with no preview_label always deploy a preview on PR;
-                  # tenants with one deploy only when that label is present.
-                  if label is None or label in pr_labels:
-                      deploy.append({"tenant": tenant, "tier": "preview", "pr_number": str(pr_number)})
-              # merge_group and skipped PRs => no deploy (test still runs)
-
-          if is_pr and not is_trusted_author:
-              print(f"::notice::No preview deploy: fork PR from an untrusted author (association '{pr_author_association}'). CI still runs.")
 
           deploy_json = json.dumps(deploy)
           print(f"Deploy matrix ({len(deploy)}): {deploy_json}")
@@ -719,7 +664,8 @@ jobs:
   # plan) genuinely FAILED, or the deploy itself failed/cancelled. Green when
   # everything succeeded OR was legitimately skipped:
   #   - non-deployable change (docs-only/config) → core-build..plan all skipped
-  #   - empty deploy plan (dependabot / changeset-release / main→prod / merge_group)
+  #   - empty deploy plan (every PR event now, since previews moved to the internal
+  #     deployer, plus dependabot / changeset-release / main→prod / merge_group)
   # A skipped upstream is "passing" here; only an explicit failure flips it red.
   # This means a typecheck/lint/cli-e2e failure (none of which are individually
   # required checks) is surfaced through the required Deploy check instead of
@@ -783,7 +729,7 @@ jobs:
     timeout-minutes: 15
     if: |
       always() &&
-      (github.event_name == 'pull_request' || github.event_name == 'push') &&
+      github.event_name == 'push' &&
       (needs.deploy.result == 'failure' || needs.deploy.result == 'cancelled')
     # Dedicated group (NOT the deploy group): serializes redundant unlocks for the
     # same stage so two rapid deploy failures can't run their guards in parallel.
@@ -802,9 +748,7 @@ jobs:
       - name: Determine stage
         id: cfg
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "stage=pr${{ github.event.number }}" |tee -a "$GITHUB_OUTPUT"
-          elif [ "${{ github.ref }}" = "refs/heads/prod" ]; then
+          if [ "${{ github.ref }}" = "refs/heads/prod" ]; then
             echo "stage=production" |tee -a "$GITHUB_OUTPUT"
           else
             echo "stage=dev" |tee -a "$GITHUB_OUTPUT"
@@ -815,9 +759,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          # head_ref for PRs, ref_name for pushes. Passed via env (never inlined
-          # into the shell) since a branch name is attacker-influenceable input.
-          BRANCH: ${{ github.event_name == 'pull_request' && github.head_ref || github.ref_name }}
+          # Passed via env (never inlined into the shell) since a branch name
+          # is attacker-influenceable input.
+          BRANCH: ${{ github.ref_name }}
           SELF_RUN_ID: ${{ github.run_id }}
         run: |
           set -uo pipefail
@@ -893,8 +837,9 @@ jobs:
         if: steps.guard.outputs.skip == 'false'
         uses: aws-actions/configure-aws-credentials@v6
         with:
-          # prod role only for a push to the prod branch; dev role for everything
-          # else (PR previews and main→staging), mirroring the deploy job.
+          # prod role only for a push to the prod branch; dev role for the
+          # main→staging push, mirroring the deploy job. This job only runs
+          # on push events (PR runs no longer hold a deploy lock to release).
           role-to-assume: ${{ (github.event_name == 'push' && github.ref_name == 'prod') && secrets.AWS_PROD_ROLE_ARN || secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: GitHubActions-${{ github.run_id }}-unlock
@@ -924,170 +869,10 @@ jobs:
           pnpm sst unlock --stage "$STAGE"
           echo "Unlock complete."
 
-  e2e:
-    needs: [deploy]
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: E2E Tests
-    timeout-minutes: 20
-    # Run E2E on: push to main (staging gate), or PR with the 'run-e2e' label.
-    # PRs without the label skip E2E entirely to save ~15-20 min of CI per push.
-    if: |
-      (needs.deploy.outputs.is-preview == 'true' || needs.deploy.outputs.stage == 'dev') &&
-      (github.event_name == 'push' || contains(github.event.pull_request.labels.*.name, 'run-e2e'))
-    # Soft-fail on PRs — results are posted as a PR comment, no red X on the workflow.
-    # E2E remains a hard failure on main (staging gate).
-    continue-on-error: ${{ github.event_name == 'pull_request' }}
-    permissions:
-      contents: read
-      pull-requests: write
-      id-token: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Download core build artifacts
-        id: download-core
-        uses: actions/download-artifact@v7
-        with:
-          name: core-build-${{ needs.deploy.outputs.core-content-hash }}
-          path: .
-        continue-on-error: true
-
-      - name: Build core packages (fallback)
-        if: steps.download-core.outcome == 'failure'
-        run: pnpm core:build
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Install Playwright Chromium
-        working-directory: apps/client
-        run: npx playwright install chromium --with-deps
-
-      - name: Wait for deployment to be healthy
-        env:
-          # Probe /api/ping (a real Lambda route) rather than the bare origin:
-          # CloudFront can answer the apex with 200/302 before the function is
-          # warm, so a bare-origin check passes against a not-yet-ready deploy.
-          TARGET_URL: https://app.${{ needs.deploy.outputs.preview-url }}/api/ping
-        run: |
-          echo "Waiting for $TARGET_URL to be healthy..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
-            if [ "$STATUS" = "200" ]; then
-              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
-              exit 0
-            fi
-            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
-            sleep 10
-          done
-          echo "Deployment did not become healthy within 300s"
-          exit 1
-
-      - name: Run E2E tests
-        id: e2e
-        env:
-          API_URL: https://app.${{ needs.deploy.outputs.preview-url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
-          AI_LATENCY_RUN: 'false'
-          PW_WORKERS: '1'
-          CI: 'true'
-        run: |
-          set -o pipefail
-          pnpm sst shell --stage ${{ needs.deploy.outputs.stage }} -- pnpm --filter client exec playwright test 2>&1 | tee apps/client/playwright-output.txt
-
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-report-${{ needs.deploy.outputs.stage }}
-          path: apps/client/playwright-report/
-          retention-days: 7
-
-      - name: Comment PR with E2E results
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const fs = require('fs');
-            const output = fs.readFileSync('apps/client/playwright-output.txt', 'utf8');
-
-            // Extract summary line (e.g., "10 passed", "2 failed, 8 passed")
-            const summaryMatch = output.match(/\d+ (?:passed|failed|skipped|flaky)[\s\S]*?(?=\n|$)/);
-            const summary = summaryMatch ? summaryMatch[0].trim() : 'See report for details';
-
-            const passed = '${{ steps.e2e.outcome }}' === 'success';
-            const icon = passed ? '✅' : '❌';
-            const status = passed ? 'Passed' : 'Failed';
-            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
-
-            const body = `${icon} **E2E Tests ${status}**
-
-            **Results:** ${summary}
-            **Preview:** \`https://app.${process.env.PREVIEW_URL}\`
-            **Report:** [Download from artifacts](${runUrl})
-
-            <sub>Tested against preview deployment for PR #${context.issue.number}</sub>`;
-
-            // Find and update existing e2e comment, or create new one
-            const { data: comments } = await github.rest.issues.listComments({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-            });
-            const existing = comments.find(c => c.body.includes('**E2E Tests'));
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                comment_id: existing.id,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: body,
-              });
-            }
-        env:
-          PREVIEW_URL: ${{ needs.deploy.outputs.preview-url }}
-
-      - name: Fail if E2E tests failed
-        if: steps.e2e.outcome == 'failure'
-        run: exit 1
+  # E2E (staging gate) removed: staging is no longer deployed from this repo
+  # (push-main -> dev moved to the internal deployer, see the `plan` job). The
+  # deployer runs staging E2E as an advisory, non-blocking step after its own
+  # deploy. PR-triggered E2E still lives in e2e-on-label.yml.
 
   notify-production-failure:
     name: Notify Production Failure

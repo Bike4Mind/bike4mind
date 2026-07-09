@@ -56,6 +56,13 @@ function uploadedSourceArtifactId(): string | undefined {
   return (call?.[1] as { source?: { artifactId?: string } }).source?.artifactId;
 }
 
+/** The {tier, scopeId} sent to upload-url (the scope finalize upserts the publication under). */
+function uploadedScope(): { tier: string; scopeId: string } {
+  const call = apiPost.mock.calls.find(c => c[0] === '/api/publish/artifact/upload-url');
+  const body = call?.[1] as { tier: string; scopeId: string };
+  return { tier: body.tier, scopeId: body.scopeId };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // S3 PUT in step 2.
@@ -141,6 +148,32 @@ describe('publishArtifactBundle', () => {
     });
     expect(uploadedSlug()).toBe('chronosphere-artifa');
   });
+
+  it('defaults to user tier scoped to the user id when no scope is given', async () => {
+    wirePublishPosts();
+    await publishArtifactBundle({
+      artifactId: 'artifact_abcdef123456',
+      type: 'react',
+      content: 'export default () => null;',
+      title: 'Chronosphere',
+      userId: 'u1',
+    });
+    expect(uploadedScope()).toEqual({ tier: 'user', scopeId: 'u1' });
+  });
+
+  it('publishes under an explicit org tier + scope when provided', async () => {
+    wirePublishPosts();
+    await publishArtifactBundle({
+      artifactId: 'artifact_abcdef123456',
+      type: 'react',
+      content: 'export default () => null;',
+      title: 'Chronosphere',
+      userId: 'u1',
+      tier: 'organization',
+      scopeId: 'org_42',
+    });
+    expect(uploadedScope()).toEqual({ tier: 'organization', scopeId: 'org_42' });
+  });
 });
 
 describe('findPublishedByArtifact', () => {
@@ -219,6 +252,35 @@ describe('artifactBundlePublisher', () => {
     await publish('public');
 
     expect(uploadedSlug()).toBe('chronosphere-v2-artifa');
+  });
+
+  it('publishes an org-tier page (scopeId = org id) for org visibility when in a Team context', async () => {
+    wirePublishPosts();
+    const publish = artifactBundlePublisher({ ...baseInput, orgId: 'org_42' });
+
+    await publish('organization');
+
+    // Org visibility must land a real org-tier page - a user-tier page with org visibility
+    // would 403 for org members (its scopeId is the user id, never the viewer's org id).
+    expect(uploadedScope()).toEqual({ tier: 'organization', scopeId: 'org_42' });
+  });
+
+  it('keeps public/private on the user tier even when a Team context is available', async () => {
+    wirePublishPosts();
+    const publish = artifactBundlePublisher({ ...baseInput, orgId: 'org_42' });
+
+    await publish('public');
+
+    expect(uploadedScope()).toEqual({ tier: 'user', scopeId: 'u1' });
+  });
+
+  it('ignores org visibility without an active org (stays user tier - the option is not offered)', async () => {
+    wirePublishPosts();
+    const publish = artifactBundlePublisher(baseInput);
+
+    await publish('organization');
+
+    expect(uploadedScope()).toEqual({ tier: 'user', scopeId: 'u1' });
   });
 
   it('discriminates publish-as-new slugs even within the SAME millisecond (random tail)', async () => {

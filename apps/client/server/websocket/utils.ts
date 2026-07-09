@@ -7,7 +7,8 @@ import { Context } from 'aws-lambda';
 import { Config } from '@server/utils/config';
 import { connectDB } from '@bike4mind/database';
 import { contextToLogs } from '@server/utils/logger';
-import { TokenExpiredError } from 'jsonwebtoken';
+import { JsonWebTokenError } from 'jsonwebtoken';
+import { UnauthorizedError } from '@bike4mind/common';
 
 // sendToClient may be called multiple times in a single request,
 // so we cache the ApiGatewayManagementApiClient
@@ -148,15 +149,29 @@ export function withWebSocketContext<T>(
       const result = await handler(event, context, logger);
       return result;
     } catch (error) {
-      if (error instanceof TokenExpiredError) {
-        logger.info(`Token expired for WebSocket ${context.functionName}`);
+      // For WebSocket connections, we should return a 200 status code even for errors
+      // to prevent the connection from being terminated, unless it's an authorization error.
+      // Detect by TYPE, not by sniffing error.message for "unauthorized" - UnauthorizedError's
+      // message is caller-supplied (e.g. connect.ts throws 'Session expired', 'User not found')
+      // and never contains that substring, so the old check silently treated every WS auth
+      // rejection as a transient error: $connect returned 200, API Gateway accepted the
+      // handshake, but Connection.create() had already been skipped by the throw - a "zombie"
+      // connection with no DB row and no subscriptions. JsonWebTokenError is included because
+      // dataSubscribeRequest.ts/dataUnsubscribeRequest.ts call verifyToken directly with no
+      // local try/catch, so a raw jwt error throws (unwrapped) into this same catch. It is the
+      // BASE class of TokenExpiredError (expired), NotBeforeError (not-yet-valid), and the
+      // signature/malformed errors - all of which are token-validity failures that belong in
+      // the 401 bucket - so matching the base covers every jwt rejection in one check.
+      const isAuthError = error instanceof UnauthorizedError || error instanceof JsonWebTokenError;
+
+      // Auth rejections are expected, benign, and high-volume (every stale-token client) -
+      // log them at info so they don't flood error logs/alerts. Only genuine (non-auth)
+      // handler failures are logged at error.
+      if (isAuthError) {
+        logger.info(`Auth rejected for WebSocket ${context.functionName}: ${(error as Error).message}`);
       } else {
         logger.error(`Error in WebSocket handler ${context.functionName}:`, error);
       }
-
-      // For WebSocket connections, we should return a 200 status code even for errors
-      // to prevent the connection from being terminated, unless it's an authorization error
-      const isAuthError = error instanceof Error && error.message.toLowerCase().includes('unauthorized');
 
       return {
         statusCode: isAuthError ? 401 : 200,

@@ -180,10 +180,11 @@ jobs:
           client-id: ${{ vars.PREMIUM_OVERLAY_CLIENT_ID }}
           private-key: ${{ secrets.PREMIUM_OVERLAY_APP_PRIVATE_KEY }}
           # Owner of the premium overlay repos + the overlay GitHub App installation.
-          # Configurable so the open-core cutover (repos + app move MillionOnMars ->
-          # Bike4Mind) is an instant `PREMIUM_OVERLAY_OWNER` var flip, not a code change.
-          # Unset var falls back to MillionOnMars, so this is a no-op until the var is set.
-          owner: ${{ vars.PREMIUM_OVERLAY_OWNER || 'MillionOnMars' }}
+          # The open-core cutover (repos + app moved MillionOnMars -> Bike4Mind) is
+          # complete, so this defaults to Bike4Mind; `PREMIUM_OVERLAY_OWNER` stays
+          # configurable for any future org move. The overlay-checkout steps below use
+          # the SAME expression, so the token owner and the checkout owner can't drift.
+          owner: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}
           repositories: |
             b4m-overwatch
             b4m-libreoncology
@@ -204,7 +205,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-overwatch
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-overwatch
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-overwatch-ref }}
           path: packages/premium/overwatch
@@ -238,7 +239,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-libreoncology
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-libreoncology
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-libreoncology-ref }}
           path: packages/premium/libreoncology
@@ -272,7 +273,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-pi
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-pi
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-pi-ref }}
           path: packages/premium/pi
@@ -306,7 +307,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-tavern
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-tavern
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-tavern-ref }}
           path: packages/premium/tavern
@@ -339,7 +340,7 @@ jobs:
         if: inputs.is_trusted_context == 'true' && steps.premium-token.outcome == 'success'
         uses: actions/checkout@v6
         with:
-          repository: MillionOnMars/b4m-optihashi
+          repository: ${{ vars.PREMIUM_OVERLAY_OWNER || 'Bike4Mind' }}/b4m-optihashi
           token: ${{ steps.premium-token.outputs.token }}
           ref: ${{ steps.overlay-pin.outputs.b4m-optihashi-ref }}
           path: packages/premium/optihashi
@@ -575,8 +576,8 @@ jobs:
           VALUE=$(openssl rand -hex 32)
           pnpm sst secret set E2E_CLEANUP_SECRET "$VALUE" --stage ${{ steps.cfg.outputs.stage }}
 
-      # Build & push the quest-processor container to the target account's ECR, then hand the
-      # URI to `sst deploy` via QUEST_PROCESSOR_IMAGE. A plain `docker build` (in-daemon
+      # Build & push the chat-completion container to the target account's ECR, then hand the
+      # URI to `sst deploy` via CHAT_COMPLETION_IMAGE. A plain `docker build` (in-daemon
       # buildkit) is used deliberately — NOT SST's docker-build provider, which boots a
       # separate buildx_buildkit builder container that times out on the self-hosted runner
       # (`booting builder: … context deadline exceeded`). This keeps `sst deploy` build-free.
@@ -588,9 +589,9 @@ jobs:
       # build is skipped when that tag already exists. Most pushes (infra/docs-only, CI retries,
       # rebases that don't touch the hashed paths) skip the build entirely; the ones that do
       # build warm their layers from the moving :cache tag instead of running cold.
-      - name: Build & push quest-processor image
+      - name: Build & push chat-completion image
         env:
-          REPO_NAME: ${{ steps.cfg.outputs.app_name }}-quest-processor
+          REPO_NAME: ${{ steps.cfg.outputs.app_name }}-chat-completion
         run: |
           set -euo pipefail
           ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
@@ -600,14 +601,14 @@ jobs:
           # content-addressed tree/blob SHA, so identical content produces an identical tag
           # regardless of commit history. The Dockerfile + .dockerignore live under apps/client,
           # so they're covered. This path set is a deliberate SUPERSET of the true import
-          # closure of `server/quest/server.ts`: under-scoping would silently ship a stale image
+          # closure of `server/chatCompletion/server.ts`: under-scoping would silently ship a stale image
           # ("my fix didn't deploy"); over-scoping only triggers an unnecessary build, which the
           # layer cache makes cheap. Narrow later (import-graph in hand) only if worth it.
           # The root install inputs the Dockerfile copies (pnpm-workspace.yaml, package.json,
           # .npmrc) are listed explicitly: a change to any of them that does NOT also move
           # pnpm-lock.yaml (e.g. an .npmrc node-linker/registry edit) would otherwise hash
           # identically and reuse a stale image. Keep this set in lockstep with the install
-          # layer's `COPY` in apps/client/Dockerfile.quest-service.
+          # layer's `COPY` in apps/client/Dockerfile.chatcompletion.
           IMAGE_HASH=$(for p in apps/client b4m-core packages pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc; do \
             git rev-parse "HEAD:${p}"; done | sha256sum | cut -c1-16)
           IMAGE_URI="${REGISTRY}/${REPO_NAME}:${IMAGE_HASH}"
@@ -648,7 +649,7 @@ jobs:
             # in an account) is tolerated — BuildKit warns and proceeds cold. Fargate runs
             # linux/amd64; the runner is amd64 so this is a native build.
             DOCKER_BUILDKIT=1 docker build \
-              -f apps/client/Dockerfile.quest-service \
+              -f apps/client/Dockerfile.chatcompletion \
               --cache-from "${CACHE_TAG}" \
               --build-arg BUILDKIT_INLINE_CACHE=1 \
               -t "${IMAGE_URI}" \
@@ -659,8 +660,8 @@ jobs:
             docker push "${CACHE_TAG}"
           fi
 
-          # Consumed by infra/questProcessorService.ts (image: questProcessorImage).
-          echo "QUEST_PROCESSOR_IMAGE=${IMAGE_URI}" >> "$GITHUB_ENV"
+          # Consumed by infra/chatCompletion.ts (image: chatCompletionImage).
+          echo "CHAT_COMPLETION_IMAGE=${IMAGE_URI}" >> "$GITHUB_ENV"
 
       - name: Deploy to AWS
         id: deploy
@@ -741,13 +742,18 @@ jobs:
           # no fallback; empty == only the base opti-knowledge lake. Keeps customer lake identity out
           # of open-core — set NEXT_PUBLIC_PREMIUM_DATA_LAKES to a JSON array of DataLakeConfig.
           NEXT_PUBLIC_PREMIUM_DATA_LAKES: ${{ vars.NEXT_PUBLIC_PREMIUM_DATA_LAKES }}
+          # Credit-valuation knobs (b4m-core/common/src/pricing.ts), build-time NEXT_PUBLIC_*
+          # also read by billing lambdas at runtime. Set both per stage or neither; empty ==
+          # in-source defaults, invalid values ignored with a warning.
+          NEXT_PUBLIC_PRICE_MARGIN: ${{ vars.NEXT_PUBLIC_PRICE_MARGIN }}
+          NEXT_PUBLIC_USD_TO_CREDITS_RATE: ${{ vars.NEXT_PUBLIC_USD_TO_CREDITS_RATE }}
           # Account-tied subscriber-fanout image reference (registry + tag). Set the
           # SUBSCRIBER_FANOUT_IMAGE repo/org variable to your published image; no brand
           # fallback. Bump the variable to roll forward (no in-tree Dockerfile to maintain).
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
           # Quest-processor image built & pushed to ECR in the previous step (build-free
-          # sst deploy). See infra/questProcessorService.ts.
-          QUEST_PROCESSOR_IMAGE: ${{ env.QUEST_PROCESSOR_IMAGE }}
+          # sst deploy). See infra/chatCompletion.ts.
+          CHAT_COMPLETION_IMAGE: ${{ env.CHAT_COMPLETION_IMAGE }}
           ENABLE_WHATS_NEW_DISTRIBUTION: ${{ github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && github.ref == 'refs/heads/prod' && 'true' || 'false' }}
           # Extra SSRF-allowlisted host suffix(es) for the What's New distribution URL (open-core
           # #9392). Account-tied, no brand fallback; empty == only CloudFront/S3 + SERVER_DOMAIN

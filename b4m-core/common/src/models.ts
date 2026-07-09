@@ -465,6 +465,12 @@ export type ModelInfo = {
   thinkingStyle?: 'legacy' | 'adaptive';
   pricing: Record<number, PricingInfo>;
   /**
+   * Marks a model as deliberately costless (e.g. local Ollama), so zero-rate
+   * pricing is intent, not a gap. Without this, a $0 cost for real usage
+   * trips the [UNPRICED_MODEL] alarm in getTextModelCost.
+   */
+  freeToRun?: boolean;
+  /**
    * Whether the model supports vision tasks.
    */
   supportsVision?: boolean;
@@ -548,6 +554,20 @@ export const getTextModelCost = (
   cacheReadTokens: number = 0,
   cacheCreationTokens: number = 0
 ): number => {
+  // $0 for real usage on a model not marked freeToRun means a missing or
+  // zero-rate pricing map: the call settles free (stochastic rounding has no
+  // 1-credit floor) and the published cost-plus markup is silently false.
+  // Alarm-only: billing behavior is unchanged.
+  const alarmIfUnpriced = (cost: number): number => {
+    const usage = inputTokens + outputTokens + cacheReadTokens + cacheCreationTokens;
+    if (cost === 0 && usage > 0 && !model.freeToRun) {
+      console.error(
+        `[UNPRICED_MODEL] ${model.id} (${model.backend}) computed $0 for ${usage} tokens; its pricing map is missing or zero`
+      );
+    }
+    return cost;
+  };
+
   const thresholds: number[] = Object.keys(model.pricing)
     .map(Number)
     .sort((a, b) => a - b);
@@ -560,22 +580,22 @@ export const getTextModelCost = (
   };
 
   const tier = tierForTokens(inputTokens);
-  if (tier === null) return 0;
+  if (tier === null) return alarmIfUnpriced(0);
 
-  // Guard against a malformed or non-tiered pricing map (e.g. a local Ollama
-  // model that publishes flat {input:0,output:0} instead of a numeric-keyed
-  // tier). Missing tier pricing means "no cost", not a crash in post-processing.
+  // Guard against a malformed or non-tiered pricing map (e.g. a flat
+  // {input:0,output:0} instead of a numeric-keyed tier). Missing tier pricing
+  // means "no cost", not a crash in post-processing.
   const tierPricing = model.pricing[tier];
-  if (!tierPricing) return 0;
+  if (!tierPricing) return alarmIfUnpriced(0);
 
   const cacheReadRate = tierPricing.cache_read ?? tierPricing.input * CACHE_READ_MULTIPLIER;
   const cacheWriteRate = tierPricing.cache_write ?? tierPricing.input * CACHE_WRITE_MULTIPLIER;
 
-  return (
+  return alarmIfUnpriced(
     tierPricing.input * inputTokens +
-    tierPricing.output * outputTokens +
-    cacheReadRate * cacheReadTokens +
-    cacheWriteRate * cacheCreationTokens
+      tierPricing.output * outputTokens +
+      cacheReadRate * cacheReadTokens +
+      cacheWriteRate * cacheCreationTokens
   );
 };
 

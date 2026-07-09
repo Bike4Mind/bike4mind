@@ -12,6 +12,14 @@ import { logger } from '../utils/Logger.js';
  */
 class DeferredToolRegistry {
   private byName = new Map<string, ICompletionOptionTools>();
+  /**
+   * Frozen snapshot of the directory names captured at `register()` time.
+   * The system-prompt directory is rendered from THIS, not from live
+   * `byName` keys, so the cache-stamped system block stays byte-identical
+   * for the whole session even if `byName` later diverges (e.g. a future
+   * optimization that drops loaded tools). See getDirectoryNames().
+   */
+  private directoryNames: readonly string[] = [];
 
   /** Replace registry contents with the supplied tools. Idempotent. */
   register(tools: ICompletionOptionTools[]): void {
@@ -19,11 +27,13 @@ class DeferredToolRegistry {
     for (const tool of tools) {
       this.byName.set(tool.toolSchema.name, tool);
     }
+    this.directoryNames = Object.freeze([...this.byName.keys()].sort());
     logger.debug(`[DeferredToolRegistry] Registered ${tools.length} deferred tool(s)`);
   }
 
   clear(): void {
     this.byName.clear();
+    this.directoryNames = Object.freeze([]);
   }
 
   size(): number {
@@ -83,9 +93,15 @@ class DeferredToolRegistry {
     return scored.slice(0, maxResults).map(s => s.tool);
   }
 
-  /** Return the directory entries used to render the system-prompt reminder. */
+  /**
+   * Directory entries rendered into the cache-stamped system-prompt reminder.
+   * Returns the frozen snapshot captured at `register()`, NOT live `byName`
+   * keys, so loading a tool mid-session can never change a byte of the cached
+   * system block (issue #213). A loaded tool remaining listed here is
+   * harmless: re-selecting it via `tool_search` is an idempotent no-op.
+   */
   getDirectoryNames(): string[] {
-    return Array.from(this.byName.keys()).sort();
+    return [...this.directoryNames];
   }
 }
 

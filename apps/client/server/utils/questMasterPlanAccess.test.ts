@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Types } from 'mongoose';
 import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '@bike4mind/common';
-import { verifyQuestPlanWriteAccess, isValidObjectId, QUEST_ID_PATTERN } from './questMasterPlanAccess';
+import {
+  verifyQuestPlanReadAccess,
+  verifyQuestPlanWriteAccess,
+  isValidObjectId,
+  QUEST_ID_PATTERN,
+} from './questMasterPlanAccess';
 
 const mockFindById = vi.fn();
 const mockUpdate = vi.fn();
@@ -141,6 +146,102 @@ describe('questMasterPlanAccess', () => {
         mockFindById.mockResolvedValue(plan);
 
         await expect(verifyQuestPlanWriteAccess(validUserId, validPlanId)).rejects.toThrow(ForbiddenError);
+        expect(mockSessionFindById).not.toHaveBeenCalled();
+      });
+    });
+
+    it('denies write access to public plans for non-collaborators', async () => {
+      const ownerId = new Types.ObjectId().toString();
+      const plan = { userId: ownerId, sharedWith: [], visibility: 'public' };
+      mockFindById.mockResolvedValue(plan);
+
+      await expect(verifyQuestPlanWriteAccess(validUserId, validPlanId)).rejects.toThrow(ForbiddenError);
+    });
+  });
+
+  describe('verifyQuestPlanReadAccess', () => {
+    it('throws UnauthorizedError when userId is undefined', async () => {
+      await expect(verifyQuestPlanReadAccess(undefined, validPlanId)).rejects.toThrow(UnauthorizedError);
+    });
+
+    it('throws BadRequestError for invalid planId format', async () => {
+      await expect(verifyQuestPlanReadAccess(validUserId, 'bad-id')).rejects.toThrow(BadRequestError);
+    });
+
+    it('throws NotFoundError when plan does not exist', async () => {
+      mockFindById.mockResolvedValue(null);
+
+      await expect(verifyQuestPlanReadAccess(validUserId, validPlanId)).rejects.toThrow(NotFoundError);
+    });
+
+    it('grants access to plan owner', async () => {
+      const plan = { userId: validUserId, sharedWith: [] };
+      mockFindById.mockResolvedValue(plan);
+
+      const result = await verifyQuestPlanReadAccess(validUserId, validPlanId);
+
+      expect(result).toBe(plan);
+    });
+
+    it('grants access to shared collaborator', async () => {
+      const ownerId = new Types.ObjectId().toString();
+      const plan = { userId: ownerId, sharedWith: [validUserId] };
+      mockFindById.mockResolvedValue(plan);
+
+      const result = await verifyQuestPlanReadAccess(validUserId, validPlanId);
+
+      expect(result).toBe(plan);
+    });
+
+    it('grants access to any user for public plans', async () => {
+      const ownerId = new Types.ObjectId().toString();
+      const plan = { userId: ownerId, sharedWith: [], visibility: 'public' };
+      mockFindById.mockResolvedValue(plan);
+
+      const result = await verifyQuestPlanReadAccess(validUserId, validPlanId);
+
+      expect(result).toBe(plan);
+    });
+
+    it('denies access to private plans for non-collaborators', async () => {
+      const ownerId = new Types.ObjectId().toString();
+      const plan = { userId: ownerId, sharedWith: [], visibility: 'user' };
+      mockFindById.mockResolvedValue(plan);
+
+      await expect(verifyQuestPlanReadAccess(validUserId, validPlanId)).rejects.toThrow(ForbiddenError);
+    });
+
+    describe('legacy backfill', () => {
+      it('backfills userId from session ownership and grants access', async () => {
+        const plan = { userId: undefined, notebookId: validNotebookId, sharedWith: [] };
+        const session = { userId: validUserId };
+        mockFindById.mockResolvedValue(plan);
+        mockSessionFindById.mockResolvedValue(session);
+        mockUpdate.mockResolvedValue(undefined);
+
+        const result = await verifyQuestPlanReadAccess(validUserId, validPlanId);
+
+        expect(result).toBe(plan);
+        expect(plan.userId).toBe(validUserId);
+        expect(mockUpdate).toHaveBeenCalledWith(plan);
+      });
+
+      it('denies access when session owner does not match', async () => {
+        const differentUser = new Types.ObjectId().toString();
+        const plan = { userId: undefined, notebookId: validNotebookId };
+        const session = { userId: differentUser };
+        mockFindById.mockResolvedValue(plan);
+        mockSessionFindById.mockResolvedValue(session);
+
+        await expect(verifyQuestPlanReadAccess(validUserId, validPlanId)).rejects.toThrow(ForbiddenError);
+        expect(mockUpdate).not.toHaveBeenCalled();
+      });
+
+      it('denies access when notebookId is not a valid ObjectId', async () => {
+        const plan = { userId: undefined, notebookId: 'not-valid' };
+        mockFindById.mockResolvedValue(plan);
+
+        await expect(verifyQuestPlanReadAccess(validUserId, validPlanId)).rejects.toThrow(ForbiddenError);
         expect(mockSessionFindById).not.toHaveBeenCalled();
       });
     });

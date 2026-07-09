@@ -359,6 +359,9 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_local_file',
     'delete_file',
     'bash_execute',
+    // Background-shell mutators (poll/list are read-only and stay allowed)
+    'write_shell_stdin',
+    'kill_background_shell',
     // Blog authoring / external publish
     'blog_draft',
     'blog_edit',
@@ -522,7 +525,7 @@ interface BaseSetting {
    * The app(s) that this setting is applicable to.
    * If not provided, the setting is applicable to all apps.
    */
-  app?: 'groktool';
+  app?: 'bike4mind';
   /** The category that this setting belongs to. */
   category?: Category;
   /** The group that this setting belongs to. */

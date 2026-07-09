@@ -477,7 +477,7 @@ export class SlackFeature implements ChatCompletionFeature {
       const closing = questReplies.substring(questReplies.length - 400, questReplies.length);
       await postMessageToSlack(
         this.chatCompletion.slackWebhookUrl,
-        `GrokTool replied to *${this.user.name}* with this response:\n${opening}...\n...\n...${closing}`
+        `Bike4Mind replied to *${this.user.name}* with this response:\n${opening}...\n...\n...${closing}`
       );
     }
   }
@@ -746,7 +746,7 @@ export class QuestMasterFeature implements ChatCompletionFeature {
       );
     }
 
-    // 'blocked' is not a valid SubQuestStatus in the type system (only in QuestMasterArtifact).
+    // 'blocked' is not a valid SubQuestStatus in the type system.
     // SubQuestStatus allows: 'not_started' | 'in_progress' | 'completed' | 'skipped' | 'deleted'
     // Tasks with status 'not_started' or 'deleted' will proceed to processing here.
 

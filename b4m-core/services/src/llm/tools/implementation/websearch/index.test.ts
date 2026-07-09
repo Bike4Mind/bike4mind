@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { safeHostname, serpApiSearch, performWebSearch } from './index';
+import { safeHostname, serpApiSearch, performWebSearch, WEB_SEARCH_NOT_CONFIGURED_MSG } from './index';
 
 vi.mock('../../../../apiKeyService', () => ({
   getSerperKey: vi.fn(),
@@ -21,12 +21,12 @@ describe('serpApiSearch — missing key', () => {
 });
 
 describe('performWebSearch — missing key', () => {
-  it('returns no-results message and empty citables when no API key is configured', async () => {
+  it('returns a clear not-configured message and empty citables when no API key is configured', async () => {
     mockGetSerperKey.mockResolvedValue(null);
 
     const result = await performWebSearch(mockAdapters, { query: 'test query' });
 
-    expect(result.formattedResults).toBe('No results found from web search.');
+    expect(result.formattedResults).toBe(WEB_SEARCH_NOT_CONFIGURED_MSG);
     expect(result.citables).toEqual([]);
   });
 });

@@ -11,6 +11,7 @@ import { ILogger, Logger } from '@bike4mind/observability';
 import { Agent } from 'undici';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { executeToolsBatch } from './executeToolsBatch';
+import { normalizeOllamaDoneReason } from './stopReason';
 
 /** A tool call normalized across native (message.tool_calls) and content-embedded forms. */
 interface NormalizedToolCall {
@@ -81,6 +82,8 @@ export class OllamaBackend implements ICompletionBackend {
             pricing: {
               [contextWindow]: { input: 0, output: 0 },
             },
+            // Deliberately costless: suppresses the [UNPRICED_MODEL] alarm.
+            freeToRun: true,
             // Derived from the model's own reported capabilities rather than
             // hardcoded; falls back to false when /api/show is unavailable.
             supportsVision: capabilities.includes('vision'),
@@ -202,6 +205,7 @@ export class OllamaBackend implements ICompletionBackend {
           inputTokens,
           outputTokens,
           ...(toolsUsed.length > 0 && { toolsUsed }),
+          ...(round.completionInfo.stopReason ? { stopReason: round.completionInfo.stopReason } : {}),
         });
         return;
       }
@@ -313,6 +317,7 @@ export class OllamaBackend implements ICompletionBackend {
     let content = '';
     let inputTokens = 0;
     let outputTokens = 0;
+    let doneReason: string | undefined;
 
     if (options.stream) {
       const response = await this._api.chat({ ...baseRequest, stream: true as const });
@@ -337,6 +342,9 @@ export class OllamaBackend implements ICompletionBackend {
         content += piece;
         inputTokens = Math.max(inputTokens, chunk.prompt_eval_count || 0);
         outputTokens += chunk.eval_count || 0;
+        if (chunk.done_reason) {
+          doneReason = chunk.done_reason;
+        }
 
         if (!buffer && piece) {
           await callback([piece], { inputTokens, outputTokens });
@@ -350,12 +358,14 @@ export class OllamaBackend implements ICompletionBackend {
       content = response.message.content || '';
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
+      doneReason = response.done_reason;
       if (!buffer) {
         await callback([content], { inputTokens, outputTokens });
       }
     }
 
-    return { content, toolCalls, completionInfo: { inputTokens, outputTokens } };
+    const stopReason = normalizeOllamaDoneReason(doneReason);
+    return { content, toolCalls, completionInfo: { inputTokens, outputTokens, ...(stopReason ? { stopReason } : {}) } };
   }
 
   /** Normalize Ollama's native tool_calls into the shared NormalizedToolCall shape. */

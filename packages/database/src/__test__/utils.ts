@@ -7,7 +7,6 @@ import { beforeAll, afterAll, beforeEach } from 'vitest';
 import { Artifact } from '../models/content/ArtifactModel';
 import { ArtifactContent } from '../models/content/ArtifactContentModel';
 import { ArtifactVersion } from '../models/content/ArtifactVersionModel';
-import { QuestMasterArtifact } from '../models/content/QuestMasterArtifactModel';
 import { FabFile } from '../models/content/FabFileModel';
 import { researchTaskRepository } from '../models/ai/ResearchTaskModel';
 import { taskScheduleRepository } from '../models/infra/ops/TaskScheduleModel';
@@ -44,7 +43,6 @@ export async function setupMongoTest() {
       Artifact.ensureIndexes(),
       ArtifactContent.ensureIndexes(),
       ArtifactVersion.ensureIndexes(),
-      QuestMasterArtifact.ensureIndexes(),
       FabFile.ensureIndexes(),
       // Repositories have no ensureIndexes; importing them registers the mongoose models.
     ]);

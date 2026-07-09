@@ -128,9 +128,15 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
-      createdFrom: { type: String, enum: ['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin'], required: true },
+      createdFrom: {
+        type: String,
+        enum: ['dashboard', 'cli', 'api', 'bridge', 'overwatch-admin', 'oauth-exchange'],
+        required: true,
+      },
       // Set on insert only; service layer must reject updates that change this field. Mongoose does not enforce immutability.
       createdByUserId: { type: String },
+      // OAuth client that minted this key via the federated AI-token exchange. See IUserApiKeyMetadata.
+      oauthClientId: { type: String },
       baseline: {
         avgRequestsPerHour: { type: Number },
         avgRequestsPerDay: { type: Number },

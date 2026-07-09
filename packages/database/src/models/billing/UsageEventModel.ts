@@ -37,10 +37,12 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     cacheWriteTokens: { type: Number, required: true, default: 0 },
     providerInputTokens: { type: Number, required: false },
     providerOutputTokens: { type: Number, required: false },
+    settledBasis: { type: String, required: false, enum: ['provider', 'local'] },
     units: { type: Number, required: false },
 
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
+    writtenOffCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },

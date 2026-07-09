@@ -7,7 +7,6 @@
       "@pages/*": ["./pages/*"],
       "@public/*": ["./public/*"],
       "@server/*": ["./server/*"],
-      "@selfhost/quest-runner": ["./server/utils/selfhostQuestRunner"],
       "@client/*": ["./*"],
       "@/*": ["./*"]
     }
@@ -22,6 +21,7 @@
     "android",
     "**/*.test.ts",
     "**/*.test.tsx",
+    "**/*.fixture.ts",
     ".next/standalone",
     ".next/server",
     ".next/cache",

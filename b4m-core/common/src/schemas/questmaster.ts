@@ -1,14 +1,16 @@
 import { z } from 'zod';
 import { BaseArtifactSchema } from './artifacts';
+import { QUEST_COMPLEXITY_VALUES, SUBQUEST_STATUS_VALUES } from '../types/entities/QuestTypes';
 
-// Quest schemas
-export const QuestStatusSchema = z.enum(['pending', 'in-progress', 'completed', 'skipped']);
+// Quest schemas - status and complexity use the canonical QuestMaster
+// vocabulary from QuestTypes (shared with QuestMasterPlan and the client)
+export const QuestStatusSchema = z.enum(SUBQUEST_STATUS_VALUES);
 
 export const QuestSchema = z.object({
   id: z.uuid(),
   title: z.string().min(1).max(255),
   description: z.string().max(1000),
-  status: QuestStatusSchema.prefault('pending'),
+  status: QuestStatusSchema.prefault('not_started'),
   order: z.int().nonnegative(),
   dependencies: z.array(z.uuid()).optional(),
   estimatedMinutes: z.int().positive().optional(),
@@ -29,7 +31,7 @@ export const QuestMasterContentSchema = z.object({
   quests: z.array(QuestSchema).min(1),
   totalSteps: z.int().positive(),
   estimatedDuration: z.int().positive().optional(),
-  complexity: z.enum(['low', 'medium', 'high']),
+  complexity: z.enum(QUEST_COMPLEXITY_VALUES),
   category: z.string().max(100).optional(),
   prerequisites: z.array(z.string().max(255)).optional(),
   completionCriteria: z.array(z.string().max(500)).optional(),

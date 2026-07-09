@@ -625,6 +625,127 @@ describe('ReActAgent Parallel Execution Integration', () => {
       // Agent should detect abort and return Interrupted
       expect(result.finalAnswer).toBe('Interrupted');
     });
+
+    it('backfills a tool_result for every advertised tool_use when aborted mid-batch', async () => {
+      // Regression for #197: a batch cancelled mid-flight must not leave any
+      // tool_use without a matching tool_result, or the provider rejects the
+      // next turn / session resume with a 400.
+      const abortController = new AbortController();
+
+      // Anthropic-shaped tool messages so we can assert tool_use/tool_result
+      // pairing and contiguity on the reconstructed history.
+      const pushToolMessages = (
+        messages: IMessage[],
+        tool: { id: string; name: string; parameters: string },
+        observation: string
+      ) => {
+        messages.push({ role: 'assistant', content: [{ type: 'tool_use', id: tool.id, name: tool.name, input: {} }] });
+        messages.push({
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: tool.id, content: observation }],
+        });
+      };
+
+      // 2 read-only tools complete, then the 3 write tools are cancelled before
+      // they run: read_2 aborts after both reads settle, so the between-phase
+      // guard unwinds the batch before the sequential (write) phase.
+      const makeTool = (name: string, fn: () => Promise<string>) => ({
+        toolFn: vi.fn(fn),
+        toolSchema: { name, description: name, parameters: { type: 'object' as const, properties: {}, required: [] } },
+      });
+      const read1 = makeTool('read_1', async () => 'result:read_1');
+      const read2 = makeTool('read_2', async () => {
+        abortController.abort();
+        return 'result:read_2';
+      });
+      const write3 = makeTool('write_3', async () => 'result:write_3');
+      const write4 = makeTool('write_4', async () => 'result:write_4');
+      const write5 = makeTool('write_5', async () => 'result:write_5');
+
+      const toolsUsed = [
+        { name: 'read_1', arguments: '{}', id: 'toolu_read_1' },
+        { name: 'read_2', arguments: '{}', id: 'toolu_read_2' },
+        { name: 'write_3', arguments: '{}', id: 'toolu_write_3' },
+        { name: 'write_4', arguments: '{}', id: 'toolu_write_4' },
+        { name: 'write_5', arguments: '{}', id: 'toolu_write_5' },
+      ];
+
+      const mockLlm: ICompletionBackend = {
+        currentModel: 'test-model',
+        getModelInfo: async () => [],
+        complete: async (_model, _messages, _options, callback) => {
+          await callback(['Thinking...'], { inputTokens: 100, outputTokens: 50, toolsUsed });
+        },
+        pushToolMessages: pushToolMessages as unknown as ICompletionBackend['pushToolMessages'],
+      };
+
+      const context: AgentContext = {
+        userId: 'test-user',
+        logger: createMockLogger() as any,
+        llm: mockLlm,
+        model: 'test-model',
+        tools: [read1, read2, write3, write4, write5],
+        maxIterations: 5,
+      };
+
+      const agent = new ReActAgent(context);
+      const result = await agent.run('Test query', {
+        parallelExecution: true,
+        // Classify write_* as write tools so they land in the sequential phase.
+        isReadOnlyTool: (name: string) => name.startsWith('read'),
+        signal: abortController.signal,
+      });
+
+      expect(result.finalAnswer).toBe('Interrupted');
+
+      // The 3 write tools must never have run (cancelled before execution).
+      expect(write3.toolFn).not.toHaveBeenCalled();
+      expect(write4.toolFn).not.toHaveBeenCalled();
+      expect(write5.toolFn).not.toHaveBeenCalled();
+
+      const messages = agent.toCheckpoint().messages;
+      const blocksOf = (content: unknown) =>
+        Array.isArray(content) ? (content as Array<Record<string, unknown>>) : [];
+      const toolUseIds = messages.flatMap(m =>
+        blocksOf(m.content)
+          .filter(b => b.type === 'tool_use')
+          .map(b => b.id)
+      );
+      const toolResultIds = messages.flatMap(m =>
+        blocksOf(m.content)
+          .filter(b => b.type === 'tool_result')
+          .map(b => b.tool_use_id)
+      );
+
+      // Parity: every advertised tool_use (all 5) has exactly one matching tool_result.
+      expect(toolUseIds.sort()).toEqual(toolsUsed.map(t => t.id).sort());
+      expect(toolResultIds.sort()).toEqual(toolUseIds.sort());
+
+      // Contiguity: each tool_use is immediately followed by its own tool_result,
+      // with no assistant/user message interleaved.
+      for (let i = 0; i < messages.length; i++) {
+        const toolUse = blocksOf(messages[i].content).find(b => b.type === 'tool_use');
+        if (!toolUse) continue;
+        const next = messages[i + 1];
+        expect(next?.role).toBe('user');
+        const toolResult = blocksOf(next?.content).find(b => b.type === 'tool_result');
+        expect(toolResult?.tool_use_id).toBe(toolUse.id);
+      }
+
+      // Content: 2 real results, 3 cancelled placeholders.
+      const contentById = new Map(
+        messages.flatMap(m =>
+          blocksOf(m.content)
+            .filter(b => b.type === 'tool_result')
+            .map(b => [b.tool_use_id as string, b.content as string])
+        )
+      );
+      expect(contentById.get('toolu_read_1')).toBe('result:read_1');
+      expect(contentById.get('toolu_read_2')).toBe('result:read_2');
+      for (const id of ['toolu_write_3', 'toolu_write_4', 'toolu_write_5']) {
+        expect(contentById.get(id)).toMatch(/cancelled before execution/i);
+      }
+    });
   });
 
   describe('token and credit tracking', () => {

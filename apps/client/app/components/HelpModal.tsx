@@ -30,7 +30,7 @@ import { APP_NAME } from '@client/config/general';
 
 // Internal discriminant only (never displayed); the displayed brand is APP_NAME.
 enum ProductType {
-  GrokTool = 'default',
+  Bike4Mind = 'default',
 }
 
 export const HelpModal: React.FC = () => {
@@ -40,7 +40,7 @@ export const HelpModal: React.FC = () => {
   const { settings, updatePreferences } = useUserSettings();
   const [feedbackContent, setFeedbackContent] = useState<string>('');
   const theme = useTheme();
-  const [productType] = useState<ProductType>(ProductType.GrokTool);
+  const [productType] = useState<ProductType>(ProductType.Bike4Mind);
   const [productTitle] = useState<string>(APP_NAME);
   const logoUrl = useGetLogo();
 
@@ -108,7 +108,7 @@ export const HelpModal: React.FC = () => {
 
   const renderContent = () => {
     switch (productType) {
-      case ProductType.GrokTool:
+      case ProductType.Bike4Mind:
         return (
           <>
             Beta users, please enjoy experimenting{productTitle ? ` with ${productTitle}` : ''}!
@@ -155,12 +155,7 @@ export const HelpModal: React.FC = () => {
         })}
       >
         <DialogContent>
-          <Stack
-            display="flex"
-            direction="row"
-            alignItems="center"
-            spacing={2}
-          >
+          <Stack display="flex" direction="row" alignItems="center" spacing={2}>
             {}
             <img src={logoUrl} alt={`${theme.branding.name} logo`} height={40} />
 

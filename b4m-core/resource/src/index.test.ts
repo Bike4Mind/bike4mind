@@ -31,6 +31,18 @@ describe('createResource — self-host Resource shim', () => {
     expect(Resource.agentContinuationQueue.url).toBe('http://mq:9324/q/agent');
   });
 
+  test('service resolves to { url } from a SCREAMING_SNAKE env var', () => {
+    const manifest: Manifest = { ChatCompletion: { kind: 'service' } };
+    const Resource = createResource({ CHAT_COMPLETION: 'http://chatcompletion:8080' }, manifest);
+    expect(Resource.ChatCompletion.url).toBe('http://chatcompletion:8080');
+  });
+
+  test('service (required) throws when its env var is unset', () => {
+    const manifest: Manifest = { ChatCompletion: { kind: 'service' } };
+    const Resource = createResource({}, manifest);
+    expect(() => Resource.ChatCompletion.url).toThrow(/CHAT_COMPLETION/);
+  });
+
   test('function resolves to { name } from a SCREAMING_SNAKE env var', () => {
     const manifest: Manifest = { ImageProcessor: { kind: 'function' } };
     const Resource = createResource({ IMAGE_PROCESSOR: 'image-processor' }, manifest);

@@ -80,6 +80,7 @@ import DownloadMenu, { downloadFile, copyToClipboard } from '../common/DownloadM
 import ShareIcon from '@mui/icons-material/Share';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 import JSONViewer from './JSONViewer';
 import { api } from '@client/app/contexts/ApiContext';
@@ -310,6 +311,9 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const [isCopying, setIsCopying] = useState(false);
   // Publish-and-share for the artifact currently in the viewer.
   const shareUser = useUser(s => s.currentUser);
+  // Active account-switcher org (null in personal context) - enables Team/org-scoped publishing.
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const { publishAndShare: publishAndShareArtifact, modal: artifactShareModal } = usePublishShare();
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDiffPreviewOpen, setIsDiffPreviewOpen] = useState(false);
@@ -974,7 +978,15 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     }
     publishAndShareArtifact({
       title,
-      ...buildArtifactPublishWiring({ artifactId, type, content, title, userId: String(shareUser.id) }),
+      ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+      ...buildArtifactPublishWiring({
+        artifactId,
+        type,
+        content,
+        title,
+        userId: String(shareUser.id),
+        orgId: activeOrg?.id,
+      }),
     });
   };
 
@@ -1934,8 +1946,7 @@ const KnowledgeContent: React.FC<{
                 lastMove: chessArtifact.metadata?.lastMove as { from: string; to: string } | undefined,
                 isCheck: (chessArtifact.metadata?.isCheck || parsedChessData.isCheck) as boolean | undefined,
                 isCheckmate: (chessArtifact.metadata?.isCheckmate || parsedChessData.isCheckmate) as
-                  | boolean
-                  | undefined,
+                  boolean | undefined,
                 isDraw: (chessArtifact.metadata?.isDraw || parsedChessData.isDraw) as boolean | undefined,
                 isGameOver: (chessArtifact.metadata?.isGameOver || parsedChessData.isGameOver) as boolean | undefined,
                 moveNumber: (chessArtifact.metadata?.moveNumber || parsedChessData.moveNumber) as number | undefined,

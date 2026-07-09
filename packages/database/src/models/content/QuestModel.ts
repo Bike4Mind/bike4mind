@@ -30,6 +30,7 @@ export const PromptMetaSchema = new Schema<PromptMeta>(
       cacheReadInputTokens: { type: Number, required: false },
       estimatedCost: { type: Number, required: false },
       creditsUsed: { type: Number, required: false },
+      settledBasis: { type: String, enum: ['provider', 'local'], required: false },
     },
     context: {
       attachedFiles: [
@@ -169,6 +170,10 @@ export const ChatHistoryItemSchema = new Schema<IChatHistoryItemDocument>(
     oob: { type: String, required: false },
     promptMeta: { type: PromptMetaSchema, required: false },
     status: { type: String, required: false },
+    // Machine-readable classifier for `type: 'error'` quests (e.g. 'insufficient_credits'),
+    // set server-side so the client can render a targeted error state. Declared so Mongoose
+    // strict mode persists it (otherwise the error UI would not survive a reload).
+    errorCode: { type: String, required: false },
     creditsUsed: { type: Number, required: false },
     pinned: { type: Boolean, required: false, default: false },
     researchModeResults: [

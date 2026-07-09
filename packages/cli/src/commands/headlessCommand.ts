@@ -15,8 +15,9 @@ import { ReActAgent } from '@bike4mind/agents';
 import type { AgentStep, AgentResult } from '@bike4mind/agents';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import { reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildSystemPrompt } from '../core/prompts';
-import { generateCliTools, PermissionManager, type AgentContext, getApiUrl, loadContextFiles } from '../utils';
+import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, loadContextFiles } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend';
@@ -136,8 +137,15 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       process.exit(1);
     }
 
-    // Initialize LLM backend - WebSocket preferred, SSE fallback
-    const apiBaseURL = getApiUrl(config.apiConfig);
+    // Initialize LLM backend - WebSocket preferred, SSE fallback.
+    // Fail loud when unconfigured rather than handing axios an empty baseURL.
+    let apiBaseURL: string;
+    try {
+      apiBaseURL = requireApiUrl(config.apiConfig);
+    } catch (error) {
+      process.stderr.write(`Error: ${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    }
     const apiClient = new ApiClient(apiBaseURL, configStore);
 
     // Layer B4M-web skills on top of the local files already loaded above.
@@ -175,7 +183,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       completionsUrl = serverConfig?.completionsUrl;
 
       if (wsUrl && wsCompletionUrl) {
-        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter);
+        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
+        wsManager.onRevoked(() => {
+          logger.warn('[headless] Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
+        });
         await wsManager.connect();
         const wsToolExecutor = new WebSocketToolExecutor(wsManager, tokenGetter);
         setWebSocketToolExecutor(wsToolExecutor);
@@ -191,6 +202,10 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
         throw new Error('No websocketUrl or wsCompletionUrl in server config');
       }
     } catch {
+      // A failed connect() still schedules a verify/reconnect via onclose. Falling back to
+      // SSE without tearing that down would leave an orphaned reconnect loop running with
+      // no owner, so disconnect before dropping the reference.
+      wsManager?.disconnect();
       wsManager = null;
       setWebSocketToolExecutor(null);
       llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, completionsUrl });
@@ -416,12 +431,21 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       backgroundManager.setCurrentTurn(null);
     }
 
-    // Save minimal session record
+    // Save minimal session record. The assistant message keeps its lossless tool
+    // trace on richContent so a later `--resume` of this session replays tool
+    // results, not just the final prose (same rule as the interactive paths).
+    const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
     const finalSession: Session = {
       ...session,
       messages: [
         { id: uuidv4(), role: 'user', content: fullPrompt, timestamp: new Date().toISOString() },
-        { id: uuidv4(), role: 'assistant', content: result.finalAnswer, timestamp: new Date().toISOString() },
+        {
+          id: uuidv4(),
+          role: 'assistant',
+          content: result.finalAnswer,
+          ...(richContent ? { richContent } : {}),
+          timestamp: new Date().toISOString(),
+        },
       ],
       updatedAt: new Date().toISOString(),
       metadata: {

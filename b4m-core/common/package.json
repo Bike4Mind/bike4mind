@@ -77,12 +77,13 @@
   "devDependencies": {
     "@types/react": "^19.2.15",
     "react": "^19.2.6",
-    "tsdown": "^0.22.2",
+    "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
     "vitest": "^4.1.9"
   },
   "dependencies": {
-    "dayjs": "^1.11.20",
+    "axios": "1.16.1",
+    "dayjs": "^1.11.21",
     "zod": "^4.4.3"
   }
 }

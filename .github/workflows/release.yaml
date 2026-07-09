@@ -72,8 +72,6 @@ jobs:
       # Use b4m-release-bot App token (not GITHUB_TOKEN) so the manual bump PR
       # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
       # are blocked by GitHub's infinite-loop prevention; custom App bots are not.
-      # NOTE: cleanup.yml uses the same App with different secret names (GH_APP_ID / GH_APP_PRIVATE_KEY).
-      # Consider consolidating to one naming convention in a follow-up.
       - name: Generate App token
         id: app-token
         uses: actions/create-github-app-token@v3
@@ -130,6 +128,7 @@ jobs:
             [services]="@bike4mind/services"
             [utils]="@bike4mind/utils"
             [mcp]="@bike4mind/mcp"
+            [slack]="@bike4mind/slack"
             [cli]="@bike4mind/cli"
           )
 
@@ -154,6 +153,7 @@ jobs:
               echo "\"@bike4mind/services\": $BUMP"
               echo "\"@bike4mind/utils\": $BUMP"
               echo "\"@bike4mind/mcp\": $BUMP"
+              echo "\"@bike4mind/slack\": $BUMP"
               echo "\"@bike4mind/cli\": $BUMP"
               echo "---"
               echo ""

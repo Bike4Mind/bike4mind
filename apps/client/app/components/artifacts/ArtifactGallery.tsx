@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -51,6 +51,7 @@ import { toast } from 'sonner';
 import { type BaseArtifact } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { buildArtifactPublishWiring } from '@client/app/utils/publishApi';
 
 // Types
@@ -127,11 +128,18 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   onArtifactCreate,
   onArtifactEdit,
 }) => {
-  // Publish-and-share: render an artifact to a hosted static bundle (/p/u/...).
+  // Publish-and-share: render an artifact to a hosted static bundle (/p/u/... or, in a Team
+  // account context, an org-scoped /p/o/...).
   const currentUser = useUser(s => s.currentUser);
+  // Active account-switcher org (null in personal context). Enables the dialog's Team option
+  // and org-scoped publishing; the server re-validates membership before trusting it.
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
+  // Guards against re-entrant Share clicks racing two publishes onto the single dialog.
+  const publishingRef = useRef(false);
   const handlePublishArtifact = useCallback(
-    (artifact: ArtifactWithContent) => {
+    async (artifact: ArtifactWithContent) => {
       if (!currentUser?.id) {
         toast.error('You must be signed in to publish');
         return;
@@ -146,18 +154,54 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
         toast.error('This artifact has no stable id to publish');
         return;
       }
-      publishAndShare({
-        title: artifact.title || 'Shared artifact',
-        ...buildArtifactPublishWiring({
-          artifactId,
-          type: artifact.type,
-          content: artifact.content ?? '',
-          title: artifact.title,
-          userId: String(currentUser.id),
-        }),
-      });
+      // Ignore re-entrant clicks while a hydration fetch is already in flight: there is a
+      // single share dialog, so two racing publishes would let the last-resolved one win it.
+      // A ref (not state) keeps the guard synchronous and free of re-render churn.
+      if (publishingRef.current) return;
+      publishingRef.current = true;
+      try {
+        // The gallery renders from the list feed (/api/artifacts), which omits `content` to stay
+        // lean. publishArtifactBundle throws on empty content before any network call, so hydrate
+        // the single artifact (the :id GET includes content by default; the string lives at
+        // response.content.content) before wiring up the publish dialog.
+        let content = artifact.content ?? '';
+        if (!content) {
+          try {
+            const { data } = await api.get<{ content?: { content?: string } }>(
+              `/api/artifacts/${encodeURIComponent(artifactId)}?includeContent=true`
+            );
+            content = data.content?.content ?? '';
+          } catch (err) {
+            // A transport/auth failure is not the same as "empty content" - keep the two
+            // distinct so a transient error doesn't send anyone chasing a data problem.
+            console.error('Failed to load artifact content for publish:', err);
+            toast.error('Could not load artifact content, please try again');
+            return;
+          }
+        }
+        if (!content) {
+          toast.error('This artifact has no content to publish');
+          return;
+        }
+        publishAndShare({
+          title: artifact.title || 'Shared artifact',
+          ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+          ...buildArtifactPublishWiring({
+            artifactId,
+            type: artifact.type,
+            content,
+            title: artifact.title,
+            userId: String(currentUser.id),
+            orgId: activeOrg?.id,
+          }),
+        });
+      } finally {
+        // Release once the dialog is open (or on any bail) - the guard only covers the
+        // async hydration window, which is where the race lives.
+        publishingRef.current = false;
+      }
     },
-    [currentUser, publishAndShare]
+    [currentUser, activeOrg, publishAndShare]
   );
 
   // State
@@ -380,7 +424,7 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
             <Dropdown>
               <MenuButton
                 slots={{ root: IconButton }}
-                slotProps={{ root: { size: 'sm', variant: 'plain' } }}
+                slotProps={{ root: { size: 'sm', variant: 'plain', 'data-testid': 'artifact-card-menu-btn' } }}
                 onClick={e => e.stopPropagation()}
               >
                 <MoreIcon />
@@ -398,7 +442,9 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
                 <MenuItem
                   onClick={e => {
                     e.stopPropagation();
-                    handlePublishArtifact(artifact);
+                    // Deliberate fire-and-forget: the async handler drives its own toasts and
+                    // opens the dialog; the menu click doesn't await it. `void` marks intent.
+                    void handlePublishArtifact(artifact);
                   }}
                   data-testid="artifact-publish-share"
                 >

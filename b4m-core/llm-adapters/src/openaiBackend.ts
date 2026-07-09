@@ -38,7 +38,8 @@ import {
 import { handleToolResultStreaming } from './toolStreamingHelper';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
-import { withRetry, isUserInitiatedAbort, isRetryableError } from './retry';
+import { withRetry, isUserInitiatedAbort, isRetryableError } from '@bike4mind/common';
+import { normalizeOpenAIFinishReason, normalizeOpenAIResponsesStopReason } from './stopReason';
 
 // Type for the reasoning_effort parameter that can be added to ChatCompletionCreateParams
 // OpenAI API expects reasoning_effort as a top-level string, not a nested object
@@ -1274,12 +1275,14 @@ export class OpenAIBackend implements ICompletionBackend {
 
       // Terminal turn - no choice had tool_calls (otherwise we'd have returned
       // above). Emit accumulated total plus this turn's tokens.
+      const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const completionInfo = {
         inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(options.responseFormat?.type === 'json_schema' ? { responseFormatMode: 'native' as const } : {}),
+        ...(finishReason ? { stopReason: finishReason } : {}),
       };
       await callback(streamedText, completionInfo);
       return;
@@ -1289,6 +1292,9 @@ export class OpenAIBackend implements ICompletionBackend {
     let cachedTokensFromStream = 0;
     let chunkCount = 0;
     let usageChunkCount = 0;
+    // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
+    // capture) - the terminal chunk of a round carries it, earlier chunks don't.
+    let streamFinishReason: string | undefined;
     for await (const chunk of response) {
       chunkCount++;
       const streamedText: string[] = [];
@@ -1303,7 +1309,11 @@ export class OpenAIBackend implements ICompletionBackend {
 
         inputTokens = Math.max(inputTokens, chunk.usage?.prompt_tokens || 0);
         outputTokens += chunk.usage?.completion_tokens || 0;
-        // Capture cached tokens if available in streaming response
+        // Capture cached tokens if available in streaming response.
+        // Do NOT forward this to CompletionInfo.cacheReadInputTokens: OpenAI's
+        // prompt_tokens INCLUDE cached tokens (unlike Anthropic, where the fields
+        // are disjoint), so forwarding without subtracting from inputTokens would
+        // double-bill the cached portion in provider-basis settlement.
         if (chunk.usage.prompt_tokens_details?.cached_tokens !== undefined) {
           cachedTokensFromStream = chunk.usage.prompt_tokens_details.cached_tokens;
           if (cachedTokensFromStream > 0) {
@@ -1331,15 +1341,21 @@ export class OpenAIBackend implements ICompletionBackend {
         if (c.delta.content) {
           streamedText[c.index] = (streamedText[c.index] || '') + c.delta.content;
         }
+
+        if (c.finish_reason) {
+          streamFinishReason = c.finish_reason;
+        }
       });
 
       // Always call the callback to maintain streaming, even during tool processing.
       // Emit accumulated total + this turn's running tokens so wrappedOnChunk
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
+      const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
     }
 
@@ -1880,10 +1896,15 @@ export class OpenAIBackend implements ICompletionBackend {
 
     // Terminal turn - no tool calls. Emit the model's text.
     if (functionCalls.length === 0) {
+      // The Responses API reports truncation via incomplete_details rather than a
+      // per-choice finish_reason string; map it onto the same stopReason vocabulary
+      // the chat-completions path uses.
+      const stopReason = normalizeOpenAIResponsesStopReason(response.incomplete_details?.reason);
       await callback([this.extractResponsesText(response.output)], {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        ...(stopReason ? { stopReason } : {}),
       });
       return;
     }

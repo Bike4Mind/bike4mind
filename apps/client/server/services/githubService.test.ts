@@ -262,14 +262,18 @@ describe('GitHubService', () => {
         await expect(GitHubService.forSystem(logger)).rejects.toThrow('DB connection failed');
       });
 
-      it('should throw if SECRET_ENCRYPTION_KEY is not configured', async () => {
+      it('should return null when SECRET_ENCRYPTION_KEY is not configured (permanent config error)', async () => {
         mockConfig.SECRET_ENCRYPTION_KEY = '';
         mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
           ...mockConnection,
           isSystemDefault: true,
         });
 
-        await expect(GitHubService.forSystem(logger)).rejects.toThrow('GitHub service configuration error');
+        // Missing key is a permanent deploy misconfiguration - forSystem returns null so
+        // the SQS consumer swallows the message instead of retrying.
+        await expect(GitHubService.forSystem(logger)).resolves.toBeNull();
+        // ...and logs the permanent-config reason so the swallow is not silent.
+        expect(mockLogger.error).toHaveBeenCalledWith(expect.stringContaining('SECRET_ENCRYPTION_KEY not configured'));
       });
 
       it('should throw on auth init failure so the caller can retry (transient failure)', async () => {

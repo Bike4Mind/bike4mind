@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/database';
 import { EmailJobStatus, EmailJobOverallStatus, EmailSendStatus } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dedupeTestRecipients } from './emailTestRecipients';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -38,7 +39,7 @@ const JobStartPayload = z.object({
 const EMAILS_PER_BATCH = 25; // Number of emails per SQS message/batch
 const SQS_BATCH_SIZE = 10; // Max SQS messages per SendMessageBatch call (AWS limit)
 
-interface Recipient {
+export interface Recipient {
   id: string;
   type: 'user' | 'subscriber' | 'direct';
   email: string;
@@ -110,24 +111,11 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         ? await buildRecipientListForUserIds(userIds, logger)
         : await buildRecipientListFromFilter(effectiveRecipientFilter, logger);
 
+      const uniqueTestRecipients = dedupeTestRecipients(testRecipients);
+      recipients = buildTestRecipients(realRecipients, uniqueTestRecipients);
       logger.info(
-        `Test mode: ${realRecipients.length} real recipients, redirecting to ${testRecipients.length} test addresses`
+        `Test mode: ${realRecipients.length} real recipients, sending ${recipients.length} email(s) to ${uniqueTestRecipients.length} test address(es)`
       );
-
-      // Create test recipients with original recipient tracking
-      // Preserve original recipient ID and type so we can look up user data for personalization
-      recipients = [];
-      for (let i = 0; i < realRecipients.length; i++) {
-        const realRecipient = realRecipients[i];
-        const testEmail = testRecipients[i % testRecipients.length]; // Round-robin test addresses
-        recipients.push({
-          id: realRecipient.id, // Preserve original ID for user data lookup
-          type: realRecipient.type, // Preserve type (user/subscriber) for correct data fetch
-          email: testEmail.toLowerCase().trim(), // Actual delivery address is the test email
-          originalRecipient: realRecipient.email, // Track original for display/personalization
-          isTestEmail: true,
-        });
-      }
     }
     // Option 2: Specific userIds provided (partial send)
     else if (userIds?.length) {
@@ -224,6 +212,30 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     throw error;
   }
 });
+
+// Caps fan-out at the number of test addresses so each test address receives
+// exactly one email, regardless of how large the real audience is.
+// Preserves original recipient ID/type for personalization, paired 1:1 with a test address.
+// Input is pre-deduped (dispatch runs dedupeTestRecipients; see the dedupe regression
+// test); the internal normalize below is kept for direct callers.
+export function buildTestRecipients(realRecipients: Recipient[], testRecipients: string[]): Recipient[] {
+  const sampleSize = Math.min(realRecipients.length, testRecipients.length);
+  const recipients: Recipient[] = [];
+
+  for (let i = 0; i < sampleSize; i++) {
+    const realRecipient = realRecipients[i];
+    const testEmail = testRecipients[i];
+    recipients.push({
+      id: realRecipient.id,
+      type: realRecipient.type,
+      email: testEmail.toLowerCase().trim(),
+      originalRecipient: realRecipient.email,
+      isTestEmail: true,
+    });
+  }
+
+  return recipients;
+}
 
 async function buildRecipientListFromFilter(
   filter: z.infer<typeof RecipientFilterSchema> | undefined,

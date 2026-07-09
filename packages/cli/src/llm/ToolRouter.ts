@@ -45,6 +45,10 @@ const LOCAL_TOOLS = [
   'math_evaluate',
   'current_datetime',
   'bash_execute',
+  'check_shell_output',
+  'write_shell_stdin',
+  'list_background_shells',
+  'kill_background_shell',
   'recent_changes',
   'ask_user_question',
 ] as const;

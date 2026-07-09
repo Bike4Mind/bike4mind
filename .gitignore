@@ -26,10 +26,19 @@ cdk.context.json
 .env
 .env.secrets
 .env.selfhost
+.env.e2e
+# Local env-file secret backups: a *.bak of an env file (tooling and editors
+# write these) and .env.e2e can both hold real secrets - never commit them.
+.env.bak
+.env.*.bak
 .direnv
 
 # Local-only docker compose override (per-developer mongo port/container)
 compose.override.yaml
+
+# Per-developer env-var wrapper for the SST personal-stage path (Tier 2).
+# Copy for-env.example -> for-env and fill in real (private) stage values.
+/for-env
 
 *.tsbuildinfo
 
