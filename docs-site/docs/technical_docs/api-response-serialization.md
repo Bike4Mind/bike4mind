@@ -188,7 +188,9 @@ already free to add a header/event without touching their existing response shap
 is a bigger step -- it touches the shape of every response body -- so it should be adopted the
 same way the request-ID field was, incrementally, rather than as a single cutover:
 
-1. **Phase 1 -- additive fields only.** Add `request_id` to the SSE error event (already done) and
+1. **Phase 1 -- additive fields only.** Attach the correlation ID on both transports (already done
+   -- `request_id` on the Next.js body, `requestId` on the SSE error event; reconciling that
+   camelCase/snake_case skew onto `request_id` is itself part of the additive rollout below) and
    introduce `meta` as an additive field on the existing Next.js error JSON body, without changing
    `error`/`name`/`request_id` at the top level. Existing clients parsing the current shape are
    unaffected; new clients can start reading `meta`.
