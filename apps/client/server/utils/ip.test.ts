@@ -68,6 +68,24 @@ describe('getClientIp', () => {
     expect(getClientIp(req)).toBe('203.0.113.7');
   });
 
+  it('uses a public IPv6 x-forwarded-for when it is the only header present', () => {
+    const req = mockReq({ headers: { 'x-forwarded-for': '2001:db8::1' } });
+    expect(getClientIp(req)).toBe('2001:db8::1');
+  });
+
+  it.each([
+    ['loopback ::1', '::1'],
+    ['link-local fe80::/10', 'fe80::abcd'],
+    ['unique-local fc00::/7', 'fc00::1'],
+    ['unique-local fd00::/8', 'fd12:3456::1'],
+  ])('filters a private/reserved IPv6 (%s) and falls back to the socket', (_label, addr) => {
+    const req = mockReq({
+      headers: { 'x-forwarded-for': addr },
+      socketIp: '203.0.113.7',
+    });
+    expect(getClientIp(req)).toBe('203.0.113.7');
+  });
+
   it('does NOT blindly trust the leftmost x-forwarded-for when a higher-priority header exists', () => {
     const req = mockReq({
       headers: {
