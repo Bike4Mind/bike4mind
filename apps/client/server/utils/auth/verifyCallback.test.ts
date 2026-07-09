@@ -8,9 +8,7 @@ const mockCreate = vi.fn();
 
 vi.mock('@bike4mind/database', () => ({
   User: {
-    // findOne returns a chainable stub so production code's `.select('+password')`
-    // works; the underlying resolved value (set via mockFindOne) is unaffected.
-    findOne: (...args: unknown[]) => ({ select: () => mockFindOne(...args) }),
+    findOne: (...args: unknown[]) => mockFindOne(...args),
     updateOne: (...args: unknown[]) => mockUpdateOne(...args),
     create: (...args: unknown[]) => mockCreate(...args),
   },
@@ -60,7 +58,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
-      password: 'bcrypt-hash',
+      hasUsablePassword: true,
       authProviders: [],
     });
 
@@ -75,7 +73,13 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   it('links AND promotes emailVerified when local user has no password (pure-OAuth shell)', async () => {
     // No password -> can't be a password-squatter's account -> the provider's
     // verified-email assertion is sufficient; link and promote in one write.
-    stage2Hit({ _id: 'u1', email: 'victim@example.com', emailVerified: false, password: null, authProviders: [] });
+    stage2Hit({
+      _id: 'u1',
+      email: 'victim@example.com',
+      emailVerified: false,
+      hasUsablePassword: false,
+      authProviders: [],
+    });
 
     const { err, user } = await runStandard(AuthStrategy.Google, baseProfile);
 
@@ -90,7 +94,13 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
   });
 
   it('does NOT promote emailVerified when it was already true (no-op on the happy path)', async () => {
-    stage2Hit({ _id: 'u1', email: 'user@example.com', emailVerified: true, password: null, authProviders: [] });
+    stage2Hit({
+      _id: 'u1',
+      email: 'user@example.com',
+      emailVerified: true,
+      hasUsablePassword: false,
+      authProviders: [],
+    });
 
     await runStandard(AuthStrategy.Google, {
       id: 'google-sub-real',
@@ -107,7 +117,14 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
     // collision is NOT an identity assertion, so promoting + backfilling the provider's
     // email onto the emailless passwordless shell would be an account takeover. The link
     // is refused - promotion requires a real verified-email match (present and equal).
-    stage2Hit({ _id: 'u1', email: null, username: 'victim', emailVerified: false, password: null, authProviders: [] });
+    stage2Hit({
+      _id: 'u1',
+      email: null,
+      username: 'victim',
+      emailVerified: false,
+      hasUsablePassword: false,
+      authProviders: [],
+    });
 
     const { err, user } = await runStandard(AuthStrategy.Google, {
       id: 'google-sub-real',
@@ -173,7 +190,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
-      password: 'bcrypt-hash',
+      hasUsablePassword: true,
       authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-original' }],
     });
 
@@ -195,7 +212,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
-      password: null,
+      hasUsablePassword: false,
       authProviders: [{ strategy: AuthStrategy.Google, id: 'google-sub-old' }],
     });
 
@@ -309,7 +326,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
-      password: 'bcrypt-hash',
+      hasUsablePassword: true,
       authProviders: [],
     });
 
@@ -331,7 +348,7 @@ describe('verifyCallback - existing user auto-link safety gate', () => {
       _id: 'u1',
       email: 'victim@example.com',
       emailVerified: false,
-      password: 'bcrypt-hash',
+      hasUsablePassword: true,
       authProviders: [{ strategy: AuthStrategy.Google, id: null }],
     });
 

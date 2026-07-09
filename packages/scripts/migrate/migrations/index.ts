@@ -57,6 +57,7 @@ import AddAuthProvidersStrategyIdIndex from './20260620000000_add-authproviders-
 import LowercaseAgentTriggerWords from './20260626000000_lowercase-agent-trigger-words';
 import BackfillPolicyAcceptanceGrandfather from './20260702010000_backfill-policy-acceptance-grandfather';
 import HashMfaBackupCodes from './20260702000000_hash-mfa-backup-codes';
+import AddHasUsablePasswordToUsers from './20260709120000_add-hasusablepassword-to-users';
 
 export interface MigrationFile {
   id: number;
@@ -117,4 +118,5 @@ export const AvailableMigrations: MigrationFile[] = [
   LowercaseAgentTriggerWords,
   BackfillPolicyAcceptanceGrandfather,
   HashMfaBackupCodes,
+  AddHasUsablePasswordToUsers,
 ];

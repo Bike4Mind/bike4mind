@@ -20,9 +20,7 @@ const mockCreate = vi.fn();
 const mockAuthFailCreate = vi.fn();
 vi.mock('@bike4mind/database', () => ({
   User: {
-    // findOne returns a chainable stub so production code's `.select('+password')`
-    // works; the underlying resolved value (set via mockFindOne) is unaffected.
-    findOne: (...a: any[]) => ({ select: () => mockFindOne(...a) }),
+    findOne: (...a: any[]) => mockFindOne(...a),
     updateOne: (...a: any[]) => mockUpdateOne(...a),
     create: (...a: any[]) => mockCreate(...a),
   },
@@ -175,7 +173,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
         _id: 'u4',
         email: 'user@example.com',
         emailVerified: false,
-        password: 'bcrypt-hash',
+        hasUsablePassword: true,
         authProviders: [],
         tokenVersion: 0,
       },
@@ -194,7 +192,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
         _id: 'u5',
         email: 'user@example.com',
         emailVerified: false,
-        password: null,
+        hasUsablePassword: false,
         authProviders: [],
         tokenVersion: 0,
       },
@@ -220,7 +218,7 @@ describe('/api/auth/okta/callback — account-link email-equality gate', () => {
         email: null,
         username: 'victim',
         emailVerified: false,
-        password: null,
+        hasUsablePassword: false,
         authProviders: [],
         tokenVersion: 0,
       },

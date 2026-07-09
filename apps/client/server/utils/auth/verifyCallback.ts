@@ -28,10 +28,7 @@ const authenticateUser = async (
     // Stage 1: match by immutable (strategy, providerId).
     // Guard: only when id is truthy - $elemMatch with id:null would match other
     // users' legacy null-id rows and introduce a new null-collision takeover.
-    // .select('+password') - `password` is `select: false` in the schema, and the
-    // auto-link gate below needs to tell a pure-OAuth shell (no password) from a
-    // password-protected account; without this every user would look passwordless.
-    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }).select('+password') : null;
+    let user = id ? await User.findOne({ authProviders: { $elemMatch: { strategy, id } } }) : null;
 
     // Stage 2: fallback to mutable email/username only when stage 1 missed.
     // The Missing Identifier guard lives here (between stages) because a stage-1
@@ -45,7 +42,7 @@ const authenticateUser = async (
       const conditions: { [field: string]: { $regex: string; $options: string } }[] = [];
       if (email) conditions.push({ email: { $regex: `^${escapeRegex(email)}$`, $options: 'i' } });
       if (username) conditions.push({ username: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } });
-      user = await User.findOne({ $or: conditions }).select('+password');
+      user = await User.findOne({ $or: conditions });
     }
 
     const oauthCredentials = {
@@ -102,20 +99,23 @@ const authenticateUser = async (
           done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
           return;
         }
-        // Local-verified half: required UNLESS the local account is a pure-OAuth
-        // shell (no password). A password-protected account with an unverified
-        // email is a classic reverse-takeover setup - an attacker pre-creates the
-        // victim's email locally (unverified, password known only to the attacker)
-        // and waits for the victim to SSO in and get absorbed. A passwordless shell
-        // can't be squatted that way, and the provider round-trip above just
-        // cryptographically attested control of this email, so linking is safe -
-        // promote the local email to verified instead of dead-ending the user.
-        // Promote ONLY on a real verified-email match, though: a username-only
+        // Local-verified half: required UNLESS the local account has no usable password
+        // (hasUsablePassword === false). An account with a real password and an
+        // unverified email is a classic reverse-takeover setup - an attacker pre-creates
+        // the victim's email locally (unverified, password known only to the attacker)
+        // and waits for the victim to SSO in and get absorbed. `hasUsablePassword` is the
+        // discriminator (NOT `!user.password`): admin/migration "shell" accounts store an
+        // auto-generated, unusable password that is bcrypt-hashed and therefore
+        // indistinguishable from a real one - see UserModel.ts's field comment. A
+        // genuinely passwordless account can't be squatted that way, and the provider
+        // round-trip above just cryptographically attested control of this email, so
+        // linking is safe - promote the local email to verified instead of dead-ending
+        // the user. Promote ONLY on a real verified-email match, though: a username-only
         // match (local email null) is not an identity assertion, so promoting on it
         // would let a colliding username link into an emailless passwordless shell
         // and stamp the attacker's email onto it.
         if (user.emailVerified !== true) {
-          if (!user.password && email && localEmail && email.toLowerCase() === localEmail.toLowerCase()) {
+          if (!user.hasUsablePassword && email && localEmail && email.toLowerCase() === localEmail.toLowerCase()) {
             promoteEmailVerified = true;
           } else {
             done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
@@ -171,6 +171,7 @@ const authenticateUser = async (
         name,
         username: username ?? name,
         password: null,
+        hasUsablePassword: false,
         isAdmin: false,
         oauthCredentials,
         authProviders: [oauthCredentials],

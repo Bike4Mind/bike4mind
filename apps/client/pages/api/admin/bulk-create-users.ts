@@ -56,6 +56,8 @@ const handler = baseApi().post(
               initialCredits: validatedData.startingCredits ?? 0,
               record: {
                 password,
+                // Auto-generated, unusable - nobody knows this password. Users sign in via OTC.
+                hasUsablePassword: false,
               },
             },
             {

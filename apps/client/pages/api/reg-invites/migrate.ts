@@ -89,7 +89,7 @@ const handler = baseApi().post(async (req, res) => {
             name,
             // Passwordless: no usable password. Store a random unusable value to
             // satisfy the record shape; the user signs in via OTC.
-            record: { password: randomUUID() },
+            record: { password: randomUUID(), hasUsablePassword: false },
           },
           { db: { users: userRepository } }
         );

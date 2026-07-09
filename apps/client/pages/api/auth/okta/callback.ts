@@ -196,10 +196,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
       conditions.push({ username: { $regex: `^${escapeRegex(username)}$`, $options: 'i' } });
     }
 
-    // .select('+password') - `password` is `select: false` in the schema, and the
-    // auto-link gate below needs to tell a pure-OAuth shell (no password) from a
-    // password-protected account; without this every user would look passwordless.
-    let user = await User.findOne({ $or: conditions }).select('+password');
+    let user = await User.findOne({ $or: conditions });
 
     // Reject system user accounts before touching any data
     if (user) requireNonSystemUser(user);
@@ -314,18 +311,22 @@ const handleOktaCallback = async (req: Request, res: Response) => {
           return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_EMAIL_MISMATCH)}`);
         }
 
-        // Local-verified half: required UNLESS the local account is a pure-OAuth
-        // shell (no password) - mirrors verifyCallback.ts. A password-protected
-        // account with an unverified email is a reverse-takeover setup (attacker
-        // pre-creates the victim's email locally with a password only they know);
-        // a passwordless shell can't be squatted that way, and Okta's assertion
-        // above just attested control of this email, so promote instead of
-        // dead-ending the user. Promote ONLY on a real verified-email match: a
-        // username-only match (local email null) is not an identity assertion, so
-        // promoting on it would let a colliding username take an emailless shell.
+        // Local-verified half: required UNLESS the local account has no usable password
+        // (hasUsablePassword === false) - mirrors verifyCallback.ts. An account with a
+        // real password and an unverified email is a reverse-takeover setup (attacker
+        // pre-creates the victim's email locally with a password only they know).
+        // `hasUsablePassword` is the discriminator (NOT `!user.password`): admin/migration
+        // "shell" accounts store an auto-generated, unusable password that is
+        // bcrypt-hashed and therefore indistinguishable from a real one - see
+        // UserModel.ts's field comment. A genuinely passwordless account can't be
+        // squatted that way, and Okta's assertion above just attested control of this
+        // email, so promote instead of dead-ending the user. Promote ONLY on a real
+        // verified-email match: a username-only match (local email null) is not an
+        // identity assertion, so promoting on it would let a colliding username take an
+        // emailless shell.
         if (user.emailVerified !== true) {
           const promotable =
-            !user.password && !!email && !!localEmail && email.toLowerCase() === localEmail.toLowerCase();
+            !user.hasUsablePassword && !!email && !!localEmail && email.toLowerCase() === localEmail.toLowerCase();
           if (!promotable) {
             Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: verification required', {
               userId: user.id,
@@ -386,6 +387,7 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         name,
         username: name,
         email,
+        hasUsablePassword: false,
         isAdmin: false,
         oauthCredentials,
         authProviders: [oauthCredentials],
