@@ -96,8 +96,10 @@ There are currently 40 tool directories under `tools/implementation/` (verified 
 `knowledgeBaseSearch`, `lattice`, `math`, `mermaidChart`, `moonPhase`, `navigateView`,
 `planetVisibility`, `promptEnhancement`, `recentChanges`, `recharts`, `skill`,
 `sunriseSunset`, `weather`, `webfetch`, `websearch`, `wikipediaOnThisDay`,
-`wolfram_alpha`. (`tools/` also has two agent-delegation tools that sit outside
-`implementation/`: `coordinateTask.ts` and `delegateToAgent.ts`.)
+`wolfram_alpha`. (`implementation/` also holds two agent-delegation tools as loose
+`.ts` files rather than their own directories - `implementation/coordinateTask.ts`
+and `implementation/delegateToAgent.ts` - so they fall outside the 40-directory
+count above.)
 
 | Proposed provider contract | Current concrete tool(s) that would implement it |
 |---|---|
