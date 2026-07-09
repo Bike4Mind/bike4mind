@@ -39,10 +39,13 @@ const RunningItem = React.memo(function RunningItem({ session }: { session: Shel
   );
 });
 
+const UNKNOWN_ICON = { symbol: '?', color: 'gray' } as const;
+
 /** A finished session: status icon + command + exit code, shown briefly. */
 const CompletedItem = React.memo(function CompletedItem({ session }: { session: ShellSession }) {
-  // Only ever rendered for terminal sessions (selectCompletedBackgroundShells).
-  const icon = TERMINAL_ICON[session.status as TerminalShellStatus];
+  // Only terminal sessions reach here (selectCompletedBackgroundShells); the
+  // fallback keeps the render crash-proof if that invariant ever changes.
+  const icon = TERMINAL_ICON[session.status as TerminalShellStatus] ?? UNKNOWN_ICON;
   const outcome = session.exitCode !== null ? `exit ${session.exitCode}` : session.status;
   return (
     <Box>
