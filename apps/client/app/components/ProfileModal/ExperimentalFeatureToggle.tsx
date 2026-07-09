@@ -153,39 +153,39 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableBmPi')}
       />
-      <FeatureContainer
-        title="Lattice"
-        featureKey="enableLattice"
-        description="Create and manipulate financial pro-forma models using natural language. Build spreadsheet-like models through conversation."
-        helpId="features/lattice"
-        enabled={isFeatureEnabled('enableLattice')}
-        disabled={!getServerSettingValue('EnableLattice')}
-        disabledReason={!getServerSettingValue('EnableLattice') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableLattice')}
-      />
-      <FeatureContainer
-        title="Mementos"
-        featureKey="enableMementos"
-        description="Save and revisit important moments from your learning sessions with AI-generated summaries."
-        helpId="features/mementos"
-        enabled={isFeatureEnabled('enableMementos')}
-        disabled={!getServerSettingValue('EnableMementos')}
-        disabledReason={!getServerSettingValue('EnableMementos') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableMementos')}
-      />
-      <FeatureContainer
-        title="Private Model Hub"
-        featureKey="enableOllama"
-        description="Access our exclusive collection of privately hosted cutting-edge models, including DeepSeek, Qwen, and other frontier models not available through mainstream providers."
-        helpId="features/private-model-hub"
-        enabled={isFeatureEnabled('enableOllama')}
-        disabled={!getServerSettingValue('EnableOllama')}
-        disabledReason={!getServerSettingValue('EnableOllama') ? 'Disabled by administrator' : undefined}
-        loading={false}
-        onChange={() => handleToggle('enableOllama')}
-      />
+      {getServerSettingValue('EnableLattice') && (
+        <FeatureContainer
+          title="Lattice"
+          featureKey="enableLattice"
+          description="Create and manipulate financial pro-forma models using natural language. Build spreadsheet-like models through conversation."
+          helpId="features/lattice"
+          enabled={isFeatureEnabled('enableLattice')}
+          loading={false}
+          onChange={() => handleToggle('enableLattice')}
+        />
+      )}
+      {getServerSettingValue('EnableMementos') && (
+        <FeatureContainer
+          title="Mementos"
+          featureKey="enableMementos"
+          description="Save and revisit important moments from your learning sessions with AI-generated summaries."
+          helpId="features/mementos"
+          enabled={isFeatureEnabled('enableMementos')}
+          loading={false}
+          onChange={() => handleToggle('enableMementos')}
+        />
+      )}
+      {getServerSettingValue('EnableOllama') && (
+        <FeatureContainer
+          title="Private Model Hub"
+          featureKey="enableOllama"
+          description="Access our exclusive collection of privately hosted cutting-edge models, including DeepSeek, Qwen, and other frontier models not available through mainstream providers."
+          helpId="features/private-model-hub"
+          enabled={isFeatureEnabled('enableOllama')}
+          loading={false}
+          onChange={() => handleToggle('enableOllama')}
+        />
+      )}
       <FeatureContainer
         title="Quest Master"
         featureKey="enableQuestMaster"
