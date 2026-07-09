@@ -9,6 +9,8 @@ import {
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
+  KNOWN_ENTITLEMENT_KEYS,
+  unknownEntitlementKeys,
 } from './registry';
 
 // Behavior tests are table-driven over the real registry rows (no product
@@ -302,5 +304,31 @@ describe('resolveEntitlements', () => {
 
   it('returns empty for a user with no tags, no subscriptions, and no email', () => {
     expect(resolveEntitlements({ tags: [], activePriceIds: [] })).toEqual([]);
+  });
+});
+
+describe('KNOWN_ENTITLEMENT_KEYS / unknownEntitlementKeys', () => {
+  it('is the sorted union of every grant source, deduped (matches allKnownEntitlementKeys)', () => {
+    const expected = Array.from(
+      new Set(
+        [...__registryRows.priceRows, ...__registryRows.tagGrantRows, ...__registryRows.domainGrantRows].flatMap(
+          r => r.entitlements
+        )
+      )
+    ).sort();
+    expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual(expected);
+    expect([...KNOWN_ENTITLEMENT_KEYS]).toEqual([...allKnownEntitlementKeys()].sort());
+    expect(new Set(KNOWN_ENTITLEMENT_KEYS).size).toBe(KNOWN_ENTITLEMENT_KEYS.length);
+  });
+
+  it('flags keys the registry does not recognize (normalized, de-duplicated)', () => {
+    const known = KNOWN_ENTITLEMENT_KEYS[0];
+    expect(unknownEntitlementKeys([known])).toEqual([]);
+    expect(unknownEntitlementKeys([`${known}`, ' BOGUS:key ', 'bogus:key'])).toEqual(['bogus:key']);
+  });
+
+  it('treats a known key as known regardless of case/whitespace', () => {
+    const known = KNOWN_ENTITLEMENT_KEYS[0];
+    expect(unknownEntitlementKeys([` ${known.toUpperCase()} `])).toEqual([]);
   });
 });

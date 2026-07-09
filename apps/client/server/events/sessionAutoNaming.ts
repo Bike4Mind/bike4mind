@@ -3,6 +3,8 @@ import { SessionEvents } from '@server/utils/eventBus';
 import { questRepository, Session, sessionRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { sessionService } from '@bike4mind/services';
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 
 export const handler = withEventContext(async (event, logger) => {
   const { sessionId, userId } = SessionEvents.AutoName.schema.parse(event.properties);
@@ -54,8 +56,10 @@ export const handler = withEventContext(async (event, logger) => {
   // Wrap in try/catch: auto-naming is a non-critical UX feature. LLM failures
   // (e.g. OpenAI 500s) must not cause a Lambda Invoke Error, so swallow and warn.
   let updatedSession;
+  let lastCompletionInfo: CompletionInfo | undefined;
+  const startTime = Date.now();
   try {
-    const { modelId, llm } = await OperationsModelService.getOperationsModel();
+    const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
     logger.info(`Using operations model for auto-naming: ${modelId}`);
 
     updatedSession = await sessionService.autoName(
@@ -71,8 +75,9 @@ export const handler = withEventContext(async (event, logger) => {
             modelId,
             [{ role: 'user', content: prompt }],
             { maxTokens: 600 },
-            async (chunks: (string | null | undefined)[]) => {
+            async (chunks: (string | null | undefined)[], completionInfo?: CompletionInfo) => {
               result += chunks.filter(Boolean).join('');
+              if (completionInfo) lastCompletionInfo = completionInfo;
             }
           );
 
@@ -83,6 +88,16 @@ export const handler = withEventContext(async (event, logger) => {
         logger,
       }
     );
+
+    await recordSessionOperationalUsage({
+      userId,
+      sessionId,
+      modelId,
+      modelInfo,
+      completionInfo: lastCompletionInfo,
+      startTime,
+      logger,
+    });
   } catch (error) {
     logger.warn(`Auto-naming failed for session ${sessionId} — skipping (non-critical)`, { error });
     return;

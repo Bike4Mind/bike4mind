@@ -420,4 +420,29 @@ describe('createDelegateToAgentTool — usage-event cost basis (#151)', () => {
     expect(captured!.cacheReadTokens).toBe(0);
     expect(captured!.cacheWriteTokens).toBe(0);
   });
+
+  it('drops the usage meta and warns when the model is not in availableModels (#152)', async () => {
+    mockDelegation(makeResult({}));
+
+    let captured: SubagentUsageMeta | undefined = {} as SubagentUsageMeta;
+    const logger = makeLogger();
+    const tool = createDelegateToAgentTool({
+      userId: 'u1',
+      llm: makeLlm(),
+      logger,
+      parentTools: [],
+      agentStore: makeStore(),
+      // Model resolvable list does not contain MODEL_ID, so cost attribution misses.
+      availableModels: [],
+      onCredits: (_credits, meta) => {
+        captured = meta;
+      },
+    });
+
+    await tool.toolFn({ task: 'research', agent: 'researcher' });
+
+    // Credits are still charged (onCredits fired) but no meta -> event is dropped.
+    expect(captured).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(MODEL_ID));
+  });
 });

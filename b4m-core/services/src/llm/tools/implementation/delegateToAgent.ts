@@ -336,6 +336,15 @@ export function createDelegateToAgentTool(deps: DelegateToAgentToolDeps): ICompl
           // delegation, inflating the margins the dashboard reports above reality.
           const cacheReadTokens = result.completionInfo.totalCacheReadTokens ?? 0;
           const cacheWriteTokens = result.completionInfo.totalCacheWriteTokens ?? 0;
+          // When the model can't be resolved the usage event is dropped rather than
+          // fabricated from zeros (see #121/#132). Warn so the drop rate is observable
+          // in logs (#152) - the credit is still charged, only cost attribution is lost.
+          if (!modelInfo) {
+            deps.logger.warn(
+              `[delegateToAgent] usage event dropped: model "${result.model}" not in availableModels; ` +
+                `${result.completionInfo.totalCredits} credits charged without cost attribution`
+            );
+          }
           deps.onCredits(
             result.completionInfo.totalCredits,
             modelInfo

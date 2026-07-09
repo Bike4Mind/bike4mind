@@ -16,6 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
+import { parseInternalStaffDomains } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -170,15 +171,12 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
  * -> no internal-domain grant, which is the correct default. Set the
  * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
  * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ *
+ * Parsed via the shared helper so analytics resolves the same domains (#172).
  */
-const INTERNAL_STAFF_DOMAINS: readonly string[] = [
-  ...new Set(
-    (process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ?? '')
-      .split(',')
-      .map(d => normalizeTag(d))
-      .filter(Boolean)
-  ),
-];
+const INTERNAL_STAFF_DOMAINS: readonly string[] = parseInternalStaffDomains(
+  process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+);
 
 /** Domains already covered by an external row (derived - no brand literals to keep in sync). */
 const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row.domain));
@@ -232,6 +230,31 @@ export const TAG_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Ma
 export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
   DOMAIN_GRANT_ROWS.map(row => [normalizeTag(row.domain), row.entitlements])
 );
+
+/**
+ * Every entitlement key the registry recognizes as a grantable product, sorted - the union of
+ * every grant source (price, comp-tag, email-domain) via `allKnownEntitlementKeys`, so there is
+ * one source of truth for "what products exist" (e.g. `optihashi:pro`, `libreoncology:pro`). New
+ * products surface here automatically as their rows are added above. Admin surfaces that let an
+ * operator pick an entitlement to grant (LLM model gating, partner signup rules) source their
+ * options from this so a typo can't persist a dead grant.
+ */
+export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
+
+/**
+ * The entitlement keys in `keys` the registry does NOT recognize (normalized, de-duplicated).
+ * Empty means every key is a known grantable product. Used to reject typo'd keys at admin
+ * write boundaries before they persist as a silent no-op grant.
+ */
+export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
+  const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+  const unknown = new Set<string>();
+  for (const raw of keys) {
+    const key = normalizeTag(raw);
+    if (key && !known.has(key)) unknown.add(key);
+  }
+  return [...unknown];
+}
 
 /** Entitlement keys granted by the given Stripe priceIds. */
 export function entitlementsForPriceIds(priceIds: readonly string[]): Set<EntitlementKey> {

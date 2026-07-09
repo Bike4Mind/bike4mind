@@ -26,7 +26,11 @@ vi.mock('@server/middlewares/baseApi', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({ partnerSignupRuleRepository: repo }));
-vi.mock('@server/entitlements/partnerRules', () => ({ invalidatePartnerRuleCache }));
+// Keep assertKnownEntitlements real (exercises the actual known-key validation); spy only on invalidate.
+vi.mock('@server/entitlements/partnerRules', async importOriginal => ({
+  ...(await importOriginal<typeof import('@server/entitlements/partnerRules')>()),
+  invalidatePartnerRuleCache,
+}));
 
 // Importing the route registers handlers.get / handlers.post via the mocked baseApi.
 import '@pages/api/admin/partner-signup-rules/index';
@@ -58,6 +62,12 @@ describe('/api/admin/partner-signup-rules — create (POST)', () => {
   it('rejects an invalid body with a 400 (Zod message)', async () => {
     const { req, res } = makeReqRes('POST', { body: { ...validRule, domain: 'gmail.com' } });
     await expect(handlers.post(req, res)).rejects.toThrow(/public mail providers/i);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown entitlement key with a 400 and never writes (issue #324)', async () => {
+    const { req, res } = makeReqRes('POST', { body: { ...validRule, entitlements: ['optihash:pro'] } });
+    await expect(handlers.post(req, res)).rejects.toThrow(/unknown entitlement key/i);
     expect(repo.create).not.toHaveBeenCalled();
   });
 

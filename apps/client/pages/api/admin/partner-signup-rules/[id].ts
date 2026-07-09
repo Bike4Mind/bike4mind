@@ -4,7 +4,7 @@ import { BadRequestError, ensureAdmin } from '@server/utils/errors';
 import { NotFoundError } from '@bike4mind/utils';
 import { partnerSignupRuleRepository } from '@bike4mind/database';
 import { updatePartnerSignupRuleSchema } from '@bike4mind/common';
-import { invalidatePartnerRuleCache } from '@server/entitlements/partnerRules';
+import { invalidatePartnerRuleCache, assertKnownEntitlements } from '@server/entitlements/partnerRules';
 import { z } from 'zod';
 
 interface RequestQuery {
@@ -27,6 +27,8 @@ const handler = baseApi()
         }
         throw error;
       }
+      // Only present on a partial update that touches entitlements.
+      if (data.entitlements) assertKnownEntitlements(data.entitlements);
 
       const updated = await partnerSignupRuleRepository.update({ id, ...data });
       // Null => the row was deleted between check and write (or never existed). 404 rather

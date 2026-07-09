@@ -1946,8 +1946,7 @@ const KnowledgeContent: React.FC<{
                 lastMove: chessArtifact.metadata?.lastMove as { from: string; to: string } | undefined,
                 isCheck: (chessArtifact.metadata?.isCheck || parsedChessData.isCheck) as boolean | undefined,
                 isCheckmate: (chessArtifact.metadata?.isCheckmate || parsedChessData.isCheckmate) as
-                  | boolean
-                  | undefined,
+                  boolean | undefined,
                 isDraw: (chessArtifact.metadata?.isDraw || parsedChessData.isDraw) as boolean | undefined,
                 isGameOver: (chessArtifact.metadata?.isGameOver || parsedChessData.isGameOver) as boolean | undefined,
                 moveNumber: (chessArtifact.metadata?.moveNumber || parsedChessData.moveNumber) as number | undefined,

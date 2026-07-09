@@ -448,6 +448,36 @@ describe('ServerSubagentOrchestrator', () => {
       );
     });
 
+    it('warns and leaves totalCredits unset when the model is not in availableModels (#152)', async () => {
+      stubAgentRun({
+        totalTokens: 15_000,
+        totalInputTokens: 12_000,
+        totalOutputTokens: 3_000,
+        iterations: 3,
+        toolCalls: 2,
+        reachedMaxIterations: false,
+      });
+
+      const logger = makeLogger();
+      const orchestrator = new ServerSubagentOrchestrator({
+        userId: 'u1',
+        llm: makeLlm(MODEL_ID),
+        logger,
+        parentTools: [],
+        // availableModels present but does not contain MODEL_ID -> fallback misses.
+        availableModels: [],
+      });
+
+      const result = await orchestrator.delegateToAgent({
+        task: 't',
+        agentDef: makeAgentDef({ model: MODEL_ID }),
+        thoroughness: 'medium',
+      });
+
+      expect(result.completionInfo.totalCredits).toBeUndefined();
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining(MODEL_ID));
+    });
+
     it('does not overwrite totalCredits when the subagent already reported them', async () => {
       stubAgentRun({
         totalTokens: 15_000,

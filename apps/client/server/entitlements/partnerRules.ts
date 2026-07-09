@@ -16,8 +16,9 @@
  * comparison rule shared with the registry so domain/key matching is identical.
  */
 import { partnerSignupRuleRepository } from '@bike4mind/database';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { normalizeTag, KNOWN_ENTITLEMENT_KEYS, unknownEntitlementKeys } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
+import { BadRequestError } from '@server/utils/errors';
 
 /** Resolved rule shape held in the cache (domain is the Map key). */
 type ResolvedRule = {
@@ -82,6 +83,21 @@ async function getRulesMap(): Promise<Map<string, ResolvedRule>> {
 /** Drop the cache so the next resolution reloads from the DB. Call after any admin write. */
 export function invalidatePartnerRuleCache(): void {
   cache = null;
+}
+
+/**
+ * Reject entitlement keys the registry doesn't recognize (issue #324). A typo like
+ * `optihash:pro` is a valid lowercase token to the Zod schema but grants nothing at
+ * derive-on-read, so it would persist as a silent no-op. Called by the admin create/update
+ * routes before write; the admin UI additionally constrains the picker to known keys.
+ */
+export function assertKnownEntitlements(entitlements: readonly string[]): void {
+  const unknown = unknownEntitlementKeys(entitlements);
+  if (unknown.length > 0) {
+    throw new BadRequestError(
+      `Unknown entitlement key(s): ${unknown.join(', ')}. Known keys: ${KNOWN_ENTITLEMENT_KEYS.join(', ')}`
+    );
+  }
 }
 
 /** The rule matching an email's verified domain, or null. Extracted like the registry (after last `@`). */

@@ -3,6 +3,8 @@ import { SessionEvents } from '@server/utils/eventBus';
 import { Quest, Session, sessionRepository } from '@bike4mind/database';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { ChatModelName, IMessage, MessageContentObject } from '@bike4mind/common';
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 import mongoose from 'mongoose';
 
 export const handler = withEventContext(async (event, logger) => {
@@ -40,7 +42,7 @@ export const handler = withEventContext(async (event, logger) => {
     `Context-summarizing session ${sessionId}: ${quests.length} quests (${session.contextSummaryUpToQuestId ?? 'start'} → ${verbatimWindowStartQuestId})`
   );
 
-  const { modelId, llm } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm, modelInfo } = await OperationsModelService.getOperationsModel();
 
   const questContent = quests
     .map(quest => {
@@ -100,12 +102,31 @@ Format: Dense bullet points. Preserve all technical specifics. No word limit.`,
   ];
 
   const completionBuffers: string[] = [];
+  let lastCompletionInfo: CompletionInfo | undefined;
+  const completionStartTime = Date.now();
 
-  await llm.complete(modelId, messages, { stream: false }, async (chunk: unknown[]) => {
-    chunk.forEach((part: unknown, index: number) => {
-      if (part === undefined || part === null) return;
-      completionBuffers[index] = (completionBuffers[index] ?? '') + String(part);
-    });
+  await llm.complete(
+    modelId,
+    messages,
+    { stream: false },
+    async (chunk: unknown[], completionInfo?: CompletionInfo) => {
+      chunk.forEach((part: unknown, index: number) => {
+        if (part === undefined || part === null) return;
+        completionBuffers[index] = (completionBuffers[index] ?? '') + String(part);
+      });
+      if (completionInfo) lastCompletionInfo = completionInfo;
+    }
+  );
+
+  // The context-summarize event carries no userId; attribute to the session's owner.
+  await recordSessionOperationalUsage({
+    userId: session.userId,
+    sessionId,
+    modelId,
+    modelInfo,
+    completionInfo: lastCompletionInfo,
+    startTime: completionStartTime,
+    logger,
   });
 
   const contextSummaryText = completionBuffers

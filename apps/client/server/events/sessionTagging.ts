@@ -3,6 +3,8 @@ import { IMessage } from '@bike4mind/common';
 import { OperationsModelService } from '@client/services/operationsModelService';
 import { withEventContext } from '@server/events/utils';
 import { SessionEvents } from '@server/utils/eventBus';
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
+import { recordSessionOperationalUsage } from '@server/events/recordSessionOperationalUsage';
 
 /**
  * Attempt to extract and parse JSON array from LLM response
@@ -148,12 +150,25 @@ export const handler = withEventContext(async (event, logger) => {
   };
 
   const completionBuffers: string[] = [];
+  let lastCompletionInfo: CompletionInfo | undefined;
+  const completionStartTime = Date.now();
 
-  await llm.complete(modelId, messages, options, async (chunk: any[]) => {
+  await llm.complete(modelId, messages, options, async (chunk: any[], completionInfo?: CompletionInfo) => {
     chunk.forEach((part: string | null | undefined, index: number) => {
       if (part === undefined || part === null) return;
       completionBuffers[index] = (completionBuffers[index] ?? '') + part;
     });
+    if (completionInfo) lastCompletionInfo = completionInfo;
+  });
+
+  await recordSessionOperationalUsage({
+    userId: userId ?? session.userId,
+    sessionId,
+    modelId,
+    modelInfo,
+    completionInfo: lastCompletionInfo,
+    startTime: completionStartTime,
+    logger,
   });
 
   const tagsText = completionBuffers
