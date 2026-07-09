@@ -12,6 +12,7 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildRedirectTo, shouldRedirectToConsent } from '@client/app/utils/authRedirect';
 
 // Keep layout components as eager imports for optimal performance
@@ -174,6 +175,7 @@ const layoutRoute = createRoute({
   id: 'layout',
   beforeLoad: ({ location }) => {
     const { currentUser, isHydrated } = useUser.getState();
+    const { accessToken } = useAccessToken.getState();
     if (!currentUser) {
       const redirectTo = buildRedirectTo(
         location.pathname,
@@ -192,7 +194,7 @@ const layoutRoute = createRoute({
     // smooth redirect. Gated on `isHydrated` so a rehydrated pre-deploy session (whose persisted
     // user stub predates `aupAcceptedVersion`) does not flash the interstitial before /api/identify
     // refetches the server-authoritative value - see shouldRedirectToConsent.
-    if (shouldRedirectToConsent({ currentUser, isHydrated })) {
+    if (shouldRedirectToConsent({ currentUser, isHydrated, hasLiveSession: !!accessToken })) {
       const redirectTo = buildRedirectTo(
         location.pathname,
         location.searchStr,

@@ -121,8 +121,17 @@ export function applyRedirect(
 export function shouldRedirectToConsent(params: {
   currentUser: { aupAcceptedVersion?: unknown } | null;
   isHydrated: boolean;
+  /**
+   * Whether there is a LIVE session (a present access token). Required because a persisted
+   * `currentUser` outlives its access token: without this gate, a stale-but-unconsented user
+   * whose session is gone is still sent to `/accept-policies`, which cannot record acceptance
+   * without an authenticated request (401), while `/login` bounces back on the same stale
+   * `currentUser` - an infinite `/login` <-> `/accept-policies` loop with no exit. A user with no
+   * live session must go to `/login` to re-authenticate, never to the consent gate.
+   */
+  hasLiveSession: boolean;
 }): boolean {
-  return !!params.currentUser && params.isHydrated && !params.currentUser.aupAcceptedVersion;
+  return params.hasLiveSession && !!params.currentUser && params.isHydrated && !params.currentUser.aupAcceptedVersion;
 }
 
 /**

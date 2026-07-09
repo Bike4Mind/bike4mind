@@ -129,13 +129,17 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     },
   };
 
-  // Redirect if already logged in
+  // Redirect away from /login only for a LIVE session: currentUser AND a present access token.
+  // A persisted currentUser can outlive its token; redirecting on the stale value alone bounces a
+  // dead session back into the app -> consent guard -> /accept-policies -> /login loop (see
+  // shouldRedirectToConsent). A user with a stale currentUser but no token must stay here to sign in.
+  const liveAccessToken = useAccessToken(s => s.accessToken);
   useEffect(() => {
-    if (currentUser) {
+    if (currentUser && liveAccessToken) {
       const searchParams = new URLSearchParams(window.location.search);
       applyRedirect(router.history, searchParams.get('redirectTo'), '/new', true);
     }
-  }, [currentUser, router]);
+  }, [currentUser, liveAccessToken, router]);
 
   // Surface SSO/OAuth failures
   useEffect(() => {
