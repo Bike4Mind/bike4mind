@@ -169,10 +169,8 @@ describe('executeToolsBatch', () => {
     });
   });
 
-  // Out-of-credits errors from the image/video generation tools are tagged terminal
-  // (via insufficientCreditsError) so the batch short-circuits exactly like a
-  // PermissionDeniedError - no tool call can succeed without credits, so the turn ends
-  // and surfaces the "Add Credits" CTA instead of feeding a dead-end error to the model.
+  // Out-of-credits errors are tagged terminal (via insufficientCreditsError) so the batch
+  // short-circuits like a PermissionDeniedError instead of feeding a dead-end error to the model.
   describe('terminal out-of-credits errors', () => {
     it('throws the tagged credit error before returning any results (parallel)', async () => {
       const tasks = [
@@ -246,9 +244,8 @@ describe('executeToolsBatch', () => {
 
       await executeToolsBatch(tasks, { parallel: true, maxConcurrency: 10 });
 
-      // Should run concurrently (not limited): both tasks start before either ends.
-      // This interleaving check is jitter-immune, unlike a raw wall-clock bound which
-      // flaked on loaded CI runners (66ms vs a 55ms limit) - see the concurrency test above.
+      // Both tasks start before either ends. This interleaving check is jitter-immune,
+      // unlike a raw wall-clock bound which flaked on loaded CI runners.
       const lastStart = Math.max(...log.filter(e => e.event === 'start').map(e => e.time));
       const firstEnd = Math.min(...log.filter(e => e.event === 'end').map(e => e.time));
       expect(lastStart).toBeLessThanOrEqual(firstEnd);

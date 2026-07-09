@@ -23,8 +23,8 @@ describe('validateUserCredits', () => {
 
   it('tags the credit rejection with the insufficient_credits classifier for the CTA', async () => {
     const user = { id: 'u1', currentCredits: 0 };
-    // The tag is what the shared tool-batch executor keys off to end the turn terminally
-    // and what ChatCompletionProcess copies onto quest.errorCode to render the Add Credits CTA.
+    // The tag is what the tool-batch executor keys off to end the turn and what
+    // ChatCompletionProcess copies onto quest.errorCode to render the Add Credits CTA.
     const err = await validateUserCredits(user, fluxModel, 1, { model: fluxModel.id }, logger).catch(e => e);
     expect(getQuestErrorCode(err)).toBe('insufficient_credits');
   });

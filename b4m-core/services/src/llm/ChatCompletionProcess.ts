@@ -3661,9 +3661,9 @@ export class ChatCompletionProcess {
       quest.reply = (err as Error).message;
       quest.type = 'error';
       quest.status = 'done';
-      // Machine-readable classifier so the client can render the inline "Add Credits" CTA.
-      // Chat reservation throws InsufficientCreditsError (code unset for the dispute-pending
-      // fraud gates); mid-turn generation tools throw a getQuestErrorCode-tagged 422.
+      // Classifier for the client's "Add Credits" CTA. Chat reservation throws
+      // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
+      // mid-turn generation tools throw a getQuestErrorCode-tagged 422.
       const questErrorCode = err instanceof InsufficientCreditsError ? err.code : getQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
@@ -3676,9 +3676,8 @@ export class ChatCompletionProcess {
       );
 
       if (err instanceof InsufficientCreditsError || questErrorCode) {
-        // Terminal out-of-credits: nothing to retry until credits are added, so return
-        // without re-throwing (a throw would route the queue handler to DLQ/retry). The
-        // quest is already saved above with type='error' and errorCode set.
+        // Terminal: nothing to retry until credits are added, so return without re-throwing
+        // (a throw would route the queue handler to DLQ/retry). Quest already saved above.
         logger.log(`Insufficient credits for quest ${questId}`);
         return;
       } else if (err instanceof Error && (err.message.toLowerCase().includes('aborted') || err.name === 'AbortError')) {
