@@ -193,8 +193,7 @@ export class BasePage {
       // Set tracker to a sentinel that never matches the new value, so React
       // always detects a change - including when clearing to empty string.
       const tracker = (el as unknown as Record<string, unknown>)._valueTracker as
-        | { setValue: (v: string) => void }
-        | undefined;
+        { setValue: (v: string) => void } | undefined;
       if (tracker) tracker.setValue('__pw_dirty__');
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, value);

@@ -303,6 +303,18 @@ describe('excel_generation', () => {
       await expect(toolFn(params)).rejects.toThrow('Invalid parameters');
     });
 
+    it('should reject more than 10000 populated cells per sheet', async () => {
+      const data = Array.from({ length: 10001 }, (_, i) => ({
+        row: (i % 1000) + 1,
+        col: Math.floor(i / 1000) + 1,
+        value: i,
+      }));
+
+      const params = { filename: 'too-many-cells', sheets: [{ name: 'Sheet1', data }] };
+
+      await expect(toolFn(params)).rejects.toThrow('Invalid parameters');
+    });
+
     it('should reject rows exceeding limit', async () => {
       const params = {
         filename: 'bad-row',
