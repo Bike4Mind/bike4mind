@@ -169,6 +169,80 @@ describe('liveOpsTriage handler', () => {
     });
   });
 
+  describe('permanent Slack misconfiguration (getSlackBotToken returns null)', () => {
+    beforeEach(() => {
+      // Configured workspace not found, and no active workspace to fall back to.
+      mockFindByIdWithToken.mockResolvedValue(null);
+      mockFindAllActive.mockResolvedValue([]);
+    });
+
+    it('does NOT re-throw, so SQS will not retry', async () => {
+      await expect(
+        dispatch(
+          makeSqsEvent({ jobId: '507f1f77bcf86cd799439011', userId: 'u1', dryRun: false }),
+          mockContext,
+          mockLogger
+        )
+      ).resolves.toBeUndefined();
+    });
+
+    it('marks the job failed with a specific reason', async () => {
+      await dispatch(
+        makeSqsEvent({ jobId: '507f1f77bcf86cd799439011', userId: 'u1', dryRun: false }),
+        mockContext,
+        mockLogger
+      );
+
+      expect(mockMarkFailed).toHaveBeenCalledWith('507f1f77bcf86cd799439011', {
+        errorMessage: 'No active Slack workspace with bot token found',
+      });
+    });
+
+    it('emits a failure metric tagged as a permanent NoSlackWorkspace error', async () => {
+      await dispatch(
+        makeSqsEvent({ jobId: '507f1f77bcf86cd799439011', userId: 'u1', dryRun: true }),
+        mockContext,
+        mockLogger
+      );
+
+      expect(mockEmitMetric).toHaveBeenCalledWith(
+        expect.any(String),
+        'ManualRunFailure',
+        1,
+        expect.objectContaining({ ErrorType: 'NoSlackWorkspace' }),
+        expect.anything()
+      );
+    });
+
+    it('never reaches GitHub lookup or runTriage/runDryRun', async () => {
+      await dispatch(
+        makeSqsEvent({ jobId: '507f1f77bcf86cd799439011', userId: 'u1', dryRun: false }),
+        mockContext,
+        mockLogger
+      );
+
+      expect(mockForSystem).not.toHaveBeenCalled();
+      expect(mockRunTriage).not.toHaveBeenCalled();
+      expect(mockRunDryRun).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('transient getSlackBotToken failure', () => {
+    it('still re-throws so SQS retries', async () => {
+      mockFindOne.mockRejectedValue(new Error('DB connection lost'));
+
+      await expect(
+        dispatch(
+          makeSqsEvent({ jobId: '507f1f77bcf86cd799439011', userId: 'u1', dryRun: false }),
+          mockContext,
+          mockLogger
+        )
+      ).rejects.toThrow('DB connection lost');
+
+      expect(mockMarkFailed).toHaveBeenCalledWith('507f1f77bcf86cd799439011', { errorMessage: 'DB connection lost' });
+    });
+  });
+
   describe('happy path', () => {
     it('completes the job when GitHub and Slack are both available', async () => {
       mockForSystem.mockResolvedValue({ someGithubClient: true });
