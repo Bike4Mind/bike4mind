@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   __registryRows,
+  allKnownEntitlementKeys,
   entitlementsForEmail,
   entitlementsForPriceIds,
   entitlementsForTags,
+  grantTagForEntitlement,
   normalizeTag,
   resolveEntitlements,
   signupCreditsForEmail,
@@ -229,6 +231,46 @@ describe('signupCreditsForEmail', () => {
     expect(signupCreditsForEmail(undefined, true)).toBe(0);
     expect(signupCreditsForEmail('', true)).toBe(0);
     expect(signupCreditsForEmail('no-at-sign', true)).toBe(0);
+  });
+});
+
+describe('allKnownEntitlementKeys', () => {
+  it('includes every entitlement key granted by any tag, domain, or price row', () => {
+    const known = new Set(allKnownEntitlementKeys());
+    for (const row of __registryRows.tagGrantRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+    for (const row of __registryRows.domainGrantRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+    for (const row of __registryRows.priceRows) {
+      for (const key of row.entitlements) expect(known.has(key)).toBe(true);
+    }
+  });
+
+  it('has no duplicates', () => {
+    const known = allKnownEntitlementKeys();
+    expect(new Set(known).size).toBe(known.length);
+  });
+});
+
+describe('grantTagForEntitlement', () => {
+  it('resolves the granting tag for every key a tag-grant row confers', () => {
+    for (const row of __registryRows.tagGrantRows) {
+      for (const key of row.entitlements) {
+        expect(grantTagForEntitlement(key)).toBe(normalizeTag(row.tag));
+      }
+    }
+  });
+
+  it('is case-insensitive on the input key', () => {
+    const row = __registryRows.tagGrantRows[0];
+    if (!row?.entitlements[0]) return;
+    expect(grantTagForEntitlement(row.entitlements[0].toUpperCase())).toBe(normalizeTag(row.tag));
+  });
+
+  it('returns undefined for a key with no tag-based grant path', () => {
+    expect(grantTagForEntitlement('no-such-entitlement-key')).toBeUndefined();
   });
 });
 

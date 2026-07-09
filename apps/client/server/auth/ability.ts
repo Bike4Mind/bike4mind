@@ -16,7 +16,7 @@ import {
   Project,
   QuestMasterPlan,
 } from '@bike4mind/database';
-import { InvitePermission, IUserDocument, Permission } from '@bike4mind/common';
+import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
 import { SecretRotation } from '@bike4mind/database/infra';
 import { Subscription } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
@@ -173,7 +173,12 @@ function defineAbilitiesFor(user: IUserDocument | undefined) {
     allow(Permission.delete, Memento, { userId: user.id });
     allow('deleteMany', Memento, { userId: user.id });
 
-    if (user.tags?.includes('Analyst')) {
+    // Prompt-library management: admin or developer (internal-staff bypass, matching
+    // every other product gate in this codebase - see hasDeveloperUserTag). Previously
+    // gated on the literal 'Analyst' tag with NO admin fallback (a codebase outlier);
+    // replaced 2026-07-08 after confirming every current holder was already admin AND
+    // developer, so this changes nothing for existing users.
+    if (user.isAdmin || hasDeveloperUserTag(user.tags)) {
       allow(Permission.create, Prompt);
       allow(Permission.update, Prompt);
       allow(Permission.delete, Prompt);

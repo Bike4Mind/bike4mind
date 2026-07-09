@@ -6,15 +6,6 @@ export const userIsDeveloper = (user: IUserDocument | null): boolean => {
   return hasDeveloperUserTag(user.tags);
 };
 
-export const userIsAnalyst = (user: IUserDocument | null): boolean => {
-  if (!user) return false;
-
-  // Developers should be able to do everything an analyst can do
-  if (userIsDeveloper(user)) return true;
-
-  return (user?.tags ?? []).some(tag => ['Analyst', 'analyst', 'Analysts', 'analysts'].includes(tag));
-};
-
 export const userIsOpti = (user: IUserDocument | null): boolean => {
   if (!user) return false;
   if (user.isAdmin) return true;
