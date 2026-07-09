@@ -551,6 +551,12 @@ export class ServerSubagentOrchestrator {
             totalCacheWriteTokens ?? 0
           );
           result.completionInfo.totalCredits = usdToCredits(usdCost);
+        } else {
+          // Model absent from availableModels: credits stay unset and the delegation's
+          // cost is lost from the usage events. Warn so the miss rate is observable (#152).
+          this.deps.logger.warn(
+            `🤖⚠️ [SubagentOrchestrator] cannot compute credits: model "${effectiveModel}" not in availableModels`
+          );
         }
       }
 
