@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { App, TrustLocationSelector, RewindSelector, SessionSelector, EnvironmentPicker } from './components';
 import type { PermissionResponse, EnvChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
 import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
@@ -312,6 +313,14 @@ function CliApp() {
   const performCleanup = useCallback(async () => {
     const cleanupTasks: Promise<void>[] = [];
 
+    // Reap background shell sessions (SIGTERM the whole process group) so we don't
+    // orphan a `pnpm dev` / watcher when the CLI exits. Synchronous, best-effort.
+    try {
+      getShellSessionManager().killAll();
+    } catch (err) {
+      logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
+    }
+
     // Save session
     const session = useCliStore.getState().session;
     if (session) {
@@ -385,6 +394,16 @@ function CliApp() {
     state.wsManager,
     state.featureRegistry,
   ]);
+
+  // Mirror background shell-session lifecycle into the store so the UI can render
+  // live indicators. The manager is a process-global singleton shared with the
+  // bash_execute tools, so we subscribe once for the app's lifetime.
+  useEffect(() => {
+    const unsubscribe = getShellSessionManager().subscribe(session => {
+      useCliStore.getState().upsertBackgroundShell(session);
+    });
+    return unsubscribe;
+  }, []);
 
   // Handle Ctrl+C and ESC using Ink's useInput
   useInput((input, key) => {
