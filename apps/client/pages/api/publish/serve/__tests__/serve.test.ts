@@ -50,11 +50,12 @@ import handler from '../[...path]';
 // request returns a WRAPPER embedding a cross-origin iframe to {publicId}.usercontent.app.<domain>;
 // the bundle CONTENT is served in isolated mode (`uc`), reached via the /uc rewrite (__uc=1) on
 // that usercontent host. `uc` = the publicId whose isolated origin we're simulating.
-type RunOpts = { user?: unknown; host?: string; raw?: boolean; v?: string; uc?: string };
-const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc }: RunOpts = {}) => {
+type RunOpts = { user?: unknown; host?: string; raw?: boolean; v?: string; uc?: string; format?: string };
+const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format }: RunOpts = {}) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
+  if (format) query.format = format;
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
   const { req, res } = createMocks({ method: 'GET', query, headers: { host: effectiveHost } });
@@ -583,24 +584,16 @@ describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
       )
     );
 
-    const { res, promise } = run(['u', 'scope123', 'my-slug']);
-    const rawReq = createMocks({
-      method: 'GET',
-      query: { path: ['u', 'scope123', 'my-slug'], format: 'raw' },
-      headers: { host: 'app.bike4mind.com' },
-    });
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
-    // discard the initial call (was for scaffolding)
-    void res;
-    void promise;
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw' });
+    await promise;
 
-    expect(rawReq.res._getStatusCode()).toBe(200);
-    expect(rawReq.res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
-    expect(rawReq.res.getHeader('X-Content-Type-Options')).toBe('nosniff');
-    const csp = rawReq.res.getHeader('Content-Security-Policy') as string;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+    expect(res.getHeader('X-Content-Type-Options')).toBe('nosniff');
+    const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain('sandbox');
-    const body = rawReq.res._getData() as string;
+    const body = res._getData() as string;
     expect(body).toContain('# My Artifact');
     expect(body).toContain('A summary.');
     expect(body).toContain('The article body.');
@@ -624,16 +617,12 @@ describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
       slug: 'x',
     });
 
-    const rawReq = createMocks({
-      method: 'GET',
-      query: { path: ['r', 'r1'], format: 'raw' },
-      headers: { host: 'app.bike4mind.com' },
-    });
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
+    const { res, promise } = run(['r', 'r1'], { format: 'raw' });
+    await promise;
 
-    expect(rawReq.res._getStatusCode()).toBe(200);
-    expect(rawReq.res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
-    const body = rawReq.res._getData() as string;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+    const body = res._getData() as string;
     expect(body).toContain('# A reply');
     expect(body).toContain('# Hello world');
     expect(body).toContain('Body markdown.');
@@ -643,14 +632,9 @@ describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
     mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
 
     // Even the owner (who could otherwise view it) gets 404 - format=raw is a public surface only.
-    const rawReq = createMocks({
-      method: 'GET',
-      query: { path: ['u', 'scope123', 'my-slug'], format: 'raw' },
-      headers: { host: 'app.bike4mind.com' },
-    });
-    (rawReq.req as Record<string, unknown>).user = { id: 'owner1' };
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
-    expect(rawReq.res._getStatusCode()).toBe(404);
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { format: 'raw', user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
     expect(mockDownload).not.toHaveBeenCalled();
   });
 
@@ -669,15 +653,10 @@ describe('GET /api/publish/serve — ?format=raw plain-text alternate', () => {
       slug: 'x',
     });
 
-    const rawReq = createMocks({
-      method: 'GET',
-      query: { path: ['r', 'r1'], format: 'raw' },
-      headers: { host: 'app.bike4mind.com' },
-    });
-    (rawReq.req as Record<string, unknown>).user = { id: 'owner1' };
-    await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(rawReq.req, rawReq.res);
-    expect(rawReq.res._getStatusCode()).toBe(404);
-    const body = rawReq.res._getData() as string;
+    const { res, promise } = run(['r', 'r1'], { format: 'raw', user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+    const body = res._getData() as string;
     expect(body).not.toContain('secret');
   });
 });
