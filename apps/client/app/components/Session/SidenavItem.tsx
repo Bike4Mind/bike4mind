@@ -317,10 +317,10 @@ const SessionSidenavItem: FC<{
             left: 0,
             top: '50%',
             transform: 'translateY(-50%)',
-            width: '3px',
-            height: '70%',
+            width: '2px',
+            height: '80%',
             backgroundColor: theme.palette.primary[500],
-            borderRadius: '0 2px 2px 0',
+            borderRadius: '1px',
           }
         : {},
       '&:hover': {

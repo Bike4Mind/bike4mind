@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Box, Typography, IconButton, Sheet } from '@mui/joy';
 import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import CloseRoundedIcon from '@mui/icons-material/CloseRounded';
 import { useMediaQuery } from '@mui/system';
 import { APP_NAME } from '@client/config/general';
 
@@ -211,14 +212,49 @@ const FTUESlider: React.FC<FTUESliderProps> = ({ onComplete }) => {
         maxWidth: isMobile ? '100%' : 'unset',
         height: isMobile ? 'calc(100vh - 32px)' : '720px',
         maxHeight: isMobile ? 'calc(100vh - 32px)' : '720px',
+        // Dark mode matches the sidebar surface; light mode keeps the Sheet default.
+        backgroundColor: theme => (theme.palette.mode === 'dark' ? theme.palette.background.surface2 : undefined),
         borderRadius: '12px',
         overflow: 'hidden',
-        boxShadow: 'lg',
+        // Soft, diffuse lift: a wide low-opacity ambient layer plus a tighter contact layer.
+        // Stronger in dark mode, where light shadows all but disappear against the background.
+        boxShadow: theme =>
+          theme.palette.mode === 'dark'
+            ? '0 24px 70px rgba(0, 0, 0, 0.28), 0 8px 20px rgba(0, 0, 0, 0.14)'
+            : '0 24px 30px rgba(0, 0, 0, 0.03), 0 8px 20px rgba(0, 0, 0, 0.02)',
         display: 'flex',
         flexDirection: 'column',
         m: isMobile ? '16px' : 'auto',
+        // Positioning context for the corner close button.
+        position: 'relative',
       }}
     >
+      {/* Dismiss the tutorial - leads to a fresh session (New Chat), wired via onComplete. */}
+      <IconButton
+        data-testid="tutorial-close-btn"
+        aria-label="Close tutorial"
+        variant="plain"
+        color="neutral"
+        size="sm"
+        onClick={() => onComplete?.()}
+        sx={theme => ({
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          zIndex: 10,
+          // Transparent at rest and on hover; only the icon tint changes (tertiary -> primary).
+          // Joy SvgIcons read --Icon-color, not `color`, so tint via that variable.
+          backgroundColor: 'transparent',
+          '--Icon-color': theme.palette.text.tertiary,
+          '& svg': { transition: 'color 0.2s ease' },
+          '&:hover': {
+            backgroundColor: 'transparent',
+            '--Icon-color': theme.palette.text.primary,
+          },
+        })}
+      >
+        <CloseRoundedIcon />
+      </IconButton>
       <Box
         sx={{
           display: 'flex',

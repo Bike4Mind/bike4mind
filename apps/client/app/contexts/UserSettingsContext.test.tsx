@@ -19,9 +19,21 @@ const defaultMockUserState = (): MockUserState => ({
 
 let mockUserState: MockUserState = defaultMockUserState();
 
+// `updatePreferences` now writes through to the store via `useUser.getState().setCurrentUser(...)`,
+// so the mock must expose `getState` (real zustand does) whose `setCurrentUser` mutates the shared
+// mock state. Object.assign keeps the selector-call form typed without `any`.
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: (selector?: (s: MockUserState) => unknown) =>
-    selector ? selector(mockUserState) : mockUserState.currentUser,
+  useUser: Object.assign(
+    (selector?: (s: MockUserState) => unknown) => (selector ? selector(mockUserState) : mockUserState.currentUser),
+    {
+      getState: () => ({
+        currentUser: mockUserState.currentUser,
+        setCurrentUser: (user: unknown) => {
+          mockUserState.currentUser = user;
+        },
+      }),
+    }
+  ),
 }));
 
 vi.mock('@client/app/contexts/TranslationProvider', () => ({
@@ -97,6 +109,20 @@ describe('UserSettingsContext — rawExperimentalPreferences optimistic update',
 
     expect(result.current.rawExperimentalPreferences.enableArtifacts).toBe(true);
     expect(result.current.rawExperimentalPreferences.enableAgents).toBe(true);
+  });
+
+  // guards the store write-through in updatePreferences (delete that line -> this fails).
+  it('writes the toggled preference through to the useUser store', () => {
+    const { result } = renderHook(() => useUserSettings(), { wrapper: makeWrapper() });
+
+    act(() => {
+      result.current.updatePreferences({ experimentalFeatures: { enableAgents: true } });
+    });
+
+    const stored = mockUserState.currentUser as {
+      preferences: { experimentalFeatures: Record<string, boolean> };
+    };
+    expect(stored.preferences.experimentalFeatures.enableAgents).toBe(true);
   });
 });
 

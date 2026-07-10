@@ -33,8 +33,13 @@ const MAX_DEPENDENCY_CONTEXT_LENGTH = 1500;
 export function createCoordinateTaskTool(
   orchestrator: SubagentOrchestrator,
   agentStore: AgentStore,
-  parentSessionId: string
+  parentSessionId: string,
+  /** Nesting depth of the agent that owns this tool (main agent = 0). Spawns run at parentDepth + 1. */
+  parentDepth = 0
 ): ICompletionOptionTools {
+  // The coordinator and every pipeline worker are spawned from this tool's own
+  // (parent) context, so they are siblings at the same depth.
+  const childDepth = parentDepth + 1;
   return {
     toolFn: async (args: unknown) => {
       const parsed = CoordinateTaskParamsSchema.safeParse(args);
@@ -64,6 +69,7 @@ export function createCoordinateTaskTool(
         thoroughness,
         parentSessionId,
         additionalTools: [decomposeTaskTool],
+        depth: childDepth,
       });
 
       // Check if decomposition was captured
@@ -78,7 +84,14 @@ export function createCoordinateTaskTool(
       // Optimization: skip pipeline for single tasks (no shared context - solo agent has no siblings)
       if (pipeline.isSingleTask()) {
         const singleTask = pipeline.getSingleTask();
-        const result = await executeSingleTask(orchestrator, singleTask, agentStore, parentSessionId, thoroughness);
+        const result = await executeSingleTask(
+          orchestrator,
+          singleTask,
+          agentStore,
+          parentSessionId,
+          thoroughness,
+          childDepth
+        );
         return `**Single Task Execution** (pipeline overhead skipped)\n\n${result}`;
       }
 
@@ -107,6 +120,7 @@ export function createCoordinateTaskTool(
           thoroughness,
           parentSessionId,
           sharedContext,
+          depth: childDepth,
         });
 
         return result.summary;
@@ -162,13 +176,15 @@ async function executeSingleTask(
   task: DecomposedTask,
   agentStore: AgentStore,
   parentSessionId: string,
-  thoroughness: 'quick' | 'medium' | 'very_thorough' = 'medium'
+  thoroughness: 'quick' | 'medium' | 'very_thorough' = 'medium',
+  depth?: number
 ): Promise<string> {
   const result = await orchestrator.delegateToAgent({
     task: task.description,
     agentName: resolveAgentName(task.agentType, agentStore),
     thoroughness,
     parentSessionId,
+    depth,
   });
 
   return result.summary;

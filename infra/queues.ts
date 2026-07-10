@@ -856,7 +856,9 @@ const sreJobQueueSubscription = sreJobQueue.subscribe(
     timeout: '8 minutes',
     memory: '1024 MB',
     vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi, sreFixQueue],
+    // eventBus: analysis emits sre.analysis.completed (routed to sreFixQueue by
+    // infra/eventBus.ts). sreFixQueue stays linked for the revision path's direct dispatch.
+    link: [...allSecrets, websocketApi, sreFixQueue, eventBus],
     logging: {
       retention: '1 week',
     },

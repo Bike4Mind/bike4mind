@@ -93,7 +93,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const queryClient = useQueryClient();
   const theme = useTheme();
   const mode = theme.palette.mode;
-  const effectiveCredits = useEffectiveCredits();
+  // Gating (exhausted/low-credit warnings) reads the live balance, not the
+  // frozen display value - a genuine mid-turn exhaustion must still surface.
+  const effectiveCredits = useEffectiveCredits({ live: true });
 
   const { chatCompletion, setChatCompletion } = useSubscribeChatCompletion(currentSessionId);
 

@@ -34,5 +34,8 @@ export {
   TOTAL_INLINE_MAX_BYTES,
 } from './collectInlineAssets';
 export { renderBundleLoaderShell } from './renderBundleLoaderShell';
+export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
 export { checkVisibility, type VisibilityCheckArtifact, type VisibilityResult } from './checkVisibility';
+export { generateShareToken } from './shareToken';
+export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';

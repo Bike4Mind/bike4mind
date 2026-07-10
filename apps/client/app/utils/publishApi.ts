@@ -81,6 +81,14 @@ export async function publishReply(input: {
   messageId: string;
   title?: string;
   visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/r` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `replyPublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
 }): Promise<PublishResult> {
   const { data } = await api.post<PublishResult>('/api/publish/reply', {
     visibility: DEFAULT_SHARE_VISIBILITY,
@@ -94,12 +102,65 @@ export async function publishFabFile(input: {
   fabFileId: string;
   title?: string;
   visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/f` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `fabFilePublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
 }): Promise<PublishResult> {
   const { data } = await api.post<PublishResult>('/api/publish/fabfile', {
     visibility: DEFAULT_SHARE_VISIBILITY,
     ...input,
   });
   return data;
+}
+
+/**
+ * Map a share-dialog visibility pick to the scope-tier fields the publish endpoints expect.
+ * Org visibility publishes a real org-tier page (scopeId = org id) so same-org members can view
+ * it - the ONLY combination the serve gate authorizes to org members (a user-tier record's
+ * scopeId is the user id, never the viewer's org id, so org visibility on it 403s everyone but
+ * the owner). Requires an active org; the dialog only offers the Team option when one exists, so
+ * this branch is unreachable without orgId. The server re-validates org membership before
+ * trusting the scope. Mirrors `artifactBundlePublisher`.
+ */
+function orgTierFields(
+  visibility: PublishVisibility,
+  orgId?: string
+): { tier: PublishScopeTier; scopeId: string } | Record<string, never> {
+  return visibility === 'organization' && orgId ? { tier: 'organization', scopeId: orgId } : {};
+}
+
+/**
+ * Build the share-dialog publish callback for a chat reply. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function replyPublisher(input: {
+  sessionId: string;
+  messageId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...reply } = input;
+  return visibility => publishReply({ ...reply, visibility, ...orgTierFields(visibility, orgId) });
+}
+
+/**
+ * Build the share-dialog publish callback for a FabFile. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function fabFilePublisher(input: {
+  fabFileId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...file } = input;
+  return visibility => publishFabFile({ ...file, visibility, ...orgTierFields(visibility, orgId) });
 }
 
 /** Report a public page for abuse. Requires an authenticated caller. */
@@ -259,9 +320,8 @@ export function artifactBundlePublisher(input: {
       ...bundle,
       visibility,
       // Org visibility publishes a real org-tier page (scopeId = org id) so same-org members
-      // can view it. Requires an active org; the dialog only offers the Team option when one
-      // exists, so this branch is unreachable without orgId.
-      ...(visibility === 'organization' && orgId ? { tier: 'organization' as const, scopeId: orgId } : {}),
+      // can view it - see orgTierFields.
+      ...orgTierFields(visibility, orgId),
       // 'update' pins the existing slug so finalize appends a version; 'new' with a prior
       // publication forces a unique slug so it can't collide back onto ANY existing one.
       ...(opts?.mode === 'update' && opts.existingSlug
@@ -360,4 +420,38 @@ export function toShareUrl(result: Pick<PublishResult, 'url'>): string {
     return `${window.location.origin}${result.url}`;
   }
   return result.url;
+}
+
+/** Absolute no-sign-in share URL for a share token (e.g. https://app.example.com/a/<token>). */
+export function toShareTokenUrl(shareToken: string): string {
+  const path = `/a/${shareToken}`;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
+ * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
+ * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ */
+export async function createOrGetShareToken(
+  publicId: string,
+  regenerate = false
+): Promise<{ shareToken: string; shareUrl: string }> {
+  const { data } = await api.post<{ shareToken: string; shareUrl: string }>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+  });
+  return data;
+}
+
+/** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
+export async function regenerateShareToken(publicId: string): Promise<{ shareToken: string; shareUrl: string }> {
+  return createOrGetShareToken(publicId, true);
+}
+
+/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+export async function revokeShareToken(publicId: string): Promise<void> {
+  await api.delete(`/api/publish/${publicId}/share-token`);
 }

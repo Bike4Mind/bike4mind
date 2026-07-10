@@ -141,6 +141,7 @@ export default function DataLakeTree({
             color="neutral"
             onClick={() => setSortBy(prev => (prev === 'count' ? 'alpha' : 'count'))}
             data-testid="datalake-sort-toggle"
+            data-sort={sortBy}
             sx={{ flexShrink: 0 }}
           >
             <SortByAlphaIcon sx={{ fontSize: 18 }} />

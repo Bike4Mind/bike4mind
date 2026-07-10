@@ -19,7 +19,10 @@ import {
 } from '../utils/toolsAdapter.js';
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
-import { ALWAYS_DENIED_FOR_AGENTS, HookBlockedError } from './types.js';
+import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
+import { clampInteractionMode } from './interactionModeClamp.js';
+import { resolveEffectiveModel } from './resolveEffectiveModel.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 import type { SharedContextAccess } from './types.js';
 import type { SharedAgentContext } from './SharedAgentContext.js';
 import { filterToolsByPatterns } from './toolFilter.js';
@@ -88,6 +91,29 @@ export interface SpawnAgentOptions {
   additionalTools?: ICompletionOptionTools[];
   /** Shared context for inter-agent communication within a pipeline */
   sharedContext?: SharedAgentContext;
+  /**
+   * Nesting depth of the agent being spawned (main agent = 0, its subagents = 1, ...).
+   * Spawns at/above MAX_SUBAGENT_DEPTH are rejected. Defaults to 1 (a direct child
+   * of the main agent) when a caller omits it.
+   */
+  depth?: number;
+  /**
+   * Parent agent's effective interaction mode - the ceiling the child cannot
+   * exceed. Defaults to the live store mode (the main agent's mode) when omitted,
+   * so direct children inherit the main agent's authority.
+   */
+  parentInteractionMode?: InteractionMode;
+  /**
+   * Interaction mode requested for the child. Clamped to parentInteractionMode,
+   * so a request more permissive than the parent is capped. Defaults to inheriting
+   * the parent's mode when omitted.
+   */
+  interactionMode?: InteractionMode;
+  /**
+   * Parent agent's effective model. A child with no explicit or agent-declared
+   * model inherits this rather than silently defaulting to a different model.
+   */
+  parentModel?: string;
 }
 
 /**
@@ -173,6 +199,26 @@ export class SubagentOrchestrator {
   async delegateToAgent(options: SpawnAgentOptions): Promise<AgentExecutionResult> {
     const { task, agentName, thoroughness, variables, parentSessionId, model, allowedTools, abortSignal } = options;
 
+    // Recursion-depth cap (fail closed). A spawned agent is at least depth 1;
+    // reject anything at/above the cap before doing any work.
+    const depth = options.depth ?? 1;
+    if (depth >= MAX_SUBAGENT_DEPTH) {
+      throw new Error(
+        `Cannot spawn agent "${agentName}": subagent nesting depth ${depth} reached the limit ` +
+          `of ${MAX_SUBAGENT_DEPTH}. Deeper delegation is blocked to prevent unbounded recursion.`
+      );
+    }
+
+    // Clamp the child's interaction mode so it never runs more permissively than
+    // its parent. The parent ceiling defaults to the live store mode (the main
+    // agent's mode) for a direct child; nested spawns pass it explicitly.
+    const { useCliStore } = await import('../store/index.js');
+    const parentInteractionMode = options.parentInteractionMode ?? useCliStore.getState().interactionMode;
+    const effectiveInteractionMode = clampInteractionMode(
+      options.interactionMode ?? parentInteractionMode,
+      parentInteractionMode
+    );
+
     // Get agent definition: use inline definition if provided, otherwise look up from store
     let agentDef: AgentDefinition;
     if (options.agentDefinition) {
@@ -186,18 +232,18 @@ export class SubagentOrchestrator {
       agentDef = storedDef;
     }
 
-    // Determine model (options > agent default > main session model if unresolved)
-    let effectiveModel = model || agentDef.model;
-    if (!model && !agentDef.modelResolved) {
-      // Agent's model wasn't resolved - inherit the main session's model
-      const config = await this.deps.configStore.get();
-      if (config?.defaultModel) {
-        this.deps.logger.debug(
-          `Agent "${agentName}" model unresolved, inheriting main session model: ${config.defaultModel}`
-        );
-        effectiveModel = config.defaultModel;
-      }
-    }
+    // Resolve the model through the explicit inherit path (see resolveEffectiveModel):
+    // an unresolved agent inherits the parent's model - or the main session model -
+    // rather than silently defaulting to a possibly-stronger model.
+    const sessionDefaultModel =
+      !model && !agentDef.modelResolved ? (await this.deps.configStore.get())?.defaultModel : undefined;
+    const effectiveModel = resolveEffectiveModel({
+      requestedModel: model,
+      agentModel: agentDef.model,
+      agentModelResolved: agentDef.modelResolved,
+      parentModel: options.parentModel,
+      sessionDefaultModel,
+    });
 
     // Determine thoroughness (param > agent default > medium)
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
@@ -244,7 +290,10 @@ export class SubagentOrchestrator {
       this.deps.apiClient,
       undefined, // toolFilter (applied below via filterToolsByPatterns)
       this.deps.showUserQuestion,
-      this.deps.checkpointStore
+      this.deps.checkpointStore,
+      undefined, // sandboxOrchestrator (not wired for subagents)
+      undefined, // allowedDirectories (not wired for subagents)
+      effectiveInteractionMode
     );
 
     // Apply wildcard filtering
@@ -266,6 +315,12 @@ export class SubagentOrchestrator {
         subagentOrchestrator: this,
         sessionId: parentSessionId,
         allowedSkills: agentDef.skills,
+        // This agent runs at `depth`; a skill it forks must spawn one level deeper.
+        parentDepth: depth,
+        // Onward forks inherit this agent's clamped mode as their ceiling.
+        parentInteractionMode: effectiveInteractionMode,
+        // Onward forks inherit this agent's model unless they declare their own.
+        parentModel: effectiveModel,
       });
       filteredTools.push(skillTool);
 

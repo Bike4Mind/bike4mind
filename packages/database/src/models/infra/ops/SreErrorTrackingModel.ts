@@ -80,12 +80,35 @@ export interface ISreErrorTracking {
   };
   /** GitHub issue number (if applicable) */
   githubIssueNumber?: number;
+  /**
+   * Denormalized open/closed state of the linked GitHub issue.
+   * Kept fresh by the webhook handlers (issues.closed/reopened) and self-healed
+   * on-view by the issue-state endpoint. Absent for CloudWatch-sourced docs and
+   * for GitHub docs whose state has not yet been observed. The admin Pipeline
+   * Status filter hides docs where this is 'closed' by default.
+   */
+  githubIssueState?: 'open' | 'closed';
   /** Fix PR number */
   fixPrNumber?: number;
   /** Fix PR SHA (for rollback detection) */
   fixPrSha?: string;
   /** When the fix PR was merged */
   fixMergedAt?: Date;
+  /**
+   * Human verdict on whether the merged SRE fix was actually correct (#271).
+   * Recorded when a reviewer applies the `sre-fix-correct` / `sre-fix-incorrect`
+   * label to the fix PR - a merge alone is not proof the fix was right. Feeds the
+   * confidence-threshold tuning + activity dashboard items in #184.
+   * Last-write-wins: applying the opposite label overrides a prior verdict.
+   */
+  fixVerdict?: {
+    /** 'correct' or 'incorrect' - the reviewer's thumbs up/down */
+    value: 'correct' | 'incorrect';
+    /** GitHub login of the reviewer who applied the label */
+    by: string;
+    /** When the verdict was recorded */
+    at: Date;
+  };
   /** When affected users were notified */
   userNotifiedAt?: Date;
   /** GitHub Actions workflow run URL */
@@ -161,9 +184,17 @@ const SreErrorTrackingSchema = new mongoose.Schema(
     affectedUserIds: { type: [String], default: [] },
     diagnosisResult: { type: mongoose.Schema.Types.Mixed },
     githubIssueNumber: { type: Number },
+    githubIssueState: { type: String, enum: ['open', 'closed'] },
     fixPrNumber: { type: Number },
     fixPrSha: { type: String },
     fixMergedAt: { type: Date },
+    fixVerdict: {
+      type: {
+        value: { type: String, enum: ['correct', 'incorrect'] },
+        by: { type: String },
+        at: { type: Date },
+      },
+    },
     userNotifiedAt: { type: Date },
     workflowRunUrl: { type: String },
     dispatchedAt: { type: Date },
@@ -202,10 +233,21 @@ SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1 }, { 
 SreErrorTrackingSchema.index({ affectedUserIds: 1 });
 // For looking up by PR number (scoped to repo - PR numbers are unique per-repo, not globally)
 SreErrorTrackingSchema.index({ repoSlug: 1, fixPrNumber: 1 }, { sparse: true });
+// For webhook-driven githubIssueState updates: setGithubIssueState filters on { repoSlug, githubIssueNumber }
+SreErrorTrackingSchema.index({ repoSlug: 1, githubIssueNumber: 1 }, { sparse: true });
 // Covers recurrence guard queries: { errorFingerprint, status: 'fixed', fixMergedAt: { $gte } }
 SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1, fixMergedAt: 1 });
 // For staleness timeout detection
 SreErrorTrackingSchema.index({ repoSlug: 1, status: 1, dispatchedAt: 1 });
+// For querying recorded fix verdicts (#271) - feeds confidence tuning + dashboard.
+// partialFilterExpression (not sparse): on a compound index sparse only skips a
+// doc when ALL keys are absent, and repoSlug is required, so a sparse index would
+// cover every doc. Filtering on fixVerdict.value indexes only the small subset of
+// docs that actually carry a human verdict.
+SreErrorTrackingSchema.index(
+  { repoSlug: 1, 'fixVerdict.value': 1 },
+  { partialFilterExpression: { 'fixVerdict.value': { $exists: true } } }
+);
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
@@ -404,6 +446,36 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 
   /**
+   * Denormalize the linked GitHub issue's open/closed state onto every tracking
+   * doc for that issue. Called from the webhook handlers (issues.closed/reopened)
+   * and the issue-state endpoint (self-heal on view). Updates ALL docs for the
+   * (repoSlug, issueNumber) pair - a single issue can have multiple tracking docs
+   * across its lifecycle (different statuses + dismissed audit history), and all
+   * should reflect the same current issue state for the admin filter.
+   *
+   * Returns the number of docs updated (0 when no tracking doc exists for the
+   * issue, which is the common case for issues that never entered the pipeline).
+   */
+  async setGithubIssueState(repoSlug: string, issueNumber: number, state: 'open' | 'closed'): Promise<number> {
+    const result = await this.model.updateMany(
+      { repoSlug, githubIssueNumber: issueNumber },
+      { $set: { githubIssueState: state } }
+    );
+    return result.modifiedCount ?? 0;
+  }
+
+  /**
+   * Backstop for the on-view self-heal: reconcile githubIssueState on a single
+   * doc by its _id. setGithubIssueState scopes its bulk update by repoSlug, so a
+   * doc missing repoSlug is silently skipped there (the fallback repoSlug won't
+   * match an absent field). The issue-state endpoint holds the viewed doc's id
+   * and calls this to guarantee that doc is reconciled regardless of repoSlug.
+   */
+  async setGithubIssueStateById(id: string, state: 'open' | 'closed'): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { githubIssueState: state } });
+  }
+
+  /**
    * Atomic state transition: only updates if current status matches expectedStatus.
    * Returns the updated document, or null if the transition was not possible.
    */
@@ -507,6 +579,28 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
     if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
     const result = await this.model.findOne(filter);
     return result?.toObject() ?? null;
+  }
+
+  /**
+   * Record a human verdict on whether the merged SRE fix was correct (#271).
+   * Maps a `sre-fix-correct` / `sre-fix-incorrect` PR label back to the tracking
+   * doc via its fixPrNumber. Last-write-wins: applying the opposite label
+   * overrides the prior verdict. Returns the updated doc, or null when no
+   * tracking doc exists for this PR (non-SRE PR - ignored gracefully).
+   */
+  async setFixVerdict(
+    prNumber: number,
+    verdict: NonNullable<ISreErrorTracking['fixVerdict']>,
+    repoSlug?: string
+  ): Promise<ISreErrorTracking | null> {
+    const filter: Record<string, unknown> = { fixPrNumber: prNumber };
+    if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
+    const result = await this.model.findOneAndUpdate(
+      filter,
+      { $set: { fixVerdict: verdict } },
+      { returnDocument: 'after' }
+    );
+    return result ? result.toObject() : null;
   }
 
   /**

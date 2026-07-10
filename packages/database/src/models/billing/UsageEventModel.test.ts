@@ -127,4 +127,83 @@ describe('UsageEventRepository', () => {
       expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
     });
   });
+
+  describe('settlementBreakdown', () => {
+    it('buckets by settledBasis and sums credits, write-offs, and token deltas', async () => {
+      await record({
+        settledBasis: 'provider',
+        inputTokens: 1000,
+        outputTokens: 500,
+        providerInputTokens: 950,
+        providerOutputTokens: 480,
+        creditsCharged: 50,
+        writtenOffCredits: 5,
+      });
+      await record({
+        settledBasis: 'provider',
+        inputTokens: 800,
+        outputTokens: 400,
+        providerInputTokens: 820,
+        providerOutputTokens: 410,
+        creditsCharged: 40,
+      });
+      await record({
+        settledBasis: 'local',
+        inputTokens: 300,
+        outputTokens: 150,
+        creditsCharged: 15,
+        writtenOffCredits: 2,
+      });
+      // Provider reported input but not output (e.g. a stream that dropped before
+      // completion): settledBasis stays 'local' since hasProviderUsage requires both.
+      // The literal 0 is a partial report, not a real comparison point, so this row
+      // must NOT contribute to the delta despite having a providerInputTokens value.
+      await record({
+        settledBasis: 'local',
+        inputTokens: 300,
+        outputTokens: 140,
+        providerInputTokens: 290,
+        providerOutputTokens: 0,
+        creditsCharged: 10,
+      });
+
+      const rows = await usageEventRepository.settlementBreakdown();
+
+      expect(rows).toHaveLength(2);
+      const provider = rows.find(r => r.settledBasis === 'provider');
+      expect(provider).toMatchObject({
+        requests: 2,
+        creditsCharged: 90,
+        writtenOffCredits: 5,
+        deltaSampleSize: 2,
+      });
+      // provider counts vs local estimate: (950-1000)+(820-800) = -30, (480-500)+(410-400) = -10
+      expect(provider!.inputTokenDelta).toBe(-30);
+      expect(provider!.outputTokenDelta).toBe(-10);
+
+      const local = rows.find(r => r.settledBasis === 'local');
+      expect(local).toMatchObject({
+        requests: 2,
+        creditsCharged: 25,
+        writtenOffCredits: 2,
+        // Neither local row has both provider counts as real positive values.
+        deltaSampleSize: 0,
+        inputTokenDelta: 0,
+        outputTokenDelta: 0,
+      });
+    });
+
+    it('excludes events with no settledBasis (rows predating the field)', async () => {
+      await record();
+      const rows = await usageEventRepository.settlementBreakdown();
+      expect(rows).toHaveLength(0);
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await record({ settledBasis: 'local' });
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+      const rows = await usageEventRepository.settlementBreakdown(30);
+      expect(rows).toHaveLength(0);
+    });
+  });
 });

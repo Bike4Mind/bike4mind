@@ -8,6 +8,7 @@ import {
 } from '@bike4mind/database';
 import { EmailJobStatus, EmailJobOverallStatus, EmailSendStatus } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
+import { dedupeTestRecipients } from './emailTestRecipients';
 import { SQSClient, SendMessageBatchCommand } from '@aws-sdk/client-sqs';
 import { Resource } from 'sst';
 import { z } from 'zod';
@@ -110,9 +111,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         ? await buildRecipientListForUserIds(userIds, logger)
         : await buildRecipientListFromFilter(effectiveRecipientFilter, logger);
 
-      recipients = buildTestRecipients(realRecipients, testRecipients);
+      const uniqueTestRecipients = dedupeTestRecipients(testRecipients);
+      recipients = buildTestRecipients(realRecipients, uniqueTestRecipients);
       logger.info(
-        `Test mode: ${realRecipients.length} real recipients, sending ${recipients.length} email(s) to ${testRecipients.length} test address(es)`
+        `Test mode: ${realRecipients.length} real recipients, sending ${recipients.length} email(s) to ${uniqueTestRecipients.length} test address(es)`
       );
     }
     // Option 2: Specific userIds provided (partial send)
@@ -214,6 +216,8 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
 // Caps fan-out at the number of test addresses so each test address receives
 // exactly one email, regardless of how large the real audience is.
 // Preserves original recipient ID/type for personalization, paired 1:1 with a test address.
+// Input is pre-deduped (dispatch runs dedupeTestRecipients; see the dedupe regression
+// test); the internal normalize below is kept for direct callers.
 export function buildTestRecipients(realRecipients: Recipient[], testRecipients: string[]): Recipient[] {
   const sampleSize = Math.min(realRecipients.length, testRecipients.length);
   const recipients: Recipient[] = [];

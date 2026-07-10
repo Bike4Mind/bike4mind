@@ -16,6 +16,10 @@ import {
   findPublishedByArtifact,
   artifactBundlePublisher,
   buildArtifactPublishWiring,
+  publishReply,
+  publishFabFile,
+  replyPublisher,
+  fabFilePublisher,
 } from '../publishApi';
 
 const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
@@ -349,5 +353,85 @@ describe('buildArtifactPublishWiring — id stability', () => {
     });
 
     expect(await wiring.resolveExisting()).toEqual(existing);
+  });
+});
+
+/** The JSON body posted to a given publish endpoint (reply/fabfile skip the S3 dance). */
+function postedBodyTo(url: string): Record<string, unknown> {
+  const call = apiPost.mock.calls.find(c => c[0] === url);
+  return (call?.[1] as Record<string, unknown>) ?? {};
+}
+
+describe('publishReply / publishFabFile - scope pass-through', () => {
+  beforeEach(() => {
+    apiPost.mockResolvedValue({ data: { ...RESULT, url: '/p/r/pub-1' } });
+  });
+
+  it('publishReply forwards tier + scopeId to the reply endpoint', async () => {
+    await publishReply({ sessionId: 's1', messageId: 'm1', tier: 'organization', scopeId: 'org_42' });
+    const body = postedBodyTo('/api/publish/reply');
+    expect(body.tier).toBe('organization');
+    expect(body.scopeId).toBe('org_42');
+  });
+
+  it('publishReply omits tier/scopeId when not given (server defaults to user tier)', async () => {
+    await publishReply({ sessionId: 's1', messageId: 'm1' });
+    const body = postedBodyTo('/api/publish/reply');
+    expect(body.tier).toBeUndefined();
+    expect(body.scopeId).toBeUndefined();
+  });
+
+  it('publishFabFile forwards tier + scopeId to the fabfile endpoint', async () => {
+    await publishFabFile({ fabFileId: 'f1', tier: 'organization', scopeId: 'org_42' });
+    const body = postedBodyTo('/api/publish/fabfile');
+    expect(body.tier).toBe('organization');
+    expect(body.scopeId).toBe('org_42');
+  });
+});
+
+describe('replyPublisher / fabFilePublisher - org-tier mapping', () => {
+  beforeEach(() => {
+    apiPost.mockResolvedValue({ data: { ...RESULT, url: '/p/r/pub-1' } });
+  });
+
+  it('replyPublisher maps org visibility to an org-tier page (scopeId = org id)', async () => {
+    const publish = replyPublisher({ sessionId: 's1', messageId: 'm1', orgId: 'org_42' });
+    await publish('organization');
+    const body = postedBodyTo('/api/publish/reply');
+    // Org visibility must land a real org-tier page - a user-tier record with org visibility
+    // would 403 org members (its scopeId is the user id, never the viewer's org id).
+    expect(body).toMatchObject({ visibility: 'organization', tier: 'organization', scopeId: 'org_42' });
+  });
+
+  it('replyPublisher keeps public on the user tier even in a Team context', async () => {
+    const publish = replyPublisher({ sessionId: 's1', messageId: 'm1', orgId: 'org_42' });
+    await publish('public');
+    const body = postedBodyTo('/api/publish/reply');
+    expect(body.visibility).toBe('public');
+    expect(body.tier).toBeUndefined();
+    expect(body.scopeId).toBeUndefined();
+  });
+
+  it('replyPublisher ignores org visibility without an active org (option is not offered)', async () => {
+    const publish = replyPublisher({ sessionId: 's1', messageId: 'm1' });
+    await publish('organization');
+    const body = postedBodyTo('/api/publish/reply');
+    expect(body.tier).toBeUndefined();
+    expect(body.scopeId).toBeUndefined();
+  });
+
+  it('fabFilePublisher maps org visibility to an org-tier page (scopeId = org id)', async () => {
+    const publish = fabFilePublisher({ fabFileId: 'f1', orgId: 'org_42' });
+    await publish('organization');
+    const body = postedBodyTo('/api/publish/fabfile');
+    expect(body).toMatchObject({ visibility: 'organization', tier: 'organization', scopeId: 'org_42' });
+  });
+
+  it('fabFilePublisher keeps public on the user tier even in a Team context', async () => {
+    const publish = fabFilePublisher({ fabFileId: 'f1', orgId: 'org_42' });
+    await publish('public');
+    const body = postedBodyTo('/api/publish/fabfile');
+    expect(body.tier).toBeUndefined();
+    expect(body.scopeId).toBeUndefined();
   });
 });

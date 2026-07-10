@@ -35,6 +35,8 @@ export function buildToolUsageEvent(params: {
   units?: number;
   inputTokens?: number;
   outputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
 }): IUsageEventInput {
   const { quest, user, organization } = params;
   return {
@@ -48,8 +50,8 @@ export function buildToolUsageEvent(params: {
     model: params.model,
     inputTokens: params.inputTokens ?? 0,
     outputTokens: params.outputTokens ?? 0,
-    cachedInputTokens: 0,
-    cacheWriteTokens: 0,
+    cachedInputTokens: params.cachedInputTokens ?? 0,
+    cacheWriteTokens: params.cacheWriteTokens ?? 0,
     units: params.units,
     costUsd: params.costUsd,
     creditsCharged: params.creditsCharged,
@@ -567,6 +569,8 @@ export class ToolBuilder {
                 creditsCharged: credits,
                 inputTokens: meta.inputTokens,
                 outputTokens: meta.outputTokens,
+                cachedInputTokens: meta.cacheReadTokens,
+                cacheWriteTokens: meta.cacheWriteTokens,
               })
             );
           }

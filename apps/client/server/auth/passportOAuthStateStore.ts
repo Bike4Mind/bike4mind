@@ -1,6 +1,7 @@
 import { Request } from 'express';
 import OAuth2Strategy from 'passport-oauth2';
 import { createStateToken, verifyStateToken } from './jwtStateStore';
+import { STATE_REASON_TO_CODE } from '@server/utils/auth/oauthFailureReason';
 
 type Metadata = OAuth2Strategy.Metadata;
 type StoreCallback = OAuth2Strategy.StateStoreStoreCallback;
@@ -55,7 +56,7 @@ export class PassportOAuthStateStore implements OAuth2Strategy.StateStore {
       if (result.valid) {
         cb(null, true, result.payload);
       } else {
-        cb(null, false, { message: result.message });
+        cb(null, false, { code: STATE_REASON_TO_CODE[result.reason], message: result.message });
       }
     } catch (err) {
       cb(err instanceof Error ? err : new Error(String(err)), false, undefined);

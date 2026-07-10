@@ -5,7 +5,11 @@ import { isMcpServerAvailable } from '@server/services/integrationCircuitBreaker
 import { getBreaker, classifyOperation, CircuitBreakerError } from '@server/services/mcpCircuitBreakers';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import type { IntegrationAuditIntegrationName } from '@bike4mind/database';
-import { rateLimitSnapshotRepository, type IntegrationType } from '@bike4mind/database';
+import {
+  rateLimitSnapshotRepository,
+  type IntegrationType,
+  INTEGRATION_AUDIT_INTEGRATION_NAMES,
+} from '@bike4mind/database';
 import { recordRateLimitEvent, recordCircuitBreakerRejection } from '@server/utils/cloudwatch';
 import {
   normalizeEndpoint,
@@ -16,7 +20,8 @@ import {
 import { randomUUID } from 'crypto';
 import { Resource } from 'sst';
 
-const AUDITABLE_INTEGRATIONS = new Set<string>(['github', 'atlassian', 'slack', 'linear', 'notion']);
+// Shared const so the auditable set can never drift from the model's enum.
+const AUDITABLE_INTEGRATIONS = new Set<string>(INTEGRATION_AUDIT_INTEGRATION_NAMES);
 
 const shouldRunLocally = () => process.env.IS_LOCAL === 'true' || process.env.NODE_ENV === 'development';
 

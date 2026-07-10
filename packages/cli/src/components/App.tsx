@@ -4,6 +4,7 @@ import { StatusBar } from './StatusBar';
 import { InputPrompt } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
 import { BackgroundAgentStatus } from './BackgroundAgentStatus';
+import { BackgroundShellStatus } from './BackgroundShellStatus';
 import { CompletedGroupNotification } from './CompletedGroupNotification';
 import { PermissionPrompt } from './PermissionPrompt';
 import type { PermissionResponse } from './PermissionPrompt';
@@ -272,6 +273,9 @@ export function App({
 
             {/* Background agent status */}
             <BackgroundAgentStatus />
+
+            {/* Background shell session status (bash_execute run_in_background) */}
+            <BackgroundShellStatus />
 
             {/* Completed group notifications - shown when all agents in a group finish */}
             <CompletedGroupNotification />

@@ -32,7 +32,7 @@ import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { ACCOUNT_LINK_VERIFICATION_REQUIRED, ACCOUNT_LINK_EMAIL_MISMATCH } from '@server/utils/auth/oauthAccountLink';
+import { decideAutoLink } from '@server/utils/auth/oauthAccountLink';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -260,56 +260,42 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         authProviders[existingProviderIndex].id === incomingSub &&
         authProviders[existingProviderIndex].oktaIdentityProviderId === incomingIdpId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
-        // Read `email_verified` straight off the OIDC userinfo as a boolean - the OIDC
-        // spec types it as a JSON boolean, so (unlike the passport-shaped profiles in
-        // verifyCallback.ts) there is no stringly-typed `'true'`/`'false'` to normalise.
-        // Do NOT swap in isProviderEmailVerified() here; that helper exists for the wider
+        // Shared account-takeover gate (see decideAutoLink) - the SAME decision
+        // verifyCallback.ts runs for the passport paths, so the two can't drift.
+        // Read `email_verified` straight off the OIDC userinfo as a boolean: the
+        // OIDC spec types it as a JSON boolean, so (unlike the passport-shaped
+        // profiles) there is no stringly-typed 'true'/'false' to normalise. Do NOT
+        // swap in isProviderEmailVerified() here; that helper exists for the wider
         // passport email-array shape this OIDC path never receives.
-        const providerEmailVerified = userInfo.email_verified === true;
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
-          Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: verification required', {
+        const decision = decideAutoLink({
+          providerEmailVerified: userInfo.email_verified === true,
+          providerEmail: email,
+          localEmail: user.email ?? null,
+          localEmailVerified: user.emailVerified === true,
+          hasUsablePassword: !!user.hasUsablePassword,
+        });
+        if (decision.action === 'refuse') {
+          // decision.detail distinguishes the two verification-required causes
+          // (provider- vs local-side) that share one public reason code - keep it
+          // in the log for attack forensics.
+          Logger.warn(`[Okta Callback] Refusing to auto-link Okta to existing account: ${decision.detail}`, {
             userId: user.id,
-            providerEmailVerified,
-            localEmailVerified,
+            detail: decision.detail,
           });
           await authFailLogRepository.create({
             strategy: 'okta',
             ip,
             userAgent,
             email,
-            reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+            reason: decision.reason,
             headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
             meta: { path: req.url, status: 401 },
           });
-          return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_VERIFICATION_REQUIRED)}`);
+          return res.redirect(`/login?error=${encodeURIComponent(decision.reason)}`);
         }
-
-        // Email-equality gate (mirrors verifyCallback.ts): both emails
-        // are verified, but they must also MATCH (case-insensitive). Verification
-        // alone is insufficient - the user lookup above matches on email OR username,
-        // so an attacker holding a verified Okta email on a colliding username could
-        // otherwise auto-link into a victim's account. Okta assertions are IdP-signed,
-        // but the per-tenant username/email split makes mismatch a real vector, not a
-        // false-positive edge case, so the gate applies here as it does for the
-        // generic OAuth path.
-        const localEmail = user.email ?? null;
-        if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
-          Logger.warn('[Okta Callback] Refusing to auto-link Okta to existing account: email mismatch', {
-            userId: user.id,
-          });
-          await authFailLogRepository.create({
-            strategy: 'okta',
-            ip,
-            userAgent,
-            email,
-            reason: ACCOUNT_LINK_EMAIL_MISMATCH,
-            headers: { 'x-forwarded-for': req.headers['x-forwarded-for'] },
-            meta: { path: req.url, status: 401 },
-          });
-          return res.redirect(`/login?error=${encodeURIComponent(ACCOUNT_LINK_EMAIL_MISMATCH)}`);
-        }
+        promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
       if (existingProviderIndex !== -1) {
@@ -318,6 +304,14 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         authProviders.push(oauthCredentials);
       }
 
+      // Promotion write rides the SAME updateOne as the provider link - no second
+      // round-trip, and it can never persist without the link (or vice versa).
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
+      const emailVerifiedAt = new Date();
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProviderLink) {
         // Linking a NEW auth provider to an existing account is a security-relevant
         // change: bump tokenVersion to invalidate any other active sessions. The
@@ -325,11 +319,15 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         // version on the in-memory user, so the token minted below matches.
         await User.updateOne(
           { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
+          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
         );
         user.tokenVersion = (user.tokenVersion ?? 0) + 1;
       } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
+        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
+      }
+      if (promoteEmailVerified) {
+        user.emailVerified = true;
+        user.emailVerifiedAt = emailVerifiedAt;
       }
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
@@ -339,12 +337,20 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         name,
         username: name,
         email,
+        hasUsablePassword: false,
         isAdmin: false,
         oauthCredentials,
         authProviders: [oauthCredentials],
       });
       Logger.debug('[Okta Callback] Created new user:', user.id);
     }
+
+    // Parity with verifyCallback.ts, which omits the password hash from the user
+    // it hands downstream. The field is select:false and never loaded on the
+    // queries above, so this is purely defensive - it keeps the two auto-link
+    // paths consistent and guards against a future query adding +password. Never
+    // persisted: nothing below calls user.save() (writes go via User.updateOne).
+    user.password = null;
 
     // Check if user is banned
     if (user.isBanned) {

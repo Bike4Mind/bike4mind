@@ -1,5 +1,4 @@
 import { IFabFileDocument } from '@bike4mind/common';
-import { useSearchFabFiles } from '@client/app/hooks/data/fabFiles';
 import { useGetTagCounts } from '@client/app/hooks/data/tag';
 import { Box, Card, Chip, CircularProgress, List, ListItemButton, ListItemContent, Stack, Typography } from '@mui/joy';
 import { FieldTooltip } from '@client/app/components/help';
@@ -20,6 +19,9 @@ interface HomeViewPanelProps {
   onNavigateToNamespace: (namespace: string) => void;
   onFileSelect: (fileId: string) => void;
   selectedIds: Set<string>;
+  recentFiles: IFabFileDocument[];
+  isLoadingRecent: boolean;
+  recentTotal?: number;
 }
 
 interface WorkspaceRow {
@@ -68,14 +70,16 @@ function buildWorkspaces(
     .sort((a, b) => b.totalCount - a.totalCount);
 }
 
-const HomeViewPanel: FC<HomeViewPanelProps> = ({ onNavigateToNamespace, onFileSelect, selectedIds }) => {
-  const { data: recentData, isLoading: isLoadingRecent } = useSearchFabFiles({
-    order: { by: 'createdAt', direction: 'desc' },
-    pagination: { page: 1, limit: 8 },
-  });
+const HomeViewPanel: FC<HomeViewPanelProps> = ({
+  onNavigateToNamespace,
+  onFileSelect,
+  selectedIds,
+  recentFiles,
+  isLoadingRecent,
+  recentTotal,
+}) => {
   const { data: tagCountsData, isLoading: isLoadingTags } = useGetTagCounts();
 
-  const recentFiles = recentData?.data?.slice(0, 8) || [];
   const workspaces = useMemo(
     () =>
       tagCountsData?.tagCounts ? buildWorkspaces(tagCountsData.tagCounts, tagCountsData.namespaceCounts ?? []) : [],
@@ -87,7 +91,7 @@ const HomeViewPanel: FC<HomeViewPanelProps> = ({ onNavigateToNamespace, onFileSe
 
   const debugDump = useMemo(() => {
     if (!showDebug || !tagCountsData) return '';
-    const totalSearchFiles = recentData?.total ?? '?';
+    const totalSearchFiles = recentTotal ?? '?';
     const nsCounts = tagCountsData.namespaceCounts ?? [];
     const tagCounts = tagCountsData.tagCounts ?? [];
 
@@ -108,7 +112,7 @@ const HomeViewPanel: FC<HomeViewPanelProps> = ({ onNavigateToNamespace, onFileSe
       tagCounts.length > 30 ? `  ... and ${tagCounts.length - 30} more` : '',
     ];
     return lines.join('\n');
-  }, [showDebug, tagCountsData, recentData, workspaces]);
+  }, [showDebug, tagCountsData, recentTotal, workspaces]);
 
   if (isLoadingRecent || isLoadingTags) {
     return (

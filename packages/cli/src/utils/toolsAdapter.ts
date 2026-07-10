@@ -25,9 +25,13 @@ import type { AgentHooks } from '../agents/types.js';
 import { HookBlockedError } from '../agents/types.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import { classifyCommandRisk } from '../config/commandRisk.js';
+import { SHELL_LIKE_TOOL_COMMAND_FIELDS } from '../config/shellCommandFields.js';
 import { getPlanModeFileDir, isWriteTargetingPlanFile } from './planMode.js';
 import { matchesAnyPattern } from '../agents/toolFilter.js';
 import { getProcessHooks } from './processHooks.js';
+import { clampInteractionMode } from '../agents/interactionModeClamp.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 
 /**
  * Tool-name patterns auto-approved without a permission prompt, from `--allowedTools`
@@ -123,7 +127,12 @@ function wrapToolWithPermission(
   /** Live, mutable allow-list shared with the core tool context. The path
    *  access-grant flow pushes onto this in place so grants take effect on the
    *  next call without rebuilding tools. */
-  allowedDirectories?: string[]
+  allowedDirectories?: string[],
+  /** Ceiling interaction mode for a spawned subagent. When set, the tool runs at
+   *  the less-permissive of this and the live store mode, so a subagent can never
+   *  exceed its parent's authority yet still tightens if the user switches to plan
+   *  mode mid-run. Undefined for the main agent (uses the live store mode). */
+  interactionModeOverride?: InteractionMode
 ): ICompletionOptionTools {
   const originalFn = tool.toolFn;
   const toolName = tool.toolSchema.name;
@@ -222,32 +231,62 @@ function wrapToolWithPermission(
       // except writes targeting the plan file. Plan-mode block runs BEFORE the
       // permission/trust check so it overrides previously trusted tools.
       const { useCliStore } = await import('../store/index.js');
-      const interactionMode = useCliStore.getState().interactionMode;
+      const liveInteractionMode = useCliStore.getState().interactionMode;
+      // Subagents carry a ceiling; clamp to the less-permissive of it and the live
+      // mode so they never exceed the parent but still honor a mid-run plan switch.
+      const interactionMode = interactionModeOverride
+        ? clampInteractionMode(liveInteractionMode, interactionModeOverride)
+        : liveInteractionMode;
       if (interactionMode === 'plan' && !isReadOnlyTool(toolName) && !isWriteTargetingPlanFile(toolName, args)) {
         const result = `Tool "${toolName}" is blocked while plan mode is active. Plan mode is read-only — research the codebase, then write your plan to a file under ${getPlanModeFileDir()}/. The user will press Shift+Tab to exit plan mode and authorize execution.`;
         agentContext.observationQueue.push({ toolName, result });
         return result;
       }
 
+      // Command-level risk gate: inspect the actual command text (not just the
+      // tool name) so a destructive command hidden behind a wrapper
+      // (`sh -c "rm -rf /"`, `sudo bash -c ...`, `curl ... | sh`) is never
+      // silently auto-run. A high-risk command ALWAYS requires an explicit
+      // prompt - this overrides host-allowlist / trust / sandbox-auto-allow /
+      // auto-accept short-circuits below. It only ever tightens: benign commands
+      // keep their existing (possibly auto-approved) behavior.
+      const commandField = SHELL_LIKE_TOOL_COMMAND_FIELDS[toolName];
+      const commandText = commandField ? args?.[commandField] : undefined;
+      // `classifyCommandRisk` is documented never to throw, but this call sits on the
+      // security boundary for every shell command - if it ever does, treat that as a
+      // high-risk command (force the prompt) rather than letting the error escape the
+      // permission gate and skip classification entirely.
+      let commandRisk: ReturnType<typeof classifyCommandRisk> | null = null;
+      if (typeof commandText === 'string') {
+        try {
+          commandRisk = classifyCommandRisk(commandText);
+        } catch {
+          commandRisk = { level: 'high', reasons: ['command risk analysis failed (fail closed)'] };
+        }
+      }
+      const forcePromptForRisk = commandRisk?.level === 'high';
+
       // Host allowlist (claude --allowedTools): auto-approve tools matching an
       // allowed pattern (e.g. mcp__manifold__*) without a permission prompt.
       const allowedPatterns = getAllowedToolPatterns();
-      if (allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
+      if (!forcePromptForRisk && allowedPatterns.length > 0 && matchesAnyPattern(toolName, allowedPatterns)) {
         return executeAndRecord();
       }
 
       // Auto-approved, trusted, or sandbox auto-allowed
-      if (!permissionManager.needsPermission(toolName, { isSandboxed })) {
+      if (!forcePromptForRisk && !permissionManager.needsPermission(toolName, { isSandboxed })) {
         return executeAndRecord();
       }
 
       // Auto-accept: skip permission prompt when Shift+Tab toggle is on
-      if (interactionMode === 'auto-accept') {
+      if (!forcePromptForRisk && interactionMode === 'auto-accept') {
         return executeAndRecord();
       }
 
       // Generate preview for dangerous operations
-      const preview = await generateToolPreview(toolName, args, isSandboxed);
+      const basePreview = await generateToolPreview(toolName, args, isSandboxed);
+      const preview =
+        forcePromptForRisk && commandRisk ? prependRiskBanner(basePreview, commandRisk.reasons) : basePreview;
 
       // Show permission prompt and wait indefinitely for response
       const response = await showPermissionPrompt(toolName, effectiveArgs, preview);
@@ -441,6 +480,18 @@ async function captureViolations(
       await orchestrator.recordViolation(v).catch(() => {});
     }
   }
+}
+
+/**
+ * Prepend a high-risk warning banner (with the classifier's reasons) to a tool
+ * preview shown in the permission prompt. Explains WHY a normally auto-approved
+ * command is being surfaced for explicit confirmation.
+ */
+function prependRiskBanner(basePreview: string | undefined, reasons: string[]): string {
+  const details =
+    reasons.length > 0 ? reasons.map(reason => `- ${reason}`).join('\n') : '- flagged by command analysis';
+  const banner = `🛑 HIGH-RISK COMMAND — flagged by static command analysis:\n\n${details}`;
+  return basePreview ? `${banner}\n\n${basePreview}` : banner;
 }
 
 /**
@@ -732,7 +783,10 @@ export async function generateCliTools(
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>,
   checkpointStore?: CheckpointStore | null,
   sandboxOrchestrator?: SandboxOrchestrator,
-  allowedDirectories?: string[]
+  allowedDirectories?: string[],
+  /** Ceiling interaction mode for a spawned subagent (see wrapToolWithPermission).
+   *  Omitted for the main agent, which follows the live store mode. */
+  interactionModeOverride?: InteractionMode
 ): Promise<{ tools: ICompletionOptionTools[]; agentContext: AgentContext }> {
   // Wire the ask_user_question callback into the tool's module-level setter
   if (showUserQuestion) {
@@ -812,6 +866,14 @@ export async function generateCliTools(
   // sync.
   const liveAllowedDirectories = allowedDirectories ?? [];
 
+  // Injects the CLI-owned web-tree-sitter comment stripper into file_read's opt-in
+  // `minified` mode (services has no tree-sitter dep). Lazy import keeps the WASM off
+  // the hot path until a minified read actually runs; reuses get_file_structure's engine.
+  const codeMinifier = async (source: string, ext: string): Promise<string | null> => {
+    const { stripComments } = await import('../tools/getFileStructure/treeSitterEngine');
+    return stripComments(source, ext);
+  };
+
   const toolsMap = generateTools(
     userId,
     user as IUserDocument,
@@ -827,7 +889,10 @@ export async function generateCliTools(
     model,
     undefined, // imageProcessorLambdaName (not needed for CLI)
     tools_to_generate,
-    liveAllowedDirectories
+    liveAllowedDirectories,
+    undefined, // entitlementKeys (default)
+    undefined, // sessionId (not needed for CLI tool build)
+    codeMinifier
   );
 
   // Convert to array and wrap with permission checks, checkpointing, server routing, and observation tracking
@@ -840,7 +905,8 @@ export async function generateCliTools(
       configStore,
       apiClient,
       sandboxOrchestrator,
-      liveAllowedDirectories
+      liveAllowedDirectories,
+      interactionModeOverride
     );
     return wrapToolWithCheckpointing(permissionWrapped, checkpointStore ?? null);
   });

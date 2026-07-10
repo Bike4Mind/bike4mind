@@ -13,7 +13,17 @@ import {
   IDataLakeRepository,
   ISkillRepository,
   ImageModerationIncident,
+  IUsageEventRepository,
+  IOrganizationRepository,
 } from '@bike4mind/common';
+
+/**
+ * Strips comments from source code, returning the stripped text, or `null` when the
+ * language is unsupported or unparsable (caller falls back to whitespace-only
+ * normalization). Injected by the CLI host, which owns the web-tree-sitter dependency;
+ * absent in other harnesses. Used by the opt-in `minified` mode of `file_read`.
+ */
+export type CodeMinifier = (source: string, ext: string) => Promise<string | null>;
 
 export interface ToolContext {
   userId: string;
@@ -46,6 +56,14 @@ export interface ToolContext {
      * incident audit record, not the block.
      */
     imageModerationIncidents?: { record(input: ImageModerationIncident): Promise<unknown> };
+    /**
+     * Analytics sink for recording non-chat AI spend (e.g. KB query embeddings). Present on
+     * the chat/agent paths (the full service db flows in); absent on lean tool harnesses,
+     * where recording degrades to a no-op.
+     */
+    usageEvents?: Pick<IUsageEventRepository, 'record'>;
+    /** Owner lookup for usage attribution; findById is all the recorder needs. */
+    organizations?: Pick<IOrganizationRepository, 'findById'>;
   };
   /**
    * Caller's RESOLVED entitlement keys (subscription- + tag-derived), resolved app-side
@@ -67,6 +85,8 @@ export interface ToolContext {
    * Additional directories can be added via --add-dir or /add-dir.
    */
   allowedDirectories?: string[];
+  /** Optional code minifier for `file_read`'s opt-in `minified` mode. See CodeMinifier. */
+  codeMinifier?: CodeMinifier;
 }
 
 export interface ToolDefinition {

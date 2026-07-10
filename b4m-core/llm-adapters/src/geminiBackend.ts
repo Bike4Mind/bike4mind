@@ -22,6 +22,7 @@ import { handleToolResultStreaming } from './toolStreamingHelper';
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
 import { withAbortListener } from './withAbortListener';
+import { normalizeGeminiFinishReason } from './stopReason';
 
 type ToolCall = {
   id: string;
@@ -724,8 +725,13 @@ export class GeminiBackend implements ICompletionBackend {
             }
           }
 
+          // Do NOT forward cachedContentTokenCount to CompletionInfo.cacheReadInputTokens:
+          // Gemini's promptTokenCount INCLUDES cached tokens (unlike Anthropic, where the
+          // fields are disjoint), so forwarding without subtracting from inputTokens would
+          // double-bill the cached portion in provider-basis settlement.
           turnInputTokens = lastChunk.usageMetadata?.promptTokenCount ?? 0;
           turnOutputTokens = lastChunk.usageMetadata?.candidatesTokenCount ?? 0;
+          const finishReason = normalizeGeminiFinishReason(lastChunk.candidates?.[0]?.finishReason);
           // Emit accum + this turn's tokens. When the call recurses below,
           // the inner call's terminal emit will overwrite this with the full
           // multi-turn total via the same accum+thisTurn shape.
@@ -735,6 +741,7 @@ export class GeminiBackend implements ICompletionBackend {
             toolsUsed,
             cacheStats,
             ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+            ...(finishReason ? { stopReason: finishReason } : {}),
           });
         }
 
@@ -938,6 +945,7 @@ export class GeminiBackend implements ICompletionBackend {
 
         turnInputTokens = r.usageMetadata?.promptTokenCount ?? 0;
         turnOutputTokens = r.usageMetadata?.candidatesTokenCount ?? 0;
+        const finishReason = normalizeGeminiFinishReason(r.candidates?.[0]?.finishReason);
         // Emit accum + this turn's tokens. The recursive call below (if any)
         // will overwrite via the same accum+thisTurn shape, ending at the
         // full multi-turn billable total.
@@ -947,6 +955,7 @@ export class GeminiBackend implements ICompletionBackend {
           toolsUsed,
           cacheStats,
           ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+          ...(finishReason ? { stopReason: finishReason } : {}),
         });
       } catch (error) {
         // Check if error is due to abort signal

@@ -140,4 +140,52 @@ describe('renderSandboxedBundle', () => {
       expect(droppedAssets).toHaveLength(0);
     });
   });
+
+  describe('assetMode override (share links)', () => {
+    const SHARE_BASE = '/a/tok123';
+
+    it("forces the <base> model for a PRIVATE bundle when assetMode:'base' (no inlining)", () => {
+      const html = `<html><head></head><body><img src="logo.png"></body></html>`;
+      const { srcdoc, droppedAssets } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: SHARE_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assetMode: 'base',
+      });
+      // <base> at the share path so assets resolve through /a/<token>/... and self-authorize.
+      expect(srcdoc).toContain(`<base href="${ORIGIN}${SHARE_BASE}/">`);
+      expect(srcdoc).toContain('src="logo.png"'); // left relative, NOT inlined
+      expect(srcdoc).not.toContain('data:image');
+      expect(droppedAssets).toHaveLength(0);
+    });
+
+    it("still inlines a PRIVATE bundle when assetMode:'inline'", () => {
+      const html = `<html><head></head><body><img src="logo.png"></body></html>`;
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assetMode: 'inline',
+        assets: new Map([['logo.png', asset('PNG', 'image/png')]]),
+      });
+      expect(srcdoc).toContain(`data:image/png;base64,${Buffer.from('PNG').toString('base64')}`);
+      expect(srcdoc).not.toContain('<base');
+    });
+
+    it('default (no assetMode) preserves visibility-derived behavior', () => {
+      const html = `<html><head></head><body></body></html>`;
+      const pub = renderSandboxedBundle({ indexHtml: html, urlBase: URL_BASE, origin: ORIGIN, visibility: 'public' });
+      expect(pub.srcdoc).toContain('<base');
+      const priv = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assets: new Map(),
+      });
+      expect(priv.srcdoc).not.toContain('<base');
+    });
+  });
 });

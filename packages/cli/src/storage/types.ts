@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { AgentStep, SubagentConfig, ThoroughnessLevel } from '@bike4mind/agents';
+import type { MessageContentObject } from '@bike4mind/common';
 import type { SandboxConfig, PartialSandboxConfig } from '../sandbox/types.js';
 
 /**
@@ -9,6 +10,14 @@ export interface Message {
   id: string; // Unique identifier for React reconciliation
   role: 'user' | 'assistant' | 'system';
   content: string;
+  /**
+   * Lossless structured content blocks for this turn (tool_use / tool_result /
+   * text / image). When present, this is the rich record used to rebuild LLM
+   * context; `content` stays the display/back-compat string (the final answer
+   * or the user's text). Absent on legacy sessions and on plain turns with no
+   * tool activity - readers fall back to `content` in that case.
+   */
+  richContent?: MessageContentObject[];
   timestamp: string;
   metadata?: {
     tokenUsage?: {
@@ -160,7 +169,7 @@ export interface CliConfig {
   auth?: AuthTokens; // OAuth authentication tokens for the active environment (optional)
   /**
    * Per-environment auth token cache, keyed by resolved API URL
-   * (e.g. "https://app.example.com", "http://localhost:3001").
+   * (e.g. "https://app.example.com", "http://localhost:3000").
    * Lets `--dev`/`--prod` flip between environments without forcing a
    * re-login each time you return to one you've already authenticated.
    */

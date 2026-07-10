@@ -1,9 +1,14 @@
 import { get_encoding, Tiktoken } from 'tiktoken';
 import type { Session } from '../storage/types.js';
-import type { ModelInfo } from '@bike4mind/common';
+import type { ModelInfo, MessageContent } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 
 const DEFAULT_CONTEXT_WINDOW = 200_000;
+
+// Flat per-image cost used when a message carries inline/url image blocks.
+// tiktoken cannot see image bytes, so we bill a fixed, deliberately generous
+// estimate to keep windowing on the safe side.
+const IMAGE_BLOCK_TOKEN_ESTIMATE = 1_600;
 
 /**
  * Token counting utility for context window management.
@@ -25,6 +30,36 @@ export class TokenCounter {
    */
   countTokens(text: string): number {
     return this.getEncoder().encode(text).length;
+  }
+
+  /**
+   * Count tokens in a message's content, whether it is a plain string or an
+   * array of structured blocks (text / tool_use / tool_result / image). Text is
+   * tiktoken-counted; images are billed a flat estimate since their bytes are
+   * opaque to the tokenizer.
+   */
+  countMessageContent(content: MessageContent): number {
+    if (typeof content === 'string') {
+      return this.countTokens(content);
+    }
+
+    return content.reduce((sum, block) => {
+      switch (block.type) {
+        case 'text':
+          return sum + this.countTokens(block.text ?? '');
+        case 'thinking':
+          return sum + this.countTokens(block.thinking ?? '');
+        case 'tool_use':
+          return sum + this.countTokens(`${block.name ?? ''} ${JSON.stringify(block.input ?? {})}`);
+        case 'tool_result':
+          return sum + this.countTokens(block.content ?? '');
+        case 'image':
+        case 'image_url':
+          return sum + IMAGE_BLOCK_TOKEN_ESTIMATE;
+        default:
+          return sum;
+      }
+    }, 0);
   }
 
   /**

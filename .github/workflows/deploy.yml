@@ -2,7 +2,13 @@ name: Deploy
 
 on:
   push:
-    branches: [main, prod]
+    # Production is no longer shipped by pushing to a `prod` branch. It is promoted
+    # from the deploy console (deploy.bike4mind.com), which dispatches deploy-tier.yml
+    # + prod-release.yml directly. Dropping `prod` here retires the old main->prod PR
+    # path so merging into `prod` no longer deploys. The now-unreachable prod-specific
+    # steps below (is_push_prod matrix entry, prod-failure alert) are dead and can be
+    # cleaned up in a follow-up.
+    branches: [main]
   pull_request:
     # Exclude prod-targeted PRs — those are the staging→production promotion
     # and `main` already validates them; a redundant CI run isn't worth it.

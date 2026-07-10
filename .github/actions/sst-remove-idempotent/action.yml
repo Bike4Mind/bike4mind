@@ -123,6 +123,66 @@ runs:
           fi
         fi
 
+        # Desync self-heal. An interrupted or partial prior remove (CI job-timeout
+        # kill, runner death, or an out-of-band delete) leaves SST state out of sync
+        # with AWS, so the retry fails one of two ways:
+        #   - a resource deleted out-of-band but still in state -> its delete errors
+        #     "not found" (e.g. ListenerNotFound after its ALB was deleted). This is
+        #     the dominant case across the orphan backlog.
+        #   - a resource live in AWS but dropped from state -> its SG delete hits
+        #     DependencyViolation (the live ALB's ENI + the AlbToTask rule on the
+        #     shared default SG still pin it).
+        # NOTE: `sst refresh` can NOT be used to reconcile here - it runs the program
+        # and bundles every function, which fails in this public checkout (premium
+        # handlers live only in the private overlay: "Handler not found ...premium-
+        # generated..."). `sst state ...` and `sst remove` do NOT bundle, so we heal
+        # via state surgery + retry. Bounded loop: each pass either drops the phantom
+        # (already-gone) resource named in the error from state, or runs the stage-
+        # scoped ALB reconcile, then retries.
+        echo "⚠️  Remove failed; attempting desync self-heal (state surgery + retry)..."
+        for heal in 1 2 3 4 5 6; do
+          if echo "$OUTPUT" | grep -qE "DependencyViolation|has a dependent object"; then
+            echo "  [heal ${heal}] DependencyViolation -> stage-scoped orphaned-ALB reconcile"
+            bash "${GITHUB_ACTION_PATH}/reconcile-orphaned-alb.sh" "${STAGE}" || true
+          elif echo "$OUTPUT" | grep -qiE "NotFound|does not exist|was not ACTIVE|ResourceNotFoundException|NoSuchEntity|no longer exists|could not be found"; then
+            # "Already gone / inactive parent" desync: the resource (or a parent
+            # it needs) was deleted out-of-band, so its delete errors. AWS phrases
+            # this differently per service - ListenerNotFound, ECS "Cluster was not
+            # ACTIVE" on ClusterCapacityProviders, IAM NoSuchEntity, Lambda
+            # ResourceNotFoundException, etc. - so match the family, not one string.
+            # Drop the phantom from state and retry. (DependencyViolation, i.e. a
+            # LIVE resource still pinning another, is handled by the branch above.)
+            # Logical name of the failed resource is the token before its
+            # " aws:/sst:/random:/command:" type on the sst "|  Error ..." line
+            # (last such token on the line, i.e. the child, not its parent).
+            PHANTOMS=$(echo "$OUTPUT" | grep -aE '^\|[[:space:]]+Error' \
+              | sed -E 's/.* ([A-Za-z0-9_]+) (aws|sst|random|command|pulumi[A-Za-z-]*):[A-Za-z].*/\1/' \
+              | grep -aE '^[A-Za-z0-9_]+$' | sort -u)
+            if [ -z "$PHANTOMS" ]; then
+              echo "  [heal ${heal}] not-found error but no resource parsed; stopping self-heal"
+              break
+            fi
+            for p in $PHANTOMS; do
+              echo "  [heal ${heal}] dropping phantom (already-gone) resource from state: ${p}"
+              printf 'y\n' | pnpm sst state remove "${p}" --stage "${STAGE}" >/dev/null 2>&1 || true
+            done
+          else
+            echo "  [heal ${heal}] failure is not a recoverable desync; stopping self-heal"
+            break
+          fi
+          attempt_remove
+          EXIT_CODE=$?
+          if [ "$EXIT_CODE" -eq 0 ]; then
+            echo "✅ Preview environment removed after self-heal (pass ${heal})"
+            echo "existed=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          if echo "$OUTPUT" | grep -q "Stage not found"; then
+            echo "existed=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+        done
+
         echo "❌ Failed to remove preview environment (exit code: $EXIT_CODE)"
         # Belt-and-suspenders: guarantee a non-zero exit even if EXIT_CODE
         # somehow ended up at 0. Without this, future regressions of the

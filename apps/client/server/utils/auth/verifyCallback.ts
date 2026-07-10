@@ -4,12 +4,10 @@ import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { randomUUID } from 'crypto';
 import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
-import {
-  isProviderEmailVerified,
-  selectProviderEmail,
-  ACCOUNT_LINK_VERIFICATION_REQUIRED,
-  ACCOUNT_LINK_EMAIL_MISMATCH,
-} from './oauthAccountLink';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
+import { ForbiddenError } from '@server/utils/errors';
+import { isProviderEmailVerified, selectProviderEmail, decideAutoLink } from './oauthAccountLink';
+import { OAuthFailureReason } from './oauthFailureReason';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
 // six total create attempts (base + 5 retries) is already generous for a
@@ -79,6 +77,7 @@ async function createUniqueOAuthUser(params: {
     name: safeName,
     username,
     password: null,
+    hasUsablePassword: false,
     isAdmin: false,
     oauthCredentials,
     authProviders: [oauthCredentials],
@@ -187,23 +186,25 @@ const authenticateUser = async (
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
-        const providerEmailVerified = isProviderEmailVerified(profile);
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
+        // Shared account-takeover gate (see decideAutoLink). This path feeds it the
+        // passport email-array shape via isProviderEmailVerified(); okta/callback.ts
+        // feeds the OIDC boolean. Both consume one decision so the two paths can't drift.
+        const decision = decideAutoLink({
+          providerEmailVerified: isProviderEmailVerified(profile),
+          providerEmail: email,
+          localEmail: user.email ?? null,
+          localEmailVerified: user.emailVerified === true,
+          hasUsablePassword: !!user.hasUsablePassword,
+        });
+        if (decision.action === 'refuse') {
           // Propagate the targeted email so [strategy]/callback.ts can write
           // it onto the auth-fail log row for forensic review during attacks.
-          done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
+          done(decision.reason, undefined, email ? { email } : undefined);
           return;
         }
-        // Both emails are verified but they must also match (case-insensitive).
-        // Verification alone is not sufficient: an attacker with a verified email
-        // on a colliding username/email could otherwise link into a victim account.
-        const localEmail = user.email ?? null;
-        if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
-          done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
-          return;
-        }
+        promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
       if (existingProviderIndex !== -1) {
@@ -219,15 +220,29 @@ const authenticateUser = async (
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;
         isNewOAuthLink?: boolean;
+        emailVerified?: boolean;
+        emailVerifiedAt?: Date;
       };
+      // Promotion write rides the SAME updateOne as the provider link - no second
+      // round-trip, and it can never persist without the link (or vice versa).
+      // Promotion only fires on a real email match (see above), so the local email
+      // is always present here - no backfill needed.
+      const emailVerifiedAt = new Date();
+      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
+        ? { emailVerified: true, emailVerifiedAt }
+        : {};
       if (isNewProvider) {
         await User.updateOne(
           { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
+          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
         );
         linkedUser.tokenVersion = (user.tokenVersion ?? 0) + 1;
       } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
+        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
+      }
+      if (promoteEmailVerified) {
+        linkedUser.emailVerified = true;
+        linkedUser.emailVerifiedAt = emailVerifiedAt;
       }
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.
@@ -249,9 +264,17 @@ const authenticateUser = async (
     // exception before it could reach [strategy]/callback.ts, surfacing every
     // failure (duplicate-key writes, system-user rejection, DB errors) as an
     // opaque "OAuth user not returned" with no reason. Log the real error and
-    // pass a non-empty info message so the callback can record something useful.
+    // attach a canonical, data-free `code` the callback can safely record -
+    // the raw `message` rides along only for the callback's console.error
+    // (CloudWatch), never for the audit reason or redirect.
     console.error('[verifyCallback] authenticateUser threw:', e);
+    const code: OAuthFailureReason = isDuplicateKeyError(e)
+      ? 'duplicate_account'
+      : e instanceof ForbiddenError
+        ? 'forbidden_system_user'
+        : 'internal';
     done(null, undefined, {
+      code,
       message: e instanceof Error ? e.message : 'Internal error during authentication',
     });
   }

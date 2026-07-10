@@ -38,6 +38,12 @@ export const SUBSCRIPTION_PLANS: Array<SubscriptionPlanDetail> = [
     // SUBSCRIPTION_PLANS / SUBSCRIPTION_PLANS_MAP for admin-grant + webhook
     // credit-granting.
     hidden: true,
+    // [DELETION-FOOTPRINT] Launch gate: publicly purchasable only when the
+    // `EnableLibreOncology` admin setting is ON (per-environment, default off).
+    // Enforced generically in pages/api/subscriptions/subscribe.ts via
+    // `availabilityFlag`; the upgrade page reads the same flag to show "coming
+    // soon". Prevents buying into the product before its lake/courses are live.
+    availabilityFlag: 'EnableLibreOncology',
     features: [
       'All disease-site courses, unlocked',
       'Full guided clinical pathways',
