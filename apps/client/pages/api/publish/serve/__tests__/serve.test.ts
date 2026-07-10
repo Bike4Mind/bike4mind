@@ -1019,6 +1019,10 @@ describe('GET /api/publish/serve — access gates (issue #383)', () => {
     expect(data).not.toContain('pub1');
     expect(res.getHeader('Cache-Control')).toBe('no-store');
     expect(res.getHeader('X-Robots-Tag')).toBe('noindex');
+    // The credential-input page must not be frame-able (clickjacking).
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain("form-action 'self'");
   });
 
   it('a valid per-artifact proof cookie unlocks the gated bundle — served like a gated (non-public) page', async () => {

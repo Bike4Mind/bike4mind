@@ -84,9 +84,16 @@ export function setGateProofCookie(res: Response, publicId: string): boolean {
   if (!name) return false;
   const token = signGateToken({ publicId });
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.setHeader(
-    'Set-Cookie',
-    `${name}=${token}; Path=/; Max-Age=${GATE_TOKEN_TTL_SECONDS}; HttpOnly; SameSite=Lax${secure}`
-  );
+  const cookie = `${name}=${token}; Path=/; Max-Age=${GATE_TOKEN_TTL_SECONDS}; HttpOnly; SameSite=Lax${secure}`;
+  // Append rather than overwrite: `res.setHeader('Set-Cookie', string)` replaces
+  // any Set-Cookie already on the response (Node treats a string value as the
+  // whole header), so coexist with other cookies by preserving prior values.
+  const existing = res.getHeader('Set-Cookie');
+  const next = existing
+    ? Array.isArray(existing)
+      ? [...existing.map(String), cookie]
+      : [String(existing), cookie]
+    : cookie;
+  res.setHeader('Set-Cookie', next);
   return true;
 }

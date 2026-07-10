@@ -6,6 +6,7 @@ const artifact = (over: Partial<VisibilityCheckArtifact> = {}): VisibilityCheckA
   visibility: 'private',
   ownerId: 'owner1',
   scopeId: 'scope1',
+  accessGate: null,
   ...over,
 });
 

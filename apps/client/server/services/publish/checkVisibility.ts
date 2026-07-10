@@ -27,8 +27,15 @@ export interface VisibilityCheckArtifact {
   visibility: PublishVisibility;
   ownerId: string;
   scopeId: string;
-  /** Optional gate on top of `public` (issue #383) — passphrase or verified-email-domain. */
-  accessGate?: {
+  /**
+   * Gate on top of `public` (issue #383) — passphrase or verified-email-domain.
+   * REQUIRED (explicit `null` when absent), NOT optional: an optional field let
+   * a caller silently bypass the gate by simply not selecting it in its Mongoose
+   * projection (exactly how the annotation routes leaked — PR #390 review). Making
+   * it required forces every caller to load `accessGate` and pass it, so a missing
+   * projection is a compile error instead of a silent gate bypass.
+   */
+  accessGate: {
     kind: 'passphrase' | 'domain';
     allowedDomains?: string[];
   } | null;

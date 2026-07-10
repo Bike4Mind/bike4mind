@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import jwt from 'jsonwebtoken';
 import type { Request } from 'express';
+import { Config } from '@server/utils/config';
 import { gateCookieName, signGateToken, verifyGateToken, requestHasGateProof } from './publishGateToken';
 
 const reqWithCookie = (cookieHeader?: string) => ({ headers: { cookie: cookieHeader } }) as unknown as Request;
@@ -12,7 +13,9 @@ describe('publishGateToken', () => {
   });
 
   it('rejects tokens signed for another audience (no cross-route replay)', () => {
-    const foreign = jwt.sign({ publicId: 'abc123' }, 'test-jwt-secret', { audience: 'some-other-route' });
+    // Sign with the SAME secret verifyGateToken uses, so the only thing being
+    // tested is the audience mismatch (not an incidental secret mismatch).
+    const foreign = jwt.sign({ publicId: 'abc123' }, Config.JWT_SECRET, { audience: 'some-other-route' });
     expect(verifyGateToken(foreign)).toBeNull();
   });
 

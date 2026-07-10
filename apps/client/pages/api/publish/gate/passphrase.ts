@@ -52,9 +52,13 @@ const handler = baseApi({ auth: false })
         : resolved.kind === 'share'
           ? { shareToken: resolved.shareToken, deletedAt: null }
           : { publicId: resolved.publicId, 'source.kind': resolved.kind, deletedAt: null };
+    // Project LEAF sub-paths only, never the parent `accessGate` together with a
+    // child — MongoDB rejects `{ accessGate: 1, 'accessGate.passphraseHash': 1 }`
+    // with a path-collision error (500 on every call, so no passphrase gate could
+    // ever be unlocked — PR #390 review, caught live). passphraseHash is
+    // select:false, hence the leading `+`.
     const artifact = await PublishedArtifact.findOne(query)
-      .select('publicId accessGate')
-      .select('+accessGate.passphraseHash')
+      .select('publicId accessGate.kind +accessGate.passphraseHash')
       .lean<GatedLean>();
 
     if (!artifact || artifact.accessGate?.kind !== 'passphrase' || !artifact.accessGate.passphraseHash) {

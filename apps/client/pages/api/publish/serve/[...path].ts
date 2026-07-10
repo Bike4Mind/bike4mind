@@ -258,9 +258,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // the passphrase proof cookie is verified here (per-artifact, audience-scoped JWT)
   // and passed in as an established fact, never the raw cookie.
   const passphraseVerified = artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId);
+  // Normalize accessGate to explicit null (a lean read of a pre-gate doc may omit
+  // it) — VisibilityCheckArtifact now REQUIRES the field so a missing projection
+  // can't silently bypass the gate.
+  const gateArtifact = { ...artifact, accessGate: artifact.accessGate ?? null };
   const access = isShare
-    ? await checkShareGrant(artifact, { user: req.user as PublishUser | undefined, passphraseVerified })
-    : await checkVisibility(artifact, req.user as PublishUser | undefined, { passphraseVerified });
+    ? await checkShareGrant(gateArtifact, { user: req.user as PublishUser | undefined, passphraseVerified })
+    : await checkVisibility(gateArtifact, req.user as PublishUser | undefined, { passphraseVerified });
   if (!access.ok) {
     // Passphrase-gated item navigated without a valid proof -> serve the PUBLIC
     // passphrase prompt shell (no artifact data) instead of a bare 401. Takes
@@ -275,6 +279,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       !(isShare && shareAssetPath);
     if (wantsPassphrasePrompt) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      // The passphrase prompt is the one page with a CREDENTIAL input, so it must
+      // not be frame-able (clickjacking the passphrase field). frame-ancestors
+      // 'self' + a tight static-page policy; form-action 'self' since the inline
+      // script POSTs same-origin to /api/publish/gate/passphrase (PR #390 review).
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; frame-ancestors 'self'; base-uri 'none'"
+      );
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Robots-Tag', 'noindex');
