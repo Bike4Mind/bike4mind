@@ -211,6 +211,11 @@ export interface CliConfig {
     promptVariant?: 'current' | 'minimal';
     /** Show the agent's thought steps in the chat trace. Default true. */
     showThoughts?: boolean;
+    /**
+     * How long a completed sub-agent's conversation history is retained for
+     * resume_agent, in ms. Defaults to DEFAULT_SUBAGENT_HISTORY_TTL_MS.
+     */
+    subagentHistoryTtlMs?: number;
   };
   /** Opt-in feature module toggles */
   features?: {
