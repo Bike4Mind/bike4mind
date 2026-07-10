@@ -142,7 +142,7 @@ export interface ApplyAccountLinkInput {
  */
 export interface AccountLinkWrite {
   update: Record<string, unknown>;
-  reflect: { tokenVersion?: number; emailVerified?: true; emailVerifiedAt?: Date };
+  reflect: { tokenVersion?: number; emailVerified?: boolean; emailVerifiedAt?: Date };
 }
 
 /**
