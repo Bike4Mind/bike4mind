@@ -187,8 +187,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // `?raw=1` is the authenticated re-fetch issued by the client-side loader shell:
   // it returns just the inner srcdoc (not the iframe wrapper) so the shell can inject it.
   // The visibility gate is UNCHANGED for raw requests - an unauthorized raw request still
-  // 401/403s and NEVER falls back to the shell (that would loop the loader).
-  const isRaw = !isShare && req.query.raw === '1';
+  // 401/403s and NEVER falls back to the shell (that would loop the loader). Honored for
+  // share links too: the gate runs FIRST on every request (raw included), so a raw
+  // re-fetch returns only content the caller is already authorized for and never widens
+  // a token link's surface — this is what lets a DOMAIN-gated /a/<token> link recover via
+  // the loader shell (the shell re-fetches ?raw=1 with the viewer's Bearer).
+  const isRaw = req.query.raw === '1';
   // `?format=raw` is the PUBLIC plain-text alternate advertised via `<link rel="alternate">`
   // on the wrapper. Distinct from `?raw=1`: format=raw exposes a stable text/plain view of the
   // artifact for agents/unfurlers/answer engines; raw=1 is the loader shell's internal
@@ -231,6 +235,17 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // fetches). One substitution point keeps every downstream decision honest.
   // Share links have their own always-no-store policy and are handled by kind.
   const isOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+
+  // The isolated `/uc` origin is an OPEN-public-only surface (a distinct SOP
+  // partition with no /api routes and an app-host-scoped proof cookie). If an
+  // artifact was embedded open-public and later GAINED a gate, existing /uc
+  // embeds/bookmarks must NOT try to serve the gate here — the passphrase shell
+  // would render on *.usercontent where its POST 404s and the proof cookie is
+  // scoped to the wrong host (infinite re-prompt). 404 instead, so the embed
+  // fails cleanly and the viewer uses the canonical /p URL (which gates properly).
+  if (isIsolated && !isOpenPublic) {
+    return res.status(404).json({ error: 'Not found' });
+  }
   const effectiveVisibility: PublishVisibility = isOpenPublic
     ? 'public'
     : artifact.visibility === 'public'
@@ -280,11 +295,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // `?raw=1` (the loader's own fetch - a shell there would loop), or `?format=raw` (a
     // plain-text API surface - an HTML shell would violate the caller's Accept expectation,
     // and format=raw is public-only anyway, so it falls through to the hard status).
-    // Never for share links: the token IS the credential, so the localStorage-JWT recovery
-    // shell is meaningless (and in Tier 1 checkShareGrant always grants, so this is unreachable
-    // for share anyway - the guard just keeps the future passphrase/domain tiers safe).
+    // Share links reach here only for a DOMAIN gate with no credential (Tier-1 open
+    // links grant unconditionally; passphrase share links took the prompt branch
+    // above). The loader shell's localStorage-JWT re-fetch is exactly the recovery a
+    // domain gate needs, so share navigations (not share asset sub-paths) get it too.
+    const isShareAsset = isShare && !!shareAssetPath;
     const wantsLoaderShell =
-      !isShare && !isRaw && !isFormatRaw && !req.user && (resolved.kind === 'bundle' ? !resolved.assetPath : true);
+      !isRaw && !isFormatRaw && !req.user && !isShareAsset && (resolved.kind === 'bundle' ? !resolved.assetPath : true);
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Security-Policy', buildWrapperCsp(req));

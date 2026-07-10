@@ -1087,6 +1087,57 @@ describe('GET /api/publish/serve — access gates (issue #383)', () => {
   });
 });
 
+describe('GET /api/publish/serve — isolated /uc origin is open-public-only', () => {
+  it('404s a __uc request for an artifact that GAINED a gate (stale embed must not render the passphrase shell on *.usercontent)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getData() as string).not.toContain('passphrase-protected');
+  });
+
+  it('still serves an OPEN-public artifact on the isolated origin', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+  });
+});
+
+describe('GET /api/publish/serve — domain-gated share link recovery (no dead-end)', () => {
+  it('a domain-gated /a/<token> navigation with no credential serves the loader shell, not a bare 401', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // The loader shell re-fetches ?raw=1 with the viewer's Bearer — the domain-gate recovery.
+    expect(data).toContain('raw=1');
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('honors ?raw=1 on a share link (loader re-fetch returns srcdoc, not the wrapper)', async () => {
+    // Open (ungated, Tier-1) share link: checkShareGrant grants, ?raw=1 returns the
+    // inner srcdoc as inert text/plain — previously ?raw=1 was ignored for share and
+    // returned the HTML wrapper, which is why the loader shell could never recover.
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { raw: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+  });
+});
+
 describe('GET /api/publish/serve — access gates on /a/<shareToken> links', () => {
   it('passphrase-gated share link with no proof returns the prompt shell (token alone is not enough)', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
