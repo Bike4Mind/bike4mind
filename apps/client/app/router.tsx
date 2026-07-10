@@ -12,6 +12,7 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildRedirectTo, shouldRedirectToConsent } from '@client/app/utils/authRedirect';
 
 // Keep layout components as eager imports for optimal performance
@@ -191,8 +192,11 @@ const layoutRoute = createRoute({
     // server consent-gate middleware is the real enforcement - but it turns opaque 403s into a
     // smooth redirect. Gated on `isHydrated` so a rehydrated pre-deploy session (whose persisted
     // user stub predates `aupAcceptedVersion`) does not flash the interstitial before /api/identify
-    // refetches the server-authoritative value - see shouldRedirectToConsent.
-    if (shouldRedirectToConsent({ currentUser, isHydrated })) {
+    // refetches the server-authoritative value, and on a live `accessToken` so a token-less/broken
+    // session goes to /login (which can re-auth) rather than being trapped in a /login <->
+    // /accept-policies loop - see shouldRedirectToConsent and issue #386.
+    const { accessToken } = useAccessToken.getState();
+    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
       const redirectTo = buildRedirectTo(
         location.pathname,
         location.searchStr,
