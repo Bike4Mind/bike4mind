@@ -38,7 +38,7 @@ async function sendOtcAndReadCode(
         type: 'rate-limited',
         description:
           'OTC send / auth-strategy returned 429 on the shared CI IP (send 5/15min, strategy 10/min). ' +
-          'Infra rate limit, not a product failure — skipping.',
+          'Infra rate limit, not a product failure - skipping.',
       });
       test.skip();
     }
