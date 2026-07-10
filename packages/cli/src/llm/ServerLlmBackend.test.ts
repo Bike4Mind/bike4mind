@@ -18,7 +18,7 @@ describe('ServerLlmBackend SSE transport (open)', () => {
     const apiClient = {
       getAxiosInstance: () => ({ post: async () => ({ status: 200, statusText: 'OK', data: stream }) }),
     } as unknown as ApiClient;
-    return new ServerLlmBackend({ apiClient, model: 'test-model', completionsUrl: '/completions' });
+    return new ServerLlmBackend({ apiClient, model: 'test-model', sseCompletionsUrl: '/completions' });
   };
 
   const collect = async (backend: ServerLlmBackend): Promise<StreamEvent[]> => {
@@ -55,7 +55,7 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
   });
 
   /** Build a backend and return the URL its first request POSTs to. */
-  const endpointUsed = async (completionsUrl?: string): Promise<string> => {
+  const endpointUsed = async (sseCompletionsUrl?: string): Promise<string> => {
     let posted = '';
     const stream = new PassThrough();
     stream.end('data: [DONE]\n\n');
@@ -67,7 +67,7 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
         },
       }),
     } as unknown as ApiClient;
-    const backend = new ServerLlmBackend({ apiClient, model: 'test-model', completionsUrl });
+    const backend = new ServerLlmBackend({ apiClient, model: 'test-model', sseCompletionsUrl });
     // Drain the (already-ended) stream so open() issues the POST.
     const drained = backend.open({ model: 'test-model', messages: [], options: {} });
     while (!(await drained[Symbol.asyncIterator]().next()).done) {
@@ -76,7 +76,7 @@ describe('ServerLlmBackend completions endpoint resolution', () => {
     return posted;
   };
 
-  it('prefers the server-advertised completionsUrl', async () => {
+  it('prefers the server-advertised sseCompletionsUrl', async () => {
     process.env.B4M_COMPLETIONS_URL = 'http://localhost:8788/api/ai/v1/completions';
     expect(await endpointUsed('https://advertised.example/completions')).toBe('https://advertised.example/completions');
   });

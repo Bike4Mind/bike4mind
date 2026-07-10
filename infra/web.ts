@@ -336,6 +336,12 @@ export const web = new sst.aws.Nextjs(
       NEXT_PUBLIC_WEBSOCKET_URL: websocketApi.url,
       NEXT_PUBLIC_SERVER_DOMAIN: process.env.SERVER_DOMAIN || '',
       APP_URL: $dev ? 'http://localhost:3000' : router.url,
+      // Direct SSE completions endpoint advertised to the CLI via /api/settings/serverConfig.
+      // Local `sst dev` has no CloudFront router mapping /api/ai/v1/completions to the
+      // ChatCompletion service, so point at its local port (see infra/chatCompletion.ts dev
+      // block). Hosted deploys leave it empty (CloudFront routes the same-origin path);
+      // self-host operators set CHAT_COMPLETION_PUBLIC_URL to the service's published origin.
+      CHAT_COMPLETION_PUBLIC_URL: $dev ? 'http://localhost:8788' : process.env.CHAT_COMPLETION_PUBLIC_URL || '',
       // Brand name + marketing URL inlined into the client bundle at build time; no brand
       // fallback (issue #9310). Empty == client renders without a product name / external links.
       NEXT_PUBLIC_APP_NAME: process.env.APP_NAME || '',

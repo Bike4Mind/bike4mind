@@ -13,7 +13,7 @@ export function getDefaultApiUrl(): string {
 }
 
 /** Local development server the `--dev` flag points the CLI at. */
-export const LOCAL_DEV_URL = 'http://localhost:3001';
+export const LOCAL_DEV_URL = 'http://localhost:3000';
 
 /**
  * Normalize and validate a user-supplied API URL. The single source of truth for
@@ -121,7 +121,7 @@ export class ApiEndpointUnconfiguredError extends Error {
   constructor() {
     super(
       'No API endpoint configured. Point the CLI at a backend first:\n' +
-        '  b4m --dev              # local dev server (http://localhost:3001)\n' +
+        '  b4m --dev              # local dev server (http://localhost:3000)\n' +
         '  b4m --api-url <url>    # a hosted or self-hosted instance'
     );
     this.name = 'ApiEndpointUnconfiguredError';

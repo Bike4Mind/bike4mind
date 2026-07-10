@@ -34,7 +34,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "tsx src/index.tsx",
+    "dev": "B4M_SOURCE_MODE=1 tsx src/index.tsx",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",

@@ -59,7 +59,7 @@ const argv = await yargs(hideBin(process.argv))
   // (`argv.dev` / `argv.prod`) are never read.
   .option('dev', {
     type: 'boolean',
-    description: 'Point the CLI at the local dev server (http://localhost:3001) and remember it',
+    description: 'Point the CLI at the local dev server (http://localhost:3000) and remember it',
   })
   .option('prod', {
     type: 'boolean',

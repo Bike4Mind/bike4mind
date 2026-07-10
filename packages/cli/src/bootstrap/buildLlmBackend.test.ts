@@ -34,7 +34,7 @@ const fakeApiClient = (serverConfig: unknown) => ({ get: vi.fn(async () => serve
 function makeInput(over: Record<string, unknown> = {}) {
   return {
     config: createMockConfig({ defaultModel: 'm1' }),
-    apiClient: fakeApiClient({ websocketUrl: 'wss://x', wsCompletionUrl: 'wss://x/c', completionsUrl: 'https://x' }),
+    apiClient: fakeApiClient({ websocketUrl: 'wss://x', wsCompletionUrl: 'wss://x/c', sseCompletionsUrl: 'https://x' }),
     tokenGetter: async () => 'token',
     startupLog: [] as string[],
     ...over,

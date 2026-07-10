@@ -26,11 +26,11 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   public currentModel: string;
   private readonly completionsEndpoint: string;
 
-  constructor(options: { apiClient: ApiClient; model: string; completionsUrl?: string }) {
+  constructor(options: { apiClient: ApiClient; model: string; sseCompletionsUrl?: string }) {
     this.apiClient = options.apiClient;
     this.currentModel = options.model;
-    if (options.completionsUrl) {
-      this.completionsEndpoint = options.completionsUrl;
+    if (options.sseCompletionsUrl) {
+      this.completionsEndpoint = options.sseCompletionsUrl;
     } else if (process.env.B4M_COMPLETIONS_URL) {
       // Escape hatch for stacks whose app origin doesn't route /api/ai/v1/* to the
       // ChatCompletion service (e.g. a self-host compose stack, where the service is
@@ -39,7 +39,7 @@ export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
       this.completionsEndpoint = process.env.B4M_COMPLETIONS_URL;
       logger.debug(`[ServerLlmBackend] Using B4M_COMPLETIONS_URL override: ${this.completionsEndpoint}`);
     } else {
-      logger.debug('[ServerLlmBackend] No completionsUrl from server - is sst dev running?');
+      logger.debug('[ServerLlmBackend] No sseCompletionsUrl from server - is sst dev running?');
       this.completionsEndpoint = '/api/ai/v1/completions';
     }
   }

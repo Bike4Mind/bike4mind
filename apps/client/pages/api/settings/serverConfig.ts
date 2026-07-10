@@ -26,7 +26,7 @@ export type ServerConfig = {
    * routing that path to the service, so CHAT_COMPLETION_PUBLIC_URL (the service's published
    * origin, e.g. http://localhost:8788) advertises the direct endpoint instead.
    */
-  completionsUrl: string;
+  sseCompletionsUrl: string;
   appfileBucketName: string;
   fabfileBucketName: string;
   googleClientId: string;
@@ -54,7 +54,7 @@ const handler = baseApi({ auth: true }).get(
       // so there is no direct URL to advertise (empty -> the CLI uses that same-origin path).
       // Self-host: nothing routes that path on the app origin, so advertise the service's
       // published endpoint from CHAT_COMPLETION_PUBLIC_URL (see the ServerConfig type doc).
-      completionsUrl: process.env.CHAT_COMPLETION_PUBLIC_URL
+      sseCompletionsUrl: process.env.CHAT_COMPLETION_PUBLIC_URL
         ? `${process.env.CHAT_COMPLETION_PUBLIC_URL.replace(/\/+$/, '')}/api/ai/v1/completions`
         : '',
       appfileBucketName: Resource.appFilesBucket.name,

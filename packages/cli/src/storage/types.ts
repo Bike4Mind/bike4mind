@@ -169,7 +169,7 @@ export interface CliConfig {
   auth?: AuthTokens; // OAuth authentication tokens for the active environment (optional)
   /**
    * Per-environment auth token cache, keyed by resolved API URL
-   * (e.g. "https://app.example.com", "http://localhost:3001").
+   * (e.g. "https://app.example.com", "http://localhost:3000").
    * Lets `--dev`/`--prod` flip between environments without forcing a
    * re-login each time you return to one you've already authenticated.
    */
