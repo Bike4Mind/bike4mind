@@ -21,6 +21,7 @@ function createMockOrchestrator(
     thoroughness: 'medium',
     summary: 'Test result summary',
     parentSessionId: 'test-session',
+    resumeId: 'test-resume-id',
     finalAnswer: 'Test answer',
     steps: [],
     completionInfo: {
@@ -61,6 +62,7 @@ function createSpawnOptions(overrides: Partial<SpawnAgentOptions> = {}): SpawnAg
     task: 'Test task',
     agentName: 'test-agent',
     parentSessionId: 'test-session',
+    resumeId: 'test-resume-id',
     ...overrides,
   };
 }
@@ -172,6 +174,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Result 1',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Answer 1',
         steps: [],
         completionInfo: {
@@ -194,6 +197,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Result 2',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Answer 2',
         steps: [],
         completionInfo: {
@@ -273,6 +277,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -321,6 +326,7 @@ describe('BackgroundAgentManager', () => {
               thoroughness: 'medium',
               summary: 'Success result',
               parentSessionId: 'test-session',
+              resumeId: 'test-resume-id',
               finalAnswer: 'Done',
               steps: [],
               completionInfo: {
@@ -363,6 +369,7 @@ describe('BackgroundAgentManager', () => {
           thoroughness: 'medium',
           summary: 'Found 5 authentication files in src/auth/',
           parentSessionId: 'test-session',
+          resumeId: 'test-resume-id',
           finalAnswer: 'Done',
           steps: [],
           completionInfo: {
@@ -403,6 +410,7 @@ describe('BackgroundAgentManager', () => {
           thoroughness: 'medium',
           summary: 'Immediate result',
           parentSessionId: 'test-session',
+          resumeId: 'test-resume-id',
           finalAnswer: 'Done',
           steps: [],
           completionInfo: {
@@ -460,6 +468,7 @@ describe('BackgroundAgentManager', () => {
           thoroughness: 'quick',
           summary: 'Single agent result',
           parentSessionId: 'test-session',
+          resumeId: 'test-resume-id',
           finalAnswer: 'Done',
           steps: [],
           completionInfo: {
@@ -542,6 +551,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Group 2 result',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -565,6 +575,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Group 1 result',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -622,6 +633,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -647,6 +659,7 @@ describe('BackgroundAgentManager', () => {
           thoroughness: 'medium',
           summary: 'Success content',
           parentSessionId: 'test-session',
+          resumeId: 'test-resume-id',
           finalAnswer: 'Done',
           steps: [],
           completionInfo: {
@@ -750,6 +763,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Found important files',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -861,6 +875,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -916,6 +931,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -967,6 +983,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -1231,6 +1248,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Done',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
@@ -1314,6 +1332,7 @@ describe('BackgroundAgentManager', () => {
             thoroughness: 'medium',
             summary: 'Success',
             parentSessionId: 'test-session',
+            resumeId: 'test-resume-id',
             finalAnswer: 'Done',
             steps: [],
             completionInfo: {
@@ -1373,6 +1392,7 @@ describe('BackgroundAgentManager', () => {
           thoroughness: 'medium',
           summary: 'Found 10 matching files',
           parentSessionId: 'test-session',
+          resumeId: 'test-resume-id',
           finalAnswer: 'Done',
           steps: [],
           completionInfo: {
@@ -1412,6 +1432,7 @@ describe('BackgroundAgentManager', () => {
         thoroughness: 'medium',
         summary: 'Future result',
         parentSessionId: 'test-session',
+        resumeId: 'test-resume-id',
         finalAnswer: 'Done',
         steps: [],
         completionInfo: {
