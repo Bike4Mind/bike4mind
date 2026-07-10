@@ -250,7 +250,14 @@ const GearsPage = () => {
                 <Typography level="title-md">{card.title}</Typography>
               </Stack>
               {unlocked ? (
-                <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${card.key}`} />
+                <Stack direction="row" alignItems="center" gap={0.75}>
+                  {status?.rewardPending && (
+                    <Chip size="sm" variant="soft" color="warning" data-testid={`gear-pending-${card.key}`}>
+                      +{status.credits} on first visitor
+                    </Chip>
+                  )}
+                  <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${card.key}`} />
+                </Stack>
               ) : (
                 status &&
                 status.credits > 0 && (

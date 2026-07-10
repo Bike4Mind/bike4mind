@@ -34,6 +34,7 @@ export interface GearStatus {
   unlocked: boolean;
   credits: number;
   creditsAwarded?: number;
+  rewardPending?: boolean;
 }
 
 export interface GearsStatusResponse {

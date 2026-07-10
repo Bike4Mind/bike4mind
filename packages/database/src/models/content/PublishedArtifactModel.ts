@@ -149,6 +149,9 @@ const PublishedArtifactSchema = new Schema(
      *  {sha256Index}.html`. Enables walking across versions + restore-to-any. */
     versions: { type: [VersionMetaSubSchema], default: [] },
     viewCount: { type: Number, default: 0, min: 0 },
+    /** Views by anyone OTHER than the signed-in owner (anonymous counts as
+     *  external). Feeds the Published gear and social proof; best-effort. */
+    externalViewCount: { type: Number, default: 0, min: 0 },
 
     /** Concurrency lock for AI revise - set while a revision is in flight,
      *  cleared when it finishes (or expires). Prevents two concurrent revisions

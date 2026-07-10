@@ -220,3 +220,31 @@ describe('GET /api/gears/status — reward schedule', () => {
     expect(byKey.forknotebook).toBe(100);
   });
 });
+
+describe('GET /api/gears/status — published reward waits for a non-owner view', () => {
+  it('publishing unlocks the gear (nav slot) but the payout stays pending until an external view', async () => {
+    mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
+      Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
+    );
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; unlocked: boolean; rewardPending?: boolean; creditsAwarded?: number }>;
+    };
+    const published = body.gears.find(g => g.key === 'published')!;
+    expect(published.unlocked).toBe(true);
+    expect(published.rewardPending).toBe(true);
+    expect(published.creditsAwarded).toBeUndefined();
+    expect(mocks.addCredits).not.toHaveBeenCalled();
+  });
+
+  it('pays the 5000 once a non-owner view exists', async () => {
+    mocks.publishedExists.mockResolvedValue({ _id: 'a1' });
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
+    expect(body.gears.find(g => g.key === 'published')!.creditsAwarded).toBe(5000);
+  });
+});

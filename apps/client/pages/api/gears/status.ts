@@ -99,6 +99,10 @@ interface GearDef {
   /** One-time unlock reward (pre-scale) — see the schedule note above. */
   credits: number;
   check: (facts: GearFacts) => Promise<boolean> | boolean;
+  /** When set, the credit payout waits for THIS stricter condition while the
+   *  unlock (checkmark / nav slot) still follows `check`. Used where the
+   *  reward needs anti-farm friction the unlock shouldn't have. */
+  rewardCheck?: (facts: GearFacts) => Promise<boolean> | boolean;
 }
 
 const GEARS: GearDef[] = [
@@ -129,10 +133,16 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await FabFile.exists({ userId })),
   },
   {
+    // 5,000 (social pricing): publishing is the growth loop. The NAV SLOT
+    // unlocks on publish (you used the feature); the credit payout waits for
+    // a NON-OWNER view — "someone saw your work", not "you clicked publish".
+    // Farming friction, not proof (b4m-strategy#93 tracks the rest).
     key: 'published',
     credits: 5000,
     kind: 'destination',
     check: async ({ userId }) => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
+    rewardCheck: async ({ userId }) =>
+      !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null, externalViewCount: { $gte: 1 } })),
   },
   // ── Skills ───────────────────────────────────────────────────────────────
   {
@@ -210,6 +220,9 @@ export interface GearStatus {
   credits: number;
   /** Set only on the response that actually granted the reward. */
   creditsAwarded?: number;
+  /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
+   *  Published: waiting for a non-owner view). */
+  rewardPending?: boolean;
 }
 
 const handler = baseApi().get(
@@ -232,7 +245,12 @@ const handler = baseApi().get(
       const unlocked = unlockedFlags[i];
       const credits = creditsFor(def);
       const gear: GearStatus = { key: def.key, kind: def.kind, unlocked, credits };
-      if (unlocked && credits > 0 && !rewarded.has(gearTxId(String(userId), def.key))) {
+      const alreadyRewarded = rewarded.has(gearTxId(String(userId), def.key));
+      // The payout may lag the unlock behind a stricter condition (anti-farm
+      // friction) — evaluate it only when it could actually change the outcome.
+      const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
+      if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
+      if (rewardEligible && credits > 0 && !alreadyRewarded) {
         try {
           const holder = await creditService.addCredits(
             {
