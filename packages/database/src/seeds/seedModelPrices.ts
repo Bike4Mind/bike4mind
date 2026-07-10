@@ -66,6 +66,15 @@ export async function seedModelPrices(
       const isSeedRow = current.note === SEED_NOTE;
       const alreadyCurrent = current.effectiveFrom.getTime() >= effectiveFrom.getTime();
       const samePrice = normalizePricing(current.pricing) === normalizePricing(entry.pricing);
+      if (isSeedRow && alreadyCurrent && !samePrice) {
+        // Entries were edited without bumping generatedAt: the change cannot
+        // be versioned (equal effectiveFrom collides on the unique index), so
+        // deployments keep billing from the stale row. Be loud about it.
+        console.warn(
+          `[modelPriceCatalog] seed entry for ${entry.modelId} (${entry.unit}) differs from the newest seed row but generatedAt was not bumped; ` +
+            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-price-seed'
+        );
+      }
       if (!isSeedRow || alreadyCurrent || samePrice) {
         skipped += 1;
         continue;

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { ModelPrice, modelPriceRepository } from './ModelPriceModel';
+import { SEED_NOTE } from '../../seeds/seedModelPrices';
 import { setupMongoTest } from '../../__test__/utils';
 
 const tier = { input: 2e-6, output: 8e-6 };
@@ -17,7 +18,7 @@ describe('ModelPriceRepository', () => {
       unit: 'per_token',
       pricing: { '200000': { ...tier, cache_read: 1e-6, cache_write: 3e-6 } },
       effectiveFrom: new Date('2026-07-01T00:00:00Z'),
-      note: 'adapter-seed',
+      note: SEED_NOTE,
     });
 
     const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
