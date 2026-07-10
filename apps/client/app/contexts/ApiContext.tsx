@@ -80,6 +80,13 @@ export const isPublicPath = (path: string): boolean => {
 export const getAxiosErrorStatus = (error: unknown): number | undefined =>
   isAxiosError(error) ? error.response?.status : undefined;
 
+// Exported so callers can tell whether the interceptor already completed a full
+// refresh-succeeded-then-retried cycle for this error (stamped below as `_retryCount`) -
+// a stronger "already tried, still failed" signal than a bare 401 status, which a caller
+// can hit on its very first attempt whenever the refresh itself (not the retry) failed.
+export const getAxiosRetryCount = (error: unknown): number =>
+  (isAxiosError(error) ? (error.config as { _retryCount?: number } | undefined)?._retryCount : undefined) ?? 0;
+
 const IDEMPOTENT_METHODS = ['post', 'put', 'patch', 'delete'];
 
 export const api = axios.create({

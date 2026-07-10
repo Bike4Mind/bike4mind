@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate, useSearch, useRouter } from '@tanstack/react-router';
 import { Box, Button, Checkbox, Container, Sheet, Stack, Typography, Link } from '@mui/joy';
 import GppGoodIcon from '@mui/icons-material/GppGood';
@@ -6,20 +6,25 @@ import Image from 'next/image';
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { api, forceSessionExpiredRedirect, getAxiosErrorStatus } from '@client/app/contexts/ApiContext';
+import {
+  api,
+  forceSessionExpiredRedirect,
+  getAxiosErrorStatus,
+  getAxiosRetryCount,
+} from '@client/app/contexts/ApiContext';
 import { useGetIdentify } from '@client/app/hooks/data/user';
 import useGetLogo from '@client/app/hooks/useGetLogo';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 
-// A second consecutive 401 on submit here means the session couldn't be recovered
-// even after ApiContext's own refresh retry - most likely a sustained transient
-// refresh-endpoint outage (a confirmed 401/400 rejection already redirects via the
-// interceptor itself before this catch runs). Don't leave the user resubmitting into
-// a dead session forever; fall back to the same teardown used for any other
-// unrecoverable 401. Only a 401 counts toward this - an unrelated failure (5xx,
-// validation, network) says nothing about the session and should just be retryable.
-const MAX_SUBMIT_ATTEMPTS = 2;
+// A 401 reaching handleSubmit's catch has already passed through ApiContext's own
+// refresh-retry interceptor once (it attempts a refresh on every 401 before rejecting) - a
+// confirmed 400/401 refresh rejection already redirects via the interceptor itself before
+// this catch ever runs. So a 401 here means either the refresh attempt itself failed (a
+// transient outage, retryCount still 0 - worth one backoff retry, since it may have already
+// cleared) or the refresh succeeded and the retried request 401'd anyway (retryCount >= 1 -
+// genuinely unrecoverable, not something a resubmit can fix). See getAxiosRetryCount.
+const SUBMIT_RETRY_DELAY_MS = 1000;
 
 /**
  * P0-B abuse gate interstitial. Shown to any authenticated account that has not yet
@@ -42,7 +47,6 @@ const AcceptPoliciesPage = () => {
   const [confirmAdult, setConfirmAdult] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const submitAttemptsRef = useRef(0);
 
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
 
@@ -74,39 +78,49 @@ const AcceptPoliciesPage = () => {
 
   const isFormValid = acceptPolicies && confirmAdult;
 
+  // allowRetry is true only for the user-initiated attempt, so the one automatic backoff
+  // retry below can't itself trigger a further retry.
+  const submitPolicyAcceptance = async (allowRetry: boolean): Promise<void> => {
+    try {
+      const response = await api.post('/api/user/accept-policies', { ageAttestation: true });
+      // Update currentUser so the consent gate clears (both the server field and this client state).
+      setCurrentUser(response.data.user);
+      applyRedirect(router.history, redirectTo, '/', true);
+    } catch (err: unknown) {
+      if (!mfaPending && getAxiosErrorStatus(err) === 401) {
+        // First attempt at a transient (not-yet-retried) 401: give the refresh endpoint a
+        // moment to recover and retry once automatically, rather than dead-ending on an error
+        // or immediately signing the user out over a passing blip.
+        if (allowRetry && getAxiosRetryCount(err) === 0) {
+          await new Promise(resolve => setTimeout(resolve, SUBMIT_RETRY_DELAY_MS));
+          await submitPolicyAcceptance(false);
+          return;
+        }
+        // Either the backoff retry also 401'd, or the interceptor already completed its own
+        // refresh-succeeded-then-retried cycle and still got 401 - not something resubmitting
+        // can fix.
+        await forceSessionExpiredRedirect();
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Unrelated to the session (5xx, validation, network) - just show it, retryable indefinitely.
+      const message =
+        (err as { response?: { data?: { error?: string } }; message?: string }).response?.data?.error ||
+        (err as Error).message ||
+        'Failed to record acceptance';
+      setError(message);
+      setIsSubmitting(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isFormValid || isSubmitting) return;
 
     setError(null);
     setIsSubmitting(true);
-    try {
-      const response = await api.post('/api/user/accept-policies', { ageAttestation: true });
-      submitAttemptsRef.current = 0;
-      // Update currentUser so the consent gate clears (both the server field and this client state).
-      setCurrentUser(response.data.user);
-      applyRedirect(router.history, redirectTo, '/', true);
-    } catch (err: unknown) {
-      const message =
-        (err as { response?: { data?: { error?: string } }; message?: string }).response?.data?.error ||
-        (err as Error).message ||
-        'Failed to record acceptance';
-      setError(message);
-
-      // Only a confirmed 401 says anything about the session; an unrelated failure (5xx,
-      // validation, network) is retryable indefinitely and should never count toward teardown.
-      if (mfaPending || getAxiosErrorStatus(err) !== 401) {
-        submitAttemptsRef.current = 0;
-        setIsSubmitting(false);
-        return;
-      }
-
-      submitAttemptsRef.current += 1;
-      if (submitAttemptsRef.current >= MAX_SUBMIT_ATTEMPTS) {
-        await forceSessionExpiredRedirect();
-      }
-      setIsSubmitting(false);
-    }
+    await submitPolicyAcceptance(true);
   };
 
   return (
@@ -133,7 +147,7 @@ const AcceptPoliciesPage = () => {
 
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
                 <GppGoodIcon sx={{ fontSize: 32, color: 'primary.500' }} />
-                <Typography level="h3">Before you continue</Typography>
+                <Typography level="h3">Before you continue!</Typography>
               </Box>
 
               <Typography level="body-md" sx={{ color: 'text.secondary', textAlign: 'center' }}>

@@ -25,9 +25,11 @@ const mockForceSessionExpiredRedirect = vi.fn().mockResolvedValue(undefined);
 vi.mock('@client/app/contexts/ApiContext', () => ({
   api: { post: (...args: unknown[]) => mockApiPost(...args) },
   forceSessionExpiredRedirect: (...args: unknown[]) => mockForceSessionExpiredRedirect(...args),
-  // Mirrors the real helper's observable behavior (pull the status off an axios-shaped
-  // error) without depending on axios's actual isAxiosError marker in test fixtures.
+  // Mirrors the real helpers' observable behavior (pull fields off an axios-shaped error)
+  // without depending on axios's actual isAxiosError marker in test fixtures.
   getAxiosErrorStatus: (error: unknown) => (error as { response?: { status?: number } } | undefined)?.response?.status,
+  getAxiosRetryCount: (error: unknown) =>
+    (error as { config?: { _retryCount?: number } } | undefined)?.config?._retryCount ?? 0,
 }));
 const mockUseGetIdentify = vi.fn();
 vi.mock('@client/app/hooks/data/user', () => ({
@@ -63,6 +65,13 @@ const acceptForm = () => {
 
 const confirmed401 = { response: { status: 401, data: { error: 'Unauthorized' } } };
 const serverError = { response: { status: 500, data: { error: 'Server error' } } };
+// A first-attempt 401 (the interceptor's refresh attempt itself failed, not yet retried).
+const transient401 = { response: { status: 401, data: { error: 'Unauthorized' } }, config: { _retryCount: 0 } };
+// The interceptor already completed its own refresh-succeeded-then-retried cycle and still
+// got 401 - config._retryCount reflects that.
+const alreadyRetried401 = { response: { status: 401, data: { error: 'Unauthorized' } }, config: { _retryCount: 1 } };
+// Real timeout comfortably past SUBMIT_RETRY_DELAY_MS (1000ms in the component).
+const RETRY_WAIT_OPTS = { timeout: 2000 };
 
 describe('AcceptPoliciesPage', () => {
   beforeEach(() => {
@@ -144,26 +153,51 @@ describe('AcceptPoliciesPage', () => {
     expect(screen.getByTestId('accept-policies-submit-btn')).toBeDisabled();
   });
 
-  // The first submit failure should look recoverable (show the error, let the user retry) since
-  // a confirmed unrecoverable 401 already redirects via ApiContext's own interceptor before this
-  // catch ever runs. Only a second consecutive 401 - most likely a sustained transient refresh
-  // outage the interceptor deliberately didn't log out for - falls back to a clean sign-out
-  // instead of resubmitting forever, and the real error text stays visible right up to that point.
-  it('shows a retryable error on the first 401 submit failure, then tears down on the second', async () => {
-    mockApiPost.mockRejectedValue(confirmed401);
+  // A first-attempt 401 (the interceptor's own refresh attempt itself failed, not yet retried)
+  // gets one automatic backoff retry before anything is shown to the user - a confirmed
+  // unrecoverable 401 already redirects via ApiContext's own interceptor before this catch ever
+  // runs, so this is specifically the "maybe it's already cleared up" case. If the retry
+  // recovers, the user never even sees an error.
+  it('auto-retries a first-attempt 401 once and succeeds silently if the retry recovers', async () => {
+    mockApiPost
+      .mockRejectedValueOnce(transient401)
+      .mockResolvedValueOnce({ data: { user: { id: 'u1', aupAcceptedVersion: 'v1' } } });
 
     renderPage();
-
     acceptForm();
-    await waitFor(() => expect(screen.getByText('Unauthorized')).toBeInTheDocument());
-    expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
-    expect(screen.getByTestId('accept-policies-submit-btn')).not.toBeDisabled();
 
-    fireEvent.click(screen.getByTestId('accept-policies-submit-btn'));
-    await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(2), RETRY_WAIT_OPTS);
+    expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
+    expect(screen.queryByText('Unauthorized')).not.toBeInTheDocument();
+  });
+
+  // If the backoff retry also 401s, that's as far as this page can recover on its own - fall
+  // back to the same clean sign-out used for any other unrecoverable session, rather than
+  // resubmitting forever or dead-ending on a raw error.
+  it('tears down if the backoff retry also 401s', async () => {
+    mockApiPost.mockRejectedValue(transient401);
+
+    renderPage();
+    acceptForm();
+
+    await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1), RETRY_WAIT_OPTS);
+    expect(mockApiPost).toHaveBeenCalledTimes(2);
     // isSubmitting must be reset even on the teardown path, so a no-op redirect (e.g. a
     // concurrent teardown already in flight) never leaves the button stuck loading.
     expect(screen.getByTestId('accept-policies-submit-btn')).not.toBeDisabled();
+  });
+
+  // If the interceptor already completed its own refresh-succeeded-then-retried cycle for this
+  // error (config._retryCount already >= 1), a further client-side retry can't help - skip the
+  // backoff delay entirely and tear down immediately.
+  it('tears down immediately with no backoff retry when the interceptor already retried once', async () => {
+    mockApiPost.mockRejectedValue(alreadyRetried401);
+
+    renderPage();
+    acceptForm();
+
+    await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1));
+    expect(mockApiPost).toHaveBeenCalledTimes(1);
   });
 
   // A failure unrelated to auth (an unrelated backend bug, a validation error) says nothing about
