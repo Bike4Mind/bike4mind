@@ -7,6 +7,7 @@ import { getPublishedArtifactsStorage } from '@server/utils/storage';
 import { PublishedArtifact } from '@bike4mind/database';
 import {
   buildPublishUrlPath,
+  checkShareGrant,
   checkVisibility,
   collectInlineAssets,
   prepareShareMeta,
@@ -129,7 +130,16 @@ interface ResolvedShortPath {
   kind: 'reply' | 'fabfile';
   publicId: string;
 }
-type ResolvedPath = ResolvedBundlePath | ResolvedShortPath;
+interface ResolvedShareTokenPath {
+  kind: 'share';
+  shareToken: string;
+  assetPath: string | null;
+}
+type ResolvedPath = ResolvedBundlePath | ResolvedShortPath | ResolvedShareTokenPath;
+
+// Share links are served same-origin, sandboxed, and must never be cached: no-store
+// is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
+const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Optional-auth shims: a valid Authorization: Bearer JWT (optionalJwtShim) or
@@ -148,23 +158,37 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(404).json({ error: 'Not found' });
   }
 
+  // No-sign-in share link (`/a/<shareToken>`). Possession of the token IS the read
+  // capability, so share links are served same-origin + sandboxed and the special
+  // serve modes below - the loader shell, `?format=raw`, `?raw=1`, and the isolated
+  // `/uc` origin - are ALL disabled: none of them should widen a token link's surface,
+  // and the token must never leak into a `*.usercontent` Host.
+  const isShare = resolved.kind === 'share';
+  const shareToken = resolved.kind === 'share' ? resolved.shareToken : '';
+  const shareAssetPath = resolved.kind === 'share' ? resolved.assetPath : null;
+
   // `?raw=1` is the authenticated re-fetch issued by the client-side loader shell:
   // it returns just the inner srcdoc (not the iframe wrapper) so the shell can inject it.
   // The visibility gate is UNCHANGED for raw requests - an unauthorized raw request still
   // 401/403s and NEVER falls back to the shell (that would loop the loader).
-  const isRaw = req.query.raw === '1';
+  const isRaw = !isShare && req.query.raw === '1';
   // `?format=raw` is the PUBLIC plain-text alternate advertised via `<link rel="alternate">`
   // on the wrapper. Distinct from `?raw=1`: format=raw exposes a stable text/plain view of the
   // artifact for agents/unfurlers/answer engines; raw=1 is the loader shell's internal
   // authenticated re-fetch. Only ever honored for artifacts with visibility === 'public'.
-  const isFormatRaw = req.query.format === 'raw';
+  const isFormatRaw = !isShare && req.query.format === 'raw';
   // Approach B: set by the `/uc/*` rewrite - this request is for the bundle on
   // its per-artifact isolated origin ({publicId}.usercontent.app.<domain>), served AS the page.
-  const isIsolated = req.query.__uc === '1';
+  const isIsolated = !isShare && req.query.__uc === '1';
 
   // Resolve the artifact.
   let artifact: PublishedArtifactLean | null = null;
-  if (resolved.kind === 'bundle') {
+  if (resolved.kind === 'share') {
+    artifact = await PublishedArtifact.findOne({
+      shareToken: resolved.shareToken,
+      deletedAt: null,
+    }).lean<PublishedArtifactLean>();
+  } else if (resolved.kind === 'bundle') {
     artifact = await PublishedArtifact.findOne({
       tier: resolved.tier,
       scopeId: resolved.scopeId,
@@ -179,12 +203,18 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     }).lean<PublishedArtifactLean>();
   }
   if (!artifact) {
+    // Unknown OR revoked token -> plain 404 (never 401/403), so a prober can't
+    // distinguish a revoked/never-existed token from a private artifact.
     return res.status(404).json({ error: 'Not found' });
   }
 
-  // Visibility gate - runs on the HTML AND every asset request.
-  const vis = await checkVisibility(artifact, req.user as PublishUser | undefined);
-  if (!vis.ok) {
+  // Access gate - runs on the HTML AND every asset request. Share links go through
+  // checkShareGrant (token possession = read, even for a non-public artifact); every
+  // other path uses the visibility-enum ladder. The two are mutually exclusive by kind.
+  const access = isShare
+    ? await checkShareGrant(artifact, { user: req.user as PublishUser | undefined })
+    : await checkVisibility(artifact, req.user as PublishUser | undefined);
+  if (!access.ok) {
     // Gated bundle INDEX navigated with NO credential -> return the PUBLIC client-side loader
     // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
     // `?raw=1` with Authorization: Bearer. The discriminator is `!req.user` (no usable
@@ -206,7 +236,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       // authenticated ?raw=1 srcdoc renders.
       return res.status(200).send(renderBundleLoaderShell());
     }
-    return res.status(vis.status).json({ error: vis.error });
+    return res.status(access.status).json({ error: access.error });
   }
 
   // ── Reply / fabfile: render the snapshot body to a sanitized viewer page. ──
@@ -234,7 +264,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "frame-ancestors 'self'",
       ].join('; ')
     );
-    res.setHeader('Cache-Control', cacheControlFor(artifact.visibility));
+    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(artifact.visibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     bumpViewCount(artifact.publicId);
     return res.status(200).send(page);
@@ -250,16 +280,20 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // ── Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. ──
   const storage = getPublishedArtifactsStorage();
 
-  if (resolved.kind === 'bundle' && resolved.assetPath) {
-    const fileEntry = artifact.manifest.find(f => f.path === resolved.assetPath);
+  // Asset sub-path for a bundle, whether reached via `/p/...` or a `/a/<token>/...`
+  // share link. Share bundles use the <base> asset model, so their assets re-enter
+  // HERE carrying the token and are authorized by the same checkShareGrant above.
+  const assetPath = resolved.kind === 'bundle' ? resolved.assetPath : shareAssetPath;
+  if (assetPath) {
+    const fileEntry = artifact.manifest.find(f => f.path === assetPath);
     if (!fileEntry) {
       return res.status(404).json({ error: 'Asset not in artifact manifest' });
     }
     try {
-      const buf = await storage.download(`${artifact.storageKeyPrefix}${resolved.assetPath}`);
+      const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
       res.setHeader('Content-Type', fileEntry.mimeType);
       res.setHeader('Content-Length', String(buf.length));
-      res.setHeader('Cache-Control', cacheControlFor(artifact.visibility));
+      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(artifact.visibility));
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // SECURITY: assets are served same-origin and validateBundle only vets
       // index.html - so an attacker could ship a second `evil.html` or `evil.svg`
@@ -311,7 +345,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // against this same base, so they stay on the isolated origin too.
   const canonicalPath = buildPublishUrlPath(artifact.tier, artifact.scopeId, artifact.slug); // /p/{prefix}/{scope}/{slug}
   const isolatedPath = canonicalPath.replace(/^\/p\b/, '/uc');
-  const urlBase = isIsolated ? isolatedPath : canonicalPath;
+  // Share bundles resolve their <base>-relative assets back through `/a/<token>/...`
+  // (self-authorized by the token); /p uses the canonical path (or isolated /uc path).
+  const shareBase = isShare ? `/a/${encodeURIComponent(shareToken)}` : '';
+  const urlBase = isShare ? shareBase : isIsolated ? isolatedPath : canonicalPath;
 
   // Document origin the sandboxed bundle resolves absolute URLs against (blessed libs, the
   // public-tier <base>). resolveDocOrigin treats Host / X-Forwarded-Proto as untrusted: it
@@ -322,9 +359,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Gated (non-public) bundles: the opaque-origin iframe can't fetch assets through the
   // gated route (uncredentialed -> 401/403), so pre-fetch them HERE (post-gate, credentialed)
   // and inline them. Public bundles load assets back through this route via an injected <base>.
+  // Share links use the <base> asset model (assets self-authorize via the token), so
+  // they never inline - only gated `/p` bundles pre-fetch + inline their assets here.
   let inlineAssets: Map<string, SandboxAsset> | undefined;
   let droppedAssets: string[] = [];
-  if (artifact.visibility !== 'public') {
+  if (!isShare && artifact.visibility !== 'public') {
     const collected = await collectInlineAssets({
       manifest: artifact.manifest,
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
@@ -338,6 +377,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     urlBase,
     origin: docOrigin,
     visibility: artifact.visibility,
+    assetMode: isShare ? 'base' : undefined,
     assets: inlineAssets,
   });
 
@@ -376,14 +416,20 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // `?v={sha}` historical views are a cold path served `no-store` (removes the
   // dependency on whether the CDN keys on the `v` query string).
-  const bundleCacheControl = isKnownOlderVersion ? 'private, no-store' : cacheControlFor(artifact.visibility);
+  const bundleCacheControl = isShare
+    ? SHARE_CACHE_CONTROL
+    : isKnownOlderVersion
+      ? 'private, no-store'
+      : cacheControlFor(artifact.visibility);
 
   // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
   // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
   // GATED bundles keep the same-origin sandboxed-srcdoc model (Approach A) because a
   // cross-origin iframe can't carry the viewer's app credentials to load a gated bundle
   // (and the app-origin handler is where the gated assets get inlined post-auth).
-  const artifactHost = artifact.visibility === 'public' ? usercontentHostFor(artifact.publicId) : '';
+  // Share links stay on the same-origin sandboxed-srcdoc model (Approach A): never the
+  // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
+  const artifactHost = !isShare && artifact.visibility === 'public' ? usercontentHostFor(artifact.publicId) : '';
 
   // ── Approach B: serve the bundle AS the page on its isolated origin. ──
   // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
@@ -423,7 +469,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // more than the JS shell. Gated shares deliberately do not: the loader shell must
   // carry no artifact data pre-auth.
   const shareMeta =
-    artifact.visibility === 'public'
+    !isShare && artifact.visibility === 'public'
       ? prepareShareMeta({
           title: artifact.title || SHARED_FALLBACK_TITLE,
           description: artifact.description,
@@ -655,6 +701,9 @@ function parsePath(segments: string[]): ResolvedPath | null {
 
   if (head === 'r' || head === 'f') {
     return { kind: head === 'r' ? 'reply' : 'fabfile', publicId: segments[1] };
+  }
+  if (head === 'a') {
+    return { kind: 'share', shareToken: segments[1], assetPath: segments.slice(2).join('/') || null };
   }
   const tier = TIER_BY_PREFIX[head];
   if (!tier) return null;
