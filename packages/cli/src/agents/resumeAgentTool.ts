@@ -41,6 +41,9 @@ export function createResumeAgentTool(
       const spawnOptions: SpawnAgentOptions = {
         task,
         agentName: stored.agentName,
+        // Replay the resolved definition so the agent rebuilds even if it was
+        // inline/dynamic or is no longer in the store.
+        agentDefinition: stored.agentDefinition,
         thoroughness: stored.thoroughness,
         parentSessionId: stored.parentSessionId,
         previousMessages,

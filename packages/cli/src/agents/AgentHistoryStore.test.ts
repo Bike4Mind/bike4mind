@@ -1,7 +1,23 @@
 import { describe, it, expect } from 'vitest';
 import type { AgentCheckpoint } from '@bike4mind/agents';
 import { AgentHistoryStore, type StoredAgentHistory } from './AgentHistoryStore.js';
+import type { AgentDefinition } from './types.js';
 import { MAX_SUBAGENT_HISTORY_ENTRIES } from '../config/constants.js';
+
+function makeDefinition(): AgentDefinition {
+  return {
+    name: 'explore',
+    description: 'test agent',
+    model: 'test-model',
+    modelResolved: true,
+    systemPrompt: 'You are a test agent.',
+    maxIterations: { quick: 1, medium: 1, very_thorough: 1 },
+    defaultThoroughness: 'quick',
+    source: 'builtin',
+    filePath: '<test>',
+    retry: { maxRetries: 0, initialDelayMs: 0 },
+  };
+}
 
 function makeCheckpoint(): AgentCheckpoint {
   return {
@@ -27,6 +43,7 @@ function makeEntry(overrides: Partial<StoredAgentHistory> = {}): StoredAgentHist
   return {
     checkpoint: makeCheckpoint(),
     agentName: 'explore',
+    agentDefinition: makeDefinition(),
     thoroughness: 'medium',
     parentSessionId: 'session-1',
     endTime: Date.now(),

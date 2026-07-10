@@ -4,6 +4,7 @@ import type { IMessage } from '@bike4mind/common';
 import { SubagentOrchestrator, type OrchestratorDependencies, type SpawnAgentOptions } from './SubagentOrchestrator.js';
 import { MAX_SUBAGENT_DEPTH } from './types.js';
 import { AgentHistoryStore } from './AgentHistoryStore.js';
+import { createResumeAgentTool } from './resumeAgentTool.js';
 
 // Stub tool generation so a real run needs no live apiClient/permission wiring.
 // The depth-cap tests below never reach this call (they throw at the agent
@@ -168,5 +169,53 @@ describe('SubagentOrchestrator history capture', () => {
     // run() builds [system, ...previousMessages, user], so the prior message is replayed at index 1.
     const replayed = stored?.checkpoint.messages.find(m => m.content === 'earlier context marker');
     expect(replayed).toBeDefined();
+  });
+});
+
+describe('resume_agent end-to-end through the real orchestrator', () => {
+  it('a delegated session, resumed via the tool, replays its prior conversation into the new run', async () => {
+    // Records the messages the LLM sees on each call, so we can prove the
+    // resumed run received the first run's conversation.
+    const seenPerCall: string[][] = [];
+    const recordingLlm: ICompletionBackend = {
+      currentModel: 'test-model',
+      getModelInfo: async () => [],
+      complete: async (
+        _model: string,
+        messages: IMessage[],
+        _options: Partial<ICompletionOptions>,
+        callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
+      ) => {
+        seenPerCall.push(messages.map(m => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content))));
+        await callback(['acknowledged'], { inputTokens: 10, outputTokens: 5, toolsUsed: [] });
+      },
+      pushToolMessages: vi.fn(),
+    };
+
+    const historyStore = new AgentHistoryStore();
+    const orchestrator = createRunnableOrchestrator(historyStore, recordingLlm);
+    const resumeTool = createResumeAgentTool(orchestrator, historyStore);
+
+    // 1. Delegate an initial task.
+    const first = await orchestrator.delegateToAgent({
+      task: 'investigate the login bug',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+    expect(historyStore.has(first.resumeId)).toBe(true);
+
+    // 2. Resume it with a follow-up via the tool.
+    seenPerCall.length = 0;
+    const out = (await resumeTool.toolFn({ job_id: first.resumeId, task: 'now write the fix' })) as string;
+
+    // 3. The resumed run's messages must carry the original task AND the follow-up,
+    //    proving prior context was injected (and not double-counting a system prompt).
+    expect(seenPerCall.length).toBeGreaterThan(0);
+    const resumedMessages = seenPerCall[0];
+    expect(resumedMessages.some(c => c.includes('investigate the login bug'))).toBe(true);
+    expect(resumedMessages.some(c => c.includes('now write the fix'))).toBe(true);
+    expect(resumedMessages.filter(c => c.startsWith('You are a test agent.')).length).toBe(1);
+    expect(out).toContain('acknowledged');
   });
 });

@@ -6,6 +6,22 @@ import { AgentHistoryStore } from './AgentHistoryStore.js';
 import { ALWAYS_DENIED_FOR_AGENTS } from './types.js';
 import type { SubagentOrchestrator, SpawnAgentOptions, AgentExecutionResult } from './SubagentOrchestrator.js';
 import type { BackgroundAgentManager } from './BackgroundAgentManager.js';
+import type { AgentDefinition } from './types.js';
+
+function definition(): AgentDefinition {
+  return {
+    name: 'explore',
+    description: 'test agent',
+    model: 'test-model',
+    modelResolved: true,
+    systemPrompt: 'You are a test agent.',
+    maxIterations: { quick: 1, medium: 1, very_thorough: 1 },
+    defaultThoroughness: 'medium',
+    source: 'builtin',
+    filePath: '<test>',
+    retry: { maxRetries: 0, initialDelayMs: 0 },
+  };
+}
 
 function checkpointWith(messages: IMessage[]): AgentCheckpoint {
   return {
@@ -28,6 +44,7 @@ function seedHistory(store: AgentHistoryStore, id: string, messages: IMessage[])
   store.set(id, {
     checkpoint: checkpointWith(messages),
     agentName: 'explore',
+    agentDefinition: definition(),
     thoroughness: 'medium',
     parentSessionId: 'session-1',
     endTime: Date.now(),

@@ -463,6 +463,7 @@ export class SubagentOrchestrator {
       this.deps.historyStore.set(resumeId, {
         checkpoint: agent.toCheckpoint(),
         agentName,
+        agentDefinition: agentDef,
         thoroughness: effectiveThoroughness,
         parentSessionId,
         endTime: Date.now(),

@@ -1,4 +1,5 @@
 import type { AgentCheckpoint, ThoroughnessLevel } from '@bike4mind/agents';
+import type { AgentDefinition } from './types.js';
 import { DEFAULT_SUBAGENT_HISTORY_TTL_MS, MAX_SUBAGENT_HISTORY_ENTRIES } from '../config/constants.js';
 
 /**
@@ -10,6 +11,11 @@ export interface StoredAgentHistory {
   checkpoint: AgentCheckpoint;
   /** Agent definition name to rebuild on resume. */
   agentName: string;
+  /**
+   * The resolved agent definition, replayed on resume so a session spawned from
+   * an inline/dynamic definition (or one no longer in the store) still rebuilds.
+   */
+  agentDefinition: AgentDefinition;
   /** Thoroughness the original run used, reused on resume. */
   thoroughness: ThoroughnessLevel;
   /** Parent session that owned the original run. */
