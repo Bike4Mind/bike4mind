@@ -20,9 +20,27 @@ import { ForbiddenError, BadRequestError } from '@server/utils/errors';
 const RepriceBody = z.object({
   modelId: z.string().min(1),
   unit: z.enum(MODEL_PRICE_UNITS).default('per_token'),
-  pricing: z.record(z.string().regex(/^\d+$/, 'tier keys must be numeric token thresholds'), ModelPriceTier),
+  // strict(): reject unknown rate fields rather than silently stripping them
+  // (a rate the schema does not know yet must fail loudly, not vanish with 200).
+  pricing: z.record(z.string().regex(/^\d+$/, 'tier keys must be numeric token thresholds'), ModelPriceTier.strict()),
   note: z.string(),
 });
+
+/** Stable serialization for idempotency comparison (mirrors the seeder's normalizePricing). */
+function normalizePricing(pricing: Record<string, Record<string, number | undefined>>): string {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(pricing).sort()) {
+    const tier = pricing[key];
+    const normalized: Record<string, number> = {};
+    for (const field of Object.keys(tier).sort()) {
+      if (tier[field] !== undefined) normalized[field] = tier[field] as number;
+    }
+    out[key] = normalized;
+  }
+  return JSON.stringify(out);
+}
+
+const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
 
 const RevertBody = z.object({
   modelId: z.string().min(1),
@@ -63,6 +81,7 @@ const handler = baseApi()
 
     const parsed = RepriceBody.safeParse(req.body);
     if (!parsed.success) throw new BadRequestError(parsed.error.issues[0]?.message ?? 'invalid reprice request');
+    const { modelId, unit, pricing } = parsed.data;
     const note = parsed.data.note.trim();
     if (!note) throw new BadRequestError('note is required: it is the audit trail for this price change');
     if (note === SEED_NOTE) {
@@ -70,11 +89,37 @@ const handler = baseApi()
         `note '${SEED_NOTE}' is reserved for seed provenance; describe the source of the reprice`
       );
     }
-    // append() re-validates (zod, empty map, all-zero) before persisting.
+    // 400-class validation here; append()'s own checks would surface as 500s.
+    const hasNonzeroTier = Object.values(pricing).some(tier => tier.input > 0 || tier.output > 0);
+    if (Object.keys(pricing).length === 0 || !hasNonzeroTier) {
+      throw new BadRequestError('all-zero or empty pricing would settle calls free; mark the model freeToRun instead');
+    }
+
+    // Only models the catalog already knows (seeded or previously priced) can
+    // be repriced: a typoed modelId must not mint a phantom in-force row.
+    const [seedEntries, newestRows] = await Promise.all([
+      generateModelPriceSeed(),
+      modelPriceRepository.rowsInForce(FAR_FUTURE),
+    ]);
+    const knownModel =
+      seedEntries.some(e => e.modelId === modelId && e.unit === unit) ||
+      newestRows.some(r => r.modelId === modelId && r.unit === unit);
+    if (!knownModel) {
+      throw new BadRequestError(`unknown model ${modelId} (${unit}): reprice targets an existing catalog model`);
+    }
+
+    // Idempotency: a resubmit of the identical reprice (double-click, network
+    // retry, second tab) returns the existing row instead of appending a
+    // duplicate; the append-only audit trail must not record phantom changes.
+    const newest = newestRows.find(r => r.modelId === modelId && r.unit === unit);
+    if (newest && newest.note === note && normalizePricing(newest.pricing) === normalizePricing(pricing)) {
+      return res.json({ row: newest });
+    }
+
     const row = await modelPriceRepository.append({
-      modelId: parsed.data.modelId,
-      unit: parsed.data.unit,
-      pricing: parsed.data.pricing,
+      modelId,
+      unit,
+      pricing,
       effectiveFrom: new Date(),
       note,
     });

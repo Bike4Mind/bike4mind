@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -45,6 +45,8 @@ interface PriceRow {
   note?: string;
 }
 
+// Mirrors SEED_NOTE in @bike4mind/database (a server-only package; importing
+// it here would pull mongoose into the client bundle). Pinned by a test there.
 const SEED_NOTE = 'adapter-seed';
 const isSeedRow = (row: PriceRow) => row.note === SEED_NOTE;
 
@@ -69,12 +71,30 @@ const RATE_LABELS: Record<RateField, string> = {
   audio_output: 'Audio out',
 };
 
-const perMillion = (usdPerToken: number | undefined) =>
-  usdPerToken === undefined
-    ? '-'
-    : `$${(usdPerToken * 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+const UNIT_SUFFIX: Record<string, string> = {
+  per_token: 'per 1M tokens',
+  per_minute: 'per minute',
+  per_image: 'per image',
+};
+
+// per_token rates are USD per single token and read best scaled to 1M; other
+// units are already human-scale and must NOT be inflated.
+const formatRate = (unit: string, value: number | undefined) => {
+  if (value === undefined) return '-';
+  const scaled = unit === 'per_token' ? value * 1_000_000 : value;
+  return `$${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
+};
+
+const firstTier = (row: PriceRow): PriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
+
+// Axios errors carry the server's validation reason in response.data, while
+// err.message is the useless generic 'Request failed with status code 400'.
+const apiErrorMessage = (err: unknown, fallback: string) => {
+  const e = err as { response?: { data?: { message?: string } }; message?: string };
+  return e?.response?.data?.message || e?.message || fallback;
+};
 
 /**
  * Admin manager for the versioned model price catalog. Rates are provider
@@ -95,6 +115,9 @@ export const ModelPricingCatalog: React.FC = () => {
   const [revertTarget, setRevertTarget] = useState<PriceRow | null>(null);
   const [historyModel, setHistoryModel] = useState<string | null>(null);
   const [history, setHistory] = useState<PriceRow[] | null>(null);
+  // Latest requested history model; a slower earlier response must not
+  // overwrite the drawer for the model currently displayed.
+  const historyRequestRef = useRef<string | null>(null);
 
   const fetchRows = useCallback(async () => {
     setIsLoading(true);
@@ -103,7 +126,7 @@ export const ModelPricingCatalog: React.FC = () => {
       const res = await api.get<{ rows: PriceRow[] }>('/api/admin/model-prices');
       setRows([...res.data.rows].sort((a, b) => a.modelId.localeCompare(b.modelId)));
     } catch (err) {
-      setError((err as Error)?.message || 'Failed to load the price catalog');
+      setError(apiErrorMessage(err, 'Failed to load the price catalog'));
     } finally {
       setIsLoading(false);
     }
@@ -124,6 +147,7 @@ export const ModelPricingCatalog: React.FC = () => {
     }
     setDraftRates(drafts);
     setNote('');
+    setError(null);
     setRepriceTarget(row);
   };
 
@@ -148,7 +172,7 @@ export const ModelPricingCatalog: React.FC = () => {
       setRepriceTarget(null);
       await fetchRows();
     } catch (err) {
-      setError((err as Error)?.message || 'Reprice failed');
+      setError(apiErrorMessage(err, 'Reprice failed'));
     } finally {
       setIsSaving(false);
     }
@@ -167,22 +191,25 @@ export const ModelPricingCatalog: React.FC = () => {
       setRevertTarget(null);
       await fetchRows();
     } catch (err) {
-      setError((err as Error)?.message || 'Revert failed');
+      setError(apiErrorMessage(err, 'Revert failed'));
     } finally {
       setIsSaving(false);
     }
   };
 
   const openHistory = async (modelId: string) => {
+    historyRequestRef.current = modelId;
     setHistoryModel(modelId);
     setHistory(null);
     try {
       const res = await api.get<{ history: PriceRow[] }>(
         `/api/admin/model-prices?history=${encodeURIComponent(modelId)}`
       );
+      if (historyRequestRef.current !== modelId) return;
       setHistory(res.data.history);
     } catch (err) {
-      setError((err as Error)?.message || 'Failed to load history');
+      if (historyRequestRef.current !== modelId) return;
+      setError(apiErrorMessage(err, 'Failed to load history'));
       setHistoryModel(null);
     }
   };
@@ -199,7 +226,7 @@ export const ModelPricingCatalog: React.FC = () => {
     <Box data-testid="model-pricing-catalog">
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
         <Box>
-          <Typography level="title-md">Model pricing (provider cost, USD per 1M tokens)</Typography>
+          <Typography level="title-md">Model pricing (provider cost, USD; token rates shown per 1M)</Typography>
           <Typography level="body-sm" color="neutral">
             Users pay this cost times the published uniform markup. Changes append versioned rows; history is never
             edited.
@@ -224,6 +251,7 @@ export const ModelPricingCatalog: React.FC = () => {
             <thead>
               <tr>
                 <th>Model</th>
+                <th>Unit</th>
                 <th>Input</th>
                 <th>Output</th>
                 <th>Audio in</th>
@@ -235,9 +263,9 @@ export const ModelPricingCatalog: React.FC = () => {
             </thead>
             <tbody>
               {rows.map(row => {
-                const tier = Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
+                const tier = firstTier(row);
                 return (
-                  <tr key={`${row.modelId}|${row.unit}`} data-testid={`model-pricing-row-${row.modelId}`}>
+                  <tr key={`${row.modelId}|${row.unit}`} data-testid={`model-pricing-row-${row.modelId}-${row.unit}`}>
                     <td>
                       <Typography level="body-sm">{row.modelId}</Typography>
                       {Object.keys(row.pricing).length > 1 && (
@@ -246,17 +274,18 @@ export const ModelPricingCatalog: React.FC = () => {
                         </Typography>
                       )}
                     </td>
-                    <td style={numberCell}>{perMillion(tier.input)}</td>
-                    <td style={numberCell}>{perMillion(tier.output)}</td>
-                    <td style={numberCell}>{perMillion(tier.audio_input)}</td>
-                    <td style={numberCell}>{perMillion(tier.audio_output)}</td>
+                    <td>{UNIT_SUFFIX[row.unit] ?? row.unit}</td>
+                    <td style={numberCell}>{formatRate(row.unit, tier.input)}</td>
+                    <td style={numberCell}>{formatRate(row.unit, tier.output)}</td>
+                    <td style={numberCell}>{formatRate(row.unit, tier.audio_input)}</td>
+                    <td style={numberCell}>{formatRate(row.unit, tier.audio_output)}</td>
                     <td>{new Date(row.effectiveFrom).toLocaleDateString()}</td>
                     <td>
                       <Chip
                         size="sm"
                         color={isSeedRow(row) ? 'neutral' : 'primary'}
                         variant="soft"
-                        data-testid={`model-pricing-source-${row.modelId}`}
+                        data-testid={`model-pricing-source-${row.modelId}-${row.unit}`}
                       >
                         {isSeedRow(row) ? 'seed' : 'operator'}
                       </Chip>
@@ -267,7 +296,7 @@ export const ModelPricingCatalog: React.FC = () => {
                           size="sm"
                           title="Reprice"
                           onClick={() => openReprice(row)}
-                          data-testid={`model-pricing-reprice-${row.modelId}`}
+                          data-testid={`model-pricing-reprice-${row.modelId}-${row.unit}`}
                         >
                           <EditIcon fontSize="small" />
                         </IconButton>
@@ -275,7 +304,7 @@ export const ModelPricingCatalog: React.FC = () => {
                           size="sm"
                           title="History"
                           onClick={() => openHistory(row.modelId)}
-                          data-testid={`model-pricing-history-${row.modelId}`}
+                          data-testid={`model-pricing-history-${row.modelId}-${row.unit}`}
                         >
                           <HistoryIcon fontSize="small" />
                         </IconButton>
@@ -284,7 +313,7 @@ export const ModelPricingCatalog: React.FC = () => {
                             size="sm"
                             title="Revert to seed pricing"
                             onClick={() => setRevertTarget(row)}
-                            data-testid={`model-pricing-revert-${row.modelId}`}
+                            data-testid={`model-pricing-revert-${row.modelId}-${row.unit}`}
                           >
                             <ReplayIcon fontSize="small" />
                           </IconButton>
@@ -302,6 +331,11 @@ export const ModelPricingCatalog: React.FC = () => {
       <Modal open={repriceTarget !== null} onClose={() => setRepriceTarget(null)}>
         <ModalDialog sx={{ minWidth: 420 }} data-testid="reprice-modal">
           <Typography level="title-md">Reprice {repriceTarget?.modelId}</Typography>
+          {error && (
+            <Alert color="danger" size="sm" data-testid="reprice-modal-error">
+              {error}
+            </Alert>
+          )}
           <Typography level="body-sm" color="neutral">
             USD per token. This appends a new operator row taking effect immediately; seeding will no longer manage this
             model until reverted.
@@ -363,6 +397,11 @@ export const ModelPricingCatalog: React.FC = () => {
       <Modal open={revertTarget !== null} onClose={() => setRevertTarget(null)}>
         <ModalDialog data-testid="revert-modal">
           <Typography level="title-md">Revert {revertTarget?.modelId} to seed pricing?</Typography>
+          {error && (
+            <Alert color="danger" size="sm" data-testid="revert-modal-error">
+              {error}
+            </Alert>
+          )}
           <Typography level="body-sm" color="neutral">
             Appends the adapter table&apos;s current rates under the seed note, so future adapter reprices flow to this
             model automatically again. The operator row stays in history.
@@ -388,16 +427,17 @@ export const ModelPricingCatalog: React.FC = () => {
           ) : (
             <Stack spacing={1}>
               {history.map((row, idx) => {
-                const tier = Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
+                const tier = firstTier(row);
                 return (
                   <Sheet key={idx} variant="soft" sx={{ p: 1, borderRadius: 'sm' }} data-testid="history-row">
                     <Typography level="body-sm">
                       {new Date(row.effectiveFrom).toLocaleString()} - {row.note || 'no note'}
                     </Typography>
                     <Typography level="body-xs" sx={numberCell}>
-                      in {perMillion(tier.input)} / out {perMillion(tier.output)}
+                      in {formatRate(row.unit, tier.input)} / out {formatRate(row.unit, tier.output)}
                       {tier.audio_input !== undefined &&
-                        ` / audio in ${perMillion(tier.audio_input)} / audio out ${perMillion(tier.audio_output)}`}
+                        ` / audio in ${formatRate(row.unit, tier.audio_input)} / audio out ${formatRate(row.unit, tier.audio_output)}`}{' '}
+                      ({UNIT_SUFFIX[row.unit] ?? row.unit})
                     </Typography>
                   </Sheet>
                 );

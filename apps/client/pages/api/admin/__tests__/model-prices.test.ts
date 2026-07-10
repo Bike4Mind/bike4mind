@@ -74,6 +74,9 @@ describe('POST /api/admin/model-prices', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockAppend.mockResolvedValue({ id: 'row1' });
+    // gpt-x is a known (seeded) model with no prior operator rows by default.
+    mockGenerateSeed.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER } }]);
+    mockRowsInForce.mockResolvedValue([]);
   });
 
   it('appends an operator reprice with a server-side effectiveFrom', async () => {
@@ -86,6 +89,57 @@ describe('POST /api/admin/model-prices', () => {
     const row = mockAppend.mock.calls[0][0];
     expect(row).toMatchObject({ modelId: 'gpt-x', note: 'provider price page 2026-07' });
     expect(row.effectiveFrom).toBeInstanceOf(Date);
+  });
+
+  it('rejects a reprice for a model unknown to the catalog and the seed (typo protection)', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-5-minl', unit: 'per_token', pricing: { '0': TIER }, note: 'typo reprice' },
+    });
+    await expect(run()).rejects.toThrow(/unknown model/i);
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('rejects unknown tier rate fields instead of silently stripping them (audio_* before the tier schema learns them)', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: {
+        modelId: 'gpt-x',
+        unit: 'per_token',
+        pricing: { '0': { ...TIER, audio_inputt: 32e-6 } },
+        note: 'invoice',
+      },
+    });
+    await expect(run()).rejects.toThrow();
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('rejects an all-zero reprice as a 400-class validation error, not a 500', async () => {
+    const { run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': { input: 0, output: 0 } }, note: 'zero it out' },
+    });
+    await expect(run()).rejects.toMatchObject({ statusCode: 400 });
+    expect(mockAppend).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent: an identical resubmit returns the existing row instead of appending a duplicate', async () => {
+    mockRowsInForce.mockResolvedValue([
+      {
+        modelId: 'gpt-x',
+        unit: 'per_token',
+        pricing: { '0': TIER },
+        note: 'provider price page 2026-07',
+        effectiveFrom: new Date(),
+      },
+    ]);
+    const { res, run } = call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'provider price page 2026-07' },
+    });
+    await run();
+    expect(mockAppend).not.toHaveBeenCalled();
+    expect(res._getJSONData().row).toMatchObject({ note: 'provider price page 2026-07' });
   });
 
   it('rejects a reprice without a note (the note IS the audit trail)', async () => {
