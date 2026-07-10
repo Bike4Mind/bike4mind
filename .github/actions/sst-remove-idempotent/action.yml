@@ -144,7 +144,14 @@ runs:
           if echo "$OUTPUT" | grep -qE "DependencyViolation|has a dependent object"; then
             echo "  [heal ${heal}] DependencyViolation -> stage-scoped orphaned-ALB reconcile"
             bash "${GITHUB_ACTION_PATH}/reconcile-orphaned-alb.sh" "${STAGE}" || true
-          elif echo "$OUTPUT" | grep -qiE "NotFound|does not exist"; then
+          elif echo "$OUTPUT" | grep -qiE "NotFound|does not exist|was not ACTIVE|ResourceNotFoundException|NoSuchEntity|no longer exists|could not be found"; then
+            # "Already gone / inactive parent" desync: the resource (or a parent
+            # it needs) was deleted out-of-band, so its delete errors. AWS phrases
+            # this differently per service - ListenerNotFound, ECS "Cluster was not
+            # ACTIVE" on ClusterCapacityProviders, IAM NoSuchEntity, Lambda
+            # ResourceNotFoundException, etc. - so match the family, not one string.
+            # Drop the phantom from state and retry. (DependencyViolation, i.e. a
+            # LIVE resource still pinning another, is handled by the branch above.)
             # Logical name of the failed resource is the token before its
             # " aws:/sst:/random:/command:" type on the sst "|  Error ..." line
             # (last such token on the line, i.e. the child, not its parent).
