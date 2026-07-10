@@ -7,11 +7,30 @@ import { api } from '@client/app/contexts/ApiContext';
  * client source of truth for both the Gears page and the sidenav's earned rows.
  */
 
-export type GearKey = 'projects' | 'agents' | 'datalakes' | 'files' | 'published';
+export type GearKind = 'destination' | 'skill';
+
+export type GearKey =
+  // destinations (earn a sidenav slot)
+  | 'projects'
+  | 'agents'
+  | 'datalakes'
+  | 'files'
+  | 'published'
+  // skills (achievements — no nav effect)
+  | 'apikey'
+  | 'apicall'
+  | 'image'
+  | 'voice'
+  | 'models'
+  | 'react'
+  | 'python'
+  | 'shareproject';
 
 export interface GearStatus {
   key: GearKey;
+  kind: GearKind;
   unlocked: boolean;
+  credits: number;
   creditsAwarded?: number;
 }
 
@@ -32,8 +51,8 @@ export function useGearsStatus() {
 }
 
 /** Convenience map: key -> unlocked. `undefined` while loading (callers choose their fallback). */
-export function useGearUnlocks(): Record<GearKey, boolean> | undefined {
+export function useGearUnlocks(): Partial<Record<GearKey, boolean>> | undefined {
   const { data } = useGearsStatus();
   if (!data) return undefined;
-  return Object.fromEntries(data.gears.map(g => [g.key, g.unlocked])) as Record<GearKey, boolean>;
+  return Object.fromEntries(data.gears.map(g => [g.key, g.unlocked])) as Partial<Record<GearKey, boolean>>;
 }

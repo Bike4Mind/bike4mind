@@ -10,6 +10,9 @@ const { mocks } = vi.hoisted(() => ({
     publishedExists: vi.fn(),
     txFind: vi.fn(),
     addCredits: vi.fn(),
+    artifactExists: vi.fn(),
+    apiKeyExists: vi.fn(),
+    usageDistinct: vi.fn(),
   },
 }));
 
@@ -35,6 +38,9 @@ vi.mock('@bike4mind/database', () => ({
   Project: { exists: (...a: unknown[]) => mocks.projectExists(...a) },
   FabFile: { exists: (...a: unknown[]) => mocks.fabFileExists(...a) },
   PublishedArtifact: { exists: (...a: unknown[]) => mocks.publishedExists(...a) },
+  Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
+  ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
+  UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
@@ -64,6 +70,9 @@ const lockEverything = () => {
   mocks.dataLakeFindOne.mockResolvedValue(null);
   mocks.fabFileExists.mockResolvedValue(null);
   mocks.publishedExists.mockResolvedValue(null);
+  mocks.artifactExists.mockResolvedValue(null);
+  mocks.apiKeyExists.mockResolvedValue(null);
+  mocks.usageDistinct.mockResolvedValue([]);
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -86,14 +95,15 @@ describe('GET /api/gears/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
-    expect(body.gears).toHaveLength(5);
+    expect(body.gears).toHaveLength(13);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
     expect(body.totalUnlocked).toBe(0);
     expect(mocks.addCredits).not.toHaveBeenCalled();
   });
 
   it('derives unlocks from data existence and grants the one-time reward with a stable transactionId', async () => {
-    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    // Answer true only for the destination arm ($or query), not the shareproject arm.
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     const { res, promise } = run({ id: 'u1' });
     await promise;
 
@@ -110,7 +120,7 @@ describe('GET /api/gears/status', () => {
   });
 
   it('never re-grants once the ledger has the gear transaction', async () => {
-    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     mocks.txFind.mockResolvedValue([{ transactionId: 'gear-unlock:u1:projects' }]);
 
     const { res, promise } = run({ id: 'u1' });
@@ -122,7 +132,7 @@ describe('GET /api/gears/status', () => {
   });
 
   it('a reward failure never breaks the status surface (nav still gets its answer)', async () => {
-    mocks.projectExists.mockResolvedValue({ _id: 'p1' });
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     mocks.addCredits.mockRejectedValue(new Error('ledger down'));
 
     const { res, promise } = run({ id: 'u1' });
@@ -141,5 +151,39 @@ describe('GET /api/gears/status', () => {
     expect(mocks.projectExists).toHaveBeenCalledWith({
       $or: [{ userId: 'u1' }, { 'users.id': 'u1' }],
     });
+  });
+});
+
+describe('GET /api/gears/status — skill gears', () => {
+  it('derives image/voice/apicall from the usage ledger and model-explorer from distinct chat models', async () => {
+    mocks.usageDistinct.mockImplementation((field: string) =>
+      Promise.resolve(field === 'feature' ? ['chat', 'image_generation', 'voice'] : ['gpt-x', 'claude-y'])
+    );
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; kind: string; unlocked: boolean }> };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
+    expect(byKey.image.unlocked).toBe(true);
+    expect(byKey.voice.unlocked).toBe(true);
+    expect(byKey.models.unlocked).toBe(true); // two distinct chat models
+    expect(byKey.apicall.unlocked).toBe(false); // no completion_api events
+    expect(byKey.image.kind).toBe('skill');
+  });
+
+  it('skill rewards use the skill credit amount, destinations the destination amount', async () => {
+    mocks.apiKeyExists.mockResolvedValue({ _id: 'k1' });
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; creditsAwarded?: number; credits: number }>;
+    };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
+    expect(byKey.apikey.creditsAwarded).toBe(byKey.apikey.credits);
+    expect(byKey.projects.creditsAwarded).toBe(byKey.projects.credits);
+    expect(byKey.projects.credits).toBeGreaterThan(byKey.apikey.credits);
   });
 });

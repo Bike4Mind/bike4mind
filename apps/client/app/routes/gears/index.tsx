@@ -9,17 +9,28 @@ import WaterOutlinedIcon from '@mui/icons-material/WaterOutlined';
 import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
+import KeyIcon from '@mui/icons-material/Key';
+import TerminalOutlinedIcon from '@mui/icons-material/TerminalOutlined';
+import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
+import MicOutlinedIcon from '@mui/icons-material/MicOutlined';
+import SwapHorizOutlinedIcon from '@mui/icons-material/SwapHorizOutlined';
+import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
+import DataObjectOutlinedIcon from '@mui/icons-material/DataObjectOutlined';
+import GroupAddOutlinedIcon from '@mui/icons-material/GroupAddOutlined';
 import { useGearsStatus, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 
 /**
- * Gears — the earned-nav progression page. One card per major feature: its
- * zero-state intro, a "do the first thing" CTA, and a checkmark once the gear
- * is unlocked (first real use). Unlocked gears appear in the sidenav; the
- * permanent rail is just New Chat / Gears / Help. Each first unlock grants a
- * one-time credit reward (see pages/api/gears/status.ts).
+ * Gears — the earned-nav progression page, and the product's tutorial system
+ * disguised as a trophy case.
+ *
+ * Destinations earn their sidenav slot on first real use (the permanent rail
+ * is New Chat / Gears / Help). Skills are capabilities worth discovering —
+ * no nav effect, just the checkmark and the credit reward. Every card is a
+ * zero-state intro with a do-the-first-thing CTA; unlock state is derived
+ * server-side (see pages/api/gears/status.ts).
  */
 
 interface GearCardDef {
@@ -31,7 +42,7 @@ interface GearCardDef {
   icon: React.ReactNode;
 }
 
-const GEAR_CARDS: GearCardDef[] = [
+const DESTINATION_CARDS: GearCardDef[] = [
   {
     key: 'projects',
     title: 'Projects',
@@ -78,6 +89,74 @@ const GEAR_CARDS: GearCardDef[] = [
   },
 ];
 
+const SKILL_CARDS: GearCardDef[] = [
+  {
+    key: 'image',
+    title: 'Image Generation',
+    tagline: 'Paint with a prompt',
+    intro: 'Ask any chat to generate or edit an image — concept art, diagrams, marketing shots.',
+    cta: 'Generate your first image',
+    icon: <ImageOutlinedIcon />,
+  },
+  {
+    key: 'models',
+    title: 'Model Explorer',
+    tagline: 'Same question, different minds',
+    intro:
+      'Switch the AI model mid-conversation — trade speed for depth, or compare answers across providers. Unlocks after chatting on two different models.',
+    cta: 'Try another model',
+    icon: <SwapHorizOutlinedIcon />,
+  },
+  {
+    key: 'react',
+    title: 'React Artifacts',
+    tagline: 'Working apps, not walls of text',
+    intro: 'Ask for an interactive React app — a calculator, a dashboard, a game — and run it right in the chat.',
+    cta: 'Build a React artifact',
+    icon: <CodeOutlinedIcon />,
+  },
+  {
+    key: 'python',
+    title: 'Python Artifacts',
+    tagline: 'Real computation, live',
+    intro: 'Ask for runnable Python — data crunching, plots, simulations — executed safely in your browser.',
+    cta: 'Run some Python',
+    icon: <DataObjectOutlinedIcon />,
+  },
+  {
+    key: 'voice',
+    title: 'Voice',
+    tagline: 'Talk it through',
+    intro: 'Have the conversation out loud — hands-free chats with any model, transcribed as you go.',
+    cta: 'Start a voice chat',
+    icon: <MicOutlinedIcon />,
+  },
+  {
+    key: 'shareproject',
+    title: 'Team Up',
+    tagline: 'Better together',
+    intro: 'Invite a teammate into a project — shared chats, shared files, shared context.',
+    cta: 'Share a project',
+    icon: <GroupAddOutlinedIcon />,
+  },
+  {
+    key: 'apikey',
+    title: 'API Key',
+    tagline: 'Your programmatic handle',
+    intro: 'Issue yourself an API key and take Bike4Mind beyond the browser — scripts, integrations, pipelines.',
+    cta: 'Issue an API key',
+    icon: <KeyIcon />,
+  },
+  {
+    key: 'apicall',
+    title: 'API Call',
+    tagline: 'Hello, world',
+    intro: 'Make your first API request — one curl with your key and the completions endpoint answers.',
+    cta: 'Make your first call',
+    icon: <TerminalOutlinedIcon />,
+  },
+];
+
 const GearsPage = () => {
   const navigate = useNavigate();
   const { data, isPending } = useGearsStatus();
@@ -89,11 +168,14 @@ const GearsPage = () => {
 
   // Same gating as the sidenav: a gear whose feature is off for this deployment
   // isn't offered at all (it would dead-end on gated endpoints).
-  const visibleCards = GEAR_CARDS.filter(card => {
-    if (card.key === 'agents') return isFeatureEnabled('enableAgents');
-    if (card.key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
+  const gearVisible = (key: GearKey) => {
+    if (key === 'agents') return isFeatureEnabled('enableAgents');
+    if (key === 'datalakes') return isAdminFeatureEnabled('EnableDataLakes');
     return true;
-  });
+  };
+  const destinationCards = DESTINATION_CARDS.filter(c => gearVisible(c.key));
+  const skillCards = SKILL_CARDS.filter(c => gearVisible(c.key));
+  const allCards = [...destinationCards, ...skillCards];
 
   // Surface fresh unlock rewards the moment the status lands.
   useEffect(() => {
@@ -102,25 +184,83 @@ const GearsPage = () => {
     if (awarded.length > 0) {
       toastedRef.current = true;
       for (const g of awarded) {
-        const card = GEAR_CARDS.find(c => c.key === g.key);
+        const card = allCards.find(c => c.key === g.key);
         toast.success(`Gear unlocked: ${card?.title ?? g.key} — +${g.creditsAwarded} credits`);
       }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
 
-  const unlockedByKey = new Map(data?.gears.map(g => [g.key, g.unlocked]) ?? []);
-  const unlockedCount = visibleCards.filter(c => unlockedByKey.get(c.key)).length;
+  const byKey = new Map(data?.gears.map(g => [g.key, g]) ?? []);
+  const unlockedCount = allCards.filter(c => byKey.get(c.key)?.unlocked).length;
 
   const onCta = (key: GearKey) => {
-    if (key === 'files') {
-      setFileBrowserOpen(true);
-      return;
-    }
-    if (key === 'projects') return void navigate({ to: '/projects' });
+    if (key === 'files') return void setFileBrowserOpen(true);
+    if (key === 'projects' || key === 'shareproject') return void navigate({ to: '/projects' });
     if (key === 'agents') return void navigate({ to: '/agents' });
     if (key === 'datalakes') return void navigate({ to: '/data-lakes' });
     if (key === 'published') return void navigate({ to: '/profile', search: { tab: 'published' } });
+    if (key === 'apikey' || key === 'apicall') {
+      return void navigate({ to: '/profile', search: { tab: 'settings' } });
+    }
+    // Chat-native skills: start a fresh chat and try it.
+    return void navigate({ to: '/new' });
   };
+
+  const renderCards = (cards: GearCardDef[]) => (
+    <Box
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
+        gap: 2,
+      }}
+    >
+      {cards.map(card => {
+        const status = byKey.get(card.key);
+        const unlocked = status?.unlocked === true;
+        return (
+          <Card
+            key={card.key}
+            variant={unlocked ? 'soft' : 'outlined'}
+            data-testid={`gear-card-${card.key}`}
+            sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
+          >
+            <Stack direction="row" alignItems="center" justifyContent="space-between">
+              <Stack direction="row" alignItems="center" gap={1}>
+                {card.icon}
+                <Typography level="title-md">{card.title}</Typography>
+              </Stack>
+              {unlocked ? (
+                <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${card.key}`} />
+              ) : (
+                status &&
+                status.credits > 0 && (
+                  <Chip size="sm" variant="soft" color="success">
+                    +{status.credits}
+                  </Chip>
+                )
+              )}
+            </Stack>
+            <Typography level="body-xs" sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7 }}>
+              {card.tagline}
+            </Typography>
+            <Typography level="body-sm" sx={{ flex: 1, opacity: 0.85 }}>
+              {card.intro}
+            </Typography>
+            <Button
+              size="sm"
+              variant={unlocked ? 'plain' : 'solid'}
+              onClick={() => onCta(card.key)}
+              loading={isPending}
+              data-testid={`gear-cta-${card.key}`}
+            >
+              {unlocked ? 'Open' : card.cta}
+            </Button>
+          </Card>
+        );
+      })}
+    </Box>
+  );
 
   return (
     <Box sx={{ maxWidth: 960, mx: 'auto', px: 3, py: 4 }} data-testid="gears-page">
@@ -129,68 +269,35 @@ const GearsPage = () => {
         <Typography level="h2">Gears</Typography>
       </Stack>
       <Typography level="body-md" sx={{ mb: 1, opacity: 0.8 }}>
-        Every feature you use for the first time earns its place in your sidebar — and a credit bonus.
+        Every feature you use for the first time earns a checkmark and a credit bonus — destinations also earn their
+        place in your sidebar.
       </Typography>
       <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
         <LinearProgress
           determinate
-          value={visibleCards.length ? (unlockedCount / visibleCards.length) * 100 : 0}
+          value={allCards.length ? (unlockedCount / allCards.length) * 100 : 0}
           sx={{ flex: 1, maxWidth: 320 }}
         />
         <Typography level="body-sm" sx={{ whiteSpace: 'nowrap', opacity: 0.8 }} data-testid="gears-progress">
-          {unlockedCount} / {visibleCards.length} unlocked
+          {unlockedCount} / {allCards.length} unlocked
         </Typography>
-        {data && data.creditsPerUnlock > 0 && (
-          <Chip size="sm" variant="soft" color="success">
-            +{data.creditsPerUnlock} credits each
-          </Chip>
-        )}
       </Stack>
 
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', md: '1fr 1fr 1fr' },
-          gap: 2,
-        }}
-      >
-        {visibleCards.map(card => {
-          const unlocked = unlockedByKey.get(card.key) === true;
-          return (
-            <Card
-              key={card.key}
-              variant={unlocked ? 'soft' : 'outlined'}
-              data-testid={`gear-card-${card.key}`}
-              sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}
-            >
-              <Stack direction="row" alignItems="center" justifyContent="space-between">
-                <Stack direction="row" alignItems="center" gap={1}>
-                  {card.icon}
-                  <Typography level="title-md">{card.title}</Typography>
-                </Stack>
-                {unlocked && (
-                  <CheckCircleIcon color="success" fontSize="small" data-testid={`gear-unlocked-${card.key}`} />
-                )}
-              </Stack>
-              <Typography level="body-xs" sx={{ textTransform: 'uppercase', letterSpacing: '0.08em', opacity: 0.7 }}>
-                {card.tagline}
-              </Typography>
-              <Typography level="body-sm" sx={{ flex: 1, opacity: 0.85 }}>
-                {card.intro}
-              </Typography>
-              <Button
-                size="sm"
-                variant={unlocked ? 'plain' : 'solid'}
-                onClick={() => onCta(card.key)}
-                loading={isPending}
-                data-testid={`gear-cta-${card.key}`}
-              >
-                {unlocked ? 'Open' : card.cta}
-              </Button>
-            </Card>
-          );
-        })}
-      </Box>
+      <Typography level="title-lg" sx={{ mb: 1.5 }}>
+        Destinations
+      </Typography>
+      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
+        First use earns these a slot in your sidebar.
+      </Typography>
+      {renderCards(destinationCards)}
+
+      <Typography level="title-lg" sx={{ mt: 4, mb: 1.5 }}>
+        Skills
+      </Typography>
+      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
+        Capabilities worth knowing about — try each once.
+      </Typography>
+      {renderCards(skillCards)}
     </Box>
   );
 };

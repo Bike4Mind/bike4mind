@@ -6,6 +6,9 @@ import {
   Project,
   FabFile,
   PublishedArtifact,
+  Artifact,
+  ApiKey,
+  UsageEvent,
   agentRepository,
   dataLakeRepository,
   creditTransactionRepository,
@@ -15,12 +18,19 @@ import {
 /**
  * GET /api/gears/status — the Gears progression surface.
  *
- * A "gear" is a major feature whose sidenav presence is EARNED by first use
- * (the nav rail stays New Chat / Gears / Help until then). Unlock state is
- * DERIVED from data existence — "has ≥1 project" IS the unlock — so there is
- * no unlock table to migrate or drift, and users with existing data are
- * grandfathered automatically. Receipt counts as use: a project you were
- * added to unlocks Projects (the collaboration is the tutorial).
+ * Two kinds of gear:
+ *  - destination: a major feature that EARNS its sidenav slot on first use
+ *    (the permanent rail is New Chat / Gears / Help).
+ *  - skill: a capability worth discovering (issue an API key, generate an
+ *    image, switch models, build a React artifact…) — no nav effect, just a
+ *    checkmark on the Gears page and the credit reward. The tutorial system
+ *    disguised as a trophy case.
+ *
+ * Unlock state is DERIVED — from feature data ("has ≥1 project") or from the
+ * billing usage ledger (feature: image_generation / voice / completion_api,
+ * distinct chat models) — so there is no unlock table to migrate or drift,
+ * and users with existing history are grandfathered automatically. Receipt
+ * counts as use: a project you were added to unlocks Projects.
  *
  * First unlock of each gear grants a one-time credit reward. Idempotency
  * rides the credit ledger itself: the stable transactionId
@@ -29,28 +39,133 @@ import {
  * polled freely and can never double-credit.
  */
 
-/** One-time reward per gear unlock; env-tunable without a deploy contract change. */
+/** One-time rewards; env-tunable without a deploy contract change. */
 export const GEAR_UNLOCK_CREDITS = Number(process.env.GEAR_UNLOCK_CREDITS ?? 25);
+export const GEAR_SKILL_CREDITS = Number(process.env.GEAR_SKILL_CREDITS ?? 10);
 
-export type GearKey = 'projects' | 'agents' | 'datalakes' | 'files' | 'published';
+export type GearKind = 'destination' | 'skill';
+
+export type GearKey =
+  // destinations (earn a sidenav slot)
+  | 'projects'
+  | 'agents'
+  | 'datalakes'
+  | 'files'
+  | 'published'
+  // skills (achievements)
+  | 'apikey'
+  | 'apicall'
+  | 'image'
+  | 'voice'
+  | 'models'
+  | 'react'
+  | 'python'
+  | 'shareproject';
 
 const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
-/** Derived existence checks — cheapest possible query per gear. */
-const GEAR_CHECKS: Record<GearKey, (userId: string) => Promise<boolean>> = {
-  // Owner OR member — same membership arms as the publish project-visibility gate.
-  projects: async userId => !!(await Project.exists({ $or: [{ userId }, { 'users.id': userId }] })),
-  agents: async userId => (await agentRepository.countByUserId(userId)) > 0,
-  datalakes: async userId => !!(await dataLakeRepository.findOne({ createdByUserId: userId })),
-  files: async userId => !!(await FabFile.exists({ userId })),
-  published: async userId => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
-};
+/** Facts gathered once per request and shared by every gear check — keeps the
+ *  endpoint at a handful of indexed queries no matter how many gears exist. */
+interface GearFacts {
+  userId: string;
+  usageFeatures: Set<string>;
+  chatModelCount: number;
+}
 
-const GEAR_KEYS = Object.keys(GEAR_CHECKS) as GearKey[];
+async function gatherFacts(userId: string): Promise<GearFacts> {
+  const [usageFeatures, chatModels] = await Promise.all([
+    UsageEvent.distinct('feature', { userId }) as Promise<string[]>,
+    UsageEvent.distinct('model', { userId, feature: 'chat' }) as Promise<string[]>,
+  ]);
+  return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length };
+}
+
+interface GearDef {
+  key: GearKey;
+  kind: GearKind;
+  check: (facts: GearFacts) => Promise<boolean> | boolean;
+}
+
+const GEARS: GearDef[] = [
+  // ── Destinations ─────────────────────────────────────────────────────────
+  {
+    key: 'projects',
+    kind: 'destination',
+    // Owner OR member — same membership arms as the publish project-visibility gate.
+    check: async ({ userId }) => !!(await Project.exists({ $or: [{ userId }, { 'users.id': userId }] })),
+  },
+  {
+    key: 'agents',
+    kind: 'destination',
+    check: async ({ userId }) => (await agentRepository.countByUserId(userId)) > 0,
+  },
+  {
+    key: 'datalakes',
+    kind: 'destination',
+    check: async ({ userId }) => !!(await dataLakeRepository.findOne({ createdByUserId: userId })),
+  },
+  {
+    key: 'files',
+    kind: 'destination',
+    check: async ({ userId }) => !!(await FabFile.exists({ userId })),
+  },
+  {
+    key: 'published',
+    kind: 'destination',
+    check: async ({ userId }) => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
+  },
+  // ── Skills ───────────────────────────────────────────────────────────────
+  {
+    key: 'apikey',
+    kind: 'skill',
+    check: async ({ userId }) => !!(await ApiKey.exists({ userId, isActive: true })),
+  },
+  {
+    key: 'apicall',
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('completion_api'),
+  },
+  {
+    key: 'image',
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('image_generation') || usageFeatures.has('image_edit'),
+  },
+  {
+    key: 'voice',
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('voice'),
+  },
+  {
+    // Ran chats on two or more distinct models — the "the grass is greener" tour.
+    key: 'models',
+    kind: 'skill',
+    check: ({ chatModelCount }) => chatModelCount >= 2,
+  },
+  {
+    key: 'react',
+    kind: 'skill',
+    check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'react' })),
+  },
+  {
+    key: 'python',
+    kind: 'skill',
+    check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'python' })),
+  },
+  {
+    // Sharing is the unlock: a project with at least one collaborator.
+    key: 'shareproject',
+    kind: 'skill',
+    check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
+  },
+];
+
+const creditsFor = (kind: GearKind) => (kind === 'destination' ? GEAR_UNLOCK_CREDITS : GEAR_SKILL_CREDITS);
 
 export interface GearStatus {
   key: GearKey;
+  kind: GearKind;
   unlocked: boolean;
+  credits: number;
   /** Set only on the response that actually granted the reward. */
   creditsAwarded?: number;
 }
@@ -60,39 +175,41 @@ const handler = baseApi().get(
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    const unlockedFlags = await Promise.all(GEAR_KEYS.map(key => GEAR_CHECKS[key](String(userId))));
+    const facts = await gatherFacts(String(userId));
+    const unlockedFlags = await Promise.all(GEARS.map(g => g.check(facts)));
 
     // One indexed query tells us which unlocks were already rewarded, so the
     // common case (nothing new) never attempts a ledger write.
-    const txIds = GEAR_KEYS.map(key => gearTxId(String(userId), key));
+    const txIds = GEARS.map(g => gearTxId(String(userId), g.key));
     const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
     const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
 
     const gears: GearStatus[] = [];
-    for (let i = 0; i < GEAR_KEYS.length; i++) {
-      const key = GEAR_KEYS[i];
+    for (let i = 0; i < GEARS.length; i++) {
+      const def = GEARS[i];
       const unlocked = unlockedFlags[i];
-      const gear: GearStatus = { key, unlocked };
-      if (unlocked && GEAR_UNLOCK_CREDITS > 0 && !rewarded.has(gearTxId(String(userId), key))) {
+      const credits = creditsFor(def.kind);
+      const gear: GearStatus = { key: def.key, kind: def.kind, unlocked, credits };
+      if (unlocked && credits > 0 && !rewarded.has(gearTxId(String(userId), def.key))) {
         try {
           const holder = await creditService.addCredits(
             {
               ownerId: String(userId),
               ownerType: CreditHolderType.User,
-              credits: GEAR_UNLOCK_CREDITS,
+              credits,
               type: 'generic_add',
-              transactionId: gearTxId(String(userId), key),
-              reason: `gear unlock: ${key}`,
+              transactionId: gearTxId(String(userId), def.key),
+              reason: `gear unlock: ${def.key}`,
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );
           // addCredits returns the holder on success; a raced duplicate is
           // swallowed inside (unique transactionId) and never double-credits.
-          if (holder) gear.creditsAwarded = GEAR_UNLOCK_CREDITS;
+          if (holder) gear.creditsAwarded = credits;
         } catch (err) {
           // Reward failure must not break the status surface — the nav still
           // needs its answer. The stable transactionId makes any retry safe.
-          req.logger?.warn?.({ err, key }, 'gear unlock credit grant failed');
+          req.logger?.warn?.({ err, key: def.key }, 'gear unlock credit grant failed');
         }
       }
       gears.push(gear);
