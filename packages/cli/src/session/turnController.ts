@@ -128,8 +128,12 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // ConversationContext owns the compaction trigger: it measures the full
     // session as it would actually be replayed (bounded tool traces included)
     // plus the system prompt, so a session whose weight lives in tool traces
-    // still compacts at the 80% mark.
-    const systemPromptTokens = tokenCounter.countTokens(systemPrompt);
+    // still compacts at the 80% mark. Tool schemas ship with every completion
+    // request too (same accounting the /context meter uses), so a tool-heavy
+    // session is folded in here as well - otherwise it could slip past the
+    // 80% check on message text alone.
+    const systemPromptTokens =
+      tokenCounter.countTokens(systemPrompt) + tokenCounter.countToolSchemaTokens(agent.getTools());
     const shouldCompact = ConversationContext.fromSession(activeSession).needsCompaction(
       systemPromptTokens,
       { model: activeSession.model, contextWindow },
