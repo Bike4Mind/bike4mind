@@ -81,6 +81,16 @@ describe('generateModalContentFromContext', () => {
     expect(content?.imageUrl).toBe('https://cdn.example.com/shot.png');
   });
 
+  it('populates imageUrl from an image-only message with no text', () => {
+    const content = generateModalContentFromContext(
+      [msg({ attachments: [{ type: 'image', url: 'https://cdn.example.com/only.png' }] })],
+      { type: 'modal' }
+    );
+
+    expect(content).not.toBeNull();
+    expect(content?.imageUrl).toBe('https://cdn.example.com/only.png');
+  });
+
   it('builds banner content when type is banner', () => {
     const content = generateModalContentFromContext([msg({ prompt: 'scheduled maintenance tonight' })], {
       type: 'banner',
