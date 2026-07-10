@@ -45,10 +45,12 @@ import { createToolSearchTool } from '../tools/toolSearchTool.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
 import { createBackgroundAgentTools } from '../agents/backgroundTools.js';
+import { createResumeAgentTool } from '../agents/resumeAgentTool.js';
 import { createCoordinateTaskTool } from '../agents/coordinatorTool.js';
 import type { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import type { AgentStore } from '../agents/AgentStore.js';
 import type { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
+import type { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
 import {
   createWriteTodosTool,
   createTodoStore,
@@ -559,7 +561,7 @@ export class AcpServer {
     const additionalDirectories = await this.resolveAdditionalDirectories();
     const agentContext: AgentContext = { currentAgent: null, observationQueue: [] };
 
-    const { agentStore, contextResult, loadedB4mTools, orchestrator, backgroundManager, mcpManager } =
+    const { agentStore, contextResult, loadedB4mTools, orchestrator, backgroundManager, historyStore, mcpManager } =
       await buildSupportingStores({
         config,
         llm,
@@ -593,6 +595,7 @@ export class AcpServer {
       orchestrator,
       agentStore,
       backgroundManager,
+      historyStore,
       sessionId: stackSessionId,
     });
 
@@ -639,12 +642,14 @@ export class AcpServer {
     orchestrator: SubagentOrchestrator;
     agentStore: AgentStore;
     backgroundManager: BackgroundAgentManager;
+    historyStore: AgentHistoryStore;
     sessionId: string;
   }): ICompletionOptionTools[] {
-    const { config, orchestrator, agentStore, backgroundManager, sessionId } = input;
+    const { config, orchestrator, agentStore, backgroundManager, historyStore, sessionId } = input;
     const tools: ICompletionOptionTools[] = [
       createAgentDelegateTool(orchestrator, agentStore, sessionId, backgroundManager),
       ...createBackgroundAgentTools(backgroundManager),
+      createResumeAgentTool(orchestrator, historyStore, backgroundManager),
       createWriteTodosTool(createTodoStore()),
       createFindDefinitionTool(),
       createGetFileStructureTool(),

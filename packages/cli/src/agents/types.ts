@@ -85,6 +85,7 @@ export const ALWAYS_DENIED_FOR_AGENTS = [
   'agent_delegate', // No agent chaining
   'create_dynamic_agent', // No recursive agent creation
   'coordinate_task', // No recursive coordination loops
+  'resume_agent', // Resume is orchestrator-only; subagents cannot resume sessions
 ] as const;
 
 /**

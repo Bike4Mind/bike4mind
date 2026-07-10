@@ -155,7 +155,9 @@ export class BackgroundAgentManager {
       groupDescription: options.groupDescription,
     };
 
-    const internal: InternalJob = { job, options, abortController };
+    // Key the stored history to the job id so resume_agent can continue this
+    // run under the same id the model already has.
+    const internal: InternalJob = { job, options: { ...options, resumeId: id }, abortController };
     this.jobs.set(id, internal);
     this.notifyStatusChange(job);
 

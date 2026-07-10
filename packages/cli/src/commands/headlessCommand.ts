@@ -33,6 +33,9 @@ import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { createAgentDelegateTool } from '../agents/delegateTool.js';
 import { createBackgroundAgentTools } from '../agents/backgroundTools.js';
+import { createResumeAgentTool } from '../agents/resumeAgentTool.js';
+import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
+import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { createCoordinateTaskTool } from '../agents/coordinatorTool.js';
 import {
   createWriteTodosTool,
@@ -393,6 +396,11 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     const mcpTools = mcpManager.getTools();
 
+    // Retains completed sub-agent conversations for resume_agent.
+    const historyStore = new AgentHistoryStore(
+      config.preferences.subagentHistoryTtlMs ?? DEFAULT_SUBAGENT_HISTORY_TTL_MS
+    );
+
     // Initialize subagent orchestrator
     const orchestrator = new SubagentOrchestrator({
       userId: config.userId,
@@ -408,11 +416,13 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       enableParallelToolExecution: config.preferences.enableParallelToolExecution === true,
       showUserQuestion: userQuestionFn,
       checkpointStore,
+      historyStore,
     });
 
     const backgroundManager = new BackgroundAgentManager(orchestrator);
     const agentDelegateTool = createAgentDelegateTool(orchestrator, agentStore, session.id, backgroundManager);
     const backgroundTools = createBackgroundAgentTools(backgroundManager);
+    const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
     const todoStore = createTodoStore();
     const writeTodosTool = createWriteTodosTool(todoStore);
     const findDefinitionTool = createFindDefinitionTool();
@@ -423,7 +433,14 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       ? createSkillTool({ customCommandStore, subagentOrchestrator: orchestrator, sessionId: session.id })
       : null;
 
-    const cliTools = [agentDelegateTool, ...backgroundTools, writeTodosTool, findDefinitionTool, getFileStructureTool];
+    const cliTools = [
+      agentDelegateTool,
+      ...backgroundTools,
+      resumeAgentTool,
+      writeTodosTool,
+      findDefinitionTool,
+      getFileStructureTool,
+    ];
     if (skillTool) cliTools.push(skillTool);
 
     // Add coordinate_task tool (gated by config flag)
