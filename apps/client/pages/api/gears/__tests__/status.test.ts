@@ -18,6 +18,7 @@ const { mocks } = vi.hoisted(() => ({
     miscFindOne: vi.fn(),
     importFindOne: vi.fn(),
     overridesByKey: vi.fn(),
+    claimOnce: vi.fn(),
   },
 }));
 
@@ -55,7 +56,10 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
-  gearStampRepository: { stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a) },
+  gearStampRepository: {
+    stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a),
+    claimOnce: (...a: unknown[]) => mocks.claimOnce(...a),
+  },
   gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -94,6 +98,7 @@ const lockEverything = () => {
   mocks.miscFindOne.mockResolvedValue(null);
   mocks.importFindOne.mockResolvedValue(null);
   mocks.overridesByKey.mockResolvedValue(new Map());
+  mocks.claimOnce.mockResolvedValue(true);
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -318,5 +323,20 @@ describe('GET /api/gears/status — Manage Gears admin overrides', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.projects.title).toBe('Projects');
     expect(byKey.clidocs.ctaAction).toContain('#stamp:clidocs');
+  });
+});
+
+describe('GET /api/gears/status — reward announcement is race-safe (dup-toast fix)', () => {
+  it('the LOSER of a concurrent claim does not report creditsAwarded even though the grant succeeded', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.claimOnce.mockResolvedValue(false); // another concurrent request already claimed the announce
+
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
+    // Ledger still granted (addCredits called) but THIS response must not announce it.
+    expect(mocks.addCredits).toHaveBeenCalled();
+    expect(body.gears.find(g => g.key === 'projects')!.creditsAwarded).toBeUndefined();
   });
 });

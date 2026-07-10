@@ -75,7 +75,12 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // show everything (the safe default for existing users; a brand-new user sees
   // the rail settle once, on first paint only).
   const gearUnlocks = useGearUnlocks();
-  const gearOpen = (key: GearKey) => gearUnlocks === undefined || gearUnlocks[key] === true;
+  // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
+  // (Files, Projects, ...) were unconditional before Gears, so a loading state,
+  // a catalog that omits/renames the key, or an admin override that drops it
+  // must NOT silently remove core navigation app-wide — only a key the server
+  // returns as `false` (a known, genuinely-unearned gear) hides its row.
+  const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
   const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {

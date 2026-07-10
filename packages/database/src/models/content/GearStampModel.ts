@@ -49,6 +49,18 @@ export class GearStampRepository extends BaseRepository<IGearStampDocument> {
     await this.model.updateOne({ userId, key }, { $setOnInsert: { userId, key } }, { upsert: true });
   }
 
+  /**
+   * Race-safe one-time claim: returns true for EXACTLY ONE caller across
+   * concurrent requests (the one whose upsert inserted the row), false for the
+   * rest. The (userId, key) unique index is the arbiter. Used to decide which
+   * of N concurrent /gears/status calls announces a fresh reward, so the credit
+   * grant (idempotent on its own ledger key) is reported to the user only once.
+   */
+  async claimOnce(userId: string, key: string): Promise<boolean> {
+    const r = await this.model.updateOne({ userId, key }, { $setOnInsert: { userId, key } }, { upsert: true });
+    return (r.upsertedCount ?? 0) === 1;
+  }
+
   async stampedKeys(userId: string): Promise<Set<string>> {
     const rows = await this.model.find({ userId }).select('key').lean<Array<{ key: string }>>();
     return new Set(rows.map(r => r.key));

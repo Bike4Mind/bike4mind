@@ -522,7 +522,12 @@ export function PublishShareModal({
               );
             })}
           </RadioGroup>
-          {isPublic && gateKind === 'none' && (
+          {/* Only assert open exposure when we KNOW it's open — i.e. a fresh
+              publish the user hasn't gated. For an already-published artifact
+              (update flow) the modal doesn't load the existing gate, so claiming
+              "anyone with the link" would be a falsehood when a gate is set; the
+              Access note below tells the truth instead. */}
+          {isPublic && gateKind === 'none' && !existing && !gateTouched && (
             <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
               ⚠ Public: anyone with the link will be able to view this.
             </Typography>
@@ -532,6 +537,14 @@ export function PublishShareModal({
         {isPublic && (
           <FormControl sx={{ mb: 2 }}>
             <FormLabel>Access</FormLabel>
+            {existing && !gateTouched && (
+              // Update flow: the modal doesn't hydrate the existing gate, so this
+              // control starts neutral. Reassure the owner their current setting
+              // is untouched — handleCreate only sends a gate when gateTouched.
+              <Typography level="body-xs" sx={{ mb: 0.75, opacity: 0.75 }} data-testid="publish-share-gate-preserved">
+                Any existing access setting is kept unless you change it here.
+              </Typography>
+            )}
             <RadioGroup
               value={gateKind}
               onChange={e => onPickGate(e.target.value as GateKind)}

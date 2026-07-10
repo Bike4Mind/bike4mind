@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { ForbiddenError } from '@server/utils/errors';
 import { gearOverrideRepository, GearOverride } from '@bike4mind/database';
 import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
-import { GEAR_DEFAULTS } from '../../gears/status';
+import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '../../gears/status';
 import { z } from 'zod';
 
 /**
@@ -42,7 +42,11 @@ const handler = baseApi()
       return {
         key: def.key,
         kind: def.kind,
-        defaults: { credits: def.credits, enabled: true, ...presentation },
+        // Report the SCALED default so the dashboard matches what status.ts
+        // actually pays (an unscaled number would mislead a credit audit — the
+        // exact ops story this dashboard exists for). An explicit credits
+        // override is absolute and shown as-is by the override block below.
+        defaults: { credits: Math.round(def.credits * GEAR_CREDITS_SCALE), enabled: true, ...presentation },
         override: o
           ? {
               enabled: o.enabled ?? null,

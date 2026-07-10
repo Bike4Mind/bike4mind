@@ -59,8 +59,16 @@ import {
  *  - anything SOCIAL — actions that pull other people in — 5,000. Sharing is
  *    the growth loop; pay for it like one.
  * GEAR_CREDITS_SCALE lets an operator globally scale the schedule without a deploy.
+ * Exported so the Manage Gears admin dashboard reports the SAME scaled amount
+ * users are paid (otherwise a credit audit reconciles against wrong numbers).
  */
-const GEAR_CREDITS_SCALE = Number(process.env.GEAR_CREDITS_SCALE ?? 1);
+export const GEAR_CREDITS_SCALE = (() => {
+  const raw = Number(process.env.GEAR_CREDITS_SCALE ?? 1);
+  // Guard: a malformed value (e.g. '2x') is NaN — Math.round(NaN) is NaN, which
+  // makes `credits > 0` false and silently zeroes EVERY reward with no error.
+  // Fall back to 1 (unscaled) and let the schedule pay as coded.
+  return Number.isFinite(raw) && raw >= 0 ? raw : 1;
+})();
 
 export type GearKind = 'destination' | 'skill';
 
@@ -429,9 +437,16 @@ const handler = baseApi().get(
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );
-          // addCredits returns the holder on success; a raced duplicate is
-          // swallowed inside (unique transactionId) and never double-credits.
-          if (holder) gear.creditsAwarded = credits;
+          // addCredits returns the holder on BOTH a fresh grant AND an idempotent
+          // duplicate (its dup branch still returns the entity), so `holder` can't
+          // tell us who actually granted. Announce the reward to the user exactly
+          // once via a race-safe claim: only the request whose (userId, key) upsert
+          // inserted wins claimOnce, so concurrent status polls don't each fire a
+          // duplicate '+N credits' toast. The ledger stays the source of truth for
+          // the money (never double-credits); this only de-dups the announcement.
+          if (holder && (await gearStampRepository.claimOnce(String(userId), `reward:${def.key}`))) {
+            gear.creditsAwarded = credits;
+          }
         } catch (err) {
           // Reward failure must not break the status surface — the nav still
           // needs its answer. The stable transactionId makes any retry safe.
