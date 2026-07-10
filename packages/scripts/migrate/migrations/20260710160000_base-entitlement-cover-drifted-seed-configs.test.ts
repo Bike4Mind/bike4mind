@@ -120,6 +120,14 @@ describe('base-entitlement-cover-drifted-seed-configs migration', () => {
     expect(mockUpdateOne).not.toHaveBeenCalled();
   });
 
+  it('no-ops when settingValue exists but is not an array', async () => {
+    mockFindOne.mockResolvedValue({ _id: 'doc1', settingValue: { not: 'an array' } });
+
+    await migration.up();
+
+    expect(mockUpdateOne).not.toHaveBeenCalled();
+  });
+
   it('down removes base only from customer-bearing seeds it created', async () => {
     mockFindOne.mockResolvedValue({
       _id: 'doc1',
