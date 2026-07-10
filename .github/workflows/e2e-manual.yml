@@ -138,23 +138,31 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # Capture the SHA currently deployed to staging (SST stage `dev`) BEFORE the
-      # suite runs, so a mid-run staging redeploy can't mislabel it. Only the
-      # full-suite dev/staging run stamps the promotable frontier (P0-2): skip
-      # previews and scoped single-project dispatches. Best-effort by design.
+      # Capture the SHA currently live on staging BEFORE the suite runs, so a mid-
+      # run staging redeploy can't mislabel it. Source of truth = the newest main
+      # commit whose `staging/deploy` status is success (the same signal the
+      # console's staging gate reads) - resolved via GITHUB_TOKEN, no AWS/SSM.
+      # Only the full-suite dev/staging run stamps the promotable frontier (P0-2):
+      # skip previews and scoped single-project dispatches. Best-effort by design.
       - name: Resolve tested SHA for e2e/smoke status
         id: tested_sha
         if: github.event_name == 'schedule' || (inputs.pr_number == '' && (inputs.test_project == '' || inputs.test_project == 'All tests'))
         continue-on-error: true
-        run: |
-          SHA=$(aws ssm get-parameter --name /b4m-deployer/last-deployed-sha/staging \
-            --query 'Parameter.Value' --output text --region "$AWS_REGION" 2>/dev/null || true)
-          if printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-            echo "Tested staging SHA: $SHA"
-          else
-            echo "No valid staging SHA from SSM (got '$SHA'); e2e/smoke status will be skipped."
-          fi
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const owner = 'Bike4Mind', repo = 'bike4mind';
+            const { data: commits } = await github.rest.repos.listCommits({ owner, repo, sha: 'main', per_page: 20 });
+            for (const c of commits) {
+              const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: c.sha });
+              if (st.statuses.some(s => s.context === 'staging/deploy' && s.state === 'success')) {
+                core.setOutput('sha', c.sha);
+                core.info(`Tested staging SHA = ${c.sha} (newest with staging/deploy=success)`);
+                return;
+              }
+            }
+            core.warning('No recent main commit has staging/deploy=success; e2e/smoke status will be skipped.');
 
       - name: Install Playwright Chromium
         working-directory: apps/client
