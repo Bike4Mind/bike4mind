@@ -9,7 +9,7 @@ import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { generateCliTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import { AgentStore } from '../agents/AgentStore.js';
-import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
+import { SubagentOrchestrator, type SubagentUsageCallback } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
@@ -42,6 +42,12 @@ export interface BuildSupportingStoresInput {
   onBackgroundStatusChange: Parameters<BackgroundAgentManager['setOnStatusChange']>[0];
   /** Background-agent group-completion callback (wired to Zustand in the shell). */
   onGroupCompletion: Parameters<BackgroundAgentManager['setOnGroupCompletion']>[0];
+  /**
+   * Optional: fired with usage totals after every subagent run (inline, background,
+   * coordinator, dynamic, skill - all funnel through the same orchestrator call).
+   * Omitted in headless mode, which has no StatusBar to surface it in.
+   */
+  onSubagentUsage?: SubagentUsageCallback;
 }
 
 export interface SupportingStores {
@@ -86,6 +92,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     silentLogger,
     onBackgroundStatusChange,
     onGroupCompletion,
+    onSubagentUsage,
   } = input;
 
   // Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
@@ -175,6 +182,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     enableParallelToolExecution: config.preferences.enableParallelToolExecution === true,
     showUserQuestion: userQuestionFn,
     checkpointStore,
+    onSubagentUsage,
   });
 
   // Create background agent manager

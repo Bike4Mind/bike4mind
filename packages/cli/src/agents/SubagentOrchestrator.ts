@@ -44,6 +44,23 @@ export type BeforeRunCallback = (agent: ReActAgent, agentName: string) => void;
 export type AfterRunCallback = (agent: ReActAgent, agentName: string) => void;
 
 /**
+ * Usage totals reported for a single delegateToAgent() run, fired on every
+ * return path (normal completion and HookBlockedError) so callers can roll
+ * subagent token/credit usage up into session metadata regardless of which
+ * spawn path (inline, background, coordinator, dynamic, skill) triggered it.
+ */
+export interface SubagentUsage {
+  agentName: string;
+  totalTokens: number;
+  totalCredits?: number;
+}
+
+/**
+ * Callback invoked once per delegateToAgent() call with that run's usage totals
+ */
+export type SubagentUsageCallback = (usage: SubagentUsage) => void;
+
+/**
  * Options for spawning an agent
  */
 export interface SpawnAgentOptions {
@@ -108,6 +125,8 @@ export interface OrchestratorDependencies {
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Optional: Checkpoint store for file change recovery */
   checkpointStore?: CheckpointStore | null;
+  /** Optional: fired with usage totals after every delegateToAgent() run, for session rollup */
+  onSubagentUsage?: SubagentUsageCallback;
 }
 
 /**
@@ -330,6 +349,7 @@ export class SubagentOrchestrator {
         if (this.afterRunCallback) {
           this.afterRunCallback(agent, agentName);
         }
+        this.deps.onSubagentUsage?.({ agentName, totalTokens: 0, totalCredits: 0 });
         return {
           agentName,
           thoroughness: effectiveThoroughness,
@@ -379,6 +399,12 @@ export class SubagentOrchestrator {
 
     // Generate summary
     const summary = this.summarizeResult(result, agentDef);
+
+    this.deps.onSubagentUsage?.({
+      agentName,
+      totalTokens: result.completionInfo.totalTokens,
+      totalCredits: result.completionInfo.totalCredits,
+    });
 
     // Return agent result
     return {
