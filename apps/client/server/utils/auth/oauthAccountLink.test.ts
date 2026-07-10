@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { isProviderEmailVerified, selectProviderEmail, isVerifiedFlag } from './oauthAccountLink';
+import {
+  isProviderEmailVerified,
+  selectProviderEmail,
+  isVerifiedFlag,
+  decideAutoLink,
+  ACCOUNT_LINK_VERIFICATION_REQUIRED,
+  ACCOUNT_LINK_EMAIL_MISMATCH,
+  type AutoLinkInput,
+} from './oauthAccountLink';
 
 describe('isVerifiedFlag', () => {
   it('returns true for boolean true', () => expect(isVerifiedFlag(true)).toBe(true));
@@ -137,5 +145,99 @@ describe('isProviderEmailVerified', () => {
         _json: { email_verified: true },
       })
     ).toBe(false);
+  });
+});
+
+describe('decideAutoLink', () => {
+  // A fully-safe baseline (verified both sides, matching emails); each test flips
+  // one field to isolate that dimension of the gate.
+  const base: AutoLinkInput = {
+    providerEmailVerified: true,
+    providerEmail: 'user@b.com',
+    localEmail: 'user@b.com',
+    localEmailVerified: true,
+    hasUsablePassword: true,
+  };
+
+  it('links when both sides are verified and emails match', () => {
+    expect(decideAutoLink(base)).toEqual({ action: 'link' });
+  });
+
+  it('is case-insensitive on the email match', () => {
+    expect(decideAutoLink({ ...base, providerEmail: 'USER@B.COM' })).toEqual({ action: 'link' });
+  });
+
+  it('refuses (verification required) when the provider email is unverified', () => {
+    expect(decideAutoLink({ ...base, providerEmailVerified: false })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+      detail: 'provider_email_unverified',
+    });
+  });
+
+  it('provider-unverified takes priority over an email mismatch', () => {
+    // Refuse-reason ordering matters: an unverified provider is reported as
+    // verification-required (provider-side), never as a mismatch.
+    expect(decideAutoLink({ ...base, providerEmailVerified: false, providerEmail: 'other@b.com' })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+      detail: 'provider_email_unverified',
+    });
+  });
+
+  it('refuses (email mismatch) when both emails are present and differ', () => {
+    expect(decideAutoLink({ ...base, providerEmail: 'attacker@b.com' })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_EMAIL_MISMATCH,
+      detail: 'email_mismatch',
+    });
+  });
+
+  describe('local account not yet verified', () => {
+    const unverifiedLocal: AutoLinkInput = { ...base, localEmailVerified: false };
+
+    it('promotes-and-links a passwordless account on a matching verified email', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false })).toEqual({
+        action: 'promote-and-link',
+      });
+    });
+
+    it('refuses a password-holding account (reverse-takeover setup)', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: true })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+
+    it('does NOT promote on a username-only match (no local email)', () => {
+      // localEmail null is not an identity assertion; promoting would let a
+      // colliding username stamp its email onto an emailless passwordless shell.
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false, localEmail: null })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+
+    it('does NOT promote when the provider email is absent', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false, providerEmail: null })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+  });
+
+  describe('one-sided emails (username-only match)', () => {
+    it('links when local is already verified even though local email is null', () => {
+      // No mismatch is possible without both emails; the verified local side
+      // still permits the link.
+      expect(decideAutoLink({ ...base, localEmail: null })).toEqual({ action: 'link' });
+    });
+
+    it('links when the provider email is null but local is verified', () => {
+      expect(decideAutoLink({ ...base, providerEmail: null })).toEqual({ action: 'link' });
+    });
   });
 });
