@@ -1077,6 +1077,11 @@
         },
         {
           "level": 2,
+          "text": "Margins",
+          "anchor": "margins"
+        },
+        {
+          "level": 2,
           "text": "Best Practices",
           "anchor": "best-practices"
         },
@@ -10475,6 +10480,11 @@
             },
             {
               "level": 2,
+              "text": "Margins",
+              "anchor": "margins"
+            },
+            {
+              "level": 2,
               "text": "Best Practices",
               "anchor": "best-practices"
             },
@@ -18805,5 +18815,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-10T06:39:46.802Z"
+  "version": "2026-07-10T07:10:47.939Z"
 }

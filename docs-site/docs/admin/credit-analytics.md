@@ -67,6 +67,18 @@ Pagination controls appear above and below the user table:
 - **Items per page** selector with options: 10, 20, 50, or 100 per page
 - **Total Users** count
 
+## Margins
+
+The Margins sub-tab reports revenue versus provider cost over the last 30 days, with a header chip showing the current pricing target (credits charged per $1 of provider cost). A refresh button reloads all three views:
+
+| View | Description |
+|------|-------------|
+| **By model by day** | Daily credits charged, provider cost, and effective margin per model. |
+| **By user (worst margin first)** | Per-user margin over the window, sorted so underpriced usage surfaces first. |
+| **Monthly COGS by provider** | Month-by-month provider cost totals, used for invoice reconciliation. |
+
+Rows below the target chip's rate were charged under older pricing or indicate a leak worth investigating.
+
 ## Best Practices
 
 - Use the "Sort by Credits: Lowest First" option to identify users who may be running low on credits and could benefit from a top-up or subscription upgrade.
