@@ -263,6 +263,9 @@ const CliConfigSchema = z.object({
      * editing the config file directly.
      */
     promptVariant: z.enum(['current', 'minimal']).optional().prefault('current'),
+    // Retention window for resumable sub-agent history (ms). Absent = use
+    // DEFAULT_SUBAGENT_HISTORY_TTL_MS. See AgentHistoryStore / resume_agent.
+    subagentHistoryTtlMs: z.number().optional(),
   }),
   tools: z.object({
     enabled: z.array(z.string()),
