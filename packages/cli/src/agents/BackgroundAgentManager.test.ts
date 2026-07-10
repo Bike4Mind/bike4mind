@@ -1490,4 +1490,19 @@ describe('BackgroundAgentManager', () => {
       expect(resolved.summary).toBe('Test result summary');
     });
   });
+
+  describe('resume history linkage', () => {
+    it('delegates with resumeId set to the job id so history keys to it', async () => {
+      const orchestrator = createMockOrchestrator();
+      const manager = new BackgroundAgentManager(orchestrator);
+
+      // Pass a bogus resumeId; spawn must override it with the generated job id.
+      const jobId = manager.spawn(createSpawnOptions({ resumeId: 'ignored' }));
+      await waitForAllJobsTerminal(manager);
+
+      const delegate = vi.mocked(orchestrator.delegateToAgent);
+      expect(delegate).toHaveBeenCalledTimes(1);
+      expect(delegate.mock.calls[0][0].resumeId).toBe(jobId);
+    });
+  });
 });

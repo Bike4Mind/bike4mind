@@ -139,6 +139,7 @@ import { createAgentDelegateTool } from './agents/delegateTool.js';
 import { createDynamicAgentTool } from './agents/dynamicAgentTool.js';
 import { BackgroundAgentManager } from './agents/BackgroundAgentManager.js';
 import { createBackgroundAgentTools } from './agents/backgroundTools.js';
+import { createResumeAgentTool } from './agents/resumeAgentTool.js';
 import { createCoordinateTaskTool } from './agents/coordinatorTool.js';
 import { parseAgentConfig } from './tools/skillTool.js';
 import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
@@ -775,6 +776,7 @@ function CliApp() {
         deferredB4mTools,
         orchestrator,
         backgroundManager,
+        historyStore,
       } = await buildSupportingStores({
         config,
         llm,
@@ -812,6 +814,9 @@ function CliApp() {
 
       // Create background agent control tools
       const backgroundTools = createBackgroundAgentTools(backgroundManager);
+
+      // Create resume_agent tool (orchestrator-only; continues a prior session)
+      const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
 
       // Wrap with FallbackLlmBackend if fallback models are configured
       const llmWithFallback =
@@ -887,6 +892,7 @@ function CliApp() {
       const cliTools = [
         agentDelegateTool,
         ...backgroundTools,
+        resumeAgentTool,
         writeTodosTool,
         decisionLogTool,
         ...blockerTools,
