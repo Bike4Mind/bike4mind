@@ -31,6 +31,12 @@ describe('model price seed (no DB)', () => {
     expect(uncovered.map(m => m.id)).toEqual([]);
   });
 
+  it('pins SEED_NOTE to the persisted value (data contract with rows already in production)', () => {
+    // Renaming the constant would reclassify every existing adapter-seed row
+    // as an operator reprice, permanently freezing price corrections.
+    expect(SEED_NOTE).toBe('adapter-seed');
+  });
+
   it('every seed entry carries a nonzero price (a zero row would settle calls free)', () => {
     const zeroPriced = seed.entries.filter(
       entry => !Object.values(entry.pricing).some(tier => tier.input > 0 || tier.output > 0)
@@ -97,6 +103,28 @@ describe('seedModelPrices (round-trip)', () => {
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0][0]).toContain(target.modelId);
     expect(warn.mock.calls[0][0]).toContain('generate:model-price-seed');
+    const history = await modelPriceRepository.historyForModel(target.modelId);
+    expect(history).toHaveLength(1);
+    warn.mockRestore();
+  });
+
+  it('does not warn on a strictly newer seed row (rollback / mixed-version fleet, not a hand-edit)', async () => {
+    // An older-code instance booting after a newer seed landed sees exactly
+    // "newest row differs, alreadyCurrent" - that is version skew, not the
+    // unbumped-generatedAt footgun. Only equal timestamps indicate a hand-edit.
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const target = seed.entries[0];
+    await modelPriceRepository.append({
+      modelId: target.modelId,
+      unit: 'per_token',
+      pricing: { '1000': { input: 99e-6, output: 99e-6 } },
+      effectiveFrom: new Date(new Date(seed.generatedAt).getTime() + 86_400_000),
+      note: SEED_NOTE,
+    });
+
+    await seedModelPrices(modelPriceRepository);
+
+    expect(warn).not.toHaveBeenCalled();
     const history = await modelPriceRepository.historyForModel(target.modelId);
     expect(history).toHaveLength(1);
     warn.mockRestore();
