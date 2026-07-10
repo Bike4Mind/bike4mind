@@ -14,10 +14,9 @@ import {
   showHelp,
   buildModalFromParams,
   generateModalFromNaturalLanguage,
-  extractImagesFromChat,
-  summarizeChatContext,
+  generateModalContentFromContext,
+  NO_CHAT_CONTEXT_MESSAGE,
   suggestTags,
-  aiGenerateModalContent,
   findModalByPartialId,
 } from '@client/app/services/adminTools/modalToolHelpers';
 
@@ -115,8 +114,17 @@ export class ModalManagementToolServer implements AdminTool {
     try {
       let modalData: Partial<IModal>;
 
-      if ((params.data as ModalGenerationParams)?.fromContext && context.chatHistory) {
-        modalData = await this.generateModalFromContext(context, params);
+      // from-context always builds from recent chat; if there is none we return
+      // a clear message rather than falling back to any query text below.
+      if ((params.data as ModalGenerationParams)?.fromContext) {
+        const contextModal = await this.generateModalFromContext(context, params);
+        if (!contextModal) {
+          return {
+            success: false,
+            error: NO_CHAT_CONTEXT_MESSAGE,
+          };
+        }
+        modalData = contextModal;
       } else if (params.query) {
         modalData = generateModalFromNaturalLanguage(
           params.query,
@@ -196,20 +204,23 @@ export class ModalManagementToolServer implements AdminTool {
     }
   }
 
-  // Generate modal from chat context
-  private async generateModalFromContext(context: AdminToolContext, params: AdminToolParams): Promise<Partial<IModal>> {
+  // Generate modal from chat context. Returns null when there is no usable
+  // recent context so the caller can surface a clear message.
+  private async generateModalFromContext(
+    context: AdminToolContext,
+    params: AdminToolParams
+  ): Promise<Partial<IModal> | null> {
     const contextMessages = (params.data as ModalGenerationParams)?.contextMessages || 5;
     const recentMessages = context.chatHistory?.slice(-contextMessages) || [];
 
-    const summary = summarizeChatContext(recentMessages);
-    const images = extractImagesFromChat(recentMessages);
-
-    const generatedContent = aiGenerateModalContent({
-      summary,
-      images,
+    const generatedContent = generateModalContentFromContext(recentMessages, {
       type: (params.data as ModalGenerationParams)?.type || 'modal',
       intent: params.query || '',
     });
+
+    if (!generatedContent) {
+      return null;
+    }
 
     return {
       ...generatedContent,
