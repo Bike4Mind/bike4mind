@@ -129,8 +129,8 @@
     "@bike4mind/common": "workspace:*",
     "@bike4mind/fab-pipeline": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
-    "@bike4mind/observability": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
@@ -145,7 +145,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"
