@@ -21,12 +21,12 @@ describe('null-shell-account-passwords migration', () => {
     mockUpdateMany.mockResolvedValue({ modifiedCount: 3 });
   });
 
-  it('nulls the leftover password only on flag-false docs that still carry one', async () => {
+  it('nulls the leftover password only on unverified flag-false docs that still carry one', async () => {
     await migration.up();
 
     expect(mockCollection).toHaveBeenCalledWith('users');
     expect(mockUpdateMany).toHaveBeenCalledWith(
-      { hasUsablePassword: false, password: { $type: 'string', $ne: '' } },
+      { hasUsablePassword: false, emailVerified: false, password: { $type: 'string', $ne: '' } },
       { $set: { password: null } }
     );
   });
@@ -37,6 +37,15 @@ describe('null-shell-account-passwords migration', () => {
     const [filter] = mockUpdateMany.mock.calls[0];
     expect(filter.hasUsablePassword).toBe(false);
     expect(filter).not.toHaveProperty('hasUsablePassword.$ne');
+  });
+
+  it('excludes verified accounts so the seeder real-secret QA accounts are never nulled', async () => {
+    await migration.up();
+
+    const [filter] = mockUpdateMany.mock.calls[0];
+    // Seeder QA/super-admin accounts are emailVerified: true with a real (SSM)
+    // password used by admin/emergency-login; this filter must skip them.
+    expect(filter.emailVerified).toBe(false);
   });
 
   it('down is a no-op (irreversible)', async () => {

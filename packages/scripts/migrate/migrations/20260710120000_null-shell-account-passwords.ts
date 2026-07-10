@@ -10,9 +10,17 @@ import { type MigrationFile } from './index';
  * stored hash is definitively junk (the flag authoritatively says the account has
  * no usable password), yet its mere presence could mislead any future
  * password-presence heuristic. This backfill aligns the stored data with the flag
- * by setting `password: null` wherever `hasUsablePassword` is already false but a
- * non-empty password string lingers - matching what the provisioning paths now
- * write directly.
+ * by setting `password: null` on those accounts - matching what the provisioning
+ * paths now write directly.
+ *
+ * Scoped to `emailVerified: false` on purpose. The one other path that writes
+ * `hasUsablePassword: false` with a NON-junk password is the DB seeder
+ * (packages/scripts/seeders/UserSeeder.ts), which stores a real shared secret
+ * (usable via admin/emergency-login.ts) on `emailVerified: true` QA accounts.
+ * Excluding verified accounts keeps this migration off the seeder's real password
+ * while still covering the admin/migrate/bulk junk-password cohort, which is always
+ * unverified. Self-registered and OAuth accounts already store `password: null`, so
+ * the `$ne: ''` guard skips them too.
  *
  * SECURITY CAVEAT: this deliberately does NOT touch `hasUsablePassword: true` docs.
  * The stuck pre-existing cohort from issue #44 is exactly those docs, and they are
@@ -36,7 +44,10 @@ const migration: MigrationFile = {
 
     const result = await db
       .collection('users')
-      .updateMany({ hasUsablePassword: false, password: { $type: 'string', $ne: '' } }, { $set: { password: null } });
+      .updateMany(
+        { hasUsablePassword: false, emailVerified: false, password: { $type: 'string', $ne: '' } },
+        { $set: { password: null } }
+      );
 
     console.log(
       `[null-shell-account-passwords] cleared leftover fake password on ${result.modifiedCount} passwordless shell accounts`
