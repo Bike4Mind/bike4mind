@@ -39,6 +39,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlin
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -340,6 +341,15 @@ const ProfileMenu = () => {
             label={t('skills.title', 'Skills')}
             onClick={() => {
               navigate({ to: '/skills' });
+              setOpen(false);
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-api-keys"
+            icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('apiKeys.title', 'API Keys')}
+            onClick={() => {
+              navigate({ to: '/profile', search: { tab: 'api-keys' } });
               setOpen(false);
             }}
           />
