@@ -341,7 +341,7 @@ jobs:
     needs: core-build
     # Self-hosted org pool (philips-labs/terraform-aws-github-runner, m6a/m6i.2xlarge,
     # 8 vCPU / 32 GB) instead of the GitHub-hosted ubuntu-latest-m larger-runner pool,
-    # which is capped at 10 concurrent org-wide. The shard fan-out (client/rest) was a
+    # which is capped at 10 concurrent org-wide. The test shard fan-out was a
     # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
     # Matches polaris's test runner (_test.yml).
     runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
