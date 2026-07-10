@@ -259,6 +259,13 @@ const ProfileMenu = () => {
     };
   }, [open]);
 
+  // Collapse the "More" flyout whenever the panel closes, so it doesn't reopen
+  // already-expanded next time. Covers every close path (card toggle, Escape,
+  // outside click, navigation) uniformly, not just the closeAll() ones.
+  useEffect(() => {
+    if (!open) setMoreOpen(false);
+  }, [open]);
+
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
