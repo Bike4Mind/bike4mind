@@ -28,6 +28,19 @@ export function normalizeTag(tag: string): string {
 }
 
 /**
+ * Reserved universal entitlement key held by EVERY authenticated user (injected
+ * in `getUserEntitlements`). It is the baseline-access signal that replaces the
+ * old "stamp a `Customer` tag on every account" workaround: a model declaring
+ * `allowedEntitlements: ['base']` is public to all authenticated users, while
+ * `isModelAccessible` stays fail-closed for a genuinely ungated (empty tags AND
+ * empty entitlements) config. Deliberately NOT a grant row / NOT in
+ * `KNOWN_ENTITLEMENT_KEYS`: it is not an admin-assignable product, it is granted
+ * to everyone unconditionally. Normalized form is lowercase (matches
+ * `normalizeEntitlementKey`).
+ */
+export const BASE_ENTITLEMENT_KEY = 'base';
+
+/**
  * A product's Stripe price ids, authored per-stage and captured BEFORE the
  * `isTestMode` resolution. The ternary resolves to ONE id at module load
  * (test-mode in CI), which would hide the inactive stage's id from the

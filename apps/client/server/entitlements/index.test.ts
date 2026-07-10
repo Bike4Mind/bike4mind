@@ -72,16 +72,24 @@ describe('getUserEntitlements', () => {
     expect(findActive).toHaveBeenCalledWith('u1');
   });
 
-  it('grants nothing from unmapped prices; tag passthrough still applies', async () => {
+  it('grants nothing from unmapped prices; tag passthrough (plus baseline) still applies', async () => {
     findActive.mockResolvedValue([{ priceId: 'price_unmapped' }]);
 
-    await expect(getUserEntitlements(user)).resolves.toEqual(['sometag']);
+    await expect(getUserEntitlements(user)).resolves.toEqual(['sometag', 'base']);
   });
 
-  it('handles a user with null tags and no subscriptions', async () => {
+  it('handles a user with null tags and no subscriptions (still holds the baseline key)', async () => {
     findActive.mockResolvedValue([]);
 
-    await expect(getUserEntitlements({ id: 'u2', tags: null })).resolves.toEqual([]);
+    await expect(getUserEntitlements({ id: 'u2', tags: null })).resolves.toEqual(['base']);
+  });
+
+  it('always grants the reserved baseline `base` key to every authenticated user', async () => {
+    findActive.mockResolvedValue([]);
+
+    // A tag-less, subscription-less account (e.g. a fresh OAuth/SSO signup) still
+    // holds `base`, which is what lets it reach base models gated on `base`.
+    await expect(getUserEntitlements({ id: 'u-base', tags: [] })).resolves.toContain('base');
   });
 
   it('grants domain-derived keys for a verified email, unioned with tag-derived keys', async () => {
@@ -97,7 +105,7 @@ describe('getUserEntitlements', () => {
 
     await expect(
       getUserEntitlements({ id: 'u5', tags: [], email: 'person@granted.example', emailVerified: false })
-    ).resolves.toEqual([]);
+    ).resolves.toEqual(['base']);
   });
 
   it('unions DB-backed partner-rule keys on top of the registry grants (issue #293)', async () => {
