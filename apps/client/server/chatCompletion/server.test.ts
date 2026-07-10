@@ -2,11 +2,19 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import type { AddressInfo } from 'net';
 import type { Server } from 'http';
 
-// SST Resource - the dedicated internal shared-secret bearer /process checks.
+// SST Resource - the internal shared-secret bearer /process checks, plus the WebSocket
+// management endpoint the ws-completions route streams through.
 const mockResource = vi.hoisted(() => ({
   CHAT_COMPLETION_INTERNAL_SECRET: { value: 'test-shared-secret' },
+  websocket: { managementEndpoint: 'https://ws.test', url: 'wss://ws.test' },
 }));
 vi.mock('sst', () => ({ Resource: mockResource }));
+
+// WS connection lookup + fanout seams for the ws-completions route.
+const mockConnectionFind = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database/social', () => ({ Connection: { find: mockConnectionFind } }));
+const mockSendToConnection = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock('@server/websocket/utils', () => ({ sendToConnection: mockSendToConnection }));
 
 // processQuest is the heavy import chain (DB models, services). Mock it so importing the
 // server doesn't drag in the whole world and so we can assert it's invoked on a valid 202.
@@ -217,5 +225,114 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
+  });
+});
+
+describe('ChatCompletion /api/ai/v1/ws-completions', () => {
+  const REQUEST_ID = '4c1f7f60-3b1a-4c2e-9b60-6f0d1a2b3c4d';
+  const VALID_WS_COMPLETION = {
+    requestId: REQUEST_ID,
+    model: 'claude-test',
+    messages: [{ role: 'user', content: 'hi' }],
+  };
+
+  const authAsApiKeyUser = () => {
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
+  };
+
+  const postWsCompletion = (body: unknown, headers: Record<string, string> = {}) =>
+    fetch(`${baseUrl}/api/ai/v1/ws-completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    });
+
+  /** The completion runs after the 202; poll until the WS fanout emits the given action. */
+  const waitForAction = async (action: string) => {
+    await vi.waitFor(() => {
+      const sent = mockSendToConnection.mock.calls.map(call => call[2]);
+      expect(sent.some(msg => msg.action === action)).toBe(true);
+    });
+    return mockSendToConnection.mock.calls.map(call => call[2]);
+  };
+
+  it('returns 401 when both API key and JWT auth fail (no execution)', async () => {
+    mockAuth.verifyApiKey.mockRejectedValue(new Error('No API key provided'));
+    mockAuth.verifyJwtToken.mockRejectedValue(new Error('No authorization token provided'));
+
+    const res = await postWsCompletion(VALID_WS_COMPLETION);
+    expect(res.status).toBe(401);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 on an invalid body (missing requestId)', async () => {
+    authAsApiKeyUser();
+    const res = await postWsCompletion({ model: 'claude-test', messages: [{ role: 'user', content: 'hi' }] });
+    expect(res.status).toBe(400);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when the user has no active WebSocket connection', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([]);
+
+    const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('No active WebSocket connection');
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('202s, then streams chunks and done over the WebSocket in the background', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }, { connectionId: 'conn-2' }]);
+    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+      await onChunk(['Hello', null], { outputTokens: 5 });
+    });
+
+    const res = await postWsCompletion({ ...VALID_WS_COMPLETION, connectionId: 'conn-2' }, { 'x-api-key': 'b4m_test' });
+    expect(res.status).toBe(202);
+    expect(await res.json()).toEqual({ success: true });
+
+    const sent = await waitForAction('cli_completion_done');
+    // connectionId targets the requesting CLI's connection only.
+    expect(mockSendToConnection.mock.calls.every(call => call[0] === 'conn-2')).toBe(true);
+    expect(mockSendToConnection.mock.calls.every(call => call[1] === 'https://ws.test')).toBe(true);
+    expect(sent.some(msg => msg.action === 'cli_completion_chunk' && msg.requestId === REQUEST_ID)).toBe(true);
+    // The usage-event dual-write seam must be passed through, matching the SSE route.
+    expect(mockExecuteCompletion.mock.calls[0][0].db.usageEvents).toBeDefined();
+  });
+
+  it('falls back to all connections when the requested connectionId is gone', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-new' }]);
+    mockExecuteCompletion.mockResolvedValue(undefined);
+
+    const res = await postWsCompletion(
+      { ...VALID_WS_COMPLETION, connectionId: 'conn-stale' },
+      { 'x-api-key': 'b4m_test' }
+    );
+    expect(res.status).toBe(202);
+
+    await waitForAction('cli_completion_done');
+    expect(mockSendToConnection.mock.calls.every(call => call[0] === 'conn-new')).toBe(true);
+  });
+
+  it('delivers a background completion failure as cli_completion_error over the WebSocket', async () => {
+    authAsApiKeyUser();
+    mockConnectionFind.mockResolvedValue([{ connectionId: 'conn-1' }]);
+    mockExecuteCompletion.mockRejectedValue(new Error('model exploded'));
+
+    const res = await postWsCompletion(VALID_WS_COMPLETION, { 'x-api-key': 'b4m_test' });
+    expect(res.status).toBe(202); // the 202 already went out - errors must arrive in-band
+
+    const sent = await waitForAction('cli_completion_error');
+    const errorMsg = sent.find(msg => msg.action === 'cli_completion_error');
+    expect(errorMsg).toMatchObject({ requestId: REQUEST_ID });
   });
 });

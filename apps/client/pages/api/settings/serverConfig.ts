@@ -18,6 +18,12 @@ export type ToolAvailability = Partial<Record<B4MLLMTools, boolean>>;
 
 export type ServerConfig = {
   websocketUrl: string;
+  /**
+   * CLI HTTP->WS completions endpoint on the ChatCompletion service: the CLI POSTs the
+   * request payload here and receives the stream over its WebSocket connection. A relative
+   * path on hosted deploys (CloudFront routes it under the app domain); an absolute URL
+   * built from CHAT_COMPLETION_PUBLIC_URL on self-host / local dev.
+   */
   wsCompletionUrl: string;
   /**
    * Optional direct URL for SSE completions. Empty in hosted deploys, where completions are
@@ -46,10 +52,15 @@ const handler = baseApi({ auth: true }).get(
 
     const config: ServerConfig = {
       websocketUrl: Resource.websocket.url,
-      wsCompletionUrl:
-        'CliWsCompletionHandler' in Resource
-          ? (Resource as unknown as Record<string, { url: string }>).CliWsCompletionHandler.url
-          : '',
+      // CLI HTTP->WS completions, served by the ChatCompletion service (it replaced the
+      // CliWsCompletionHandler Lambda). Resolution mirrors sseCompletionsUrl below, except a
+      // relative path is advertised on hosted (the CLI resolves it against its API base URL):
+      // CloudFront routes it to the service, and the route 202s immediately, so the origin
+      // read timeout that forced the old Lambda onto a direct function URL doesn't apply.
+      // Self-host / local dev advertise the service's published origin instead.
+      wsCompletionUrl: process.env.CHAT_COMPLETION_PUBLIC_URL
+        ? `${process.env.CHAT_COMPLETION_PUBLIC_URL.replace(/\/+$/, '')}/api/ai/v1/ws-completions`
+        : '/api/ai/v1/ws-completions',
       // Hosted: served by the ChatCompletion service via CloudFront at /api/ai/v1/completions,
       // so there is no direct URL to advertise (empty -> the CLI uses that same-origin path).
       // Self-host: nothing routes that path on the app origin, so advertise the service's
