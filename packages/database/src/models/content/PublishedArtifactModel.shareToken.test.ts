@@ -52,4 +52,21 @@ describe('PublishedArtifact shareToken', () => {
     await PublishedArtifact.updateOne({ _id: doc._id }, { $set: { deletedAt: new Date() } });
     expect(await publishedArtifactRepository.findByShareToken('LIVE-TOKEN')).toBeFalsy();
   });
+
+  it('toJSON never serializes the capability token', async () => {
+    const doc = await make({ shareToken: 'SECRET-TOKEN' });
+    const json = doc.toJSON() as Record<string, unknown>;
+    expect(json.publicId).toBe(doc.publicId); // real fields survive
+    expect(json.shareToken).toBeUndefined();
+    expect(json.shareTokenUpdatedAt).toBeUndefined();
+  });
+
+  it('a projected lean read (the management GET) omits the token', async () => {
+    const doc = await make({ shareToken: 'PROJECTED-OUT' });
+    const lean = await PublishedArtifact.findOne({ _id: doc._id })
+      .select('-shareToken -shareTokenUpdatedAt')
+      .lean<Record<string, unknown>>();
+    expect(lean?.publicId).toBe(doc.publicId);
+    expect(lean?.shareToken).toBeUndefined();
+  });
 });

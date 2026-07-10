@@ -137,7 +137,19 @@ const PublishedArtifactSchema = new Schema(
   {
     timestamps: true,
     collection: 'published_artifacts',
-    toJSON: { virtuals: true },
+    // shareToken is an unguessable read capability - strip it from serialized docs so it
+    // can never ride along in a full-doc response. Its value is delivered ONLY by the
+    // dedicated /share-token endpoint (which reads it via .lean(), bypassing this transform).
+    // NOTE: .lean() queries skip this transform, so lean full-doc responses must still
+    // exclude it with a projection (see pages/api/publish/artifacts/[id].ts GET).
+    toJSON: {
+      virtuals: true,
+      transform: (_doc, ret: Record<string, unknown>) => {
+        delete ret.shareToken;
+        delete ret.shareTokenUpdatedAt;
+        return ret;
+      },
+    },
     toObject: { virtuals: true },
   }
 );

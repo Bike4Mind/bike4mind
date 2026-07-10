@@ -297,7 +297,7 @@ export function PublishShareModal({
   const onRegenerateShareToken = () =>
     runShareToken(
       async () => (await regenerateShareToken(result!.publicId)).shareToken,
-      'Link regenerated — the old link no longer works'
+      'Link regenerated - the old link no longer works'
     );
   const onRevokeShareToken = () =>
     runShareToken(async () => {
@@ -310,7 +310,7 @@ export function PublishShareModal({
       await navigator.clipboard.writeText(text);
       toast.success('Link copied to clipboard!');
     } catch {
-      toast.error("Couldn't copy — select the URL manually");
+      toast.error("Couldn't copy - select the URL manually");
     }
   };
 

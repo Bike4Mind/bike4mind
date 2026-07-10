@@ -282,7 +282,7 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
   });
 });
 
-describe('PublishShareModal — no-sign-in (/a) share link', () => {
+describe('PublishShareModal - no-sign-in (/a) share link', () => {
   const publishResult: PublishResult = {
     publicId: 'pub-1',
     url: '/p/u/u1/s',

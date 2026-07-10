@@ -732,7 +732,7 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
   });
 });
 
-describe('GET /api/publish/serve — /a/<shareToken> no-sign-in links', () => {
+describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
   it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
