@@ -40,6 +40,14 @@ on:
         description: 'Tester ID for user isolation (e.g. alice)'
         type: string
         required: false
+      # Internal: set to 'true' only by the deployer's staging-deploy trigger when
+      # REQUIRE_E2E is enabled. Coalesces rapid gate runs to the latest tip; leave
+      # 'false' for manual/scheduled runs (which keep their existing behavior).
+      gate_run:
+        description: 'Internal: deploy-triggered gate run (leave false for manual runs)'
+        type: string
+        default: 'false'
+        required: false
 
 env:
   AWS_REGION: us-east-2
@@ -57,9 +65,12 @@ jobs:
       statuses: write
     # Serialize per-stage so an overlapping scheduled + manual run (or two
     # manual runs) can't stomp each other's global-setup data cleanup.
+    # Gate runs (deploy-triggered) share one group and coalesce to the latest tip
+    # via cancel-in-progress. Manual/scheduled runs keep their exact prior behavior:
+    # per-target group, no cancellation (gate_run is unset -> the else branch).
     concurrency:
-      group: e2e-manual-${{ inputs.pr_number || inputs.stage || 'dev' }}
-      cancel-in-progress: false
+      group: ${{ inputs.gate_run == 'true' && 'e2e-manual-gate' || format('e2e-manual-{0}', inputs.pr_number || inputs.stage || 'dev') }}
+      cancel-in-progress: ${{ inputs.gate_run == 'true' }}
 
     steps:
       - name: Resolve configuration
