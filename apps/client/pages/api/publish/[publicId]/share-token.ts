@@ -50,19 +50,40 @@ const handler = baseApi()
     if (!artifact) return;
 
     const regenerate = (req.body as { regenerate?: boolean } | undefined)?.regenerate === true;
-    let shareToken = artifact.shareToken;
-    if (regenerate || !shareToken) {
-      // 256-bit token, so a collision on the partial-unique index is negligible.
-      shareToken = generateShareToken();
-      await PublishedArtifact.updateOne(
-        { publicId: artifact.publicId, deletedAt: null },
-        { $set: { shareToken, shareTokenUpdatedAt: new Date() } }
-      );
+
+    // Fast path: a token exists and we're not rotating -> return it (idempotent).
+    if (!regenerate && artifact.shareToken) {
+      return res.status(200).json({ shareToken: artifact.shareToken, shareUrl: `/a/${artifact.shareToken}` });
+    }
+
+    // Mint or rotate under a compare-and-set so two racing POSTs can't hand a caller a
+    // token that loses the write race (which would 404). The filter pins the precondition
+    // - token ABSENT for a mint, or the EXACT current token for a rotate - so only one
+    // racer's write lands; the loser's filter no longer matches and we return the token
+    // that actually persisted. (256-bit, so a partial-unique-index collision is negligible.)
+    const candidate = generateShareToken();
+    const precondition = regenerate
+      ? { shareToken: artifact.shareToken ?? { $exists: false } }
+      : { shareToken: { $exists: false } };
+    const won = await PublishedArtifact.findOneAndUpdate(
+      { publicId: artifact.publicId, deletedAt: null, ...precondition },
+      { $set: { shareToken: candidate, shareTokenUpdatedAt: new Date() } },
+      { new: true }
+    ).lean<{ shareToken?: string }>();
+
+    if (won) {
       req.logger.info(
         `[PUBLISH] share-token ${artifact.shareToken ? 'rotated' : 'minted'} publicId=${artifact.publicId} by=${req.user!.id}`
       );
+      return res.status(200).json({ shareToken: candidate, shareUrl: `/a/${candidate}` });
     }
-    return res.status(200).json({ shareToken, shareUrl: `/a/${shareToken}` });
+
+    // Lost the race: a concurrent request already minted/rotated. Return the persisted token.
+    const current = await PublishedArtifact.findOne({ publicId: artifact.publicId, deletedAt: null })
+      .select('shareToken')
+      .lean<{ shareToken?: string }>();
+    const token = current?.shareToken ?? candidate;
+    return res.status(200).json({ shareToken: token, shareUrl: `/a/${token}` });
   })
   .delete(async (req: Request, res: Response) => {
     const artifact = await loadOwnedArtifact(req, res);

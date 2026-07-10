@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockFindOne, mockUpdateOne } = vi.hoisted(() => ({
-  mockFindOne: vi.fn(),
-  mockUpdateOne: vi.fn(),
+const { mockLoad, mockFindOneAndUpdate, mockCurrent, mockUpdateOne } = vi.hoisted(() => ({
+  mockLoad: vi.fn(), // loadOwnedArtifact's findOne(...).lean()
+  mockFindOneAndUpdate: vi.fn(), // the compare-and-set mint/rotate
+  mockCurrent: vi.fn(), // lost-race findOne(...).select('shareToken').lean()
+  mockUpdateOne: vi.fn(), // DELETE revoke
 }));
 
 // baseApi mock: callable chain routed by req.method; supports .post()/.delete().
@@ -24,7 +26,12 @@ vi.mock('@server/middlewares/baseApi', () => ({
 
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
-    findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockFindOne(...a)) }),
+    // `.lean()` -> load (loadOwnedArtifact); `.select().lean()` -> lost-race current-token read.
+    findOne: (...a: unknown[]) => ({
+      select: () => ({ lean: () => Promise.resolve(mockCurrent(...a)) }),
+      lean: () => Promise.resolve(mockLoad(...a)),
+    }),
+    findOneAndUpdate: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockFindOneAndUpdate(...a)) }),
     updateOne: (...a: unknown[]) => Promise.resolve(mockUpdateOne(...a)),
   },
 }));
@@ -42,7 +49,9 @@ const run = ({ method = 'POST', user = { id: 'owner1' }, publicId = 'pub1', body
 };
 
 beforeEach(() => {
-  mockFindOne.mockReset().mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
+  mockLoad.mockReset().mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
+  mockFindOneAndUpdate.mockReset().mockResolvedValue({ shareToken: 'TESTTOKEN' }); // won the CAS
+  mockCurrent.mockReset().mockResolvedValue({ shareToken: 'TESTTOKEN' });
   mockUpdateOne.mockReset().mockResolvedValue({});
 });
 
@@ -52,54 +61,68 @@ describe('POST /api/publish/[publicId]/share-token', () => {
     const { res, promise } = run({ user: null });
     await promise;
     expect(res._getStatusCode()).toBe(401);
-    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('403s a non-owner, non-admin', async () => {
     const { res, promise } = run({ user: { id: 'someone-else' } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
-    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
   it('404s when the artifact does not exist', async () => {
-    mockFindOne.mockResolvedValue(null);
+    mockLoad.mockResolvedValue(null);
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(404);
   });
 
-  it('mints a token when absent and returns the /a URL', async () => {
+  it('mints a token when absent via a compare-and-set on token-absent', async () => {
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
-    expect(mockUpdateOne).toHaveBeenCalledOnce();
-    const [, update] = mockUpdateOne.mock.calls[0] as [unknown, { $set: Record<string, unknown> }];
+    expect(mockFindOneAndUpdate).toHaveBeenCalledOnce();
+    const [filter, update] = mockFindOneAndUpdate.mock.calls[0] as [
+      Record<string, unknown>,
+      { $set: Record<string, unknown> },
+    ];
+    expect(filter.shareToken).toEqual({ $exists: false }); // precondition: mint only when absent
     expect(update.$set.shareToken).toBe('TESTTOKEN');
     expect(update.$set.shareTokenUpdatedAt).toBeInstanceOf(Date);
   });
 
-  it('is idempotent: returns the existing token without rewriting it', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
+  it('is idempotent: returns the existing token without a write', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
     const { res, promise } = run();
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ shareToken: 'EXISTING', shareUrl: '/a/EXISTING' });
-    expect(mockUpdateOne).not.toHaveBeenCalled();
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
 
-  it('rotates the token when regenerate:true, even if one exists', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
+  it('rotates via a compare-and-set pinned to the current token when regenerate:true', async () => {
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
     const { res, promise } = run({ body: { regenerate: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ shareToken: 'TESTTOKEN', shareUrl: '/a/TESTTOKEN' });
-    expect(mockUpdateOne).toHaveBeenCalledOnce();
+    const [filter] = mockFindOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
+    expect(filter.shareToken).toBe('EXISTING'); // precondition: only rotate if the token is unchanged
+  });
+
+  it('on a lost race (CAS matched nothing), returns the concurrently-persisted token', async () => {
+    mockFindOneAndUpdate.mockResolvedValue(null); // someone else wrote first
+    mockCurrent.mockResolvedValue({ shareToken: 'WINNER-TOKEN' });
+    const { res, promise } = run({ body: { regenerate: true } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual({ shareToken: 'WINNER-TOKEN', shareUrl: '/a/WINNER-TOKEN' });
   });
 
   it('lets an admin manage a token they do not own', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'someone-else' });
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'someone-else' });
     const { res, promise } = run({ user: { id: 'admin1', isAdmin: true } });
     await promise;
     expect(res._getStatusCode()).toBe(200);
@@ -108,7 +131,7 @@ describe('POST /api/publish/[publicId]/share-token', () => {
 
 describe('DELETE /api/publish/[publicId]/share-token', () => {
   it('revokes the token via $unset', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1', shareToken: 'EXISTING' });
     const { res, promise } = run({ method: 'DELETE' });
     await promise;
     expect(res._getStatusCode()).toBe(200);
@@ -118,7 +141,7 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
   });
 
   it('is a no-op (still 200) when there is no token to revoke', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
     const { res, promise } = run({ method: 'DELETE' });
     await promise;
     expect(res._getStatusCode()).toBe(200);
@@ -126,7 +149,7 @@ describe('DELETE /api/publish/[publicId]/share-token', () => {
   });
 
   it('403s a non-owner', async () => {
-    mockFindOne.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
+    mockLoad.mockResolvedValue({ publicId: 'pub1', ownerId: 'owner1' });
     const { res, promise } = run({ method: 'DELETE', user: { id: 'intruder' } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
