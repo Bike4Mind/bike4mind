@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
 import { optionalJwtAuth } from '@server/middlewares/optionalJwtAuth';
+import { rateLimit } from '@server/middlewares/rateLimit';
 import type { Request, Response, NextFunction } from 'express';
 import { marked } from 'marked';
 import { getPublishedArtifactsStorage } from '@server/utils/storage';
@@ -76,6 +77,18 @@ const TIER_BY_PREFIX: Record<string, PublishScopeTier> = { u: 'user', pj: 'proje
 const optionalJwtShim = optionalJwtAuth();
 const optionalAuthShim = apiKeyAuth();
 
+// Anonymous `/a/<shareToken>` requests are the abuse/DoS surface for share links.
+// Bound them per client (keyed by IP for anonymous viewers); a bundle load fans out
+// into one request per asset, so the limit is generous. Fixed bucket (not the path)
+// so every token shares one counter per client rather than one counter per token.
+const SHARE_RATE_LIMIT_WINDOW_MS = 60_000;
+const SHARE_RATE_LIMIT_MAX = 600;
+const shareRateLimitShim = rateLimit({
+  limit: SHARE_RATE_LIMIT_MAX,
+  windowMs: SHARE_RATE_LIMIT_WINDOW_MS,
+  bucket: 'publish-share-token',
+});
+
 /** Run an Express-style middleware as a promise; resolves on next(), rejects on next(err). */
 function runShim(
   shim: (req: Request, res: Response, next: NextFunction) => unknown,
@@ -140,6 +153,10 @@ type ResolvedPath = ResolvedBundlePath | ResolvedShortPath | ResolvedShareTokenP
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
+// In-document belt-and-suspenders for the X-Robots-Tag / Referrer-Policy headers, for
+// UAs that honor the <meta> but not the header (and vice versa).
+const SHARE_NOINDEX_META =
+  '<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="no-referrer">';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
   // Optional-auth shims: a valid Authorization: Bearer JWT (optionalJwtShim) or
@@ -166,6 +183,19 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const isShare = resolved.kind === 'share';
   const shareToken = resolved.kind === 'share' ? resolved.shareToken : '';
   const shareAssetPath = resolved.kind === 'share' ? resolved.assetPath : null;
+
+  // Rate-limit share links before touching the DB (throttled requests never query).
+  // The shim rejects (via next(err)) once the bucket is full; map that to a 429 with
+  // the Retry-After it already set.
+  if (isShare) {
+    try {
+      await runShim(shareRateLimitShim, req, res);
+    } catch {
+      const retryAfter = res.getHeader('Retry-After');
+      return res.status(429).json({ error: 'Too many requests', retryAfter });
+    }
+    if (res.headersSent) return;
+  }
 
   // `?raw=1` is the authenticated re-fetch issued by the client-side loader shell:
   // it returns just the inner srcdoc (not the iframe wrapper) so the shell can inject it.
@@ -239,6 +269,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(access.status).json({ error: access.error });
   }
 
+  if (isShare) {
+    // No-sign-in links are unlisted capabilities: keep them out of search indexes,
+    // and stop the token leaking to third parties via the Referer header on any
+    // outbound link the artifact author included. Set once here so every share
+    // response below (viewer page, asset, wrapper) inherits them.
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+  }
+
   // ── Reply / fabfile: render the snapshot body to a sanitized viewer page. ──
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
     if (isFormatRaw) {
@@ -247,7 +286,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       }
       return sendRawArtifact(res, artifact, artifact.renderedBody ?? '');
     }
-    const page = renderViewerPage(artifact);
+    const page = renderViewerPage(artifact, isShare);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // No scripts are needed for a rendered text/markdown page; 'none' neutralizes
     // any markup that slipped through, so this page can't execute injected JS.
@@ -479,7 +518,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta);
+  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta, isShare);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : ''));
@@ -504,7 +543,8 @@ function renderBundleWrapper(
   srcdoc: string,
   requestedVersion: string,
   isolatedSrc: string,
-  shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null
+  shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
+  noindex: boolean
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -530,12 +570,13 @@ function renderBundleWrapper(
   const reportHref = `/report/${encodeURIComponent(artifact.publicId)}`;
   const versionBar = buildVersionSwitcherHtml(artifact, requestedVersion);
   const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
+  const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
   const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
 <title>${titleHtml}</title>${metaHead}
 <style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:100vh}
 .b4m-report{position:fixed;bottom:10px;right:10px;z-index:2147483647;font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
@@ -776,19 +817,20 @@ function sendRawArtifact(res: Response, artifact: PublishedArtifactLean, body: s
  * markdown (rendered via marked); fabfiles render as escaped <pre>. Served with
  * script-src 'none' so injected markup cannot execute.
  */
-function renderViewerPage(artifact: PublishedArtifactLean): string {
+function renderViewerPage(artifact: PublishedArtifactLean, noindex: boolean): string {
   const body = artifact.renderedBody ?? '';
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   const contentHtml =
     artifact.source.kind === 'reply'
       ? sanitizeRenderedHtml(marked.parse(body, { async: false }) as string)
       : `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+  const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
 
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>
