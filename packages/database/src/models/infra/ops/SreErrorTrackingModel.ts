@@ -94,6 +94,21 @@ export interface ISreErrorTracking {
   fixPrSha?: string;
   /** When the fix PR was merged */
   fixMergedAt?: Date;
+  /**
+   * Human verdict on whether the merged SRE fix was actually correct (#271).
+   * Recorded when a reviewer applies the `sre-fix-correct` / `sre-fix-incorrect`
+   * label to the fix PR - a merge alone is not proof the fix was right. Feeds the
+   * confidence-threshold tuning + activity dashboard items in #184.
+   * Last-write-wins: applying the opposite label overrides a prior verdict.
+   */
+  fixVerdict?: {
+    /** 'correct' or 'incorrect' - the reviewer's thumbs up/down */
+    value: 'correct' | 'incorrect';
+    /** GitHub login of the reviewer who applied the label */
+    by: string;
+    /** When the verdict was recorded */
+    at: Date;
+  };
   /** When affected users were notified */
   userNotifiedAt?: Date;
   /** GitHub Actions workflow run URL */
@@ -173,6 +188,13 @@ const SreErrorTrackingSchema = new mongoose.Schema(
     fixPrNumber: { type: Number },
     fixPrSha: { type: String },
     fixMergedAt: { type: Date },
+    fixVerdict: {
+      type: {
+        value: { type: String, enum: ['correct', 'incorrect'] },
+        by: { type: String },
+        at: { type: Date },
+      },
+    },
     userNotifiedAt: { type: Date },
     workflowRunUrl: { type: String },
     dispatchedAt: { type: Date },
@@ -217,6 +239,15 @@ SreErrorTrackingSchema.index({ repoSlug: 1, githubIssueNumber: 1 }, { sparse: tr
 SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1, fixMergedAt: 1 });
 // For staleness timeout detection
 SreErrorTrackingSchema.index({ repoSlug: 1, status: 1, dispatchedAt: 1 });
+// For querying recorded fix verdicts (#271) - feeds confidence tuning + dashboard.
+// partialFilterExpression (not sparse): on a compound index sparse only skips a
+// doc when ALL keys are absent, and repoSlug is required, so a sparse index would
+// cover every doc. Filtering on fixVerdict.value indexes only the small subset of
+// docs that actually carry a human verdict.
+SreErrorTrackingSchema.index(
+  { repoSlug: 1, 'fixVerdict.value': 1 },
+  { partialFilterExpression: { 'fixVerdict.value': { $exists: true } } }
+);
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
@@ -548,6 +579,28 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
     if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
     const result = await this.model.findOne(filter);
     return result?.toObject() ?? null;
+  }
+
+  /**
+   * Record a human verdict on whether the merged SRE fix was correct (#271).
+   * Maps a `sre-fix-correct` / `sre-fix-incorrect` PR label back to the tracking
+   * doc via its fixPrNumber. Last-write-wins: applying the opposite label
+   * overrides the prior verdict. Returns the updated doc, or null when no
+   * tracking doc exists for this PR (non-SRE PR - ignored gracefully).
+   */
+  async setFixVerdict(
+    prNumber: number,
+    verdict: NonNullable<ISreErrorTracking['fixVerdict']>,
+    repoSlug?: string
+  ): Promise<ISreErrorTracking | null> {
+    const filter: Record<string, unknown> = { fixPrNumber: prNumber };
+    if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
+    const result = await this.model.findOneAndUpdate(
+      filter,
+      { $set: { fixVerdict: verdict } },
+      { returnDocument: 'after' }
+    );
+    return result ? result.toObject() : null;
   }
 
   /**

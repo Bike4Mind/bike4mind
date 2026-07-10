@@ -79,31 +79,31 @@ const specProjects = [
   // AI latency suites: only included when AI_LATENCY_RUN=true (e2e-ai-latency workflow)
   ...(process.env.AI_LATENCY_RUN === 'true'
     ? [
-      {
-        name: 'ai-latency-short-answers',
-        setupMatch: /(?:^|\/)ai-latency-short-answers\.setup\.ts$/,
-        testMatch: /(?:^|\/)ai-latency-short-answers\.spec\.ts$/,
-        auth: './e2e/.auth/ai-latency-short-answers-user.json',
-      },
-      {
-        name: 'ai-latency-long-answers',
-        setupMatch: /(?:^|\/)ai-latency-long-answers\.setup\.ts$/,
-        testMatch: /(?:^|\/)ai-latency-long-answers\.spec\.ts$/,
-        auth: './e2e/.auth/ai-latency-long-answers-user.json',
-      },
-      {
-        name: 'ai-latency-tool-prompts',
-        setupMatch: /(?:^|\/)ai-latency-tool-prompts\.setup\.ts$/,
-        testMatch: /(?:^|\/)ai-latency-tool-prompts\.spec\.ts$/,
-        auth: './e2e/.auth/ai-latency-tool-prompts-user.json',
-      },
-      {
-        name: 'ai-latency-intermediate-tools',
-        setupMatch: /(?:^|\/)ai-latency-intermediate-tools\.setup\.ts$/,
-        testMatch: /(?:^|\/)ai-latency-intermediate-tools\.spec\.ts$/,
-        auth: './e2e/.auth/ai-latency-intermediate-tools-user.json',
-      },
-    ]
+        {
+          name: 'ai-latency-short-answers',
+          setupMatch: /(?:^|\/)ai-latency-short-answers\.setup\.ts$/,
+          testMatch: /(?:^|\/)ai-latency-short-answers\.spec\.ts$/,
+          auth: './e2e/.auth/ai-latency-short-answers-user.json',
+        },
+        {
+          name: 'ai-latency-long-answers',
+          setupMatch: /(?:^|\/)ai-latency-long-answers\.setup\.ts$/,
+          testMatch: /(?:^|\/)ai-latency-long-answers\.spec\.ts$/,
+          auth: './e2e/.auth/ai-latency-long-answers-user.json',
+        },
+        {
+          name: 'ai-latency-tool-prompts',
+          setupMatch: /(?:^|\/)ai-latency-tool-prompts\.setup\.ts$/,
+          testMatch: /(?:^|\/)ai-latency-tool-prompts\.spec\.ts$/,
+          auth: './e2e/.auth/ai-latency-tool-prompts-user.json',
+        },
+        {
+          name: 'ai-latency-intermediate-tools',
+          setupMatch: /(?:^|\/)ai-latency-intermediate-tools\.setup\.ts$/,
+          testMatch: /(?:^|\/)ai-latency-intermediate-tools\.spec\.ts$/,
+          auth: './e2e/.auth/ai-latency-intermediate-tools-user.json',
+        },
+      ]
     : []),
 ];
 
@@ -182,16 +182,16 @@ export default defineConfig({
     // short-answers test user/auth so it sees the same modal a latency spec would.
     ...(process.env.AI_LATENCY_RUN === 'true'
       ? [
-        {
-          name: 'ai-latency-discover',
-          use: {
-            ...devices['Desktop Chrome'],
-            storageState: './e2e/.auth/ai-latency-short-answers-user.json',
+          {
+            name: 'ai-latency-discover',
+            use: {
+              ...devices['Desktop Chrome'],
+              storageState: './e2e/.auth/ai-latency-short-answers-user.json',
+            },
+            dependencies: ['setup-ai-latency-short-answers'],
+            testMatch: [/(?:^|\/)ai-latency-discover\.spec\.ts$/],
           },
-          dependencies: ['setup-ai-latency-short-answers'],
-          testMatch: [/(?:^|\/)ai-latency-discover\.spec\.ts$/],
-        },
-      ]
+        ]
       : []),
   ],
 });

@@ -37,7 +37,15 @@ vi.mock('@server/models/Subscription', () => ({
 // Two plans: one gated behind an availability flag, one always-purchasable.
 vi.mock('@client/lib/userSubscriptions/constants', () => ({
   SUBSCRIPTION_PLANS: [
-    { priceId: 'price_gated', availabilityFlag: 'EnableGatedProduct', interval: 'monthly', name: 'Gated', credits: 1, features: [], description: '' },
+    {
+      priceId: 'price_gated',
+      availabilityFlag: 'EnableGatedProduct',
+      interval: 'monthly',
+      name: 'Gated',
+      credits: 1,
+      features: [],
+      description: '',
+    },
     { priceId: 'price_open', interval: 'monthly', name: 'Open', credits: 1, features: [], description: '' },
   ],
 }));
