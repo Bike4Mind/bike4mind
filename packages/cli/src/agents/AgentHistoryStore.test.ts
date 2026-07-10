@@ -98,6 +98,15 @@ describe('AgentHistoryStore', () => {
     expect(store.size()).toBe(2);
   });
 
+  it('falls back to the default TTL when given a non-positive value (never silently disables)', () => {
+    // 0 or negative would otherwise evict on the next set(); the store floors to the default.
+    for (const bad of [0, -1000]) {
+      const store = new AgentHistoryStore(bad);
+      store.set('a', makeEntry());
+      expect(store.has('a')).toBe(true);
+    }
+  });
+
   it('caps total retained entries', () => {
     // Long TTL so only the count cap can evict.
     const store = new AgentHistoryStore(24 * 60 * 60 * 1000);

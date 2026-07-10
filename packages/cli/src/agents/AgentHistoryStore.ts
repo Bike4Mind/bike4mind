@@ -37,7 +37,10 @@ export class AgentHistoryStore {
   private readonly ttlMs: number;
 
   constructor(ttlMs: number = DEFAULT_SUBAGENT_HISTORY_TTL_MS) {
-    this.ttlMs = ttlMs;
+    // A non-positive TTL would evict every entry on the next set() (now - endTime
+    // is already > 0), silently disabling resume. Fall back to the default rather
+    // than let a stray config value turn the feature off with no signal.
+    this.ttlMs = ttlMs > 0 ? ttlMs : DEFAULT_SUBAGENT_HISTORY_TTL_MS;
   }
 
   set(id: string, entry: StoredAgentHistory): void {
