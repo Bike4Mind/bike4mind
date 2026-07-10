@@ -460,8 +460,17 @@ export class SubagentOrchestrator {
 
     // Persist the finished conversation so resume_agent can continue it.
     if (this.deps.historyStore) {
+      const checkpoint = agent.toCheckpoint();
+      // run() records the final answer as a step, not a message, so the agent's
+      // own conclusion is absent from the checkpoint history. Append it as an
+      // assistant turn so a resumed run sees what it previously concluded (the
+      // whole point of "resume to fix the bug you found").
+      const last = checkpoint.messages[checkpoint.messages.length - 1];
+      if (result.finalAnswer && !(last?.role === 'assistant' && last.content === result.finalAnswer)) {
+        checkpoint.messages.push({ role: 'assistant', content: result.finalAnswer });
+      }
       this.deps.historyStore.set(resumeId, {
-        checkpoint: agent.toCheckpoint(),
+        checkpoint,
         agentName,
         agentDefinition: agentDef,
         thoroughness: effectiveThoroughness,

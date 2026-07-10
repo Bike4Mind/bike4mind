@@ -215,6 +215,9 @@ describe('resume_agent end-to-end through the real orchestrator', () => {
     const resumedMessages = seenPerCall[0];
     expect(resumedMessages.some(c => c.includes('investigate the login bug'))).toBe(true);
     expect(resumedMessages.some(c => c.includes('now write the fix'))).toBe(true);
+    // The agent's own prior answer is replayed too, so the resumed run can act on
+    // what it previously concluded (final answers are captured as assistant turns).
+    expect(resumedMessages.filter(c => c === 'acknowledged').length).toBe(1);
     expect(resumedMessages.filter(c => c.startsWith('You are a test agent.')).length).toBe(1);
     expect(out).toContain('acknowledged');
   });
