@@ -218,4 +218,47 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(mockExecuteCompletion.mock.calls[0][0]).toMatchObject({ userId: 'u2' });
     expect(text).toContain('data: [DONE]');
   });
+
+  // Regression guard for #40: OpenAI-shape consumers send stream/tools/temperature/max_tokens
+  // at the top level (not nested under `options`), and Zod's default strip mode silently drops
+  // unrecognized top-level keys. Assert the route normalizes them into `options` before they
+  // reach executeCompletion, rather than dropping them.
+  it('normalizes top-level stream/temperature/max_tokens/tools into options before execution', async () => {
+    mockAuth.verifyApiKey.mockResolvedValue({
+      keyId: 'key1',
+      userId: 'u1',
+      scopes: [],
+      rateLimit: { requestsPerMinute: 60, requestsPerDay: 1000 },
+    });
+    mockAuth.checkApiKeyRateLimitOrThrow.mockResolvedValue({});
+    mockExecuteCompletion.mockImplementation(async ({ onChunk }) => {
+      await onChunk(['Hello', null], { outputTokens: 5 });
+    });
+
+    const res = await postCompletion(
+      {
+        ...VALID_COMPLETION,
+        stream: true,
+        temperature: 0.4,
+        max_tokens: 256,
+        tools: [
+          {
+            toolSchema: {
+              name: 'lookup',
+              description: 'Look something up',
+              parameters: { type: 'object' },
+            },
+          },
+        ],
+      },
+      { 'x-api-key': 'b4m_test' }
+    );
+    await res.text();
+
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.options).toMatchObject({ stream: true, temperature: 0.4, maxTokens: 256 });
+    expect(params.options.tools).toHaveLength(1);
+    expect(params.options.tools[0].toolSchema.name).toBe('lookup');
+  });
 });

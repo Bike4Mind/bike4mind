@@ -138,6 +138,31 @@ describe('CompletionRequestSchema', () => {
     });
     expect(out.response_format?.type).toBe('json_schema');
   });
+
+  // OpenAI-shape consumers write stream/tools/temperature/max_tokens at the top level too;
+  // the schema must accept all of them there, not just response_format.
+  it('accepts stream, tools, temperature, and max_tokens at the top level', () => {
+    const out = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+      temperature: 0.2,
+      max_tokens: 512,
+      tools: [
+        {
+          toolSchema: {
+            name: 'add',
+            description: 'Add two numbers',
+            parameters: { type: 'object', properties: { a: { type: 'number' } } },
+          },
+        },
+      ],
+    });
+    expect(out.stream).toBe(false);
+    expect(out.temperature).toBe(0.2);
+    expect(out.max_tokens).toBe(512);
+    expect(out.tools).toHaveLength(1);
+  });
 });
 
 describe('normalizeCompletionRequest', () => {
@@ -198,5 +223,125 @@ describe('normalizeCompletionRequest', () => {
     const normalized = normalizeCompletionRequest(parsed);
     expect(normalized.options).toBeUndefined();
     expect(normalized.response_format).toBeUndefined();
+  });
+
+  it('hoists top-level stream into options.stream (false is not mistaken for absent)', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.stream).toBeUndefined();
+    expect(normalized.options?.stream).toBe(false);
+  });
+
+  it('hoists top-level tools into options.tools', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      tools: [
+        {
+          toolSchema: {
+            name: 'add',
+            description: 'Add two numbers',
+            parameters: { type: 'object', properties: { a: { type: 'number' } } },
+          },
+        },
+      ],
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.tools).toBeUndefined();
+    expect(normalized.options?.tools).toHaveLength(1);
+    expect(normalized.options?.tools?.[0].toolSchema.name).toBe('add');
+  });
+
+  it('hoists top-level temperature into options.temperature', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0.7,
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.temperature).toBeUndefined();
+    expect(normalized.options?.temperature).toBe(0.7);
+  });
+
+  it('hoists top-level max_tokens into options.maxTokens (OpenAI naming alias)', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 1024,
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.max_tokens).toBeUndefined();
+    expect(normalized.options?.maxTokens).toBe(1024);
+  });
+
+  it('leaves nested options.maxTokens untouched when no top-level max_tokens is sent', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      options: { maxTokens: 256 },
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.options?.maxTokens).toBe(256);
+  });
+
+  it('top-level max_tokens wins over nested options.maxTokens', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 1024,
+      options: { maxTokens: 256 },
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.options?.maxTokens).toBe(1024);
+  });
+
+  it('top-level stream/temperature win over nested options when both are populated', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      temperature: 0.9,
+      options: { stream: false, temperature: 0.1 },
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.options?.stream).toBe(true);
+    expect(normalized.options?.temperature).toBe(0.9);
+  });
+
+  it('normalizes all five top-level fields at once, preserving unrelated nested options', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+      temperature: 0.5,
+      max_tokens: 2048,
+      response_format: { type: 'text' },
+      tools: [
+        {
+          toolSchema: {
+            name: 'lookup',
+            description: 'Look something up',
+            parameters: { type: 'object' },
+          },
+        },
+      ],
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.stream).toBeUndefined();
+    expect(normalized.temperature).toBeUndefined();
+    expect(normalized.max_tokens).toBeUndefined();
+    expect(normalized.response_format).toBeUndefined();
+    expect(normalized.tools).toBeUndefined();
+    expect(normalized.options).toMatchObject({
+      stream: true,
+      temperature: 0.5,
+      maxTokens: 2048,
+      response_format: { type: 'text' },
+    });
+    expect(normalized.options?.tools?.[0].toolSchema.name).toBe('lookup');
   });
 });

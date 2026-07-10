@@ -63,15 +63,21 @@ export type CompletionMessage = z.infer<typeof CompletionMessageSchema>;
  * Schema for CLI LLM completion requests
  * Shared between Next.js API route (dev) and Lambda function (production)
  *
- * `response_format` is accepted at the top level (OpenAI-compatible) AND nested
- * under `options` (legacy shape). Use `normalizeCompletionRequest()` to collapse
- * the two surfaces into the canonical `options.response_format` location before
- * downstream consumption.
+ * `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are all
+ * accepted at the top level (OpenAI-compatible, matching how every major LLM
+ * SDK shapes a completion request) AND nested under `options` (legacy shape).
+ * Use `normalizeCompletionRequest()` to collapse both surfaces into the
+ * canonical `options.<field>` location before downstream consumption.
  */
 export const CompletionRequestSchema = z.object({
   model: z.string(),
   messages: z.array(CompletionMessageSchema),
   response_format: ResponseFormatSchema.optional(),
+  stream: z.boolean().optional(),
+  tools: z.array(CompletionToolSchema).optional(),
+  temperature: z.number().optional(),
+  // OpenAI wire naming; normalizes into options.maxTokens alongside the legacy `maxTokens` alias.
+  max_tokens: z.number().optional(),
   options: z
     .object({
       temperature: z.number().optional(),
@@ -86,16 +92,36 @@ export const CompletionRequestSchema = z.object({
 export type CompletionRequest = z.infer<typeof CompletionRequestSchema>;
 
 /**
- * Hoist a top-level `response_format` into `options.response_format` so all
- * downstream code can read it from a single canonical location. If both are
- * present, the top-level value wins (matches OpenAI's spec where the top-level
- * field is the official location). Idempotent.
+ * Hoist top-level OpenAI-shape fields (`response_format`, `stream`, `tools`,
+ * `temperature`, `max_tokens`) into their `options.<field>` equivalents so all
+ * downstream code reads from a single canonical location. If both surfaces are
+ * present for a field, the top-level value wins (matches OpenAI's spec, where
+ * the top-level field is the official location). Idempotent.
  */
 export function normalizeCompletionRequest<T extends CompletionRequest>(req: T): T {
-  if (!req.response_format) return req;
+  if (
+    req.response_format === undefined &&
+    req.stream === undefined &&
+    req.tools === undefined &&
+    req.temperature === undefined &&
+    req.max_tokens === undefined
+  ) {
+    return req;
+  }
   return {
     ...req,
     response_format: undefined,
-    options: { ...req.options, response_format: req.response_format },
+    stream: undefined,
+    tools: undefined,
+    temperature: undefined,
+    max_tokens: undefined,
+    options: {
+      ...req.options,
+      ...(req.response_format !== undefined && { response_format: req.response_format }),
+      ...(req.stream !== undefined && { stream: req.stream }),
+      ...(req.tools !== undefined && { tools: req.tools }),
+      ...(req.temperature !== undefined && { temperature: req.temperature }),
+      ...(req.max_tokens !== undefined && { maxTokens: req.max_tokens }),
+    },
   };
 }
