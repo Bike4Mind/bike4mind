@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { Config } from '@server/utils/config';
-import { IUserDocument, ApiKeyScope, type CompletionSource } from '@bike4mind/common';
+import { IUserDocument, ApiKeyScope, type ApiKeyBillingOwnerType, type CompletionSource } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
@@ -22,6 +22,10 @@ export interface ApiKeyInfo {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  /** Billing target. Organization -> completions bill `organizationId`'s credit pool. */
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  /** Organization whose pool this key bills, present iff billingOwnerType is Organization. */
+  organizationId?: string;
 }
 
 /**
@@ -117,6 +121,8 @@ export async function verifyApiKey(
       userId: validation.userId,
       scopes: validation.scopes,
       rateLimit: validation.rateLimit,
+      billingOwnerType: validation.billingOwnerType,
+      organizationId: validation.organizationId,
     };
   } catch (error) {
     if (error instanceof Error) {

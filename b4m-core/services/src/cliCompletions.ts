@@ -5,9 +5,12 @@ import {
   getTextModelCost,
   CreditHolderType,
   ICreditHolder,
+  ICreditHolderMethods,
   IAdminSettingsRepository,
   IApiKeyRepository,
   ICreditTransactionRepository,
+  IOrganizationDocument,
+  IOrganizationRepository,
   IUsageEventRepository,
   IUserRepository,
   type CompletionSource,
@@ -61,6 +64,8 @@ export interface CompletionParams {
     creditTransactions: ICreditTransactionRepository;
     users: IUserRepository;
     usageEvents?: IUsageEventRepository;
+    /** Required only when `billingOrganizationId` is set (org-billed API keys). */
+    organizations?: IOrganizationRepository;
   };
   /**
    * API key information if authenticated via API key
@@ -70,6 +75,14 @@ export interface CompletionParams {
     keyId: string;
     keyName: string;
   };
+  /**
+   * When set, this completion's credits are reserved from and settled to the
+   * organization's shared pool (`ownerType: Organization`) instead of the
+   * requesting user. The user in `userId` stays the actor for attribution and
+   * per-member usage tracking. Set by the auth layer for org-billed API keys.
+   * Requires `db.organizations`.
+   */
+  billingOrganizationId?: string;
   /** Correlation id for the usage-event dual write. Synthesized when absent. */
   requestId?: string;
   /**
@@ -103,6 +116,26 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
+
+  // Resolve the credit holder. Org-billed API keys reserve from and settle to the
+  // organization's shared pool; everything else bills the requesting user. The user
+  // stays the actor (attribution + per-member usage), only the pool differs.
+  let organization: IOrganizationDocument | null = null;
+  if (params.billingOrganizationId) {
+    if (!db.organizations) {
+      throw new Error('[CLI_CREDITS] organizations repository is required to bill an organization API key');
+    }
+    organization = await db.organizations.findById(params.billingOrganizationId);
+    if (!organization) {
+      throw new Error(`[CLI_CREDITS] Billing organization ${params.billingOrganizationId} not found`);
+    }
+  }
+  const billToOrg = organization !== null;
+  const holderId = billToOrg ? organization!.id : userId;
+  const holderType = billToOrg ? CreditHolderType.Organization : CreditHolderType.User;
+  const holderMethods: ICreditHolderMethods = billToOrg ? db.organizations! : db.users;
+  const fetchHolder = (): Promise<ICreditHolder | null> =>
+    billToOrg ? db.organizations!.findById(holderId) : db.users.findById(holderId);
 
   // Get effective API keys (user keys or fallback to admin demo keys)
   const apiKeys = await getEffectiveLLMApiKeys(userId, { db, getSettingsByNames });
@@ -178,21 +211,34 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
 
     logger?.debug?.(`[CLI_CREDITS] Reserving ${reservedCredits} credits (estimated) before execution`);
 
-    // Atomically reserve credits using incrementCredits with negative value
-    const userAfterReservation = await db.users.incrementCredits(userId, -reservedCredits);
+    // Org-billed keys: enforce the per-member cap before touching the shared pool,
+    // mirroring deductCreditsWithOrgSupport. Uses the estimate; settlement records
+    // the actual usage against the member below.
+    if (billToOrg && organization!.maxCreditsPerMember != null) {
+      const member = organization!.userDetails?.find(u => u.id === userId);
+      const usedCredits = member?.usedCredits ?? 0;
+      if (usedCredits + reservedCredits > organization!.maxCreditsPerMember) {
+        throw new InsufficientCreditsError('Organization member credit limit reached');
+      }
+    }
 
-    if (!userAfterReservation || userAfterReservation.currentCredits < 0) {
+    // Atomically reserve credits using incrementCredits with negative value
+    const holderAfterReservation = await holderMethods.incrementCredits(holderId, -reservedCredits);
+
+    if (!holderAfterReservation || holderAfterReservation.currentCredits < 0) {
       // Rollback the reservation immediately
-      await db.users.incrementCredits(userId, reservedCredits);
-      const actualBalance = (userAfterReservation?.currentCredits ?? 0) + reservedCredits;
+      await holderMethods.incrementCredits(holderId, reservedCredits);
+      const actualBalance = (holderAfterReservation?.currentCredits ?? 0) + reservedCredits;
       throw new InsufficientCreditsError(
-        `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-          `Try using a smaller model or reducing the prompt size.`
+        billToOrg
+          ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
+          : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
+              `Try using a smaller model or reducing the prompt size.`
       );
     }
 
     logger?.debug?.(
-      `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${userAfterReservation.currentCredits}`
+      `[CLI_CREDITS] Credits reserved successfully. Balance after reservation: ${holderAfterReservation.currentCredits}`
     );
   }
 
@@ -261,10 +307,10 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   try {
     await llm.complete(model, messages, completionOptions, wrappedOnChunk);
   } catch (error) {
-    // If completion fails, refund the reserved credits
+    // If completion fails, refund the reserved credits to whichever pool paid
     if (reservedCredits > 0) {
       logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
-      await db.users.incrementCredits(userId, reservedCredits);
+      await holderMethods.incrementCredits(holderId, reservedCredits);
     }
     throw error;
   }
@@ -324,17 +370,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           `Reserved: ${reservedCredits}, Difference: ${creditDifference}`
       );
 
-      // Track the final user state for transaction record
-      let userAfterAdjustment: ICreditHolder | null = null;
+      // Track the final holder (user or org) state for the transaction record
+      let holderAfterAdjustment: ICreditHolder | null = null;
 
-      // Adjust the difference between reserved and actual
+      // Adjust the difference between reserved and actual against the paying pool
       if (creditDifference !== 0) {
         // Pre-check: warn if adjustment will cause negative balance (under-reservation case)
         if (creditDifference < 0) {
           // Under-reservation: we need to charge more credits
           // Check if this will cause negative balance
-          const currentUser = await db.users.findById(userId);
-          const currentBalance = currentUser?.currentCredits ?? 0;
+          const currentHolder = await fetchHolder();
+          const currentBalance = currentHolder?.currentCredits ?? 0;
           const projectedBalance = currentBalance + creditDifference;
 
           if (projectedBalance < 0) {
@@ -342,6 +388,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
               '[CLI_CREDITS] WARNING: Adjustment will cause negative balance - tracking for reconciliation',
               {
                 userId,
+                holderId,
+                holderType,
                 currentBalance,
                 adjustment: creditDifference,
                 projectedBalance,
@@ -353,39 +401,53 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           }
         }
 
-        userAfterAdjustment = await db.users.incrementCredits(userId, creditDifference);
+        holderAfterAdjustment = await holderMethods.incrementCredits(holderId, creditDifference);
         logger?.debug?.(
           `[CLI_CREDITS] Credit adjustment applied: ${creditDifference > 0 ? 'refunded' : 'charged'} ${Math.abs(creditDifference)} credits. ` +
-            `New balance: ${userAfterAdjustment?.currentCredits}`
+            `New balance: ${holderAfterAdjustment?.currentCredits}`
         );
 
         // Check for negative balance (should be rare with atomic reservation)
-        if (userAfterAdjustment && userAfterAdjustment.currentCredits < 0) {
-          logger?.error?.('[CLI_CREDITS] ALERT: User went into negative balance after adjustment', {
+        if (holderAfterAdjustment && holderAfterAdjustment.currentCredits < 0) {
+          logger?.error?.('[CLI_CREDITS] ALERT: Credit holder went into negative balance after adjustment', {
             userId,
-            balance: userAfterAdjustment.currentCredits,
+            holderId,
+            holderType,
+            balance: holderAfterAdjustment.currentCredits,
             reserved: reservedCredits,
             actual: actualCredits,
           });
         }
       } else {
         // No adjustment needed, fetch current state for transaction record
-        userAfterAdjustment = await db.users.findById(userId);
+        holderAfterAdjustment = await fetchHolder();
+      }
+
+      // Org-billed keys: record the actual charge against the acting member so
+      // per-member usage + maxCreditsPerMember stay accurate (matches
+      // deductCreditsWithOrgSupport). Balance already moved on the org above.
+      if (billToOrg) {
+        await db.organizations!.updateUserDetails(holderId, userId, {
+          creditsDelta: actualCredits,
+          lastCreditUsedAt: new Date(),
+        });
       }
 
       // Create transaction record with ACTUAL usage (not estimated/reserved)
       // Skip balance update since we already adjusted atomically above
-      if (userAfterAdjustment) {
+      if (holderAfterAdjustment) {
         Logger.globalInstance.debug('Credit usage:', actualCredits);
         // Use completion_api_usage for ALL /api/ai/v1/completions requests
         // Differentiate by endpoint, not by auth method
-        const description = apiKeyInfo ? `API key (${apiKeyInfo.keyName}) completion usage` : 'Completion API usage';
+        const description = apiKeyInfo
+          ? `API key (${apiKeyInfo.keyName}) completion usage${billToOrg ? ' (org-billed)' : ''}`
+          : 'Completion API usage';
 
         await subtractCredits(
           {
             type: 'completion_api_usage',
-            ownerId: userId,
-            ownerType: CreditHolderType.User,
+            ownerId: holderId,
+            ownerType: holderType,
             credits: actualCredits,
             description,
             model: model as ChatModels,
@@ -399,6 +461,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
                 apiKeyName: apiKeyInfo.keyName,
               }),
               authMethod: apiKeyInfo ? 'api_key' : 'jwt',
+              // For org-billed keys, keep the acting user for attribution even
+              // though the credits leave the org pool.
+              ...(billToOrg && { billedTo: 'organization', actingUserId: userId }),
               usdCost,
               reservedCredits,
               creditDifference,
@@ -406,9 +471,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           },
           {
             db: { creditTransactions: db.creditTransactions },
-            creditHolderMethods: db.users,
+            creditHolderMethods: holderMethods,
             skipBalanceUpdate: true,
-            currentCreditHolder: userAfterAdjustment,
+            currentCreditHolder: holderAfterAdjustment,
           }
         );
 
@@ -417,8 +482,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           ?.record({
             requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
             userId,
-            ownerId: userId,
-            ownerType: CreditHolderType.User,
+            ownerId: holderId,
+            ownerType: holderType,
             feature: 'completion_api',
             provider: modelInfo.backend,
             model,
