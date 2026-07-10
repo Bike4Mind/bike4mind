@@ -7,6 +7,10 @@ interface StatusBarProps {
   model: string;
   tokenUsage: number;
   creditsUsage?: number;
+  /** Aggregate tokens consumed by spawned subagents this session (separate from tokenUsage) */
+  subagentTokenUsage?: number;
+  /** Aggregate credits consumed by spawned subagents this session (best-effort, see subagentCost) */
+  subagentCreditsUsage?: number;
 }
 
 export const StatusBar = React.memo(function StatusBar({
@@ -14,6 +18,8 @@ export const StatusBar = React.memo(function StatusBar({
   model,
   tokenUsage,
   creditsUsage,
+  subagentTokenUsage,
+  subagentCreditsUsage,
 }: StatusBarProps) {
   const interactionMode = useCliStore(state => state.interactionMode);
 
@@ -42,6 +48,12 @@ export const StatusBar = React.memo(function StatusBar({
           <Text dimColor>
             {creditsUsage.toLocaleString()} {creditsUsage === 1 ? 'credit' : 'credits'}
           </Text>
+        )}
+        {subagentTokenUsage !== undefined && subagentTokenUsage > 0 && (
+          <Text dimColor>+{subagentTokenUsage.toLocaleString()} agent tokens</Text>
+        )}
+        {subagentCreditsUsage !== undefined && subagentCreditsUsage > 0 && (
+          <Text dimColor>+{subagentCreditsUsage.toLocaleString()} agent credits</Text>
         )}
         <Text dimColor>{model}</Text>
       </Box>

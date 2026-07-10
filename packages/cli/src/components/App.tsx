@@ -66,6 +66,8 @@ export function App({
   const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_4_5_SONNET);
   const totalTokens = useCliStore(state => state.session?.metadata.totalTokens || 0);
   const totalCredits = useCliStore(state => state.session?.metadata.totalCredits);
+  const subagentTokens = useCliStore(state => state.session?.metadata.subagentTokens);
+  const subagentCost = useCliStore(state => state.session?.metadata.subagentCost);
   const isThinking = useCliStore(state => state.isThinking);
   const permissionPrompt = useCliStore(state => state.permissionPrompt);
   const userQuestionPrompt = useCliStore(state => state.userQuestionPrompt);
@@ -335,6 +337,8 @@ export function App({
               model={currentModel}
               tokenUsage={totalTokens}
               creditsUsage={totalCredits}
+              subagentTokenUsage={subagentTokens}
+              subagentCreditsUsage={subagentCost}
             />
           </Box>
         </>
