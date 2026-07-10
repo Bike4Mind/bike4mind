@@ -28,6 +28,7 @@ const NotebookPage = lazy(() => import('./routes/notebooks/$id'));
 const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
+const GearsPage = lazy(() => import('./routes/gears/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const AgentsPage = lazy(() => import('./routes/agents'));
@@ -296,6 +297,17 @@ const notebookRoute = createRoute({
       projectId: search.projectId ? String(search.projectId) : undefined,
     };
   },
+});
+
+// Gears — the earned-nav progression page (one card per major feature).
+const gearsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/gears',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GearsPage />
+    </Suspense>
+  ),
 });
 
 // Projects index route (replaces /projects/index.tsx)
@@ -932,6 +944,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     newRoute,
     notebookRoute,
+    gearsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,
