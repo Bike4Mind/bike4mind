@@ -18,8 +18,8 @@ export function parseInternalStaffDomains(raw: string | undefined): string[] {
 /**
  * Parse NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES (comma-separated `domain:Label` pairs) into a
  * `{ domain -> label }` map — the curated-label companion to NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
- * (e.g. `milliononmars.com` -> "Million on Mars"). Domain lowercased; label kept verbatim after
- * the first `:`. Empty -> {} (no brand fallback, so no B4M literal ships in open-core).
+ * (e.g. `acme.com:Acme Corp` -> `{ 'acme.com': 'Acme Corp' }`). Domain lowercased; label kept
+ * verbatim after the first `:`. Empty -> {} (no brand fallback, so no brand literal ships).
  */
 export function parseInternalOrgDisplayNames(raw: string | undefined): Record<string, string> {
   const map: Record<string, string> = {};

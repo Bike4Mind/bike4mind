@@ -24,8 +24,8 @@ process.env.SERVER_DOMAIN ??= 'bike4mind.com';
 // internal-domain rows and their signup credits. Not shipped in the code itself.
 process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ??= 'bike4mind.com,milliononmars.com';
 
-// Curated domain->display-name map (#350) so inferOrganizationFromEmail groups milliononmars.com
-// under "Million on Mars". No brand fallback ships in the code itself.
+// Curated domain->display-name map (#350) so inferOrganizationFromEmail groups the seeded
+// internal domain under its curated label. No brand fallback ships in the code itself.
 process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES ??= 'milliononmars.com:Million on Mars';
 
 // Mock window.matchMedia for MUI Joy UI components (only in browser/jsdom environments)
