@@ -214,6 +214,12 @@ if (!$dev) {
   // via dev.command with no ALB, and the CLI reaches it on localhost:8788.
   router.route(`${routePrefix}/api/ai/v1/completions`, chatCompletion.url);
 
+  // CLI HTTP->WS completions (replaced the CliWsCompletionHandler Lambda). Safe behind
+  // CloudFront despite long completions: the route 202s after auth/validation and streams
+  // the result over the WebSocket, so the origin read timeout never engages (the old Lambda
+  // held the response open for the whole completion, forcing a direct function URL).
+  router.route(`${routePrefix}/api/ai/v1/ws-completions`, chatCompletion.url);
+
   const defaultSecurityGroupId = aws.ec2
     .getSecurityGroupsOutput({
       filters: [

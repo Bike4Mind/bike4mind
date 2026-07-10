@@ -1074,7 +1074,7 @@ export class ConfigStore {
    *
    * Targets:
    *  - 'prod'              -> the build-time default service (clears customUrl)
-   *  - 'dev'               -> local dev server (http://localhost:3001)
+   *  - 'dev'               -> local dev server (http://localhost:3000)
    *  - { customUrl: '...' }  -> arbitrary self-hosted URL
    *
    * Mutates the cached config in place and persists via `save()` (no argument)

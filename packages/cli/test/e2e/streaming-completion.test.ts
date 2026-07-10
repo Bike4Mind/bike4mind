@@ -45,7 +45,7 @@ function makeSseBackend(producers: Array<(stream: PassThrough) => void>): Server
       },
     }),
   } as unknown as ApiClient;
-  return new ServerLlmBackend({ apiClient, model: 'faux-model', completionsUrl: '/completions' });
+  return new ServerLlmBackend({ apiClient, model: 'faux-model', sseCompletionsUrl: '/completions' });
 }
 
 function makeAgent(llm: ICompletionBackend): ReActAgent {
