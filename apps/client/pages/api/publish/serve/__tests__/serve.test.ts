@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload } = vi.hoisted(() => ({
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockDownload: vi.fn(),
+  mockUpdateOne: vi.fn(() => Promise.resolve()),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
@@ -41,7 +42,7 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockArtifactFindOne(...a)) }),
-    updateOne: () => Promise.resolve(),
+    updateOne: (...a: unknown[]) => mockUpdateOne(...a),
   },
   Project: {
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
@@ -62,8 +63,9 @@ type RunOpts = {
   uc?: string;
   format?: string;
   cookie?: string;
+  userAgent?: string;
 };
-const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie }: RunOpts = {}) => {
+const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent }: RunOpts = {}) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
@@ -72,6 +74,7 @@ const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc,
   if (uc) query.__uc = '1';
   const headers: Record<string, string> = { host: effectiveHost };
   if (cookie) headers.cookie = cookie;
+  if (userAgent) headers['user-agent'] = userAgent;
   const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
@@ -95,6 +98,7 @@ beforeEach(() => {
   mockArtifactFindOne.mockReset();
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
+  mockUpdateOne.mockReset().mockResolvedValue(undefined);
 });
 
 describe('GET /api/publish/serve — sandboxed bundle', () => {
@@ -1124,5 +1128,35 @@ describe('GET /api/publish/serve — access gates on /a/<shareToken> links', () 
     const { res, promise } = run(['a', 'tok123', 'style.css']);
     await promise;
     expect(res._getStatusCode()).toBe(401);
+  });
+});
+
+describe('GET /api/publish/serve — external view counting (Published gear feed)', () => {
+  const renderedReply = () => bundle({ source: { kind: 'reply' }, renderedBody: 'hi there' });
+
+  it('an anonymous HUMAN view increments externalViewCount', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith(
+      { publicId: 'pub1' },
+      { $inc: { viewCount: 1, externalViewCount: 1 } }
+    );
+  });
+
+  it('a link-preview crawler does NOT count as a visitor (pasting your own link must not pay the gear)', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], {
+      userAgent: 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+    });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+
+  it('the signed-in OWNER does not count as an external view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' }, userAgent: 'Mozilla/5.0 Safari/605.1' });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });
 });

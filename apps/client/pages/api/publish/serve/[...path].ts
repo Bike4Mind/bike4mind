@@ -313,7 +313,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       if (artifact.visibility !== 'public') {
         return res.status(404).json({ error: 'Not found' });
       }
-      return sendRawArtifact(res, artifact, artifact.renderedBody ?? '', req.user as { id?: string } | undefined);
+      return sendRawArtifact(
+        res,
+        artifact,
+        artifact.renderedBody ?? '',
+        req.user as { id?: string } | undefined,
+        req.headers['user-agent']
+      );
     }
     const page = renderViewerPage(artifact, isShare);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -334,7 +340,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     );
     res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    bumpViewCount(artifact, req.user as { id?: string } | undefined);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
     return res.status(200).send(page);
   }
 
@@ -404,7 +410,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     if (artifact.visibility !== 'public') {
       return res.status(404).json({ error: 'Not found' });
     }
-    return sendRawArtifact(res, artifact, stripToText(indexHtml, 50000), req.user as { id?: string } | undefined);
+    return sendRawArtifact(
+      res,
+      artifact,
+      stripToText(indexHtml, 50000),
+      req.user as { id?: string } | undefined,
+      req.headers['user-agent']
+    );
   }
 
   // Approach B: on the per-artifact isolated origin the bundle is served at a
@@ -478,7 +490,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    bumpViewCount(artifact, req.user as { id?: string } | undefined);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
     return res.status(200).send(srcdoc);
   }
 
@@ -554,7 +566,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : ''));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  bumpViewCount(artifact, req.user as { id?: string } | undefined);
+  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
   return res.status(200).send(wrapperPage);
 });
 
@@ -796,17 +808,30 @@ function cacheControlFor(visibility: PublishVisibility): string {
 }
 
 /** Best-effort, non-authoritative view counter. Never blocks the response. */
+/** Link-preview crawlers and indexers fetch every pasted URL automatically —
+ *  merely PASTING your own link into Slack must not count as "someone saw it".
+ *  Substring match on the UA, lowercased; the generic bot/crawler/spider tail
+ *  catches the long tail of unfurlers. */
+const CRAWLER_UA_RE =
+  /slackbot|discordbot|twitterbot|facebookexternalhit|linkedinbot|whatsapp|telegrambot|skypeuripreview|googlebot|bingbot|applebot|duckduckbot|yandex|baiduspider|petalbot|bot\b|crawler|spider|preview/i;
+
 /**
  * Best-effort, non-authoritative view counters. Never blocks the response.
- * `externalViewCount` excludes the owner's own (signed-in) visits — it feeds
- * the Published gear ("someone else saw your page") and any future social
- * proof. An anonymous view counts as external: the owner CAN game it via
- * incognito, but that is friction where zero existed; real proof-of-human is
- * tracked as strategy P1 (b4m-strategy#93).
+ * `externalViewCount` excludes the owner's own (signed-in) visits AND known
+ * link-preview crawlers — it feeds the Published gear ("someone else saw your
+ * page") and any future social proof. An anonymous human view counts as
+ * external: the owner CAN game it via incognito, but that is friction where
+ * zero existed; real proof-of-human is tracked as strategy P1
+ * (b4m-strategy#93).
  */
-function bumpViewCount(artifact: { publicId: string; ownerId: string }, viewer: { id?: string } | undefined): void {
+function bumpViewCount(
+  artifact: { publicId: string; ownerId: string },
+  viewer: { id?: string } | undefined,
+  userAgent?: string
+): void {
   const isOwner = !!viewer?.id && String(viewer.id) === String(artifact.ownerId);
-  const inc = isOwner ? { viewCount: 1 } : { viewCount: 1, externalViewCount: 1 };
+  const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
+  const inc = isOwner || isCrawler ? { viewCount: 1 } : { viewCount: 1, externalViewCount: 1 };
   void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
 }
 
@@ -821,7 +846,8 @@ function sendRawArtifact(
   res: Response,
   artifact: PublishedArtifactLean,
   body: string,
-  viewer: { id?: string } | undefined
+  viewer: { id?: string } | undefined,
+  userAgent?: string
 ): void {
   const title = artifact.title || SHARED_FALLBACK_TITLE;
   const description = artifact.description?.trim();
@@ -834,7 +860,7 @@ function sendRawArtifact(
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', cacheControlFor('public'));
   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-  bumpViewCount(artifact, viewer);
+  bumpViewCount(artifact, viewer, userAgent);
   res.status(200).send(content);
 }
 
