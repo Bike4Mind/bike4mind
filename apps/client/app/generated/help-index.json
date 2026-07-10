@@ -1030,7 +1030,7 @@
     {
       "slug": "admin/credit-analytics",
       "title": "Credit Analytics",
-      "description": "Manage user credit balances and configure per-model cost settings for the platform",
+      "description": "Manage user credit balances and review margin analytics for the platform",
       "category": "admin",
       "sidebarPosition": 12,
       "tags": [
@@ -1074,31 +1074,6 @@
           "level": 3,
           "text": "Pagination",
           "anchor": "pagination"
-        },
-        {
-          "level": 2,
-          "text": "Model Cost Settings",
-          "anchor": "model-cost-settings"
-        },
-        {
-          "level": 3,
-          "text": "Model Type Tabs",
-          "anchor": "model-type-tabs"
-        },
-        {
-          "level": 3,
-          "text": "Text Model Table",
-          "anchor": "text-model-table"
-        },
-        {
-          "level": 3,
-          "text": "Image Model Table",
-          "anchor": "image-model-table"
-        },
-        {
-          "level": 3,
-          "text": "Saving and Reverting",
-          "anchor": "saving-and-reverting"
         },
         {
           "level": 2,
@@ -10453,7 +10428,7 @@
         {
           "slug": "admin/credit-analytics",
           "title": "Credit Analytics",
-          "description": "Manage user credit balances and configure per-model cost settings for the platform",
+          "description": "Manage user credit balances and review margin analytics for the platform",
           "category": "admin",
           "sidebarPosition": 12,
           "tags": [
@@ -10497,31 +10472,6 @@
               "level": 3,
               "text": "Pagination",
               "anchor": "pagination"
-            },
-            {
-              "level": 2,
-              "text": "Model Cost Settings",
-              "anchor": "model-cost-settings"
-            },
-            {
-              "level": 3,
-              "text": "Model Type Tabs",
-              "anchor": "model-type-tabs"
-            },
-            {
-              "level": 3,
-              "text": "Text Model Table",
-              "anchor": "text-model-table"
-            },
-            {
-              "level": 3,
-              "text": "Image Model Table",
-              "anchor": "image-model-table"
-            },
-            {
-              "level": 3,
-              "text": "Saving and Reverting",
-              "anchor": "saving-and-reverting"
             },
             {
               "level": 2,
@@ -18855,5 +18805,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-04T06:30:22.519Z"
+  "version": "2026-07-10T06:39:46.802Z"
 }

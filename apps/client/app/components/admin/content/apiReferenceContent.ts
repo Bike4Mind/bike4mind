@@ -762,7 +762,6 @@ Structured multi-step plans created by the QuestMaster agent.
 |--------|----------|-------------|
 | GET | /api/settings/serverStatus | Health check / server status |
 | GET | /api/settings/serverConfig | Server configuration |
-| GET | /api/settings/model-pricing | LLM model pricing data |
 | GET | /api/settings | Get app settings |
 | PUT | /api/settings/update | Update settings |
 | GET | /api/settings/fetch | Fetch specific setting |
