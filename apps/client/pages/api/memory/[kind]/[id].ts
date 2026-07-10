@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { deepAgentCharterRepository } from '@bike4mind/database';
-import { readPrincipalMemory, type PrincipalKind } from '@bike4mind/memory';
+import { agentRepository, deepAgentCharterRepository } from '@bike4mind/database';
+import { firstMatchStore, readPrincipalMemory, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
+import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 
 const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
 
@@ -9,7 +10,8 @@ const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'syst
  * GET /api/memory/:kind/:id - read a principal's unified memory profile (Mementos 2.0).
  *
  * The first surface over the principal-scoped memory core: for an agent principal it folds that
- * agent's DeepAgent charter into the shared MemoryProfile shape. Owner-scoped in the store (spec
+ * agent's DeepAgent charter (or, failing that, its persona-agent journal) into the shared
+ * MemoryProfile shape. Owner-scoped in the store (spec
  * L6) - you only see agents you own - and a not-found / not-owned principal both return 404 so the
  * endpoint never reveals another owner's agent. User/org/system kinds return 404 until their
  * stores are wired (build-order steps 3+).
@@ -26,7 +28,12 @@ const handler = baseApi().get(async (req, res) => {
       .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
   }
 
-  const store = createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId });
+  // An agent id can resolve to either backend: try the richer DeepAgent charter first, then the
+  // persona-agent journal. Both stores are owner-scoped.
+  const store = firstMatchStore([
+    createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId }),
+    createPersonaAgentMemoryStore({ agents: agentRepository, ownerUserId }),
+  ]);
   const profile = await readPrincipalMemory({ kind: kind as PrincipalKind, id }, store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 

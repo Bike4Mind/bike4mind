@@ -52,8 +52,10 @@ export interface MemoryProfile {
   name?: string;
   role?: string;
   beliefs: Belief[];
-  sizeBudgetBytes: number;
-  version: number;
+  /** Scarcity budget that triggers grooming. Charter-specific; absent for sources with no byte budget. */
+  sizeBudgetBytes?: number;
+  /** Monotonic profile version, where the source tracks one. */
+  version?: number;
   /** ISO-8601; set when the profile was last groomed. */
   groomedAt?: string;
 }
