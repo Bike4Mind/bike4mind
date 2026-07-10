@@ -117,6 +117,23 @@ describe('executeCompletion - org billing routing', () => {
     );
   });
 
+  it('skips BOTH member tracking and the ledger row if the settlement holder fetch returns null', async () => {
+    // Regression guard: updateUserDetails must not advance usedCredits without a
+    // matching ledger transaction. Org loads fine at the top, then the settlement
+    // re-fetch (creditDifference === 0 branch) comes back null.
+    const { db, organizations } = buildDb();
+    const org = { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
+    organizations.findById.mockReset();
+    organizations.findById.mockResolvedValueOnce(org).mockResolvedValue(null);
+
+    await executeCompletion({ ...baseParams, db, billingOrganizationId: 'org1' });
+
+    // Balance already moved atomically at reservation; but with no holder to
+    // anchor the transaction, neither the member tracking nor the ledger write fire.
+    expect(organizations.updateUserDetails).not.toHaveBeenCalled();
+    expect(mockSubtractCredits).not.toHaveBeenCalled();
+  });
+
   it('rejects when the org member credit cap would be exceeded', async () => {
     const { db } = buildDb({
       org: {

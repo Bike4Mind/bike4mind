@@ -423,19 +423,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         holderAfterAdjustment = await fetchHolder();
       }
 
-      // Org-billed keys: record the actual charge against the acting member so
-      // per-member usage + maxCreditsPerMember stay accurate (matches
-      // deductCreditsWithOrgSupport). Balance already moved on the org above.
-      if (billToOrg) {
-        await db.organizations!.updateUserDetails(holderId, userId, {
-          creditsDelta: actualCredits,
-          lastCreditUsedAt: new Date(),
-        });
-      }
-
       // Create transaction record with ACTUAL usage (not estimated/reserved)
       // Skip balance update since we already adjusted atomically above
       if (holderAfterAdjustment) {
+        // Org-billed keys: record the actual charge against the acting member so
+        // per-member usage + maxCreditsPerMember stay accurate (matches
+        // deductCreditsWithOrgSupport). Balance already moved on the org above.
+        // Kept inside this guard so per-member tracking and the ledger row commit
+        // together: a null holder fetch skips both, never advancing usedCredits
+        // without a matching transaction.
+        if (billToOrg) {
+          await db.organizations!.updateUserDetails(holderId, userId, {
+            creditsDelta: actualCredits,
+            lastCreditUsedAt: new Date(),
+          });
+        }
+
         Logger.globalInstance.debug('Credit usage:', actualCredits);
         // Use completion_api_usage for ALL /api/ai/v1/completions requests
         // Differentiate by endpoint, not by auth method
