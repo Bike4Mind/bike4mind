@@ -230,6 +230,13 @@ export const PublishedArtifactSchema = z.object({
   /** Group id a viewer must belong to when gated cross-scope. */
   gatedToGroupId: z.string().optional(),
 
+  /** Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
+   *  from `publicId` (which stays stable for `/p/*`) so rotating it revokes every
+   *  outstanding link without touching the artifact. Absent until the owner opts in. */
+  shareToken: z.string().optional(),
+  /** When `shareToken` was last minted/rotated; drives the owner-facing "link created" surface. */
+  shareTokenUpdatedAt: z.date().nullish(),
+
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
    *  `visibility`. Defaults to `none` (read-only) until the owner opts in. */
   commentPolicy: CommentPolicySchema.prefault('none'),

@@ -29,6 +29,10 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
+// Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 
 vi.mock('@server/utils/storage', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
@@ -861,5 +865,121 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
     await promise;
 
     expect(res._getData() as string).toContain(BRIDGE_MARKER);
+  });
+});
+
+describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // Same-origin sandbox model - never the cross-origin usercontent embed.
+    expect(data).toContain('srcdoc=');
+    expect(data).not.toContain('usercontent.app.bike4mind.com');
+    // <base> points assets back through the token path so they self-authorize. It lives
+    // inside the srcdoc attribute, so its quotes are HTML-escaped in the wrapper.
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    // Always noindex; never the public SEO/raw surface.
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(data).not.toContain('link rel="alternate"');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+  });
+
+  it('grants read to a PRIVATE bundle via token (possession is the capability), using <base> not inlining', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        visibility: 'private',
+        ownerId: 'owner1',
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><img src="logo.png"></body></html>'));
+
+    // No credential at all - the token alone authorizes the read.
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    expect(data).not.toContain('data:image/png;base64,'); // share never inlines - assets self-authorize via the token
+    expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
+  });
+
+  it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
+    mockArtifactFindOne.mockReturnValue(null);
+
+    const { res, promise } = run(['a', 'gone']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('serves a bundle asset through the token path with no-store + noindex', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('PNGBYTES'));
+
+    const { res, promise } = run(['a', 'tok123', 'logo.png']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('image/png');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('disables ?format=raw on a share link (no plain-text surface)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Not honored: returns the HTML wrapper, not the text/plain alternate.
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('renders a reply via token with the viewer page + noindex meta', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r1',
+      title: 'A reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody: '# Hello world',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'x',
+    });
+
+    const { res, promise } = run(['a', 'tokreply']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Hello world');
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
   });
 });
