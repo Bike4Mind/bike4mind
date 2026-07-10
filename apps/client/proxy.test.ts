@@ -99,6 +99,19 @@ describe('proxy CSP header', () => {
     expect(response.headers.get('X-Frame-Options')).toBeNull();
   });
 
+  it('does NOT set CSP on /a/ share-link routes (handler sets its own sandbox CSP)', () => {
+    const response = proxy(makeRequest('https://app.bike4mind.com/a/lHDIsomeToken'));
+    expect(response.headers.get('Content-Security-Policy')).toBeNull();
+  });
+
+  it('does NOT clobber Referrer-Policy on /a/ routes (handler sets no-referrer)', () => {
+    const share = proxy(makeRequest('https://app.bike4mind.com/a/lHDIsomeToken'));
+    expect(share.headers.get('Referrer-Policy')).toBeNull();
+    // Other routes still get the app default.
+    const page = proxy(makeRequest('https://app.bike4mind.com/home'));
+    expect(page.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+  });
+
   it('sets X-Frame-Options on HTML routes', () => {
     const response = proxy(makeRequest('https://app.bike4mind.com/'));
     expect(response.headers.get('X-Frame-Options')).toBe('SAMEORIGIN');
