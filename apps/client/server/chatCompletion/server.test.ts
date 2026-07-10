@@ -219,10 +219,10 @@ describe('ChatCompletion /api/ai/v1/completions', () => {
     expect(text).toContain('data: [DONE]');
   });
 
-  // Regression guard for #40: OpenAI-shape consumers send stream/tools/temperature/max_tokens
-  // at the top level (not nested under `options`), and Zod's default strip mode silently drops
-  // unrecognized top-level keys. Assert the route normalizes them into `options` before they
-  // reach executeCompletion, rather than dropping them.
+  // OpenAI-shape consumers send stream/tools/temperature/max_tokens at the top level (not
+  // nested under `options`), and Zod's default strip mode silently drops unrecognized top-level
+  // keys. Assert the route normalizes them into `options` before they reach executeCompletion,
+  // rather than dropping them.
   it('normalizes top-level stream/temperature/max_tokens/tools into options before execution', async () => {
     mockAuth.verifyApiKey.mockResolvedValue({
       keyId: 'key1',

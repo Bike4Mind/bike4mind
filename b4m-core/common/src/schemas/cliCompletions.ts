@@ -97,31 +97,27 @@ export type CompletionRequest = z.infer<typeof CompletionRequestSchema>;
  * downstream code reads from a single canonical location. If both surfaces are
  * present for a field, the top-level value wins (matches OpenAI's spec, where
  * the top-level field is the official location). Idempotent.
+ *
+ * Destructuring (rather than a hand-written list of fields to delete) means a
+ * field that was never sent stays absent from the result instead of becoming
+ * an explicit `undefined` own-property - keeping the normalized shape
+ * indistinguishable from what Zod would produce for a request that never had
+ * these fields at the top level.
  */
 export function normalizeCompletionRequest<T extends CompletionRequest>(req: T): T {
-  if (
-    req.response_format === undefined &&
-    req.stream === undefined &&
-    req.tools === undefined &&
-    req.temperature === undefined &&
-    req.max_tokens === undefined
-  ) {
+  const { response_format, stream, tools, temperature, max_tokens, options, ...rest } = req;
+  if ([response_format, stream, tools, temperature, max_tokens].every(field => field === undefined)) {
     return req;
   }
   return {
-    ...req,
-    response_format: undefined,
-    stream: undefined,
-    tools: undefined,
-    temperature: undefined,
-    max_tokens: undefined,
+    ...rest,
     options: {
-      ...req.options,
-      ...(req.response_format !== undefined && { response_format: req.response_format }),
-      ...(req.stream !== undefined && { stream: req.stream }),
-      ...(req.tools !== undefined && { tools: req.tools }),
-      ...(req.temperature !== undefined && { temperature: req.temperature }),
-      ...(req.max_tokens !== undefined && { maxTokens: req.max_tokens }),
+      ...options,
+      ...(response_format !== undefined && { response_format }),
+      ...(stream !== undefined && { stream }),
+      ...(tools !== undefined && { tools }),
+      ...(temperature !== undefined && { temperature }),
+      ...(max_tokens !== undefined && { maxTokens: max_tokens }),
     },
-  };
+  } as T;
 }
