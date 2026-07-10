@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-11T03:47:10.876Z",
+  "generatedAt": "2026-07-13T02:20:57.544Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -650,6 +650,20 @@
         "1050000": {
           "input": 0.000005,
           "output": 0.0000225
+        }
+      }
+    },
+    {
+      "modelId": "gpt-realtime-1.5",
+      "unit": "per_token",
+      "pricing": {
+        "0": {
+          "input": 0.000004,
+          "cache_read": 4.0000000000000003e-7,
+          "output": 0.000016,
+          "audio_input": 0.000032,
+          "audio_cache_read": 4.0000000000000003e-7,
+          "audio_output": 0.000064
         }
       }
     },

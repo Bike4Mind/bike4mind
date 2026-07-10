@@ -37,6 +37,14 @@ describe('model price seed (no DB)', () => {
     expect(SEED_NOTE).toBe('adapter-seed');
   });
 
+  it('includes realtime voice rates with audio pricing (the voice settlement path reads these)', () => {
+    const realtime = seed.entries.find(e => e.modelId === 'gpt-realtime-1.5');
+    expect(realtime).toBeDefined();
+    const tier = Object.values(realtime!.pricing)[0] as Record<string, number>;
+    expect(tier.audio_input).toBeGreaterThan(0);
+    expect(tier.audio_output).toBeGreaterThan(0);
+  });
+
   it('every seed entry carries a nonzero price (a zero row would settle calls free)', () => {
     const zeroPriced = seed.entries.filter(
       entry => !Object.values(entry.pricing).some(tier => tier.input > 0 || tier.output > 0)
@@ -144,6 +152,28 @@ describe('seedModelPrices (round-trip)', () => {
 
     const history = await modelPriceRepository.historyForModel(target.modelId);
     expect(history).toHaveLength(1);
+  });
+
+  it('propagates an audio-only reprice (normalizePricing must see the audio fields)', async () => {
+    // If normalizePricing omitted audio_* fields, an older seed row differing
+    // ONLY in an audio rate would compare as "same price" and never version.
+    const realtime = seed.entries.find(e => e.modelId === 'gpt-realtime-1.5')!;
+    const [threshold, tier] = Object.entries(realtime.pricing)[0] as [
+      string,
+      { input: number; output: number; audio_output: number },
+    ];
+    await modelPriceRepository.append({
+      modelId: realtime.modelId,
+      unit: 'per_token',
+      pricing: { [threshold]: { ...tier, audio_output: tier.audio_output * 2 } },
+      effectiveFrom: new Date('2020-01-01T00:00:00Z'),
+      note: SEED_NOTE,
+    });
+
+    await seedModelPrices(modelPriceRepository);
+
+    const history = await modelPriceRepository.historyForModel(realtime.modelId);
+    expect(history).toHaveLength(2);
   });
 
   it('never supersedes an operator-appended reprice, even an older one with different pricing', async () => {
