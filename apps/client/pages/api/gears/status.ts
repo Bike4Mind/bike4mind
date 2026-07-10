@@ -12,6 +12,7 @@ import {
   agentRepository,
   dataLakeRepository,
   creditTransactionRepository,
+  gearStampRepository,
   userRepository,
 } from '@bike4mind/database';
 
@@ -60,7 +61,10 @@ export type GearKey =
   | 'models'
   | 'react'
   | 'python'
-  | 'shareproject';
+  | 'shareproject'
+  // skills recorded via first-use stamps (see server/services/gears/stampGear.ts)
+  | 'downloadnotebook'
+  | 'forknotebook';
 
 const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
@@ -70,14 +74,16 @@ interface GearFacts {
   userId: string;
   usageFeatures: Set<string>;
   chatModelCount: number;
+  stamps: Set<string>;
 }
 
 async function gatherFacts(userId: string): Promise<GearFacts> {
-  const [usageFeatures, chatModels] = await Promise.all([
+  const [usageFeatures, chatModels, stamps] = await Promise.all([
     UsageEvent.distinct('feature', { userId }) as Promise<string[]>,
     UsageEvent.distinct('model', { userId, feature: 'chat' }) as Promise<string[]>,
+    gearStampRepository.stampedKeys(userId),
   ]);
-  return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length };
+  return { userId, usageFeatures: new Set(usageFeatures), chatModelCount: chatModels.length, stamps };
 }
 
 interface GearDef {
@@ -156,6 +162,18 @@ const GEARS: GearDef[] = [
     key: 'shareproject',
     kind: 'skill',
     check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
+  },
+  // Stamp-backed skills: the action leaves no other queryable trace, so the
+  // action's route stamps first use (stampGear) and the check reads the stamp.
+  {
+    key: 'downloadnotebook',
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('downloadnotebook'),
+  },
+  {
+    key: 'forknotebook',
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('forknotebook'),
   },
 ];
 

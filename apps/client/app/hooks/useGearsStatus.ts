@@ -24,7 +24,9 @@ export type GearKey =
   | 'models'
   | 'react'
   | 'python'
-  | 'shareproject';
+  | 'shareproject'
+  | 'downloadnotebook'
+  | 'forknotebook';
 
 export interface GearStatus {
   key: GearKey;

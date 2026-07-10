@@ -17,6 +17,8 @@ import SwapHorizOutlinedIcon from '@mui/icons-material/SwapHorizOutlined';
 import CodeOutlinedIcon from '@mui/icons-material/CodeOutlined';
 import DataObjectOutlinedIcon from '@mui/icons-material/DataObjectOutlined';
 import GroupAddOutlinedIcon from '@mui/icons-material/GroupAddOutlined';
+import ForkRightOutlinedIcon from '@mui/icons-material/ForkRightOutlined';
+import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
 import { useGearsStatus, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -155,6 +157,23 @@ const SKILL_CARDS: GearCardDef[] = [
     cta: 'Make your first call',
     icon: <TerminalOutlinedIcon />,
   },
+  {
+    key: 'forknotebook',
+    title: 'Fork a Notebook',
+    tagline: 'Branch the timeline',
+    intro:
+      'Fork any conversation from any message — explore a what-if without losing the original thread. Find it in the message ⋯ menu.',
+    cta: 'Open a notebook to fork',
+    icon: <ForkRightOutlinedIcon />,
+  },
+  {
+    key: 'downloadnotebook',
+    title: 'Download a Notebook',
+    tagline: 'Take it with you',
+    intro: 'Export a curated notebook as a file — share it, archive it, or read it offline.',
+    cta: 'Download a notebook',
+    icon: <DownloadOutlinedIcon />,
+  },
 ];
 
 const GearsPage = () => {
@@ -263,41 +282,46 @@ const GearsPage = () => {
   );
 
   return (
-    <Box sx={{ maxWidth: 960, mx: 'auto', px: 3, py: 4 }} data-testid="gears-page">
-      <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 0.5 }}>
-        <SettingsOutlinedIcon />
-        <Typography level="h2">Gears</Typography>
-      </Stack>
-      <Typography level="body-md" sx={{ mb: 1, opacity: 0.8 }}>
-        Every feature you use for the first time earns a checkmark and a credit bonus — destinations also earn their
-        place in your sidebar.
-      </Typography>
-      <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
-        <LinearProgress
-          determinate
-          value={allCards.length ? (unlockedCount / allCards.length) * 100 : 0}
-          sx={{ flex: 1, maxWidth: 320 }}
-        />
-        <Typography level="body-sm" sx={{ whiteSpace: 'nowrap', opacity: 0.8 }} data-testid="gears-progress">
-          {unlockedCount} / {allCards.length} unlocked
+    // Own scroll container (same pattern as the Agents/Projects pages): the app
+    // layout is a fixed-height shell, so a page taller than the viewport must
+    // scroll itself or the overflow is simply clipped.
+    <Box sx={{ height: '100%', overflowY: 'auto', overflowX: 'hidden' }} data-testid="gears-page">
+      <Box sx={{ maxWidth: 960, mx: 'auto', px: 3, py: 4 }}>
+        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 0.5 }}>
+          <SettingsOutlinedIcon />
+          <Typography level="h2">Gears</Typography>
+        </Stack>
+        <Typography level="body-md" sx={{ mb: 1, opacity: 0.8 }}>
+          Every feature you use for the first time earns a checkmark and a credit bonus — destinations also earn their
+          place in your sidebar.
         </Typography>
-      </Stack>
+        <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
+          <LinearProgress
+            determinate
+            value={allCards.length ? (unlockedCount / allCards.length) * 100 : 0}
+            sx={{ flex: 1, maxWidth: 320 }}
+          />
+          <Typography level="body-sm" sx={{ whiteSpace: 'nowrap', opacity: 0.8 }} data-testid="gears-progress">
+            {unlockedCount} / {allCards.length} unlocked
+          </Typography>
+        </Stack>
 
-      <Typography level="title-lg" sx={{ mb: 1.5 }}>
-        Destinations
-      </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
-        First use earns these a slot in your sidebar.
-      </Typography>
-      {renderCards(destinationCards)}
+        <Typography level="title-lg" sx={{ mb: 1.5 }}>
+          Destinations
+        </Typography>
+        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
+          First use earns these a slot in your sidebar.
+        </Typography>
+        {renderCards(destinationCards)}
 
-      <Typography level="title-lg" sx={{ mt: 4, mb: 1.5 }}>
-        Skills
-      </Typography>
-      <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
-        Capabilities worth knowing about — try each once.
-      </Typography>
-      {renderCards(skillCards)}
+        <Typography level="title-lg" sx={{ mt: 4, mb: 1.5 }}>
+          Skills
+        </Typography>
+        <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
+          Capabilities worth knowing about — try each once.
+        </Typography>
+        {renderCards(skillCards)}
+      </Box>
     </Box>
   );
 };

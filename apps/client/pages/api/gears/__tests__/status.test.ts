@@ -13,6 +13,7 @@ const { mocks } = vi.hoisted(() => ({
     artifactExists: vi.fn(),
     apiKeyExists: vi.fn(),
     usageDistinct: vi.fn(),
+    stampedKeys: vi.fn(),
   },
 }));
 
@@ -44,6 +45,7 @@ vi.mock('@bike4mind/database', () => ({
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
+  gearStampRepository: { stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a) },
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -73,6 +75,7 @@ const lockEverything = () => {
   mocks.artifactExists.mockResolvedValue(null);
   mocks.apiKeyExists.mockResolvedValue(null);
   mocks.usageDistinct.mockResolvedValue([]);
+  mocks.stampedKeys.mockResolvedValue(new Set());
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -95,7 +98,7 @@ describe('GET /api/gears/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
-    expect(body.gears).toHaveLength(13);
+    expect(body.gears).toHaveLength(15);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
     expect(body.totalUnlocked).toBe(0);
     expect(mocks.addCredits).not.toHaveBeenCalled();
@@ -185,5 +188,18 @@ describe('GET /api/gears/status — skill gears', () => {
     expect(byKey.apikey.creditsAwarded).toBe(byKey.apikey.credits);
     expect(byKey.projects.creditsAwarded).toBe(byKey.projects.credits);
     expect(byKey.projects.credits).toBeGreaterThan(byKey.apikey.credits);
+  });
+});
+
+describe('GET /api/gears/status — stamp-backed gears', () => {
+  it('unlocks download/fork from first-use stamps', async () => {
+    mocks.stampedKeys.mockResolvedValue(new Set(['forknotebook']));
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean }> };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
+    expect(byKey.forknotebook.unlocked).toBe(true);
+    expect(byKey.downloadnotebook.unlocked).toBe(false);
   });
 });
