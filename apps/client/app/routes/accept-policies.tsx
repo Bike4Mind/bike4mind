@@ -147,7 +147,7 @@ const AcceptPoliciesPage = () => {
 
               <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5 }}>
                 <GppGoodIcon sx={{ fontSize: 32, color: 'primary.500' }} />
-                <Typography level="h3">Before you continue!</Typography>
+                <Typography level="h3">Before you continue</Typography>
               </Box>
 
               <Typography level="body-md" sx={{ color: 'text.secondary', textAlign: 'center' }}>
