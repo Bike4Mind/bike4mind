@@ -1,4 +1,11 @@
-import { ChatModels, ModelBackend, ModelInfo, isModelDeprecated } from '@bike4mind/common';
+import {
+  ChatModels,
+  IModelPrice,
+  ModelBackend,
+  ModelInfo,
+  applyModelPriceCatalog,
+  isModelDeprecated,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
@@ -136,7 +143,27 @@ export function getLlmByModel(
 // warm Lambda instances from re-fetching every request (admin model changes still take
 // effect within 5 minutes, and a cold start always rebuilds the list).
 const MODEL_CACHE_TTL_MS = 5 * 60_000;
+// When the price-catalog fetch fails, cache the literal-priced fallback only
+// briefly: a transient DB blip should cost seconds of superseded prices, not
+// a full TTL window.
+const MODEL_CACHE_RETRY_TTL_MS = 30_000;
 let _modelCache: { key: string; models: ModelInfo[]; expiresAt: number } | null = null;
+
+/**
+ * Optional versioned-price-catalog hook. This package cannot depend on the
+ * database, so the app layer injects a rows provider (one DB read per model
+ * cache rebuild, i.e. per TTL window / cold start). Unset provider or a
+ * failing fetch = adapter price literals, which keeps zero-config self-host
+ * deployments working.
+ */
+export type ModelPriceRowsProvider = () => Promise<IModelPrice[]>;
+let _priceRowsProvider: ModelPriceRowsProvider | null = null;
+
+export function setModelPriceRowsProvider(provider: ModelPriceRowsProvider | null): void {
+  _priceRowsProvider = provider;
+  // Rebuild on next call so freshly wired prices don't wait out a stale TTL.
+  _modelCache = null;
+}
 
 function getModelCacheKey(apiKeys: ApiKeyTable | null): string {
   if (!apiKeys) return 'null';
@@ -201,10 +228,26 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     return today.getTime() < cutoff.getTime();
   });
 
-  // Store in module-level cache
-  _modelCache = { key: cacheKey, models: filtered, expiresAt: Date.now() + MODEL_CACHE_TTL_MS };
+  // Overlay versioned catalog prices when the app wired a provider.
+  let priced = filtered;
+  let catalogFetchFailed = false;
+  if (_priceRowsProvider) {
+    try {
+      const rows = await _priceRowsProvider();
+      priced = applyModelPriceCatalog(filtered, rows);
+      const overlaid = priced.filter((m, i) => m !== filtered[i]).length;
+      Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${filtered.length} models`);
+    } catch (error) {
+      catalogFetchFailed = true;
+      Logger.globalInstance.warn('[getAvailableModels] price catalog unavailable; using adapter literals', error);
+    }
+  }
 
-  return filtered;
+  // Store in module-level cache (short-lived when the catalog fetch failed).
+  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  _modelCache = { key: cacheKey, models: priced, expiresAt: Date.now() + ttl };
+
+  return priced;
 };
 
 // Types and core utils:

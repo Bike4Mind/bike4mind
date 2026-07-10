@@ -2,6 +2,7 @@ export * from './errors';
 export * from './validation';
 export * from './apikey';
 export * from './models';
+export * from './modelPriceCatalog';
 export * from './pricing';
 export * from './imageGeneration';
 export * from './videoGeneration';
