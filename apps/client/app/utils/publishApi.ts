@@ -361,3 +361,37 @@ export function toShareUrl(result: Pick<PublishResult, 'url'>): string {
   }
   return result.url;
 }
+
+/** Absolute no-sign-in share URL for a share token (e.g. https://app.example.com/a/<token>). */
+export function toShareTokenUrl(shareToken: string): string {
+  const path = `/a/${shareToken}`;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
+ * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
+ * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ */
+export async function createOrGetShareToken(
+  publicId: string,
+  regenerate = false
+): Promise<{ shareToken: string; shareUrl: string }> {
+  const { data } = await api.post<{ shareToken: string; shareUrl: string }>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+  });
+  return data;
+}
+
+/** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
+export async function regenerateShareToken(publicId: string): Promise<{ shareToken: string; shareUrl: string }> {
+  return createOrGetShareToken(publicId, true);
+}
+
+/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+export async function revokeShareToken(publicId: string): Promise<void> {
+  await api.delete(`/api/publish/${publicId}/share-token`);
+}

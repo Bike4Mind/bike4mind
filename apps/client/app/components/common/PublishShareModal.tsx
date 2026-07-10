@@ -19,6 +19,7 @@ import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
 import GroupIcon from '@mui/icons-material/Group';
+import LinkIcon from '@mui/icons-material/Link';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
@@ -26,6 +27,10 @@ import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind
 import { ShareActions } from './ShareActions';
 import {
   toShareUrl,
+  toShareTokenUrl,
+  createOrGetShareToken,
+  regenerateShareToken,
+  revokeShareToken,
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
   type PublishMode,
@@ -121,6 +126,9 @@ export function PublishShareModal({
     commentPolicy?: CommentPolicy;
   } | null>(null);
   const [mode, setMode] = useState<PublishMode>('new');
+  // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
+  const [shareToken, setShareToken] = useState<string | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -131,6 +139,8 @@ export function PublishShareModal({
       setBusy(false);
       setExisting(null);
       setMode('new');
+      setShareToken(null);
+      setShareBusy(false);
     }
   }, [open, defaultVisibility]);
 
@@ -267,6 +277,41 @@ export function PublishShareModal({
     if (busy) return;
     if (phase === 'shared') void changeVisibilityLive(next);
     else setVisibility(next);
+  };
+
+  // No-sign-in link (`/a/<token>`): mint on demand, rotate (revokes old links), or revoke.
+  const runShareToken = async (action: () => Promise<string | null>, successMsg: string): Promise<void> => {
+    if (!result || shareBusy) return;
+    setShareBusy(true);
+    try {
+      setShareToken(await action());
+      toast.success(successMsg);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setShareBusy(false);
+    }
+  };
+  const onCreateShareToken = () =>
+    runShareToken(async () => (await createOrGetShareToken(result!.publicId)).shareToken, 'No-sign-in link created');
+  const onRegenerateShareToken = () =>
+    runShareToken(
+      async () => (await regenerateShareToken(result!.publicId)).shareToken,
+      'Link regenerated — the old link no longer works'
+    );
+  const onRevokeShareToken = () =>
+    runShareToken(async () => {
+      await revokeShareToken(result!.publicId);
+      return null;
+    }, 'No-sign-in link revoked');
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Link copied to clipboard!');
+    } catch {
+      toast.error("Couldn't copy — select the URL manually");
+    }
   };
 
   return (
@@ -415,14 +460,7 @@ export function PublishShareModal({
                 <IconButton
                   variant="outlined"
                   color="neutral"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(url);
-                      toast.success('Link copied to clipboard!');
-                    } catch {
-                      toast.error("Couldn't copy — select the URL manually");
-                    }
-                  }}
+                  onClick={() => void copyToClipboard(url)}
                   data-testid="publish-share-copy"
                 >
                   <ContentCopyIcon />
@@ -430,6 +468,80 @@ export function PublishShareModal({
               </Tooltip>
             </Box>
             <ShareActions title={title} url={url} markdown={markdown} />
+
+            <Box
+              sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}
+              data-testid="publish-share-token-section"
+            >
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                <LinkIcon fontSize="small" />
+                <FormLabel sx={{ mb: 0 }}>No-sign-in link</FormLabel>
+              </Box>
+              <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
+                A link anyone can open without an account. Regenerate to instantly revoke old links.
+              </Typography>
+              {shareToken ? (
+                <>
+                  <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+                    <Input
+                      value={toShareTokenUrl(shareToken)}
+                      readOnly
+                      slotProps={{
+                        input: { 'data-testid': 'publish-share-token-url', onFocus: e => e.currentTarget.select() },
+                      }}
+                      sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
+                    />
+                    <Tooltip title="Copy no-sign-in link">
+                      <IconButton
+                        variant="outlined"
+                        color="neutral"
+                        onClick={() => void copyToClipboard(toShareTokenUrl(shareToken))}
+                        data-testid="publish-share-token-copy"
+                      >
+                        <ContentCopyIcon />
+                      </IconButton>
+                    </Tooltip>
+                  </Box>
+                  <Box sx={{ display: 'flex', gap: 1 }}>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="neutral"
+                      loading={shareBusy}
+                      onClick={() => void onRegenerateShareToken()}
+                      data-testid="publish-share-token-regenerate"
+                    >
+                      Regenerate
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outlined"
+                      color="danger"
+                      loading={shareBusy}
+                      onClick={() => void onRevokeShareToken()}
+                      data-testid="publish-share-token-revoke"
+                    >
+                      Revoke
+                    </Button>
+                  </Box>
+                  <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
+                    ⚠ Anyone with this link can view without signing in.
+                  </Typography>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  loading={shareBusy}
+                  startDecorator={<LinkIcon />}
+                  onClick={() => void onCreateShareToken()}
+                  data-testid="publish-share-token-create"
+                >
+                  Create no-sign-in link
+                </Button>
+              )}
+            </Box>
           </>
         )}
       </ModalDialog>
