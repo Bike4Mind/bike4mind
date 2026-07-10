@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -17,7 +17,9 @@ import type { IChatHistoryItem } from '@bike4mind/common';
 
 // --- context / data hooks -------------------------------------------------
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'user-1' } }),
+  // organizationId is the org the server (checkScopePermission) will accept a Team publish for;
+  // the Team option is gated on the selected org matching it.
+  useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42' } }),
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
@@ -48,8 +50,11 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
 vi.mock('@client/app/hooks/data/settings', () => ({
   useSettingsFromServer: () => ({ data: [] }),
 }));
+// Capturable across renders so the share-wiring tests can assert the exact options
+// handleShareReply passes (esp. whether orgOption is supplied).
+const publishAndShareSpy = vi.fn();
 vi.mock('@client/app/hooks/usePublishShare', () => ({
-  usePublishShare: () => ({ publishAndShare: vi.fn(), modal: null }),
+  usePublishShare: () => ({ publishAndShare: publishAndShareSpy, modal: null }),
 }));
 vi.mock('@client/app/hooks/useMessageEditMode', () => {
   const state = { triggerEdit: vi.fn() };
@@ -71,7 +76,13 @@ vi.mock('@client/app/utils/fabFileUtils', () => ({
   saveToFileAndWorkbench: vi.fn(),
 }));
 vi.mock('@client/app/utils/publishApi', () => ({
-  publishReply: vi.fn(),
+  replyPublisher: vi.fn(() => vi.fn()),
+}));
+// Mutable so a test can flip between personal (null) and an active org account.
+let selectedAccountValue: { id: string; name: string; personal: boolean } | null = null;
+vi.mock('@client/app/components/Credits/AccountSelector', () => ({
+  useSelectedAccount: (selector: (s: { selectedAccount: typeof selectedAccountValue }) => unknown) =>
+    selector({ selectedAccount: selectedAccountValue }),
 }));
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
@@ -98,7 +109,10 @@ vi.mock('@client/app/hooks/useAdminSettingsCache', () => ({
 }));
 
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
+import { replyPublisher } from '@client/app/utils/publishApi';
 import MessageContent from './MessageContent';
+
+const replyPublisherMock = replyPublisher as unknown as ReturnType<typeof vi.fn>;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (
@@ -172,5 +186,56 @@ describe('MessageContent actions menu - EnableDataLakes gating', () => {
     fireEvent.click(screen.getByTestId('message-send-to-datalake'));
 
     expect(useSendToDataLakeStore.getState().isOpen).toBe(true);
+  });
+});
+
+describe('MessageContent share reply - org (Team) visibility wiring', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    publishAndShareSpy.mockReset();
+    replyPublisherMock.mockReset();
+    replyPublisherMock.mockReturnValue(vi.fn());
+    selectedAccountValue = null;
+  });
+
+  it('offers the Team option and publishes org-scoped when an org account is active', async () => {
+    selectedAccountValue = { id: 'org_42', name: 'Acme', personal: false };
+    renderAndOpenActionsMenu();
+
+    fireEvent.click(screen.getByTestId('message-share-reply'));
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    // The dialog is told to offer Team, and the publisher is built with the org id so a Team
+    // pick lands an org-tier page.
+    expect(publishAndShareSpy.mock.calls[0][0]).toMatchObject({
+      orgOption: { label: 'Team', hint: 'Members of Acme' },
+    });
+    expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: 'org_42' }));
+  });
+
+  it('omits the Team option in a personal account context', async () => {
+    selectedAccountValue = null;
+    renderAndOpenActionsMenu();
+
+    fireEvent.click(screen.getByTestId('message-share-reply'));
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
+    expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: undefined }));
+  });
+
+  it("omits Team when the selected org is NOT the user's publishable org (multi-org member)", async () => {
+    // The account switcher lists every org the user belongs to, but checkScopePermission only
+    // accepts a Team publish for user.organizationId. Selecting a different (still valid) org must
+    // not offer Team, or the publish would 403.
+    selectedAccountValue = { id: 'org_OTHER', name: 'Other Org', personal: false };
+    renderAndOpenActionsMenu();
+
+    fireEvent.click(screen.getByTestId('message-share-reply'));
+
+    await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
+    expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
+    expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: undefined }));
   });
 });

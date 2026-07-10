@@ -13,7 +13,7 @@ import {
   Prompt,
   UserActivityCounter,
 } from '../models';
-import { InvitePermission, IUserDocument, Permission } from '@bike4mind/common';
+import { InvitePermission, IUserDocument, Permission, hasDeveloperUserTag } from '@bike4mind/common';
 
 export type Ability = MongoAbility;
 export function defineAbilitiesFor(user: IUserDocument | undefined) {
@@ -145,8 +145,12 @@ export function defineAbilitiesFor(user: IUserDocument | undefined) {
     // Allow all users to read prompts
     allow(Permission.read, Prompt);
 
-    // Allow users with the 'analyst' role to create, update, and delete prompts
-    if (user.tags?.includes('Analyst')) {
+    // Prompt-library management: admin or developer (internal-staff bypass) - the
+    // SAME rule as the HTTP ability (apps/client/server/auth/ability.ts). Both
+    // definitions previously gated on the literal 'Analyst' tag with no admin
+    // fallback; unified 2026-07-08 so the Slack/queue paths that consume this
+    // db-core ability match the HTTP path and no longer depend on a retired tag.
+    if (user.isAdmin || hasDeveloperUserTag(user.tags)) {
       allow(Permission.create, Prompt);
       allow(Permission.update, Prompt);
       allow(Permission.delete, Prompt);

@@ -23,6 +23,7 @@ import {
 import { getCachingAdapter, logCacheStats } from './caching/adapters';
 import { convertMessagesToOpenAIFormat } from './messageFormatConverter';
 import { injectJsonSchemaInstruction, isBestEffortJsonSchema } from './responseFormatHelpers';
+import { normalizeOpenAIFinishReason } from './stopReason';
 
 export class XAIBackend implements ICompletionBackend {
   private _baseUrl = 'https://api.x.ai/v1';
@@ -514,12 +515,14 @@ export class XAIBackend implements ICompletionBackend {
 
       // Terminal turn - no choice had tool_calls (we'd have returned above).
       // Emit accum + this turn's tokens.
+      const finishReason = normalizeOpenAIFinishReason(response.choices[0]?.finish_reason);
       const completionInfo = {
         inputTokens: accumInputTokens + (response.usage?.prompt_tokens || 0),
         outputTokens: accumOutputTokens + (response.usage?.completion_tokens || 0),
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
         cacheStats,
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
+        ...(finishReason ? { stopReason: finishReason } : {}),
       };
       await callback(streamedText, completionInfo);
       return;
@@ -528,6 +531,9 @@ export class XAIBackend implements ICompletionBackend {
     const func: { name?: string; id?: string; parameters?: string }[] = [];
     let isInThinkingBlock = false;
     let cachedTokensFromStream = 0; // Track cached tokens from streaming chunks
+    // Keep the last non-null finish_reason (mirrors anthropicBackend's stopReason
+    // capture) - the terminal chunk of a round carries it, earlier chunks don't.
+    let streamFinishReason: string | undefined;
 
     for await (const chunk of response) {
       const streamedText: string[] = [];
@@ -542,6 +548,10 @@ export class XAIBackend implements ICompletionBackend {
       }
 
       chunk?.choices.forEach((c: ChatCompletionChunk.Choice) => {
+        if (c.finish_reason) {
+          streamFinishReason = c.finish_reason;
+        }
+
         // Handle reasoning content for thinking models (only if thinking is enabled)
         if (thinkingEnabled && (c.delta as any).reasoning_content) {
           if (!isInThinkingBlock) {
@@ -575,10 +585,12 @@ export class XAIBackend implements ICompletionBackend {
 
       // Emit accum + this turn's running tokens so wrappedOnChunk
       // (assign-not-add) ends each turn at the cumulative cross-turn total.
+      const normalizedFinishReason = normalizeOpenAIFinishReason(streamFinishReason);
       await callback(streamedText, {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        ...(normalizedFinishReason ? { stopReason: normalizedFinishReason } : {}),
       });
     }
 

@@ -17,7 +17,7 @@ import {
   SRE_DEFAULT_REPO_SLUG,
   type SreJobType,
 } from '@bike4mind/common';
-import { adminSettingsRepository, cacheRepository } from '@bike4mind/database';
+import { adminSettingsRepository, cacheRepository, sreErrorTrackingRepository } from '@bike4mind/database';
 import { createHash } from 'crypto';
 import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToQueue } from '@server/utils/sqs';
@@ -105,6 +105,58 @@ export function parseIssueNumberFromUrl(url: string | undefined): number | undef
   if (!url) return undefined;
   const match = url.match(/\/issues\/(\d+)/);
   return match ? Number(match[1]) : undefined;
+}
+
+/**
+ * Denormalize a GitHub issue's open/closed state onto any SRE tracking docs for
+ * that issue when a webhook reports the issue was closed or reopened.
+ *
+ * This is the authoritative freshness source for `githubIssueState`: GitHub fires
+ * `issues.closed`/`issues.reopened` whenever an issue changes state - whether SRE
+ * merged a fix (`Closes #N`), a human resolved it, or the bot closed it as
+ * `already_fixed` - so a single touchpoint keeps the admin "hide closed-issue
+ * tracking" filter accurate regardless of who closed the issue.
+ *
+ * Deliberately decoupled from `dispatchIssueToSre`'s eligibility gate: `closed`
+ * is intentionally NOT an SRE-eligible action (re-ingesting it would trigger a
+ * false-positive fix-loop alert), but we still want to record the state change.
+ *
+ * No-ops for any action other than `closed`/`reopened`, and swallows its own
+ * errors: a failed state write must never fail the webhook (GitHub would retry
+ * the delivery and re-dispatch the issue for analysis).
+ *
+ * Callable with either the loose `SreIssuePayload` (SRE endpoint) or the org
+ * webhook's `GitHubIssuesPayload` - both satisfy this structural shape.
+ */
+export async function syncSreIssueStateFromWebhook(
+  payload: { action: string; issue: { number: number }; repository?: { full_name?: string } },
+  logger?: Logger
+): Promise<void> {
+  const state = payload.action === 'closed' ? 'closed' : payload.action === 'reopened' ? 'open' : undefined;
+  if (!state) return;
+
+  const repoSlug = payload.repository?.full_name;
+  if (!repoSlug) return;
+
+  try {
+    const updated = await sreErrorTrackingRepository.setGithubIssueState(repoSlug, payload.issue.number, state);
+    if (updated > 0) {
+      logger?.info('[SRE-SENTINEL] Synced githubIssueState from webhook', {
+        action: payload.action,
+        issueNumber: payload.issue.number,
+        repoSlug,
+        state,
+        updated,
+      });
+    }
+  } catch (error) {
+    logger?.warn('[SRE-SENTINEL] Failed to sync githubIssueState (non-fatal)', {
+      action: payload.action,
+      issueNumber: payload.issue.number,
+      repoSlug,
+      error,
+    });
+  }
 }
 
 export interface SreDispatchResult {

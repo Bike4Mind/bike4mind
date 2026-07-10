@@ -1,4 +1,4 @@
-import { IBaseRepository, IMongoDocument } from '@bike4mind/common';
+import { IBaseRepository, IMongoDocument, SettingKey } from '@bike4mind/common';
 import Stripe from 'stripe';
 import type { ISubscription } from '@client/lib/subscriptions/types';
 
@@ -39,6 +39,15 @@ export type SubscriptionPlanDetail = {
    * credit-granting.
    */
   hidden?: boolean;
+  /**
+   * Generic launch/availability gate. When set, this plan is publicly purchasable
+   * only while the named admin-settings boolean is ON; the public subscribe
+   * endpoint refuses checkout otherwise (and paywall UIs can show "coming soon").
+   * Product-neutral - any plan may opt in, and a fork with no such plan simply
+   * has nothing to gate. Admin comp-grants are unaffected. Omitted = always
+   * purchasable (the default for B4M's own plans).
+   */
+  availabilityFlag?: SettingKey;
 };
 
 export interface IUserSubscription extends IMongoDocument {

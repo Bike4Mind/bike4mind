@@ -3,11 +3,7 @@ import type { ILogger } from '@bike4mind/observability';
 let isRegistered = false;
 
 type ErrorCategory =
-  | 'network_terminated'
-  | 'network_timeout'
-  | 'network_connection'
-  | 'unhandled_rejection'
-  | 'uncaught_exception';
+  'network_terminated' | 'network_timeout' | 'network_connection' | 'unhandled_rejection' | 'uncaught_exception';
 
 /**
  * Classifies an error into a category for structured logging and metrics.
@@ -51,7 +47,7 @@ function buildLogEntry(error: unknown, category: ErrorCategory) {
  * Registers global handlers for unhandled promise rejections and uncaught exceptions.
  *
  * Provider-agnostic core shared by Lambda handlers and the always-on
- * QuestProcessorService container. The handlers:
+ * ChatCompletion container. The handlers:
  * 1. Log errors with structured context
  * 2. Classify error types for easier debugging
  * 3. Distinguish network errors from application errors and swallow the network
@@ -73,7 +69,7 @@ function buildLogEntry(error: unknown, category: ErrorCategory) {
  * import { registerProcessErrorHandlers } from '@bike4mind/utils';
  *
  * // Call once at startup, after imports
- * registerProcessErrorHandlers(logger, 'QuestProcessorService');
+ * registerProcessErrorHandlers(logger, 'ChatCompletion');
  * ```
  */
 export function registerProcessErrorHandlers(logger?: ILogger, context: string = 'Process'): void {

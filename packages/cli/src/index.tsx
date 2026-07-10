@@ -21,6 +21,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { App, TrustLocationSelector, RewindSelector, SessionSelector, EnvironmentPicker } from './components';
 import type { PermissionResponse, EnvChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
 import { LoginFlow } from './components/LoginFlow';
 import { SessionStore, ConfigStore, CommandHistoryStore } from './storage';
 import type { Session, Message, CliConfig, ProjectConfig, ProjectLocalConfig, SessionHandoff } from './storage';
@@ -46,6 +47,7 @@ import {
   extractCompactInstructions,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
+import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
@@ -113,7 +115,7 @@ function renderBanner(startupLog: string[] = []): void {
 }
 
 import { useCliStore } from './store';
-import { ServerLlmBackend, isTransientNetworkError } from './llm/ServerLlmBackend';
+import { ServerLlmBackend } from './llm/ServerLlmBackend';
 import { WebSocketLlmBackend } from './llm/WebSocketLlmBackend';
 import { NotifyingLlmBackend } from './llm/NotifyingLlmBackend.js';
 import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
@@ -149,13 +151,10 @@ import {
   createGetFileStructureTool,
   createDecisionLogTool,
   createDecisionStore,
-  formatDecisionsOutput,
   createBlockerTools,
   createBlockerStore,
-  formatBlockersOutput,
   createReviewGateTool,
   createReviewGateStore,
-  formatReviewGatesOutput,
 } from './tools';
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
@@ -167,6 +166,9 @@ import { buildSandbox } from './bootstrap/buildSandbox.js';
 import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
+import { dispatch as dispatchCommand } from './commands/registry.js';
+import { runTurn } from './session/turnController.js';
+import { printDecisions, printBlockers, printReviewGates } from './commands/handlers/workflowViews.js';
 
 interface PermissionPromptState {
   id: string;
@@ -310,6 +312,14 @@ function CliApp() {
   const performCleanup = useCallback(async () => {
     const cleanupTasks: Promise<void>[] = [];
 
+    // Reap background shell sessions (SIGTERM the whole process group) so we don't
+    // orphan a `pnpm dev` / watcher when the CLI exits. Synchronous, best-effort.
+    try {
+      getShellSessionManager().killAll();
+    } catch (err) {
+      logger.debug(`[CLEANUP] Shell session reap error: ${err}`);
+    }
+
     // Save session
     const session = useCliStore.getState().session;
     if (session) {
@@ -383,6 +393,16 @@ function CliApp() {
     state.wsManager,
     state.featureRegistry,
   ]);
+
+  // Mirror background shell-session lifecycle into the store so the UI can render
+  // live indicators. The manager is a process-global singleton shared with the
+  // bash_execute tools, so we subscribe once for the app's lifetime.
+  useEffect(() => {
+    const unsubscribe = getShellSessionManager().subscribe(session => {
+      useCliStore.getState().upsertBackgroundShell(session);
+    });
+    return unsubscribe;
+  }, []);
 
   // Handle Ctrl+C and ESC using Ink's useInput
   useInput((input, key) => {
@@ -1222,14 +1242,13 @@ function CliApp() {
       };
       setStoreSession(sessionWithMessages);
 
-      // Build conversation history
-      const recentMessages = session.messages.slice(-20);
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+      // Build conversation history through the one owner of turn assembly:
+      // token-aware windowing + lossless mapping, replacing the old slice(-20).
+      const contextWindow = getTokenCounter().getContextWindow(session.model, state.availableModels);
+      const previousMessages = ConversationContext.fromSession(session).buildPreviousMessages(messageContent, {
+        model: session.model,
+        contextWindow,
+      });
 
       // Run agent with FULL template (not the display message)
       const cliConfig = await state.configStore.get();
@@ -1272,10 +1291,14 @@ function CliApp() {
       // Update the pending assistant message with the actual response
       const updatedMessages = [...currentSession.messages];
       const lastMessage = updatedMessages[updatedMessages.length - 1];
+      // Lossless tool trace so the next turn can replay tool results, not just
+      // the final prose (see ConversationContext).
+      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       updatedMessages[updatedMessages.length - 1] = {
         id: lastMessage.id, // Preserve the original message ID
         role: 'assistant',
         content: result.finalAnswer,
+        ...(richContent ? { richContent } : {}),
         timestamp: new Date().toISOString(),
         metadata: {
           steps: result.steps.map(formatStep),
@@ -1416,318 +1439,27 @@ function CliApp() {
     }
   };
 
-  const handleMessage = async (message: string) => {
-    // Read session fresh from the Zustand store. The React `state.session`
-    // captured by this closure can be stale when handleMessage is invoked
-    // again via the message-queue drain: the previous turn already wrote
-    // its user message into the store, but the closure's `state` reference
-    // still points at the pre-turn session object. Reading `state.session`
-    // and then writing back would clobber the previous turn's user prompt
-    // (the queued message would appear to "disappear" from history).
-    const storeSession = useCliStore.getState().session;
-    if (!state.agent || !storeSession) {
-      console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
-      return;
-    }
-
-    // Process-hook (host action_required signal): a new user prompt clears any
-    // stale block sentinel.
-    void getProcessHooks()?.fireUserPromptSubmit();
-
-    // Mirror the user turn into the tavern transcript so remote viewers see
-    // it immediately. `text` clamped to the schema's 4000-char cap; the
-    // bridge is a no-op if cc-bridge isn't running.
-    void bridgePresence.emitEvent({ type: 'message', role: 'user', text: message.slice(0, 4000) });
-    void bridgePresence.emitEvent({ type: 'status', status: 'running', text: message.slice(0, 240) });
-
-    // Add to command history
-    await state.commandHistoryStore.add(message);
-    const updatedHistory = await state.commandHistoryStore.list();
-    setCommandHistory(updatedHistory);
-
-    // Check for auto-compact before processing
-    const config = state.config;
-    let activeSession = storeSession;
-    if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
-      const tokenCounter = getTokenCounter();
-      const contextWindow = tokenCounter.getContextWindow(activeSession.model, state.availableModels);
-      const threshold = contextWindow * 0.8;
-
-      const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
-        contextContent: state.contextContent,
-        agentStore: state.agentStore || undefined,
-        customCommands: state.customCommandStore.getAllCommands(),
-        enableSkillTool: config?.preferences.enableSkillTool !== false,
-        additionalDirectories: state.additionalDirectories,
-        featureModulePrompts: state.featureRegistry?.getSystemPromptSections() || undefined,
-        deferredToolNames: deferredToolRegistry.getDirectoryNames(),
-      });
-      const contextUsage = tokenCounter.countSessionTokens(activeSession, systemPrompt);
-
-      if (contextUsage.totalTokens >= threshold) {
-        console.log('\n\u26A0\uFE0F  Context window 80% full. Auto-compacting...\n');
-
-        // Set thinking state for compaction
-        useCliStore.getState().setIsThinking(true);
-
-        try {
-          const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(activeSession.messages, {
-            claudeMdInstructions: extractCompactInstructions(state.contextContent || ''),
-          });
-
-          if (compactionPrompt) {
-            const result = await state.agent.run(compactionPrompt, { maxIterations: 1 });
-
-            await state.sessionStore.save(activeSession);
-            const newSession = createCompactedSession(
-              activeSession,
-              result.finalAnswer,
-              preservedMessages,
-              !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
-            );
-
-            await logger.initialize(newSession.id);
-            setStoreSession(newSession);
-            useCliStore.getState().clearPendingMessages();
-
-            console.log('\u2705 Auto-compacted. Continuing with your message...\n');
-
-            // Update local reference to use new session for remaining code
-            activeSession = newSession;
-          }
-        } finally {
-          useCliStore.getState().setIsThinking(false);
-        }
-      }
-    }
-
-    // Set thinking state to show loading indicator
-    useCliStore.getState().setIsThinking(true);
-
-    // Create abort controller for this operation
-    const abortController = new AbortController();
-    setState(prev => ({ ...prev, abortController }));
-
-    try {
-      // Check if message contains images and build multimodal message if needed
-      let messageContent: any = message;
-      let userMessageContent = message;
-
-      if (state.messageBuilder && state.messageBuilder.hasImages(message)) {
-        const { message: multimodalMessage } = await state.messageBuilder.buildMessage(message);
-        messageContent = multimodalMessage.content;
-        userMessageContent = message; // Keep original text with placeholders for display
-      }
-
-      // Create user message
-      const userMessage: Message = {
-        id: uuidv4(),
-        role: 'user',
-        content: userMessageContent,
-        timestamp: new Date().toISOString(),
-      };
-
-      // Create a pending assistant message to show steps as they come in
-      const pendingAssistantMessage: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: '...',
-        timestamp: new Date().toISOString(),
-        metadata: {
-          steps: [],
-        },
-      };
-
-      // Add user message to session.messages (already complete)
-      // Use activeSession which may have been updated by auto-compact
-      const sessionWithUserMessage: Session = {
-        ...activeSession,
-        messages: [...activeSession.messages, userMessage],
-        updatedAt: new Date().toISOString(),
-      };
-      setStoreSession(sessionWithUserMessage);
-
-      // Add pending assistant message to pendingMessages (dynamic, will update in real-time)
-      useCliStore.getState().addPendingMessage(pendingAssistantMessage);
-
-      // Build conversation history from previous messages (last 10 exchanges to avoid token limits)
-      // Use only the original messages (before pending assistant), not including user message we just added
-      const recentMessages = activeSession.messages.slice(-20); // Last 20 messages = 10 exchanges
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
-
-      // Run agent with conversation history, using multimodal content if images present
-      const cliConfig = await state.configStore.get();
-
-      // Set turn ID for grouped background agent notifications
-      const turnId = `turn-${randomBytes(4).toString('hex')}`;
-      state.backgroundManager?.setCurrentTurn(turnId);
-
-      let result;
-      try {
-        result = await state.agent.run(messageContent, {
-          previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
-          signal: abortController.signal,
-          parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
-        });
-      } finally {
-        state.backgroundManager?.setCurrentTurn(null);
-      }
-
-      // Check if permission was denied
-      const permissionDenied = result.finalAnswer.startsWith('Permission denied for tool');
-
-      // Provide immediate feedback if permission was denied
-      if (permissionDenied) {
-        console.log('\n⚠️  Action denied by user\n');
-      }
-
-      // Count successful tool calls from result.steps (observations = completed tools)
-      const successfulToolCalls = result.steps.filter(s => s.type === 'observation').length;
-
-      // Create the final assistant message
-      const finalAssistantMessage: Message = {
-        id: pendingAssistantMessage.id, // Preserve the original message ID
-        role: 'assistant',
-        content: result.finalAnswer,
-        timestamp: pendingAssistantMessage.timestamp,
-        metadata: {
-          tokenUsage: {
-            prompt: 0,
-            completion: 0,
-            total: result.completionInfo.totalTokens,
-          },
-          creditsUsed: result.completionInfo.totalCredits,
-          steps: result.steps.map(formatStep), // Complete history: thoughts, actions, observations
-          permissionDenied,
-        },
-      };
-
-      // Move the pending message to session.messages (history)
-      useCliStore.getState().completePendingMessage(0, finalAssistantMessage);
-
-      // Get the updated session and update metadata
-      const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
-
-      const updatedSession: Session = {
-        ...currentSession,
-        metadata: {
-          ...currentSession.metadata,
-          totalTokens: currentSession.metadata.totalTokens + result.completionInfo.totalTokens,
-          totalCredits: (currentSession.metadata.totalCredits || 0) + (result.completionInfo.totalCredits || 0),
-          toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
-        },
-      };
-
-      setStoreSession(updatedSession);
-
-      // Auto-save session
-      await state.sessionStore.save(updatedSession);
-    } catch (error) {
-      // Clear pending messages on error
-      useCliStore.getState().clearPendingMessages();
-
-      // Handle abort (user pressed ESC)
-      if (error instanceof Error && error.name === 'AbortError') {
-        logger.debug('[ABORT] Operation aborted by user');
-
-        // Add cancellation message to session
-        const currentSession = useCliStore.getState().session;
-        if (currentSession) {
-          const cancelMessage: Message = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: '⚠️ Operation cancelled by user',
-            timestamp: new Date().toISOString(),
-            metadata: {
-              cancelled: true,
-            },
-          };
-
-          const sessionWithCancel: Session = {
-            ...currentSession,
-            messages: [...currentSession.messages, cancelMessage],
-            updatedAt: new Date().toISOString(),
-          };
-
-          setStoreSession(sessionWithCancel);
-          await state.sessionStore.save(sessionWithCancel);
-        }
-        return;
-      }
-
-      // Handle authentication errors gracefully (without stack trace)
-      if (error instanceof Error) {
-        if (error.message.includes('Authentication failed') || error.message.includes('Authentication expired')) {
-          console.log('\n❌ Authentication failed');
-          console.log('💡 Run /login to authenticate with your API environment.\n');
-          return;
-        }
-      }
-
-      // Defense in depth: a bare network-level abort (e.g. `Error: aborted`
-      // from a TLS socket close, the symptom that rendered as a cryptic
-      // "❌ aborted") is not the user cancelling - it's the connection dropping.
-      // The streaming backend retries these and rewrites the message, but if a
-      // bare one ever reaches here from another path (other backends, etc.),
-      // surface something the user can act on rather than a one-word error.
-      // Reuse the backend's classifier so this stays in lockstep with the full
-      // set of transient patterns it retries (ETIMEDOUT, terminated, fetch
-      // failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
-      const rawMessage = error instanceof Error ? error.message : String(error);
-      if (error instanceof Error && isTransientNetworkError(error)) {
-        console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');
-        logger.debug(`Full error details: ${error.stack || error.message}`);
-        return;
-      }
-
-      // Handle other errors - clean message for users, full stack in debug logs
-      console.error(`\n❌ ${rawMessage}\n`);
-      logger.debug(`Full error details: ${error instanceof Error ? error.stack || error.message : String(error)}`);
-    } finally {
-      // Tavern: the ReAct turn has settled. Parity with Claude Code's
-      // tavern integration: a finished turn means "your turn now" - emit
-      // `awaiting_input` so the chime/toast/tab-badge fire and a remote
-      // user knows to come back. The exception is a user-initiated abort
-      // (ESC): they're already at the keyboard, so emit silent `idle`.
-      // Read from the local `abortController` captured at the top of this
-      // turn - `state.abortController` is already null by now because the
-      // ESC handler clears it eagerly.
-      const wasAborted = abortController.signal.aborted;
-      setState(prev => ({ ...prev, abortController: null }));
-      useCliStore.getState().setIsThinking(false);
-      // Process-hook (host action_required signal): end of turn - clear any block
-      // sentinel (covers a *denied* permission, which never reaches PostToolUse).
-      void getProcessHooks()?.fireStop();
-      void bridgePresence.emitEvent({
-        type: 'status',
-        status: wasAborted ? 'idle' : 'awaiting_input',
-      });
-      // Drain the user-message queue: if the user submitted more messages
-      // while this one was processing, collate ALL of them into a single
-      // combined prompt (separated by blank lines) and submit as one
-      // request. Fewer round-trips and the model can address everything
-      // at once. ESC clears the queue (see ESC handler), so an aborted
-      // turn falls through with an empty queue. setImmediate defers the
-      // recursive call out of this finally to avoid re-entering
-      // handleMessage synchronously.
-      if (!wasAborted) {
-        const queued = useCliStore.getState().dequeueAllMessages();
-        if (queued.length > 0) {
-          const combined = queued.join('\n\n');
-          setImmediate(() => {
-            void handleMessage(combined);
-          });
-        }
-      }
-    }
-  };
+  // Thin wrapper over the extracted turn lifecycle (session/turnController.ts,
+  // issue #228). Builds a React-free TurnContext from the current render state;
+  // all turn logic lives in runTurn so it can be tested without mounting Ink.
+  const handleMessage = (message: string): Promise<void> =>
+    runTurn(message, {
+      agent: state.agent,
+      sessionStore: state.sessionStore,
+      configStore: state.configStore,
+      commandHistoryStore: state.commandHistoryStore,
+      customCommandStore: state.customCommandStore,
+      messageBuilder: state.messageBuilder,
+      config: state.config,
+      availableModels: state.availableModels,
+      agentStore: state.agentStore,
+      contextContent: state.contextContent,
+      additionalDirectories: state.additionalDirectories,
+      featureRegistry: state.featureRegistry,
+      backgroundManager: state.backgroundManager,
+      setCommandHistory,
+      setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+    });
   handleMessageRef.current = handleMessage;
 
   /**
@@ -1767,28 +1499,25 @@ function CliApp() {
 
       useCliStore.getState().addPendingMessage(pendingAssistantMessage);
 
-      // Build conversation history from previous messages
-      const recentMessages = session.messages.slice(-20);
-      const previousMessages = recentMessages
-        .filter((msg: Message) => msg.role === 'user' || msg.role === 'assistant')
-        .map((msg: Message) => ({
-          role: msg.role as 'user' | 'assistant',
-          content: msg.content,
-        }));
+      // Build conversation history through the one owner of turn assembly:
+      // token-aware windowing + lossless mapping, replacing the old slice(-20).
+      const backgroundPrompt = '[System: Background agents have completed. Review and summarize the results.]';
+      const contextWindow = getTokenCounter().getContextWindow(session.model, state.availableModels);
+      const previousMessages = ConversationContext.fromSession(session).buildPreviousMessages(backgroundPrompt, {
+        model: session.model,
+        contextWindow,
+      });
 
       // Run agent with a system prompt to process background results
       // The actual notification will be injected by NotifyingLlmBackend
       const cliConfig = await state.configStore.get();
 
-      const result = await state.agent.run(
-        '[System: Background agents have completed. Review and summarize the results.]',
-        {
-          previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
-          signal: abortController.signal,
-          parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
-        }
-      );
+      const result = await state.agent.run(backgroundPrompt, {
+        previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
+        signal: abortController.signal,
+        parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
+        isReadOnlyTool,
+      });
 
       // Count successful tool calls
       const successfulToolCalls = result.steps.filter(s => s.type === 'observation').length;
@@ -1799,10 +1528,12 @@ function CliApp() {
 
       // Create a continuation message (renders without header due to isContinuation flag)
       // This works with Ink's Static component which doesn't re-render existing items
+      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
       const continuationMessage: Message = {
         id: uuidv4(),
         role: 'assistant',
         content: '---\n\n**Background Agent Results:**\n\n' + result.finalAnswer,
+        ...(richContent ? { richContent } : {}),
         timestamp: new Date().toISOString(),
         metadata: {
           isContinuation: true, // Flag to skip "Assistant" header in MessageItem
@@ -2188,24 +1919,6 @@ function CliApp() {
     }
   };
 
-  const printDecisions = (): void => {
-    console.log('\n📋 Decision Log\n');
-    console.log(formatDecisionsOutput(decisionStoreRef.current.decisions));
-    console.log('');
-  };
-
-  const printBlockers = (): void => {
-    console.log('\n🚧 Blockers\n');
-    console.log(formatBlockersOutput(blockerStoreRef.current.blockers));
-    console.log('');
-  };
-
-  const printReviewGates = (): void => {
-    console.log('\n🛑 Review Gates\n');
-    console.log(formatReviewGatesOutput(reviewGateStoreRef.current.reviewGates));
-    console.log('');
-  };
-
   const printWorkflowOverview = (): void => {
     const decisionCount = decisionStoreRef.current.decisions.length;
     const blockers = blockerStoreRef.current.blockers;
@@ -2385,86 +2098,22 @@ function CliApp() {
       }
     }
 
+    // Registry-based commands (migrated out of the switch below).
+    // Tried after the custom-command check so user commands still take
+    // precedence; unmatched names fall through to the switch.
+    const handledByRegistry = await dispatchCommand(command, args, {
+      configStore: state.configStore,
+      customCommandStore: state.customCommandStore,
+      permissionManager: state.permissionManager,
+      decisionStore: decisionStoreRef.current,
+      blockerStore: blockerStoreRef.current,
+      reviewGateStore: reviewGateStoreRef.current,
+      openConfigEditor: () => setShowConfigEditor(true),
+    });
+    if (handledByRegistry) return;
+
     // Handle built-in commands
     switch (command) {
-      case 'help': {
-        const customCommands = state.customCommandStore.getAllCommands();
-        const hasCustomCommands = customCommands.length > 0;
-
-        console.log(`
-Available commands:
-  /help - Show this help message
-  /exit - Exit the CLI
-  /clear - Start a new session
-  /rewind - Rewind conversation to a previous point
-  /undo - Undo the last file change
-  /checkpoints - List available file restore points
-  /restore <n> - Restore files to a specific checkpoint
-  /diff [n] - Show diff between current state and a checkpoint
-  /login - Authenticate with your B4M account
-  /logout - Clear authentication and sign out
-  /whoami - Show current authenticated user
-  /usage - Show credit usage and balance
-  /save <name> - Save current session
-  /resume - List and resume saved sessions
-  /config - Show configuration
-
-API Configuration:
-  /set-api <url> - Connect to self-hosted Bike4Mind instance
-  /reset-api - Clear the custom API URL (falls back to the default, or prompts you to pick one)
-  /api-info - Show current API configuration
-
-Tool Permissions:
-  /trust <tool-name> - Trust a tool (won't ask permission again)
-  /untrust <tool-name> - Remove tool from trusted list
-  /trusted - List all trusted tools
-
-Project Configuration:
-  /project-config - Show merged project configuration
-
-Custom Commands:
-  /commands - List all custom commands
-  /commands:new <name> - Create a new custom command
-  /commands:reload - Reload custom commands from disk
-
-Terminal Setup:
-  /terminal-setup - Configure Shift+Enter for multi-line input
-
-Keyboard Shortcuts:
-  Ctrl+C          - Press twice to exit
-  Esc             - Abort current operation
-  Shift+Tab       - Toggle auto-accept edits
-  Ctrl+U          - Clear current line
-  Ctrl+K          - Clear from cursor to end of line
-  Ctrl+W          - Delete word before cursor
-  Ctrl+A          - Move cursor to beginning
-  Ctrl+E          - Move cursor to end
-  Ctrl+B / ←      - Move cursor left
-  Ctrl+F / →      - Move cursor right
-  Ctrl+D          - Delete character at cursor
-  Ctrl+L          - Clear input
-  ↑ / ↓           - Navigate history / autocomplete
-  Tab             - Accept autocomplete suggestion
-  Shift+Cmd+Click - Open links in browser
-
-Multi-line Input:
-  \\ + Enter       - Insert newline (works everywhere)
-  Option + Enter  - Insert newline (macOS standard terminals)
-  Shift + Enter   - Insert newline (iTerm2, WezTerm, Ghostty, Kitty)${hasCustomCommands ? '\n\n📝 Custom Commands Available:' : ''}${
-    hasCustomCommands
-      ? customCommands
-          .map(cmd => {
-            const source = cmd.source === 'global' ? '🏠' : '📁';
-            const argHint = cmd.argumentHint ? ` ${cmd.argumentHint}` : '';
-            return `\n  ${source} /${cmd.name}${argHint} - ${cmd.description}`;
-          })
-          .join('')
-      : ''
-  }
-        `);
-        break;
-      }
-
       case 'exit':
       case 'quit':
         // If a Ctrl+C exit chain is already in flight, don't start a second
@@ -2597,12 +2246,6 @@ Multi-line Input:
         break;
       }
 
-      case 'config': {
-        // Open interactive configuration editor
-        setShowConfigEditor(true);
-        break;
-      }
-
       case 'set-api': {
         const rawUrl = args[0];
 
@@ -2655,18 +2298,6 @@ Multi-line Input:
         } else {
           console.log("💡 Restart the CLI and you'll be prompted to choose a backend.\n");
         }
-        break;
-      }
-
-      case 'api-info': {
-        const config = await state.configStore.get();
-        const endpoint = resolveApiEndpoint(config.apiConfig);
-        const apiType = getEnvironmentName(config.apiConfig);
-
-        console.log('\n🌍 API Configuration:\n');
-        console.log(`Type: ${apiType}`);
-        console.log(`URL: ${endpoint.status === 'configured' ? endpoint.url : '(not configured)'}`);
-        console.log('');
         break;
       }
 
@@ -2806,22 +2437,6 @@ Multi-line Input:
         state.permissionManager.untrustTool(toolToUntrust);
         await state.configStore.untrustTool(toolToUntrust);
         console.log(`✅ Tool '${toolToUntrust}' removed from trusted list`);
-        break;
-      }
-
-      case 'trusted': {
-        if (!state.permissionManager) {
-          console.log('Permission manager not initialized');
-          return;
-        }
-        const trustedTools = state.permissionManager.getTrustedTools();
-        console.log('\n🔒 Trusted Tools:\n');
-        if (trustedTools.length === 0) {
-          console.log('  (none)');
-        } else {
-          trustedTools.forEach(t => console.log(`  - ${t}`));
-        }
-        console.log('');
         break;
       }
 
@@ -3898,21 +3513,6 @@ Multi-line Input:
         break;
       }
 
-      case 'decisions': {
-        printDecisions();
-        break;
-      }
-
-      case 'blockers': {
-        printBlockers();
-        break;
-      }
-
-      case 'review-gates': {
-        printReviewGates();
-        break;
-      }
-
       case 'handoff': {
         await runHandoffCommand(args);
         break;
@@ -3927,14 +3527,14 @@ Multi-line Input:
             printWorkflowOverview();
             break;
           case 'decisions':
-            printDecisions();
+            printDecisions(decisionStoreRef.current);
             break;
           case 'blockers':
-            printBlockers();
+            printBlockers(blockerStoreRef.current);
             break;
           case 'review-gates':
           case 'gates':
-            printReviewGates();
+            printReviewGates(reviewGateStoreRef.current);
             break;
           case 'handoff':
             await runHandoffCommand(subArgs);
@@ -3944,27 +3544,6 @@ Multi-line Input:
             console.log('Available: decisions, blockers, handoff, review-gates (alias: gates)');
             break;
         }
-        break;
-      }
-
-      case 'dirs': {
-        const additionalDirs = await state.configStore.getAdditionalDirectories();
-        const cwd = process.cwd();
-
-        console.log('\n📂 Accessible Directories:\n');
-        console.log(`  📁 Working directory: ${cwd}`);
-
-        if (additionalDirs.length > 0) {
-          console.log('\n  📁 Additional directories:');
-          additionalDirs.forEach(d => {
-            console.log(`     ${d}`);
-          });
-        } else {
-          console.log('\n  No additional directories configured.');
-          console.log('  Use /add-dir <path> or --add-dir <path> flag to add directories.');
-        }
-
-        console.log('');
         break;
       }
 

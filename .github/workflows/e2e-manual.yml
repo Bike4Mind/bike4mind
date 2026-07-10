@@ -29,6 +29,8 @@ on:
           - Profile
           - Tavern
           - Search
+          - Data Lake
+          - Skills
         default: All tests
       pr_number:
         description: 'PR number for preview env (overrides stage, e.g. 123)'
@@ -37,6 +39,14 @@ on:
       e2e_test_id:
         description: 'Tester ID for user isolation (e.g. alice)'
         type: string
+        required: false
+      # Internal: set to 'true' only by the deployer's staging-deploy trigger when
+      # REQUIRE_E2E is enabled. Coalesces rapid gate runs to the latest tip; leave
+      # 'false' for manual/scheduled runs (which keep their existing behavior).
+      gate_run:
+        description: 'Internal: deploy-triggered gate run (leave false for manual runs)'
+        type: string
+        default: 'false'
         required: false
 
 env:
@@ -51,11 +61,16 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # Post the e2e/smoke commit status the prod-promotion console reads (P0-2).
+      statuses: write
     # Serialize per-stage so an overlapping scheduled + manual run (or two
     # manual runs) can't stomp each other's global-setup data cleanup.
+    # Gate runs (deploy-triggered) share one group and coalesce to the latest tip
+    # via cancel-in-progress. Manual/scheduled runs keep their exact prior behavior:
+    # per-target group, no cancellation (gate_run is unset -> the else branch).
     concurrency:
-      group: e2e-manual-${{ inputs.pr_number || inputs.stage || 'dev' }}
-      cancel-in-progress: false
+      group: ${{ inputs.gate_run == 'true' && 'e2e-manual-gate' || format('e2e-manual-{0}', inputs.pr_number || inputs.stage || 'dev') }}
+      cancel-in-progress: ${{ inputs.gate_run == 'true' }}
 
     steps:
       - name: Resolve configuration
@@ -134,6 +149,32 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      # Capture the SHA currently live on staging BEFORE the suite runs, so a mid-
+      # run staging redeploy can't mislabel it. Source of truth = the newest main
+      # commit whose `staging/deploy` status is success (the same signal the
+      # console's staging gate reads) - resolved via GITHUB_TOKEN, no AWS/SSM.
+      # Only the full-suite dev/staging run stamps the promotable frontier (P0-2):
+      # skip previews and scoped single-project dispatches. Best-effort by design.
+      - name: Resolve tested SHA for e2e/smoke status
+        id: tested_sha
+        if: github.event_name == 'schedule' || (inputs.pr_number == '' && (inputs.test_project == '' || inputs.test_project == 'All tests'))
+        continue-on-error: true
+        uses: actions/github-script@v8
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const owner = 'Bike4Mind', repo = 'bike4mind';
+            const { data: commits } = await github.rest.repos.listCommits({ owner, repo, sha: 'main', per_page: 20 });
+            for (const c of commits) {
+              const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: c.sha });
+              if (st.statuses.some(s => s.context === 'staging/deploy' && s.state === 'success')) {
+                core.setOutput('sha', c.sha);
+                core.info(`Tested staging SHA = ${c.sha} (newest with staging/deploy=success)`);
+                return;
+              }
+            }
+            core.warning('No recent main commit has staging/deploy=success; e2e/smoke status will be skipped.');
+
       - name: Install Playwright Chromium
         working-directory: apps/client
         # Cap the install: the yauzl/Node>=24.16 extraction wedge
@@ -196,6 +237,8 @@ jobs:
             "Profile")         PW_ARGS="--project=profile" ;;
             "Tavern")          PW_ARGS="--project=tavern" ;;
             "Search")          PW_ARGS="--project=search" ;;
+            "Data Lake")       PW_ARGS="--project=data-lake" ;;
+            "Skills")          PW_ARGS="--project=skills" ;;
             *)                 echo "Unknown test selection: '$TEST_PROJECT' — running full suite" ;;
           esac
           [ -n "$PW_ARGS" ] && echo "Running specific test: $TEST_PROJECT ($PW_ARGS)"
@@ -282,6 +325,41 @@ jobs:
           echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
           echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Post e2e/smoke commit status (P0-2 console gate)
+        # Stamp the tested staging SHA with the full-suite result so the prod-
+        # promotion console can read a per-commit e2e signal. `success` only when
+        # nothing failed, nothing was left unstarted, and tests actually ran.
+        # Best-effort: never fails the e2e run.
+        if: always() && steps.tested_sha.outputs.sha != ''
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          TESTED_SHA: ${{ steps.tested_sha.outputs.sha }}
+          FAILED: ${{ steps.results.outputs.failed }}
+          NOT_STARTED: ${{ steps.results.outputs.not_started }}
+          PASSED: ${{ steps.results.outputs.passed }}
+          TOTAL: ${{ steps.results.outputs.total }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const sha = process.env.TESTED_SHA;
+            const total = Number(process.env.TOTAL || '0');
+            if (total === 0) {
+              core.warning('No e2e results parsed; skipping e2e/smoke status (leaves it missing = not promotable).');
+              return;
+            }
+            const ok = process.env.FAILED === '0' && process.env.NOT_STARTED === '0';
+            const state = ok ? 'success' : 'failure';
+            const desc = (ok
+              ? `Full e2e suite passed (${process.env.PASSED}/${total})`
+              : `Full e2e suite: ${process.env.FAILED} failed, ${process.env.NOT_STARTED} not started`).slice(0, 140);
+            await github.rest.repos.createCommitStatus({
+              owner: 'Bike4Mind', repo: 'bike4mind', sha,
+              state, context: 'e2e/smoke', target_url: process.env.RUN_URL, description: desc,
+            });
+            core.info(`Posted e2e/smoke=${state} on ${sha.slice(0, 7)}`);
 
       - name: Parse credits data
         id: credits

@@ -168,6 +168,7 @@ export const SettingKeySchema = z.enum([
 
   // CREDITS RELATED SETTINGS
   'enforceCredits',
+  'billOperationalUsage',
   'enableTeamPlan',
   'allowOpenRegistration',
   'blockDisposableEmails',
@@ -259,6 +260,9 @@ export const SettingKeySchema = z.enum([
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'optiMaxToolCalls',
+
+  // LIBREONCOLOGY SETTINGS
+  'EnableLibreOncology',
 
   // CONTEXT TELEMETRY SETTINGS
   'EnableContextTelemetry',
@@ -359,6 +363,9 @@ export const OrchestrationDefaultsSchema = z.object({
     'edit_local_file',
     'delete_file',
     'bash_execute',
+    // Background-shell mutators (poll/list are read-only and stay allowed)
+    'write_shell_stdin',
+    'kill_background_shell',
     // Blog authoring / external publish
     'blog_draft',
     'blog_edit',
@@ -1327,6 +1334,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableComputeSubmission', order: 82 },
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
+      { key: 'EnableLibreOncology', order: 85 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -1381,7 +1389,8 @@ export const API_SERVICE_GROUPS = {
     settings: [
       { key: 'pricePerCredit', order: 1 },
       { key: 'enforceCredits', order: 2 },
-      { key: 'enableTeamPlan', order: 3 },
+      { key: 'billOperationalUsage', order: 3 },
+      { key: 'enableTeamPlan', order: 4 },
     ],
   },
   KNOWLEDGE: {
@@ -2211,6 +2220,18 @@ export const settingsMap = {
     // client and server resolve the same default.
     defaultValue: process.env.B4M_SELF_HOST === 'true' ? false : true,
     description: 'Whether to enforce credits for users',
+    group: API_SERVICE_GROUPS.CREDITS.id,
+    category: 'Users',
+  }),
+  billOperationalUsage: makeBooleanSetting({
+    key: 'billOperationalUsage',
+    name: 'Bill Operational Usage',
+    // Default OFF: operational-model and embedding spend (auto-naming, summarization,
+    // tagging, context summarization, KB query embeddings) is recorded as platform COGS
+    // but not deducted from the user/org. Turn ON to also debit credits for that spend.
+    defaultValue: false,
+    description:
+      'Whether operational-model and embedding usage (auto-naming, summarization, tagging, KB search embeddings) is billed to the user/org. Off = recorded as platform cost only.',
     group: API_SERVICE_GROUPS.CREDITS.id,
     category: 'Users',
   }),
@@ -3083,6 +3104,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 81,
     dependsOn: 'EnableOptiHashi',
+  }),
+  // [DELETION-FOOTPRINT] LibreOncology launch gate (removed when the product is
+  // extracted). When off, the LibreOncology upgrade page shows "coming soon" and
+  // the public subscribe endpoint refuses checkout (via the generic
+  // plan.availabilityFlag path), so no one can buy into the product before its
+  // lake + course maps are provisioned. Flipped ON per-environment at launch.
+  // Admin comp-grants are unaffected (different route). Mirrors EnableOptiHashi.
+  EnableLibreOncology: makeBooleanSetting({
+    key: 'EnableLibreOncology',
+    name: 'Enable LibreOncology',
+    defaultValue: false,
+    description:
+      'Enable public LibreOncology subscriptions (checkout). Off = the product shows "coming soon" and cannot be purchased; entitled/comp users are unaffected.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 85,
   }),
   EnableComputeSubmission: makeBooleanSetting({
     key: 'EnableComputeSubmission',

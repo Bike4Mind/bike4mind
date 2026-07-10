@@ -1,4 +1,9 @@
-import { creditTransactionRepository, organizationRepository, withTransaction } from '@bike4mind/database';
+import {
+  creditLotRepository,
+  creditTransactionRepository,
+  organizationRepository,
+  withTransaction,
+} from '@bike4mind/database';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { ForbiddenError } from '@server/utils/errors';
 import { creditService } from '@bike4mind/services';
@@ -62,7 +67,7 @@ const handler = baseApi().post(
             metadata: { adminUserId: req.user!.id, reason, source: 'admin_topup' },
           },
           {
-            db: { creditTransactions: creditTransactionRepository },
+            db: { creditTransactions: creditTransactionRepository, creditLots: creditLotRepository },
             creditHolderMethods: organizationRepository,
           }
         );

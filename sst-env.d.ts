@@ -27,11 +27,6 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "CliLlmHandler": {
-      "name": string
-      "type": "sst.aws.Function"
-      "url": string
-    }
     "CliToolHandler": {
       "name": string
       "type": "sst.aws.Function"
@@ -206,9 +201,13 @@ declare module "sst" {
       "type": "sst.sst.Secret"
       "value": string
     }
-    "QuestProcessorService": {
+    "ChatCompletion": {
       "type": "sst.aws.Service"
       "url": string
+    }
+    "CHAT_COMPLETION_INTERNAL_SECRET": {
+      "type": "sst.sst.Secret"
+      "value": string
     }
     "RATE_LIMIT_INGEST_TOKEN": {
       "type": "sst.sst.Secret"

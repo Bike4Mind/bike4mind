@@ -45,6 +45,23 @@ const CombinedNotebooks = () => {
   const isAgentsEnabled = isFeatureEnabled('enableAgents');
   const location = useLocation();
 
+  // Route-driven sidebar selection. Anywhere in the projects/agents sections (the grid or a
+  // specific /:id screen) the stale current-session highlight should be dropped (currentSessionId
+  // is a persisted store value that isn't cleared on navigation). A specific project/agent screen
+  // additionally highlights its own row. Computed once here so the hot per-notebook rows don't
+  // each subscribe to the router.
+  const onProjectsSection = location.pathname === '/projects' || location.pathname.startsWith('/projects/');
+  const onAgentsSection = location.pathname === '/agents' || location.pathname.startsWith('/agents/');
+  const suppressNotebookHighlight = onProjectsSection || onAgentsSection;
+  const activeProjectId = useMemo(() => {
+    const match = location.pathname.match(/^\/projects\/([^/]+)/);
+    return match ? match[1] : null;
+  }, [location.pathname]);
+  const activeAgentId = useMemo(() => {
+    const match = location.pathname.match(/^\/agents\/([^/]+)/);
+    return match ? match[1] : null;
+  }, [location.pathname]);
+
   // The shared sidebar serves the default surface (surface:null). Product surfaces like /opti
   // own a dedicated, fully scoped nav (e.g. OptiSidenav) and no longer render this component, so
   // it carries no surface-specific branching.
@@ -638,9 +655,7 @@ const CombinedNotebooks = () => {
                     display: 'flex',
                     alignItems: 'center',
                     cursor: 'pointer',
-                    backgroundColor: isSelected
-                      ? theme.palette.notebooklist.focusedBackground
-                      : theme.palette.background.panel,
+                    backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
                     '&:hover': {
                       backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
                     },
@@ -648,7 +663,21 @@ const CombinedNotebooks = () => {
                   };
                 }}
               >
-                <BookOpen size={18} style={{ color: 'inherit' }} />
+                {/* 20x20 frame around an 18px SVG, matching the top SidenavNav icon slots.
+                    Pin the child svg to 18px so it can't stretch to fill the 20px frame. */}
+                <Box
+                  sx={{
+                    width: 20,
+                    height: 20,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    '& svg': { width: '18px', height: '18px' },
+                  }}
+                >
+                  <BookOpen style={{ color: 'inherit' }} />
+                </Box>
                 <Typography
                   level="body-xs"
                   sx={theme => ({
@@ -724,7 +753,8 @@ const CombinedNotebooks = () => {
                         isShared={false}
                         favoriteSessions={favoriteSessions}
                         showMessageCount={false}
-                        disableExportOps
+                        suppressActive={suppressNotebookHighlight}
+                        activeAgentId={activeAgentId}
                         onNavigate={handleItemNavigate}
                         onNotebookClick={handleNotebookClick}
                         onToggle={handleToggleItemSelection}
@@ -753,12 +783,14 @@ const CombinedNotebooks = () => {
                     isExpanded={expandedProjects.has(project.id)}
                     onToggleExpand={() => handleToggleProject(project.id)}
                     onClick={() => handleItemNavigate(`/projects/${project.id}`)}
+                    isSelected={project.id === activeProjectId}
                   />
                   {expandedProjects.has(project.id) && (
                     <ProjectSessionList
                       project={project as IProjectDocument}
                       onNotebookClick={handleNotebookClick}
                       favoriteSessions={favoriteSessions}
+                      suppressActive={suppressNotebookHighlight}
                     />
                   )}
                 </Box>
@@ -774,6 +806,8 @@ const CombinedNotebooks = () => {
             selectedItems={selectedItems}
             favoriteSessions={favoriteSessions}
             showMessageCount={showMessageCounts}
+            suppressActive={suppressNotebookHighlight}
+            activeAgentId={activeAgentId}
             onNavigate={handleItemNavigate}
             onNotebookClick={handleNotebookClick}
             onToggle={handleToggleItemSelection}

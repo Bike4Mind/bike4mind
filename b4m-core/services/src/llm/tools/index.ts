@@ -51,6 +51,10 @@ export type CliLlmTools =
   | 'grep_search'
   | 'delete_file'
   | 'bash_execute'
+  | 'check_shell_output'
+  | 'write_shell_stdin'
+  | 'list_background_shells'
+  | 'kill_background_shell'
   | 'recent_changes'
   | 'lattice_create_model'
   | 'lattice_add_entity'
@@ -146,10 +150,9 @@ export const b4mTools = {
 } satisfies {
   // PremiumOverlayToolName: implemented by premium overlay packages, supplied at
   // runtime via the externalTools merge - core intentionally has no entry for them.
-  [key in Exclude<
-    LlmTools,
-    CliLlmTools | 'delegate_to_agent' | SlackLlmTools | PremiumOverlayToolName
-  >]: ToolDefinition;
+  [
+    key in Exclude<LlmTools, CliLlmTools | 'delegate_to_agent' | SlackLlmTools | PremiumOverlayToolName>
+  ]: ToolDefinition;
 };
 
 export const generateTools = (
@@ -169,7 +172,8 @@ export const generateTools = (
   tools: Record<string, ToolDefinition> = b4mTools,
   allowedDirectories?: string[],
   entitlementKeys: string[] = [],
-  sessionId?: string
+  sessionId?: string,
+  codeMinifier?: ToolContext['codeMinifier']
 ): Record<string, ICompletionOptionTools> => {
   const context: ToolContext = {
     userId,
@@ -187,6 +191,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    codeMinifier,
   };
 
   return Object.entries(tools).reduce(

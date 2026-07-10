@@ -26,7 +26,11 @@ import {
 import { WebhookAuditLogger, extractWebhookMetadata } from '@server/integrations/github/WebhookAuditLogger';
 import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLogger';
 import { decryptToken } from '@server/security/tokenEncryption';
-import { dispatchIssueToSre, SreIssuePayloadSchema } from '@server/integrations/github/sreWebhookDispatch';
+import {
+  dispatchIssueToSre,
+  syncSreIssueStateFromWebhook,
+  SreIssuePayloadSchema,
+} from '@server/integrations/github/sreWebhookDispatch';
 import { dispatchReviewToSreRevision } from '@server/integrations/github/sreRevisionDispatch';
 import { serializeError } from '@server/utils/serializeError';
 import { randomUUID } from 'crypto';
@@ -192,6 +196,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           });
           return res.status(200).json({ success: true, message: 'Accepted' });
         }
+
+        // Keep the denormalized githubIssueState fresh for the admin filter.
+        // Runs for closed/reopened (dispatchIssueToSre drops `closed` at its
+        // eligibility gate, so this is the only path that records a close here).
+        // No-ops for other actions; swallows its own errors.
+        await syncSreIssueStateFromWebhook(parseResult.data, logger);
 
         const result = await dispatchIssueToSre(parseResult.data, logger, correlationId);
         logger.info('[SRE-WEBHOOK] Issue dispatch complete', {

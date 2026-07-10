@@ -103,26 +103,38 @@ export function applyRedirect(
  * Decides whether the layout `beforeLoad` guard should bounce an authenticated
  * user to the /accept-policies interstitial.
  *
- * Redirect ONLY when the user has been confirmed by the server this page load
- * (`isHydrated` - flipped true the first time /api/identify, refreshUser, or a
- * WebSocket push writes a non-null user) AND still lacks an accepted policy
- * version. Gating on `isHydrated` is what fixes the post-deploy edge case: a
- * session that was already logged in when the consent feature shipped rehydrates
- * from a persisted `user-context` stub that predates `aupAcceptedVersion`, so the
- * field reads as missing. Before identify refetches (which honors a 5-min
- * `staleTime` when the stub is seeded as react-query `initialData`), that stub
- * would otherwise trip a spurious interstitial flash on hard reload. Deferring
- * until `isHydrated` lets the server-authoritative (grandfathered) value land
- * first. A genuinely un-consented account is still gated: after login, identify
- * sets the user (isHydrated true) with no `aupAcceptedVersion`, so the guard
- * fires on the next protected navigation. This client redirect is UX only - the
- * server consent-gate middleware is the real enforcement and fails closed.
+ * Redirect ONLY when there is a live session (`accessToken` present) AND the user
+ * has been confirmed by the server this page load (`isHydrated` - flipped true the
+ * first time /api/identify, refreshUser, or a WebSocket push writes a non-null user)
+ * AND still lacks an accepted policy version.
+ *
+ * The `accessToken` gate is load-bearing: recording acceptance (POST
+ * /api/user/accept-policies) needs an authenticated `req.user` and 401s without one,
+ * and /accept-policies itself bounces a token-less user to /login. Without this gate a
+ * user with a stale persisted `currentUser` but no live session is sent to
+ * /accept-policies (which can't record acceptance for them), bounced to /login, then -
+ * because a stale `currentUser` makes the login page redirect back into the app shell -
+ * routed straight back to /accept-policies: an inescapable /login <-> /accept-policies
+ * loop. Requiring a token routes a broken session to /login instead, where it can
+ * re-authenticate. See issue #386.
+ *
+ * Gating on `isHydrated` fixes a separate post-deploy edge case: a session that was
+ * already logged in when the consent feature shipped rehydrates from a persisted
+ * `user-context` stub that predates `aupAcceptedVersion`, so the field reads as missing.
+ * Before identify refetches (which honors a 5-min `staleTime` when the stub is seeded as
+ * react-query `initialData`), that stub would otherwise trip a spurious interstitial flash
+ * on hard reload. Deferring until `isHydrated` lets the server-authoritative (grandfathered)
+ * value land first. A genuinely un-consented account is still gated: after login, identify
+ * sets the user (isHydrated true) with a live token and no `aupAcceptedVersion`, so the guard
+ * fires on the next protected navigation. This client redirect is UX only - the server
+ * consent-gate middleware is the real enforcement and fails closed.
  */
 export function shouldRedirectToConsent(params: {
   currentUser: { aupAcceptedVersion?: unknown } | null;
   isHydrated: boolean;
+  accessToken: string | null;
 }): boolean {
-  return !!params.currentUser && params.isHydrated && !params.currentUser.aupAcceptedVersion;
+  return !!params.accessToken && !!params.currentUser && params.isHydrated && !params.currentUser.aupAcceptedVersion;
 }
 
 /**

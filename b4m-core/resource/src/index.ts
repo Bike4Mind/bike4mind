@@ -10,7 +10,7 @@
  */
 import { DEFAULT_MANIFEST } from './manifest';
 
-export type Kind = 'secret' | 'bucket' | 'queue' | 'function' | 'websocket' | 'record';
+export type Kind = 'secret' | 'bucket' | 'queue' | 'function' | 'service' | 'websocket' | 'record';
 
 export interface ManifestEntry {
   kind: Kind;
@@ -37,11 +37,13 @@ type Shape<E extends ManifestEntry> = E['kind'] extends 'secret'
       ? { name: Optional<E, string> }
       : E['kind'] extends 'queue'
         ? { url: Optional<E, string> }
-        : E['kind'] extends 'websocket'
-          ? { managementEndpoint: string; url: string }
-          : E['kind'] extends 'record'
-            ? Optional<E, Record<string, string>>
-            : never;
+        : E['kind'] extends 'service'
+          ? { url: Optional<E, string> }
+          : E['kind'] extends 'websocket'
+            ? { managementEndpoint: string; url: string }
+            : E['kind'] extends 'record'
+              ? Optional<E, Record<string, string>>
+              : never;
 
 export type ResourceShim<M extends Manifest = Manifest> = { App: App } & {
   [K in keyof M]: Shape<M[K]>;
@@ -103,6 +105,7 @@ function buildShape(name: string, entry: ManifestEntry, env: Env): Shaped {
         },
       };
     case 'queue':
+    case 'service':
       return {
         get url() {
           return resolve(env, key, entry.optional);

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseFileStructure, getSupportedLanguages, getLanguageForExtension } from '../treeSitterEngine';
+import { parseFileStructure, getSupportedLanguages, getLanguageForExtension, stripComments } from '../treeSitterEngine';
 
 describe('treeSitterEngine', () => {
   describe('parseFileStructure', () => {
@@ -171,6 +171,78 @@ class Bar {} // line 5
 
       const bar = items.find(i => i.name === 'Bar');
       expect(bar?.line).toBe(5);
+    });
+  });
+
+  describe('stripComments', () => {
+    it('removes line and block comments from TypeScript while keeping code intact', async () => {
+      const source = `// leading comment
+import { useState } from 'react'; // trailing comment
+
+/* block comment
+   spanning lines */
+export function greet(name: string): string {
+  // inner comment
+  return \`Hello, \${name}\`; /* inline block */
+}
+`;
+      const stripped = await stripComments(source, '.ts');
+      expect(stripped).not.toBeNull();
+      expect(stripped).not.toContain('leading comment');
+      expect(stripped).not.toContain('block comment');
+      expect(stripped).not.toContain('inner comment');
+      expect(stripped).not.toContain('inline block');
+      // Code retained
+      expect(stripped).toContain("import { useState } from 'react';");
+      expect(stripped).toContain('export function greet(name: string): string');
+      expect(stripped).toContain('return `Hello, ${name}`;');
+
+      // Stripped output is still syntactically valid: re-parsing finds the same symbols.
+      const items = await parseFileStructure(stripped as string, 'typescript');
+      expect(items.find(i => i.kind === 'function' && i.name === 'greet')).toBeDefined();
+    });
+
+    it('removes JSX comments from TSX', async () => {
+      const source = `export const App = () => {
+  return (
+    <div>
+      {/* jsx comment here */}
+      <span>hello</span>
+    </div>
+  );
+};
+`;
+      const stripped = await stripComments(source, '.tsx');
+      expect(stripped).not.toBeNull();
+      expect(stripped).not.toContain('jsx comment here');
+      expect(stripped).toContain('<span>hello</span>');
+    });
+
+    it('strips Python # comments but preserves docstrings', async () => {
+      const source = `# module comment
+def add(a, b):
+    """Return the sum of a and b."""  # trailing comment
+    return a + b  # inline
+`;
+      const stripped = await stripComments(source, '.py');
+      expect(stripped).not.toBeNull();
+      expect(stripped).not.toContain('module comment');
+      expect(stripped).not.toContain('trailing comment');
+      expect(stripped).not.toContain('# inline');
+      // Docstring is a string expression (semantically live via __doc__), not a comment.
+      expect(stripped).toContain('"""Return the sum of a and b."""');
+      expect(stripped).toContain('return a + b');
+    });
+
+    it('returns the source unchanged when there are no comments', async () => {
+      const source = `export const x = 1;\nexport const y = 2;\n`;
+      const stripped = await stripComments(source, '.ts');
+      expect(stripped).toBe(source);
+    });
+
+    it('returns null for unsupported extensions (caller falls back)', async () => {
+      expect(await stripComments('key: value', '.yaml')).toBeNull();
+      expect(await stripComments('# title', '.md')).toBeNull();
     });
   });
 

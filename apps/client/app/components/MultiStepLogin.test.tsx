@@ -14,7 +14,12 @@ const mocks = vi.hoisted(() => ({
   verifyOTC: vi.fn(),
   setCurrentUser: vi.fn(),
   trackSignupConversion: vi.fn(),
+  applyRedirect: vi.fn(),
+  // Mutable so the "already logged in" tests can vary the session state. Not reset by
+  // vi.clearAllMocks() (it only touches mock fns) - each describe's beforeEach resets these.
+  userState: { currentUser: null as unknown },
   accessTokenState: {
+    accessToken: null as string | null,
     setVerifiedTokens: vi.fn(),
     resetTokens: vi.fn(),
     setMfaPendingTokens: vi.fn(),
@@ -28,10 +33,16 @@ vi.mock('@client/app/hooks/data/auth', () => ({
   useVerifyOTC: () => ({ mutateAsync: mocks.verifyOTC, isPending: false }),
 }));
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: null }),
+  useUser: () => ({ setCurrentUser: mocks.setCurrentUser, currentUser: mocks.userState.currentUser }),
 }));
 vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: Object.assign(() => mocks.accessTokenState, { getState: () => mocks.accessTokenState }),
+  // Apply the selector so `useAccessToken(s => s.accessToken)` returns the token, not the
+  // whole state object; bare `getState()` calls still get the full state.
+  useAccessToken: Object.assign(
+    (selector?: (s: typeof mocks.accessTokenState) => unknown) =>
+      selector ? selector(mocks.accessTokenState) : mocks.accessTokenState,
+    { getState: () => mocks.accessTokenState }
+  ),
 }));
 vi.mock('@client/app/hooks/data/mfa', () => ({
   useVerifyMFA: () => ({ mutateAsync: vi.fn() }),
@@ -44,7 +55,7 @@ vi.mock('@tanstack/react-router', () => ({
 }));
 // finishLogin calls applyRedirect(router.history, ...); stub it so the empty history is inert.
 vi.mock('@client/app/utils/authRedirect', () => ({
-  applyRedirect: vi.fn(),
+  applyRedirect: mocks.applyRedirect,
   appendRedirectTo: (url: string) => url,
 }));
 vi.mock('@client/app/contexts/ApiContext', () => ({ resetRefreshPromise: vi.fn() }));
@@ -55,7 +66,10 @@ vi.mock('@client/app/hooks/useCommonStyles', () => ({
 vi.mock('@client/app/hooks/useGetLogo', () => ({ default: () => '/logo.png' }));
 vi.mock('@client/app/hooks/data/settings', () => ({ useBrandingSettings: () => ({}) }));
 vi.mock('next/image', () => ({ default: () => null }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k: string) => k }),
+  Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
+}));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -89,6 +103,8 @@ const acceptInlinePolicies = async (user: ReturnType<typeof userEvent.setup>) =>
 describe('MultiStepLogin — inline registration (new-user branch)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
     mocks.sendOTC.mockResolvedValue({ pendingToken: 'ptok-1' });
     // Strategy check for a passwordless email - no SSO redirect.
     global.fetch = vi.fn().mockResolvedValue({
@@ -275,5 +291,39 @@ describe('MultiStepLogin — inline registration (new-user branch)', () => {
     // Must NOT strand the user on the username step, and must not create a session.
     expect(screen.queryByTestId('login-register-username-input')).not.toBeInTheDocument();
     expect(mocks.setCurrentUser).not.toHaveBeenCalled();
+  });
+});
+
+// The "already logged in" bounce must gate on a LIVE session (currentUser + token), not on a
+// stale persisted currentUser alone - otherwise a broken session is trapped in a /login <->
+// /accept-policies loop (issue #386). See the isLoggedIn guard in MultiStepLogin.
+describe('MultiStepLogin — already-logged-in redirect guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userState.currentUser = null;
+    mocks.accessTokenState.accessToken = null;
+  });
+
+  it('renders the login form and does NOT redirect when currentUser is a stale stub with no access token', () => {
+    // The deadlock case: a persisted currentUser survives with no live token. The form must show
+    // so the broken session can re-authenticate, and it must not be bounced back into the app shell.
+    mocks.userState.currentUser = { id: 'stale-user' };
+    mocks.accessTokenState.accessToken = null;
+
+    renderLogin();
+
+    expect(screen.getByTestId('login-email-input')).toBeInTheDocument();
+    expect(mocks.applyRedirect).not.toHaveBeenCalled();
+  });
+
+  it('redirects away from /login when there is a live session (currentUser + access token)', () => {
+    mocks.userState.currentUser = { id: 'real-user' };
+    mocks.accessTokenState.accessToken = 'live-token';
+
+    renderLogin();
+
+    // isLoggedIn short-circuits the render to null and the effect bounces to the app shell.
+    expect(screen.queryByTestId('login-email-input')).not.toBeInTheDocument();
+    expect(mocks.applyRedirect).toHaveBeenCalledWith(expect.anything(), null, '/new', true);
   });
 });

@@ -119,7 +119,7 @@ async function runFullPipeline(
     // Forward streamed reply updates to the SSE writer in the handler.
     onReplyStream,
     // No-op: we run process() inline in this request handler, so we deliberately
-    // do NOT dispatch to the cliLlmHandler Lambda / EventBridge. invoke() requires
+    // do NOT dispatch out-of-process (to the ChatCompletion service). invoke() requires
     // a callback (it throws if missing) but we want zero out-of-process work - the
     // whole completion happens synchronously here.
     invokeLambda: async () => {},

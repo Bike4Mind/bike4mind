@@ -56,12 +56,12 @@ const NetworkStatus: FC<IProps> = () => {
   const { t } = useTranslation();
   const isDeveloper = useUser(s => s.isDeveloper || s.isAdmin);
 
-  // Poll the always-on QuestProcessorService web server (via the VPC-internal /health proxy)
+  // Poll the always-on ChatCompletion web server (via the VPC-internal /health proxy)
   // so the cloud-icon tooltip can show it alongside the websocket as a connected-services
   // checklist. The 15s poll is itself the retry cadence - no per-request retries on a down service.
   const { data: questProcessor, isLoading: questProcessorLoading } = useQuery<{ connected: boolean }>({
-    queryKey: ['quest-processor', 'status'],
-    queryFn: async () => (await api.get<{ connected: boolean }>('/api/quest-processor-status')).data,
+    queryKey: ['chat-completion', 'status'],
+    queryFn: async () => (await api.get<{ connected: boolean }>('/api/chat-completion-status')).data,
     refetchInterval: 15000,
     retry: false,
     staleTime: 10000,

@@ -9,6 +9,11 @@ Everything committed here is public and permanent. Before you commit, ask: *"Wou
 - **Never commit secrets** (API keys, tokens, connection strings, `.env`). The gitleaks pre-commit hook + CI scans are a backstop, not the guard. If you leak one: **rotate first, delete second** — history is permanent.
 - No customer/partner names, cloud identifiers (AWS account IDs, ARNs, bucket names — resolve at runtime), internal-tracker issue numbers, or teammate names in code, comments, commits, or branch names.
 - **ASCII only** in code and comments — no curly quotes, em-dashes, or other smart punctuation.
+- **CRITICAL — premium overlay pin bumps must have minimal, generic messages.** When changing an overlay SHA in `premium-overlay.lock.json`, the commit message, PR title, PR body, and any issue MUST describe *only* the mechanical pin change and nothing about *what* the overlay is changing. The premium overlay repos are private and their change details (features, integrations, fixes, internal codenames) may be sensitive — never describe them in this public repo. Squash-merge copies the PR body into permanent public history, so keep it to a single line, e.g.:
+  - ✅ `Sets the b4m-<name> overlay pin to <40-char-sha>. Overlay-pin-only change; no application source changes.`
+  - ❌ Anything naming the overlay's features, integrations, providers, fix details, or internal codenames.
+
+  Put the real "why" (what changed and how it was verified) in the **private** overlay repo's own PR, not here.
 
 ## Commit identity
 
@@ -56,6 +61,17 @@ Turbo gives cached, topologically-ordered builds; the `pnpm` commands still work
 - Prefer `unknown` (forces narrowing), generics (`<T extends …>`), union types, or `Record<string, unknown>` over `any`.
 - ✅ `const data: unknown = await fetch(); if (typeof data === 'object') { … }`
 - ⚠️ `const legacy: any = …; // any: third-party lib ships no types`
+
+## Comment hygiene
+
+Code describes *what* it does and comments explain the *why* that the code can't.
+
+- **Clear code gets zero comments.** Add concise comments only for a real reason like a non-obvious constraint, a gotcha, unique context, a unit (e.g. ms).
+- **Never restate the code.** No multi-line preamble on a simple statement; no long essay on a simple function. If the comment just re-says the code, delete it.
+- **Complex code gets 1-2 lines** covering what isn't visible from the code itself: the reasoning, the tradeoff, the edge case. Go longer only when genuinely justified.
+- **Function/block comments: as descriptive as needed, and no more.** State the contract (purpose, non-obvious inputs/outputs, side effects) concisely; skip the play-by-play.
+- **Keep cross-references.** A comment that points to a related module, spells out an invariant across areas, or warns "must stay in sync with X" saves the reader a hunt. This is the one kind of comment to be generous with.
+- **Don't cite tickets for routine changes.** Reference an external source only when it carries context that can't live in the code and a future reader will actually need. Reminder: this is a public repo, so internal tracker numbers are never allowed regardless.
 
 ## Testing guidelines
 

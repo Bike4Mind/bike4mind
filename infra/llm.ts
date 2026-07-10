@@ -6,7 +6,7 @@ import { allSecrets } from './secrets';
 import { lambdaVpc } from './vpc';
 
 // Web-originated completions ('completion.started') are no longer handled by a Lambda.
-// They are processed by the always-on QuestProcessorService (see infra/questProcessorService.ts),
+// They are processed by the always-on ChatCompletion (see infra/chatCompletion.ts),
 // which the frontend reaches directly over HTTP. Slack-originated completions still route
 // through EventBridge → slackQuestProcessor below.
 

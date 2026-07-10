@@ -84,6 +84,7 @@ const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false 
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
+const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
@@ -533,6 +534,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.Subscribers}>
                 {activeTab === AdminTab.Subscribers && <SubscribersTab />}
+              </TabPanel>
+              <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
               </TabPanel>
               <TabPanel value={AdminTab.Subscriptions}>
                 {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}

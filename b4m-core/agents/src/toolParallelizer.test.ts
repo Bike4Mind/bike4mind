@@ -54,6 +54,8 @@ describe('toolParallelizer (agents package)', () => {
         'delete_file',
         'shell_execute',
         'bash_execute',
+        'write_shell_stdin',
+        'kill_background_shell',
         'git_commit',
         'git_push',
       ];

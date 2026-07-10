@@ -132,6 +132,17 @@ export interface AgentContext {
    * speaking in the agent's configured personality. See `getSystemPrompt()`.
    */
   personaPrompt?: string;
+  /**
+   * Artifact-emission guidance APPENDED to the system prompt (optional). Carries
+   * the same instruction chat completions inject (chat's `ArtifactEmissionPrompt`
+   * / `ARTIFACT_EMISSION_PROMPT`) so the agent wraps chart/code/HTML/SVG/Mermaid
+   * output in `<artifact>` tags in its final answer. Composed AFTER persona and
+   * the operational (default or overridden) prompt so both keep leading. The
+   * host resolves it (gated on the admin `EnableArtifacts` setting) and only
+   * passes it when the feature is on; when unset, behavior is unchanged. See
+   * `getSystemPrompt()`.
+   */
+  artifactEmissionPrompt?: string;
   /** Force the model to use a specific tool or any tool */
   toolChoice?: 'auto' | 'required' | { type: 'function'; function: { name: string } };
   /** Extended thinking configuration (Anthropic models) */
@@ -204,8 +215,13 @@ export interface AgentRunOptions {
   maxTotalTokens?: number;
   /** Additional context to include in the prompt */
   context?: string;
-  /** Previous conversation messages to maintain context */
-  previousMessages?: ConversationMessage[];
+  /**
+   * Previous conversation messages to maintain context. Typed as IMessage[] so
+   * callers can replay rich content (tool_use / tool_result / image blocks), not
+   * just plain strings. Plain { role, content: string } objects still satisfy
+   * this, so existing callers are unaffected.
+   */
+  previousMessages?: IMessage[];
   signal?: AbortSignal;
   /** Enable parallel execution of read-only tools for performance improvement */
   parallelExecution?: boolean;
@@ -282,6 +298,12 @@ export interface AgentCheckpoint {
    * with checkpoints written before this field existed.
    */
   initialMessageCount?: number;
+  /**
+   * Provider stop reason of the last LLM completion; persisted to
+   * `promptMeta.finishReason` for chat parity. Optional for backward
+   * compatibility with checkpoints written before this field existed.
+   */
+  finishReason?: string;
 }
 
 /**

@@ -80,6 +80,14 @@ export interface ISreErrorTracking {
   };
   /** GitHub issue number (if applicable) */
   githubIssueNumber?: number;
+  /**
+   * Denormalized open/closed state of the linked GitHub issue.
+   * Kept fresh by the webhook handlers (issues.closed/reopened) and self-healed
+   * on-view by the issue-state endpoint. Absent for CloudWatch-sourced docs and
+   * for GitHub docs whose state has not yet been observed. The admin Pipeline
+   * Status filter hides docs where this is 'closed' by default.
+   */
+  githubIssueState?: 'open' | 'closed';
   /** Fix PR number */
   fixPrNumber?: number;
   /** Fix PR SHA (for rollback detection) */
@@ -176,6 +184,7 @@ const SreErrorTrackingSchema = new mongoose.Schema(
     affectedUserIds: { type: [String], default: [] },
     diagnosisResult: { type: mongoose.Schema.Types.Mixed },
     githubIssueNumber: { type: Number },
+    githubIssueState: { type: String, enum: ['open', 'closed'] },
     fixPrNumber: { type: Number },
     fixPrSha: { type: String },
     fixMergedAt: { type: Date },
@@ -224,6 +233,8 @@ SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1 }, { 
 SreErrorTrackingSchema.index({ affectedUserIds: 1 });
 // For looking up by PR number (scoped to repo - PR numbers are unique per-repo, not globally)
 SreErrorTrackingSchema.index({ repoSlug: 1, fixPrNumber: 1 }, { sparse: true });
+// For webhook-driven githubIssueState updates: setGithubIssueState filters on { repoSlug, githubIssueNumber }
+SreErrorTrackingSchema.index({ repoSlug: 1, githubIssueNumber: 1 }, { sparse: true });
 // Covers recurrence guard queries: { errorFingerprint, status: 'fixed', fixMergedAt: { $gte } }
 SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1, fixMergedAt: 1 });
 // For staleness timeout detection
@@ -432,6 +443,36 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
     updates?: Partial<ISreErrorTracking>
   ): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { status, ...updates } });
+  }
+
+  /**
+   * Denormalize the linked GitHub issue's open/closed state onto every tracking
+   * doc for that issue. Called from the webhook handlers (issues.closed/reopened)
+   * and the issue-state endpoint (self-heal on view). Updates ALL docs for the
+   * (repoSlug, issueNumber) pair - a single issue can have multiple tracking docs
+   * across its lifecycle (different statuses + dismissed audit history), and all
+   * should reflect the same current issue state for the admin filter.
+   *
+   * Returns the number of docs updated (0 when no tracking doc exists for the
+   * issue, which is the common case for issues that never entered the pipeline).
+   */
+  async setGithubIssueState(repoSlug: string, issueNumber: number, state: 'open' | 'closed'): Promise<number> {
+    const result = await this.model.updateMany(
+      { repoSlug, githubIssueNumber: issueNumber },
+      { $set: { githubIssueState: state } }
+    );
+    return result.modifiedCount ?? 0;
+  }
+
+  /**
+   * Backstop for the on-view self-heal: reconcile githubIssueState on a single
+   * doc by its _id. setGithubIssueState scopes its bulk update by repoSlug, so a
+   * doc missing repoSlug is silently skipped there (the fallback repoSlug won't
+   * match an absent field). The issue-state endpoint holds the viewed doc's id
+   * and calls this to guarantee that doc is reconciled regardless of repoSlug.
+   */
+  async setGithubIssueStateById(id: string, state: 'open' | 'closed'): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { githubIssueState: state } });
   }
 
   /**

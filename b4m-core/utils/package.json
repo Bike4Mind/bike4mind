@@ -80,7 +80,7 @@
     "axios": "1.16.1",
     "cheerio": "1.2.0",
     "csv-parse": "^6.2.1",
-    "dayjs": "^1.11.20",
+    "dayjs": "^1.11.21",
     "dotenv": "^17.4.2",
     "file-type": "^22.0.1",
     "jimp": "^1.6.1",
@@ -95,10 +95,10 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/aws-lambda": "^8.10.161",
+    "@types/aws-lambda": "^8.10.162",
     "@types/lodash": "^4.17.24",
     "@types/mime-types": "^3.0.1",
-    "tsdown": "^0.22.2",
+    "tsdown": "^0.22.3",
     "typescript": "^5.9.3"
   }
 }

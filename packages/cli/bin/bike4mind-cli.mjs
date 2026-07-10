@@ -102,6 +102,10 @@ const argv = await yargs(hideBin(process.argv))
     description: 'When using -p, auto-allow all tool permission prompts (use with caution in CI/CD)',
     default: false,
   })
+  .option('permission-policy', {
+    type: 'string',
+    description: 'When using -p, path to a JSON permission policy for unattended runs (allow/deny/risk rules)',
+  })
   .option('ollama-host', {
     type: 'string',
     description: 'Add local Ollama models to the model picker (e.g. http://localhost:11434)',
@@ -197,6 +201,7 @@ const argv = await yargs(hideBin(process.argv))
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
+  .command('acp', 'Run as an Agent Client Protocol (ACP) stdio server for editors like Zed')
   .help()
   .alias('help', 'h')
   .version(cliVersion)
@@ -261,7 +266,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'update', 'doctor']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'update', 'doctor', 'acp']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -364,6 +369,7 @@ if (argv.prompt !== undefined) {
       dangerouslySkipPermissions: argv['dangerously-skip-permissions'] || false,
       verbose: argv.verbose || false,
       addDirs: rawAddDirs.map(d => resolve(d)),
+      permissionPolicyPath: argv['permission-policy'] ? resolve(argv['permission-policy']) : undefined,
     });
     // handleHeadlessCommand calls process.exit internally, but handle the case it doesn't
     process.exit(0);
@@ -420,6 +426,31 @@ if (argv._[0] === 'update') {
     process.exit(0);
   } catch (error) {
     console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle ACP server command (external command)
+// stdio is the JSON-RPC transport, so this never returns until the client
+// disconnects. Errors go to stderr to keep stdout as a clean protocol stream.
+if (argv._[0] === 'acp') {
+  try {
+    let handleAcpCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/acpCommand.ts');
+      handleAcpCommand = module.handleAcpCommand;
+    } else {
+      const module = await import('../dist/commands/acpCommand.mjs');
+      handleAcpCommand = module.handleAcpCommand;
+    }
+
+    await handleAcpCommand({ verbose: argv.verbose || false, version: cliVersion });
+    process.exit(0);
+  } catch (error) {
+    process.stderr.write(`Error: ${error.message}\n`);
     process.exit(1);
   }
 }

@@ -9,8 +9,10 @@ import {
   buildPublishUrlPath,
   checkVisibility,
   collectInlineAssets,
+  prepareShareMeta,
   renderBundleLoaderShell,
   renderSandboxedBundle,
+  stripToText,
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
@@ -61,10 +63,13 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
  * served as inert text/plain so direct navigation can't execute it on the app origin.
  *
- * The loader shell is scoped to bundles. Gated reply/fabfile
- * snapshots are standalone top-level pages (working links, `script-src 'none'`, no iframe),
- * so browser-session viewing of a GATED reply/fabfile still requires a credential (-> 401);
- * the iframe-srcdoc model would change their sandboxing and break link navigation.
+ * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
+ * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
+ * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
+ * script-free inside the shell's `allow-scripts` iframe. Tradeoff: inside the shelled (gated)
+ * render, links obey the iframe sandbox (no `allow-popups`/`allow-top-navigation`), so
+ * `target=_blank`/top-nav links won't open - acceptable versus the prior hard 401, and the
+ * direct (public, non-shelled) render is unaffected (its links work normally).
  */
 
 const TIER_BY_PREFIX: Record<string, PublishScopeTier> = { u: 'user', pj: 'project', o: 'organization' };
@@ -151,6 +156,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // The visibility gate is UNCHANGED for raw requests - an unauthorized raw request still
   // 401/403s and NEVER falls back to the shell (that would loop the loader).
   const isRaw = req.query.raw === '1';
+  // `?format=raw` is the PUBLIC plain-text alternate advertised via `<link rel="alternate">`
+  // on the wrapper. Distinct from `?raw=1`: format=raw exposes a stable text/plain view of the
+  // artifact for agents/unfurlers/answer engines; raw=1 is the loader shell's internal
+  // authenticated re-fetch. Only ever honored for artifacts with visibility === 'public'.
+  const isFormatRaw = req.query.format === 'raw';
   // Approach B: set by the `/uc/*` rewrite - this request is for the bundle on
   // its per-artifact isolated origin ({publicId}.usercontent.app.<domain>), served AS the page.
   const isIsolated = req.query.__uc === '1';
@@ -178,15 +188,22 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Visibility gate - runs on the HTML AND every asset request.
   const vis = await checkVisibility(artifact, req.user as PublishUser | undefined);
   if (!vis.ok) {
-    // Gated bundle INDEX navigated with NO credential -> return the PUBLIC client-side loader
+    // Gated INDEX/page navigated with NO credential -> return the PUBLIC client-side loader
     // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
-    // `?raw=1` with Authorization: Bearer. The discriminator is `!req.user` (no usable
-    // credential on this request): re-fetching only helps when none was presented. A request
-    // that DID carry a credential and still failed (403 - authed-but-unauthorized) re-fetches
-    // to no avail, so it falls through to the hard status below. NOT for: assets (gated bundles
-    // inline their assets, so the opaque iframe never requests them) or `?raw=1` (the loader's
-    // own fetch - a shell there would loop).
-    const wantsLoaderShell = resolved.kind === 'bundle' && !resolved.assetPath && !isRaw && !req.user;
+    // `?raw=1` with Authorization: Bearer, then injects the result as the iframe srcdoc. The
+    // discriminator is `!req.user` (no usable credential on this request): re-fetching only
+    // helps when none was presented. A request that DID carry a credential and still failed
+    // (403 - authed-but-unauthorized) re-fetches to no avail, so it falls through to the hard
+    // status below. Applies to bundle indexes AND reply/fabfile pages: all are top-level
+    // navigations that carry no Authorization header, so the same token-recovery works. The
+    // reply/fabfile `?raw=1` render carries its own `script-src 'none'` meta (renderViewerPage),
+    // so it stays script-free even inside the shell's allow-scripts iframe. NOT for: bundle
+    // ASSETS (gated bundles inline their assets, so the opaque iframe never requests them),
+    // `?raw=1` (the loader's own fetch - a shell there would loop), or `?format=raw` (a
+    // plain-text API surface - an HTML shell would violate the caller's Accept expectation,
+    // and format=raw is public-only anyway, so it falls through to the hard status).
+    const wantsLoaderShell =
+      !isRaw && !isFormatRaw && !req.user && (resolved.kind === 'bundle' ? !resolved.assetPath : true);
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Security-Policy', buildWrapperCsp(req));
@@ -202,6 +219,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // ── Reply / fabfile: render the snapshot body to a sanitized viewer page. ──
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
+    if (isFormatRaw) {
+      if (artifact.visibility !== 'public') {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      return sendRawArtifact(res, artifact, artifact.renderedBody ?? '');
+    }
     const page = renderViewerPage(artifact);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
     // No scripts are needed for a rendered text/markdown page; 'none' neutralizes
@@ -223,6 +246,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     bumpViewCount(artifact.publicId);
     return res.status(200).send(page);
+  }
+
+  // ?format=raw is a public-only surface; reject before touching storage on gated bundles
+  // so a private artifact can never be pulled from S3 by a raw request (defense in depth on
+  // top of the format=raw text-extraction gate later).
+  if (isFormatRaw && artifact.visibility !== 'public') {
+    return res.status(404).json({ error: 'Not found' });
   }
 
   // ── Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. ──
@@ -274,6 +304,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(isKnownOlderVersion ? 404 : 500).json({
       error: isKnownOlderVersion ? 'Version not found' : 'Artifact index.html missing from storage',
     });
+  }
+
+  if (isFormatRaw) {
+    if (artifact.visibility !== 'public') {
+      return res.status(404).json({ error: 'Not found' });
+    }
+    return sendRawArtifact(res, artifact, stripToText(indexHtml, 50000));
   }
 
   // Approach B: on the per-artifact isolated origin the bundle is served at a
@@ -389,7 +426,22 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const isolatedSrc = useIsolatedEmbed
     ? `https://${artifactHost}${isolatedPath}${requestedVersion ? `?v=${encodeURIComponent(requestedVersion)}` : ''}`
     : '';
-  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc);
+  // Public shares emit full server-rendered meta + a noscript body + a link to the
+  // raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
+  // more than the JS shell. Gated shares deliberately do not: the loader shell must
+  // carry no artifact data pre-auth.
+  const shareMeta =
+    artifact.visibility === 'public'
+      ? prepareShareMeta({
+          title: artifact.title || SHARED_FALLBACK_TITLE,
+          description: artifact.description,
+          bodyForExcerpt: indexHtml,
+          canonicalUrl: `${docOrigin}${canonicalPath}`,
+          rawUrl: `${docOrigin}${canonicalPath}?format=raw`,
+          siteName: process.env.APP_NAME || '',
+        })
+      : null;
+  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : ''));
@@ -413,7 +465,8 @@ function renderBundleWrapper(
   artifact: PublishedArtifactLean,
   srcdoc: string,
   requestedVersion: string,
-  isolatedSrc: string
+  isolatedSrc: string,
+  shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -438,12 +491,14 @@ function renderBundleWrapper(
   // the app-origin report flow. The bundle in the opaque-origin iframe can't reach it.
   const reportHref = `/report/${encodeURIComponent(artifact.publicId)}`;
   const versionBar = buildVersionSwitcherHtml(artifact, requestedVersion);
+  const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
+  const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${titleHtml}</title>
+<title>${titleHtml}</title>${metaHead}
 <style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:100vh}
 .b4m-report{position:fixed;bottom:10px;right:10px;z-index:2147483647;font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
@@ -459,6 +514,7 @@ ${iframeTag}
 ${overlay}
 ${versionBar}
 <a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
+${noscriptBody}
 </body>
 </html>`;
 }
@@ -588,6 +644,7 @@ interface PublishedArtifactLean {
   scopeId: string;
   slug: string;
   title: string;
+  description?: string;
   visibility: PublishVisibility;
   commentPolicy?: 'none' | 'open' | 'restricted';
   ownerId: string;
@@ -651,6 +708,29 @@ function bumpViewCount(publicId: string): void {
 }
 
 /**
+ * Serve a plain-text alternate for a public artifact (?format=raw). Author-supplied text is
+ * inert as text/plain, but we still emit `default-src 'none'; sandbox` + nosniff so a UA
+ * that ignored the type couldn't parse it as HTML on the app origin. Callers must gate on
+ * `visibility === 'public'` and pass the already-plain body (post-HTML-strip for bundles,
+ * as-is for reply/fabfile renderedBody).
+ */
+function sendRawArtifact(res: Response, artifact: PublishedArtifactLean, body: string): void {
+  const title = artifact.title || SHARED_FALLBACK_TITLE;
+  const description = artifact.description?.trim();
+  const parts = [`# ${title}`];
+  if (description) parts.push('', description);
+  const trimmedBody = body.trim();
+  if (trimmedBody) parts.push('', trimmedBody);
+  const content = parts.join('\n') + '\n';
+  res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Cache-Control', cacheControlFor('public'));
+  res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+  bumpViewCount(artifact.publicId);
+  res.status(200).send(content);
+}
+
+/**
  * Render a reply/fabfile snapshot to a standalone HTML page. Replies are
  * markdown (rendered via marked); fabfiles render as escaped <pre>. Served with
  * script-src 'none' so injected markup cannot execute.
@@ -668,6 +748,10 @@ function renderViewerPage(artifact: PublishedArtifactLean): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- CSP as a meta so the no-JS posture survives when this page is injected as the loader
+     shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
+     sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost("img-src 'self' data:")}; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>

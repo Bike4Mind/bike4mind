@@ -119,6 +119,8 @@ export interface IUserPreferences {
    * - `on`: agent_executor used by default; toggle starts in the ON state
    */
   agentModeDefault?: 'off' | 'auto' | 'on';
+  /** Whether to show fun/novelty tools (chess, dice, ISS tracker, etc.) in the tools catalog. Default: false. */
+  showFunTools?: boolean;
 }
 
 /** Source of a moderation flag - which moderation backend produced the hit. */
@@ -175,6 +177,16 @@ export interface IUser extends ICreditHolder {
   name: string;
   email: string | null;
   password: string | null;
+  /**
+   * Whether `password` is a real, user-known credential usable for authentication
+   * (password-based login via emergency-login). NOT inferable from `password`
+   * truthiness - admin/migration "shell" accounts store an auto-generated, unusable
+   * password that is bcrypt-hashed and therefore indistinguishable from a real one.
+   * Passwordless-first: each creation site sets this explicitly. Gates the SSO
+   * auto-link local-email-verified requirement - see verifyCallback.ts / okta/callback.ts.
+   * @default false
+   */
+  hasUsablePassword?: boolean;
   groups: Array<string> | null;
   isAdmin: boolean;
   storageLimit: number /** Storage limit in MBs */;

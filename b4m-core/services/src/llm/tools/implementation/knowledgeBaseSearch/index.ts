@@ -1,11 +1,27 @@
 import { ToolContext, ToolDefinition } from '../../base/types';
-import { CitableSource, IFabFileDocument, isSupportedEmbeddingModel, SupportedEmbeddingModel } from '@bike4mind/common';
-import { getProviderFromModel, getSettingsByNames } from '@bike4mind/utils';
+import {
+  CitableSource,
+  getEmbeddingModelCost,
+  IFabFileDocument,
+  isSupportedEmbeddingModel,
+  SupportedEmbeddingModel,
+} from '@bike4mind/common';
+import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { semanticDataLakeSearch, SemanticChunkResult } from '../../../../dataLakeService/semanticDataLakeSearch';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
+import { recordOperationalUsage } from '../../../../billing';
 
 const CHUNK_TEXT_CAP = 1200;
+
+// One tiktoken tokenizer for the whole module: KB search fires up to 3x per turn on
+// the hot chat path, and a fresh tokenizer would throw away its encoder cache each call.
+let sharedTokenizer: ITokenizer | undefined;
+function getSharedTokenizer(logger: Logger): ITokenizer {
+  if (!sharedTokenizer) sharedTokenizer = createTokenizer({ logger });
+  return sharedTokenizer;
+}
 
 /** Clean "[Category] 01 Some Name.md" -> "Some Name" for display. */
 function prettyFileName(fn: string): string {
@@ -82,6 +98,33 @@ async function trySemanticKbSearch(
       },
       { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
     );
+
+    // Record the query-embedding spend (the embed ran once above regardless of hit count).
+    // Isolated so a recording failure never discards a good search result.
+    try {
+      const queryTokens = await getSharedTokenizer(context.logger).countTokens(query, embeddingModel);
+      const organization =
+        context.user.organizationId && context.db.organizations
+          ? await context.db.organizations.findById(context.user.organizationId)
+          : null;
+      await recordOperationalUsage(
+        {
+          requestId: context.sessionId ?? context.userId,
+          user: context.user,
+          organization,
+          sessionId: context.sessionId,
+          feature: 'embedding',
+          provider,
+          model: embeddingModel,
+          inputTokens: queryTokens,
+          costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
+          source: 'system',
+        },
+        { db: { usageEvents: context.db.usageEvents, adminSettings }, logger: context.logger }
+      );
+    } catch (recordErr) {
+      context.logger.warn('📚 [semantic] failed to record embedding usage:', recordErr);
+    }
 
     if (search.results.length === 0) return null;
 

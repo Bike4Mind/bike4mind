@@ -42,6 +42,8 @@ const SPEC_KEYS = [
   'profile',
   'tavern',
   'search',
+  'dataLake',
+  'skills',
 ];
 
 /**

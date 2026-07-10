@@ -30,6 +30,13 @@ vi.mock('@server/utils/auditLog', () => ({
 }));
 vi.mock('@server/entitlements/invalidate', () => ({ pushEntitlementInvalidation: vi.fn() }));
 
+// DB-backed partner rules (issue #293). Default to "no rule" so the existing cases
+// fall through to the env registry exactly as before; DB-precedence cases set a match.
+const mockPartnerGrant = vi.fn();
+vi.mock('@server/entitlements/partnerRules', () => ({
+  partnerSignupGrantForEmail: (...a: any[]) => mockPartnerGrant(...a),
+}));
+
 const mockFindByToken = vi.fn();
 const mockUpdate = vi.fn();
 const mockFindBySettingName = vi.fn();
@@ -41,6 +48,7 @@ vi.mock('@bike4mind/database', () => ({
   withTransaction: (fn: any) => fn(),
   adminSettingsRepository: { findBySettingName: (...a: any[]) => mockFindBySettingName(...a) },
   creditTransactionRepository: {},
+  creditLotRepository: {},
 }));
 
 const mockVerifyEmailToken = vi.fn();
@@ -91,6 +99,7 @@ describe('/api/email/verify — domain-grant signup credits', () => {
     mockUpdate.mockResolvedValue(undefined);
     mockAddCredits.mockResolvedValue({});
     mockFindBySettingName.mockResolvedValue({ settingValue: 1000 });
+    mockPartnerGrant.mockResolvedValue({ matched: false, entitlements: new Set(), signupCredits: 0 });
   });
 
   it('is a sanity check that the fixture domain actually confers the product credit sum', () => {
@@ -192,5 +201,44 @@ describe('/api/email/verify — domain-grant signup credits', () => {
 
     expect(res._getStatusCode()).toBe(200);
     expect((req as any).logger.error).toHaveBeenCalled();
+  });
+
+  // DB-backed partner rules (issue #293): a matched rule is the source of truth,
+  // overriding the env registry for both the entitlement keys and the credit amount.
+  it('grants the DB rule signupCredits (per-partner amount) over the env amount', async () => {
+    // A domain the env registry does NOT confer (so env would grant 0) - proves the
+    // DB rule is what fires, not a coincidental env match.
+    mockUser({ email: 'person@newpartner.com', tags: [] });
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 150_000,
+    });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(domainGrantCall()?.[0]).toEqual(
+      expect.objectContaining({ credits: 150_000, transactionId: 'domain-grant-credits:user-1' })
+    );
+  });
+
+  it('honors a DB rule that grants access with 0 bonus credits (no env fallback)', async () => {
+    // Even for an env-domain email, a matched rule with 0 credits must NOT fall back
+    // to the env 250_000 - `matched` distinguishes "0 on purpose" from "no rule".
+    mockUser({ email: DOMAIN_EMAIL, tags: [] });
+    mockPartnerGrant.mockResolvedValue({
+      matched: true,
+      entitlements: new Set(['optihashi:pro']),
+      signupCredits: 0,
+    });
+    const { req, res } = makeReqRes();
+
+    await handler(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    // 0 credits -> no domain grant credit call at all, and definitely not the env 250k.
+    expect(domainGrantCall()).toBeFalsy();
   });
 });

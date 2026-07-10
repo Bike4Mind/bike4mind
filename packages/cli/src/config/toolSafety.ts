@@ -46,11 +46,17 @@ export const DEFAULT_TOOL_CATEGORIES: Record<string, ToolCategory> = {
   delete_file: 'prompt_always',
   shell_execute: 'prompt_always',
   bash_execute: 'prompt_always',
+  // Background-shell mutators: writing input to / killing a running process is an action.
+  write_shell_stdin: 'prompt_always',
+  kill_background_shell: 'prompt_always',
   git_commit: 'prompt_always',
   git_push: 'prompt_always',
 
   // Prompt-default: read-only; prompts by default but can be trusted
   web_search: 'prompt_default',
+  // Background-shell reads: polling output / listing sessions has no side effects.
+  check_shell_output: 'prompt_default',
+  list_background_shells: 'prompt_default',
   web_fetch: 'prompt_default',
   deep_research: 'prompt_default',
   file_read: 'prompt_default',

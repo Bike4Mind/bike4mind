@@ -20,7 +20,6 @@ import {
 import { eventBus } from './eventBus';
 import { slackEventBus } from './bus';
 import { mcpHandler } from './mcp';
-import { cliLlmHandler } from './cliLlmHandler';
 import { cliWsCompletionHandler } from './cliWsCompletionHandler';
 import {
   fabFileChunkQueue,
@@ -72,7 +71,7 @@ import {
   optihashiRunCompletionQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
-import { questProcessorService } from './questProcessorService';
+import { chatCompletion } from './chatCompletion';
 import { router, routerDistributionId, whatsNewDistributionId, cdnUrlForLambdaEnv } from './router';
 import { secrets } from './secrets';
 import { migratorInvocation } from './database';
@@ -178,11 +177,10 @@ export const web = new sst.aws.Nextjs(
       ...Object.values(secrets),
       websocketApi,
       historyImportBucket,
-      // Linked so the frontend can resolve Resource.QuestProcessorService.url to POST quests.
-      questProcessorService,
+      // Linked so the frontend can resolve Resource.ChatCompletion.url to POST quests.
+      chatCompletion,
       imageProcessor,
       mcpHandler,
-      cliLlmHandler,
       cliWsCompletionHandler,
       fabFileBucket,
       generatedImagesBucket,

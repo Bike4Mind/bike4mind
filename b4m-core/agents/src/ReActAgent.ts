@@ -87,6 +87,13 @@ export class ReActAgent extends EventEmitter {
   private totalCacheReadTokens = 0;
   private totalCacheWriteTokens = 0;
   private toolCallCount = 0;
+  /**
+   * Provider stop reason of the last LLM completion, preserve-last-non-null.
+   * Surfaced on the checkpoint and persisted to `promptMeta.finishReason` for
+   * chat parity - lets the client tell a truncated artifact from a completed
+   * reply that merely contains an unclosed `<artifact>` tag in prose.
+   */
+  private lastStopReason?: string;
   private observationQueue: Array<{ toolId: string; toolName: string; result: unknown }> = [];
   private confidenceLog: Array<{
     toolName: string;
@@ -172,6 +179,7 @@ export class ReActAgent extends EventEmitter {
     this.toolCallCount = 0;
     this.confidenceLog = [];
     this.iterationConfidences = [];
+    this.lastStopReason = undefined;
 
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
@@ -310,6 +318,12 @@ export class ReActAgent extends EventEmitter {
               this.totalTokens += inputTokens + outputTokens;
               this.totalInputTokens += inputTokens;
               this.totalOutputTokens += outputTokens;
+
+              // Preserve the last non-null stop reason (see lastStopReason).
+              // Early streaming frames carry none; the final frame does.
+              if (completionInfo.stopReason != null) {
+                this.lastStopReason = completionInfo.stopReason;
+              }
 
               // Accumulate cache stats if available
               if (completionInfo.cacheStats) {
@@ -629,7 +643,14 @@ export class ReActAgent extends EventEmitter {
     // prepend it so the agent speaks in character while keeping the operational
     // (ReAct tool-use) guidance below. When no persona, behavior is unchanged.
     const persona = this.context.personaPrompt?.trim();
-    return persona ? `${persona}\n\n${base}` : base;
+    const composed = persona ? `${persona}\n\n${base}` : base;
+
+    // Append artifact-emission guidance LAST (after persona + operational prompt)
+    // when the host opted in - parity with chat completions, which inject the
+    // same guidance so chart/code/HTML/SVG/Mermaid output is wrapped in
+    // <artifact> tags. When unset, behavior is unchanged.
+    const artifact = this.context.artifactEmissionPrompt?.trim();
+    return artifact ? `${composed}\n\n${artifact}` : composed;
   }
 
   private buildDefaultSystemPrompt(): string {
@@ -768,6 +789,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       confidenceLog: structuredClone(this.confidenceLog),
       iterationConfidences: [...this.iterationConfidences],
       initialMessageCount: this.initialMessageCount,
+      finishReason: this.lastStopReason,
     };
   }
 
@@ -797,6 +819,9 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
     // field existed; safe because at the point fromCheckpoint runs, no iteration
     // messages have been appended yet for the resumed run.
     this.initialMessageCount = checkpoint.initialMessageCount ?? this.messages.length;
+    // Restore so a run finishing in a continuation Lambda still persists the
+    // stop reason; the finishing Lambda's final completion re-sets it regardless.
+    this.lastStopReason = checkpoint.finishReason;
     // observationQueue is always drained within a single LLM callback -
     // it cannot contain data at checkpoint boundaries. Clear it explicitly.
     this.observationQueue = [];
@@ -858,6 +883,7 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.toolCallCount = 0;
       this.confidenceLog = [];
       this.iterationConfidences = [];
+      this.lastStopReason = undefined;
       this.iterations = 0;
 
       this.messages = [
@@ -983,6 +1009,12 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             this.totalTokens += inputTokens + outputTokens;
             this.totalInputTokens += inputTokens;
             this.totalOutputTokens += outputTokens;
+
+            // Preserve the last non-null stop reason (see lastStopReason).
+            // A prior tool_use turn is overwritten by the final completion.
+            if (completionInfo.stopReason != null) {
+              this.lastStopReason = completionInfo.stopReason;
+            }
 
             if (completionInfo.cacheStats) {
               this.totalCacheReadTokens += completionInfo.cacheStats.cacheReadTokens || 0;

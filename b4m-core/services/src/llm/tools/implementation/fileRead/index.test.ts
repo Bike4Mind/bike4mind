@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { fileReadTool } from './index';
-import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdtemp, writeFile, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -113,5 +113,63 @@ describe('fileReadTool', () => {
 
     expect(result).toContain('Error reading file');
     expect(result).toContain('Access denied');
+  });
+
+  describe('minified mode', () => {
+    // Fake stand-in for the CLI's tree-sitter stripper: removes JS line comments.
+    const fakeMinifier = async (source: string) => source.replace(/^\s*\/\/.*$/gm, '');
+    const minifyContext = { logger: mockLogger, codeMinifier: fakeMinifier };
+
+    let bigFile: string;
+    let bigRaw: string;
+
+    beforeAll(async () => {
+      // Comment-heavy file comfortably above the small-file fast-path threshold (1KB).
+      const block = Array.from(
+        { length: 40 },
+        (_, i) => `// explanatory comment number ${i}\nconst v${i} = ${i};`
+      ).join('\n');
+      bigRaw = `${block}\n`;
+      bigFile = join(testDir, 'big.ts');
+      await writeFile(bigFile, bigRaw);
+    });
+
+    it('strips comments, reports savings, and adds a steer-to-file_read header', async () => {
+      const tool = fileReadTool.implementation(minifyContext as never, {});
+      const result = await tool.toolFn({ path: 'big.ts', minified: true });
+
+      expect(result).toContain('[Minified view of big.ts');
+      expect(result).toContain('tokens saved');
+      expect(result).toContain('Use file_read WITHOUT minified');
+      expect(result).not.toContain('explanatory comment');
+      expect(result).toContain('const v0 = 0;');
+      expect(result).toContain('const v39 = 39;');
+    });
+
+    it('never mutates the file on disk', async () => {
+      const tool = fileReadTool.implementation(minifyContext as never, {});
+      await tool.toolFn({ path: 'big.ts', minified: true });
+
+      const onDisk = await readFile(bigFile, 'utf-8');
+      expect(onDisk).toBe(bigRaw); // raw bytes preserved -> edit staleness detection intact
+    });
+
+    it('falls back to whitespace-only normalization when no minifier is injected', async () => {
+      const tool = fileReadTool.implementation(mockContext as never, {});
+      const result = await tool.toolFn({ path: 'big.ts', minified: true });
+
+      expect(result).toContain('[Minified view of big.ts');
+      expect(result).toContain('comments kept');
+      expect(result).toContain('explanatory comment'); // comments preserved on fallback
+    });
+
+    it('skips minification for small files (fast path returns raw content)', async () => {
+      const tool = fileReadTool.implementation(minifyContext as never, {});
+      const result = await tool.toolFn({ path: 'test.txt', minified: true });
+
+      expect(result).not.toContain('[Minified view');
+      expect(result).toContain('Line 1');
+      expect(result).toContain('Line 10');
+    });
   });
 });

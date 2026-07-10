@@ -54,7 +54,10 @@ vi.mock('@client/app/hooks/data/settings', () => ({
 }));
 vi.mock('./common/MFAModal', () => ({ default: () => null }));
 vi.mock('next/image', () => ({ default: () => null }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (k: string) => k }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (k: string) => k }),
+  Trans: ({ i18nKey }: { i18nKey?: string }) => i18nKey ?? null,
+}));
 vi.mock('sonner', () => ({ toast: mocks.toast }));
 
 import Register from './Register';
