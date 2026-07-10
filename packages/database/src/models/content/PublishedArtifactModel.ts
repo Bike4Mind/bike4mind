@@ -78,6 +78,13 @@ const PublishedArtifactSchema = new Schema(
     },
     gatedToGroupId: { type: String },
 
+    // Unguessable capability token for no-sign-in `/a/<shareToken>` links. Distinct
+    // from `publicId` so rotating it revokes outstanding links without touching the
+    // artifact or its `/p/*` URL. Uniqueness enforced via the partial index below
+    // (not `unique: true` on the field, so token-less rows do not collide).
+    shareToken: { type: String },
+    shareTokenUpdatedAt: { type: Date, default: null },
+
     /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
      *  `visibility` (who may view). Defaults to `none` so existing artifacts
      *  stay read-only until the owner opts in. */
@@ -142,6 +149,12 @@ PublishedArtifactSchema.index(
   { tier: 1, scopeId: 1, slug: 1 },
   { unique: true, partialFilterExpression: { deletedAt: null } }
 );
+// Unguessable share-token lookup for `/a/<shareToken>`. Partial-unique on string-typed
+// tokens only, so the many rows without a token do not collide on the unique constraint.
+PublishedArtifactSchema.index(
+  { shareToken: 1 },
+  { unique: true, partialFilterExpression: { shareToken: { $type: 'string' } } }
+);
 PublishedArtifactSchema.index({ ownerId: 1, deletedAt: 1 }); // a user's published artifacts
 PublishedArtifactSchema.index({ visibility: 1, deletedAt: 1 }); // public listing / gate
 PublishedArtifactSchema.index({ 'source.kind': 1, 'source.sessionId': 1 }); // reply lookups
@@ -181,6 +194,11 @@ export class PublishedArtifactRepository extends BaseRepository<IPublishedArtifa
 
   async findByPublicId(publicId: string) {
     return this.findOne({ publicId, deletedAt: null });
+  }
+
+  /** Resolve a live artifact by its no-sign-in share token. */
+  async findByShareToken(shareToken: string) {
+    return this.findOne({ shareToken, deletedAt: null });
   }
 
   /** Look up by the compound key, non-deleted only. */
