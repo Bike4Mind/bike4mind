@@ -7,7 +7,6 @@ import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
 import { addUserToOrganization } from '@server/managers/organizationManager';
-import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
 const migrateRequestSchema = z.object({
@@ -87,9 +86,9 @@ const handler = baseApi().post(async (req, res) => {
             username,
             email,
             name,
-            // Passwordless: no usable password. Store a random unusable value to
-            // satisfy the record shape; the user signs in via OTC.
-            record: { password: randomUUID(), hasUsablePassword: false },
+            // Passwordless: no usable password. Store null so `password` presence
+            // stays a truthful signal; the user signs in via OTC.
+            record: { password: null, hasUsablePassword: false },
           },
           { db: { users: userRepository } }
         );
