@@ -3,7 +3,8 @@ import { useAdminSettings } from '@client/app/contexts/AdminSettingsContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useMemo } from 'react';
-import { LLMModelConfig, ModelInfo, PREDEFINED_USER_TAGS } from '@bike4mind/common';
+import { LLMModelConfig, ModelInfo } from '@bike4mind/common';
+import { BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 
 /**
  * Hook to fetch LLM model configurations from admin settings
@@ -95,18 +96,21 @@ export function useLLMModelConfigurationsWithDefaults(modelInfos?: ModelInfo[]) 
 }
 
 // Default model configuration logic
-const getDefaultModelConfig = (modelInfo: ModelInfo): LLMModelConfig => {
+export const getDefaultModelConfig = (modelInfo: ModelInfo): LLMModelConfig => {
   // Enabled by default unless the model is private
   const isEnabled = !modelInfo.private;
 
   // All users get access to all models by default - no cost-based restrictions.
-  // Admin can still override per-model access via the LLM config panel if needed.
-  const defaultTags = PREDEFINED_USER_TAGS.map(tag => tag.toLowerCase());
-
+  // Expressed as the reserved `base` entitlement (held by every authenticated
+  // user) rather than a proxy tag set, so a tag-less account still sees the
+  // model. `isModelAccessible` stays fail-closed for a genuinely ungated config
+  // (empty tags AND empty entitlements); admins narrow access by setting tags /
+  // entitlements, or hide a model outright with `enabled: false`.
   return {
     ...modelInfo,
     enabled: isEnabled,
-    allowedUserTags: defaultTags,
+    allowedUserTags: [],
+    allowedEntitlements: [BASE_ENTITLEMENT_KEY],
     fallbackModel: '',
   };
 };

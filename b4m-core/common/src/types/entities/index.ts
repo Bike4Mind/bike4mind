@@ -41,6 +41,7 @@ export * from './AnalyticsTypes';
 export * from './FavoriteTypes';
 export * from './CreditTransactionTypes';
 export * from './UsageEventTypes';
+export * from './ModelPriceTypes';
 export * from './CreditHolderTypes';
 export * from './CreditLotTypes';
 export * from './EmbeddingCacheTypes';
