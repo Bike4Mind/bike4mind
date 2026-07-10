@@ -267,7 +267,7 @@ export async function performDeepResearch(
     }
 
     let completionInfo: CompletionInfo | undefined;
-    const startTime = Date.now();
+    const analysisStart = Date.now();
     await analysisLlm.complete(
       analysisModel,
       [{ role: 'user', content: prompt }],
@@ -278,7 +278,7 @@ export async function performDeepResearch(
       }
     );
 
-    await recordToolOperationalUsage(context, { model: analysisModel, completionInfo, startTime });
+    await recordToolOperationalUsage(context, { model: analysisModel, completionInfo, startTime: analysisStart });
     return result;
   };
 

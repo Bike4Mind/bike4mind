@@ -134,7 +134,7 @@ export async function generateAndSendProactiveMessage({
       undefined, // tools (defaults to b4mTools)
       undefined, // allowedDirectories
       undefined, // entitlementKeys
-      undefined, // sessionId
+      session.id, // sessionId: attribute proactive-message tool spend to its session
       undefined, // codeMinifier - CLI-only (web-tree-sitter); not wired on the proactive path
       models // availableModels: resolve COGS pricing for tool-internal operational calls
     );
