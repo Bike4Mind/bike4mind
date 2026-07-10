@@ -39,7 +39,6 @@ export interface GearStatus {
 export interface GearsStatusResponse {
   gears: GearStatus[];
   totalUnlocked: number;
-  creditsPerUnlock: number;
 }
 
 export function useGearsStatus() {

@@ -187,7 +187,8 @@ describe('GET /api/gears/status — skill gears', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.apikey.creditsAwarded).toBe(byKey.apikey.credits);
     expect(byKey.projects.creditsAwarded).toBe(byKey.projects.credits);
-    expect(byKey.projects.credits).toBeGreaterThan(byKey.apikey.credits);
+    expect(byKey.projects.credits).toBe(1000);
+    expect(byKey.apikey.credits).toBe(500);
   });
 });
 
@@ -201,5 +202,21 @@ describe('GET /api/gears/status — stamp-backed gears', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.forknotebook.unlocked).toBe(true);
     expect(byKey.downloadnotebook.unlocked).toBe(false);
+  });
+});
+
+describe('GET /api/gears/status — reward schedule', () => {
+  it('social gears pay 5000; destinations 1000; skills scale 100-1000 by complexity', async () => {
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+    const body = res._getJSONData() as { gears: Array<{ key: string; credits: number }> };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g.credits]));
+    expect(byKey.shareproject).toBe(5000); // social: pulls another person in
+    expect(byKey.published).toBe(5000); // social: shares work with the world (lead-gen)
+    expect(byKey.projects).toBe(1000);
+    expect(byKey.agents).toBe(1000);
+    expect(byKey.apicall).toBe(1000);
+    expect(byKey.image).toBe(100);
+    expect(byKey.forknotebook).toBe(100);
   });
 });

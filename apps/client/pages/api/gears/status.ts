@@ -40,9 +40,16 @@ import {
  * polled freely and can never double-credit.
  */
 
-/** One-time rewards; env-tunable without a deploy contract change. */
-export const GEAR_UNLOCK_CREDITS = Number(process.env.GEAR_UNLOCK_CREDITS ?? 25);
-export const GEAR_SKILL_CREDITS = Number(process.env.GEAR_SKILL_CREDITS ?? 10);
+/**
+ * One-time rewards, per gear. The schedule (Erik, 2026-07-10):
+ *  - destinations (earn a sidenav slot): 1,000 each
+ *  - skills: 100-1,000 scaled by implied complexity (a one-prompt image is a
+ *    nudge; a working API integration is real onboarding)
+ *  - anything SOCIAL — actions that pull other people in — 5,000. Sharing is
+ *    the growth loop; pay for it like one.
+ * GEAR_CREDITS_SCALE lets an operator globally scale the schedule without a deploy.
+ */
+const GEAR_CREDITS_SCALE = Number(process.env.GEAR_CREDITS_SCALE ?? 1);
 
 export type GearKind = 'destination' | 'skill';
 
@@ -89,6 +96,8 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
 interface GearDef {
   key: GearKey;
   kind: GearKind;
+  /** One-time unlock reward (pre-scale) — see the schedule note above. */
+  credits: number;
   check: (facts: GearFacts) => Promise<boolean> | boolean;
 }
 
@@ -96,70 +105,83 @@ const GEARS: GearDef[] = [
   // ── Destinations ─────────────────────────────────────────────────────────
   {
     key: 'projects',
+    credits: 1000,
     kind: 'destination',
     // Owner OR member — same membership arms as the publish project-visibility gate.
     check: async ({ userId }) => !!(await Project.exists({ $or: [{ userId }, { 'users.id': userId }] })),
   },
   {
     key: 'agents',
+    credits: 1000,
     kind: 'destination',
     check: async ({ userId }) => (await agentRepository.countByUserId(userId)) > 0,
   },
   {
     key: 'datalakes',
+    credits: 1000,
     kind: 'destination',
     check: async ({ userId }) => !!(await dataLakeRepository.findOne({ createdByUserId: userId })),
   },
   {
     key: 'files',
+    credits: 1000,
     kind: 'destination',
     check: async ({ userId }) => !!(await FabFile.exists({ userId })),
   },
   {
     key: 'published',
+    credits: 5000,
     kind: 'destination',
     check: async ({ userId }) => !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null })),
   },
   // ── Skills ───────────────────────────────────────────────────────────────
   {
     key: 'apikey',
+    credits: 500,
     kind: 'skill',
     check: async ({ userId }) => !!(await ApiKey.exists({ userId, isActive: true })),
   },
   {
     key: 'apicall',
+    credits: 1000,
     kind: 'skill',
     check: ({ usageFeatures }) => usageFeatures.has('completion_api'),
   },
   {
     key: 'image',
+    credits: 100,
     kind: 'skill',
     check: ({ usageFeatures }) => usageFeatures.has('image_generation') || usageFeatures.has('image_edit'),
   },
   {
     key: 'voice',
+    credits: 250,
     kind: 'skill',
     check: ({ usageFeatures }) => usageFeatures.has('voice'),
   },
   {
     // Ran chats on two or more distinct models — the "the grass is greener" tour.
     key: 'models',
+    credits: 250,
     kind: 'skill',
     check: ({ chatModelCount }) => chatModelCount >= 2,
   },
   {
     key: 'react',
+    credits: 500,
     kind: 'skill',
     check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'react' })),
   },
   {
     key: 'python',
+    credits: 500,
     kind: 'skill',
     check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'python' })),
   },
   {
     // Sharing is the unlock: a project with at least one collaborator.
     key: 'shareproject',
+    credits: 5000,
     kind: 'skill',
     check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
   },
@@ -167,17 +189,19 @@ const GEARS: GearDef[] = [
   // action's route stamps first use (stampGear) and the check reads the stamp.
   {
     key: 'downloadnotebook',
+    credits: 250,
     kind: 'skill',
     check: ({ stamps }) => stamps.has('downloadnotebook'),
   },
   {
     key: 'forknotebook',
+    credits: 100,
     kind: 'skill',
     check: ({ stamps }) => stamps.has('forknotebook'),
   },
 ];
 
-const creditsFor = (kind: GearKind) => (kind === 'destination' ? GEAR_UNLOCK_CREDITS : GEAR_SKILL_CREDITS);
+const creditsFor = (def: GearDef) => Math.round(def.credits * GEAR_CREDITS_SCALE);
 
 export interface GearStatus {
   key: GearKey;
@@ -206,7 +230,7 @@ const handler = baseApi().get(
     for (let i = 0; i < GEARS.length; i++) {
       const def = GEARS[i];
       const unlocked = unlockedFlags[i];
-      const credits = creditsFor(def.kind);
+      const credits = creditsFor(def);
       const gear: GearStatus = { key: def.key, kind: def.kind, unlocked, credits };
       if (unlocked && credits > 0 && !rewarded.has(gearTxId(String(userId), def.key))) {
         try {
@@ -236,7 +260,6 @@ const handler = baseApi().get(
     return res.status(200).json({
       gears,
       totalUnlocked: gears.filter(g => g.unlocked).length,
-      creditsPerUnlock: GEAR_UNLOCK_CREDITS,
     });
   })
 );
