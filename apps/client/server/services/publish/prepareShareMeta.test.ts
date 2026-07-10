@@ -37,14 +37,30 @@ describe('prepareShareMeta', () => {
 
     expect(metaTags).toContain('<meta name="description" content="A short description">');
     expect(metaTags).toContain('<meta property="og:title" content="Hello">');
-    expect(metaTags).toContain('<meta property="og:description" content="A short description">');
+    // Unfurl surfaces (og:/twitter:description) carry the brand CTA; the plain
+    // search-snippet description above stays CTA-free.
+    expect(metaTags).toContain(
+      '<meta property="og:description" content="A short description · Build and share with ExampleApp.">'
+    );
     expect(metaTags).toContain('<meta property="og:type" content="article">');
     expect(metaTags).toContain('<meta property="og:url" content="https://example.com/p/u/scope/slug">');
     expect(metaTags).toContain('<meta property="og:site_name" content="ExampleApp">');
     expect(metaTags).toContain('<meta name="twitter:card" content="summary">');
     expect(metaTags).toContain('<meta name="twitter:title" content="Hello">');
-    expect(metaTags).toContain('<meta name="twitter:description" content="A short description">');
+    expect(metaTags).toContain(
+      '<meta name="twitter:description" content="A short description · Build and share with ExampleApp.">'
+    );
     expect(metaTags).toContain('<link rel="canonical" href="https://example.com/p/u/scope/slug">');
+  });
+
+  it('omits the unfurl CTA when no siteName is configured (fork-safe neutral default)', () => {
+    const { metaTags } = prepareShareMeta({
+      title: 'Hello',
+      description: 'A short description',
+      canonicalUrl: 'https://example.com/p/u/scope/slug',
+    });
+    expect(metaTags).toContain('<meta property="og:description" content="A short description">');
+    expect(metaTags).not.toContain('Build and share with');
   });
 
   it('escapes title/description/URL to prevent breakout in meta attributes', () => {

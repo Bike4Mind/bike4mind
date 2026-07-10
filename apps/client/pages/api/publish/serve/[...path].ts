@@ -18,6 +18,9 @@ import {
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
+import { parsePublishPath } from '@server/services/publish/parsePublishPath';
+import { requestHasGateProof } from '@server/services/publish/publishGateToken';
+import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 import {
   buildBundleScriptSrc,
@@ -74,7 +77,6 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * direct (public, non-shelled) render is unaffected (its links work normally).
  */
 
-const TIER_BY_PREFIX: Record<string, PublishScopeTier> = { u: 'user', pj: 'project', o: 'organization' };
 // Bearer-JWT first (browser/client loader), then X-API-Key (programmatic). apiKeyAuth
 // early-returns when req.user is already set, so the order lets Bearer win.
 const optionalJwtShim = optionalJwtAuth();
@@ -135,24 +137,6 @@ const ASSET_CSP = [
   withAppHost("frame-ancestors 'self'"),
 ].join('; ');
 
-interface ResolvedBundlePath {
-  kind: 'bundle';
-  tier: PublishScopeTier;
-  scopeId: string;
-  slug: string;
-  assetPath: string | null;
-}
-interface ResolvedShortPath {
-  kind: 'reply' | 'fabfile';
-  publicId: string;
-}
-interface ResolvedShareTokenPath {
-  kind: 'share';
-  shareToken: string;
-  assetPath: string | null;
-}
-type ResolvedPath = ResolvedBundlePath | ResolvedShortPath | ResolvedShareTokenPath;
-
 // Share links are served same-origin, sandboxed, and must never be cached: no-store
 // is what makes a token rotation/revoke take effect immediately (no stale CDN/browser copy).
 const SHARE_CACHE_CONTROL = 'private, no-store, must-revalidate';
@@ -173,7 +157,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const rawPath = req.query.path;
   const segments: string[] = Array.isArray(rawPath) ? rawPath.map(p => String(p)) : rawPath ? [String(rawPath)] : [];
 
-  const resolved = parsePath(segments);
+  const resolved = parsePublishPath(segments);
   if (!resolved) {
     return res.status(404).json({ error: 'Not found' });
   }
@@ -241,13 +225,47 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(404).json({ error: 'Not found' });
   }
 
+  // A `public` artifact with an access gate must NOT serve like open-public:
+  // no CDN caching, no isolated public origin, and bundles inline their assets
+  // (the opaque-origin iframe can't carry the proof cookie on subresource
+  // fetches). One substitution point keeps every downstream decision honest.
+  // Share links have their own always-no-store policy and are handled by kind.
+  const isOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
+  const effectiveVisibility: PublishVisibility = isOpenPublic
+    ? 'public'
+    : artifact.visibility === 'public'
+      ? 'private'
+      : artifact.visibility;
+
   // Access gate - runs on the HTML AND every asset request. Share links go through
   // checkShareGrant (token possession = read, even for a non-public artifact); every
-  // other path uses the visibility-enum ladder. The two are mutually exclusive by kind.
+  // other path uses the visibility-enum ladder. BOTH honor the artifact's accessGate:
+  // the passphrase proof cookie is verified here (per-artifact, audience-scoped JWT)
+  // and passed in as an established fact, never the raw cookie.
+  const passphraseVerified = artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId);
   const access = isShare
-    ? await checkShareGrant(artifact, { user: req.user as PublishUser | undefined })
-    : await checkVisibility(artifact, req.user as PublishUser | undefined);
+    ? await checkShareGrant(artifact, { user: req.user as PublishUser | undefined, passphraseVerified })
+    : await checkVisibility(artifact, req.user as PublishUser | undefined, { passphraseVerified });
   if (!access.ok) {
+    // Passphrase-gated item navigated without a valid proof -> serve the PUBLIC
+    // passphrase prompt shell (no artifact data) instead of a bare 401. Takes
+    // precedence over the JWT loader shell below: a Bearer re-fetch can never
+    // satisfy a passphrase gate, so the loader would dead-end at "sign in".
+    // Applies to /p AND /a navigations; assets, ?raw=1 and ?format=raw hard-fail.
+    const wantsPassphrasePrompt =
+      access.reason === 'passphrase' &&
+      !isRaw &&
+      !isFormatRaw &&
+      !(resolved.kind === 'bundle' && resolved.assetPath) &&
+      !(isShare && shareAssetPath);
+    if (wantsPassphrasePrompt) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('X-Robots-Tag', 'noindex');
+      if (isShare) res.setHeader('Referrer-Policy', 'no-referrer');
+      return res.status(200).send(renderPassphraseShell());
+    }
     // Gated INDEX/page navigated with NO credential -> return the PUBLIC client-side loader
     // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
     // `?raw=1` with Authorization: Bearer, then injects the result as the iframe srcdoc. The
@@ -314,7 +332,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "frame-ancestors 'self'",
       ].join('; ')
     );
-    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(artifact.visibility));
+    res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
     bumpViewCount(artifact.publicId);
     return res.status(200).send(page);
@@ -343,7 +361,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       const buf = await storage.download(`${artifact.storageKeyPrefix}${assetPath}`);
       res.setHeader('Content-Type', fileEntry.mimeType);
       res.setHeader('Content-Length', String(buf.length));
-      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(artifact.visibility));
+      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
       res.setHeader('X-Content-Type-Options', 'nosniff');
       // SECURITY: assets are served same-origin and validateBundle only vets
       // index.html - so an attacker could ship a second `evil.html` or `evil.svg`
@@ -413,7 +431,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // they never inline - only gated `/p` bundles pre-fetch + inline their assets here.
   let inlineAssets: Map<string, SandboxAsset> | undefined;
   let droppedAssets: string[] = [];
-  if (!isShare && artifact.visibility !== 'public') {
+  if (isShare ? !!artifact.accessGate : !isOpenPublic) {
     const collected = await collectInlineAssets({
       manifest: artifact.manifest,
       load: path => storage.download(`${artifact.storageKeyPrefix}${path}`),
@@ -426,8 +444,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     indexHtml,
     urlBase,
     origin: docOrigin,
-    visibility: artifact.visibility,
-    assetMode: isShare ? 'base' : undefined,
+    visibility: effectiveVisibility,
+    assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
     assets: inlineAssets,
   });
 
@@ -470,7 +488,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     ? SHARE_CACHE_CONTROL
     : isKnownOlderVersion
       ? 'private, no-store'
-      : cacheControlFor(artifact.visibility);
+      : cacheControlFor(effectiveVisibility);
 
   // The per-artifact isolated origin (Approach B), e.g. `abc123.usercontent.app.<domain>`.
   // Empty when SERVER_DOMAIN is unset (Approach B disabled) OR the artifact is non-public:
@@ -479,7 +497,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // (and the app-origin handler is where the gated assets get inlined post-auth).
   // Share links stay on the same-origin sandboxed-srcdoc model (Approach A): never the
   // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
-  const artifactHost = !isShare && artifact.visibility === 'public' ? usercontentHostFor(artifact.publicId) : '';
+  const artifactHost = !isShare && isOpenPublic ? usercontentHostFor(artifact.publicId) : '';
 
   // ── Approach B: serve the bundle AS the page on its isolated origin. ──
   // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
@@ -514,12 +532,13 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   const isolatedSrc = useIsolatedEmbed
     ? `https://${artifactHost}${isolatedPath}${requestedVersion ? `?v=${encodeURIComponent(requestedVersion)}` : ''}`
     : '';
-  // Public shares emit full server-rendered meta + a noscript body + a link to the
-  // raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
-  // more than the JS shell. Gated shares deliberately do not: the loader shell must
-  // carry no artifact data pre-auth.
+  // OPEN-public shares emit full server-rendered meta + a noscript body + a link to
+  // the raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
+  // more than the JS shell. Gated shares (access gate OR non-public) deliberately do
+  // not — the pre-auth shells carry no artifact data, and even post-auth renders skip
+  // the SEO surface so a gate regression can never leak meta to crawlers.
   const shareMeta =
-    !isShare && artifact.visibility === 'public'
+    !isShare && isOpenPublic
       ? prepareShareMeta({
           title: artifact.title || SHARED_FALLBACK_TITLE,
           description: artifact.description,
@@ -736,6 +755,9 @@ interface PublishedArtifactLean {
   title: string;
   description?: string;
   visibility: PublishVisibility;
+  /** Optional gate on top of `public` (issue #383). passphraseHash is select:false
+   *  on the schema, so it never appears in this lean read. */
+  accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
   commentPolicy?: 'none' | 'open' | 'restricted';
   ownerId: string;
   storageKeyPrefix: string;
@@ -747,28 +769,6 @@ interface PublishedArtifactLean {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
-function parsePath(segments: string[]): ResolvedPath | null {
-  if (segments.length < 2) return null;
-  const head = segments[0];
-
-  if (head === 'r' || head === 'f') {
-    return { kind: head === 'r' ? 'reply' : 'fabfile', publicId: segments[1] };
-  }
-  if (head === 'a') {
-    return { kind: 'share', shareToken: segments[1], assetPath: segments.slice(2).join('/') || null };
-  }
-  const tier = TIER_BY_PREFIX[head];
-  if (!tier) return null;
-  if (segments.length < 3) return null;
-  return {
-    kind: 'bundle',
-    tier,
-    scopeId: segments[1],
-    slug: segments[2],
-    assetPath: segments.slice(3).join('/') || null,
-  };
-}
-
 /** Join paths into a comma-separated header value, capped at maxLen chars (adds a `...(+N)` tail). */
 function truncateHeaderList(paths: string[], maxLen: number): string {
   const full = paths.join(', ');

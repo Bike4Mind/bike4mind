@@ -185,6 +185,21 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
 }
 
+/** Access gate on top of `visibility: 'public'` — see issue #383. */
+export type PublishAccessGateInput =
+  | { kind: 'passphrase'; passphrase: string }
+  | { kind: 'domain'; allowedDomains: string[] }
+  | null;
+
+/**
+ * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * The passphrase is sent once and stored only as a hash server-side; there is
+ * no API to read it back — rotating means setting a new one.
+ */
+export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
 /**
  * Restore a published bundle to its immediately-previous version (owner/admin).
  * Returns the new version's sha. Only works when a previous version was archived

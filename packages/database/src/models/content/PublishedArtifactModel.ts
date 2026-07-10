@@ -12,10 +12,27 @@ import BaseRepository from '@bike4mind/db-core';
  * custom `id` field is needed. Indexes are declared via schema.index() per the
  * repo's MongoDB Index Guidelines (no `index: true` on fields).
  */
+/**
+ * Optional access gate layered ON TOP of `visibility: 'public'` (issue #383).
+ * Orthogonal to the visibility ladder so the shared `PublishVisibility` type
+ * (in @bike4mind/common) stays untouched:
+ *  - passphrase -> anyone with the link who presents the passphrase
+ *  - domain     -> logged-in viewers whose VERIFIED email domain is allowlisted
+ * Declared host-side only for now; lift into the common contract in a follow-up.
+ */
+export interface PublishedArtifactAccessGate {
+  kind: 'passphrase' | 'domain';
+  /** bcrypt hash; `select: false` in the schema so reads never leak it by default. */
+  passphraseHash?: string | null;
+  /** Lowercased registrable domains, exact-match only (no substrings). */
+  allowedDomains?: string[];
+}
+
 export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 'createdAt' | 'updatedAt'>, Document {
   id: string; // required by IMongoDocument (Mongoose's Document.id is optional)
   createdAt: Date;
   updatedAt: Date;
+  accessGate?: PublishedArtifactAccessGate | null;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -44,6 +61,18 @@ const VersionMetaSubSchema = new Schema(
     publishedBy: { type: String, required: true },
     size: { type: SizeSubSchema, required: true },
     sha256Index: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const AccessGateSubSchema = new Schema(
+  {
+    kind: { type: String, required: true, enum: ['passphrase', 'domain'] },
+    // Never selected by default: management GET/PATCH responses and the serve
+    // route's lean reads must not carry the hash. The passphrase-verify route
+    // opts in explicitly with .select('+accessGate.passphraseHash').
+    passphraseHash: { type: String, default: null, select: false },
+    allowedDomains: { type: [String], default: undefined },
   },
   { _id: false }
 );
@@ -84,6 +113,11 @@ const PublishedArtifactSchema = new Schema(
     // (not `unique: true` on the field, so token-less rows do not collide).
     shareToken: { type: String },
     shareTokenUpdatedAt: { type: Date, default: null },
+
+    /** Optional gate on top of open sharing — see PublishedArtifactAccessGate.
+     *  Applies to BOTH share surfaces: `visibility: 'public'` (/p/*) and
+     *  share-token links (/a/<token>). */
+    accessGate: { type: AccessGateSubSchema, default: null },
 
     /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
      *  `visibility` (who may view). Defaults to `none` so existing artifacts
