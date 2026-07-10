@@ -344,4 +344,33 @@ describe('normalizeCompletionRequest', () => {
     });
     expect(normalized.options?.tools?.[0].toolSchema.name).toBe('lookup');
   });
+
+  // Locks in the fix from the destructuring rewrite: a field that was never sent must stay
+  // absent from the result, not become an explicit `undefined` own-property (the latter would
+  // make e.g. `'tools' in normalized` true for a request that never sent tools).
+  it('does not add own-keys for fields that were never sent', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(Object.keys(normalized)).toEqual(['model', 'messages', 'options']);
+    expect(Object.hasOwn(normalized, 'tools')).toBe(false);
+    expect(Object.hasOwn(normalized, 'temperature')).toBe(false);
+    expect(Object.hasOwn(normalized, 'max_tokens')).toBe(false);
+    expect(Object.hasOwn(normalized, 'response_format')).toBe(false);
+  });
+
+  it('hoists temperature: 0 and max_tokens: 0 (falsy-but-defined, not mistaken for absent)', () => {
+    const parsed = CompletionRequestSchema.parse({
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }],
+      temperature: 0,
+      max_tokens: 0,
+    });
+    const normalized = normalizeCompletionRequest(parsed);
+    expect(normalized.options?.temperature).toBe(0);
+    expect(normalized.options?.maxTokens).toBe(0);
+  });
 });
