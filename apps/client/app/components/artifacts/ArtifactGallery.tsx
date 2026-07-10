@@ -135,6 +135,11 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
   // and org-scoped publishing; the server re-validates membership before trusting it.
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+  // Only offer Team for the org the server will accept: checkScopePermission gates org publishing
+  // on user.organizationId, so a multi-org member who selected a different (still valid) org would
+  // be offered Team but 403 on publish. Gate the option on the match so the UI never invites a
+  // rejected action.
+  const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
   const { publishAndShare, modal: publishShareModal } = usePublishShare();
   // Guards against re-entrant Share clicks racing two publishes onto the single dialog.
   const publishingRef = useRef(false);
@@ -185,14 +190,14 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
         }
         publishAndShare({
           title: artifact.title || 'Shared artifact',
-          ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+          ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
           ...buildArtifactPublishWiring({
             artifactId,
             type: artifact.type,
             content,
             title: artifact.title,
             userId: String(currentUser.id),
-            orgId: activeOrg?.id,
+            orgId: teamOrg?.id,
           }),
         });
       } finally {
@@ -201,7 +206,7 @@ export const ArtifactGallery: React.FC<ArtifactGalleryProps> = ({
         publishingRef.current = false;
       }
     },
-    [currentUser, activeOrg, publishAndShare]
+    [currentUser, teamOrg, publishAndShare]
   );
 
   // State

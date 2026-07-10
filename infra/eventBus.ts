@@ -4,7 +4,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
-import { notebookCurationQueue } from './queues';
+import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 
 // Stripe events
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
@@ -332,9 +332,31 @@ const spiderSubscription = eventBus.subscribe(
   }
 );
 
+// SRE Diagnostician -> Surgeon handoff. The analysis handler emits
+// sre.analysis.completed (apps/client/server/utils/eventBus.ts) and this rule
+// routes it to sreFixQueue, replacing the former direct SQS dispatch. Gives a
+// single seam for replay/inspection, and future consumers (audit, metrics)
+// attach here without touching the analysis Lambda. Failed deliveries go to
+// the existing sreFixQueueDLQ via the target's dead-letter config.
+const sreFixDispatchSubscription = eventBus.subscribeQueue('SreFixDispatch', sreFixQueue, {
+  pattern: {
+    detailType: ['sre.analysis.completed'],
+  },
+  transform: {
+    target: targetArgs => {
+      targetArgs.deadLetterConfig = { arn: sreFixQueueDLQ.arn };
+    },
+  },
+});
+
+// EventBridge needs SendMessage on the DLQ to deliver failed events (the rule
+// target's policy created by subscribeQueue only covers the main queue).
+sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
+
 export {
   eventBus,
   telemetryAlertRuleDLQ,
+  sreFixDispatchSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

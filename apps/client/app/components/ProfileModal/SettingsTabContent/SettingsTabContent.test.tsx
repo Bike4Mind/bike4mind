@@ -20,10 +20,15 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-// Non-admin user: personal Custom Instructions must stay reachable for regular
-// users, not gated behind admin.
+// Non-admin user with email configured: personal Custom Instructions must stay
+// reachable for regular users, not gated behind admin.
+let mockUser: Record<string, unknown> = {
+  id: 'u1',
+  name: 'Test User',
+  platformEmailAddress: 'user@app.example.com',
+};
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'u1', name: 'Test User' }, isAdmin: false }),
+  useUser: () => ({ currentUser: mockUser }),
 }));
 
 // Mementos visibility is driven by useFeatureEnabled so the admin `EnableMementos`
@@ -63,6 +68,7 @@ describe('SettingsTabContent sub-tabs', () => {
     searchValue = {};
     enableMementos = false;
     featureLoading = false;
+    mockUser = { id: 'u1', name: 'Test User', platformEmailAddress: 'user@app.example.com' };
   });
 
   it('exposes Custom Instructions to a non-admin user (no regression)', () => {
@@ -74,6 +80,12 @@ describe('SettingsTabContent sub-tabs', () => {
     renderSettings();
     expect(screen.getByTestId('settings-subtab-general')).toBeInTheDocument();
     expect(screen.getByTestId('settings-subtab-email-inbox')).toBeInTheDocument();
+  });
+
+  it('hides the Email Inbox sub-tab when user has no platform email configured', () => {
+    mockUser = { id: 'u1', name: 'Test User' };
+    renderSettings();
+    expect(screen.queryByTestId('settings-subtab-email-inbox')).not.toBeInTheDocument();
   });
 
   // Billing (credit analytics) was promoted out to the top-level `usage` tab,

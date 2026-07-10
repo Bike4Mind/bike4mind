@@ -866,6 +866,14 @@ export async function generateCliTools(
   // sync.
   const liveAllowedDirectories = allowedDirectories ?? [];
 
+  // Injects the CLI-owned web-tree-sitter comment stripper into file_read's opt-in
+  // `minified` mode (services has no tree-sitter dep). Lazy import keeps the WASM off
+  // the hot path until a minified read actually runs; reuses get_file_structure's engine.
+  const codeMinifier = async (source: string, ext: string): Promise<string | null> => {
+    const { stripComments } = await import('../tools/getFileStructure/treeSitterEngine');
+    return stripComments(source, ext);
+  };
+
   const toolsMap = generateTools(
     userId,
     user as IUserDocument,
@@ -881,7 +889,10 @@ export async function generateCliTools(
     model,
     undefined, // imageProcessorLambdaName (not needed for CLI)
     tools_to_generate,
-    liveAllowedDirectories
+    liveAllowedDirectories,
+    undefined, // entitlementKeys (default)
+    undefined, // sessionId (not needed for CLI tool build)
+    codeMinifier
   );
 
   // Convert to array and wrap with permission checks, checkpointing, server routing, and observation tracking

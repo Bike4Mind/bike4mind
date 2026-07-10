@@ -206,17 +206,17 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     let wsManager: WebSocketConnectionManager | null = null;
     let llm: ICompletionBackend & { currentModel: string; getModelInfo: () => Promise<{ id: string }[]> };
-    let completionsUrl: string | undefined;
+    let sseCompletionsUrl: string | undefined;
 
     try {
       const serverConfig = await apiClient.get<{
         websocketUrl?: string;
         wsCompletionUrl?: string;
-        completionsUrl?: string;
+        sseCompletionsUrl?: string;
       }>('/api/settings/serverConfig');
       const wsUrl = serverConfig?.websocketUrl;
       const wsCompletionUrl = serverConfig?.wsCompletionUrl;
-      completionsUrl = serverConfig?.completionsUrl;
+      sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
 
       if (wsUrl && wsCompletionUrl) {
         wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
@@ -244,7 +244,7 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       wsManager?.disconnect();
       wsManager = null;
       setWebSocketToolExecutor(null);
-      llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, completionsUrl });
+      llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, sseCompletionsUrl });
       logger.debug('[headless] Using SSE transport fallback');
     }
 

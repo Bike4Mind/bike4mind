@@ -17,11 +17,14 @@ import { BLESSED_SCRIPT_PATHS } from './validateBundle';
  * The serve handler downloads bytes and constructs the iframe wrapper; this
  * function only transforms the bundle HTML that becomes the iframe `srcdoc`.
  *
- * Asset model (the opaque origin has no usable base URL of its own):
- *   - public   -> inject `<base href="{origin}{urlBase}/">` so relative asset
- *                refs load back through the gated `/p/...` asset route (public,
- *                uncredentialed loads are fine).
- *   - gated    -> the caller passes an `assets` map of pre-fetched bytes (fetched
+ * Asset model (the opaque origin has no usable base URL of its own), selected by
+ * `assetMode` (defaults from `visibility`: public -> base, gated -> inline):
+ *   - base     -> inject `<base href="{origin}{urlBase}/">` so relative asset
+ *                refs load back through the `{urlBase}` asset route. Used for
+ *                public `/p/*` (uncredentialed) AND for `/a/<shareToken>` links
+ *                (the asset requests re-enter carrying the token, so they self-
+ *                authorize even for a non-public artifact - no inlining needed).
+ *   - inline   -> the caller passes an `assets` map of pre-fetched bytes (fetched
  *                on the app origin WITH the viewer's credential); each relative
  *                ref is inlined as a `data:` URI / inline `<style>` so the opaque
  *                origin never makes a credentialed request. Missing/oversized
@@ -46,11 +49,17 @@ export interface RenderSandboxedBundleInput {
   urlBase: string;
   /** Document origin to resolve absolute URLs against, e.g. `https://app.example.com`. */
   origin: string;
-  /** Artifact visibility - `public` uses `<base>`, everything else inlines assets. */
+  /** Artifact visibility - the default `assetMode` derives from it (public -> base). */
   visibility: PublishVisibility;
   /**
-   * Pre-fetched bundle assets keyed by their relative manifest path. Required for
-   * gated (non-public) artifacts; ignored for `public` (which uses `<base>`).
+   * Override the asset strategy. Defaults to `base` for public visibility and
+   * `inline` otherwise. `/a/<shareToken>` links force `base` regardless of
+   * visibility (token-authorized asset sub-paths need no inlining).
+   */
+  assetMode?: 'base' | 'inline';
+  /**
+   * Pre-fetched bundle assets keyed by their relative manifest path. Required when
+   * `assetMode` resolves to `inline`; ignored for `base`.
    */
   assets?: Map<string, SandboxAsset>;
 }
@@ -73,7 +82,7 @@ const RELATIVE_ATTR_PAIRS: ReadonlyArray<readonly [string, string]> = [
 export function renderSandboxedBundle(input: RenderSandboxedBundleInput): RenderSandboxedBundleResult {
   const { indexHtml, urlBase, origin, visibility } = input;
   const assets = input.assets ?? new Map<string, SandboxAsset>();
-  const isPublic = visibility === 'public';
+  const assetMode = input.assetMode ?? (visibility === 'public' ? 'base' : 'inline');
   const droppedAssets: string[] = [];
 
   const $ = cheerio.load(indexHtml);
@@ -86,8 +95,8 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
     if (src && blessed.has(src)) $(el).attr('src', `${origin}${src}`);
   });
 
-  if (isPublic) {
-    // Relative asset refs load back through the gated `/p/...` route. A <base> makes
+  if (assetMode === 'base') {
+    // Relative asset refs load back through the `{urlBase}` route. A <base> makes
     // every relative URL (and the author's own) resolve against the bundle's path.
     ensureBaseHref($, `${origin}${urlBase}/`);
   } else {

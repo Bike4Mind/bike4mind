@@ -172,7 +172,8 @@ export const generateTools = (
   tools: Record<string, ToolDefinition> = b4mTools,
   allowedDirectories?: string[],
   entitlementKeys: string[] = [],
-  sessionId?: string
+  sessionId?: string,
+  codeMinifier?: ToolContext['codeMinifier']
 ): Record<string, ICompletionOptionTools> => {
   const context: ToolContext = {
     userId,
@@ -190,6 +191,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    codeMinifier,
   };
 
   return Object.entries(tools).reduce(

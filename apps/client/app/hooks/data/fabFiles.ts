@@ -494,7 +494,7 @@ export interface ISearchFabFilesParams {
   pagination?: { page: number; limit: number };
   order?: { by: 'fileName' | 'fileSize' | 'createdAt'; direction: 'asc' | 'desc' };
 }
-export function useSearchFabFiles(parameters?: ISearchFabFilesParams) {
+export function useSearchFabFiles(parameters?: ISearchFabFilesParams, options?: { enabled?: boolean }) {
   return useQuery({
     queryKey: ['fabFiles', 'search', parameters],
     queryFn: async () => {
@@ -510,6 +510,7 @@ export function useSearchFabFiles(parameters?: ISearchFabFilesParams) {
       return response.data;
     },
     refetchOnWindowFocus: false,
+    enabled: options?.enabled, // undefined => defaults to true (existing callers unaffected)
   });
 }
 

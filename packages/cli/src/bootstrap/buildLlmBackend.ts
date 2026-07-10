@@ -135,17 +135,17 @@ export async function buildLlmBackend(
   // Falls back to SSE if WebSocket is unavailable
   let wsManager: WebSocketConnectionManager | null = null;
   let llm: CliLlmBackend;
-  let completionsUrl: string | undefined;
+  let sseCompletionsUrl: string | undefined;
 
   try {
     const serverConfig = await apiClient.get<{
       websocketUrl?: string;
       wsCompletionUrl?: string;
-      completionsUrl?: string;
+      sseCompletionsUrl?: string;
     }>('/api/settings/serverConfig');
     const wsUrl = serverConfig?.websocketUrl;
     const wsCompletionUrl = serverConfig?.wsCompletionUrl;
-    completionsUrl = serverConfig?.completionsUrl;
+    sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
 
     if (wsUrl && wsCompletionUrl) {
       wsManager = await deps.connectWebSocket(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
@@ -181,7 +181,7 @@ export async function buildLlmBackend(
     llm = deps.createServerBackend({
       apiClient,
       model: config.defaultModel,
-      completionsUrl,
+      sseCompletionsUrl,
     });
   }
 

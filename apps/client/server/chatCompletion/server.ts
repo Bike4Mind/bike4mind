@@ -4,7 +4,8 @@ import { registerProcessErrorHandlers } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
 import { registerInternalRoutes } from './internal/route';
-import { registerExternalRoutes } from './external/route';
+import { registerExternalRoutes } from './external/sseRoute';
+import { registerWsCompletionRoutes } from './external/wsRoute';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -16,7 +17,7 @@ import { registerExternalRoutes } from './external/route';
  *     creates the quest, POSTs the QuestStartBody here, and gets a 202 back in ~milliseconds;
  *     we process it in-process (the container outlives the request, unlike a Lambda) and stream
  *     results over WebSocket. Guarded by a shared-secret bearer.
- *   - external/route.ts -> POST /api/ai/v1/completions: the user-authenticated
+ *   - external/sseRoute.ts -> POST /api/ai/v1/completions: the user-authenticated
  *     CLI/3rd-party SSE completions endpoint (own API-key / JWT auth).
  *
  * Why this exists: a long-running container has no cold start and no 15-minute Lambda
@@ -74,6 +75,11 @@ export function createApp() {
   // the always-on service so it has no cold start / 15-min Lambda ceiling. Its in-flight streams
   // join the same drain set so SIGTERM lets them finish (bounded by DRAIN_TIMEOUT_MS).
   registerExternalRoutes(app, track);
+
+  // CLI HTTP->WebSocket completions (POST payload here, chunks stream over the CLI's
+  // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
+  // join the same drain set.
+  registerWsCompletionRoutes(app, track);
 
   return app;
 }

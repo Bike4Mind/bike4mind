@@ -1,5 +1,5 @@
 import { Ability } from '@server/auth/ability';
-import { ApiKeyScope, IUserApiKeyRateLimit, IUserDocument } from '@bike4mind/common';
+import { ApiKeyBillingOwnerType, ApiKeyScope, IUserApiKeyRateLimit, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 
@@ -13,6 +13,10 @@ declare global {
       rateLimit: IUserApiKeyRateLimit;
       /** Overwatch product this key is bound to. Set only for OVERWATCH_INGEST_WRITE keys. */
       productId?: string;
+      /** Billing target. Organization -> usage bills `organizationId`'s credit pool. */
+      billingOwnerType?: ApiKeyBillingOwnerType;
+      /** Organization the key bills, present iff billingOwnerType is Organization. */
+      organizationId?: string;
     }
 
     interface ApiKeyUsageInfo {

@@ -89,7 +89,7 @@
     "turbo": "^2.10.4",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.62.0",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "sst": "4.14.1"

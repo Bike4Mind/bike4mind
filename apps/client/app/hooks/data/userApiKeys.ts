@@ -38,6 +38,14 @@ export interface CreateUserApiKeyRequest {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  /** When set, mint an org-billed key charging this organization's credit pool. */
+  organizationId?: string;
+}
+
+/** An organization the current user may bill API-key usage to. */
+export interface BillingOrganization {
+  id: string;
+  name: string;
 }
 
 export interface CreateUserApiKeyResponse extends IUserApiKeyDocument {
@@ -56,6 +64,16 @@ export function useGetUserApiKeys() {
     queryKey: ['user-api-keys'],
     queryFn: async () => {
       const response = await api.get('/api/user-api-keys');
+      return response.data;
+    },
+  });
+}
+
+export function useBillingOrganizations() {
+  return useQuery<BillingOrganization[]>({
+    queryKey: ['user-api-keys', 'billing-organizations'],
+    queryFn: async () => {
+      const response = await api.get('/api/user-api-keys/billing-organizations');
       return response.data;
     },
   });

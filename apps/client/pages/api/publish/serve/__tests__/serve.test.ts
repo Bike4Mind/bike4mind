@@ -29,6 +29,10 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
+// Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 
 vi.mock('@server/utils/storage', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
@@ -455,6 +459,142 @@ describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
   });
 });
 
+describe('GET /api/publish/serve - reply/fabfile organization visibility', () => {
+  // Org-tier reply/fabfile records store the org id as scopeId; the gate authorizes a viewer
+  // whose organizationId matches. This is the path #174 re-enables for reply/fabfile shares.
+  const orgReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r-org',
+    title: 'Org reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Org only',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-org',
+    ...over,
+  });
+
+  it('serves an org reply to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Org only');
+  });
+
+  it('403s an org reply for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('serves the loader shell (not 401) for an anonymous nav to a gated org reply', async () => {
+    // A top-level nav carries no Authorization header; the shell recovers the localStorage
+    // JWT and re-fetches ?raw=1 - same path bundles use. See the loader-shell describe below.
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  });
+
+  it('serves an org fabfile to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('org file body');
+  });
+
+  it('403s an org fabfile for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+});
+
+describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
+  // Gated reply/fabfile pages are top-level navigations that carry no Authorization header, so
+  // (like bundles) they get the public loader shell, whose script re-fetches ?raw=1 with the
+  // localStorage JWT. This is what makes an org-shared reply/fabfile actually viewable in a
+  // browser after being authorized by the gate.
+  const gatedReply = (over = {}) => ({
+    publicId: 'r-gated',
+    title: 'Gated reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Secret org reply',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-gated',
+    ...over,
+  });
+
+  it('returns the loader shell (not 401) for an anonymous nav to a gated reply', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(data).not.toContain('allow-same-origin');
+    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("'raw=1'");
+    // Shell must NOT leak the gated reply's content or title.
+    expect(data).not.toContain('Secret org reply');
+  });
+
+  it('returns the loader shell for an anonymous nav to a gated fabfile', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      gatedReply({ publicId: 'f-gated', source: { kind: 'fabfile' }, slug: 'f-gated' })
+    );
+    const { res, promise } = run(['f', 'f-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  });
+
+  it('does NOT return the shell for a gated reply ?raw=1 with no credential (stays 401, no loop)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getData() as string).not.toContain('b4m-frame');
+  });
+
+  it('renders the reply for a gated ?raw=1 fetch from a same-org member (the shell re-fetch)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true, user: { id: 'member', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Secret org reply');
+    // The srcdoc-injected page keeps script-src 'none' via its own CSP meta (the shell's iframe
+    // is allow-scripts, so this backstop must ride along in the HTML, not just the HTTP header).
+    expect(data).toContain("script-src 'none'");
+  });
+
+  it('does NOT return the shell for a gated reply when authed-but-outside-org (stays 403)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { user: { id: 'outsider', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getData() as string).not.toContain('b4m-frame');
+  });
+});
+
 describe('GET /api/publish/serve — version history (?v)', () => {
   const versioned = (over: Record<string, unknown> = {}) =>
     bundle({ sha256Index: 'curSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'curSHA' }], ...over });
@@ -725,5 +865,121 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
     await promise;
 
     expect(res._getData() as string).toContain(BRIDGE_MARKER);
+  });
+});
+
+describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // Same-origin sandbox model - never the cross-origin usercontent embed.
+    expect(data).toContain('srcdoc=');
+    expect(data).not.toContain('usercontent.app.bike4mind.com');
+    // <base> points assets back through the token path so they self-authorize. It lives
+    // inside the srcdoc attribute, so its quotes are HTML-escaped in the wrapper.
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    // Always noindex; never the public SEO/raw surface.
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(data).not.toContain('link rel="alternate"');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+  });
+
+  it('grants read to a PRIVATE bundle via token (possession is the capability), using <base> not inlining', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        visibility: 'private',
+        ownerId: 'owner1',
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><img src="logo.png"></body></html>'));
+
+    // No credential at all - the token alone authorizes the read.
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    expect(data).not.toContain('data:image/png;base64,'); // share never inlines - assets self-authorize via the token
+    expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
+  });
+
+  it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
+    mockArtifactFindOne.mockReturnValue(null);
+
+    const { res, promise } = run(['a', 'gone']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('serves a bundle asset through the token path with no-store + noindex', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('PNGBYTES'));
+
+    const { res, promise } = run(['a', 'tok123', 'logo.png']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('image/png');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('disables ?format=raw on a share link (no plain-text surface)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Not honored: returns the HTML wrapper, not the text/plain alternate.
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('renders a reply via token with the viewer page + noindex meta', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r1',
+      title: 'A reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody: '# Hello world',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'x',
+    });
+
+    const { res, promise } = run(['a', 'tokreply']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Hello world');
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
   });
 });

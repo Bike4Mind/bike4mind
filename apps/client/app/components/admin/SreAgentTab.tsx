@@ -17,6 +17,7 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   CircularProgress,
   DialogActions,
@@ -1162,6 +1163,7 @@ type TrackingDocSummary = Partial<Pick<ISreErrorTracking, 'id'>> &
     | 'classification'
     | 'fixPrNumber'
     | 'githubIssueNumber'
+    | 'githubIssueState'
     | 'createdAt'
     | 'updatedAt'
   > & {
@@ -1175,6 +1177,44 @@ function getDocId(doc: TrackingDocSummary): string | undefined {
 }
 
 export { type TrackingDocSummary, getDocId };
+
+/**
+ * A doc is hidden by the "hide closed GitHub issues" filter only when its
+ * denormalized githubIssueState is 'closed'. CloudWatch-sourced docs (no linked
+ * issue) and GitHub docs whose state has not been observed yet (githubIssueState
+ * absent, or 'open') always stay visible - so the filter never hides in-flight
+ * work on a false or missing state.
+ */
+export function isClosedGithubIssueDoc(doc: Pick<TrackingDocSummary, 'githubIssueState'>): boolean {
+  return doc.githubIssueState === 'closed';
+}
+
+/** sessionStorage key persisting the Pipeline Status "hide closed GH issues" toggle across the session. */
+const HIDE_CLOSED_ISSUES_STORAGE_KEY = 'sre-pipeline-hide-closed-issues';
+
+/**
+ * Session-persisted boolean toggle, defaulting to `true` (hide closed-issue
+ * tracking on first open, per the issue's default view). Persistence uses
+ * sessionStorage so it survives tab navigation but resets in a new session.
+ */
+function useHideClosedIssues(): [boolean, (next: boolean) => void] {
+  const [hide, setHide] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.sessionStorage.getItem(HIDE_CLOSED_ISSUES_STORAGE_KEY);
+    return stored === null ? true : stored === 'true';
+  });
+
+  const update = useCallback((next: boolean) => {
+    setHide(next);
+    try {
+      window.sessionStorage.setItem(HIDE_CLOSED_ISSUES_STORAGE_KEY, String(next));
+    } catch {
+      // sessionStorage can throw (private mode / quota) - persistence is best-effort.
+    }
+  }, []);
+
+  return [hide, update];
+}
 
 // Keep in sync with RETRYABLE_STATUSES in packages/database/src/models/SreErrorTrackingModel.ts
 // (cannot import from @bike4mind/database in client components - pulls in node:fs via documentdb-cert-manager)
@@ -1223,7 +1263,11 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
     staleTime: 30_000,
   });
 
-  const isGithubIssue = doc.source === 'GITHUB_ISSUE' && !!doc.githubIssueNumber;
+  // Fire the issue-state self-heal for any GitHub-issue doc, even one whose issue
+  // number is not yet backfilled onto githubIssueNumber (it still lives in the
+  // server-side sourceRef URL, which the endpoint parses and backfills). Gating on
+  // githubIssueNumber here would leave such a doc unable to reconcile from its card.
+  const isGithubIssue = doc.source === 'GITHUB_ISSUE';
 
   const { data: issueState } = useQuery({
     queryKey: ['sre-issue-state', docId],
@@ -1894,8 +1938,9 @@ function ScanSection({ repoSlugs }: { repoSlugs: string[] }) {
   );
 }
 
-function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
+export function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const [selectedRepo, setSelectedRepo] = useState<string>('');
+  const [hideClosedIssues, setHideClosedIssues] = useHideClosedIssues();
 
   const { data: trackingDocs, isLoading } = useQuery({
     queryKey: ['sre-tracking-recent', selectedRepo],
@@ -1907,6 +1952,13 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
+
+  const visibleDocs = useMemo(
+    () => (hideClosedIssues ? (trackingDocs ?? []).filter(doc => !isClosedGithubIssueDoc(doc)) : (trackingDocs ?? [])),
+    [trackingDocs, hideClosedIssues]
+  );
+
+  const hiddenByFilterCount = (trackingDocs?.length ?? 0) - visibleDocs.length;
 
   return (
     <Stack spacing={1.5}>
@@ -1928,6 +1980,13 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
           </Select>
         </FormControl>
       )}
+      <Checkbox
+        size="sm"
+        label="Hide tracking for closed GitHub issues"
+        checked={hideClosedIssues}
+        onChange={e => setHideClosedIssues(e.target.checked)}
+        data-testid="sre-pipeline-hide-closed-toggle"
+      />
       <ManualTriggerSection repoSlugs={repoSlugs} />
       <ScanSection repoSlugs={repoSlugs} />
       {isLoading ? (
@@ -1936,11 +1995,26 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
         <Alert variant="soft" color="neutral">
           No tracked errors yet. The pipeline will populate this once errors are ingested.
         </Alert>
+      ) : !visibleDocs.length ? (
+        <Alert variant="soft" color="neutral" data-testid="sre-pipeline-all-hidden">
+          {hiddenByFilterCount === 1
+            ? '1 tracked error is for a closed GitHub issue. Uncheck the filter above to see it.'
+            : `${hiddenByFilterCount} tracked errors are for closed GitHub issues. Uncheck the filter above to see them.`}
+        </Alert>
       ) : (
-        trackingDocs.map(doc => {
-          const key = getDocId(doc) ?? doc.errorFingerprint;
-          return <PipelineTrackingCard key={key} doc={doc} />;
-        })
+        <>
+          {hideClosedIssues && hiddenByFilterCount > 0 && (
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="sre-pipeline-hidden-count">
+              {hiddenByFilterCount === 1
+                ? '1 closed-issue doc hidden'
+                : `${hiddenByFilterCount} closed-issue docs hidden`}
+            </Typography>
+          )}
+          {visibleDocs.map(doc => {
+            const key = getDocId(doc) ?? doc.errorFingerprint;
+            return <PipelineTrackingCard key={key} doc={doc} />;
+          })}
+        </>
       )}
     </Stack>
   );

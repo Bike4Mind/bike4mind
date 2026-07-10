@@ -46,8 +46,6 @@ const handler = baseApi().post(
 
           const username = validatedData.email.split('@')[0];
 
-          const password = Math.random().toString(36).slice(-8);
-
           const newUser = await userService.createUser(
             {
               username,
@@ -55,8 +53,9 @@ const handler = baseApi().post(
               name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
               initialCredits: validatedData.startingCredits ?? 0,
               record: {
-                password,
-                // Auto-generated, unusable - nobody knows this password. Users sign in via OTC.
+                // Passwordless: no usable password. Store null so `password`
+                // presence stays a truthful signal. Users sign in via OTC.
+                password: null,
                 hasUsablePassword: false,
               },
             },
@@ -134,8 +133,7 @@ const handler = baseApi().post(
           return {
             success: true,
             email: newUser.email,
-            // Passwordless: the generated password is unusable (no password login),
-            // so it's intentionally not returned. Users sign in via OTC.
+            // Passwordless account (no password login); users sign in via OTC.
             user: newUser,
           };
         } catch (error: any) {
