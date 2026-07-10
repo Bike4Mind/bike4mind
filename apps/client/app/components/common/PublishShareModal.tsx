@@ -15,7 +15,6 @@ import {
   FormLabel,
   Switch,
 } from '@mui/joy';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
 import GroupIcon from '@mui/icons-material/Group';
@@ -658,7 +657,7 @@ export function PublishShareModal({
                   onClick={() => void copyToClipboard(url)}
                   data-testid="publish-share-copy"
                 >
-                  <ContentCopyIcon />
+                  <LinkIcon />
                 </IconButton>
               </Tooltip>
             </Box>
@@ -693,7 +692,7 @@ export function PublishShareModal({
                         onClick={() => void copyToClipboard(toShareTokenUrl(shareToken))}
                         data-testid="publish-share-token-copy"
                       >
-                        <ContentCopyIcon />
+                        <LinkIcon />
                       </IconButton>
                     </Tooltip>
                   </Box>

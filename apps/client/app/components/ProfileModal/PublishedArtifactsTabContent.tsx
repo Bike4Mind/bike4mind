@@ -14,7 +14,7 @@ import {
   Link,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import LinkIcon from '@mui/icons-material/Link';
 import RestoreIcon from '@mui/icons-material/Restore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -221,7 +221,7 @@ export default function PublishedArtifactsTabContent() {
                       }}
                       data-testid={`published-artifact-copy-${a.publicId}`}
                     >
-                      <ContentCopyIcon />
+                      <LinkIcon />
                     </IconButton>
                   </Tooltip>
 
