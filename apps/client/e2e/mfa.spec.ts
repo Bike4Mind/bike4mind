@@ -138,7 +138,10 @@ test.describe('MFA', () => {
     await adminPage.fillLoginAsMfa(generateTotp(adminSecret));
     await adminPage.confirmLoginAs();
 
-    await basePage.waitForToast('Successfully logged in as user');
+    // Landing on /new is the success signal. The "logged in as user" toast is deliberately not
+    // asserted - useLoginAsUser hard-navigates (window.location.replace) 50ms after firing it, so
+    // the toast is torn down before Playwright can reliably observe it (flaky, and /new already
+    // proves the impersonation succeeded).
     await expect(page).toHaveURL(/\/new/);
     await expect(page).not.toHaveURL(/.*login.*/);
   });
