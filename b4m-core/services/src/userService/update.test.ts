@@ -125,6 +125,40 @@ describe('applyBaseUserUpdates', () => {
     );
   });
 
+  it('should throw (not crash) when setting a password on a passwordless shell account (password: null)', () => {
+    // Shell/provisioned accounts now store password: null (not a fake hash).
+    // The password-change path must reject cleanly, never bcrypt.compare against null.
+    const shellUser: IUserDocument = {
+      id: 'user-shell',
+      username: 'shelluser',
+      name: 'Shell User',
+      email: 'shell@example.com',
+      password: null,
+      isAdmin: false,
+      authProviders: [],
+      storageLimit: 1000,
+      currentStorageSize: 0,
+      currentCredits: 0,
+      tags: [],
+      level: 'DemoUser',
+      isBanned: false,
+      isModerated: false,
+      systemFiles: [],
+      oauthCredentials: {},
+      counters: { counters: [] },
+      numReferralsAvailable: 0,
+      regInvites: [],
+      loginRecords: [],
+      showCreditsUsed: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    } as IUserDocument;
+
+    expect(() => applyBaseUserUpdates(shellUser, { password: 'newpassword' })).toThrow(
+      'User does not have a password. Cannot update password for OAuth users.'
+    );
+  });
+
   it('should throw error when new password matches old password', () => {
     // Arrange
     const hashedPassword = bcrypt.hashSync('samepassword', 10);
