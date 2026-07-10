@@ -278,7 +278,7 @@ export function buildSharedTools(
 
     // Wrap all tools for sentinel extraction
     if (tools) {
-      wrapToolsForSentinels(tools, logger, callbacks);
+      wrapToolsForSentinels(tools, logger, callbacks, userId);
     }
   }
 
@@ -429,7 +429,35 @@ function wrapNavigateViewTool(
   };
 }
 
-function wrapToolsForSentinels(tools: ICompletionOptionTools[], logger: Logger, callbacks: ToolBuilderCallbacks): void {
+// ---------------------------------------------------------------------------
+// Tool-finish observer (host seam)
+// ---------------------------------------------------------------------------
+
+export interface ToolFinishObservation {
+  toolName: string;
+  userId?: string;
+}
+
+/**
+ * Optional host-registered observer called after ANY tool completes on the
+ * shared pipeline (chat, agents, quests). Fire-and-forget by contract: it is
+ * invoked synchronously, never awaited, and exceptions are swallowed — an
+ * observer can never add latency to or break a tool call. First consumer:
+ * the Gears progression system (first-use stamps for web_search, web_fetch,
+ * wolfram_alpha, math_evaluate, ...).
+ */
+let toolFinishObserver: ((observation: ToolFinishObservation) => void) | null = null;
+
+export function setToolFinishObserver(observer: ((observation: ToolFinishObservation) => void) | null): void {
+  toolFinishObserver = observer;
+}
+
+function wrapToolsForSentinels(
+  tools: ICompletionOptionTools[],
+  logger: Logger,
+  callbacks: ToolBuilderCallbacks,
+  userId?: string
+): void {
   for (let i = 0; i < tools.length; i++) {
     const originalToolFn = tools[i].toolFn;
     const toolName = tools[i].toolSchema?.name || `tool-${i}`;
@@ -437,6 +465,16 @@ function wrapToolsForSentinels(tools: ICompletionOptionTools[], logger: Logger, 
       ...tools[i],
       toolFn: async (args: unknown) => {
         const result = await originalToolFn(args);
+
+        // Non-blocking host observer (see setToolFinishObserver): sync call,
+        // no await, exceptions swallowed — zero added latency by contract.
+        if (toolFinishObserver) {
+          try {
+            toolFinishObserver({ toolName, userId });
+          } catch {
+            // observers must never break or slow a tool call
+          }
+        }
 
         // Extract __uiSideEffect sentinel
         if (callbacks.onUiSideEffect) {

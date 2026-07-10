@@ -9,10 +9,19 @@ import {
   Artifact,
   ApiKey,
   UsageEvent,
+  User,
+  Session,
+  Agent,
+  Memento,
+  QuestMasterPlan,
+  McpServer,
   agentRepository,
   dataLakeRepository,
   creditTransactionRepository,
   gearStampRepository,
+  importHistoryJobRepository,
+  rapidReplyAuditLogRepository,
+  researchDataRepository,
   userRepository,
 } from '@bike4mind/database';
 
@@ -69,9 +78,26 @@ export type GearKey =
   | 'react'
   | 'python'
   | 'shareproject'
+  | 'questmaster'
+  | 'mementos'
+  | 'video'
+  | 'mcp'
+  | 'mfa'
+  | 'slack'
+  | 'importopenai'
+  | 'importclaude'
+  | 'research'
+  | 'rapidreply'
+  | 'shareagent'
   // skills recorded via first-use stamps (see server/services/gears/stampGear.ts)
   | 'downloadnotebook'
-  | 'forknotebook';
+  | 'forknotebook'
+  | 'websearch'
+  | 'webfetch'
+  | 'wolfram'
+  | 'matheval'
+  // client-claimable curiosity stamps (see pages/api/gears/stamp.ts)
+  | 'clidocs';
 
 const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
@@ -195,6 +221,80 @@ const GEARS: GearDef[] = [
     kind: 'skill',
     check: async ({ userId }) => !!(await Project.exists({ userId, 'users.0': { $exists: true } })),
   },
+  {
+    key: 'questmaster',
+    credits: 1000,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await QuestMasterPlan.exists({ userId })),
+  },
+  {
+    key: 'mementos',
+    credits: 250,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await Memento.exists({ userId })),
+  },
+  {
+    key: 'video',
+    credits: 250,
+    kind: 'skill',
+    check: ({ usageFeatures }) => usageFeatures.has('video_generation'),
+  },
+  {
+    key: 'mcp',
+    credits: 1000,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await McpServer.exists({ userId })),
+  },
+  {
+    key: 'mfa',
+    credits: 500,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
+  },
+  {
+    // A notebook that lives in Slack — the partial index on slackMetadata
+    // exists for exactly this shape of query.
+    key: 'slack',
+    credits: 1000,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await Session.exists({ userId, slackMetadata: { $exists: true, $ne: null } })),
+  },
+  {
+    // Split imports (Erik, 2026-07-10): each history you bring over is its own
+    // earned reward — imported history is switching-cost reversal.
+    key: 'importopenai',
+    credits: 1000,
+    kind: 'skill',
+    check: async ({ userId }) =>
+      !!(await importHistoryJobRepository.findOne({ userId, source: 'OpenAI', status: 'completed' })),
+  },
+  {
+    key: 'importclaude',
+    credits: 1000,
+    kind: 'skill',
+    check: async ({ userId }) =>
+      !!(await importHistoryJobRepository.findOne({ userId, source: 'Claude', status: 'completed' })),
+  },
+  {
+    key: 'research',
+    credits: 500,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await researchDataRepository.findOne({ userId })),
+  },
+  {
+    key: 'rapidreply',
+    credits: 250,
+    kind: 'skill',
+    check: async ({ userId }) => !!(await rapidReplyAuditLogRepository.findOne({ userId })),
+  },
+  {
+    // SOCIAL: your agent in someone else's hands — public or explicitly shared.
+    key: 'shareagent',
+    credits: 5000,
+    kind: 'skill',
+    check: async ({ userId }) =>
+      !!(await Agent.exists({ userId, $or: [{ isPublic: true }, { 'users.0': { $exists: true } }] })),
+  },
   // Stamp-backed skills: the action leaves no other queryable trace, so the
   // action's route stamps first use (stampGear) and the check reads the stamp.
   {
@@ -208,6 +308,40 @@ const GEARS: GearDef[] = [
     credits: 100,
     kind: 'skill',
     check: ({ stamps }) => stamps.has('forknotebook'),
+  },
+  // Tool gears — stamped by the shared-pipeline tool-finish observer
+  // (server/services/gears/toolGearObserver.ts): zero-latency by contract.
+  {
+    key: 'websearch',
+    credits: 100,
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('websearch'),
+  },
+  {
+    key: 'webfetch',
+    credits: 100,
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('webfetch'),
+  },
+  {
+    key: 'wolfram',
+    credits: 250,
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('wolfram'),
+  },
+  {
+    key: 'matheval',
+    credits: 100,
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('matheval'),
+  },
+  {
+    // Client-claimable curiosity stamp (self-attested doc visit) — priced
+    // accordingly; see the allowlist note in pages/api/gears/stamp.ts.
+    key: 'clidocs',
+    credits: 100,
+    kind: 'skill',
+    check: ({ stamps }) => stamps.has('clidocs'),
   },
 ];
 

@@ -25,8 +25,24 @@ export type GearKey =
   | 'react'
   | 'python'
   | 'shareproject'
+  | 'questmaster'
+  | 'mementos'
+  | 'video'
+  | 'mcp'
+  | 'mfa'
+  | 'slack'
+  | 'importopenai'
+  | 'importclaude'
+  | 'research'
+  | 'rapidreply'
+  | 'shareagent'
   | 'downloadnotebook'
-  | 'forknotebook';
+  | 'forknotebook'
+  | 'websearch'
+  | 'webfetch'
+  | 'wolfram'
+  | 'matheval'
+  | 'clidocs';
 
 export interface GearStatus {
   key: GearKey;

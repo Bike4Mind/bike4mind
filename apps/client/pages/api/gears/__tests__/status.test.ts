@@ -14,6 +14,9 @@ const { mocks } = vi.hoisted(() => ({
     apiKeyExists: vi.fn(),
     usageDistinct: vi.fn(),
     stampedKeys: vi.fn(),
+    miscExists: vi.fn(),
+    miscFindOne: vi.fn(),
+    importFindOne: vi.fn(),
   },
 }));
 
@@ -42,10 +45,19 @@ vi.mock('@bike4mind/database', () => ({
   Artifact: { exists: (...a: unknown[]) => mocks.artifactExists(...a) },
   ApiKey: { exists: (...a: unknown[]) => mocks.apiKeyExists(...a) },
   UsageEvent: { distinct: (...a: unknown[]) => mocks.usageDistinct(...a) },
+  User: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  Session: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  Agent: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  Memento: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  QuestMasterPlan: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
+  McpServer: { exists: (...a: unknown[]) => mocks.miscExists(...a) },
   agentRepository: { countByUserId: (...a: unknown[]) => mocks.agentCount(...a) },
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
   gearStampRepository: { stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a) },
+  importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
+  rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
+  researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   userRepository: {},
 }));
 vi.mock('@bike4mind/services', () => ({
@@ -76,6 +88,9 @@ const lockEverything = () => {
   mocks.apiKeyExists.mockResolvedValue(null);
   mocks.usageDistinct.mockResolvedValue([]);
   mocks.stampedKeys.mockResolvedValue(new Set());
+  mocks.miscExists.mockResolvedValue(null);
+  mocks.miscFindOne.mockResolvedValue(null);
+  mocks.importFindOne.mockResolvedValue(null);
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -98,7 +113,7 @@ describe('GET /api/gears/status', () => {
 
     expect(res._getStatusCode()).toBe(200);
     const body = res._getJSONData() as { gears: Array<{ unlocked: boolean }>; totalUnlocked: number };
-    expect(body.gears).toHaveLength(15);
+    expect(body.gears).toHaveLength(31);
     expect(body.gears.every(g => !g.unlocked)).toBe(true);
     expect(body.totalUnlocked).toBe(0);
     expect(mocks.addCredits).not.toHaveBeenCalled();
@@ -246,5 +261,20 @@ describe('GET /api/gears/status — published reward waits for a non-owner view'
 
     const body = res._getJSONData() as { gears: Array<{ key: string; creditsAwarded?: number }> };
     expect(body.gears.find(g => g.key === 'published')!.creditsAwarded).toBe(5000);
+  });
+});
+
+describe('GET /api/gears/status — imports are split per source', () => {
+  it('unlocks ChatGPT and Claude imports independently, completed jobs only', async () => {
+    mocks.importFindOne.mockImplementation((q: { source?: string; status?: string }) =>
+      Promise.resolve(q.source === 'OpenAI' && q.status === 'completed' ? { _id: 'j1' } : null)
+    );
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string; unlocked: boolean }> };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
+    expect(byKey.importopenai.unlocked).toBe(true);
+    expect(byKey.importclaude.unlocked).toBe(false);
   });
 });

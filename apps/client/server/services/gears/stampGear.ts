@@ -5,7 +5,8 @@ import { gearStampRepository } from '@bike4mind/database';
  * Everything else is DERIVED (see pages/api/gears/status.ts); add a key here
  * only when derivation is genuinely impossible.
  */
-export type StampedGearKey = 'downloadnotebook' | 'forknotebook' | 'webfetch';
+export type StampedGearKey =
+  'downloadnotebook' | 'forknotebook' | 'websearch' | 'webfetch' | 'wolfram' | 'matheval' | 'clidocs';
 
 /**
  * Fire-and-forget first-use stamp. One line at the action site:

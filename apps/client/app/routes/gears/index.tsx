@@ -19,6 +19,22 @@ import DataObjectOutlinedIcon from '@mui/icons-material/DataObjectOutlined';
 import GroupAddOutlinedIcon from '@mui/icons-material/GroupAddOutlined';
 import ForkRightOutlinedIcon from '@mui/icons-material/ForkRightOutlined';
 import DownloadOutlinedIcon from '@mui/icons-material/DownloadOutlined';
+import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import PsychologyOutlinedIcon from '@mui/icons-material/PsychologyOutlined';
+import MovieOutlinedIcon from '@mui/icons-material/MovieOutlined';
+import CableOutlinedIcon from '@mui/icons-material/CableOutlined';
+import SecurityOutlinedIcon from '@mui/icons-material/SecurityOutlined';
+import ForumOutlinedIcon from '@mui/icons-material/ForumOutlined';
+import CloudDownloadOutlinedIcon from '@mui/icons-material/CloudDownloadOutlined';
+import TravelExploreOutlinedIcon from '@mui/icons-material/TravelExploreOutlined';
+import BoltOutlinedIcon from '@mui/icons-material/BoltOutlined';
+import IosShareOutlinedIcon from '@mui/icons-material/IosShareOutlined';
+import SearchOutlinedIcon from '@mui/icons-material/SearchOutlined';
+import LanguageOutlinedIcon from '@mui/icons-material/LanguageOutlined';
+import FunctionsOutlinedIcon from '@mui/icons-material/FunctionsOutlined';
+import CalculateOutlinedIcon from '@mui/icons-material/CalculateOutlined';
+import MenuBookOutlinedIcon from '@mui/icons-material/MenuBookOutlined';
+import { api } from '@client/app/contexts/ApiContext';
 import { useGearsStatus, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -174,11 +190,140 @@ const SKILL_CARDS: GearCardDef[] = [
     cta: 'Download a notebook',
     icon: <DownloadOutlinedIcon />,
   },
+  {
+    key: 'questmaster',
+    title: 'Quest Master',
+    tagline: 'A mission, not a message',
+    intro: 'Hand the AI a multi-step goal — it plans, executes in parallel, and reports back.',
+    cta: 'Start your first quest',
+    icon: <AutoAwesomeOutlinedIcon />,
+  },
+  {
+    key: 'mementos',
+    title: 'Mementos',
+    tagline: 'It remembers so you do not have to',
+    intro: 'Automatic memory across conversations — facts about you and your work, captured and recalled.',
+    cta: 'Make a memory',
+    icon: <PsychologyOutlinedIcon />,
+  },
+  {
+    key: 'video',
+    title: 'Video Generation',
+    tagline: 'Prompt to motion',
+    intro: 'Generate short video from a text prompt, right in the conversation.',
+    cta: 'Generate a video',
+    icon: <MovieOutlinedIcon />,
+  },
+  {
+    key: 'research',
+    title: 'Research Engine',
+    tagline: 'Deep dives, cited',
+    intro: 'Multi-source research runs that gather, read, and cite the web for you.',
+    cta: 'Run a research task',
+    icon: <TravelExploreOutlinedIcon />,
+  },
+  {
+    key: 'rapidreply',
+    title: 'Rapid Reply',
+    tagline: 'Answers at the speed of chat',
+    intro: 'One-tap AI replies where the conversation already lives.',
+    cta: 'Try Rapid Reply',
+    icon: <BoltOutlinedIcon />,
+  },
+  {
+    key: 'mcp',
+    title: 'MCP Server',
+    tagline: 'Plug in your own tools',
+    intro: 'Connect a Model Context Protocol server and give every chat your custom tools.',
+    cta: 'Connect an MCP server',
+    icon: <CableOutlinedIcon />,
+  },
+  {
+    key: 'slack',
+    title: 'Slack',
+    tagline: 'B4M where your team talks',
+    intro: 'Bring Bike4Mind into Slack — notebooks that live in your channels and threads.',
+    cta: 'Chat from Slack',
+    icon: <ForumOutlinedIcon />,
+  },
+  {
+    key: 'importopenai',
+    title: 'Import from ChatGPT',
+    tagline: 'Bring your history home',
+    intro: 'Import your entire ChatGPT export — every conversation searchable alongside your new work.',
+    cta: 'Import ChatGPT history',
+    icon: <CloudDownloadOutlinedIcon />,
+  },
+  {
+    key: 'importclaude',
+    title: 'Import from Claude',
+    tagline: 'Bring your history home',
+    intro: 'Import your Claude export — your past conversations, vectorized and searchable here.',
+    cta: 'Import Claude history',
+    icon: <CloudDownloadOutlinedIcon />,
+  },
+  {
+    key: 'mfa',
+    title: 'Lock It Down',
+    tagline: 'Your account, actually yours',
+    intro: 'Turn on two-factor authentication — TOTP with backup codes.',
+    cta: 'Enable 2FA',
+    icon: <SecurityOutlinedIcon />,
+  },
+  {
+    key: 'shareagent',
+    title: 'Share an Agent',
+    tagline: 'Your agent, their hands',
+    intro: 'Publish an agent or share it with teammates — expertise that multiplies.',
+    cta: 'Share an agent',
+    icon: <IosShareOutlinedIcon />,
+  },
+  {
+    key: 'websearch',
+    title: 'Web Search',
+    tagline: 'The live internet, in-chat',
+    intro: 'Let a conversation search the web for current answers.',
+    cta: 'Ask something current',
+    icon: <SearchOutlinedIcon />,
+  },
+  {
+    key: 'webfetch',
+    title: 'Web Fetch',
+    tagline: 'Read any page',
+    intro: 'Pull a specific URL into the conversation and work with its content.',
+    cta: 'Fetch a page',
+    icon: <LanguageOutlinedIcon />,
+  },
+  {
+    key: 'wolfram',
+    title: 'Wolfram Alpha',
+    tagline: 'Real math, step by step',
+    intro: 'Symbolic math and computational answers with worked steps.',
+    cta: 'Compute something',
+    icon: <FunctionsOutlinedIcon />,
+  },
+  {
+    key: 'matheval',
+    title: 'Math Evaluation',
+    tagline: 'Numbers you can trust',
+    intro: 'Exact calculation in-chat — no LLM arithmetic hallucinations.',
+    cta: 'Crunch a number',
+    icon: <CalculateOutlinedIcon />,
+  },
+  {
+    key: 'clidocs',
+    title: 'Meet the CLI',
+    tagline: 'B4M in your terminal',
+    intro:
+      'A full command-line interface — scripts, pipes, and agents from your shell. Peek at the docs to earn this one.',
+    cta: 'Open the CLI docs',
+    icon: <MenuBookOutlinedIcon />,
+  },
 ];
 
 const GearsPage = () => {
   const navigate = useNavigate();
-  const { data, isPending } = useGearsStatus();
+  const { data, isPending, refetch } = useGearsStatus();
   const { isFeatureEnabled } = useFeatureEnabled();
   const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
   const { setOpen: setFileBrowserOpen } = useFileBrowser();
@@ -216,11 +361,21 @@ const GearsPage = () => {
   const onCta = (key: GearKey) => {
     if (key === 'files') return void setFileBrowserOpen(true);
     if (key === 'projects' || key === 'shareproject') return void navigate({ to: '/projects' });
-    if (key === 'agents') return void navigate({ to: '/agents' });
+    if (key === 'agents' || key === 'shareagent') return void navigate({ to: '/agents' });
     if (key === 'datalakes') return void navigate({ to: '/data-lakes' });
     if (key === 'published') return void navigate({ to: '/profile', search: { tab: 'published' } });
-    if (key === 'apikey' || key === 'apicall') {
+    if (key === 'apikey' || key === 'apicall' || key === 'mfa' || key === 'importopenai' || key === 'importclaude') {
       return void navigate({ to: '/profile', search: { tab: 'settings' } });
+    }
+    if (key === 'clidocs') {
+      // Curiosity gear: opening the docs IS the unlock (self-attested, priced
+      // accordingly — see the stamp endpoint's allowlist note).
+      window.open('https://docs.bike4mind.com/cli/', '_blank', 'noopener');
+      void api
+        .post('/api/gears/stamp', { key: 'clidocs' })
+        .then(() => refetch())
+        .catch(() => undefined);
+      return;
     }
     // Chat-native skills: start a fresh chat and try it.
     return void navigate({ to: '/new' });
