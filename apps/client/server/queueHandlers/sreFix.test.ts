@@ -45,6 +45,7 @@ const mockResolvedRepoConfig = {
 
 vi.mock('@bike4mind/common', () => ({
   SreSourceType: { CLOUDWATCH: 'CLOUDWATCH', GITHUB_ISSUE: 'GITHUB_ISSUE' },
+  SRE_ANALYSIS_COMPLETED_EVENT: 'sre.analysis.completed',
   SRE_DEFAULT_REPO_SLUG: 'MillionOnMars/lumina5',
   SRE_TEST_FILE_GLOBS: ['**/*.test.*', '**/*.spec.*', '**/__tests__/**'],
   resolveFullConfig: vi.fn(() => mockResolvedRepoConfig),
@@ -82,6 +83,17 @@ function makeSqsEvent(body: Record<string, unknown>) {
   return { Records: [{ body: JSON.stringify(body) }] };
 }
 
+// EventBridge rule targets deliver the full event envelope (infra/eventBus.ts)
+function makeEventBridgeSqsEvent(detail: Record<string, unknown>) {
+  return makeSqsEvent({
+    version: '0',
+    id: 'evt-1',
+    'detail-type': 'sre.analysis.completed',
+    source: 'bike4mind',
+    detail,
+  });
+}
+
 function makeFixRequest(overrides: Record<string, unknown> = {}) {
   return {
     trackingId: 'track-123',
@@ -110,6 +122,22 @@ describe('sreFix handler', () => {
     mockClaimDispatch.mockResolvedValue({ _id: 'track-123' });
     mockCreateDispatchEvent.mockResolvedValue(undefined);
     mockUpdateStatus.mockResolvedValue(undefined);
+  });
+
+  describe('EventBridge envelope unwrap', () => {
+    it('unwraps the detail payload when delivered via the sre.analysis.completed rule', async () => {
+      await dispatch(makeEventBridgeSqsEvent(makeFixRequest()), mockContext, mockLogger);
+
+      expect(mockClaimDispatch).toHaveBeenCalledWith('track-123');
+      expect(mockCreateDispatchEvent).toHaveBeenCalled();
+    });
+
+    it('still accepts bare payloads from direct SQS producers (approval/revision paths)', async () => {
+      await dispatch(makeSqsEvent(makeFixRequest()), mockContext, mockLogger);
+
+      expect(mockClaimDispatch).toHaveBeenCalledWith('track-123');
+      expect(mockCreateDispatchEvent).toHaveBeenCalled();
+    });
   });
 
   describe('circuit breaker', () => {

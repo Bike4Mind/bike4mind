@@ -4,6 +4,7 @@ import { adminSettingsRepository, sreErrorTrackingRepository } from '@bike4mind/
 import {
   SreSourceType,
   SreAgentConfigSchema,
+  SRE_ANALYSIS_COMPLETED_EVENT,
   SRE_DEFAULT_REPO_SLUG,
   SRE_TEST_FILE_GLOBS,
   resolveFullConfig,
@@ -55,7 +56,14 @@ const SreFixRequestSchema = z.object({
 });
 
 export const dispatch = dispatchWithLogger(async (event, context, logger) => {
-  const body = JSON.parse(event.Records[0].body);
+  const raw = JSON.parse(event.Records[0].body);
+  // The Diagnostician path arrives via an EventBridge rule (infra/eventBus.ts),
+  // which wraps the payload in the full event envelope; direct SQS producers
+  // (Slack approval, revision handler) send the bare fix request.
+  const body =
+    raw && typeof raw === 'object' && raw['detail-type'] === SRE_ANALYSIS_COMPLETED_EVENT && 'detail' in raw
+      ? raw.detail
+      : raw;
   const fixRequest = SreFixRequestSchema.parse(body);
 
   const repoSlug = fixRequest.repoSlug ?? SRE_DEFAULT_REPO_SLUG;
