@@ -733,6 +733,9 @@ jobs:
           # (entitlements/registry.ts). Build-time NEXT_PUBLIC_*, no brand fallback; empty ==
           # no internal-domain grant. Set the repo/org variable per stage to activate.
           NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS: ${{ vars.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS }}
+          # Curated `domain:Label` map for internal-org analytics grouping (#350). Companion to
+          # NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS; no brand fallback, empty == title-cased domain.
+          NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES: ${{ vars.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES }}
           # External customer domain-grant rows as JSON (entitlements/registry.ts). Build-time
           # NEXT_PUBLIC_*, no brand fallback; empty == no external grant. Keeps customer/partner
           # identity out of open-core — set the NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS repo/org variable

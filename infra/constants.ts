@@ -44,6 +44,9 @@ export const DEFAULT_LAMBDA_ENVIRONMENT = {
   // @bike4mind/database (not inlined by next build), so the report cron + web lambdas need
   // it here — else it reads undefined and internalUsers=0. No brand fallback.
   NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS: process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS || '',
+  // Curated domain->display-name map for internal-org analytics grouping (#350). Runtime-read by
+  // inferOrganizationFromEmail in the report cron. No brand fallback; empty == title-cased domain.
+  NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES: process.env.NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES || '',
   // Enable What's New modal distribution (S3 upload) for main production only
   // Fork environments should NOT set this - they consume via WHATS_NEW_DISTRIBUTION_URL
   ENABLE_WHATS_NEW_DISTRIBUTION: process.env.ENABLE_WHATS_NEW_DISTRIBUTION || '',
