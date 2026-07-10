@@ -49,7 +49,8 @@ import { APP_NAME } from '@client/config/general';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
 import ShareIcon from '@mui/icons-material/Share';
 import { usePublishShare } from '@client/app/hooks/usePublishShare';
-import { publishReply } from '@client/app/utils/publishApi';
+import { replyPublisher } from '@client/app/utils/publishApi';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import PushPinIcon from '@mui/icons-material/PushPin';
 import PushPinOutlinedIcon from '@mui/icons-material/PushPinOutlined';
 import { useGetQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
@@ -437,15 +438,33 @@ const MessageContent: React.FC<ContentProps> = memo(
 
     // Publish-and-share: snapshot this reply to a public /p/r URL + social bar.
     const { publishAndShare: publishAndShareReply, modal: shareModal } = usePublishShare();
+    // Active account-switcher org (null in personal context). Enables the dialog's Team option
+    // and org-scoped publishing; the server re-validates membership before trusting it.
+    const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+    const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+    // Only offer Team for the org the server will accept: checkScopePermission gates org
+    // publishing on user.organizationId, so a multi-org member who selected a different (still
+    // valid) org would be offered Team but 403 on publish. Gate the option on the match so the
+    // UI never invites a rejected action (fails closed either way).
+    const teamOrg = activeOrg && String(activeOrg.id) === String(currentUser?.organizationId) ? activeOrg : null;
     const hasShareableReply = !!(extractedReplies[0] || messageData.reply);
     const handleShareReply = useCallback(() => {
       if (!messageData.id || !sessionId) return;
       void publishAndShareReply({
-        publish: visibility => publishReply({ sessionId, messageId: messageData.id!, visibility }),
+        publish: replyPublisher({ sessionId, messageId: messageData.id, orgId: teamOrg?.id }),
+        ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
         title: messageData.prompt?.slice(0, 80) || (APP_NAME ? `Shared from ${APP_NAME}` : 'Shared reply'),
         markdown: extractedReplies[0] || messageData.reply || undefined,
       });
-    }, [messageData.id, messageData.prompt, messageData.reply, sessionId, extractedReplies, publishAndShareReply]);
+    }, [
+      messageData.id,
+      messageData.prompt,
+      messageData.reply,
+      sessionId,
+      extractedReplies,
+      teamOrg,
+      publishAndShareReply,
+    ]);
 
     // Get friendly model name from modelInfo repository
     const getModelDisplayName = (modelName: string): string => {
