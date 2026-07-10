@@ -18,9 +18,17 @@
  *
  * Usage:
  *   BASE_URL=https://app.pr8933.preview.bike4mind.com \
- *   TEST_EMAIL=test@test.com \
- *   TEST_PASSWORD=$(./for-env dev seed-password) \
+ *   TEST_EMAIL=agentless-e2e@test.com \
+ *   E2E_CLEANUP_SECRET=<the stage's shared E2E secret (SST E2E_CLEANUP_SECRET)> \
  *   node scripts/verify-agentless-dispatch.mjs
+ *
+ * Auth is passwordless (email OTC), so the script authenticates through the
+ * E2E test plumbing instead of a mailbox: it mints the account via the gated
+ * /api/test/create-user endpoint (which returns tokens directly), falling back
+ * to the OTC flow (/api/otc/send -> /api/test/otc-code -> /api/otc/verify) when
+ * the account already exists. Both paths require an `-e2e@test.com` email and
+ * the shared E2E secret, and only work on non-production stages (the test
+ * endpoints are hard-disabled on prod).
  *
  * Credentials are read from env vars (never argv) to keep them out of shell
  * history and process listings. The script does not log the access token.
@@ -29,8 +37,8 @@
 // Node 22+ provides global WebSocket — no dependency needed.
 
 const BASE_URL = process.env.BASE_URL;
-const TEST_EMAIL = process.env.TEST_EMAIL ?? 'test@test.com';
-const TEST_PASSWORD = process.env.TEST_PASSWORD;
+const TEST_EMAIL = process.env.TEST_EMAIL ?? 'agentless-e2e@test.com';
+const E2E_CLEANUP_SECRET = process.env.E2E_CLEANUP_SECRET;
 
 if (!BASE_URL) {
   // Fail fast rather than silently hit a stale default — a hard-coded preview
@@ -49,9 +57,15 @@ const RECONNECT_QUERY =
 const RUN_TIMEOUT_MS = Number(process.env.RUN_TIMEOUT_MS ?? 180_000);
 const SKIP_RECONNECT = process.env.SKIP_RECONNECT === '1';
 
-if (!TEST_PASSWORD) {
-  console.error('TEST_PASSWORD env var is required.');
-  console.error('Tip: TEST_PASSWORD=$(./for-env dev seed-password) ...');
+if (!E2E_CLEANUP_SECRET) {
+  console.error('E2E_CLEANUP_SECRET env var is required (the stage\'s shared E2E secret).');
+  process.exit(2);
+}
+
+// The test auth endpoints only serve -e2e@test.com accounts; fail fast with a
+// clear message instead of a confusing 400 from the server.
+if (!/-e2e@test\.com$/i.test(TEST_EMAIL)) {
+  console.error(`TEST_EMAIL must end with -e2e@test.com (got ${TEST_EMAIL}).`);
   process.exit(2);
 }
 
@@ -61,10 +75,10 @@ const log = (...args) => console.log(`[${new Date().toISOString()}]`, ...args);
 // HTTP helpers
 // ---------------------------------------------------------------------------
 
-async function postJson(url, body) {
+async function postJson(url, body, headers = {}) {
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...headers },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
@@ -94,6 +108,66 @@ async function postAuthed(url, accessToken, body) {
     throw new Error(`POST ${url} failed: ${res.status} ${res.statusText} — ${text.slice(0, 200)}`);
   }
   return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Auth — passwordless (OTC) via the E2E test plumbing
+// ---------------------------------------------------------------------------
+
+/**
+ * Obtain an access token for TEST_EMAIL without a mailbox.
+ *
+ * Fast path: /api/test/create-user mints the account AND returns a token pair
+ * in one call. When the account already exists that call fails, so fall back
+ * to a real OTC login: /api/otc/send issues the pending token, the gated
+ * /api/test/otc-code hands back the plaintext code (non-prod,
+ * -e2e@test.com accounts only), and /api/otc/verify exchanges them for tokens.
+ * Mirrors apps/client/e2e/helpers/api.ts (apiCreateTestUser / apiGetOtcCode).
+ */
+async function obtainAccessToken() {
+  const secretHeader = { 'x-e2e-cleanup-secret': E2E_CLEANUP_SECRET };
+  const username = TEST_EMAIL.split('@')[0];
+
+  try {
+    const created = await postJson(
+      `${BASE_URL}/api/test/create-user`,
+      // Passwordless account: empty password matches how OTC registration seeds users.
+      { username, email: TEST_EMAIL, name: username, password: '' },
+      secretHeader
+    );
+    log(`Created test user ${TEST_EMAIL}`);
+    return { accessToken: created.accessToken, userId: created.user?.id ?? '<unknown>' };
+  } catch (err) {
+    // 401/403 mean a bad secret or a production stage — the OTC fallback needs
+    // the same secret, so surface the real problem instead of failing twice.
+    if (/ 40[13] /.test(err.message)) throw err;
+    log(`create-user unavailable (${err.message.slice(0, 120)}) — falling back to OTC login`);
+  }
+
+  // /api/otc/send enforces a 30s per-recipient cooldown (429) — reruns within
+  // that window just need to wait it out.
+  const { pendingToken } = await postJson(`${BASE_URL}/api/otc/send`, { email: TEST_EMAIL });
+
+  const codeRes = await fetch(`${BASE_URL}/api/test/otc-code?email=${encodeURIComponent(TEST_EMAIL)}`, {
+    headers: secretHeader,
+  });
+  if (!codeRes.ok) {
+    const text = await codeRes.text().catch(() => '');
+    throw new Error(`GET /api/test/otc-code failed: ${codeRes.status} — ${text.slice(0, 200)}`);
+  }
+  const { code } = await codeRes.json();
+
+  const verifyRes = await postJson(`${BASE_URL}/api/otc/verify`, { email: TEST_EMAIL, code, pendingToken });
+  if (verifyRes.registrationRequired) {
+    throw new Error(`No account for ${TEST_EMAIL} and create-user failed — cannot register via this path.`);
+  }
+  if (verifyRes.mfaRequired || verifyRes.mfaSetupRequired) {
+    throw new Error(`Account ${TEST_EMAIL} requires MFA — use a plain -e2e@test.com account without MFA.`);
+  }
+  if (!verifyRes.accessToken) {
+    throw new Error('OTC verify response did not include accessToken.');
+  }
+  return { accessToken: verifyRes.accessToken, userId: verifyRes.id ?? verifyRes._id ?? '<unknown>' };
 }
 
 // ---------------------------------------------------------------------------
@@ -345,18 +419,10 @@ async function reconnectDispatch(accessToken, wsUrl, sessionId) {
 async function main() {
   log(`Target: ${BASE_URL}`);
 
-  // Login
-  log(`Logging in as ${TEST_EMAIL}…`);
-  const loginRes = await postJson(`${BASE_URL}/api/password/login`, {
-    username: TEST_EMAIL,
-    password: TEST_PASSWORD,
-  });
-  if (!loginRes.accessToken) {
-    throw new Error('Login response did not include accessToken (MFA required? force password change?)');
-  }
-  const accessToken = loginRes.accessToken;
-  const userId = loginRes.id ?? loginRes.userId ?? '<unknown>';
-  log(`Logged in (userId=${userId})`);
+  // Login (passwordless — via the E2E test plumbing)
+  log(`Authenticating as ${TEST_EMAIL}…`);
+  const { accessToken, userId } = await obtainAccessToken();
+  log(`Authenticated (userId=${userId})`);
 
   // Server config → WebSocket URL
   const serverConfig = await getJson(`${BASE_URL}/api/settings/serverConfig`, accessToken);
