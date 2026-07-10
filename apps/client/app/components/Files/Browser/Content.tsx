@@ -1,4 +1,4 @@
-import { InviteType, KnowledgeType } from '@bike4mind/common';
+import { IFabFileDocument, InviteType, KnowledgeType } from '@bike4mind/common';
 import { useSessions, useWorkBenchFiles, useWorkBenchStore } from '@client/app/contexts/SessionsContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -7,6 +7,7 @@ import {
   useBulkDeleteFiles,
   useCreateFabFile,
   usePaginatedSearchFabFiles,
+  useSearchFabFiles,
 } from '@client/app/hooks/data/fabFiles';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 import { useUpdateSession } from '@client/app/hooks/data/sessions';
@@ -18,7 +19,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import { Box, Button, Chip, Typography, Modal, ModalDialog, ModalClose, Stack } from '@mui/joy';
 import { FieldTooltip } from '@client/app/components/help';
-import { FC, useState, useEffect } from 'react';
+import { FC, useState, useEffect, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
@@ -119,6 +120,14 @@ const FileBrowserContent = () => {
     page: currentPage,
   });
 
+  // Overview tab renders its own "Recent" list (separate from the paginated allFiles
+  // list below), so it's only fetched while that tab is active.
+  const { data: recentData, isLoading: isLoadingRecent } = useSearchFabFiles(
+    { order: { by: 'createdAt', direction: 'desc' }, pagination: { page: 1, limit: 8 } },
+    { enabled: viewAction.viewMode === 'home' }
+  );
+  const recentFiles = recentData?.data?.slice(0, 8) || [];
+
   const { mutateAsync: toggleTagToFiles } = useToggleTagToFiles();
   const { data: fileTags } = useGetFileTags();
   const { mutateAsync: deleteFiles } = useBulkDeleteFiles();
@@ -131,6 +140,36 @@ const FileBrowserContent = () => {
   const totalFiles = data?.total || 0;
   const totalPages = Math.ceil(totalFiles / FILES_PER_PAGE);
   const { mutate: addFilesToProject } = useAddFilesToProject();
+
+  // What Select All should select for the currently active tab: the Overview tab only
+  // ever shows the "Recent" files, not the full paginated list.
+  const selectableFiles = viewAction.viewMode === 'home' ? recentFiles : allFiles;
+
+  // Selection is shared global state that persists across tab switches, but Overview
+  // ("recent") and List/Grid ("paginated") show different file sets - carrying a
+  // selection across that boundary produces a count/checkmarks that don't match what's
+  // visible. Clear on crossing that boundary, but not when merely toggling List<->Grid,
+  // which show the same underlying list and where a persisted selection is useful.
+  const selectionScope = viewAction.viewMode === 'home' ? 'recent' : 'paginated';
+  const selectionScopeRef = useRef(selectionScope);
+  useEffect(() => {
+    if (selectionScopeRef.current !== selectionScope) {
+      setSelectedIds(new Set<string>());
+      selectionScopeRef.current = selectionScope;
+    }
+  }, [selectionScope, setSelectedIds]);
+
+  // Files can be selected from either list (Overview's recentFiles or the paginated
+  // allFiles), so bulk actions must resolve selections against both, not just allFiles.
+  const filesById = useMemo(() => {
+    const m = new Map<string, IFabFileDocument>();
+    for (const f of allFiles) m.set(f.id, f);
+    for (const f of recentFiles) m.set(f.id, f);
+    return m;
+  }, [allFiles, recentFiles]);
+  const selectedFiles = Array.from(selectedIds)
+    .map(id => filesById.get(id))
+    .filter((f): f is IFabFileDocument => Boolean(f));
 
   // Subscribe to WebSocket updates for file vectorization status
   useEffect(() => {
@@ -172,13 +211,13 @@ const FileBrowserContent = () => {
       setSelectedIds(new Set<string>());
       return;
     }
-    setSelectedIds(new Set(allFiles.map(f => f.id)));
+    setSelectedIds(new Set(selectableFiles.map(f => f.id)));
   }
 
   function handleAdd() {
     const { setWorkBenchFiles } = useWorkBenchStore.getState();
 
-    const applicableFiles = allFiles.filter(f => !workBenchFiles.some(w => w.id === f.id) && selectedIds.has(f.id));
+    const applicableFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
 
     // Check if any images are too large for current model (legacy files only)
     const currentModelInfo = modelInfo?.find(m => m.id === model);
@@ -251,8 +290,8 @@ const FileBrowserContent = () => {
 
   async function handleDelete() {
     // Partition selected files into owned vs shared
-    const ownedCount = allFiles.filter(f => selectedIds.has(f.id) && f.userId === currentUser?.id).length;
-    const sharedCount = allFiles.filter(f => selectedIds.has(f.id) && f.userId !== currentUser?.id).length;
+    const ownedCount = selectedFiles.filter(f => f.userId === currentUser?.id).length;
+    const sharedCount = selectedFiles.filter(f => f.userId !== currentUser?.id).length;
 
     let title: string;
     let description: string;
@@ -600,6 +639,9 @@ const FileBrowserContent = () => {
           {viewAction.viewMode === 'home' && (
             <HomeViewPanel
               selectedIds={selectedIds}
+              recentFiles={recentFiles}
+              isLoadingRecent={isLoadingRecent}
+              recentTotal={recentData?.total}
               onNavigateToNamespace={namespace => {
                 if (namespace) {
                   setTagViewInitialNamespace(namespace);
@@ -776,7 +818,7 @@ const FileBrowserContent = () => {
                 tags: [tag],
               });
             }}
-            hasSelectedAll={selectedIds.size === allFiles.length}
+            hasSelectedAll={selectedIds.size === selectableFiles.length}
             selectedCount={selectedIds.size}
             onSelectAll={handleSelectAll}
             onDelete={handleDelete}
@@ -784,7 +826,7 @@ const FileBrowserContent = () => {
             onShare={handleBulkShare}
             currentPage={currentPage}
             totalPages={totalPages}
-            onPageChange={setCurrentPage}
+            onPageChange={viewAction.viewMode === 'home' ? undefined : setCurrentPage}
             isLoadingPage={isFetching}
           />
         </Box>
@@ -792,7 +834,7 @@ const FileBrowserContent = () => {
         {/* Bulk Share Modal */}
         {showBulkShareModal && (
           <ShareDocumentModal
-            files={allFiles.filter(file => selectedIds.has(file.id))}
+            files={selectedFiles}
             type={InviteType.FabFile}
             open={showBulkShareModal}
             onClose={() => {

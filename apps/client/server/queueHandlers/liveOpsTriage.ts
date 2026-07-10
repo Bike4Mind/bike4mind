@@ -134,10 +134,26 @@ export const dispatch = dispatchWithLogger(async (event: SQSEvent, context: Cont
   try {
     await updateProgress(5, 'Connecting to services...');
 
-    // Get Slack bot token
+    // Get Slack bot token. getSlackBotToken() returns null only for permanent config
+    // states (no workspace configured / no active workspace / workspace has no bot
+    // token stored) - swallow those here (log, markFailed, return) so SQS doesn't
+    // retry a message that can never succeed. A genuine decrypt failure (bad
+    // SECRET_ENCRYPTION_KEY, corrupted token) throws from decryptToken() itself and
+    // falls through to the outer catch for SQS retry.
     const slackBotToken = await getSlackBotToken(logger);
     if (!slackBotToken) {
-      throw new Error('No active Slack workspace with bot token found');
+      logger.warn('No active Slack workspace with bot token found - failing job without retry', { jobId });
+      await liveOpsTriageJobRepository.markFailed(jobId, {
+        errorMessage: 'No active Slack workspace with bot token found',
+      });
+      await emitMetric(
+        CLOUDWATCH_NAMESPACE,
+        'ManualRunFailure',
+        1,
+        { DryRun: String(dryRun), ErrorType: 'NoSlackWorkspace' },
+        StandardUnit.Count
+      );
+      return;
     }
 
     await updateProgress(10, 'Connecting to GitHub...');

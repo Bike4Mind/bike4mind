@@ -8,7 +8,7 @@ const FAR_FUTURE = new Date('9999-01-01T00:00:00Z');
  * reprices and are never superseded by seeding. */
 export const SEED_NOTE = 'adapter-seed';
 
-interface ModelPriceSeedFile {
+export interface ModelPriceSeedFile {
   /** Generation timestamp, stamped by the regeneration script. Doubles as the
    * deterministic effectiveFrom for every row of this seed version, so
    * concurrent seeders collide on the unique index instead of duplicating. */
@@ -66,6 +66,18 @@ export async function seedModelPrices(
       const isSeedRow = current.note === SEED_NOTE;
       const alreadyCurrent = current.effectiveFrom.getTime() >= effectiveFrom.getTime();
       const samePrice = normalizePricing(current.pricing) === normalizePricing(entry.pricing);
+      const sameVersion = current.effectiveFrom.getTime() === effectiveFrom.getTime();
+      if (isSeedRow && sameVersion && !samePrice) {
+        // Entries were edited without bumping generatedAt: the change cannot
+        // be versioned (equal effectiveFrom collides on the unique index), so
+        // deployments keep billing from the stale row. Be loud about it.
+        // Strict equality only: a strictly newer row just means an older-code
+        // instance is booting after a newer seed landed (rollback / canary).
+        console.warn(
+          `[modelPriceCatalog] seed entry for ${entry.modelId} (${entry.unit}) differs from the newest seed row but generatedAt (${seed.generatedAt}) was not bumped; ` +
+            'regenerate the seed instead of editing entries: pnpm --filter @bike4mind/database generate:model-price-seed'
+        );
+      }
       if (!isSeedRow || alreadyCurrent || samePrice) {
         skipped += 1;
         continue;

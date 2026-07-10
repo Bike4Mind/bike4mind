@@ -23,7 +23,8 @@
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "test:ui": "vitest --ui"
+    "test:ui": "vitest --ui",
+    "generate:model-price-seed": "tsx src/seeds/regenerateModelPriceSeed.ts"
   },
   "dependencies": {
     "@bike4mind/common": "workspace:*",
@@ -42,6 +43,7 @@
     "@vitest/coverage-v8": "^4.1.9",
     "@vitest/ui": "^4.1.9",
     "mongodb-memory-server": "^11.2.0",
+    "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.9"
   }

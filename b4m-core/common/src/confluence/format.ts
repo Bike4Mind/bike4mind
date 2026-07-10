@@ -12,6 +12,127 @@ import {
   RestrictionOperation,
 } from './api';
 
+// Raw Confluence REST response shapes: only the fields the formatters read, all
+// optional, plus the error envelope Confluence puts on some 2xx bodies. Hand-authored
+// to a known subset (not generated) - unmodeled fields are simply ignored, missing
+// fields are handled by the optional chaining + guards below.
+interface RawErrorEnvelope {
+  error?: unknown;
+  errors?: unknown;
+}
+interface RawLinks {
+  base?: string;
+  webui?: string;
+  tinyui?: string;
+}
+interface RawBody {
+  storage?: { value?: string };
+  view?: { value?: string };
+}
+
+interface RawConfluenceUser extends RawErrorEnvelope {
+  type?: string;
+  accountId?: string;
+  accountType?: string;
+  email?: string;
+  publicName?: string;
+  displayName?: string;
+  personalSpace?: { id?: string | number; key?: string; name?: string };
+}
+
+interface RawConfluencePage extends RawErrorEnvelope {
+  id?: string;
+  title?: string;
+  status?: string;
+  spaceId?: string;
+  parentId?: string;
+  space?: { key?: string };
+  body?: RawBody;
+  version?: { number?: number };
+  _links?: RawLinks;
+}
+
+interface RawConfluenceSpace extends RawErrorEnvelope {
+  id?: string | number;
+  key?: string;
+  name?: string;
+  type?: string;
+  description?: { plain?: { value?: string }; value?: string };
+  _links?: RawLinks;
+}
+
+interface RawConfluenceComment extends RawErrorEnvelope {
+  id?: string;
+  type?: string;
+  status?: string;
+  title?: string;
+  body?: RawBody;
+  history?: {
+    createdBy?: RawConfluenceUser;
+    createdDate?: string;
+    lastUpdated?: { when?: string };
+  };
+  container?: { id?: string | number };
+  ancestors?: Array<{ id?: string }>;
+  extensions?: { inlineProperties?: unknown };
+  _links?: RawLinks;
+}
+
+interface RawSearchResultItem {
+  id?: string;
+  title?: string;
+  url?: string;
+  content?: { id?: string; title?: string; history?: { lastUpdated?: { when?: string } } };
+  space?: { id?: string | number; key?: string; name?: string };
+  body?: RawBody;
+  excerpt?: string;
+  lastModified?: string;
+  _links?: RawLinks;
+}
+
+interface RawListResponse<T> extends RawErrorEnvelope {
+  results?: T[];
+  start?: number;
+  limit?: number;
+  size?: number;
+  totalSize?: number;
+  _links?: RawLinks;
+}
+
+// Generic, tolerant search envelope: the fields are optional and cover both the
+// Confluence search shape and other search-result shapes, so a loosely-shaped payload
+// still formats defensively rather than being rejected at the type boundary.
+type RawSearchResponse = RawListResponse<RawSearchResultItem>;
+
+interface RawRestrictionSubject {
+  accountId?: string;
+  username?: string;
+  key?: string;
+  name?: string;
+  id?: string;
+  displayName?: string;
+  publicName?: string;
+}
+interface RawRestrictionSet {
+  user?: { results?: RawRestrictionSubject[] } | RawRestrictionSubject[];
+  group?: { results?: RawRestrictionSubject[] } | RawRestrictionSubject[];
+}
+interface RawRestrictionEntry {
+  operation?: string;
+  restrictions?: RawRestrictionSet;
+  // Index signature keeps this assignable from the wider ConfluenceApiResponse (api.ts):
+  // RawRestrictionsResponse.results is RawRestrictionEntry[], fed from that type's own
+  // ConfluenceApiResponse[], and without an index signature TS rejects the element
+  // assignment as a "weak type" (no properties in common with the source). Trade-off:
+  // this disables typo-detection on property access against this one type.
+  [key: string]: unknown;
+}
+interface RawRestrictionsResponse extends RawErrorEnvelope {
+  results?: RawRestrictionEntry[];
+  read?: RawRestrictionEntry;
+  update?: RawRestrictionEntry;
+}
+
 // Formatted response shapes: the narrow, non-nullable return contract of the format
 // helpers below. On a malformed/error payload the helpers throw rather than return a
 // partial shape (the request layer already throws on non-2xx; MCP tools wrap calls in try/catch).
@@ -119,6 +240,17 @@ function stripHtmlAndNormalizeWhitespace(html: string | undefined): string {
   );
 }
 
+// Confluence v1 returns some ids (space, container) as numbers while v2 uses strings;
+// normalize to the string-typed output contract.
+function toIdString(id: string | number | undefined): string | undefined {
+  return id === undefined ? undefined : String(id);
+}
+
+// A restriction's user/group set is either a bare array or a { results } wrapper (v1 variance).
+function restrictionMembers(set: RawRestrictionSet['user']): RawRestrictionSubject[] {
+  return Array.isArray(set) ? set : set?.results || [];
+}
+
 /**
  * Formats a Confluence user object to only include fields defined in ConfluenceUser interface.
  * Removes extra fields like _links, _expandable, profilePicture, operations, etc.
@@ -126,14 +258,15 @@ function stripHtmlAndNormalizeWhitespace(html: string | undefined): string {
  * @param user - Raw user object from Confluence API
  * @returns Formatted user object, or the original if it's an error response
  */
-export function formatUserResponse(user: any): ConfluenceUser {
-  // If the response is an error or doesn't have expected structure, return as-is
+export function formatUserResponse(user: RawConfluenceUser): ConfluenceUser {
+  // Request layer throws on non-2xx; this guards a 2xx body that is an error/malformed.
   if (!user || typeof user !== 'object' || user.error || user.errors) {
-    return user;
+    throw confluenceResponseError('user', user);
   }
 
   return {
-    type: user.type,
+    // Non-null: API always returns `type` on a well-formed user object.
+    type: user.type!,
     accountId: user.accountId,
     accountType: user.accountType,
     email: user.email,
@@ -141,7 +274,7 @@ export function formatUserResponse(user: any): ConfluenceUser {
     displayName: user.displayName,
     personalSpace: user.personalSpace
       ? {
-          id: user.personalSpace.id,
+          id: toIdString(user.personalSpace.id),
           key: user.personalSpace.key,
           name: user.personalSpace.name,
         }
@@ -155,7 +288,7 @@ export function formatUserResponse(user: any): ConfluenceUser {
  * only guards the rare 2xx-with-bad-body case. Callers (the MCP tools) wrap every
  * ConfluenceApi call in try/catch, so the throw surfaces as a normal error response.
  */
-function confluenceResponseError(kind: string, payload: any): Error {
+function confluenceResponseError(kind: string, payload: RawErrorEnvelope | null | undefined): Error {
   let detail = 'unexpected response shape';
   if (payload && typeof payload === 'object' && (payload.error || payload.errors)) {
     const raw = payload.error ?? payload.errors;
@@ -173,7 +306,7 @@ function confluenceResponseError(kind: string, payload: any): Error {
  * @returns Formatted page object with essential fields only
  * @throws if the response is an error envelope or lacks the expected page shape
  */
-export function formatPageResponse(page: any, siteUrl: string): FormattedPage {
+export function formatPageResponse(page: RawConfluencePage, siteUrl: string): FormattedPage {
   // Request layer throws on non-2xx; this guards a 2xx body that is an error/malformed.
   if (!page || typeof page !== 'object' || page.error || page.errors || !page.id) {
     throw confluenceResponseError('page', page);
@@ -194,7 +327,8 @@ export function formatPageResponse(page: any, siteUrl: string): FormattedPage {
 
   return {
     pageId: page.id,
-    title: page.title,
+    // Non-null: API always returns `title` on a well-formed page object.
+    title: page.title!,
     status: page.status,
     spaceId: page.spaceId,
     spaceKey: page.space?.key,
@@ -213,20 +347,23 @@ export function formatPageResponse(page: any, siteUrl: string): FormattedPage {
  * @param siteUrl - The ATLASSIAN_SITE_URL from config
  * @returns Formatted search result with essential fields only
  */
-export function formatSearchResults(searchResult: any, siteUrl: string): FormattedSearchResults {
+export function formatSearchResults(searchResult: RawSearchResponse, siteUrl: string): FormattedSearchResults {
   if (!searchResult || typeof searchResult !== 'object' || searchResult.error || searchResult.errors) {
     throw confluenceResponseError('search', searchResult);
   }
 
   const baseUrl = searchResult?._links?.base || siteUrl.replace(/\/$/, '');
   const results = Array.isArray(searchResult.results)
-    ? searchResult.results.map((result: any) => {
+    ? searchResult.results.map(result => {
         return {
-          id: result.content?.id || result.id,
-          title: result.title || result.content?.title,
+          // The trimmed output types id/title as required; this input is intentionally
+          // tolerant (see RawSearchResponse), so a loosely-shaped item may leave these
+          // undefined. Force-unwrapped to satisfy the output contract, best-effort.
+          id: (result.content?.id || result.id)!,
+          title: (result.title || result.content?.title)!,
           url: result.url ? `${baseUrl}${result.url}` : result._links?.webui ? `${baseUrl}${result._links.webui}` : '',
           space: {
-            id: result.space?.id,
+            id: toIdString(result.space?.id),
             key: result.space?.key,
             name: result.space?.name,
           },
@@ -263,7 +400,7 @@ export function formatSearchResults(searchResult: any, siteUrl: string): Formatt
  * @param siteUrl - The ATLASSIAN_SITE_URL from config
  * @returns Formatted space object with essential fields only
  */
-export function formatSpaceResponse(space: any, siteUrl: string): FormattedSpace {
+export function formatSpaceResponse(space: RawConfluenceSpace, siteUrl: string): FormattedSpace {
   if (!space || typeof space !== 'object' || space.error || space.errors) {
     throw confluenceResponseError('space', space);
   }
@@ -274,9 +411,10 @@ export function formatSpaceResponse(space: any, siteUrl: string): FormattedSpace
   const link = space._links?.webui ? `${baseUrl}${space._links.webui}` : `${baseUrl}/spaces/${space.key}`;
 
   return {
-    id: space.id,
-    key: space.key,
-    name: space.name,
+    id: toIdString(space.id),
+    // Non-null: API always returns key/name on a well-formed space object.
+    key: space.key!,
+    name: space.name!,
     description: stripHtmlAndNormalizeWhitespace(space.description?.plain?.value || space.description?.value || ''),
     type: space.type,
     link,
@@ -291,13 +429,16 @@ export function formatSpaceResponse(space: any, siteUrl: string): FormattedSpace
  * @param siteUrl - The ATLASSIAN_SITE_URL from config
  * @returns Formatted spaces response with essential fields only
  */
-export function formatSpaceList(spacesResponse: any, siteUrl: string): FormattedSpaceList {
+export function formatSpaceList(
+  spacesResponse: RawListResponse<RawConfluenceSpace>,
+  siteUrl: string
+): FormattedSpaceList {
   if (!spacesResponse || typeof spacesResponse !== 'object' || spacesResponse.error || spacesResponse.errors) {
     throw confluenceResponseError('space list', spacesResponse);
   }
 
   const results = Array.isArray(spacesResponse.results)
-    ? spacesResponse.results.map((space: any) => formatSpaceResponse(space, siteUrl))
+    ? spacesResponse.results.map(space => formatSpaceResponse(space, siteUrl))
     : [];
 
   return {
@@ -308,7 +449,7 @@ export function formatSpaceList(spacesResponse: any, siteUrl: string): Formatted
 /**
  * Formats a Confluence comment response to include only essential fields for AI.
  */
-export function formatCommentResponse(comment: any, siteUrl: string): FormattedComment {
+export function formatCommentResponse(comment: RawConfluenceComment, siteUrl: string): FormattedComment {
   if (!comment || typeof comment !== 'object' || comment.error || comment.errors) {
     throw confluenceResponseError('comment', comment);
   }
@@ -317,7 +458,8 @@ export function formatCommentResponse(comment: any, siteUrl: string): FormattedC
   const link = comment._links?.webui ? `${baseUrl}${comment._links.webui}` : '';
 
   return {
-    id: comment.id,
+    // Non-null: API always returns `id` on a well-formed comment object.
+    id: comment.id!,
     type: comment.type, // 'comment'
     status: comment.status,
     title: comment.title, // Usually "Re: Page Title"
@@ -325,7 +467,7 @@ export function formatCommentResponse(comment: any, siteUrl: string): FormattedC
     author: comment.history?.createdBy ? formatUserResponse(comment.history.createdBy) : undefined,
     created: comment.history?.createdDate,
     updated: comment.history?.lastUpdated?.when,
-    parentId: comment.container?.id, // Page ID
+    parentId: toIdString(comment.container?.id), // Page ID
     parentCommentId: comment.ancestors?.length ? comment.ancestors[comment.ancestors.length - 1].id : undefined,
     link,
     inlineProperties: comment.extensions?.inlineProperties, // For inline comments
@@ -335,13 +477,16 @@ export function formatCommentResponse(comment: any, siteUrl: string): FormattedC
 /**
  * Formats a list of Confluence comments.
  */
-export function formatCommentList(commentsResponse: any, siteUrl: string): FormattedCommentList {
+export function formatCommentList(
+  commentsResponse: RawListResponse<RawConfluenceComment>,
+  siteUrl: string
+): FormattedCommentList {
   if (!commentsResponse || typeof commentsResponse !== 'object' || commentsResponse.error || commentsResponse.errors) {
     throw confluenceResponseError('comment list', commentsResponse);
   }
 
   const results = Array.isArray(commentsResponse.results)
-    ? commentsResponse.results.map((comment: any) => formatCommentResponse(comment, siteUrl))
+    ? commentsResponse.results.map(comment => formatCommentResponse(comment, siteUrl))
     : [];
 
   return {
@@ -360,15 +505,16 @@ export function formatCommentList(commentsResponse: any, siteUrl: string): Forma
  * @param siteUrl - The ATLASSIAN_SITE_URL from config
  * @returns Formatted pages response with essential fields only
  */
-export function formatPageList(pagesResponse: any, siteUrl: string): FormattedPageList {
+export function formatPageList(pagesResponse: RawListResponse<RawConfluencePage>, siteUrl: string): FormattedPageList {
   if (!pagesResponse || typeof pagesResponse !== 'object' || pagesResponse.error || pagesResponse.errors) {
     throw confluenceResponseError('page list', pagesResponse);
   }
 
   const results = Array.isArray(pagesResponse.results)
-    ? pagesResponse.results.map((page: any) => ({
-        pageId: page.id,
-        title: page.title,
+    ? pagesResponse.results.map(page => ({
+        // Non-null: API always returns id/title on a well-formed page list item.
+        pageId: page.id!,
+        title: page.title!,
         status: page.status,
         parentId: page.parentId,
         spaceId: page.spaceId,
@@ -388,9 +534,17 @@ export function formatPageList(pagesResponse: any, siteUrl: string): FormattedPa
  * @param pageId - The page ID the restrictions belong to
  * @returns Formatted page restrictions with subjects for each operation
  */
-export function formatPageRestrictions(restrictionsResponse: any, pageId: string): PageRestrictions {
+export function formatPageRestrictions(
+  restrictionsResponse: RawRestrictionsResponse,
+  pageId: string
+): PageRestrictions {
   // If the response is an error or doesn't have expected structure, return empty restrictions
-  if (!restrictionsResponse || typeof restrictionsResponse !== 'object' || restrictionsResponse.error) {
+  if (
+    !restrictionsResponse ||
+    typeof restrictionsResponse !== 'object' ||
+    restrictionsResponse.error ||
+    restrictionsResponse.errors
+  ) {
     return {
       pageId,
       hasRestrictions: false,
@@ -407,7 +561,7 @@ export function formatPageRestrictions(restrictionsResponse: any, pageId: string
   //    { read: { restrictions: {...} }, update: { restrictions: {...} } }
 
   // Normalize to a map of operation -> restrictions data
-  const operationsMap: Record<string, any> = {};
+  const operationsMap: Record<string, RawRestrictionEntry> = {};
 
   if (Array.isArray(restrictionsResponse.results)) {
     // Array format: iterate through results and build map by operation
@@ -431,22 +585,22 @@ export function formatPageRestrictions(restrictionsResponse: any, pageId: string
 
     const subjects: RestrictionSubject[] = [];
 
-    // Extract user restrictions
-    const users = opData.restrictions.user?.results || opData.restrictions.user || [];
+    const users = restrictionMembers(opData.restrictions.user);
     for (const user of users) {
       subjects.push({
         type: 'user',
-        identifier: user.accountId || user.username || user.key,
+        // Non-null: API always returns at least one of these identifier fields.
+        identifier: (user.accountId || user.username || user.key)!,
         displayName: user.displayName || user.publicName,
       });
     }
 
-    // Extract group restrictions
-    const groups = opData.restrictions.group?.results || opData.restrictions.group || [];
+    const groups = restrictionMembers(opData.restrictions.group);
     for (const group of groups) {
       subjects.push({
         type: 'group',
-        identifier: group.name || group.id,
+        // Non-null: API always returns at least one of these identifier fields.
+        identifier: (group.name || group.id)!,
         displayName: group.name,
       });
     }

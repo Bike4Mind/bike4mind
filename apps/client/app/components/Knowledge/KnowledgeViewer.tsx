@@ -314,6 +314,11 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   // Active account-switcher org (null in personal context) - enables Team/org-scoped publishing.
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : null;
+  // Only offer Team for the org the server will accept: checkScopePermission gates org publishing
+  // on user.organizationId, so a multi-org member who selected a different (still valid) org would
+  // be offered Team but 403 on publish. Gate the option on the match so the UI never invites a
+  // rejected action.
+  const teamOrg = activeOrg && String(activeOrg.id) === String(shareUser?.organizationId) ? activeOrg : null;
   const { publishAndShare: publishAndShareArtifact, modal: artifactShareModal } = usePublishShare();
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
   const [isDiffPreviewOpen, setIsDiffPreviewOpen] = useState(false);
@@ -978,14 +983,14 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     }
     publishAndShareArtifact({
       title,
-      ...(activeOrg ? { orgOption: { label: 'Team', hint: `Members of ${activeOrg.name}` } } : {}),
+      ...(teamOrg ? { orgOption: { label: 'Team', hint: `Members of ${teamOrg.name}` } } : {}),
       ...buildArtifactPublishWiring({
         artifactId,
         type,
         content,
         title,
         userId: String(shareUser.id),
-        orgId: activeOrg?.id,
+        orgId: teamOrg?.id,
       }),
     });
   };

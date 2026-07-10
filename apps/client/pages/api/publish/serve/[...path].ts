@@ -65,10 +65,13 @@ import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
  * and the visibility gate still runs for the HTML AND every asset. `?raw=1` is
  * served as inert text/plain so direct navigation can't execute it on the app origin.
  *
- * The loader shell is scoped to bundles. Gated reply/fabfile
- * snapshots are standalone top-level pages (working links, `script-src 'none'`, no iframe),
- * so browser-session viewing of a GATED reply/fabfile still requires a credential (-> 401);
- * the iframe-srcdoc model would change their sandboxing and break link navigation.
+ * The loader shell covers bundles AND reply/fabfile. A gated reply/fabfile navigated with no
+ * credential gets the same shell, which re-fetches `?raw=1` and injects the rendered page as the
+ * iframe srcdoc; `renderViewerPage` carries a `script-src 'none'` CSP meta so it stays
+ * script-free inside the shell's `allow-scripts` iframe. Tradeoff: inside the shelled (gated)
+ * render, links obey the iframe sandbox (no `allow-popups`/`allow-top-navigation`), so
+ * `target=_blank`/top-nav links won't open - acceptable versus the prior hard 401, and the
+ * direct (public, non-shelled) render is unaffected (its links work normally).
  */
 
 const TIER_BY_PREFIX: Record<string, PublishScopeTier> = { u: 'user', pj: 'project', o: 'organization' };
@@ -245,17 +248,25 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     ? await checkShareGrant(artifact, { user: req.user as PublishUser | undefined })
     : await checkVisibility(artifact, req.user as PublishUser | undefined);
   if (!access.ok) {
-    // Gated bundle INDEX navigated with NO credential -> return the PUBLIC client-side loader
+    // Gated INDEX/page navigated with NO credential -> return the PUBLIC client-side loader
     // shell instead of a hard 401. Its inline script reads the localStorage JWT and re-fetches
-    // `?raw=1` with Authorization: Bearer. The discriminator is `!req.user` (no usable
-    // credential on this request): re-fetching only helps when none was presented. A request
-    // that DID carry a credential and still failed (403 - authed-but-unauthorized) re-fetches
-    // to no avail, so it falls through to the hard status below. NOT for: assets (gated bundles
-    // inline their assets, so the opaque iframe never requests them), `?raw=1` (the loader's
-    // own fetch - a shell there would loop), or `?format=raw` (a plain-text API surface -
-    // returning an HTML shell would violate the caller's Accept expectation, and format=raw
-    // is public-only anyway, so we fall through to the visibility gate's hard status).
-    const wantsLoaderShell = resolved.kind === 'bundle' && !resolved.assetPath && !isRaw && !isFormatRaw && !req.user;
+    // `?raw=1` with Authorization: Bearer, then injects the result as the iframe srcdoc. The
+    // discriminator is `!req.user` (no usable credential on this request): re-fetching only
+    // helps when none was presented. A request that DID carry a credential and still failed
+    // (403 - authed-but-unauthorized) re-fetches to no avail, so it falls through to the hard
+    // status below. Applies to bundle indexes AND reply/fabfile pages: all are top-level
+    // navigations that carry no Authorization header, so the same token-recovery works. The
+    // reply/fabfile `?raw=1` render carries its own `script-src 'none'` meta (renderViewerPage),
+    // so it stays script-free even inside the shell's allow-scripts iframe. NOT for: bundle
+    // ASSETS (gated bundles inline their assets, so the opaque iframe never requests them),
+    // `?raw=1` (the loader's own fetch - a shell there would loop), or `?format=raw` (a
+    // plain-text API surface - an HTML shell would violate the caller's Accept expectation,
+    // and format=raw is public-only anyway, so it falls through to the hard status).
+    // Never for share links: the token IS the credential, so the localStorage-JWT recovery
+    // shell is meaningless (and in Tier 1 checkShareGrant always grants, so this is unreachable
+    // for share anyway - the guard just keeps the future passphrase/domain tiers safe).
+    const wantsLoaderShell =
+      !isShare && !isRaw && !isFormatRaw && !req.user && (resolved.kind === 'bundle' ? !resolved.assetPath : true);
     if (wantsLoaderShell) {
       res.setHeader('Content-Type', 'text/html; charset=utf-8');
       res.setHeader('Content-Security-Policy', buildWrapperCsp(req));
@@ -831,6 +842,10 @@ function renderViewerPage(artifact: PublishedArtifactLean, noindex: boolean): st
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
+<!-- CSP as a meta so the no-JS posture survives when this page is injected as the loader
+     shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
+     sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost("img-src 'self' data:")}; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>

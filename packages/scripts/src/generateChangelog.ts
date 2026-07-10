@@ -271,6 +271,45 @@ Return ONLY a valid JSON object in this exact format (no markdown, no code block
 }`;
 }
 
+const SECTION_NOUNS: Record<ChangelogSection['type'], [singular: string, plural: string]> = {
+  features: ['feature', 'features'],
+  fixes: ['fix', 'fixes'],
+  performance: ['performance improvement', 'performance improvements'],
+  internal: ['internal change', 'internal changes'],
+  hotfix: ['hotfix', 'hotfixes'],
+};
+
+function capitalizeFirst(text: string): string {
+  return text.length ? text[0].toUpperCase() + text.slice(1) : text;
+}
+
+function joinWithAnd(parts: string[]): string {
+  if (parts.length <= 1) return parts.join('');
+  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
+  return `${parts.slice(0, -1).join(', ')}, and ${parts[parts.length - 1]}`;
+}
+
+/**
+ * Build a descriptive release title from parsed sections, for when the AI
+ * generator is unavailable. A single change becomes its own subject (e.g.
+ * "Add settlement view to admin usage-margin endpoint"); multiple changes become
+ * a count summary ("3 features and 2 fixes"). Only degrades to the generic
+ * "Production Release" when nothing categorizable is left. Exported for testing.
+ */
+export function buildFallbackTitle(sections: ChangelogSection[]): string {
+  const withItems = sections.filter(s => s.items.length > 0);
+  const total = withItems.reduce((n, s) => n + s.items.length, 0);
+
+  if (total === 0) return 'Production Release';
+  if (total === 1) return capitalizeFirst(withItems.flatMap(s => s.items)[0]);
+
+  const parts = withItems.map(s => {
+    const [singular, plural] = SECTION_NOUNS[s.type];
+    return `${s.items.length} ${s.items.length === 1 ? singular : plural}`;
+  });
+  return capitalizeFirst(joinWithAnd(parts));
+}
+
 /**
  * Generate fallback changelog if AI fails
  */
@@ -306,7 +345,7 @@ function generateFallbackChangelog(commits: GitHubCommit[], prNumbers: number[])
   }
 
   return {
-    title: 'Production Release',
+    title: buildFallbackTitle(sections),
     sections,
     briefSummary: briefSummary.slice(0, 5),
     metadata: {
