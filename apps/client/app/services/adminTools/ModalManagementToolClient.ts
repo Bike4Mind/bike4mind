@@ -181,7 +181,7 @@ export class ModalManagementToolClient implements AdminTool {
                   type: finalModal.isBanner ? ('banner' as const) : ('modal' as const),
                 },
               },
-              message: `✅ ${finalModal.isBanner ? 'Banner' : 'Modal'} "${finalModal.title}" created successfully!`,
+              message: `✅ ${finalModal.isBanner ? 'Banner' : 'Modal'} "${finalModal.title || finalModal.textMessage}" created successfully!`,
             };
           },
         },
