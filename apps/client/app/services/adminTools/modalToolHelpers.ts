@@ -366,8 +366,11 @@ export function summarizeChatContext(messages: IChatHistoryItem[]): string {
         reply?: string | null;
         replies?: string[];
       };
+      // Prefer a single prompt source (legacy content/text OR the real prompt)
+      // so a message carrying both shapes is not concatenated twice.
+      const prompt = extra.content || extra.text || m.prompt;
       const reply = extra.reply || extra.replies?.find(Boolean);
-      return [extra.content, extra.text, m.prompt, reply].filter(Boolean).join(' ').trim();
+      return [prompt, reply].filter(Boolean).join(' ').trim();
     })
     .filter(Boolean);
   return texts.join(' ').slice(-500); // Last 500 chars
