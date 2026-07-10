@@ -206,6 +206,9 @@ importers:
       '@bike4mind/mcp':
         specifier: workspace:*
         version: link:../../b4m-core/mcp
+      '@bike4mind/memory':
+        specifier: workspace:*
+        version: link:../../b4m-core/memory
       '@bike4mind/observability':
         specifier: workspace:*
         version: link:../../b4m-core/observability
