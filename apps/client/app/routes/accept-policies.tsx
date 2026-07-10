@@ -131,6 +131,11 @@ const AcceptPoliciesPage = () => {
 
       if (!useAccessToken.getState().mfaPending && getAxiosErrorStatus(err) === 401) {
         // Retries exhausted (or none were warranted) - not something resubmitting can fix.
+        // Mirrors the mount effect's own guard: markSessionExpired() (inside
+        // forceSessionExpiredRedirect) clears accessToken synchronously, which would
+        // otherwise re-run that effect mid-await and fire a soft, uninformative /login
+        // navigation before this call's own hard redirect (with proper messaging) lands.
+        tearingDownRef.current = true;
         setError(message);
         await forceSessionExpiredRedirect();
         setIsSubmitting(false);
