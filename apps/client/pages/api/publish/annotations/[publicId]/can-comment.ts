@@ -17,8 +17,9 @@ interface ArtifactGateLean {
   ownerId: string;
   scopeId: string;
   commentPolicy: CommentPolicy;
-  // MUST be selected — checkVisibility enforces the passphrase/domain gate off it.
-  accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+  // Required (explicit null) to match VisibilityCheckArtifact; a lean read of a
+  // pre-gate doc may omit it, so it's coerced `?? null` at the call below.
+  accessGate: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
 }
 
 const handler = baseApi({ auth: false })
@@ -31,10 +32,11 @@ const handler = baseApi({ auth: false })
     const publicId = String(req.query.publicId ?? '');
     if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
 
-    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
+    const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
       .select('publicId visibility ownerId scopeId commentPolicy accessGate')
-      .lean<ArtifactGateLean>();
-    if (!artifact) return res.status(404).json({ error: 'Not found' });
+      .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    const artifact: ArtifactGateLean = { ...doc, accessGate: doc.accessGate ?? null };
 
     const publishUser = toPublishUser(req.user);
     const vis = await checkVisibility(artifact, publishUser, {

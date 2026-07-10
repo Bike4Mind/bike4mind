@@ -1,4 +1,4 @@
-import * as b4mServices from '@bike4mind/services';
+import { setToolFinishObserver } from '@bike4mind/services';
 import { stampGear, type StampedGearKey } from './stampGear';
 
 /**
@@ -24,9 +24,11 @@ export function registerToolGearObserver(): void {
   if (registered) return;
   registered = true;
   try {
-    // Optional-chained + try/caught: tests partially mock @bike4mind/services,
-    // and a missing seam must never break a lambda (or a test file) at import.
-    b4mServices.setToolFinishObserver?.(({ toolName, userId }) => {
+    // Try/caught: tests partially mock @bike4mind/services, and accessing a
+    // missing mocked export throws — a missing seam must never break a lambda
+    // (or a test file). Named import (not `import *`): the namespace form
+    // trips the restricted-exports lint rule on this package.
+    setToolFinishObserver(({ toolName, userId }) => {
       const key = TOOL_GEAR_STAMPS[toolName];
       if (key) stampGear(userId, key);
     });

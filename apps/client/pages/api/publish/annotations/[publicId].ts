@@ -41,15 +41,18 @@ interface ArtifactGateLean {
   scopeId: string;
   commentPolicy: CommentPolicy;
   sha256Index?: string;
-  // MUST be selected: checkVisibility enforces the passphrase/domain gate off
-  // this field. Omitting it silently bypasses the gate (undefined gate = open).
-  accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+  // Required (explicit null) to match VisibilityCheckArtifact — the gate is
+  // enforced off this field, so normalizing it here means no caller can pass a
+  // shape that silently bypasses the gate. A lean read of a pre-gate doc may
+  // omit it, so loadArtifact coerces `?? null`.
+  accessGate: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
 }
 
 async function loadArtifact(publicId: string): Promise<ArtifactGateLean | null> {
-  return PublishedArtifact.findOne({ publicId, deletedAt: null })
+  const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
     .select('publicId visibility ownerId scopeId commentPolicy sha256Index accessGate')
-    .lean<ArtifactGateLean>();
+    .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
+  return doc ? { ...doc, accessGate: doc.accessGate ?? null } : null;
 }
 
 /** The gate context for annotation reads/writes: a passphrase gate is satisfied
