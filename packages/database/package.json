@@ -39,10 +39,10 @@
     "typescript": "^5.9.3"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.1.9",
-    "@vitest/ui": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/ui": "^4.1.10",
     "mongodb-memory-server": "^11.2.0",
     "vite-tsconfig-paths": "^6.1.1",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   }
 }
