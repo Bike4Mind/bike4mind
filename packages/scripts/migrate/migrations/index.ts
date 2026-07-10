@@ -60,6 +60,7 @@ import HashMfaBackupCodes from './20260702000000_hash-mfa-backup-codes';
 import BackfillCreditLots from './20260707120000_backfill-credit-lots';
 import AddHasUsablePasswordToUsers from './20260709120000_add-hasusablepassword-to-users';
 import BaseEntitlementOnDefaultModels from './20260709130000_base-entitlement-on-default-models';
+import NullShellAccountPasswords from './20260710120000_null-shell-account-passwords';
 
 export interface MigrationFile {
   id: number;
@@ -123,4 +124,5 @@ export const AvailableMigrations: MigrationFile[] = [
   BackfillCreditLots,
   AddHasUsablePasswordToUsers,
   BaseEntitlementOnDefaultModels,
+  NullShellAccountPasswords,
 ];
