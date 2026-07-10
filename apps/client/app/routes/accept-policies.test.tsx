@@ -16,10 +16,15 @@ vi.mock('@tanstack/react-router', () => ({
 vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1' }, setCurrentUser: vi.fn() }),
 }));
-const mockUseAccessToken = vi.fn();
-vi.mock('@client/app/hooks/useAccessToken', () => ({
-  useAccessToken: () => mockUseAccessToken(),
-}));
+// A plain mutable object (not a vi.fn() return-value mock) so both the hook call and the
+// imperative getState() call - which the component uses to re-read mfaPending live, not from
+// a stale closure - read the same live values, matching real zustand's single-store semantics.
+const mockAccessTokenState = { accessToken: 'atk' as string | null, mfaPending: false };
+vi.mock('@client/app/hooks/useAccessToken', () => {
+  const useAccessToken = () => mockAccessTokenState;
+  useAccessToken.getState = () => mockAccessTokenState;
+  return { useAccessToken };
+});
 const mockApiPost = vi.fn();
 const mockForceSessionExpiredRedirect = vi.fn().mockResolvedValue(undefined);
 vi.mock('@client/app/contexts/ApiContext', () => ({
@@ -63,21 +68,33 @@ const acceptForm = () => {
   fireEvent.click(screen.getByTestId('accept-policies-submit-btn'));
 };
 
-const confirmed401 = { response: { status: 401, data: { error: 'Unauthorized' } } };
-const serverError = { response: { status: 500, data: { error: 'Server error' } } };
+// withRetry (the real, unmocked implementation) coerces a thrown non-Error into a generic
+// Error before passing it to isRetryable, which would strip a plain-object fixture's
+// response/config - so fixtures must be real Error instances to survive that coercion intact.
+const makeAxiosError = (status: number, message: string, retryCount?: number) => {
+  const err = new Error(message) as Error & { response: unknown; config?: unknown };
+  err.response = { status, data: { error: message } };
+  if (retryCount !== undefined) {
+    err.config = { _retryCount: retryCount };
+  }
+  return err;
+};
+
+const serverError = makeAxiosError(500, 'Server error');
 // A first-attempt 401 (the interceptor's refresh attempt itself failed, not yet retried).
-const transient401 = { response: { status: 401, data: { error: 'Unauthorized' } }, config: { _retryCount: 0 } };
+const transient401 = makeAxiosError(401, 'Unauthorized', 0);
 // The interceptor already completed its own refresh-succeeded-then-retried cycle and still
 // got 401 - config._retryCount reflects that.
-const alreadyRetried401 = { response: { status: 401, data: { error: 'Unauthorized' } }, config: { _retryCount: 1 } };
-// Real timeout comfortably past SUBMIT_RETRY_DELAY_MS (1000ms in the component).
+const alreadyRetried401 = makeAxiosError(401, 'Unauthorized', 1);
+// Real timeout comfortably past SUBMIT_RETRY_DELAY_MS (1000ms in the component, plus jitter).
 const RETRY_WAIT_OPTS = { timeout: 2000 };
 
 describe('AcceptPoliciesPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockForceSessionExpiredRedirect.mockResolvedValue(undefined);
-    mockUseAccessToken.mockReturnValue({ accessToken: 'atk', mfaPending: false });
+    mockAccessTokenState.accessToken = 'atk';
+    mockAccessTokenState.mfaPending = false;
     mockUseGetIdentify.mockReturnValue({ isError: false, error: null });
   });
 
@@ -108,16 +125,29 @@ describe('AcceptPoliciesPage', () => {
     expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
   });
 
-  // A bootstrap /api/identify that comes back with a confirmed 401 (a stale token whose refresh
-  // attempt itself failed) must not strand the user on this interstitial forever - it should fall
-  // back to the same clean-sign-out teardown used for any other unrecoverable 401, instead of
-  // silently sitting on a form the session can't actually submit.
-  it('tears down when identify fails with a confirmed 401', async () => {
-    mockUseGetIdentify.mockReturnValue({ isError: true, error: confirmed401 });
+  // Only once ApiContext's interceptor has completed its own refresh-succeeded-then-retried
+  // cycle and still gotten 401 (config._retryCount >= 1) is this genuinely unrecoverable - a
+  // first-attempt 401 (retryCount 0) can equally mean the refresh endpoint itself failed
+  // transiently, which the interceptor deliberately does NOT treat as unrecoverable.
+  it('tears down when identify fails with a confirmed, already-retried 401', async () => {
+    mockUseGetIdentify.mockReturnValue({ isError: true, error: alreadyRetried401 });
 
     renderPage();
 
     await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1));
+  });
+
+  // A first-attempt 401 on identify (retryCount 0) can be a transient refresh-endpoint outage
+  // (e.g. a cold Lambda right after a deploy) - exactly the case ApiContext's own interceptor
+  // deliberately does not tear down for, to avoid a spurious logout storm. This page must not
+  // force a teardown on that signal alone either.
+  it('does not tear down when identify fails with a first-attempt (not-yet-retried) 401', () => {
+    mockUseGetIdentify.mockReturnValue({ isError: true, error: transient401 });
+
+    renderPage();
+
+    expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
+    expect(checkboxInput('accept-policies-checkbox')).not.toBeDisabled();
   });
 
   // A background-refetch blip unrelated to auth (network drop, 5xx) says nothing about whether
@@ -135,8 +165,8 @@ describe('AcceptPoliciesPage', () => {
   // During mfaPending no refresh token is issued by design, so a 401 on identify is expected,
   // not a sign of a dead session - tearing down here would destroy an in-progress MFA setup.
   it('does not tear down on a confirmed 401 while mfaPending', () => {
-    mockUseAccessToken.mockReturnValue({ accessToken: 'atk', mfaPending: true });
-    mockUseGetIdentify.mockReturnValue({ isError: true, error: confirmed401 });
+    mockAccessTokenState.mfaPending = true;
+    mockUseGetIdentify.mockReturnValue({ isError: true, error: alreadyRetried401 });
 
     renderPage();
 
@@ -144,7 +174,7 @@ describe('AcceptPoliciesPage', () => {
   });
 
   it('disables the form while the session is unverified', () => {
-    mockUseGetIdentify.mockReturnValue({ isError: true, error: confirmed401 });
+    mockUseGetIdentify.mockReturnValue({ isError: true, error: alreadyRetried401 });
 
     renderPage();
 
@@ -173,8 +203,9 @@ describe('AcceptPoliciesPage', () => {
 
   // If the backoff retry also 401s, that's as far as this page can recover on its own - fall
   // back to the same clean sign-out used for any other unrecoverable session, rather than
-  // resubmitting forever or dead-ending on a raw error.
-  it('tears down if the backoff retry also 401s', async () => {
+  // resubmitting forever or dead-ending on a raw error. The real error text stays visible right
+  // up to that point rather than being silently dropped.
+  it('tears down if the backoff retry also 401s, showing the error first', async () => {
     mockApiPost.mockRejectedValue(transient401);
 
     renderPage();
@@ -182,6 +213,7 @@ describe('AcceptPoliciesPage', () => {
 
     await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1), RETRY_WAIT_OPTS);
     expect(mockApiPost).toHaveBeenCalledTimes(2);
+    expect(screen.getByText('Unauthorized')).toBeInTheDocument();
     // isSubmitting must be reset even on the teardown path, so a no-op redirect (e.g. a
     // concurrent teardown already in flight) never leaves the button stuck loading.
     expect(screen.getByTestId('accept-policies-submit-btn')).not.toBeDisabled();
@@ -189,7 +221,7 @@ describe('AcceptPoliciesPage', () => {
 
   // If the interceptor already completed its own refresh-succeeded-then-retried cycle for this
   // error (config._retryCount already >= 1), a further client-side retry can't help - skip the
-  // backoff delay entirely and tear down immediately.
+  // backoff delay entirely and tear down immediately, still showing the error first.
   it('tears down immediately with no backoff retry when the interceptor already retried once', async () => {
     mockApiPost.mockRejectedValue(alreadyRetried401);
 
@@ -198,6 +230,7 @@ describe('AcceptPoliciesPage', () => {
 
     await waitFor(() => expect(mockForceSessionExpiredRedirect).toHaveBeenCalledTimes(1));
     expect(mockApiPost).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Unauthorized')).toBeInTheDocument();
   });
 
   // A failure unrelated to auth (an unrelated backend bug, a validation error) says nothing about
@@ -217,8 +250,8 @@ describe('AcceptPoliciesPage', () => {
   });
 
   it('does not tear down on repeated 401 submit failures while mfaPending', async () => {
-    mockUseAccessToken.mockReturnValue({ accessToken: 'atk', mfaPending: true });
-    mockApiPost.mockRejectedValue(confirmed401);
+    mockAccessTokenState.mfaPending = true;
+    mockApiPost.mockRejectedValue(alreadyRetried401);
 
     renderPage();
 
@@ -228,6 +261,26 @@ describe('AcceptPoliciesPage', () => {
     fireEvent.click(screen.getByTestId('accept-policies-submit-btn'));
     await waitFor(() => expect(mockApiPost).toHaveBeenCalledTimes(2));
 
+    expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
+  });
+
+  // mfaPending is re-read live (useAccessToken.getState()) rather than closed over at the start
+  // of the submit, since the retry chain can run up to a second later - a cross-tab mfaPending
+  // rehydrate mid-wait must not be missed by a stale closure.
+  it('re-reads mfaPending fresh rather than using a stale value from when the submit started', async () => {
+    let callCount = 0;
+    mockApiPost.mockImplementation(() => {
+      callCount += 1;
+      if (callCount === 2) {
+        mockAccessTokenState.mfaPending = true;
+      }
+      return Promise.reject(transient401);
+    });
+
+    renderPage();
+    acceptForm();
+
+    await waitFor(() => expect(callCount).toBe(2), RETRY_WAIT_OPTS);
     expect(mockForceSessionExpiredRedirect).not.toHaveBeenCalled();
   });
 });

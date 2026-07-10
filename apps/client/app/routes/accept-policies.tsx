@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch, useRouter } from '@tanstack/react-router';
 import { Box, Button, Checkbox, Container, Sheet, Stack, Typography, Link } from '@mui/joy';
 import GppGoodIcon from '@mui/icons-material/GppGood';
 import Image from 'next/image';
+import { withRetry } from '@bike4mind/common';
 
 import { useUser } from '@client/app/contexts/UserContext';
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
@@ -17,13 +18,7 @@ import useGetLogo from '@client/app/hooks/useGetLogo';
 import { ExternalLinks, CHECKBOX_LABEL_LINK_SX } from '@client/app/utils/externalLinks';
 import { applyRedirect } from '@client/app/utils/authRedirect';
 
-// A 401 reaching handleSubmit's catch has already passed through ApiContext's own
-// refresh-retry interceptor once (it attempts a refresh on every 401 before rejecting) - a
-// confirmed 400/401 refresh rejection already redirects via the interceptor itself before
-// this catch ever runs. So a 401 here means either the refresh attempt itself failed (a
-// transient outage, retryCount still 0 - worth one backoff retry, since it may have already
-// cleared) or the refresh succeeded and the retried request 401'd anyway (retryCount >= 1 -
-// genuinely unrecoverable, not something a resubmit can fix). See getAxiosRetryCount.
+// One backoff retry before giving up on a submit 401 - see the isRetryable predicate below.
 const SUBMIT_RETRY_DELAY_MS = 1000;
 
 /**
@@ -47,24 +42,42 @@ const AcceptPoliciesPage = () => {
   const [confirmAdult, setConfirmAdult] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set right before calling forceSessionExpiredRedirect() so the effect below (which
+  // re-runs when that call's markSessionExpired() clears accessToken) can tell "we're
+  // already mid-teardown, the hard redirect is already coming" apart from a page load
+  // that genuinely never had a token, and skip firing a second, uninformative soft nav.
+  const tearingDownRef = useRef(false);
+  // Aborted on unmount so a pending submit-retry backoff (see handleSubmit) doesn't fire
+  // a pointless extra request, or its follow-on state updates, after the user has left.
+  const submitAbortControllerRef = useRef<AbortController | null>(null);
+  useEffect(() => {
+    return () => submitAbortControllerRef.current?.abort();
+  }, []);
 
   const redirectTo = (search as { redirectTo?: string }).redirectTo;
 
-  // True when identify came back with a confirmed 401 (a stale token whose refresh attempt
-  // itself failed, per ApiContext's transient-vs-confirmed distinction) - this page then has no
-  // server-confirmed user to render off. Excludes mfaPending, which both ApiContext's interceptor
-  // and UserContext's bootstrap effect also exempt: during mfaPending no refresh token is issued
-  // by design, so a 401 here is expected, not a dead session. Also excludes anything other than a
-  // confirmed 401 (5xx, network, an unrelated background-refetch blip on an otherwise-valid
-  // session) - those say nothing about this session being unrecoverable.
-  const sessionUnverified = identity.isError && !mfaPending && getAxiosErrorStatus(identity.error) === 401;
+  // True only once identify has both a confirmed 401 (not mfaPending, which both ApiContext's
+  // interceptor and UserContext's bootstrap effect also exempt - no refresh token is issued
+  // during mfaPending by design, so a 401 there is expected) AND retryCount >= 1, meaning
+  // ApiContext's interceptor already completed its own refresh-succeeded-then-retried cycle
+  // and still got 401. A first-attempt 401 (retryCount 0) can equally mean the refresh
+  // endpoint itself failed transiently - a case the interceptor deliberately does NOT treat as
+  // unrecoverable, to avoid a spurious logout on e.g. a cold Lambda right after a deploy - so
+  // this page must not force a teardown on that signal alone either.
+  const sessionUnverified =
+    identity.isError &&
+    !mfaPending &&
+    getAxiosErrorStatus(identity.error) === 401 &&
+    getAxiosRetryCount(identity.error) >= 1;
 
   // Guard the guard: no token -> login; already-accepted user -> don't trap them on this page;
   // unverifiable session -> tear down the same way any other unrecoverable 401 does instead of
   // stranding the user on an interstitial their session can't back.
   useEffect(() => {
     if (!accessToken) {
-      navigate({ to: '/login', replace: true });
+      if (!tearingDownRef.current) {
+        navigate({ to: '/login', replace: true });
+      }
       return;
     }
     if (currentUser?.aupAcceptedVersion) {
@@ -72,47 +85,12 @@ const AcceptPoliciesPage = () => {
       return;
     }
     if (sessionUnverified) {
+      tearingDownRef.current = true;
       void forceSessionExpiredRedirect();
     }
   }, [accessToken, currentUser, sessionUnverified, navigate, redirectTo, router]);
 
   const isFormValid = acceptPolicies && confirmAdult;
-
-  // allowRetry is true only for the user-initiated attempt, so the one automatic backoff
-  // retry below can't itself trigger a further retry.
-  const submitPolicyAcceptance = async (allowRetry: boolean): Promise<void> => {
-    try {
-      const response = await api.post('/api/user/accept-policies', { ageAttestation: true });
-      // Update currentUser so the consent gate clears (both the server field and this client state).
-      setCurrentUser(response.data.user);
-      applyRedirect(router.history, redirectTo, '/', true);
-    } catch (err: unknown) {
-      if (!mfaPending && getAxiosErrorStatus(err) === 401) {
-        // First attempt at a transient (not-yet-retried) 401: give the refresh endpoint a
-        // moment to recover and retry once automatically, rather than dead-ending on an error
-        // or immediately signing the user out over a passing blip.
-        if (allowRetry && getAxiosRetryCount(err) === 0) {
-          await new Promise(resolve => setTimeout(resolve, SUBMIT_RETRY_DELAY_MS));
-          await submitPolicyAcceptance(false);
-          return;
-        }
-        // Either the backoff retry also 401'd, or the interceptor already completed its own
-        // refresh-succeeded-then-retried cycle and still got 401 - not something resubmitting
-        // can fix.
-        await forceSessionExpiredRedirect();
-        setIsSubmitting(false);
-        return;
-      }
-
-      // Unrelated to the session (5xx, validation, network) - just show it, retryable indefinitely.
-      const message =
-        (err as { response?: { data?: { error?: string } }; message?: string }).response?.data?.error ||
-        (err as Error).message ||
-        'Failed to record acceptance';
-      setError(message);
-      setIsSubmitting(false);
-    }
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,7 +98,49 @@ const AcceptPoliciesPage = () => {
 
     setError(null);
     setIsSubmitting(true);
-    await submitPolicyAcceptance(true);
+
+    const controller = new AbortController();
+    submitAbortControllerRef.current = controller;
+
+    try {
+      const { result: response } = await withRetry(
+        () => api.post('/api/user/accept-policies', { ageAttestation: true }),
+        {
+          maxRetries: 1,
+          initialDelayMs: SUBMIT_RETRY_DELAY_MS,
+          abortSignal: controller.signal,
+          // Only a first-attempt 401 (config._retryCount still 0 - the interceptor's own
+          // refresh attempt itself failed, not yet retried) is worth a retry: a confirmed
+          // 400/401 refresh rejection already redirects via the interceptor before this catch
+          // ever runs, so a persisting 401 here means either a transient refresh outage worth
+          // one more try, or (once retried) the interceptor's own refresh-succeeded-then-retried
+          // cycle already failed - not something a resubmit can fix. mfaPending is re-read live
+          // (not closed over) since this predicate can run up to a second after the original call.
+          isRetryable: err =>
+            !useAccessToken.getState().mfaPending && getAxiosErrorStatus(err) === 401 && getAxiosRetryCount(err) === 0,
+        }
+      );
+      // Update currentUser so the consent gate clears (both the server field and this client state).
+      setCurrentUser(response.data.user);
+      applyRedirect(router.history, redirectTo, '/', true);
+    } catch (err: unknown) {
+      const message =
+        (err as { response?: { data?: { error?: string } }; message?: string }).response?.data?.error ||
+        (err as Error).message ||
+        'Failed to record acceptance';
+
+      if (!useAccessToken.getState().mfaPending && getAxiosErrorStatus(err) === 401) {
+        // Retries exhausted (or none were warranted) - not something resubmitting can fix.
+        setError(message);
+        await forceSessionExpiredRedirect();
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Unrelated to the session (5xx, validation, network) - just show it, retryable indefinitely.
+      setError(message);
+      setIsSubmitting(false);
+    }
   };
 
   return (
