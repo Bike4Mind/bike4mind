@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { CanCommentResponse, CommentPolicy, PublishVisibility } from '@bike4mind/common';
-import { checkVisibility, canAnnotate, toPublishUser } from '@server/services/publish';
+import { checkVisibility, canAnnotate, toPublishUser, requestHasGateProof } from '@server/services/publish';
 
 /**
  * GET /api/publish/annotations/[publicId]/can-comment - the PER-VIEWER comment
@@ -17,6 +17,8 @@ interface ArtifactGateLean {
   ownerId: string;
   scopeId: string;
   commentPolicy: CommentPolicy;
+  // MUST be selected — checkVisibility enforces the passphrase/domain gate off it.
+  accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
 }
 
 const handler = baseApi({ auth: false })
@@ -30,12 +32,14 @@ const handler = baseApi({ auth: false })
     if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
 
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('publicId visibility ownerId scopeId commentPolicy')
+      .select('publicId visibility ownerId scopeId commentPolicy accessGate')
       .lean<ArtifactGateLean>();
     if (!artifact) return res.status(404).json({ error: 'Not found' });
 
     const publishUser = toPublishUser(req.user);
-    const vis = await checkVisibility(artifact, publishUser);
+    const vis = await checkVisibility(artifact, publishUser, {
+      passphraseVerified: artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId),
+    });
     if (!vis.ok) return res.status(vis.status).json({ error: vis.error });
 
     const response: CanCommentResponse = {

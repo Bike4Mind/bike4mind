@@ -65,7 +65,10 @@ type RunOpts = {
   cookie?: string;
   userAgent?: string;
 };
-const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent }: RunOpts = {}) => {
+const run = (
+  segments: string[],
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent }: RunOpts = {}
+) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
@@ -1134,19 +1137,24 @@ describe('GET /api/publish/serve — access gates on /a/<shareToken> links', () 
 describe('GET /api/publish/serve — external view counting (Published gear feed)', () => {
   const renderedReply = () => bundle({ source: { kind: 'reply' }, renderedBody: 'hi there' });
 
-  it('an anonymous HUMAN view increments externalViewCount', async () => {
+  it('an AUTHENTICATED non-owner view increments externalViewCount', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
+  });
+
+  it('an ANONYMOUS view does NOT count as external — the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
     await promise;
-    expect(mockUpdateOne).toHaveBeenCalledWith(
-      { publicId: 'pub1' },
-      { $inc: { viewCount: 1, externalViewCount: 1 } }
-    );
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });
 
-  it('a link-preview crawler does NOT count as a visitor (pasting your own link must not pay the gear)', async () => {
+  it('a link-preview crawler does NOT count as a visitor', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
     const { promise } = run(['r', 'pub1'], {
+      user: { id: 'someone-else' },
       userAgent: 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
     });
     await promise;
@@ -1155,7 +1163,7 @@ describe('GET /api/publish/serve — external view counting (Published gear feed
 
   it('the signed-in OWNER does not count as an external view', async () => {
     mockArtifactFindOne.mockReturnValue(renderedReply());
-    const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' }, userAgent: 'Mozilla/5.0 Safari/605.1' });
+    const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' } });
     await promise;
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });

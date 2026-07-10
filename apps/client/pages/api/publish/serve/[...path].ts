@@ -310,7 +310,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // ── Reply / fabfile: render the snapshot body to a sanitized viewer page. ──
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
     if (isFormatRaw) {
-      if (artifact.visibility !== 'public') {
+      if (!isOpenPublic) {
         return res.status(404).json({ error: 'Not found' });
       }
       return sendRawArtifact(
@@ -347,7 +347,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // ?format=raw is a public-only surface; reject before touching storage on gated bundles
   // so a private artifact can never be pulled from S3 by a raw request (defense in depth on
   // top of the format=raw text-extraction gate later).
-  if (isFormatRaw && artifact.visibility !== 'public') {
+  if (isFormatRaw && !isOpenPublic) {
     return res.status(404).json({ error: 'Not found' });
   }
 
@@ -407,7 +407,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   }
 
   if (isFormatRaw) {
-    if (artifact.visibility !== 'public') {
+    if (!isOpenPublic) {
       return res.status(404).json({ error: 'Not found' });
     }
     return sendRawArtifact(
@@ -817,21 +817,30 @@ const CRAWLER_UA_RE =
 
 /**
  * Best-effort, non-authoritative view counters. Never blocks the response.
- * `externalViewCount` excludes the owner's own (signed-in) visits AND known
- * link-preview crawlers — it feeds the Published gear ("someone else saw your
- * page") and any future social proof. An anonymous human view counts as
- * external: the owner CAN game it via incognito, but that is friction where
- * zero existed; real proof-of-human is tracked as strategy P1
- * (b4m-strategy#93).
+ *
+ * `viewCount` counts everything. `externalViewCount` feeds the Published gear
+ * ("someone else saw your page") and MUST resist self-granting: a top-level
+ * browser navigation to /p/... carries no Authorization header, so the serve
+ * route cannot tell the owner apart from a stranger on an anonymous request —
+ * counting anonymous views as external let every publisher pay themselves the
+ * 5,000-credit reward by opening their own freshly-published link (verified
+ * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
+ * AUTHENTICATED, non-owner, non-crawler viewer — a request that actually
+ * carries a credential we can attribute to a different user. Domain-gated
+ * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
+ * purely-anonymous public views no longer count, and stronger proof-of-human
+ * is tracked as strategy P1 (b4m-strategy#93).
  */
 function bumpViewCount(
   artifact: { publicId: string; ownerId: string },
   viewer: { id?: string } | undefined,
   userAgent?: string
 ): void {
-  const isOwner = !!viewer?.id && String(viewer.id) === String(artifact.ownerId);
+  const isAuthed = !!viewer?.id;
+  const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
   const isCrawler = !!userAgent && CRAWLER_UA_RE.test(userAgent);
-  const inc = isOwner || isCrawler ? { viewCount: 1 } : { viewCount: 1, externalViewCount: 1 };
+  const countsAsExternal = isAuthed && !isOwner && !isCrawler;
+  const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
   void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
 }
 
@@ -858,6 +867,8 @@ function sendRawArtifact(
   const content = parts.join('\n') + '\n';
   res.setHeader('Content-Type', 'text/plain; charset=utf-8');
   res.setHeader('X-Content-Type-Options', 'nosniff');
+  // Reached only for OPEN-public artifacts (every ?format=raw caller now guards
+  // on !isOpenPublic), so the shared-cacheable public policy is correct here.
   res.setHeader('Cache-Control', cacheControlFor('public'));
   res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
   bumpViewCount(artifact, viewer, userAgent);
