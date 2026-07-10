@@ -17,6 +17,7 @@ const { mocks } = vi.hoisted(() => ({
     miscExists: vi.fn(),
     miscFindOne: vi.fn(),
     importFindOne: vi.fn(),
+    overridesByKey: vi.fn(),
   },
 }));
 
@@ -55,6 +56,7 @@ vi.mock('@bike4mind/database', () => ({
   dataLakeRepository: { findOne: (...a: unknown[]) => mocks.dataLakeFindOne(...a) },
   creditTransactionRepository: { find: (...a: unknown[]) => mocks.txFind(...a) },
   gearStampRepository: { stampedKeys: (...a: unknown[]) => mocks.stampedKeys(...a) },
+  gearOverrideRepository: { byKey: (...a: unknown[]) => mocks.overridesByKey(...a) },
   importHistoryJobRepository: { findOne: (...a: unknown[]) => mocks.importFindOne(...a) },
   rapidReplyAuditLogRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
   researchDataRepository: { findOne: (...a: unknown[]) => mocks.miscFindOne(...a) },
@@ -91,6 +93,7 @@ const lockEverything = () => {
   mocks.miscExists.mockResolvedValue(null);
   mocks.miscFindOne.mockResolvedValue(null);
   mocks.importFindOne.mockResolvedValue(null);
+  mocks.overridesByKey.mockResolvedValue(new Map());
   mocks.txFind.mockResolvedValue([]);
 };
 
@@ -276,5 +279,44 @@ describe('GET /api/gears/status — imports are split per source', () => {
     const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
     expect(byKey.importopenai.unlocked).toBe(true);
     expect(byKey.importclaude.unlocked).toBe(false);
+  });
+});
+
+describe('GET /api/gears/status — Manage Gears admin overrides', () => {
+  it('a disabled gear vanishes entirely (no card, no payout)', async () => {
+    mocks.overridesByKey.mockResolvedValue(new Map([['image', { key: 'image', enabled: false }]]));
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as { gears: Array<{ key: string }> };
+    expect(body.gears.some(g => g.key === 'image')).toBe(false);
+    expect(body.gears).toHaveLength(30);
+  });
+
+  it('credits and copy overrides are ABSOLUTE and ride the response', async () => {
+    mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
+    mocks.overridesByKey.mockResolvedValue(
+      new Map([['projects', { key: 'projects', credits: 1, title: 'Projects (nerfed)' }]])
+    );
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+
+    const body = res._getJSONData() as {
+      gears: Array<{ key: string; credits: number; title: string; creditsAwarded?: number }>;
+    };
+    const projects = body.gears.find(g => g.key === 'projects')!;
+    expect(projects.credits).toBe(1);
+    expect(projects.title).toBe('Projects (nerfed)');
+    expect(projects.creditsAwarded).toBe(1);
+    expect(mocks.addCredits.mock.calls[0][0]).toMatchObject({ credits: 1 });
+  });
+
+  it('serves the code-default presentation when no override exists', async () => {
+    const { res, promise } = run({ id: 'u1' });
+    await promise;
+    const body = res._getJSONData() as { gears: Array<{ key: string; title: string; ctaAction: string }> };
+    const byKey = Object.fromEntries(body.gears.map(g => [g.key, g]));
+    expect(byKey.projects.title).toBe('Projects');
+    expect(byKey.clidocs.ctaAction).toContain('#stamp:clidocs');
   });
 });

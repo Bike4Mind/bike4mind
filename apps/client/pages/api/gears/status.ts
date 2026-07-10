@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { CreditHolderType } from '@bike4mind/common';
 import { creditService } from '@bike4mind/services';
+import { GEAR_PRESENTATION } from '@client/lib/gears/presentation';
 import {
   Project,
   FabFile,
@@ -19,6 +20,7 @@ import {
   dataLakeRepository,
   creditTransactionRepository,
   gearStampRepository,
+  gearOverrideRepository,
   importHistoryJobRepository,
   rapidReplyAuditLogRepository,
   researchDataRepository,
@@ -347,11 +349,25 @@ const GEARS: GearDef[] = [
 
 const creditsFor = (def: GearDef) => Math.round(def.credits * GEAR_CREDITS_SCALE);
 
+/** Code-defined gear defaults, exported for the Manage Gears admin dashboard
+ *  (key/kind/credits only — checks stay private to this endpoint). */
+export const GEAR_DEFAULTS: Array<{ key: GearKey; kind: GearKind; credits: number }> = GEARS.map(g => ({
+  key: g.key,
+  kind: g.kind,
+  credits: g.credits,
+}));
+
 export interface GearStatus {
   key: GearKey;
   kind: GearKind;
   unlocked: boolean;
   credits: number;
+  /** Presentation, admin-override-merged over the code defaults. */
+  title: string;
+  tagline: string;
+  intro: string;
+  cta: string;
+  ctaAction: string;
   /** Set only on the response that actually granted the reward. */
   creditsAwarded?: number;
   /** Unlocked, but the payout's stricter condition isn't met yet (e.g.
@@ -364,21 +380,37 @@ const handler = baseApi().get(
     const userId = req.user?.id;
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
-    const facts = await gatherFacts(String(userId));
-    const unlockedFlags = await Promise.all(GEARS.map(g => g.check(facts)));
+    // Admin overrides (Manage Gears) layer over the code defaults: disabled
+    // gears vanish (no card, no payout); a credits override is ABSOLUTE (not
+    // scaled) so what the admin typed is exactly what pays out.
+    const [facts, overrides] = await Promise.all([gatherFacts(String(userId)), gearOverrideRepository.byKey()]);
+    const activeGears = GEARS.filter(g => overrides.get(g.key)?.enabled !== false);
+    const unlockedFlags = await Promise.all(activeGears.map(g => g.check(facts)));
 
     // One indexed query tells us which unlocks were already rewarded, so the
     // common case (nothing new) never attempts a ledger write.
-    const txIds = GEARS.map(g => gearTxId(String(userId), g.key));
+    const txIds = activeGears.map(g => gearTxId(String(userId), g.key));
     const existing = await creditTransactionRepository.find({ transactionId: { $in: txIds } });
     const rewarded = new Set((existing as Array<{ transactionId?: string }>).map(t => t.transactionId).filter(Boolean));
 
     const gears: GearStatus[] = [];
-    for (let i = 0; i < GEARS.length; i++) {
-      const def = GEARS[i];
+    for (let i = 0; i < activeGears.length; i++) {
+      const def = activeGears[i];
       const unlocked = unlockedFlags[i];
-      const credits = creditsFor(def);
-      const gear: GearStatus = { key: def.key, kind: def.kind, unlocked, credits };
+      const o = overrides.get(def.key);
+      const credits = o?.credits ?? creditsFor(def);
+      const base = GEAR_PRESENTATION[def.key];
+      const gear: GearStatus = {
+        key: def.key,
+        kind: def.kind,
+        unlocked,
+        credits,
+        title: o?.title ?? base.title,
+        tagline: o?.tagline ?? base.tagline,
+        intro: o?.intro ?? base.intro,
+        cta: o?.cta ?? base.cta,
+        ctaAction: o?.ctaAction ?? base.ctaAction,
+      };
       const alreadyRewarded = rewarded.has(gearTxId(String(userId), def.key));
       // The payout may lag the unlock behind a stricter condition (anti-farm
       // friction) — evaluate it only when it could actually change the outcome.

@@ -51,6 +51,12 @@ export interface GearStatus {
   credits: number;
   creditsAwarded?: number;
   rewardPending?: boolean;
+  /** Presentation is server truth (code defaults + Manage Gears admin overrides). */
+  title: string;
+  tagline: string;
+  intro: string;
+  cta: string;
+  ctaAction: string;
 }
 
 export interface GearsStatusResponse {
