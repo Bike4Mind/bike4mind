@@ -1,7 +1,7 @@
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
-import { NOTION_API_BASE_URL } from './notionConfig';
+import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
 
 const TOKEN_VALIDATION_TIMEOUT = 10000;
 
@@ -33,16 +33,16 @@ export class NotionTokenManager {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          'Notion-Version': '2022-06-28',
+          'Notion-Version': NOTION_VERSION,
           'Content-Type': 'application/json',
         },
         signal: controller.signal,
       });
-      clearTimeout(timeoutId);
       return response.ok;
     } catch {
-      clearTimeout(timeoutId);
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

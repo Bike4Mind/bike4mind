@@ -1,6 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
-import { getNotionOAuthConfig, NOTION_OAUTH_TOKEN_URL } from '@server/integrations/notion';
+import {
+  getNotionOAuthConfig,
+  NOTION_OAUTH_TOKEN_URL,
+  NOTION_API_BASE_URL,
+  NOTION_VERSION,
+} from '@server/integrations/notion';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
 import { Config } from '@server/utils/config';
 import crypto from 'crypto';
@@ -9,8 +14,6 @@ import { encryptToken } from '@server/security/tokenEncryption';
 
 const OAUTH_TIMEOUT = 30000;
 const NOTION_API_TIMEOUT = 10000;
-const NOTION_API_BASE_URL = 'https://api.notion.com/v1';
-const NOTION_VERSION = '2022-06-28';
 
 interface NotionTokenResponse {
   access_token: string;
@@ -295,12 +298,12 @@ async function detectRootPageId(accessToken: string): Promise<string | undefined
       },
       body: JSON.stringify({
         filter: { value: 'page', property: 'object' },
+        // Ascending = oldest-edited first, so we pick the longest-lived root page
         sort: { direction: 'ascending', timestamp: 'last_edited_time' },
         page_size: 10,
       }),
       signal: controller.signal,
     });
-    clearTimeout(timeoutId);
 
     if (!response.ok) return undefined;
 
@@ -318,8 +321,9 @@ async function detectRootPageId(accessToken: string): Promise<string | undefined
     // Fall back to the first accessible page
     return data.results[0]?.id;
   } catch {
-    clearTimeout(timeoutId);
     return undefined;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
