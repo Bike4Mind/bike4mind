@@ -27,6 +27,7 @@ import { buildSystemPrompt } from '../core/prompts';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { ConversationContext, reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
+import { createReactiveCompactionHandler } from '../utils/reactiveCompaction.js';
 import { formatStep, extractCompactInstructions } from '../utils';
 import { logger } from '../utils/Logger';
 import { isTransientNetworkError } from '../llm/retryPolicy';
@@ -246,6 +247,10 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool,
+        // Mid-loop recovery if a provider context-window error interrupts this
+        // turn: compact the in-flight history once and retry, instead of
+        // failing the turn and losing the user's work.
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
       });
     } finally {
       backgroundManager?.setCurrentTurn(null);
