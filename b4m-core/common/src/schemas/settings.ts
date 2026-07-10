@@ -261,6 +261,9 @@ export const SettingKeySchema = z.enum([
   'EnableFamilyCompute',
   'optiMaxToolCalls',
 
+  // LIBREONCOLOGY SETTINGS
+  'EnableLibreOncology',
+
   // CONTEXT TELEMETRY SETTINGS
   'EnableContextTelemetry',
   'contextTelemetryAlerts',
@@ -1331,6 +1334,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableComputeSubmission', order: 82 },
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
+      { key: 'EnableLibreOncology', order: 85 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -3100,6 +3104,22 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 81,
     dependsOn: 'EnableOptiHashi',
+  }),
+  // [DELETION-FOOTPRINT] LibreOncology launch gate (removed when the product is
+  // extracted). When off, the LibreOncology upgrade page shows "coming soon" and
+  // the public subscribe endpoint refuses checkout (via the generic
+  // plan.availabilityFlag path), so no one can buy into the product before its
+  // lake + course maps are provisioned. Flipped ON per-environment at launch.
+  // Admin comp-grants are unaffected (different route). Mirrors EnableOptiHashi.
+  EnableLibreOncology: makeBooleanSetting({
+    key: 'EnableLibreOncology',
+    name: 'Enable LibreOncology',
+    defaultValue: false,
+    description:
+      'Enable public LibreOncology subscriptions (checkout). Off = the product shows "coming soon" and cannot be purchased; entitled/comp users are unaffected.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 85,
   }),
   EnableComputeSubmission: makeBooleanSetting({
     key: 'EnableComputeSubmission',
