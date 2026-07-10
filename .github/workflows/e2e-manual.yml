@@ -53,6 +53,8 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # Post the e2e/smoke commit status the prod-promotion console reads (P0-2).
+      statuses: write
     # Serialize per-stage so an overlapping scheduled + manual run (or two
     # manual runs) can't stomp each other's global-setup data cleanup.
     concurrency:
@@ -135,6 +137,24 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
+
+      # Capture the SHA currently deployed to staging (SST stage `dev`) BEFORE the
+      # suite runs, so a mid-run staging redeploy can't mislabel it. Only the
+      # full-suite dev/staging run stamps the promotable frontier (P0-2): skip
+      # previews and scoped single-project dispatches. Best-effort by design.
+      - name: Resolve tested SHA for e2e/smoke status
+        id: tested_sha
+        if: github.event_name == 'schedule' || (inputs.pr_number == '' && (inputs.test_project == '' || inputs.test_project == 'All tests'))
+        continue-on-error: true
+        run: |
+          SHA=$(aws ssm get-parameter --name /b4m-deployer/last-deployed-sha/staging \
+            --query 'Parameter.Value' --output text --region "$AWS_REGION" 2>/dev/null || true)
+          if printf '%s' "$SHA" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+            echo "Tested staging SHA: $SHA"
+          else
+            echo "No valid staging SHA from SSM (got '$SHA'); e2e/smoke status will be skipped."
+          fi
 
       - name: Install Playwright Chromium
         working-directory: apps/client
@@ -286,6 +306,41 @@ jobs:
           echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
           echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Post e2e/smoke commit status (P0-2 console gate)
+        # Stamp the tested staging SHA with the full-suite result so the prod-
+        # promotion console can read a per-commit e2e signal. `success` only when
+        # nothing failed, nothing was left unstarted, and tests actually ran.
+        # Best-effort: never fails the e2e run.
+        if: always() && steps.tested_sha.outputs.sha != ''
+        continue-on-error: true
+        uses: actions/github-script@v8
+        env:
+          TESTED_SHA: ${{ steps.tested_sha.outputs.sha }}
+          FAILED: ${{ steps.results.outputs.failed }}
+          NOT_STARTED: ${{ steps.results.outputs.not_started }}
+          PASSED: ${{ steps.results.outputs.passed }}
+          TOTAL: ${{ steps.results.outputs.total }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const sha = process.env.TESTED_SHA;
+            const total = Number(process.env.TOTAL || '0');
+            if (total === 0) {
+              core.warning('No e2e results parsed; skipping e2e/smoke status (leaves it missing = not promotable).');
+              return;
+            }
+            const ok = process.env.FAILED === '0' && process.env.NOT_STARTED === '0';
+            const state = ok ? 'success' : 'failure';
+            const desc = (ok
+              ? `Full e2e suite passed (${process.env.PASSED}/${total})`
+              : `Full e2e suite: ${process.env.FAILED} failed, ${process.env.NOT_STARTED} not started`).slice(0, 140);
+            await github.rest.repos.createCommitStatus({
+              owner: 'Bike4Mind', repo: 'bike4mind', sha,
+              state, context: 'e2e/smoke', target_url: process.env.RUN_URL, description: desc,
+            });
+            core.info(`Posted e2e/smoke=${state} on ${sha.slice(0, 7)}`);
 
       - name: Parse credits data
         id: credits
