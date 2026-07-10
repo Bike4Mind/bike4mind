@@ -48,6 +48,12 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
   // Track pending session to handle race conditions during session creation
   const pendingSessionRef = useRef<string | null>(null);
 
+  // Last real (non-null, non-optimistic) sessionId this hook was subscribed to.
+  // Used below to detect a switch between two different real sessions (e.g.
+  // forking mid-stream) so a leftover "still streaming" state from the
+  // previous session doesn't lock the newly-viewed session's composer.
+  const prevRealSessionIdRef = useRef<string | null>(null);
+
   // Store the last processed quest to avoid duplicate/outdated processing
   const lastProcessedQuestRef = useRef<any | null>(null);
 
@@ -346,6 +352,27 @@ export function useSubscribeChatCompletion(sessionId: string | null) {
     // Clear per-session tracking when session changes (artifact dedup + client first-token timing)
     artifactPersistence.reset();
     metrics.reset();
+
+    // Switching between two different real sessions (e.g. forking or navigating
+    // away while a completion is in-flight) must not carry over the previous
+    // session's "still streaming" state - otherwise the newly-viewed session's
+    // composer shows a spurious Stop button until the OTHER session's stream
+    // ends. Optimistic/null ids are skipped as endpoints of this comparison
+    // since they're transient placeholders during session creation, not a
+    // real session the user has switched away from or to.
+    const isRealSessionId = (id: string | null): id is string => !!id && !isOptimisticId(id);
+    if (isRealSessionId(sessionId)) {
+      if (isRealSessionId(prevRealSessionIdRef.current) && prevRealSessionIdRef.current !== sessionId) {
+        setChatCompletion({
+          quest: undefined,
+          completed: true,
+          stopped: false,
+          statusMessage: undefined,
+          rapidReply: undefined,
+        });
+      }
+      prevRealSessionIdRef.current = sessionId;
+    }
 
     const unsubscribeChatCompletion = subscribeToAction('streamed_chat_completion', handleStreamingMessage);
     const unsubscribeRapidReply = subscribeToAction('streamed_rapid_reply', handleStreamingMessage);
