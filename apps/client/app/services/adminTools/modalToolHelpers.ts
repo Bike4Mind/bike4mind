@@ -434,7 +434,7 @@ export function aiGenerateModalContent(params: {
 // Shown when a from-context request has no recent chat to summarize, so callers
 // surface a clear message instead of a generic empty modal.
 export const NO_CHAT_CONTEXT_MESSAGE =
-  'No recent chat context found to build a modal from. Have a conversation (or attach an image) first, then try `/admin modal from-context` again.';
+  'No recent chat context found to build a modal from. Have a conversation first, then try `/admin modal from-context` again.';
 
 // Build modal content from recent chat context. Returns null when there is no
 // usable context (no text and no images) so callers can surface a clear
