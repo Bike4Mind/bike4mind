@@ -5,7 +5,7 @@ import {
   memoryLedgerRepository,
   mementoRepository,
 } from '@bike4mind/database';
-import { firstMatchStore, readPrincipalMemory, type PrincipalKind } from '@bike4mind/memory';
+import { firstMatchStore, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
 import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
@@ -21,6 +21,9 @@ const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'syst
  * user's own mementos. Owner-scoped in every store (spec L6): you only see agents you own and only
  * your own user memory, and a not-found / not-owned principal returns 404 so the endpoint never
  * reveals another principal's existence. Org/system kinds 404 until their stores are wired.
+ *
+ * With `?q=<query>` the response also carries `recalled`: the beliefs ranked for that query by the
+ * ACT-R retrieval score (activation + relevance), the read-time pull that a chat preamble would use.
  */
 const handler = baseApi().get(async (req, res) => {
   const ownerUserId = req.user?.id;
@@ -46,6 +49,16 @@ const handler = baseApi().get(async (req, res) => {
   ]);
   const profile = await readPrincipalMemory({ kind: kind as PrincipalKind, id }, store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
+
+  const query = typeof req.query.q === 'string' ? req.query.q : undefined;
+  if (query !== undefined) {
+    const recalled = recall(profile.beliefs, query).map(r => ({
+      belief: r.belief,
+      relevance: r.relevance,
+      score: r.score,
+    }));
+    return res.status(200).json({ profile, query, recalled });
+  }
 
   return res.status(200).json({ profile });
 });

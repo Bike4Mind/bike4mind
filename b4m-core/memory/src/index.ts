@@ -1,6 +1,7 @@
 export * from './types';
 export * from './activation';
 export * from './ledger';
+export * from './recall';
 export * from './store';
 export * from './readPrincipalMemory';
 export * from './composeStores';
