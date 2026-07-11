@@ -64,15 +64,17 @@ type RunOpts = {
   format?: string;
   cookie?: string;
   userAgent?: string;
+  embed?: boolean;
 };
 const run = (
   segments: string[],
-  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent }: RunOpts = {}
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
   if (format) query.format = format;
+  if (embed) query.embed = '1';
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
   const headers: Record<string, string> = { host: effectiveHost };
@@ -1221,5 +1223,101 @@ describe('GET /api/publish/serve - external view counting (Published gear feed)'
     const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' } });
     await promise;
     expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+});
+
+describe('GET /api/publish/serve - embed allowlist', () => {
+  const frameAncestorsOf = (res: { getHeader: (n: string) => unknown }) =>
+    (res.getHeader('Content-Security-Policy') as string)
+      .split(';')
+      .find(d => d.trim().startsWith('frame-ancestors'))!
+      .trim();
+
+  it('appends an allowlisted origin to the WRAPPER frame-ancestors (open-public)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://app.bike4mind.com https://erikbethke.com");
+  });
+
+  it('appends the origin to the ISOLATED bundle frame-ancestors too (ancestor-chain rule)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const fa = frameAncestorsOf(res);
+    // The external embedder is an ancestor of the nested bundle, so it must be listed
+    // here as well as on the wrapper - but the app host stays and no wildcard appears.
+    expect(fa).toBe('frame-ancestors https://app.bike4mind.com https://erikbethke.com');
+    expect(fa).not.toContain('*');
+  });
+
+  it('adds nothing to frame-ancestors when there is no allowlist (regression)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://app.bike4mind.com");
+  });
+
+  it('does NOT honor an allowlist on a gated artifact (loader shell CSP omits the origin)', async () => {
+    // A domain gate serves the anonymous loader shell; its CSP must never carry the
+    // embed grant (defense in depth - a gated page is no-store and must not be framed).
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] },
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).not.toContain('erikbethke.com');
+  });
+
+  it('?embed=1 renders chrome-less (no version bar) but keeps exactly one canonical link', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        embedOrigins: ['https://erikbethke.com'],
+        sha256Index: 'newSHA',
+        versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // The version-switcher ELEMENT is dropped (its CSS class always lives in <style>).
+    expect(data).not.toContain('<div class="b4m-ver">');
+    // Canonical is emitted once by shareMeta (not duplicated by the embed path).
+    expect(data.match(/rel="canonical"/g)?.length).toBe(1);
+    expect(data).toContain('href="https://app.bike4mind.com/p/u/scope123/my-slug"');
+  });
+
+  it('normal (non-embed) render keeps the version bar', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ sha256Index: 'newSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getData() as string).toContain('<div class="b4m-ver">');
   });
 });

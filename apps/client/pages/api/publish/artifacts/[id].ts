@@ -2,8 +2,8 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
 import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
-import { VisibilitySchema, CommentPolicySchema } from '@bike4mind/common';
-import { resolveVisibility, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
+import { VisibilitySchema, CommentPolicySchema, EMBED_ORIGINS_MAX } from '@bike4mind/common';
+import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
@@ -41,6 +41,10 @@ const PatchSchema = z.object({
   visibility: VisibilitySchema.optional(),
   commentPolicy: CommentPolicySchema.optional(),
   accessGate: AccessGatePatchSchema.optional(),
+  // Raw strings; validateEmbedOrigins normalizes and applies the host/open-public
+  // rules server-side. `[]` clears the allowlist. Bounded here so a huge payload
+  // is rejected before per-origin parsing.
+  embedOrigins: z.array(z.string()).max(EMBED_ORIGINS_MAX).optional(),
 });
 
 function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: boolean }): boolean {
@@ -121,13 +125,31 @@ const handler = baseApi()
       });
     }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
+
+    // Embed allowlist. Validated against the artifact's FINAL open-public state
+    // (after any visibility/gate change above), so a gate + embed grant in the
+    // same PATCH is rejected as a pair rather than by apply order.
+    const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
+    let embedOriginsChanged = false;
+    if (parsed.data.embedOrigins !== undefined) {
+      const check = validateEmbedOrigins(parsed.data.embedOrigins, { isOpenPublic: isOpenPublicNow });
+      if (!check.ok) {
+        return res.status(400).json({ error: check.error, code: check.code });
+      }
+      const before = [...(artifact.embedOrigins ?? [])].sort();
+      const after = [...check.value].sort();
+      embedOriginsChanged = before.join('\n') !== after.join('\n');
+      // Absent (undefined) when empty so the field stays off the document.
+      artifact.embedOrigins = check.value.length > 0 ? check.value : undefined;
+    }
     await artifact.save();
 
-    // Leaving the open-public state (downgrade OR newly-gated) must purge the
-    // cached public copy immediately, otherwise the now-restricted page keeps
-    // serving from cache. Fire-and-forget - best-effort, swallows its own errors.
-    const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
-    if (wasOpenPublic && !isOpenPublicNow) {
+    // Any change that alters the CACHED public response must purge the CDN, or the
+    // stale copy keeps serving up to its TTL. Two triggers: (a) leaving open-public
+    // (downgrade OR newly-gated) removes the page from cache-eligibility; (b) the
+    // embed allowlist changed while still open-public - the served frame-ancestors
+    // CSP header is part of the cached bytes. Fire-and-forget, best-effort.
+    if ((wasOpenPublic && !isOpenPublicNow) || (isOpenPublicNow && embedOriginsChanged)) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
     const json = artifact.toJSON() as Record<string, unknown> & {

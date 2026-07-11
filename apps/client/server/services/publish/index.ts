@@ -61,3 +61,4 @@ export {
   GATE_TOKEN_TTL_SECONDS,
 } from './publishGateToken';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
+export { validateEmbedOrigins, type EmbedOriginsResult } from './embedOrigins';

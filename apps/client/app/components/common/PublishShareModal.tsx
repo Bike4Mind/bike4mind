@@ -26,6 +26,7 @@ import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
 import { ShareActions } from './ShareActions';
+import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import {
   toShareUrl,
   toShareTokenUrl,
@@ -35,6 +36,7 @@ import {
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
   updatePublishedAccessGate,
+  getPublishedEmbedState,
   type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
@@ -179,6 +181,9 @@ export function PublishShareModal({
   const [gatePassphrase, setGatePassphrase] = useState('');
   const [gateDomainsText, setGateDomainsText] = useState('');
   const [gateTouched, setGateTouched] = useState(false);
+  // Whether a gate is live on the published item - drives whether the embed
+  // editor is offered (embedding is open-public only). Seeded from the record.
+  const [embedGated, setEmbedGated] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -195,8 +200,27 @@ export function PublishShareModal({
       setGatePassphrase('');
       setGateDomainsText('');
       setGateTouched(false);
+      setEmbedGated(false);
     }
   }, [open, defaultVisibility]);
+
+  // Seed whether a gate is live once we have a published item (the embed editor
+  // seeds its own origin list).
+  useEffect(() => {
+    if (!open || !result?.publicId) return;
+    let active = true;
+    void getPublishedEmbedState(result.publicId)
+      .then(state => {
+        if (!active) return;
+        setEmbedGated(state.gated);
+      })
+      .catch(() => {
+        /* best-effort seed; the editor still works, the server re-validates */
+      });
+    return () => {
+      active = false;
+    };
+  }, [open, result?.publicId]);
 
   // Detect a prior publication once the dialog is open. Default to "update" when found so
   // re-publishing lands a new version (the discoverable path); guard against a resolution
@@ -406,6 +430,9 @@ export function PublishShareModal({
       await updatePublishedAccessGate(result.publicId, gate);
       setGateTouched(false);
       setGatePassphrase('');
+      // Embedding is open-public only, so hide the embed editor the moment a gate
+      // goes on (and reveal it again when the gate is cleared) - matches the server rule.
+      setEmbedGated(gate !== null);
       toast.success(
         gate === null
           ? 'Link is open to anyone again'
@@ -749,6 +776,12 @@ export function PublishShareModal({
                 </Button>
               )}
             </Box>
+
+            {result && isPublic && !embedGated && (
+              <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <EmbedAllowlistEditor publicId={result.publicId} shareUrl={url} title={title} isOpenPublic />
+              </Box>
+            )}
           </>
         )}
       </ModalDialog>
