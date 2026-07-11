@@ -39,6 +39,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlin
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -258,6 +259,13 @@ const ProfileMenu = () => {
     };
   }, [open]);
 
+  // Collapse the "More" flyout whenever the panel closes, so it doesn't reopen
+  // already-expanded next time. Covers every close path (card toggle, Escape,
+  // outside click, navigation) uniformly, not just the closeAll() ones.
+  useEffect(() => {
+    if (!open) setMoreOpen(false);
+  }, [open]);
+
   const planLabel =
     selectedAccount && !selectedAccount.personal ? t('account.team', 'Team') : t('account.personal', 'Personal');
 
@@ -340,6 +348,15 @@ const ProfileMenu = () => {
             label={t('skills.title', 'Skills')}
             onClick={() => {
               navigate({ to: '/skills' });
+              setOpen(false);
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-api-keys"
+            icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('apiKeys.title', 'API Keys')}
+            onClick={() => {
+              navigate({ to: '/profile', search: { tab: 'api-keys' } });
               setOpen(false);
             }}
           />
