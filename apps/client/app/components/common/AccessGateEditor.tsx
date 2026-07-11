@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Box, Button, FormLabel, Input, Radio, RadioGroup, Textarea, Typography } from '@mui/joy';
+import { Box, Button, FormLabel, Input, Radio, RadioGroup, Sheet, Textarea, Typography } from '@mui/joy';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
+import PublicIcon from '@mui/icons-material/Public';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import {
@@ -23,6 +24,11 @@ export interface AccessGateEditorProps {
 }
 
 type GateKind = 'none' | 'passphrase' | 'domain';
+const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNode }> = [
+  { value: 'none', label: 'Anyone with the link', icon: <PublicIcon sx={{ fontSize: 16 }} /> },
+  { value: 'passphrase', label: 'Passphrase', icon: <KeyIcon sx={{ fontSize: 16 }} /> },
+  { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
+];
 /** Registrable domain, exact form (mirrors the server DOMAIN_RE). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
@@ -123,38 +129,46 @@ export function AccessGateEditor({
         </Typography>
       ) : (
         <>
+          {/* Each option is a full clickable card (Radio `overlay` fills the Sheet),
+              so a click anywhere on the box selects it - not just the radio dot. */}
           <RadioGroup
-            orientation="horizontal"
             value={kind}
             onChange={e => setKind(e.target.value as GateKind)}
-            sx={{ gap: 2, mb: 1, flexWrap: 'wrap' }}
+            sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, mb: 1 }}
           >
-            <Radio
-              value="none"
-              label="Anyone with the link"
-              data-testid={`${testIdPrefix}-none`}
-              sx={{ p: 0.5, borderRadius: 'md' }}
-            />
-            <Radio
-              value="passphrase"
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <KeyIcon sx={{ fontSize: 15 }} /> Passphrase
-                </Box>
-              }
-              data-testid={`${testIdPrefix}-passphrase`}
-              sx={{ p: 0.5, borderRadius: 'md' }}
-            />
-            <Radio
-              value="domain"
-              label={
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <DomainIcon sx={{ fontSize: 15 }} /> Email domain
-                </Box>
-              }
-              data-testid={`${testIdPrefix}-domain`}
-              sx={{ p: 0.5, borderRadius: 'md' }}
-            />
+            {GATE_OPTIONS.map(o => {
+              const selected = kind === o.value;
+              return (
+                <Sheet
+                  key={o.value}
+                  variant="outlined"
+                  sx={{
+                    position: 'relative',
+                    flex: 1,
+                    borderRadius: 'md',
+                    p: 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 0.75,
+                    cursor: 'pointer',
+                    borderColor: selected ? 'primary.500' : 'divider',
+                    bgcolor: selected ? 'primary.softBg' : 'background.surface',
+                  }}
+                >
+                  {o.icon}
+                  <Typography level="body-sm" sx={{ fontWeight: selected ? 600 : 400 }}>
+                    {o.label}
+                  </Typography>
+                  <Radio
+                    overlay
+                    value={o.value}
+                    label=""
+                    data-testid={`${testIdPrefix}-${o.value}`}
+                    sx={{ ml: 'auto' }}
+                  />
+                </Sheet>
+              );
+            })}
           </RadioGroup>
 
           {kind === 'passphrase' && (

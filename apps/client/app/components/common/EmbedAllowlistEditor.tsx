@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Box, Button, Chip, FormLabel, IconButton, Input, Textarea, Tooltip, Typography } from '@mui/joy';
+import { Box, Button, Chip, ChipDelete, FormLabel, IconButton, Input, Textarea, Tooltip, Typography } from '@mui/joy';
 import CodeIcon from '@mui/icons-material/Code';
-import CloseIcon from '@mui/icons-material/Close';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import { parseEmbedOrigin, EMBED_ORIGINS_MAX } from '@bike4mind/common';
@@ -166,16 +165,11 @@ export function EmbedAllowlistEditor({
               color="neutral"
               data-testid={`${testIdPrefix}-chip-${origin}`}
               endDecorator={
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="neutral"
+                <ChipDelete
                   disabled={busy}
                   onClick={() => onRemove(origin)}
                   data-testid={`${testIdPrefix}-remove-${origin}`}
-                >
-                  <CloseIcon sx={{ fontSize: 14 }} />
-                </IconButton>
+                />
               }
             >
               {origin}
