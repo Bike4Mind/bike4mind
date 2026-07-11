@@ -86,7 +86,7 @@ export function createAgentDelegateTool(
 
       // Foreground execution (default): block until complete
       const result = await orchestrator.delegateToAgent(spawnOptions);
-      return result.summary;
+      return `${result.summary}\n\n[resume id: ${result.resumeId} - use resume_agent with this id to continue this session]`;
     },
     toolSchema: {
       name: 'agent_delegate',

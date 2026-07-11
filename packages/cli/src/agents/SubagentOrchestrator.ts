@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ThoroughnessLevel } from '@bike4mind/agents';
+import type { IMessage } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { PermissionManager } from '../utils/PermissionManager.js';
@@ -32,6 +34,7 @@ import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
+import type { AgentHistoryStore } from './AgentHistoryStore.js';
 
 // Re-export ThoroughnessLevel for convenience
 export type { ThoroughnessLevel };
@@ -60,6 +63,17 @@ export interface SpawnAgentOptions {
   variables?: Record<string, string>;
   /** Parent session ID */
   parentSessionId: string;
+  /**
+   * Resume id to store this run's history under. When omitted, delegateToAgent
+   * generates one. Background runs pass their job id so the resumable key matches
+   * the id the model already sees.
+   */
+  resumeId?: string;
+  /**
+   * Prior conversation to replay into the agent (from a stored checkpoint) so a
+   * resumed run continues with full context. See resume_agent.
+   */
+  previousMessages?: IMessage[];
   /** Override model for this execution (takes precedence over agent default) */
   model?: string;
   /** Additional tool restrictions (merged with agent definition) */
@@ -111,6 +125,8 @@ export interface AgentExecutionResult extends AgentResult {
   summary: string;
   /** Parent session ID this agent was spawned from */
   parentSessionId: string;
+  /** Id under which this run's history was stored; pass to resume_agent to continue it. */
+  resumeId: string;
 }
 
 /**
@@ -134,6 +150,8 @@ export interface OrchestratorDependencies {
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Optional: Checkpoint store for file change recovery */
   checkpointStore?: CheckpointStore | null;
+  /** Optional: retains completed sub-agent conversations for resume_agent. */
+  historyStore?: AgentHistoryStore | null;
 }
 
 /**
@@ -189,6 +207,9 @@ export class SubagentOrchestrator {
           `of ${MAX_SUBAGENT_DEPTH}. Deeper delegation is blocked to prevent unbounded recursion.`
       );
     }
+
+    // Id this run's history is stored under; background runs supply their job id.
+    const resumeId = options.resumeId ?? `sub-${randomBytes(4).toString('hex')}`;
 
     // Clamp the child's interaction mode so it never runs more permissively than
     // its parent. The parent ceiling defaults to the live store mode (the main
@@ -363,6 +384,7 @@ export class SubagentOrchestrator {
             parallelExecution: this.deps.enableParallelToolExecution === true,
             isReadOnlyTool,
             maxHistoryIterations: 4,
+            previousMessages: options.previousMessages,
           }),
         {
           maxRetries: agentDef.retry.maxRetries,
@@ -390,6 +412,7 @@ export class SubagentOrchestrator {
           thoroughness: effectiveThoroughness,
           summary: `Agent blocked: ${error.message}`,
           parentSessionId,
+          resumeId,
           finalAnswer: error.message,
           steps: [],
           completionInfo: {
@@ -435,6 +458,27 @@ export class SubagentOrchestrator {
     // Generate summary
     const summary = this.summarizeResult(result, agentDef);
 
+    // Persist the finished conversation so resume_agent can continue it.
+    if (this.deps.historyStore) {
+      const checkpoint = agent.toCheckpoint();
+      // run() records the final answer as a step, not a message, so the agent's
+      // own conclusion is absent from the checkpoint history. Append it as an
+      // assistant turn so a resumed run sees what it previously concluded (the
+      // whole point of "resume to fix the bug you found").
+      const last = checkpoint.messages[checkpoint.messages.length - 1];
+      if (result.finalAnswer && !(last?.role === 'assistant' && last.content === result.finalAnswer)) {
+        checkpoint.messages.push({ role: 'assistant', content: result.finalAnswer });
+      }
+      this.deps.historyStore.set(resumeId, {
+        checkpoint,
+        agentName,
+        agentDefinition: agentDef,
+        thoroughness: effectiveThoroughness,
+        parentSessionId,
+        endTime: Date.now(),
+      });
+    }
+
     // Return agent result
     return {
       ...result,
@@ -442,6 +486,7 @@ export class SubagentOrchestrator {
       thoroughness: effectiveThoroughness,
       summary,
       parentSessionId,
+      resumeId,
     };
   }
 
