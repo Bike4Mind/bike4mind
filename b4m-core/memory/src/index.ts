@@ -1,4 +1,5 @@
 export * from './types';
+export * from './activation';
 export * from './ledger';
 export * from './store';
 export * from './readPrincipalMemory';

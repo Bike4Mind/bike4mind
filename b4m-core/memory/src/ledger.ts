@@ -18,6 +18,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { activationToSalience, baseLevelActivation, DEFAULT_ACTIVATION, type ActivationConfig } from './activation';
 import { EVIDENCE_TIERS, type Belief, type EvidenceTier, type Principal } from './types';
 
 /**
@@ -118,44 +119,75 @@ const TIER_CONFIDENCE: Record<EvidenceTier, number> = {
 const strongerTier = (a: EvidenceTier, b?: EvidenceTier): EvidenceTier =>
   b && EVIDENCE_TIERS.indexOf(b) > EVIDENCE_TIERS.indexOf(a) ? b : a;
 
+export interface FoldOptions {
+  /**
+   * ISO time to evaluate ACT-R activation as of. Defaults to the latest event's `at`, which keeps
+   * the fold replayable (same ledger -> same beliefs). Pass a live "now" at read time to let
+   * untouched beliefs decay since the last write.
+   */
+  now?: string;
+  /** Override the activation decay/threshold config (per principal, as usage dictates). */
+  activation?: Partial<ActivationConfig>;
+}
+
 /**
  * Fold a ledger into the belief set it projects to. Deterministic and replayable: process events
  * in ledger order, keyed by subject; assert creates/replaces, affirm refreshes, retract removes.
- * The returned beliefs carry every contributing event hash in `derivedFrom` - memory with
- * citations that trace straight back into the tamper-evident log.
+ * The returned beliefs carry every contributing event hash in `derivedFrom` - memory with citations
+ * that trace straight back into the tamper-evident log - and an ACT-R `activation` (with its
+ * thresholded `salience`) computed from each belief's presentation history.
  */
-export function foldEvents(chain: readonly MemoryEvent[]): Belief[] {
+export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions = {}): Belief[] {
   const bySubject = new Map<string, Belief>();
+  // Presentation times (assert + affirms) per surviving subject, for the activation pass below.
+  const presentations = new Map<string, number[]>();
+  let latestAt = '';
+
   for (const e of chain) {
+    if (e.at > latestAt) latestAt = e.at;
     const existing = bySubject.get(e.subject);
     if (e.kind === 'retract') {
       bySubject.delete(e.subject);
+      presentations.delete(e.subject);
     } else if (e.kind === 'assert') {
       const tier = e.evidenceTier ?? 'engineering-proxy';
+      presentations.set(e.subject, [Date.parse(e.at)]);
       bySubject.set(e.subject, {
         id: e.subject,
         fact: e.fact ?? existing?.fact ?? e.subject,
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
-        salience: e.salience ?? existing?.salience,
         derivedFrom: [e.hash],
         lastAffirmedAt: e.at,
       });
     } else if (existing) {
       // affirm: refresh an existing belief; a no-op on a retracted/never-asserted subject.
       const tier = strongerTier(existing.evidenceTier, e.evidenceTier);
+      presentations.get(e.subject)?.push(Date.parse(e.at));
       bySubject.set(e.subject, {
         ...existing,
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
-        salience: e.salience ?? existing.salience,
         derivedFrom: [...existing.derivedFrom, e.hash],
         lastAffirmedAt: e.at,
       });
     }
   }
-  // Deterministic ordering: most-recently-affirmed first, id as a stable tiebreak.
+
+  // Activation pass: compute decaying salience as of `now` (default: the last write). Deterministic
+  // when `now` is omitted, so a replayed fold reproduces identical activation.
+  const config: ActivationConfig = { ...DEFAULT_ACTIVATION, ...options.activation };
+  const nowMs = Date.parse(options.now ?? latestAt);
+  for (const [subject, belief] of bySubject) {
+    belief.activation = baseLevelActivation(presentations.get(subject) ?? [], nowMs, config);
+    belief.salience = activationToSalience(belief.activation, config);
+  }
+
+  // Ordering: most active first (top-of-mind), lastAffirmedAt then id as stable tiebreaks.
   return [...bySubject.values()].sort(
-    (a, b) => b.lastAffirmedAt.localeCompare(a.lastAffirmedAt) || a.id.localeCompare(b.id)
+    (a, b) =>
+      (b.activation ?? 0) - (a.activation ?? 0) ||
+      b.lastAffirmedAt.localeCompare(a.lastAffirmedAt) ||
+      a.id.localeCompare(b.id)
   );
 }

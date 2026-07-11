@@ -117,3 +117,41 @@ describe('deterministic fold', () => {
     expect(foldEvents(chain)).toEqual(foldEvents(chain));
   });
 });
+
+describe('computed salience (ACT-R activation)', () => {
+  it('computes activation and a thresholded salience for every belief', () => {
+    const chain = buildChain([ev({ subject: 'a', fact: 'A', at: '2026-07-10T00:00:00.000Z' })]);
+    const [belief] = foldEvents(chain, { now: '2026-07-11T00:00:00.000Z' });
+    expect(typeof belief.activation).toBe('number');
+    expect(['hot', 'warm', 'cold']).toContain(belief.salience);
+  });
+
+  it('a recently-affirmed belief is hotter than a stale one', () => {
+    const chain = buildChain([
+      ev({ subject: 'stale', fact: 'stale', at: '2026-06-01T00:00:00.000Z' }),
+      ev({ subject: 'fresh', fact: 'fresh', at: '2026-06-01T00:00:00.000Z' }),
+      ev({ subject: 'fresh', kind: 'affirm', at: '2026-07-10T00:00:00.000Z' }),
+    ]);
+    const beliefs = foldEvents(chain, { now: '2026-07-11T00:00:00.000Z' });
+    const fresh = beliefs.find(b => b.id === 'fresh')!;
+    const stale = beliefs.find(b => b.id === 'stale')!;
+    expect(fresh.activation!).toBeGreaterThan(stale.activation!);
+    expect(fresh.salience).toBe('hot');
+    expect(stale.salience).toBe('cold');
+  });
+
+  it('decays as of a later read time: the same ledger goes colder when now advances', () => {
+    const chain = buildChain([ev({ subject: 'a', fact: 'A', at: '2026-07-10T00:00:00.000Z' })]);
+    const soon = foldEvents(chain, { now: '2026-07-11T00:00:00.000Z' })[0].activation!;
+    const later = foldEvents(chain, { now: '2026-09-01T00:00:00.000Z' })[0].activation!;
+    expect(later).toBeLessThan(soon);
+  });
+
+  it('orders beliefs most-active first', () => {
+    const chain = buildChain([
+      ev({ subject: 'cold', fact: 'cold', at: '2026-05-01T00:00:00.000Z' }),
+      ev({ subject: 'hot', fact: 'hot', at: '2026-07-10T00:00:00.000Z' }),
+    ]);
+    expect(foldEvents(chain, { now: '2026-07-11T00:00:00.000Z' }).map(b => b.id)).toEqual(['hot', 'cold']);
+  });
+});

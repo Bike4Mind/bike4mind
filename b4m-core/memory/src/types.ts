@@ -39,12 +39,18 @@ export interface Belief {
   /** 0..1 */
   confidence: number;
   /**
-   * Source salience/heat tier, a distinct axis from `evidenceTier` (confidence-in-the-claim):
-   * how top-of-mind the memory is. User mementos carry hot/warm/cold; DeepAgent/persona sources
-   * leave it undefined for now. This is the seed of the ACT-R activation tier step 5 computes for
-   * every belief.
+   * Salience/heat tier, a distinct axis from `evidenceTier` (confidence-in-the-claim): how
+   * top-of-mind the memory is. When beliefs are folded from a ledger this is COMPUTED from
+   * `activation` (ACT-R), so it decays as a belief goes untouched; adapters that project a snapshot
+   * (user mementos) carry it through from their source tier instead.
    */
   salience?: 'hot' | 'warm' | 'cold';
+  /**
+   * ACT-R base-level activation: `ln(sum of dt^-d)` over the belief's presentations (its assert +
+   * affirms in the ledger), evaluated as of a given time. Higher = more active/top-of-mind. Present
+   * only on ledger-folded beliefs; `salience` is its thresholded tier.
+   */
+  activation?: number;
   derivedFrom: string[];
   /** ISO-8601. */
   lastAffirmedAt: string;
