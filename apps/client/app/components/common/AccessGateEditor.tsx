@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Box, Button, FormLabel, Input, Radio, RadioGroup, Sheet, Textarea, Typography } from '@mui/joy';
+import { Box, Button, FormLabel, Input, Radio, Sheet, Textarea, Typography } from '@mui/joy';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
@@ -129,11 +129,12 @@ export function AccessGateEditor({
         </Typography>
       ) : (
         <>
-          {/* Each option is a full clickable card (Radio `overlay` fills the Sheet),
-              so a click anywhere on the box selects it - not just the radio dot. */}
-          <RadioGroup
-            value={kind}
-            onChange={e => setKind(e.target.value as GateKind)}
+          {/* The whole card is the click target (the Sheet owns onClick); the Radio
+              is a read-only visual indicator with pointer-events disabled so it never
+              eats the tap. role/aria + keyboard make it an accessible radio group. */}
+          <Box
+            role="radiogroup"
+            aria-label="Who can view"
             sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 1, mb: 1 }}
           >
             {GATE_OPTIONS.map(o => {
@@ -142,8 +143,18 @@ export function AccessGateEditor({
                 <Sheet
                   key={o.value}
                   variant="outlined"
+                  role="radio"
+                  aria-checked={selected}
+                  tabIndex={0}
+                  onClick={() => setKind(o.value)}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setKind(o.value);
+                    }
+                  }}
+                  data-testid={`${testIdPrefix}-${o.value}`}
                   sx={{
-                    position: 'relative',
                     flex: 1,
                     borderRadius: 'md',
                     p: 1,
@@ -153,23 +164,18 @@ export function AccessGateEditor({
                     cursor: 'pointer',
                     borderColor: selected ? 'primary.500' : 'divider',
                     bgcolor: selected ? 'primary.softBg' : 'background.surface',
+                    '&:hover': { borderColor: selected ? 'primary.500' : 'neutral.400' },
                   }}
                 >
+                  <Radio checked={selected} readOnly value={o.value} tabIndex={-1} sx={{ pointerEvents: 'none' }} />
                   {o.icon}
                   <Typography level="body-sm" sx={{ fontWeight: selected ? 600 : 400 }}>
                     {o.label}
                   </Typography>
-                  <Radio
-                    overlay
-                    value={o.value}
-                    label=""
-                    data-testid={`${testIdPrefix}-${o.value}`}
-                    sx={{ ml: 'auto' }}
-                  />
                 </Sheet>
               );
             })}
-          </RadioGroup>
+          </Box>
 
           {kind === 'passphrase' && (
             <Input

@@ -26,11 +26,9 @@ const renderEditor = (visibility = 'public', initialGate: PublishAccessGateRead 
   );
 };
 
-// jsdom Radio clicks: set the underlying input and fire change so Joy updates.
-const pickGate = (kind: string) => {
-  const radio = document.querySelector(`input[type="radio"][value="${kind}"]`) as HTMLInputElement;
-  fireEvent.click(radio);
-};
+// The whole card is the click target (the Radio inside is a pointer-events-none
+// visual), so select by clicking the option card, not the radio input.
+const pickGate = (kind: string) => fireEvent.click(screen.getByTestId(`manage-gate-${kind}`));
 
 describe('AccessGateEditor', () => {
   it('shows the needs-public hint when the artifact is not public', () => {
