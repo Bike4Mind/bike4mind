@@ -102,7 +102,7 @@ export default function PublishedArtifactsTabContent() {
   if (isError) {
     return (
       <Typography color="danger" data-testid="published-artifacts-error">
-        Failed to load your published artifacts.
+        Failed to load your Live Artifacts.
       </Typography>
     );
   }
@@ -110,11 +110,11 @@ export default function PublishedArtifactsTabContent() {
   return (
     <Box data-testid="published-artifacts-tab">
       <Typography level="title-md" sx={{ mb: 0.5 }}>
-        Published artifacts
+        Live Artifacts
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Everything you&apos;ve published. Change who can view, turn comments on or off, restore a previous version, or
-        delete.
+        Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, restore a previous
+        version, or delete.
       </Typography>
 
       {artifacts.length === 0 ? (

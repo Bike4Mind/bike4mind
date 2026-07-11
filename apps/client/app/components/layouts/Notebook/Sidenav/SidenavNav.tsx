@@ -216,10 +216,10 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     ...(gearOpen('published')
       ? [
           {
-            // Published shares are the product's lead-gen surface - surface them as a
-            // first-class destination instead of Profile -> Published (3 clicks deep).
+            // Live Artifacts (published shares) are the product's lead-gen surface -
+            // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
             key: 'published',
-            label: t('sidenav.published', 'Published'),
+            label: t('sidenav.published', 'Live Artifacts'),
             icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
             onClick: () => {

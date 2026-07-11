@@ -50,7 +50,7 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
     ctaAction: 'files',
   },
   published: {
-    title: 'Published',
+    title: 'Live Artifacts',
     tagline: 'Your work, one link',
     intro:
       'Turn any artifact into a shareable web page - public, passphrase-protected, or restricted to email domains you choose.',

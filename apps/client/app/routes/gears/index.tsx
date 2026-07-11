@@ -240,7 +240,7 @@ const GearsPage = () => {
             {renderCards(destinations)}
 
             <Typography level="title-lg" sx={{ mt: 4, mb: 1.5 }}>
-              Skills
+              Explore Features
             </Typography>
             <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
               Capabilities worth knowing about - try each once.
