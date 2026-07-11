@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { appendEvent, buildChain, foldEvents, verifyChain, type MemoryEvent, type MemoryEventInput } from './ledger';
+import {
+  appendEvent,
+  buildChain,
+  foldEvents,
+  sealEvent,
+  verifyChain,
+  type MemoryEvent,
+  type MemoryEventInput,
+} from './ledger';
 import type { Principal } from './types';
 
 const user: Principal = { kind: 'user', id: 'u1' };
@@ -31,6 +39,13 @@ describe('ledger chain', () => {
     const a = appendEvent([], ev({ sources: ['x', 'y', 'z'] }));
     const b = appendEvent([], ev({ sources: ['z', 'x', 'y'] }));
     expect(a.hash).toBe(b.hash);
+  });
+
+  it('sealEvent chains onto a given head hash identically to appendEvent', () => {
+    const genesis = appendEvent([], ev({ subject: 'a' }));
+    const next = ev({ subject: 'b', at: '2026-07-02T00:00:00.000Z' });
+    expect(sealEvent(genesis.hash, next)).toEqual(appendEvent([genesis], next));
+    expect(sealEvent(null, next)).toEqual(appendEvent([], next));
   });
 
   it('verifies an intact chain', () => {

@@ -76,10 +76,18 @@ const canonical = (e: MemoryEventInput, prevHash: string | null): string =>
 
 const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
 
-/** Seal one input onto the end of an existing chain, computing its `prevHash` and `hash`. */
-export function appendEvent(chain: readonly MemoryEvent[], input: MemoryEventInput): MemoryEvent {
-  const prevHash = chain.length ? chain[chain.length - 1].hash : null;
+/**
+ * Seal an input onto a known predecessor hash (null for the genesis event), computing its `hash`.
+ * The persistence-friendly core of the append: a store can chain onto its stored head hash without
+ * materialising the whole chain in memory.
+ */
+export function sealEvent(prevHash: string | null, input: MemoryEventInput): MemoryEvent {
   return { ...input, prevHash, hash: sha256(canonical(input, prevHash)) };
+}
+
+/** Seal one input onto the end of an in-memory chain, computing its `prevHash` and `hash`. */
+export function appendEvent(chain: readonly MemoryEvent[], input: MemoryEventInput): MemoryEvent {
+  return sealEvent(chain.length ? chain[chain.length - 1].hash : null, input);
 }
 
 /** Build a full chain from raw inputs in order. Pure: same inputs -> byte-identical chain. */

@@ -1,0 +1,65 @@
+import { baseApi } from '@server/middlewares/baseApi';
+import { memoryLedgerRepository } from '@bike4mind/database';
+import { EVIDENCE_TIERS, type EvidenceTier, type MemoryEventInput, type PrincipalKind } from '@bike4mind/memory';
+import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
+
+const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
+const EVENT_KINDS = ['assert', 'affirm', 'retract'] as const;
+type EventKind = (typeof EVENT_KINDS)[number];
+
+/**
+ * POST /api/memory/:kind/:id/events - append one event to a principal's ledger (Mementos 2.0).
+ *
+ * The write path onto the persisted, content-hash-chained ledger. Owner-scoped: for now a caller
+ * may only append to their OWN user memory (kind=user, id=your userId); appending to agent / org /
+ * system ledgers is deferred to the cross-principal witness increment. The event time is stamped by
+ * the server, not the client, so it can be trusted by the ACT-R decay and the hash chain. Beliefs
+ * are not written here - they are re-folded from the ledger on read.
+ */
+const handler = baseApi().post(async (req, res) => {
+  const ownerUserId = req.user?.id;
+  if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
+
+  const kind = String(req.query.kind);
+  const id = String(req.query.id);
+  if (!PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
+    return res
+      .status(400)
+      .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
+  }
+  if (kind !== 'user' || id !== ownerUserId) {
+    return res.status(403).json({ error: 'You can only append to your own user memory for now.' });
+  }
+
+  const body = (req.body ?? {}) as Record<string, unknown>;
+  const eventKind = body.kind;
+  if (typeof eventKind !== 'string' || !EVENT_KINDS.includes(eventKind as EventKind)) {
+    return res.status(400).json({ error: `Field 'kind' must be one of: ${EVENT_KINDS.join(', ')}.` });
+  }
+  const subject = typeof body.subject === 'string' ? body.subject.trim() : '';
+  if (!subject) return res.status(400).json({ error: "Field 'subject' is required." });
+
+  const fact = typeof body.fact === 'string' ? body.fact : undefined;
+  const evidenceTier = body.evidenceTier;
+  if (evidenceTier !== undefined && !EVIDENCE_TIERS.includes(evidenceTier as EvidenceTier)) {
+    return res.status(400).json({ error: `Field 'evidenceTier' must be one of: ${EVIDENCE_TIERS.join(', ')}.` });
+  }
+  const sources = Array.isArray(body.sources)
+    ? body.sources.filter((s): s is string => typeof s === 'string')
+    : undefined;
+
+  const eventInput: MemoryEventInput = {
+    principal: { kind: kind as PrincipalKind, id },
+    kind: eventKind as EventKind,
+    subject,
+    fact,
+    evidenceTier: evidenceTier as EvidenceTier | undefined,
+    at: new Date().toISOString(),
+    sources,
+  };
+
+  const sealed = await appendMemoryEvent(memoryLedgerRepository, ownerUserId, eventInput);
+  return res.status(201).json({ event: sealed });
+});
+
+export default handler;

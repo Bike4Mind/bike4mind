@@ -1,7 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { agentRepository, deepAgentCharterRepository, mementoRepository } from '@bike4mind/database';
+import {
+  agentRepository,
+  deepAgentCharterRepository,
+  memoryLedgerRepository,
+  mementoRepository,
+} from '@bike4mind/database';
 import { firstMatchStore, readPrincipalMemory, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
+import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 
@@ -28,10 +34,12 @@ const handler = baseApi().get(async (req, res) => {
       .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
   }
 
-  // Resolve the principal against each backend, first match wins: an agent id via the richer
-  // DeepAgent charter, then the persona-agent journal; a user id via that user's own mementos.
-  // Every store is owner-scoped.
+  // Resolve the principal against each backend, first match wins. The persisted ledger comes first,
+  // so once a principal has real events they are the source of truth; a principal with no ledger
+  // falls through to the snapshot adapters unchanged (DeepAgent charter, then persona-agent journal;
+  // a user id via that user's own mementos). Every store is owner-scoped.
   const store = firstMatchStore([
+    createLedgerMemoryStore({ ledger: memoryLedgerRepository, ownerUserId }),
     createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId }),
     createPersonaAgentMemoryStore({ agents: agentRepository, ownerUserId }),
     createUserMementoMemoryStore({ mementos: mementoRepository, ownerUserId }),
