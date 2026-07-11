@@ -14,8 +14,6 @@ import {
   FormControl,
   FormLabel,
   Switch,
-  Chip,
-  Textarea,
 } from '@mui/joy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
@@ -24,13 +22,11 @@ import LinkIcon from '@mui/icons-material/Link';
 import KeyIcon from '@mui/icons-material/Key';
 import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
-import CodeIcon from '@mui/icons-material/Code';
-import CloseIcon from '@mui/icons-material/Close';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
-import { parseEmbedOrigin, EMBED_ORIGINS_MAX } from '@bike4mind/common';
 import { ShareActions } from './ShareActions';
+import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import {
   toShareUrl,
   toShareTokenUrl,
@@ -40,7 +36,6 @@ import {
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
   updatePublishedAccessGate,
-  updatePublishedEmbedOrigins,
   getPublishedEmbedState,
   type PublishAccessGateInput,
   type PublishMode,
@@ -186,12 +181,8 @@ export function PublishShareModal({
   const [gatePassphrase, setGatePassphrase] = useState('');
   const [gateDomainsText, setGateDomainsText] = useState('');
   const [gateTouched, setGateTouched] = useState(false);
-  // Embed allowlist (open-public only): external https origins allowed to frame
-  // this artifact. Seeded from the live record once the shared phase opens; the
-  // section hides while a gate is live (`embedGated`).
-  const [embedOrigins, setEmbedOrigins] = useState<string[]>([]);
-  const [embedInput, setEmbedInput] = useState('');
-  const [embedBusy, setEmbedBusy] = useState(false);
+  // Whether a gate is live on the published item - drives whether the embed
+  // editor is offered (embedding is open-public only). Seeded from the record.
   const [embedGated, setEmbedGated] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
@@ -209,21 +200,18 @@ export function PublishShareModal({
       setGatePassphrase('');
       setGateDomainsText('');
       setGateTouched(false);
-      setEmbedOrigins([]);
-      setEmbedInput('');
-      setEmbedBusy(false);
       setEmbedGated(false);
     }
   }, [open, defaultVisibility]);
 
-  // Seed the embed allowlist from the live record once we have a published item.
+  // Seed whether a gate is live once we have a published item (the embed editor
+  // seeds its own origin list).
   useEffect(() => {
     if (!open || !result?.publicId) return;
     let active = true;
     void getPublishedEmbedState(result.publicId)
       .then(state => {
         if (!active) return;
-        setEmbedOrigins(state.embedOrigins);
         setEmbedGated(state.gated);
       })
       .catch(() => {
@@ -464,49 +452,6 @@ export function PublishShareModal({
     setGateKind(next);
     setGateTouched(true);
   };
-
-  // Embed allowlist: persist each add/remove to the live item. Optimistic with
-  // rollback so the chip list stays in sync if the server rejects (e.g. a gate is on).
-  const persistEmbedOrigins = async (next: string[], successMsg: string) => {
-    if (!result || embedBusy) return;
-    const prev = embedOrigins;
-    setEmbedOrigins(next);
-    setEmbedBusy(true);
-    try {
-      await updatePublishedEmbedOrigins(result.publicId, next);
-      toast.success(successMsg);
-    } catch (err) {
-      setEmbedOrigins(prev);
-      toast.error(errorMessage(err));
-    } finally {
-      setEmbedBusy(false);
-    }
-  };
-  const onAddEmbedOrigin = () => {
-    const parsed = parseEmbedOrigin(embedInput);
-    if (!parsed) {
-      toast.error('Enter a full https origin, e.g. https://example.com');
-      return;
-    }
-    if (embedOrigins.includes(parsed)) {
-      setEmbedInput('');
-      return;
-    }
-    if (embedOrigins.length >= EMBED_ORIGINS_MAX) {
-      toast.error(`Up to ${EMBED_ORIGINS_MAX} sites can embed one artifact`);
-      return;
-    }
-    setEmbedInput('');
-    void persistEmbedOrigins([...embedOrigins, parsed], `${parsed} can now embed this`);
-  };
-  const onRemoveEmbedOrigin = (origin: string) =>
-    void persistEmbedOrigins(
-      embedOrigins.filter(o => o !== origin),
-      'Embed permission removed'
-    );
-  // Copy-paste snippet for the embedder's site. Title is escaped for the attribute
-  // (it is copied as literal text, but a stray quote would break the tag).
-  const embedSnippet = `<iframe src="${url}?embed=1" width="100%" height="600" style="border:0" loading="lazy" title="${title.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe>`;
 
   return (
     <Modal open={open} onClose={onClose}>
@@ -832,98 +777,9 @@ export function PublishShareModal({
               )}
             </Box>
 
-            {isPublic && !embedGated && (
-              <Box
-                sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}
-                data-testid="publish-share-embed-section"
-              >
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-                  <CodeIcon fontSize="small" />
-                  <FormLabel sx={{ mb: 0 }}>Embed on your site</FormLabel>
-                </Box>
-                <Typography level="body-xs" sx={{ opacity: 0.75, mb: 1 }}>
-                  Allow specific sites to frame this artifact. Add the exact origin (up to {EMBED_ORIGINS_MAX}) where
-                  you&apos;ll paste the embed code.
-                </Typography>
-                <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-                  <Input
-                    value={embedInput}
-                    placeholder="https://example.com"
-                    onChange={e => setEmbedInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        onAddEmbedOrigin();
-                      }
-                    }}
-                    disabled={embedBusy || embedOrigins.length >= EMBED_ORIGINS_MAX}
-                    slotProps={{ input: { 'data-testid': 'publish-share-embed-input', autoComplete: 'off' } }}
-                    sx={{ flex: 1, fontFamily: 'monospace', fontSize: '13px' }}
-                  />
-                  <Button
-                    size="sm"
-                    variant="outlined"
-                    color="neutral"
-                    loading={embedBusy}
-                    disabled={embedOrigins.length >= EMBED_ORIGINS_MAX}
-                    onClick={() => onAddEmbedOrigin()}
-                    data-testid="publish-share-embed-add"
-                  >
-                    Allow
-                  </Button>
-                </Box>
-                {embedOrigins.length > 0 && (
-                  <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75, mb: 1 }}>
-                    {embedOrigins.map(origin => (
-                      <Chip
-                        key={origin}
-                        variant="soft"
-                        color="neutral"
-                        data-testid={`publish-share-embed-chip-${origin}`}
-                        endDecorator={
-                          <IconButton
-                            size="sm"
-                            variant="plain"
-                            color="neutral"
-                            disabled={embedBusy}
-                            onClick={() => onRemoveEmbedOrigin(origin)}
-                            data-testid={`publish-share-embed-remove-${origin}`}
-                          >
-                            <CloseIcon sx={{ fontSize: 14 }} />
-                          </IconButton>
-                        }
-                      >
-                        {origin}
-                      </Chip>
-                    ))}
-                  </Box>
-                )}
-                {embedOrigins.length > 0 && (
-                  <>
-                    <Typography level="body-xs" sx={{ opacity: 0.75, mb: 0.5 }}>
-                      Paste this where you want the artifact to appear:
-                    </Typography>
-                    <Box sx={{ display: 'flex', gap: 1 }}>
-                      <Textarea
-                        value={embedSnippet}
-                        readOnly
-                        minRows={2}
-                        slotProps={{ textarea: { 'data-testid': 'publish-share-embed-snippet' } }}
-                        sx={{ flex: 1, fontFamily: 'monospace', fontSize: '12px' }}
-                      />
-                      <Tooltip title="Copy embed code">
-                        <IconButton
-                          variant="outlined"
-                          color="neutral"
-                          onClick={() => void copyToClipboard(embedSnippet)}
-                          data-testid="publish-share-embed-copy"
-                        >
-                          <CodeIcon />
-                        </IconButton>
-                      </Tooltip>
-                    </Box>
-                  </>
-                )}
+            {result && isPublic && !embedGated && (
+              <Box sx={{ mt: 2, pt: 2, borderTop: '1px solid', borderColor: 'divider' }}>
+                <EmbedAllowlistEditor publicId={result.publicId} shareUrl={url} title={title} isOpenPublic />
               </Box>
             )}
           </>

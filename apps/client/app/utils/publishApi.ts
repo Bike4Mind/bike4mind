@@ -219,6 +219,28 @@ export async function getPublishedEmbedState(publicId: string): Promise<{ embedO
   return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
 }
 
+/** Read shape of a live access gate (the passphrase hash is stripped server-side). */
+export type PublishAccessGateRead = { kind: 'passphrase' } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/** Everything the per-artifact manage panel needs to seed its editors (owner/admin). */
+export interface PublishedManageState {
+  visibility: PublishVisibility;
+  accessGate: PublishAccessGateRead;
+  embedOrigins: string[];
+  commentPolicy: CommentPolicy;
+}
+
+export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
+  const { data } = await api.get<{ artifact?: Partial<PublishedManageState> }>(`/api/publish/artifacts/${publicId}`);
+  const a = data.artifact ?? {};
+  return {
+    visibility: a.visibility ?? 'private',
+    accessGate: a.accessGate ?? null,
+    embedOrigins: a.embedOrigins ?? [],
+    commentPolicy: a.commentPolicy ?? 'none',
+  };
+}
+
 /**
  * Restore a published bundle to its immediately-previous version (owner/admin).
  * Returns the new version's sha. Only works when a previous version was archived
