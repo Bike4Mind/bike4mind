@@ -50,6 +50,15 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
   sources: string[];
   hash: string;
   prevHash: string | null;
+  // --- crypto-shred (see @bike4mind/memory): the chain hashes over `commitment`, not the fact, so
+  //     the plaintext `fact` can be removed to honor deletion while the chain still verifies.
+  //     Optional so events written before this format read back cleanly. ---
+  /** Per-event salt binding the fact into its commitment; not secret. */
+  salt?: string;
+  /** Salted hash of the fact; what the chain hash actually binds to. */
+  commitment?: string;
+  /** True once the plaintext fact has been shredded. */
+  shredded?: boolean;
 }
 
 interface IMemoryLedgerEventModel extends Model<IMemoryLedgerEvent> {}
@@ -69,6 +78,9 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
     sources: { type: [String], default: [] },
     hash: { type: String, required: true },
     prevHash: { type: String, default: null },
+    salt: { type: String },
+    commitment: { type: String },
+    shredded: { type: Boolean },
   },
   { timestamps: true }
 );

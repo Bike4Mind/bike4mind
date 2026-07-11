@@ -3,7 +3,9 @@ import {
   appendEvent,
   buildChain,
   foldEvents,
+  REDACTED_FACT,
   sealEvent,
+  shredEvent,
   verifyChain,
   type MemoryEvent,
   type MemoryEventInput,
@@ -12,11 +14,13 @@ import type { Principal } from './types';
 
 const user: Principal = { kind: 'user', id: 'u1' };
 
+// A fixed salt so sealing is reproducible in tests; production mints a random salt per event.
 const ev = (over: Partial<MemoryEventInput>): MemoryEventInput => ({
   principal: user,
   kind: 'assert',
   subject: 's',
   at: '2026-07-01T00:00:00.000Z',
+  salt: 'test-salt',
   ...over,
 });
 
@@ -64,6 +68,40 @@ describe('ledger chain', () => {
     const chain = buildChain([ev({ subject: 'a' }), ev({ subject: 'b' }), ev({ subject: 'c' })]);
     const withHole = [chain[0], chain[2]]; // drop the middle event
     expect(verifyChain(withHole)).toEqual({ ok: false, brokenAt: 1 });
+  });
+});
+
+describe('crypto-shred safety', () => {
+  it('the chain still verifies after a fact is shredded (hash binds the commitment, not the fact)', () => {
+    const chain = buildChain([
+      ev({ subject: 'a', fact: 'keep me' }),
+      ev({ subject: 'b', fact: 'delete me' }),
+      ev({ subject: 'c', fact: 'keep me too' }),
+    ]);
+    const shredded: MemoryEvent[] = [...chain];
+    shredded[1] = shredEvent(shredded[1]);
+    expect(shredded[1].fact).toBeUndefined();
+    expect(shredded[1].shredded).toBe(true);
+    expect(verifyChain(shredded)).toEqual({ ok: true, brokenAt: -1 });
+  });
+
+  it('a shredded belief folds to a redaction, keeping its structure and provenance', () => {
+    const chain = buildChain([
+      ev({ subject: 'secret', fact: 'my SSN is 123', at: '2026-07-01T00:00:00.000Z' }),
+      ev({ subject: 'secret', kind: 'affirm', at: '2026-07-02T00:00:00.000Z' }),
+    ]);
+    const shredded = [shredEvent(chain[0]), chain[1]];
+    const [belief] = foldEvents(shredded);
+    expect(belief.fact).toBe(REDACTED_FACT);
+    expect(belief.shredded).toBe(true);
+    expect(belief.derivedFrom).toHaveLength(2); // the assert + affirm event hashes survive
+  });
+
+  it('the commitment does not reveal the fact and is salted (equal facts differ across events)', () => {
+    const a = sealEvent(null, ev({ subject: 'x', fact: 'same', salt: 's1' }));
+    const b = sealEvent(null, ev({ subject: 'x', fact: 'same', salt: 's2' }));
+    expect(a.commitment).not.toContain('same');
+    expect(a.commitment).not.toBe(b.commitment);
   });
 });
 

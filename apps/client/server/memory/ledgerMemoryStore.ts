@@ -64,6 +64,8 @@ export async function appendMemoryEvent(
       sources: sealed.sources ?? [],
       hash: sealed.hash,
       prevHash: sealed.prevHash,
+      salt: sealed.salt,
+      commitment: sealed.commitment,
     });
     if (stored) return sealed;
   }
@@ -83,6 +85,10 @@ function toMemoryEvent(d: IMemoryLedgerEvent): MemoryEvent {
     sources: d.sources,
     hash: d.hash,
     prevHash: d.prevHash,
+    // Shred-safe fields; empty for events written before this format (they fold on `fact` as before).
+    salt: d.salt ?? '',
+    commitment: d.commitment ?? '',
+    shredded: d.shredded,
   };
 }
 

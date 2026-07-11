@@ -51,6 +51,8 @@ export interface Belief {
    * only on ledger-folded beliefs; `salience` is its thresholded tier.
    */
   activation?: number;
+  /** True when the belief's source fact has been shredded; `fact` is a redaction placeholder. */
+  shredded?: boolean;
   derivedFrom: string[];
   /** ISO-8601. */
   lastAffirmedAt: string;

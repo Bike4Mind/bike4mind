@@ -17,7 +17,7 @@
  * This module is pure and side-effect-free; persistence and write policy live in the host.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { activationToSalience, baseLevelActivation, DEFAULT_ACTIVATION, type ActivationConfig } from './activation';
 import { EVIDENCE_TIERS, type Belief, type EvidenceTier, type Principal } from './types';
 
@@ -31,13 +31,16 @@ import { EVIDENCE_TIERS, type Belief, type EvidenceTier, type Principal } from '
  */
 export type MemoryEventKind = 'assert' | 'affirm' | 'retract';
 
+/** Placeholder shown for a fact that has been shredded (its plaintext removed). */
+export const REDACTED_FACT = '[shredded]';
+
 /** The semantic payload of an event, before it is chained and content-addressed. */
 export interface MemoryEventInput {
   principal: Principal;
   kind: MemoryEventKind;
   /** Stable identity of the claim; groups assert/affirm/retract for one belief across the ledger. */
   subject: string;
-  /** The claim text. Expected on `assert`; carried for context on the others. */
+  /** The claim text - the shreddable payload. Expected on `assert`; carried for context otherwise. */
   fact?: string;
   evidenceTier?: EvidenceTier;
   salience?: 'hot' | 'warm' | 'cold';
@@ -45,28 +48,51 @@ export interface MemoryEventInput {
   at: string;
   /** Free-form provenance ids (session, quest, episode, ...); order-insensitive. */
   sources?: string[];
+  /**
+   * Per-event random salt binding the fact into its `commitment`. Generated at seal time when
+   * omitted; accept it here only to make sealing reproducible in tests. Not secret.
+   */
+  salt?: string;
 }
 
-/** A sealed ledger event: its input, chained to a predecessor and content-addressed by `hash`. */
+/**
+ * A sealed ledger event, chained to a predecessor and content-addressed by `hash`.
+ *
+ * Shred-safety: the chain hashes over `commitment` (a salted hash of the fact), NOT the fact itself.
+ * So the plaintext `fact` can be removed later - by dropping it, or in production by destroying its
+ * encryption key - and the chain still VERIFIES (the commitment persists) while the content becomes
+ * unreadable. This is what lets a principal's memory honor deletion without breaking the append-only
+ * tamper-evident log.
+ */
 export interface MemoryEvent extends MemoryEventInput {
+  salt: string;
+  /** Salted hash of the fact; this (not the fact) is what the chain hash binds to. */
+  commitment: string;
+  /** True once the plaintext `fact` has been shredded; the commitment and chain stay intact. */
+  shredded?: boolean;
   /** sha256 hex of this event's canonical form (which folds in `prevHash`); doubles as its id. */
   hash: string;
   /** `hash` of the previous event in this principal's chain; null for the genesis event. */
   prevHash: string | null;
 }
 
+const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
+
+/** Salted commitment to the fact - binds the (shreddable) plaintext into the chain via a hash. */
+const commit = (salt: string, fact?: string): string => sha256(`${salt} ${JSON.stringify(fact ?? null)}`);
+
 /**
- * Canonical form used for hashing. An ARRAY (not an object) so field order is fixed by construction
- * and never depends on key iteration order. `sources` is sorted so provenance order does not change
- * identity. Everything that defines the event semantically is included; nothing else is.
+ * Canonical form used for the chain hash. An ARRAY (not an object) so field order is fixed by
+ * construction. `commitment` stands in for the fact, so the hash survives shredding; `sources` is
+ * sorted so provenance order does not change identity.
  */
-const canonical = (e: MemoryEventInput, prevHash: string | null): string =>
+const chainCanonical = (e: MemoryEventInput, commitment: string, prevHash: string | null): string =>
   JSON.stringify([
     e.principal.kind,
     e.principal.id,
     e.kind,
     e.subject,
-    e.fact ?? null,
+    commitment,
     e.evidenceTier ?? null,
     e.salience ?? null,
     e.at,
@@ -74,15 +100,31 @@ const canonical = (e: MemoryEventInput, prevHash: string | null): string =>
     prevHash,
   ]);
 
-const sha256 = (s: string): string => createHash('sha256').update(s).digest('hex');
-
 /**
- * Seal an input onto a known predecessor hash (null for the genesis event), computing its `hash`.
- * The persistence-friendly core of the append: a store can chain onto its stored head hash without
- * materialising the whole chain in memory.
+ * Seal an input onto a known predecessor hash (null for the genesis event): mint a salt, commit the
+ * fact, and hash over the commitment. The persistence-friendly core of the append - a store can
+ * chain onto its stored head hash without materialising the whole chain in memory.
  */
 export function sealEvent(prevHash: string | null, input: MemoryEventInput): MemoryEvent {
-  return { ...input, prevHash, hash: sha256(canonical(input, prevHash)) };
+  const salt = input.salt ?? randomBytes(16).toString('hex');
+  const commitment = commit(salt, input.fact);
+  return {
+    ...input,
+    salt,
+    commitment,
+    prevHash,
+    hash: sha256(chainCanonical(input, commitment, prevHash)),
+  };
+}
+
+/**
+ * Shred an event's plaintext: remove `fact` while keeping the salt, commitment, hash, and links. The
+ * chain still verifies afterwards and the fold redacts the belief. In production the same effect
+ * comes from destroying the fact's encryption key; this models it for a plaintext ledger.
+ */
+export function shredEvent(event: MemoryEvent): MemoryEvent {
+  const { fact: _fact, ...rest } = event;
+  return { ...rest, shredded: true };
 }
 
 /** Seal one input onto the end of an in-memory chain, computing its `prevHash` and `hash`. */
@@ -103,13 +145,21 @@ export interface ChainVerification {
   brokenAt: number;
 }
 
-/** Recompute the chain and confirm every link and content hash. O(n), pure. */
+/**
+ * Recompute the chain and confirm every link and hash. Keyless and shred-safe: it hashes over the
+ * stored `commitment`, so it passes on shredded events too (the fact is gone but the commitment
+ * remains). While a fact IS present, it also checks the fact still matches its commitment, so a
+ * tampered plaintext is caught; a shredded event skips that check (nothing to recompute). O(n), pure.
+ */
 export function verifyChain(chain: readonly MemoryEvent[]): ChainVerification {
   let prevHash: string | null = null;
   for (let i = 0; i < chain.length; i++) {
     const e = chain[i];
     if (e.prevHash !== prevHash) return { ok: false, brokenAt: i };
-    if (e.hash !== sha256(canonical(e, prevHash))) return { ok: false, brokenAt: i };
+    if (e.hash !== sha256(chainCanonical(e, e.commitment, prevHash))) return { ok: false, brokenAt: i };
+    if (!e.shredded && e.fact !== undefined && e.commitment !== commit(e.salt, e.fact)) {
+      return { ok: false, brokenAt: i };
+    }
     prevHash = e.hash;
   }
   return { ok: true, brokenAt: -1 };
@@ -162,7 +212,8 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
       presentations.set(e.subject, [Date.parse(e.at)]);
       bySubject.set(e.subject, {
         id: e.subject,
-        fact: e.fact ?? existing?.fact ?? e.subject,
+        fact: e.shredded ? REDACTED_FACT : (e.fact ?? existing?.fact ?? e.subject),
+        ...(e.shredded ? { shredded: true } : {}),
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
         derivedFrom: [e.hash],
