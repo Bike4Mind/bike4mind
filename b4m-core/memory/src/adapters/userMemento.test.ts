@@ -30,11 +30,12 @@ describe('userMementosToProfile', () => {
       fact: 'Erik lives in Austin.',
       evidenceTier: 'engineering-proxy',
       confidence: 0.9,
+      salience: 'hot',
       derivedFrom: ['s1'],
       lastAffirmedAt: '2026-07-10T00:00:00.000Z',
     });
     // warm -> 0.6; sessionId null so provenance falls back to questId
-    expect(p.beliefs[1]).toMatchObject({ confidence: 0.6, derivedFrom: ['q9'] });
+    expect(p.beliefs[1]).toMatchObject({ confidence: 0.6, salience: 'warm', derivedFrom: ['q9'] });
   });
 
   it('falls back to weight for confidence when tier is absent', () => {

@@ -38,6 +38,13 @@ export interface Belief {
   evidenceTier: EvidenceTier;
   /** 0..1 */
   confidence: number;
+  /**
+   * Source salience/heat tier, a distinct axis from `evidenceTier` (confidence-in-the-claim):
+   * how top-of-mind the memory is. User mementos carry hot/warm/cold; DeepAgent/persona sources
+   * leave it undefined for now. This is the seed of the ACT-R activation tier step 5 computes for
+   * every belief.
+   */
+  salience?: 'hot' | 'warm' | 'cold';
   derivedFrom: string[];
   /** ISO-8601. */
   lastAffirmedAt: string;

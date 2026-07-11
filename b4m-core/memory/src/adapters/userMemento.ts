@@ -21,6 +21,8 @@ const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
 const toIso = (d: Date | string): string => (typeof d === 'string' ? d : d.toISOString());
 const tierConfidence = (tier?: string, weight?: number): number =>
   tier === 'hot' ? 0.9 : tier === 'warm' ? 0.6 : tier === 'cold' ? 0.3 : clamp01(weight ?? 0.5);
+const asSalience = (tier?: string): 'hot' | 'warm' | 'cold' | undefined =>
+  tier === 'hot' || tier === 'warm' || tier === 'cold' ? tier : undefined;
 
 /**
  * Fold a user's mementos into the principal-scoped MemoryProfile (principal kind 'user'). Lossy:
@@ -38,6 +40,7 @@ export function userMementosToProfile(userId: string, mementos: UserMementoLike[
         fact: m.summary,
         evidenceTier: 'engineering-proxy',
         confidence: tierConfidence(m.tier, m.weight),
+        salience: asSalience(m.tier),
         derivedFrom: m.sessionId ? [m.sessionId] : m.questId ? [m.questId] : [],
         lastAffirmedAt: toIso(m.lastAccessedAt),
       })),
