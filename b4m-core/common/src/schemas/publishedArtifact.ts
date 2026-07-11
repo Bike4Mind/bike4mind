@@ -168,6 +168,74 @@ export const ALLOWED_MIME_EXACT: readonly string[] = [
   'application/octet-stream',
 ];
 
+// --- Embed allowlist (publisher-controlled external framing) ---
+
+/**
+ * Exact external origins a publisher permits to embed this artifact in an iframe
+ * (frame-ancestors grants). Publication-level, not version-level: the grant
+ * follows the publicId across revisions and restores. Empty/absent means the
+ * default posture (app host only). Only meaningful for OPEN-public artifacts
+ * (public visibility AND no access gate) - a gated artifact framed cross-origin
+ * cannot authenticate, so the serve route restricts emission accordingly.
+ */
+export const EMBED_ORIGINS_MAX = 5;
+
+/**
+ * Parse and normalize one embed origin. Format-only (host-agnostic): the
+ * "not under the app or usercontent host" check needs the runtime host and lives
+ * server-side. Returns the normalized `https://host[:port]` origin, or null if it
+ * is not an exact https origin (no path/query/fragment/userinfo, no wildcard, no
+ * IP literal, a real dotted host with a non-numeric TLD).
+ */
+export function parseEmbedOrigin(raw: string): string | null {
+  const trimmed = raw.trim().toLowerCase();
+  if (!trimmed) return null;
+  let url: URL;
+  try {
+    url = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:') return null; // no mixed-content embed grants
+  if (url.username || url.password) return null; // no userinfo
+  if (url.search || url.hash) return null; // origin only
+  if (url.pathname !== '/' && url.pathname !== '') return null; // no path
+  const host = url.hostname;
+  if (host.includes('*')) return null; // no wildcards
+  if (host.startsWith('[')) return null; // no bracketed IPv6
+  if (/^\d+(\.\d+){3}$/.test(host)) return null; // no IPv4 literal
+  const labels = host.split('.');
+  if (labels.length < 2) return null; // must be a real dotted host, not a bare label
+  const tld = labels[labels.length - 1];
+  if (!/[a-z]/.test(tld)) return null; // TLD must contain a letter (rejects numeric last label)
+  // Reconstruct from parsed parts so the returned value is canonical.
+  return url.port ? `https://${host}:${url.port}` : `https://${host}`;
+}
+
+/** True when `origin`'s host equals `host` or is a subdomain of it. Used server-side
+ *  to reject grants that fall under the app or usercontent domain (which would
+ *  re-open bundle-on-bundle framing through the "external" path). */
+export function isOriginUnderHost(origin: string, host: string): boolean {
+  const h = host.trim().toLowerCase().replace(/^https?:\/\//, '');
+  let originHost: string;
+  try {
+    originHost = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
+  return originHost === h || originHost.endsWith(`.${h}`);
+}
+
+/** Field schema: an array of pre-normalized exact https origins, deduped, capped.
+ *  The authoritative host-exclusion check is applied server-side at write time. */
+export const EmbedOriginsSchema = z
+  .array(z.string())
+  .max(EMBED_ORIGINS_MAX)
+  .transform(list => [...new Set(list.map(o => o.toLowerCase()))])
+  .refine(list => list.every(o => parseEmbedOrigin(o) === o), {
+    message: 'each embed origin must be an exact, normalized https origin',
+  });
+
 // ─── Moderation (abuse reporting + takedown) ───────────────────────
 
 /**
@@ -240,6 +308,10 @@ export const PublishedArtifactSchema = z.object({
   /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
    *  `visibility`. Defaults to `none` (read-only) until the owner opts in. */
   commentPolicy: CommentPolicySchema.prefault('none'),
+
+  /** Exact external origins permitted to embed this artifact (frame-ancestors
+   *  grants). Publication-level; empty/absent means app host only. */
+  embedOrigins: z.array(z.string()).max(EMBED_ORIGINS_MAX).optional(),
 
   ownerId: z.string(),
   lastPublishedBy: z.string().optional(),
@@ -319,6 +391,8 @@ export const UploadUrlRequestSchema = z.object({
   gatedToGroupId: z.string().optional(),
   /** Who may annotate the published artifact. Defaults to `none` (read-only). */
   commentPolicy: CommentPolicySchema.optional(),
+  /** Origins allowed to embed this artifact (validated + host-excluded server-side). */
+  embedOrigins: EmbedOriginsSchema.optional(),
   source: PublishSourceSchema.optional(),
   files: z.array(FileDescriptorSchema).min(1).max(PUBLISH_LIMITS.maxFiles),
 });
