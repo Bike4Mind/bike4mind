@@ -20,7 +20,7 @@ import { toast } from 'sonner';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
- * Manage Gears — the ops override surface for the Gears progression system
+ * Manage Gears - the ops override surface for the Gears progression system
  * (same defaults+overrides pattern as System Prompts). Everything shipped in
  * code is the default; an admin edit here comes over the top LIVE, no deploy:
  * kill a runaway reward (enabled off / credits 0), reword a card, or repoint
@@ -78,7 +78,7 @@ const ManageGearsTab = () => {
     queryKey: ['admin', 'gears'],
     queryFn: async () => (await api.get<{ gears: AdminGear[] }>('/api/admin/gears')).data,
   });
-  // Row being edited (one at a time keeps the table calm) + its draft values.
+  // Row being edited (one at a time) + its draft values.
   const [editingKey, setEditingKey] = useState<string | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [busy, setBusy] = useState(false);
@@ -109,7 +109,7 @@ const ManageGearsTab = () => {
     setBusy(true);
     try {
       // Sparse patch: only ship fields that differ from the code default, and
-      // null out fields returned to it — keeps the override row honest about
+      // null out fields returned to it - keeps the override row honest about
       // what the admin actually changed.
       const d = g.defaults;
       await api.put('/api/admin/gears', {
@@ -122,7 +122,7 @@ const ManageGearsTab = () => {
         cta: draft.cta === d.cta ? null : draft.cta,
         ctaAction: draft.ctaAction === d.ctaAction ? null : draft.ctaAction,
       });
-      toast.success(`Saved override for "${g.key}" — live now`);
+      toast.success(`Saved override for "${g.key}" - live now`);
       setEditingKey(null);
       setDraft(null);
       await refresh();
@@ -156,11 +156,11 @@ const ManageGearsTab = () => {
         Manage Gears
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Code ships the defaults; anything you save here overrides them live — no deploy. Kill a runaway reward by
+        Code ships the defaults; anything you save here overrides them live - no deploy. Kill a runaway reward by
         disabling a gear or setting its credits to 0.
       </Typography>
       {isPending ? (
-        <Typography level="body-sm">Loading gears…</Typography>
+        <Typography level="body-sm">Loading gears...</Typography>
       ) : (
         <Sheet variant="outlined" sx={{ borderRadius: 'sm', overflow: 'auto' }}>
           <Table size="sm" stickyHeader sx={{ minWidth: 900, '& td': { verticalAlign: 'top' } }}>
@@ -169,8 +169,8 @@ const ManageGearsTab = () => {
                 <th style={{ width: 140 }}>Gear</th>
                 <th style={{ width: 70 }}>On</th>
                 <th style={{ width: 90 }}>Credits</th>
-                <th>Copy (title · tagline · intro)</th>
-                <th style={{ width: 220 }}>CTA (label · action)</th>
+                <th>Copy (title / tagline / intro)</th>
+                <th style={{ width: 220 }}>CTA (label / action)</th>
                 <th style={{ width: 110 }} aria-label="actions" />
               </tr>
             </thead>
@@ -246,7 +246,7 @@ const ManageGearsTab = () => {
                       ) : (
                         <Stack gap={0.25}>
                           <Typography level="body-sm">
-                            <b>{e.title}</b> · {e.tagline}
+                            <b>{e.title}</b> / {e.tagline}
                           </Typography>
                           <Typography level="body-xs" sx={{ opacity: 0.7 }}>
                             {e.intro}
@@ -267,7 +267,7 @@ const ManageGearsTab = () => {
                             size="sm"
                             value={draft.ctaAction}
                             onChange={ev => setDraft({ ...draft, ctaAction: ev.target.value })}
-                            placeholder="navigate:/path | external:https://… | files"
+                            placeholder="navigate:/path | external:https://... | files"
                             sx={{ fontFamily: 'monospace' }}
                           />
                         </Stack>
@@ -283,7 +283,7 @@ const ManageGearsTab = () => {
                     <td>
                       {isEditing ? (
                         <Stack direction="row" gap={0.5}>
-                          <Tooltip title="Save — takes effect immediately">
+                          <Tooltip title="Save - takes effect immediately">
                             <IconButton
                               size="sm"
                               color="primary"

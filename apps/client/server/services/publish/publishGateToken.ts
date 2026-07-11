@@ -3,18 +3,17 @@ import { z } from 'zod';
 import type { Request, Response } from 'express';
 import { Config } from '@server/utils/config';
 
-// Publish access-gate proof token (issue #383, passphrase mode).
+// Publish access-gate proof token (passphrase mode).
 //
-// When a viewer presents the correct passphrase for a gated published artifact,
-// POST /api/publish/gate/passphrase mints this short-lived signed JWT and sets it
-// as an HttpOnly cookie scoped to that ONE artifact. The serve route verifies the
-// cookie on every subsequent request and passes `passphraseVerified` into
-// checkVisibility. The proof — not the passphrase — is what travels on requests,
-// so the passphrase itself is never stored client-side.
+// On correct passphrase, POST /api/publish/gate/passphrase mints this short-lived
+// signed JWT as an HttpOnly cookie scoped to that ONE artifact; the serve route
+// verifies it and passes `passphraseVerified` into checkVisibility. The proof -
+// not the passphrase - is what travels on requests, so the passphrase itself is
+// never stored client-side.
 //
 // Audience-scoping (same pattern as voiceSessionToken): a leaked proof token can't
 // be replayed against any other JWT-accepting route, and the embedded publicId
-// pins it to a single artifact — a proof for artifact A grants nothing on B.
+// pins it to a single artifact - a proof for artifact A grants nothing on B.
 const GATE_TOKEN_AUDIENCE = 'publish-passphrase-gate';
 
 /** 2h: long enough to read/share around a meeting, short enough that rotating
@@ -44,7 +43,7 @@ export function signGateToken(claims: GateTokenClaims): string {
   });
 }
 
-/** Verify a proof token; returns claims or null (never throws — an invalid or
+/** Verify a proof token; returns claims or null (never throws - an invalid or
  *  expired proof simply means "not verified" and the viewer re-prompts). */
 export function verifyGateToken(token: string): GateTokenClaims | null {
   try {

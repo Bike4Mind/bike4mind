@@ -146,9 +146,8 @@ const SHARE_NOINDEX_META =
   '<meta name="robots" content="noindex,nofollow">\n<meta name="referrer" content="no-referrer">';
 
 const handler = baseApi({ auth: false }).get(async (req: Request, res: Response) => {
-  // Optional-auth shims: a valid Authorization: Bearer JWT (optionalJwtShim) or
-  // X-API-Key (optionalAuthShim) populates req.user; neither present passes through
-  // anonymously; an INVALID X-API-Key short-circuits with 401 inside apiKeyAuth.
+  // Optional-auth shims populate req.user from a Bearer JWT or X-API-Key; anonymous
+  // passes through. An INVALID X-API-Key short-circuits with 401 inside apiKeyAuth.
   await runShim(optionalJwtShim, req, res);
   if (res.headersSent) return;
   await runShim(optionalAuthShim, req, res);
@@ -190,7 +189,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // 401/403s and NEVER falls back to the shell (that would loop the loader). Honored for
   // share links too: the gate runs FIRST on every request (raw included), so a raw
   // re-fetch returns only content the caller is already authorized for and never widens
-  // a token link's surface — this is what lets a DOMAIN-gated /a/<token> link recover via
+  // a token link's surface - this is what lets a DOMAIN-gated /a/<token> link recover via
   // the loader shell (the shell re-fetches ?raw=1 with the viewer's Bearer).
   const isRaw = req.query.raw === '1';
   // `?format=raw` is the PUBLIC plain-text alternate advertised via `<link rel="alternate">`
@@ -232,14 +231,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // A `public` artifact with an access gate must NOT serve like open-public:
   // no CDN caching, no isolated public origin, and bundles inline their assets
   // (the opaque-origin iframe can't carry the proof cookie on subresource
-  // fetches). One substitution point keeps every downstream decision honest.
+  // fetches).
   // Share links have their own always-no-store policy and are handled by kind.
   const isOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
 
   // The isolated `/uc` origin is an OPEN-public-only surface (a distinct SOP
   // partition with no /api routes and an app-host-scoped proof cookie). If an
   // artifact was embedded open-public and later GAINED a gate, existing /uc
-  // embeds/bookmarks must NOT try to serve the gate here — the passphrase shell
+  // embeds/bookmarks must NOT try to serve the gate here - the passphrase shell
   // would render on *.usercontent where its POST 404s and the proof cookie is
   // scoped to the wrong host (infinite re-prompt). 404 instead, so the embed
   // fails cleanly and the viewer uses the canonical /p URL (which gates properly).
@@ -259,7 +258,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // and passed in as an established fact, never the raw cookie.
   const passphraseVerified = artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId);
   // Normalize accessGate to explicit null (a lean read of a pre-gate doc may omit
-  // it) — VisibilityCheckArtifact now REQUIRES the field so a missing projection
+  // it) - VisibilityCheckArtifact now REQUIRES the field so a missing projection
   // can't silently bypass the gate.
   const gateArtifact = { ...artifact, accessGate: artifact.accessGate ?? null };
   const access = isShare
@@ -336,7 +335,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('Referrer-Policy', 'no-referrer');
   }
 
-  // ── Reply / fabfile: render the snapshot body to a sanitized viewer page. ──
+  // -- Reply / fabfile: render the snapshot body to a sanitized viewer page. --
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
     if (isFormatRaw) {
       if (!isOpenPublic) {
@@ -380,7 +379,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(404).json({ error: 'Not found' });
   }
 
-  // ── Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. ──
+  // -- Bundle: serve HTML (asset rewrite + inline-script strip) or stream an asset. --
   const storage = getPublishedArtifactsStorage();
 
   // Asset sub-path for a bundle, whether reached via `/p/...` or a `/a/<token>/...`
@@ -540,7 +539,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
   const artifactHost = !isShare && isOpenPublic ? usercontentHostFor(artifact.publicId) : '';
 
-  // ── Approach B: serve the bundle AS the page on its isolated origin. ──
+  // -- Approach B: serve the bundle AS the page on its isolated origin. --
   // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
   // as a TRUE separate origin (its own SOP partition) - author inline JS executes, but it
   // cannot read the APP origin's localStorage/token (different origin). We validate the
@@ -560,7 +559,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(200).send(srcdoc);
   }
 
-  // ── App origin: the trusted WRAPPER page (comment overlay reads the token here). ──
+  // -- App origin: the trusted WRAPPER page (comment overlay reads the token here). --
   // Approach B -> embed the bundle via a CROSS-ORIGIN `<iframe src={isolatedSrc}>` (the
   // isolated origin provides the isolation; `allow-same-origin` there is safe because it
   // resolves to the usercontent origin, NOT the app origin -> no ATO). Gated on
@@ -576,7 +575,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // OPEN-public shares emit full server-rendered meta + a noscript body + a link to
   // the raw plain-text variant so unfurlers, LLM URL fetchers, and non-JS crawlers see
   // more than the JS shell. Gated shares (access gate OR non-public) deliberately do
-  // not — the pre-auth shells carry no artifact data, and even post-auth renders skip
+  // not - the pre-auth shells carry no artifact data, and even post-auth renders skip
   // the SEO surface so a gate regression can never leak meta to crawlers.
   const shareMeta =
     !isShare && isOpenPublic
@@ -787,7 +786,7 @@ function buildWrapperCsp(req: Request, artifactHost?: string): string {
   ].join('; ');
 }
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types ---------------------------------------------------------------------
 interface PublishedArtifactLean {
   publicId: string;
   tier: PublishScopeTier;
@@ -809,7 +808,7 @@ interface PublishedArtifactLean {
   versions?: Array<{ sha256Index: string }>;
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// -- Helpers -----------------------------------------------------------------
 /** Join paths into a comma-separated header value, capped at maxLen chars (adds a `...(+N)` tail). */
 function truncateHeaderList(paths: string[], maxLen: number): string {
   const full = paths.join(', ');
@@ -818,11 +817,11 @@ function truncateHeaderList(paths: string[], maxLen: number): string {
   let len = 0;
   for (let i = 0; i < paths.length; i++) {
     const add = (kept.length ? 2 : 0) + paths[i].length;
-    if (len + add > maxLen - 16) break; // reserve room for the `…(+N more)` tail
+    if (len + add > maxLen - 16) break; // reserve room for the `...(+N more)` tail
     kept.push(paths[i]);
     len += add;
   }
-  return `${kept.join(', ')} …(+${paths.length - kept.length} more)`;
+  return `${kept.join(', ')} ...(+${paths.length - kept.length} more)`;
 }
 
 function cacheControlFor(visibility: PublishVisibility): string {
@@ -836,8 +835,7 @@ function cacheControlFor(visibility: PublishVisibility): string {
   return 'private, no-store, must-revalidate';
 }
 
-/** Best-effort, non-authoritative view counter. Never blocks the response. */
-/** Link-preview crawlers and indexers fetch every pasted URL automatically —
+/** Link-preview crawlers and indexers fetch every pasted URL automatically -
  *  merely PASTING your own link into Slack must not count as "someone saw it".
  *  Substring match on the UA, lowercased; the generic bot/crawler/spider tail
  *  catches the long tail of unfurlers. */
@@ -850,11 +848,11 @@ const CRAWLER_UA_RE =
  * `viewCount` counts everything. `externalViewCount` feeds the Published gear
  * ("someone else saw your page") and MUST resist self-granting: a top-level
  * browser navigation to /p/... carries no Authorization header, so the serve
- * route cannot tell the owner apart from a stranger on an anonymous request —
+ * route cannot tell the owner apart from a stranger on an anonymous request -
  * counting anonymous views as external let every publisher pay themselves the
  * 5,000-credit reward by opening their own freshly-published link (verified
  * gate-bypass, PR #390 review). So externalViewCount increments ONLY for an
- * AUTHENTICATED, non-owner, non-crawler viewer — a request that actually
+ * AUTHENTICATED, non-owner, non-crawler viewer - a request that actually
  * carries a credential we can attribute to a different user. Domain-gated
  * views satisfy this (the loader shell re-fetches with the viewer's Bearer);
  * purely-anonymous public views no longer count, and stronger proof-of-human

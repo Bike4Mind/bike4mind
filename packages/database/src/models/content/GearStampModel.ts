@@ -2,15 +2,12 @@ import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
- * GearStamp — a first-use record for Gears (the earned-nav progression) whose
- * actions leave no other queryable trace: downloading a notebook, forking a
- * notebook, and similar fire-and-forget moments. Most gears are DERIVED from
- * existing data (see pages/api/gears/status.ts); a stamp exists only where
- * derivation is impossible.
+ * GearStamp - a first-use record for Gears (the earned-nav progression) whose
+ * actions leave no other queryable trace. Most gears are DERIVED (see
+ * pages/api/gears/status.ts); a stamp exists only where derivation is impossible.
  *
- * One row per (userId, key), enforced by the unique compound index — writers
- * upsert and treat E11000 as success (already stamped). Rows are permanent:
- * a gear, once earned, stays earned.
+ * One row per (userId, key), unique compound index; writers upsert and treat
+ * E11000 as success. Rows are permanent.
  */
 export interface IGearStampDocument extends Document {
   id: string;

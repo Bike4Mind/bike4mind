@@ -441,10 +441,9 @@ export interface ToolFinishObservation {
 /**
  * Optional host-registered observer called after ANY tool completes on the
  * shared pipeline (chat, agents, quests). Fire-and-forget by contract: it is
- * invoked synchronously, never awaited, and exceptions are swallowed — an
- * observer can never add latency to or break a tool call. First consumer:
- * the Gears progression system (first-use stamps for web_search, web_fetch,
- * wolfram_alpha, math_evaluate, ...).
+ * invoked synchronously, never awaited, and exceptions are swallowed - an
+ * observer can never add latency to or break a tool call. First consumer: the
+ * Gears progression system.
  */
 let toolFinishObserver: ((observation: ToolFinishObservation) => void) | null = null;
 
@@ -467,7 +466,7 @@ function wrapToolsForSentinels(
         const result = await originalToolFn(args);
 
         // Non-blocking host observer (see setToolFinishObserver): sync call,
-        // no await, exceptions swallowed — zero added latency by contract.
+        // no await, exceptions swallowed - zero added latency by contract.
         if (toolFinishObserver) {
           try {
             toolFinishObserver({ toolName, userId });

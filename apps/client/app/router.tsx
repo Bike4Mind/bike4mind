@@ -299,7 +299,7 @@ const notebookRoute = createRoute({
   },
 });
 
-// Gears — the earned-nav progression page (one card per major feature).
+// Gears - the earned-nav progression page (one card per major feature).
 const gearsRoute = createRoute({
   getParentRoute: () => layoutRoute,
   path: '/gears',

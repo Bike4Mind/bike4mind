@@ -240,10 +240,10 @@ export function PublishShareModal({
   //
   // In the SHARED phase we can only PATCH the existing record's `visibility` - we cannot migrate
   // its scope tier - so the offered set must be valid for the published record's tier:
-  //   • user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
+  //   - user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
   //     'organization' on a user-scoped record, whose scopeId is the user id, so the serve gate
   //     would 403 every org member (moving to org scope requires re-publishing, not a PATCH).
-  //   • org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
+  //   - org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
   //     (SCOPE_POLICY), so the server would reject it - don't offer a dead-end.
   // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
   // full set is safe.
@@ -273,7 +273,7 @@ export function PublishShareModal({
     }
     const domains = parseDomains(gateDomainsText);
     if (!domains) {
-      toast.error('Enter 1–20 valid domains (like acme.com), separated by commas');
+      toast.error('Enter 1-20 valid domains (like acme.com), separated by commas');
       return 'invalid';
     }
     return { kind: 'domain', allowedDomains: domains };
@@ -287,12 +287,12 @@ export function PublishShareModal({
     const stagedGate = isPublic && gateTouched ? buildGateInput() : null;
     if (stagedGate === 'invalid') return;
     setBusy(true);
-    const id = toast.loading(mode === 'update' ? 'Publishing new version…' : 'Creating share link…');
+    const id = toast.loading(mode === 'update' ? 'Publishing new version...' : 'Creating share link...');
     try {
       const r = await publish(visibility, { mode, existingSlug: existing?.slug });
       if (stagedGate) {
         await updatePublishedAccessGate(r.publicId, stagedGate).catch(() => {
-          toast.warning('Published, but protecting the link failed — set access below before sharing.');
+          toast.warning('Published, but protecting the link failed - set access below before sharing.');
         });
       }
       // The publish callback creates the item with the server-default comment policy
@@ -304,7 +304,7 @@ export function PublishShareModal({
       if (commentsOn) {
         const nextPolicy: CommentPolicy = existing?.commentPolicy === 'restricted' ? 'restricted' : 'open';
         await updatePublishedCommentPolicy(r.publicId, nextPolicy).catch(() => {
-          toast.warning('Published, but enabling comments failed — you can toggle them below.');
+          toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
       setResult(r);
@@ -345,7 +345,7 @@ export function PublishShareModal({
     setBusy(true);
     try {
       await updatePublishedVisibility(result.publicId, next);
-      toast.success(next === 'public' ? 'Now public — anyone with the link can view' : `Visibility set to ${next}`);
+      toast.success(next === 'public' ? 'Now public - anyone with the link can view' : `Visibility set to ${next}`);
     } catch {
       setVisibility(prev);
       toast.error('Failed to update visibility');
@@ -410,7 +410,7 @@ export function PublishShareModal({
         gate === null
           ? 'Link is open to anyone again'
           : gate.kind === 'passphrase'
-            ? 'Passphrase set — share it with your viewers'
+            ? 'Passphrase set - share it with your viewers'
             : 'Domain restriction applied'
       );
     } catch (err) {
@@ -452,19 +452,19 @@ export function PublishShareModal({
                 value="update"
                 disabled={busy}
                 data-testid="publish-share-mode-update"
-                label={`Update “${existing.title}” — adds a new version`}
+                label={`Update "${existing.title}" - adds a new version`}
               />
               <Radio
                 value="new"
                 disabled={busy}
                 data-testid="publish-share-mode-new"
-                label="Publish as new — a separate page"
+                label="Publish as new - a separate page"
               />
             </RadioGroup>
             {mode === 'update' && (
               <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
                 {existing.versionsCount >= 2
-                  ? `Currently ${existing.versionsCount} versions — your update becomes the newest, switchable on the published page.`
+                  ? `Currently ${existing.versionsCount} versions - your update becomes the newest, switchable on the published page.`
                   : 'Re-publishing adds a 2nd version and turns on the version switcher on the published page.'}
               </Typography>
             )}
@@ -522,7 +522,7 @@ export function PublishShareModal({
               );
             })}
           </RadioGroup>
-          {/* Only assert open exposure when we KNOW it's open — i.e. a fresh
+          {/* Only assert open exposure when we KNOW it's open - i.e. a fresh
               publish the user hasn't gated. For an already-published artifact
               (update flow) the modal doesn't load the existing gate, so claiming
               "anyone with the link" would be a falsehood when a gate is set; the
@@ -540,7 +540,7 @@ export function PublishShareModal({
             {existing && !gateTouched && (
               // Update flow: the modal doesn't hydrate the existing gate, so this
               // control starts neutral. Reassure the owner their current setting
-              // is untouched — handleCreate only sends a gate when gateTouched.
+              // is untouched - handleCreate only sends a gate when gateTouched.
               <Typography level="body-xs" sx={{ mb: 0.75, opacity: 0.75 }} data-testid="publish-share-gate-preserved">
                 Any existing access setting is kept unless you change it here.
               </Typography>
@@ -587,7 +587,7 @@ export function PublishShareModal({
                   slotProps={{ input: { 'data-testid': 'publish-share-gate-passphrase', autoComplete: 'off' } }}
                 />
                 <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
-                  Share it however you like — anyone with the link and passphrase can view. It&apos;s stored only as a
+                  Share it however you like - anyone with the link and passphrase can view. It&apos;s stored only as a
                   hash; to change it later, set a new one.
                 </Typography>
               </Box>

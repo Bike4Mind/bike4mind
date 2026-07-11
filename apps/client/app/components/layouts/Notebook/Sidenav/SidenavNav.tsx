@@ -69,7 +69,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // so hide the Data Lakes destination when it's off - otherwise the link lands on an
   // Explorer whose every request 403s (mirrors FileBrowser's guard).
   const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
-  // Gears (earned nav): feature rows appear once the user has USED the feature —
+  // Gears (earned nav): feature rows appear once the user has USED the feature -
   // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
   // (has >=1 project, agent, lake, file, publication). While the status loads we
   // show everything (the safe default for existing users; a brand-new user sees
@@ -78,7 +78,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
   // (Files, Projects, ...) were unconditional before Gears, so a loading state,
   // a catalog that omits/renames the key, or an admin override that drops it
-  // must NOT silently remove core navigation app-wide — only a key the server
+  // must NOT silently remove core navigation app-wide - only a key the server
   // returns as `false` (a known, genuinely-unearned gear) hides its row.
   const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
   const helpOpen = useHelpPanel(s => s.open);
@@ -216,8 +216,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     ...(gearOpen('published')
       ? [
           {
-            // Published shares are the product's lead-gen surface — surface them as a
-            // first-class destination instead of Profile → Published (3 clicks deep).
+            // Published shares are the product's lead-gen surface - surface them as a
+            // first-class destination instead of Profile -> Published (3 clicks deep).
             key: 'published',
             label: t('sidenav.published', 'Published'),
             icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),

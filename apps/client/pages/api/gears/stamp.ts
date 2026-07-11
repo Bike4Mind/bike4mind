@@ -4,11 +4,11 @@ import { z } from 'zod';
 import { gearStampRepository } from '@bike4mind/database';
 
 /**
- * POST /api/gears/stamp — client-claimable first-use stamps.
+ * POST /api/gears/stamp - client-claimable first-use stamps.
  *
  * SECURITY: the allowlist below is the whole design. A client-callable stamp
  * is self-attested ("I looked at the docs"), so ONLY low-value, curiosity-tier
- * gears may ever appear here — anything whose reward is worth farming must be
+ * gears may ever appear here - anything whose reward is worth farming must be
  * derived server-side or stamped by the action's own route instead.
  */
 const CLIENT_STAMPABLE = ['clidocs'] as const;

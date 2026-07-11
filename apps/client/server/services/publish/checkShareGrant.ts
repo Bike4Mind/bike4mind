@@ -11,7 +11,7 @@ import { checkAccessGate, type AccessGateShape, type VisibilityContext, type Vis
  * Tiers 2+3 (issue #383) layer the artifact's optional `accessGate` ON TOP of
  * token possession, through the same checkAccessGate the /p/* path uses:
  *  - passphrase: the caller verifies the per-artifact proof cookie (minted by
- *    POST /api/publish/gate/passphrase) and passes `ctx.passphraseVerified` —
+ *    POST /api/publish/gate/passphrase) and passes `ctx.passphraseVerified`;
  *    the raw passphrase never rides ordinary requests.
  *  - domain: requires `ctx.user` with a VERIFIED email whose domain exact-matches
  *    the record's allowlist.

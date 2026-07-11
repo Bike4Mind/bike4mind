@@ -77,7 +77,7 @@ describe('checkVisibility', () => {
   });
 });
 
-// ── Access gates (issue #383) — layered on top of visibility: 'public' ────────
+// Access gates (issue #383) - layered on top of visibility: 'public'
 import { vi, beforeEach } from 'vitest';
 
 const { mockUserFindById } = vi.hoisted(() => ({ mockUserFindById: vi.fn() }));
@@ -99,7 +99,7 @@ beforeEach(() => {
   mockUserFindById.mockReset().mockResolvedValue(null);
 });
 
-describe('checkVisibility — passphrase gate', () => {
+describe('checkVisibility - passphrase gate', () => {
   const gated = { ...gatedBase, visibility: 'public' as const, accessGate: { kind: 'passphrase' as const } };
 
   it('denies without proof, flagging reason so the serve route can prompt', async () => {
@@ -110,10 +110,10 @@ describe('checkVisibility — passphrase gate', () => {
       reason: 'passphrase',
     });
   });
-  it('admits with a verified proof (anonymous is fine — the proof IS the credential)', async () => {
+  it('admits with a verified proof (anonymous is fine - the proof IS the credential)', async () => {
     expect(await checkVisibility(gated, undefined, { passphraseVerified: true })).toEqual({ ok: true });
   });
-  it('a logged-in non-owner without proof is still denied — login is not the credential', async () => {
+  it('a logged-in non-owner without proof is still denied - login is not the credential', async () => {
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, reason: 'passphrase' });
   });
   it('owner and admin bypass their own gate', async () => {
@@ -122,7 +122,7 @@ describe('checkVisibility — passphrase gate', () => {
   });
 });
 
-describe('checkVisibility — domain gate', () => {
+describe('checkVisibility - domain gate', () => {
   const gated = {
     ...gatedBase,
     visibility: 'public' as const,
@@ -140,7 +140,7 @@ describe('checkVisibility — domain gate', () => {
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com', emailVerified: false });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403, reason: 'domain' });
   });
-  it('rejects a verified email on the wrong domain — exact match only, no suffix tricks', async () => {
+  it('rejects a verified email on the wrong domain - exact match only, no suffix tricks', async () => {
     mockUserFindById.mockResolvedValue({ email: 'jo@evilacme.com', emailVerified: true });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403 });
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com.evil.io', emailVerified: true });

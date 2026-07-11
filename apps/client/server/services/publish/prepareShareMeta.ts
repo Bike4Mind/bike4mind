@@ -75,9 +75,9 @@ export function prepareShareMeta(input: ShareMetaInput): ShareMetaOutput {
   // Unfurl CTA: shared links are the product's lead-gen surface (chat clients
   // render og:/twitter:description in the link card), so append a short
   // brand-derived call to action there. The plain `meta name="description"`
-  // stays CTA-free — that one feeds search snippets, not link cards.
+  // stays CTA-free - that one feeds search snippets, not link cards.
   const ctaText = input.siteName ? `Build and share with ${input.siteName}.` : '';
-  const unfurlDesc = descText ? (ctaText ? `${descText} · ${ctaText}` : descText) : ctaText;
+  const unfurlDesc = descText ? (ctaText ? `${descText} - ${ctaText}` : descText) : ctaText;
   const unfurlDescEsc = unfurlDesc ? escapeHtml(unfurlDesc) : '';
 
   const metaTags = [

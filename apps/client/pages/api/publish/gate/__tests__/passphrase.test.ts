@@ -23,7 +23,7 @@ vi.mock('@server/middlewares/baseApi', () => ({
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => (_r: unknown, _s: unknown, n: () => void) => n() }));
 vi.mock('@server/middlewares/asyncHandler', () => ({ asyncHandler: (fn: unknown) => fn }));
 
-// PublishedArtifact.findOne(...).select(...).lean() — capture the select string.
+// PublishedArtifact.findOne(...).select(...).lean() - capture the select string.
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     findOne: (...a: unknown[]) => {
@@ -58,7 +58,7 @@ beforeEach(() => {
   mocks.stamp.mockResolvedValue(undefined);
 });
 
-describe('POST /api/publish/gate/passphrase — projection safety (regression: MongoDB path collision)', () => {
+describe('POST /api/publish/gate/passphrase - projection safety (regression: MongoDB path collision)', () => {
   it('never projects a parent path together with its child sub-path', async () => {
     mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
 

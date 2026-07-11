@@ -268,7 +268,7 @@ export default function PublishedArtifactsTabContent() {
                     sx={{ opacity: 0.7 }}
                     data-testid={`published-artifact-single-version-${a.publicId}`}
                   >
-                    Only one version published — re-publish this artifact (or use AI Revise) to create version history.
+                    Only one version published - re-publish this artifact (or use AI Revise) to create version history.
                     A version switcher appears on the page once there are 2 or more versions.
                   </Typography>
                 )}

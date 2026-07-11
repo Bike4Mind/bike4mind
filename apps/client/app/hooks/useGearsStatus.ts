@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
- * Gears — the earned-nav progression state (see pages/api/gears/status.ts).
+ * Gears - the earned-nav progression state (see pages/api/gears/status.ts).
  * Unlocks are derived server-side from data existence; this hook is the single
  * client source of truth for both the Gears page and the sidenav's earned rows.
  */
@@ -16,7 +16,7 @@ export type GearKey =
   | 'datalakes'
   | 'files'
   | 'published'
-  // skills (achievements — no nav effect)
+  // skills (achievements - no nav effect)
   | 'apikey'
   | 'apicall'
   | 'image'
@@ -69,7 +69,7 @@ export function useGearsStatus() {
     queryKey: ['gears', 'status'],
     queryFn: async () => (await api.get<GearsStatusResponse>('/api/gears/status')).data,
     // Unlocks only move forward and creations invalidate explicitly (or are
-    // picked up on the next visit) — keep the nav from refetching on every mount.
+    // picked up on the next visit) - keep the nav from refetching on every mount.
     staleTime: 5 * 60_000,
   });
 }

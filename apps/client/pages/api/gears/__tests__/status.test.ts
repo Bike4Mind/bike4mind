@@ -180,7 +180,7 @@ describe('GET /api/gears/status', () => {
   });
 });
 
-describe('GET /api/gears/status — skill gears', () => {
+describe('GET /api/gears/status - skill gears', () => {
   it('derives image/voice/apicall from the usage ledger and model-explorer from distinct chat models', async () => {
     mocks.usageDistinct.mockImplementation((field: string) =>
       Promise.resolve(field === 'feature' ? ['chat', 'image_generation', 'voice'] : ['gpt-x', 'claude-y'])
@@ -215,7 +215,7 @@ describe('GET /api/gears/status — skill gears', () => {
   });
 });
 
-describe('GET /api/gears/status — stamp-backed gears', () => {
+describe('GET /api/gears/status - stamp-backed gears', () => {
   it('unlocks download/fork from first-use stamps', async () => {
     mocks.stampedKeys.mockResolvedValue(new Set(['forknotebook']));
     const { res, promise } = run({ id: 'u1' });
@@ -228,7 +228,7 @@ describe('GET /api/gears/status — stamp-backed gears', () => {
   });
 });
 
-describe('GET /api/gears/status — reward schedule', () => {
+describe('GET /api/gears/status - reward schedule', () => {
   it('social gears pay 5000; destinations 1000; skills scale 100-1000 by complexity', async () => {
     const { res, promise } = run({ id: 'u1' });
     await promise;
@@ -244,7 +244,7 @@ describe('GET /api/gears/status — reward schedule', () => {
   });
 });
 
-describe('GET /api/gears/status — published reward waits for a non-owner view', () => {
+describe('GET /api/gears/status - published reward waits for a non-owner view', () => {
   it('publishing unlocks the gear (nav slot) but the payout stays pending until an external view', async () => {
     mocks.publishedExists.mockImplementation((q: { externalViewCount?: unknown }) =>
       Promise.resolve(q.externalViewCount ? null : { _id: 'a1' })
@@ -272,7 +272,7 @@ describe('GET /api/gears/status — published reward waits for a non-owner view'
   });
 });
 
-describe('GET /api/gears/status — imports are split per source', () => {
+describe('GET /api/gears/status - imports are split per source', () => {
   it('unlocks ChatGPT and Claude imports independently, completed jobs only', async () => {
     mocks.importFindOne.mockImplementation((q: { source?: string; status?: string }) =>
       Promise.resolve(q.source === 'OpenAI' && q.status === 'completed' ? { _id: 'j1' } : null)
@@ -287,7 +287,7 @@ describe('GET /api/gears/status — imports are split per source', () => {
   });
 });
 
-describe('GET /api/gears/status — Manage Gears admin overrides', () => {
+describe('GET /api/gears/status - Manage Gears admin overrides', () => {
   it('a disabled gear vanishes entirely (no card, no payout)', async () => {
     mocks.overridesByKey.mockResolvedValue(new Map([['image', { key: 'image', enabled: false }]]));
     const { res, promise } = run({ id: 'u1' });
@@ -326,7 +326,7 @@ describe('GET /api/gears/status — Manage Gears admin overrides', () => {
   });
 });
 
-describe('GET /api/gears/status — reward announcement is race-safe (dup-toast fix)', () => {
+describe('GET /api/gears/status - reward announcement is race-safe (dup-toast fix)', () => {
   it('the LOSER of a concurrent claim does not report creditsAwarded even though the grant succeeded', async () => {
     mocks.projectExists.mockImplementation((q: { $or?: unknown }) => Promise.resolve(q.$or ? { _id: 'p1' } : null));
     mocks.claimOnce.mockResolvedValue(false); // another concurrent request already claimed the announce

@@ -33,7 +33,7 @@ describe('publishGateToken', () => {
     expect(gateCookieName('')).toBeNull();
   });
 
-  it('requestHasGateProof matches only the SAME artifact — a proof for A grants nothing on B', () => {
+  it('requestHasGateProof matches only the SAME artifact - a proof for A grants nothing on B', () => {
     const token = signGateToken({ publicId: 'artifactA' });
     const req = reqWithCookie(`b4m_pg_artifactA=${token}; other=1`);
     expect(requestHasGateProof(req, 'artifactA')).toBe(true);

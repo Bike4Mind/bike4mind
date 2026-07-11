@@ -7,7 +7,7 @@
  * on success the server sets the HttpOnly proof cookie and the shell reloads the
  * page, which now passes the gate server-side.
  *
- * Like renderBundleLoaderShell, this page is FULLY STATIC — it carries no
+ * Like renderBundleLoaderShell, this page is FULLY STATIC - it carries no
  * per-artifact data (no title, no id), so an anonymous viewer learns nothing
  * about the artifact beyond "it exists and wants a passphrase". No server
  * interpolation -> no injection surface. The passphrase travels only in the
@@ -26,7 +26,7 @@ export function renderPassphraseShell(): string {
     var passphrase = input.value;
     if (!passphrase) { note('Enter the passphrase.'); return; }
     btn.disabled = true;
-    note('Checking…');
+    note('Checking...');
     fetch('/api/publish/gate/passphrase', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -34,13 +34,13 @@ export function renderPassphraseShell(): string {
       body: JSON.stringify({ path: location.pathname, passphrase: passphrase })
     })
       .then(function (res) {
-        if (res.status === 204) { note('Unlocked — loading…'); location.reload(); return; }
+        if (res.status === 204) { note('Unlocked - loading...'); location.reload(); return; }
         btn.disabled = false;
         if (res.status === 403) { note('That passphrase is not correct.'); return; }
-        if (res.status === 429) { note('Too many attempts — wait a minute and try again.'); return; }
-        note('Something went wrong — try again.');
+        if (res.status === 429) { note('Too many attempts - wait a minute and try again.'); return; }
+        note('Something went wrong - try again.');
       })
-      .catch(function () { btn.disabled = false; note('Network error — try again.'); });
+      .catch(function () { btn.disabled = false; note('Network error - try again.'); });
   });
   input.focus();
 })();`;

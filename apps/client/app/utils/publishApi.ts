@@ -185,7 +185,7 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
 }
 
-/** Access gate on top of `visibility: 'public'` — see issue #383. */
+/** Access gate on top of `visibility: 'public'` - see issue #383. */
 export type PublishAccessGateInput =
   | { kind: 'passphrase'; passphrase: string }
   | { kind: 'domain'; allowedDomains: string[] }
@@ -194,7 +194,7 @@ export type PublishAccessGateInput =
 /**
  * Set, rotate, or clear (null) a public item's access gate (owner/admin).
  * The passphrase is sent once and stored only as a hash server-side; there is
- * no API to read it back — rotating means setting a new one.
+ * no API to read it back - rotating means setting a new one.
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
@@ -315,7 +315,7 @@ export interface ArtifactPublishOpts {
  *
  * When the caller is in an org ("Team") account context, `orgId` enables the dialog's
  * Team option: picking `'organization'` visibility publishes an org-tier page
- * (`tier:'organization'`, `scopeId=orgId` → `/p/o/{orgId}/{slug}`). This is the ONLY
+ * (`tier:'organization'`, `scopeId=orgId` -> `/p/o/{orgId}/{slug}`). This is the ONLY
  * combination the serve gate authorizes to org members - a user-tier page with org
  * visibility would 403 for everyone but the owner (its scopeId is the user id, never the
  * viewer's org id). The server re-validates org membership before trusting the scope.

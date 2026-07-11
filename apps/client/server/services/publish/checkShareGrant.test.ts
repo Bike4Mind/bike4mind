@@ -11,7 +11,7 @@ describe('checkShareGrant (Tier 1: token possession = read)', () => {
   });
 });
 
-// ── Tiers 2+3 (issue #383): accessGate layered on top of token possession ─────
+// -- Tiers 2+3 (issue #383): accessGate layered on top of token possession -----
 import { vi } from 'vitest';
 
 vi.mock('@bike4mind/database', () => ({
@@ -22,7 +22,7 @@ vi.mock('@bike4mind/database', () => ({
   },
 }));
 
-describe('checkShareGrant — passphrase gate on a token link', () => {
+describe('checkShareGrant - passphrase gate on a token link', () => {
   const gated = { ownerId: 'owner1', accessGate: { kind: 'passphrase' as const } };
 
   it('token alone is NOT enough once a passphrase gate is set', async () => {
@@ -36,7 +36,7 @@ describe('checkShareGrant — passphrase gate on a token link', () => {
   });
 });
 
-describe('checkShareGrant — domain gate on a token link', () => {
+describe('checkShareGrant - domain gate on a token link', () => {
   const gated = { ownerId: 'owner1', accessGate: { kind: 'domain' as const, allowedDomains: ['acme.com'] } };
 
   it('anonymous token holder must sign in (401 + reason domain)', async () => {

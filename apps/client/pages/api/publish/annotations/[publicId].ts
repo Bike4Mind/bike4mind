@@ -41,7 +41,7 @@ interface ArtifactGateLean {
   scopeId: string;
   commentPolicy: CommentPolicy;
   sha256Index?: string;
-  // Required (explicit null) to match VisibilityCheckArtifact — the gate is
+  // Required (explicit null) to match VisibilityCheckArtifact - the gate is
   // enforced off this field, so normalizing it here means no caller can pass a
   // shape that silently bypasses the gate. A lean read of a pre-gate doc may
   // omit it, so loadArtifact coerces `?? null`.
@@ -147,7 +147,7 @@ const handler = baseApi({ auth: false })
         createdAt: { $gte: new Date(Date.now() - COMMENT_RATE_WINDOW_MS) },
       });
       if (recent >= COMMENT_RATE_MAX) {
-        return res.status(429).json({ error: 'You are commenting too quickly — please slow down' });
+        return res.status(429).json({ error: 'You are commenting too quickly - please slow down' });
       }
     }
 

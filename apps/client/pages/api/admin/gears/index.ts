@@ -6,7 +6,7 @@ import { GEAR_DEFAULTS, GEAR_CREDITS_SCALE } from '../../gears/status';
 import { z } from 'zod';
 
 /**
- * /api/admin/gears — Manage Gears (same defaults+overrides pattern as System
+ * /api/admin/gears - Manage Gears (same defaults+overrides pattern as System
  * Prompts): code defines every gear's default credits/presentation; an admin
  * override is a sparse patch over the top, applied live with no deploy. The
  * ops story: a reward loophole in prod is one dashboard edit (credits -> 0 or
@@ -43,7 +43,7 @@ const handler = baseApi()
         key: def.key,
         kind: def.kind,
         // Report the SCALED default so the dashboard matches what status.ts
-        // actually pays (an unscaled number would mislead a credit audit — the
+        // actually pays (an unscaled number would mislead a credit audit - the
         // exact ops story this dashboard exists for). An explicit credits
         // override is absolute and shown as-is by the override block below.
         defaults: { credits: Math.round(def.credits * GEAR_CREDITS_SCALE), enabled: true, ...presentation },

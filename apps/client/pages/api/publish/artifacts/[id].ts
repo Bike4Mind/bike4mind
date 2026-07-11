@@ -112,11 +112,11 @@ const handler = baseApi()
         };
       }
     }
-    // A gate only means something on the public tier — reject a combination that
+    // A gate only means something on the public tier - reject a combination that
     // would silently never apply (fail loud beats a gate the owner thinks is on).
     if (artifact.accessGate && artifact.visibility !== 'public') {
       return res.status(400).json({
-        error: 'An access gate requires visibility "public" — clear the gate or set visibility to public',
+        error: 'An access gate requires visibility "public" - clear the gate or set visibility to public',
         code: 'GATE_REQUIRES_PUBLIC',
       });
     }
@@ -134,7 +134,7 @@ const handler = baseApi()
       accessGate?: { passphraseHash?: string | null } | null;
     };
     // Defense in depth: the hash is select:false, but this doc was loaded in this
-    // request's write path — never echo it.
+    // request's write path - never echo it.
     if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
     return res.status(200).json({ artifact: json });
   })

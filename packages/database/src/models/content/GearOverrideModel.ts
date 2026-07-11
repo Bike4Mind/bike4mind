@@ -2,16 +2,13 @@ import mongoose, { Schema, model, Document, Model } from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
 
 /**
- * GearOverride — admin-managed, per-gear overrides layered over the
- * code-defined gear defaults (same defaults+overrides pattern as System
- * Prompts). Every field is optional: an absent field means "use the code
- * default", so an override row is a sparse patch, not a copy.
- *
- * The ops story this exists for: a reward loophole is discovered in prod —
- * an admin flips `enabled` off or drops `credits` to 0 from the Manage Gears
- * dashboard, instantly, with no deploy. `credits` overrides are ABSOLUTE
- * (deliberately not multiplied by GEAR_CREDITS_SCALE) so what the admin
- * types is exactly what pays out.
+ * GearOverride - admin-managed, per-gear overrides layered over the code-defined
+ * gear defaults (same defaults+overrides pattern as System Prompts). Every field
+ * is optional: an absent field means "use the code default", so a row is a sparse
+ * patch, not a copy. An admin can flip `enabled` or drop `credits` from the
+ * Manage Gears dashboard with no deploy. `credits` overrides are ABSOLUTE
+ * (deliberately not multiplied by GEAR_CREDITS_SCALE) - what the admin types is
+ * exactly what pays out.
  */
 export interface IGearOverrideDocument extends Document {
   id: string;

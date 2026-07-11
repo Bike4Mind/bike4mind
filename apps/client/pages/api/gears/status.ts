@@ -28,45 +28,32 @@ import {
 } from '@bike4mind/database';
 
 /**
- * GET /api/gears/status — the Gears progression surface.
+ * GET /api/gears/status - the Gears progression surface.
  *
- * Two kinds of gear:
- *  - destination: a major feature that EARNS its sidenav slot on first use
- *    (the permanent rail is New Chat / Gears / Help).
- *  - skill: a capability worth discovering (issue an API key, generate an
- *    image, switch models, build a React artifact…) — no nav effect, just a
- *    checkmark on the Gears page and the credit reward. The tutorial system
- *    disguised as a trophy case.
+ * Two kinds of gear: destination (earns a sidenav slot on first use) and
+ * skill (a checkmark + credit reward, no nav effect).
  *
- * Unlock state is DERIVED — from feature data ("has ≥1 project") or from the
- * billing usage ledger (feature: image_generation / voice / completion_api,
- * distinct chat models) — so there is no unlock table to migrate or drift,
- * and users with existing history are grandfathered automatically. Receipt
- * counts as use: a project you were added to unlocks Projects.
+ * Unlock state is DERIVED - from feature data or the billing usage ledger -
+ * so there is no unlock table to migrate or drift, and existing history is
+ * grandfathered automatically (a project you were added to unlocks Projects).
  *
- * First unlock of each gear grants a one-time credit reward. Idempotency
- * rides the credit ledger itself: the stable transactionId
+ * Idempotency rides the credit ledger: the stable transactionId
  * `gear-unlock:<userId>:<gearKey>` is a unique key on CreditTransaction, so a
- * duplicate grant attempt is swallowed by addCredits — this endpoint can be
- * polled freely and can never double-credit.
+ * duplicate grant is swallowed by addCredits - this endpoint can be polled
+ * freely and can never double-credit.
  */
 
 /**
- * One-time rewards, per gear. The schedule (Erik, 2026-07-10):
- *  - destinations (earn a sidenav slot): 1,000 each
- *  - skills: 100-1,000 scaled by implied complexity (a one-prompt image is a
- *    nudge; a working API integration is real onboarding)
- *  - anything SOCIAL — actions that pull other people in — 5,000. Sharing is
- *    the growth loop; pay for it like one.
- * GEAR_CREDITS_SCALE lets an operator globally scale the schedule without a deploy.
- * Exported so the Manage Gears admin dashboard reports the SAME scaled amount
- * users are paid (otherwise a credit audit reconciles against wrong numbers).
+ * One-time rewards per gear: destinations 1,000; skills 100-1,000 by
+ * complexity; social actions 5,000. GEAR_CREDITS_SCALE globally scales the
+ * schedule without a deploy - exported so the Manage Gears admin dashboard
+ * reports the SAME scaled amount users are paid (else a credit audit
+ * reconciles against wrong numbers).
  */
 export const GEAR_CREDITS_SCALE = (() => {
   const raw = Number(process.env.GEAR_CREDITS_SCALE ?? 1);
-  // Guard: a malformed value (e.g. '2x') is NaN — Math.round(NaN) is NaN, which
-  // makes `credits > 0` false and silently zeroes EVERY reward with no error.
-  // Fall back to 1 (unscaled) and let the schedule pay as coded.
+  // A malformed value (e.g. '2x') is NaN, and Math.round(NaN) silently zeroes
+  // EVERY reward (`credits > 0` becomes false). Fall back to 1 (unscaled).
   return Number.isFinite(raw) && raw >= 0 ? raw : 1;
 })();
 
@@ -111,7 +98,7 @@ export type GearKey =
 
 const gearTxId = (userId: string, key: GearKey) => `gear-unlock:${userId}:${key}`;
 
-/** Facts gathered once per request and shared by every gear check — keeps the
+/** Facts gathered once per request and shared by every gear check - keeps the
  *  endpoint at a handful of indexed queries no matter how many gears exist. */
 interface GearFacts {
   userId: string;
@@ -132,7 +119,7 @@ async function gatherFacts(userId: string): Promise<GearFacts> {
 interface GearDef {
   key: GearKey;
   kind: GearKind;
-  /** One-time unlock reward (pre-scale) — see the schedule note above. */
+  /** One-time unlock reward (pre-scale) - see the schedule note above. */
   credits: number;
   check: (facts: GearFacts) => Promise<boolean> | boolean;
   /** When set, the credit payout waits for THIS stricter condition while the
@@ -142,12 +129,12 @@ interface GearDef {
 }
 
 const GEARS: GearDef[] = [
-  // ── Destinations ─────────────────────────────────────────────────────────
+  // --- Destinations ---
   {
     key: 'projects',
     credits: 1000,
     kind: 'destination',
-    // Owner OR member — same membership arms as the publish project-visibility gate.
+    // Owner OR member - same membership arms as the publish project-visibility gate.
     check: async ({ userId }) => !!(await Project.exists({ $or: [{ userId }, { 'users.id': userId }] })),
   },
   {
@@ -169,10 +156,8 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await FabFile.exists({ userId })),
   },
   {
-    // 5,000 (social pricing): publishing is the growth loop. The NAV SLOT
-    // unlocks on publish (you used the feature); the credit payout waits for
-    // a NON-OWNER view — "someone saw your work", not "you clicked publish".
-    // Farming friction, not proof (b4m-strategy#93 tracks the rest).
+    // Nav slot unlocks on publish; the credit payout waits for a NON-OWNER
+    // view (anti-farm: "someone saw your work", not "you clicked publish").
     key: 'published',
     credits: 5000,
     kind: 'destination',
@@ -180,7 +165,7 @@ const GEARS: GearDef[] = [
     rewardCheck: async ({ userId }) =>
       !!(await PublishedArtifact.exists({ ownerId: userId, deletedAt: null, externalViewCount: { $gte: 1 } })),
   },
-  // ── Skills ───────────────────────────────────────────────────────────────
+  // --- Skills ---
   {
     key: 'apikey',
     credits: 500,
@@ -206,7 +191,6 @@ const GEARS: GearDef[] = [
     check: ({ usageFeatures }) => usageFeatures.has('voice'),
   },
   {
-    // Ran chats on two or more distinct models — the "the grass is greener" tour.
     key: 'models',
     credits: 250,
     kind: 'skill',
@@ -225,7 +209,7 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await Artifact.exists({ userId, type: 'python' })),
   },
   {
-    // Sharing is the unlock: a project with at least one collaborator.
+    // A project with at least one collaborator.
     key: 'shareproject',
     credits: 5000,
     kind: 'skill',
@@ -262,16 +246,14 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await User.exists({ _id: userId, 'mfa.totpEnabled': true })),
   },
   {
-    // A notebook that lives in Slack — the partial index on slackMetadata
-    // exists for exactly this shape of query.
+    // The partial index on slackMetadata exists for exactly this query shape.
     key: 'slack',
     credits: 1000,
     kind: 'skill',
     check: async ({ userId }) => !!(await Session.exists({ userId, slackMetadata: { $exists: true, $ne: null } })),
   },
   {
-    // Split imports (Erik, 2026-07-10): each history you bring over is its own
-    // earned reward — imported history is switching-cost reversal.
+    // Each imported history is its own reward (OpenAI and Claude count separately).
     key: 'importopenai',
     credits: 1000,
     kind: 'skill',
@@ -298,7 +280,7 @@ const GEARS: GearDef[] = [
     check: async ({ userId }) => !!(await rapidReplyAuditLogRepository.findOne({ userId })),
   },
   {
-    // SOCIAL: your agent in someone else's hands — public or explicitly shared.
+    // Your agent public or explicitly shared with others.
     key: 'shareagent',
     credits: 5000,
     kind: 'skill',
@@ -319,7 +301,7 @@ const GEARS: GearDef[] = [
     kind: 'skill',
     check: ({ stamps }) => stamps.has('forknotebook'),
   },
-  // Tool gears — stamped by the shared-pipeline tool-finish observer
+  // Tool gears - stamped by the shared-pipeline tool-finish observer
   // (server/services/gears/toolGearObserver.ts): zero-latency by contract.
   {
     key: 'websearch',
@@ -346,8 +328,8 @@ const GEARS: GearDef[] = [
     check: ({ stamps }) => stamps.has('matheval'),
   },
   {
-    // Client-claimable curiosity stamp (self-attested doc visit) — priced
-    // accordingly; see the allowlist note in pages/api/gears/stamp.ts.
+    // Client-claimable curiosity stamp (self-attested doc visit); see the
+    // allowlist note in pages/api/gears/stamp.ts.
     key: 'clidocs',
     credits: 100,
     kind: 'skill',
@@ -358,7 +340,7 @@ const GEARS: GearDef[] = [
 const creditsFor = (def: GearDef) => Math.round(def.credits * GEAR_CREDITS_SCALE);
 
 /** Code-defined gear defaults, exported for the Manage Gears admin dashboard
- *  (key/kind/credits only — checks stay private to this endpoint). */
+ *  (key/kind/credits only - checks stay private to this endpoint). */
 export const GEAR_DEFAULTS: Array<{ key: GearKey; kind: GearKind; credits: number }> = GEARS.map(g => ({
   key: g.key,
   kind: g.kind,
@@ -421,7 +403,7 @@ const handler = baseApi().get(
       };
       const alreadyRewarded = rewarded.has(gearTxId(String(userId), def.key));
       // The payout may lag the unlock behind a stricter condition (anti-farm
-      // friction) — evaluate it only when it could actually change the outcome.
+      // friction); evaluate it only when it could change the outcome.
       const rewardEligible = unlocked && !alreadyRewarded && def.rewardCheck ? await def.rewardCheck(facts) : unlocked;
       if (unlocked && !rewardEligible && !alreadyRewarded) gear.rewardPending = true;
       if (rewardEligible && credits > 0 && !alreadyRewarded) {
@@ -437,18 +419,17 @@ const handler = baseApi().get(
             },
             { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
           );
-          // addCredits returns the holder on BOTH a fresh grant AND an idempotent
-          // duplicate (its dup branch still returns the entity), so `holder` can't
-          // tell us who actually granted. Announce the reward to the user exactly
-          // once via a race-safe claim: only the request whose (userId, key) upsert
-          // inserted wins claimOnce, so concurrent status polls don't each fire a
-          // duplicate '+N credits' toast. The ledger stays the source of truth for
-          // the money (never double-credits); this only de-dups the announcement.
+          // addCredits returns the holder on both a fresh grant and an idempotent
+          // duplicate, so it can't tell us who actually granted. claimOnce is a
+          // race-safe (userId, key) upsert - only the inserting request wins, so
+          // concurrent polls don't each fire a duplicate '+N credits' toast. The
+          // ledger stays the source of truth for the money; this only de-dups the
+          // announcement.
           if (holder && (await gearStampRepository.claimOnce(String(userId), `reward:${def.key}`))) {
             gear.creditsAwarded = credits;
           }
         } catch (err) {
-          // Reward failure must not break the status surface — the nav still
+          // Reward failure must not break the status surface - the nav still
           // needs its answer. The stable transactionId makes any retry safe.
           req.logger?.warn?.({ err, key: def.key }, 'gear unlock credit grant failed');
         }

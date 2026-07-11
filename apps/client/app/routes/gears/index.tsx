@@ -41,8 +41,7 @@ import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 
 /**
- * Gears — the earned-nav progression page, and the product's tutorial system
- * disguised as a trophy case.
+ * Gears - the earned-nav progression page.
  *
  * Presentation (title/tagline/intro/CTA) is SERVER truth: the status endpoint
  * serves the code defaults merged with any Manage Gears admin overrides, so a
@@ -112,12 +111,12 @@ const GearsPage = () => {
     if (awarded.length > 0) {
       toastedRef.current = true;
       for (const g of awarded) {
-        toast.success(`Gear unlocked: ${g.title} — +${g.creditsAwarded} credits`);
+        toast.success(`Gear unlocked: ${g.title} - +${g.creditsAwarded} credits`);
       }
     }
   }, [data]);
 
-  /** Interpret a gear's ctaAction — see lib/gears/presentation.ts for the grammar. */
+  /** Interpret a gear's ctaAction - see lib/gears/presentation.ts for the grammar. */
   const onCta = (gear: GearStatus) => {
     const [action, stampDirective] = gear.ctaAction.split('#');
     const stampKey = stampDirective?.startsWith('stamp:') ? stampDirective.slice('stamp:'.length) : null;
@@ -216,7 +215,7 @@ const GearsPage = () => {
           <Typography level="h2">Gears</Typography>
         </Stack>
         <Typography level="body-md" sx={{ mb: 1, opacity: 0.8 }}>
-          Every feature you use for the first time earns a checkmark and a credit bonus — destinations also earn their
+          Every feature you use for the first time earns a checkmark and a credit bonus - destinations also earn their
           place in your sidebar.
         </Typography>
         <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 3 }}>
@@ -226,7 +225,7 @@ const GearsPage = () => {
             sx={{ flex: 1, maxWidth: 320 }}
           />
           <Typography level="body-sm" sx={{ whiteSpace: 'nowrap', opacity: 0.8 }} data-testid="gears-progress">
-            {isPending ? 'Checking the grid…' : `${unlockedCount} / ${gears.length} unlocked`}
+            {isPending ? 'Checking the grid...' : `${unlockedCount} / ${gears.length} unlocked`}
           </Typography>
         </Stack>
 
@@ -244,7 +243,7 @@ const GearsPage = () => {
               Skills
             </Typography>
             <Typography level="body-sm" sx={{ mb: 2, opacity: 0.75 }}>
-              Capabilities worth knowing about — try each once.
+              Capabilities worth knowing about - try each once.
             </Typography>
             {renderCards(skills)}
           </>

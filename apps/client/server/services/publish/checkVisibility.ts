@@ -2,24 +2,21 @@ import type { PublishVisibility } from '@bike4mind/common';
 import type { PublishUser } from './checkScopePermission';
 
 /**
- * Publish - shared visibility gate for a PublishedArtifact. Extracted from the
- * serve handler so the public viewer AND the annotation routes reason about
- * "may this caller VIEW this artifact" through one code path.
+ * Publish - shared visibility gate for a PublishedArtifact. One code path for
+ * "may this caller VIEW this artifact", used by both the public viewer and the
+ * annotation routes.
  *
- * Mirrors the visibility ladder { private, project, organization, public }:
+ * Visibility ladder { private, project, organization, public }:
  *  - public          -> anyone, even anonymous
  *  - organization     -> same-org members (org tier stores org _id as scopeId)
  *  - project          -> project owner or member
  *  - private          -> owner / admin only
  *
- * A `public` artifact may additionally carry an `accessGate` (issue #383):
+ * A `public` artifact may additionally carry an `accessGate`:
  *  - passphrase -> anyone with the link who has presented the passphrase this
  *                  session (proof cookie -> ctx.passphraseVerified)
  *  - domain     -> logged-in viewers whose VERIFIED email domain is allowlisted
  * Owner/admin always pass their own gate.
- *
- * Returns `{ ok: true }` or `{ ok: false, status, error, reason? }` for direct
- * mapping to an HTTP response. `user` is undefined for anonymous callers.
  */
 
 /** The minimal artifact shape the gate needs. */
@@ -28,12 +25,11 @@ export interface VisibilityCheckArtifact {
   ownerId: string;
   scopeId: string;
   /**
-   * Gate on top of `public` (issue #383) — passphrase or verified-email-domain.
+   * Gate on top of `public` - passphrase or verified-email-domain.
    * REQUIRED (explicit `null` when absent), NOT optional: an optional field let
-   * a caller silently bypass the gate by simply not selecting it in its Mongoose
-   * projection (exactly how the annotation routes leaked — PR #390 review). Making
-   * it required forces every caller to load `accessGate` and pass it, so a missing
-   * projection is a compile error instead of a silent gate bypass.
+   * a caller silently bypass the gate by not selecting it in its Mongoose
+   * projection. Making it required forces every caller to load `accessGate` and
+   * pass it, so a missing projection is a compile error, not a silent bypass.
    */
   accessGate: {
     kind: 'passphrase' | 'domain';
@@ -131,7 +127,7 @@ export async function checkAccessGate(
     .lean<{ email?: string; emailVerified?: boolean } | null>();
   const email = viewer?.email?.toLowerCase() ?? '';
   const domain = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
-  // Exact domain match only — no substring/suffix matching — and only for
+  // Exact domain match only - no substring/suffix matching - and only for
   // VERIFIED emails (same rule as the entitlement domain grants).
   if (viewer?.emailVerified === true && domain && allowed.includes(domain)) return { ok: true };
   return {

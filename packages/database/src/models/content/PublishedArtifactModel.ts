@@ -114,7 +114,7 @@ const PublishedArtifactSchema = new Schema(
     shareToken: { type: String },
     shareTokenUpdatedAt: { type: Date, default: null },
 
-    /** Optional gate on top of open sharing — see PublishedArtifactAccessGate.
+    /** Optional gate on top of open sharing - see PublishedArtifactAccessGate.
      *  Applies to BOTH share surfaces: `visibility: 'public'` (/p/*) and
      *  share-token links (/a/<token>). */
     accessGate: { type: AccessGateSubSchema, default: null },

@@ -40,7 +40,7 @@ describe('prepareShareMeta', () => {
     // Unfurl surfaces (og:/twitter:description) carry the brand CTA; the plain
     // search-snippet description above stays CTA-free.
     expect(metaTags).toContain(
-      '<meta property="og:description" content="A short description · Build and share with ExampleApp.">'
+      '<meta property="og:description" content="A short description - Build and share with ExampleApp.">'
     );
     expect(metaTags).toContain('<meta property="og:type" content="article">');
     expect(metaTags).toContain('<meta property="og:url" content="https://example.com/p/u/scope/slug">');
@@ -48,7 +48,7 @@ describe('prepareShareMeta', () => {
     expect(metaTags).toContain('<meta name="twitter:card" content="summary">');
     expect(metaTags).toContain('<meta name="twitter:title" content="Hello">');
     expect(metaTags).toContain(
-      '<meta name="twitter:description" content="A short description · Build and share with ExampleApp.">'
+      '<meta name="twitter:description" content="A short description - Build and share with ExampleApp.">'
     );
     expect(metaTags).toContain('<link rel="canonical" href="https://example.com/p/u/scope/slug">');
   });
