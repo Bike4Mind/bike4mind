@@ -187,9 +187,7 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
 
 /** Access gate on top of `visibility: 'public'` - see issue #383. */
 export type PublishAccessGateInput =
-  | { kind: 'passphrase'; passphrase: string }
-  | { kind: 'domain'; allowedDomains: string[] }
-  | null;
+  { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
 
 /**
  * Set, rotate, or clear (null) a public item's access gate (owner/admin).
@@ -198,6 +196,27 @@ export type PublishAccessGateInput =
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
+/**
+ * Set or clear the embed allowlist - the external https origins allowed to frame
+ * this artifact (owner/admin). Only honored while the item is open-public (no
+ * gate); `[]` clears it. The server normalizes and re-validates each origin.
+ */
+export async function updatePublishedEmbedOrigins(publicId: string, embedOrigins: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { embedOrigins });
+}
+
+/**
+ * Current embed-allowlist state for seeding the editor: the allowlisted origins
+ * plus whether a gate is live (embedding is open-public only, so the editor hides
+ * when `gated`).
+ */
+export async function getPublishedEmbedState(publicId: string): Promise<{ embedOrigins: string[]; gated: boolean }> {
+  const { data } = await api.get<{ artifact?: { embedOrigins?: string[]; accessGate?: unknown } }>(
+    `/api/publish/artifacts/${publicId}`
+  );
+  return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
 }
 
 /**
