@@ -1307,9 +1307,12 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     // Canonical is emitted once by shareMeta (not duplicated by the embed path).
     expect(data.match(/rel="canonical"/g)?.length).toBe(1);
     expect(data).toContain('href="https://app.bike4mind.com/p/u/scope123/my-slug"');
+    // Lead-gen livery: the embed carries a "Built with ..." brand pill linking out.
+    expect(data).toContain('<a class="b4m-brand"');
+    expect(data).toContain('Built with');
   });
 
-  it('normal (non-embed) render keeps the version bar', async () => {
+  it('normal (non-embed) render keeps the version bar and shows no floating brand pill', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({ sha256Index: 'newSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }] })
     );
@@ -1317,6 +1320,8 @@ describe('GET /api/publish/serve - embed allowlist', () => {
 
     const { res, promise } = run(['u', 'scope123', 'my-slug']);
     await promise;
+    // The brand pill is embed-only (the normal page uses the baked footer + chrome).
+    expect(res._getData() as string).not.toContain('<a class="b4m-brand"');
 
     expect(res._getData() as string).toContain('<div class="b4m-ver">');
   });

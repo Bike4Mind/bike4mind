@@ -32,6 +32,7 @@ import {
   isAppWrapperHost,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -597,7 +598,25 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta, isShare, isEmbed);
+  // Lead-gen target for the embed badge: the marketing site with UTM attribution
+  // when configured, else the artifact's own canonical page on the app (still a
+  // branded destination). Runtime-derived - no hardcoded brand host.
+  const brandHref = isEmbed
+    ? WEBSITE_URL
+      ? `${WEBSITE_URL}/?utm_source=embedded-artifact&utm_medium=embed-badge&utm_campaign=publish`
+      : `${docOrigin}${canonicalPath}`
+    : '';
+  const wrapperPage = renderBundleWrapper(
+    artifact,
+    srcdoc,
+    requestedVersion,
+    isolatedSrc,
+    shareMeta,
+    isShare,
+    isEmbed,
+    brandHref,
+    isEmbed ? getBrandName() : ''
+  );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
@@ -624,7 +643,9 @@ function renderBundleWrapper(
   isolatedSrc: string,
   shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
   noindex: boolean,
-  embed = false
+  embed = false,
+  brandHref = '',
+  brandName = ''
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -656,6 +677,17 @@ function renderBundleWrapper(
   // overlay) so the widget is just the content. The canonical link back to the
   // real page is already emitted for open-public renders via shareMeta.
   const chromeBody = embed ? '' : `\n${overlay}\n${versionBar}`;
+  // Lead-gen livery for a chrome-less embed: a "Built with {brand}" pill floating
+  // over the framed artifact (top-level link, not blocked by the wrapper CSP). This
+  // is the ONLY brand mark a third-party embed carries - the bundle's own share
+  // footer is baked into the content and absent from externally-built bundles - so
+  // it makes every embed do the powered-by lead-gen job. Embed mode only.
+  const brandBadge =
+    embed && brandHref && brandName
+      ? `\n<a class="b4m-brand" href="${escapeHtml(brandHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
+          brandName
+        )}</a>`
+      : '';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -666,6 +698,9 @@ function renderBundleWrapper(
 .b4m-report{position:fixed;bottom:10px;right:10px;z-index:2147483647;font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
 .b4m-report:hover{color:#fff;background:rgba(13,24,48,.95)}
+.b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:#fff;background:#F26C1F;padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
+.b4m-brand:hover{filter:brightness(1.07)}
 .b4m-ver{position:fixed;bottom:10px;left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
   font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#cbd5e1;background:rgba(13,24,48,.78);
   padding:5px 9px;border-radius:8px;backdrop-filter:blur(4px)}
@@ -673,7 +708,7 @@ function renderBundleWrapper(
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}${chromeBody}
+${iframeTag}${chromeBody}${brandBadge}
 <a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
 ${noscriptBody}
 </body>
