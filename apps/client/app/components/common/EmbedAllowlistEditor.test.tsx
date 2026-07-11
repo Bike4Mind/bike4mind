@@ -58,6 +58,30 @@ describe('EmbedAllowlistEditor', () => {
     );
   });
 
+  it('uplevels a casual bare host to a full https origin', async () => {
+    renderEditor();
+    fireEvent.change(screen.getByTestId('publish-share-embed-input'), { target: { value: 'erikbethke.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+  });
+
+  it('reduces a pasted full URL (with path) to its origin', async () => {
+    renderEditor();
+    fireEvent.change(screen.getByTestId('publish-share-embed-input'), {
+      target: { value: 'https://erikbethke.com/blog/some-post' },
+    });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+  });
+
   it('rejects a non-https origin without a PATCH', () => {
     renderEditor();
     fireEvent.change(screen.getByTestId('publish-share-embed-input'), { target: { value: 'http://insecure.com' } });

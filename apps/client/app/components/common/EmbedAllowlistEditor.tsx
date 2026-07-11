@@ -29,6 +29,25 @@ function errMessage(err: unknown): string {
 }
 
 /**
+ * Casual input sugar: turn what a user actually types (`erikbethke.com`,
+ * `erikbethke.com/blog`) into a candidate https origin, then let the strict
+ * parseEmbedOrigin validate it. Prepends `https://` when no scheme is given and
+ * reduces a full URL to its origin (frame-ancestors is origin-level anyway). An
+ * explicit `http://` is left as-is so parseEmbedOrigin rejects it loudly.
+ */
+function coerceToOrigin(raw: string): string {
+  const s = raw.trim();
+  if (!s) return s;
+  const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;
+  try {
+    const u = new URL(withScheme);
+    return u.port ? `${u.protocol}//${u.hostname}:${u.port}` : `${u.protocol}//${u.hostname}`;
+  } catch {
+    return s;
+  }
+}
+
+/**
  * Embed allowlist editor: add or remove the external https origins allowed to
  * frame this artifact, and copy a ready-made `?embed=1` iframe snippet. Used by
  * both the publish/share dialog and the Live Artifacts manage panel. The server
@@ -83,9 +102,9 @@ export function EmbedAllowlistEditor({
   };
 
   const onAdd = () => {
-    const parsed = parseEmbedOrigin(input);
+    const parsed = parseEmbedOrigin(coerceToOrigin(input));
     if (!parsed) {
-      toast.error('Enter a full https origin, e.g. https://example.com');
+      toast.error('Enter a site like example.com (it becomes https://example.com)');
       return;
     }
     if (origins.includes(parsed)) {
@@ -132,7 +151,7 @@ export function EmbedAllowlistEditor({
       <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
         <Input
           value={input}
-          placeholder="https://example.com"
+          placeholder="example.com"
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => {
             if (e.key === 'Enter') {
