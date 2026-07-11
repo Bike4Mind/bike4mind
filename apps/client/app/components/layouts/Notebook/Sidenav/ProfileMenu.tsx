@@ -115,10 +115,12 @@ type AccountCardProps = {
   onSelect: () => void;
   // Sole account (no team/other accounts to switch to): hide the radio, it's not a choice.
   bare?: boolean;
+  // Nothing decrements while enforceCredits is off, so the balance is misleading - hide it.
+  showCredits: boolean;
 };
 
 /** Account switcher card (Personal / Team) shown at the top of the expanded profile menu. */
-const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare }: AccountCardProps) => (
+export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare, showCredits }: AccountCardProps) => (
   <Box
     data-testid="profile-account-option"
     onClick={onSelect}
@@ -168,23 +170,25 @@ const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare }: Acc
         />
       )}
     </Box>
-    <Chip
-      size="sm"
-      variant="plain"
-      startDecorator={<Bike4MindIcon size="12" />}
-      sx={theme => ({
-        alignSelf: 'flex-start',
-        backgroundColor: 'transparent',
-        border: 'none',
-        px: 0,
-        fontSize: '13px',
-        gap: '6px',
-        // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
-        '--Icon-color': theme.palette.text.tertiary,
-      })}
-    >
-      {credits.toLocaleString()}
-    </Chip>
+    {showCredits && (
+      <Chip
+        size="sm"
+        variant="plain"
+        startDecorator={<Bike4MindIcon size="12" />}
+        sx={theme => ({
+          alignSelf: 'flex-start',
+          backgroundColor: 'transparent',
+          border: 'none',
+          px: 0,
+          fontSize: '13px',
+          gap: '6px',
+          // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
+          '--Icon-color': theme.palette.text.tertiary,
+        })}
+      >
+        {credits.toLocaleString()}
+      </Chip>
+    )}
   </Box>
 );
 
@@ -214,7 +218,7 @@ const ProfileMenu = () => {
   // filterVisiblePremiumNavItems - see its doc comment and unit tests.
   const { data: entitlements } = useEntitlements();
   const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
-  const isCreditsEnabled = useGetSettingsValue('enforceCredits');
+  const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
   const { setOpen: setInboxOpen } = useInbox.getState();
   const toggleReferralModal = useReferralModal(s => s.toggle);
@@ -309,6 +313,7 @@ const ProfileMenu = () => {
                 selected={selectedAccount?.id === account.id}
                 onSelect={() => setSelectedAccount(account)}
                 bare={accounts.length === 1}
+                showCredits={isCreditsEnabled}
               />
             ))}
           </Stack>
