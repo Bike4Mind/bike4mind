@@ -127,9 +127,14 @@ export function AccessGateEditor({
             orientation="horizontal"
             value={kind}
             onChange={e => setKind(e.target.value as GateKind)}
-            sx={{ gap: 2, mb: 1 }}
+            sx={{ gap: 2, mb: 1, flexWrap: 'wrap' }}
           >
-            <Radio value="none" label="Anyone with the link" data-testid={`${testIdPrefix}-none`} />
+            <Radio
+              value="none"
+              label="Anyone with the link"
+              data-testid={`${testIdPrefix}-none`}
+              sx={{ p: 0.5, borderRadius: 'md' }}
+            />
             <Radio
               value="passphrase"
               label={
@@ -138,6 +143,7 @@ export function AccessGateEditor({
                 </Box>
               }
               data-testid={`${testIdPrefix}-passphrase`}
+              sx={{ p: 0.5, borderRadius: 'md' }}
             />
             <Radio
               value="domain"
@@ -147,6 +153,7 @@ export function AccessGateEditor({
                 </Box>
               }
               data-testid={`${testIdPrefix}-domain`}
+              sx={{ p: 0.5, borderRadius: 'md' }}
             />
           </RadioGroup>
 

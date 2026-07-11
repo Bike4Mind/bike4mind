@@ -355,11 +355,9 @@ describe('PublishShareModal - embed allowlist', () => {
   };
 
   const renderShared = async (seed: { embedOrigins?: string[]; accessGate?: unknown } = {}) => {
-    apiGet
-      .mockClear()
-      .mockResolvedValue({
-        data: { artifact: { embedOrigins: seed.embedOrigins ?? [], accessGate: seed.accessGate ?? null } },
-      });
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { embedOrigins: seed.embedOrigins ?? [], accessGate: seed.accessGate ?? null } },
+    });
     apiPatch.mockClear().mockResolvedValue({ data: {} });
     const publish = vi.fn().mockResolvedValue(publishResult);
     render(

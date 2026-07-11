@@ -1273,7 +1273,10 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     // A domain gate serves the anonymous loader shell; its CSP must never carry the
     // embed grant (defense in depth - a gated page is no-store and must not be framed).
     mockArtifactFindOne.mockReturnValue(
-      bundle({ accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] }, embedOrigins: ['https://erikbethke.com'] })
+      bundle({
+        accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] },
+        embedOrigins: ['https://erikbethke.com'],
+      })
     );
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
 
