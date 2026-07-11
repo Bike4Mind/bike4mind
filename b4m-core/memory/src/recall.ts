@@ -12,46 +12,11 @@
  * pure, zero-dependency lexical default so recall works with no external services.
  */
 
+import { tokenize } from './text';
 import type { Belief } from './types';
 
 /** Relevance of a belief to a query, ideally in 0..1. Injected by the host for embedding recall. */
 export type RecallScorer = (query: string, belief: Belief) => number;
-
-const STOPWORDS = new Set([
-  'a',
-  'an',
-  'the',
-  'is',
-  'are',
-  'was',
-  'were',
-  'be',
-  'to',
-  'of',
-  'in',
-  'on',
-  'for',
-  'and',
-  'or',
-  'with',
-  'as',
-  'at',
-  'by',
-  'it',
-  'this',
-  'that',
-  'i',
-  'you',
-  'my',
-  'me',
-]);
-
-const tokenize = (s: string): string[] =>
-  s
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .split(/\s+/)
-    .filter(t => t.length > 1 && !STOPWORDS.has(t));
 
 /**
  * Default scorer: normalized token overlap (Jaccard) between the query and the belief's fact. Pure

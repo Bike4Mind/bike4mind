@@ -1,6 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { memoryLedgerRepository } from '@bike4mind/database';
-import { EVIDENCE_TIERS, type EvidenceTier, type MemoryEventInput, type PrincipalKind } from '@bike4mind/memory';
+import {
+  EVIDENCE_TIERS,
+  resolveSubject,
+  type EvidenceTier,
+  type MemoryEventInput,
+  type PrincipalKind,
+} from '@bike4mind/memory';
 import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
 
 const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
@@ -36,10 +42,14 @@ const handler = baseApi().post(async (req, res) => {
   if (typeof eventKind !== 'string' || !EVENT_KINDS.includes(eventKind as EventKind)) {
     return res.status(400).json({ error: `Field 'kind' must be one of: ${EVENT_KINDS.join(', ')}.` });
   }
-  const subject = typeof body.subject === 'string' ? body.subject.trim() : '';
-  if (!subject) return res.status(400).json({ error: "Field 'subject' is required." });
-
   const fact = typeof body.fact === 'string' ? body.fact : undefined;
+  // Subject identity: an explicit subject wins; otherwise derive a stable key from the fact so
+  // re-mentions coalesce (affirm) instead of piling up. Null means neither gave a usable key.
+  const subject = resolveSubject({ subject: typeof body.subject === 'string' ? body.subject : undefined, fact });
+  if (!subject) {
+    return res.status(400).json({ error: "Provide a 'subject', or a 'fact' with enough content to derive one." });
+  }
+
   const evidenceTier = body.evidenceTier;
   if (evidenceTier !== undefined && !EVIDENCE_TIERS.includes(evidenceTier as EvidenceTier)) {
     return res.status(400).json({ error: `Field 'evidenceTier' must be one of: ${EVIDENCE_TIERS.join(', ')}.` });
