@@ -15,11 +15,12 @@ import {
   FormLabel,
   Switch,
 } from '@mui/joy';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import PublicIcon from '@mui/icons-material/Public';
 import LockIcon from '@mui/icons-material/Lock';
 import GroupIcon from '@mui/icons-material/Group';
 import LinkIcon from '@mui/icons-material/Link';
+import KeyIcon from '@mui/icons-material/Key';
+import DomainIcon from '@mui/icons-material/Domain';
 import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
@@ -33,6 +34,8 @@ import {
   revokeShareToken,
   updatePublishedVisibility,
   updatePublishedCommentPolicy,
+  updatePublishedAccessGate,
+  type PublishAccessGateInput,
   type PublishMode,
   type ArtifactPublishOpts,
 } from '@client/app/utils/publishApi';
@@ -90,6 +93,46 @@ const PRIVATE_OPTION: VisibilityOption = { value: 'private', label: 'Private', h
  *  active choice (and signals exposure when Public is selected). */
 const AMBER = '#f59e0b';
 
+/** Client-side mirror of the server's registrable-domain check (server is authoritative). */
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+
+type GateKind = 'none' | 'passphrase' | 'domain';
+
+const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: React.ReactNode }> = [
+  {
+    value: 'none',
+    label: 'Anyone with the link',
+    hint: 'No extra step for viewers',
+    icon: <PublicIcon fontSize="small" />,
+  },
+  {
+    value: 'passphrase',
+    label: 'Passphrase required',
+    hint: 'Viewers enter a passphrase you share with them',
+    icon: <KeyIcon fontSize="small" />,
+  },
+  {
+    value: 'domain',
+    label: 'Specific email domains',
+    hint: 'Viewers sign in with a verified work email you allow',
+    icon: <DomainIcon fontSize="small" />,
+  },
+];
+
+/** Parse the domains textarea into normalized domains; null when any entry is invalid. */
+function parseDomains(text: string): string[] | null {
+  const items = [
+    ...new Set(
+      text
+        .split(/[\s,]+/)
+        .map(d => d.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
+  if (items.length === 0 || items.length > 20) return null;
+  return items.every(d => DOMAIN_RE.test(d)) ? items : null;
+}
+
 function errorMessage(err: unknown): string {
   if (isAxiosError(err)) return (err.response?.data as { error?: string })?.error || err.message || 'Failed to publish';
   return err instanceof Error ? err.message : 'Failed to publish';
@@ -129,6 +172,13 @@ export function PublishShareModal({
   // The opt-in no-sign-in (`/a/<token>`) share link, minted lazily only when the owner asks.
   const [shareToken, setShareToken] = useState<string | null>(null);
   const [shareBusy, setShareBusy] = useState(false);
+  // Access gate on top of Public (issue #383). `gateTouched` distinguishes "left at
+  // defaults" from an explicit choice, so an update-publish never clobbers an existing
+  // gate the user didn't interact with.
+  const [gateKind, setGateKind] = useState<GateKind>('none');
+  const [gatePassphrase, setGatePassphrase] = useState('');
+  const [gateDomainsText, setGateDomainsText] = useState('');
+  const [gateTouched, setGateTouched] = useState(false);
 
   // Reset to the choose phase each time the dialog is opened fresh.
   useEffect(() => {
@@ -141,6 +191,10 @@ export function PublishShareModal({
       setMode('new');
       setShareToken(null);
       setShareBusy(false);
+      setGateKind('none');
+      setGatePassphrase('');
+      setGateDomainsText('');
+      setGateTouched(false);
     }
   }, [open, defaultVisibility]);
 
@@ -186,10 +240,10 @@ export function PublishShareModal({
   //
   // In the SHARED phase we can only PATCH the existing record's `visibility` - we cannot migrate
   // its scope tier - so the offered set must be valid for the published record's tier:
-  //   • user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
+  //   - user-tier page  -> Public/Private only. Offering Team here would PATCH visibility to
   //     'organization' on a user-scoped record, whose scopeId is the user id, so the serve gate
   //     would 403 every org member (moving to org scope requires re-publishing, not a PATCH).
-  //   • org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
+  //   - org-tier page   -> Public/Team only. 'private' isn't a valid override for org tier
   //     (SCOPE_POLICY), so the server would reject it - don't offer a dead-end.
   // In the CHOOSE phase the publish callback maps a Team pick to a real org-tier page, so the
   // full set is safe.
@@ -207,13 +261,40 @@ export function PublishShareModal({
     return orgEntry ? [PUBLIC_OPTION, orgEntry, PRIVATE_OPTION] : [PUBLIC_OPTION, PRIVATE_OPTION];
   }, [orgOption, result]);
 
+  /** The staged gate as API input; 'invalid' blocks submission with a specific message. */
+  const buildGateInput = (): PublishAccessGateInput | 'invalid' => {
+    if (gateKind === 'none') return null;
+    if (gateKind === 'passphrase') {
+      if (gatePassphrase.length < 8) {
+        toast.error('Passphrase must be at least 8 characters');
+        return 'invalid';
+      }
+      return { kind: 'passphrase', passphrase: gatePassphrase };
+    }
+    const domains = parseDomains(gateDomainsText);
+    if (!domains) {
+      toast.error('Enter 1-20 valid domains (like acme.com), separated by commas');
+      return 'invalid';
+    }
+    return { kind: 'domain', allowedDomains: domains };
+  };
+
   // Phase 1 -> publish with the chosen visibility.
   const handleCreate = async () => {
     if (!publish) return;
+    // Validate the staged gate BEFORE publishing so a typo'd passphrase doesn't
+    // leave the page momentarily open-public.
+    const stagedGate = isPublic && gateTouched ? buildGateInput() : null;
+    if (stagedGate === 'invalid') return;
     setBusy(true);
-    const id = toast.loading(mode === 'update' ? 'Publishing new version…' : 'Creating share link…');
+    const id = toast.loading(mode === 'update' ? 'Publishing new version...' : 'Creating share link...');
     try {
       const r = await publish(visibility, { mode, existingSlug: existing?.slug });
+      if (stagedGate) {
+        await updatePublishedAccessGate(r.publicId, stagedGate).catch(() => {
+          toast.warning('Published, but protecting the link failed - set access below before sharing.');
+        });
+      }
       // The publish callback creates the item with the server-default comment policy
       // ('none'); if the user left comments enabled, turn them on. Re-assert the PRESERVED
       // policy, not a blanket 'open': the binary toggle can't express 'restricted', so
@@ -223,7 +304,7 @@ export function PublishShareModal({
       if (commentsOn) {
         const nextPolicy: CommentPolicy = existing?.commentPolicy === 'restricted' ? 'restricted' : 'open';
         await updatePublishedCommentPolicy(r.publicId, nextPolicy).catch(() => {
-          toast.warning('Published, but enabling comments failed — you can toggle them below.');
+          toast.warning('Published, but enabling comments failed - you can toggle them below.');
         });
       }
       setResult(r);
@@ -264,7 +345,7 @@ export function PublishShareModal({
     setBusy(true);
     try {
       await updatePublishedVisibility(result.publicId, next);
-      toast.success(next === 'public' ? 'Now public — anyone with the link can view' : `Visibility set to ${next}`);
+      toast.success(next === 'public' ? 'Now public - anyone with the link can view' : `Visibility set to ${next}`);
     } catch {
       setVisibility(prev);
       toast.error('Failed to update visibility');
@@ -314,6 +395,37 @@ export function PublishShareModal({
     }
   };
 
+  // Phase 2 -> apply the staged access gate to the live item (explicit button,
+  // since passphrase/domains need typing before they're applyable).
+  const applyGateLive = async () => {
+    if (!result || busy) return;
+    const gate = buildGateInput();
+    if (gate === 'invalid') return;
+    setBusy(true);
+    try {
+      await updatePublishedAccessGate(result.publicId, gate);
+      setGateTouched(false);
+      setGatePassphrase('');
+      toast.success(
+        gate === null
+          ? 'Link is open to anyone again'
+          : gate.kind === 'passphrase'
+            ? 'Passphrase set - share it with your viewers'
+            : 'Domain restriction applied'
+      );
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onPickGate = (next: GateKind) => {
+    if (busy) return;
+    setGateKind(next);
+    setGateTouched(true);
+  };
+
   return (
     <Modal open={open} onClose={onClose}>
       <ModalDialog sx={{ maxWidth: 520, width: '100%' }} data-testid="publish-share-modal">
@@ -340,19 +452,19 @@ export function PublishShareModal({
                 value="update"
                 disabled={busy}
                 data-testid="publish-share-mode-update"
-                label={`Update “${existing.title}” — adds a new version`}
+                label={`Update "${existing.title}" - adds a new version`}
               />
               <Radio
                 value="new"
                 disabled={busy}
                 data-testid="publish-share-mode-new"
-                label="Publish as new — a separate page"
+                label="Publish as new - a separate page"
               />
             </RadioGroup>
             {mode === 'update' && (
               <Typography level="body-xs" sx={{ mt: 0.75, opacity: 0.75 }}>
                 {existing.versionsCount >= 2
-                  ? `Currently ${existing.versionsCount} versions — your update becomes the newest, switchable on the published page.`
+                  ? `Currently ${existing.versionsCount} versions - your update becomes the newest, switchable on the published page.`
                   : 'Re-publishing adds a 2nd version and turns on the version switcher on the published page.'}
               </Typography>
             )}
@@ -410,12 +522,107 @@ export function PublishShareModal({
               );
             })}
           </RadioGroup>
-          {isPublic && (
+          {/* Only assert open exposure when we KNOW it's open - i.e. a fresh
+              publish the user hasn't gated. For an already-published artifact
+              (update flow) the modal doesn't load the existing gate, so claiming
+              "anyone with the link" would be a falsehood when a gate is set; the
+              Access note below tells the truth instead. */}
+          {isPublic && gateKind === 'none' && !existing && !gateTouched && (
             <Typography level="body-xs" sx={{ mt: 0.75, color: AMBER }}>
               ⚠ Public: anyone with the link will be able to view this.
             </Typography>
           )}
         </FormControl>
+
+        {isPublic && (
+          <FormControl sx={{ mb: 2 }}>
+            <FormLabel>Access</FormLabel>
+            {existing && !gateTouched && (
+              // Update flow: the modal doesn't hydrate the existing gate, so this
+              // control starts neutral. Reassure the owner their current setting
+              // is untouched - handleCreate only sends a gate when gateTouched.
+              <Typography level="body-xs" sx={{ mb: 0.75, opacity: 0.75 }} data-testid="publish-share-gate-preserved">
+                Any existing access setting is kept unless you change it here.
+              </Typography>
+            )}
+            <RadioGroup
+              value={gateKind}
+              onChange={e => onPickGate(e.target.value as GateKind)}
+              data-testid="publish-share-gate"
+              sx={{ gap: 0.75 }}
+            >
+              {GATE_OPTIONS.map(o => (
+                <Radio
+                  key={o.value}
+                  value={o.value}
+                  disabled={busy}
+                  data-testid={`publish-share-gate-${o.value}`}
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      {o.icon}
+                      <Box>
+                        <Typography level="title-sm" sx={{ lineHeight: 1.2 }}>
+                          {o.label}
+                        </Typography>
+                        <Typography level="body-xs" sx={{ opacity: 0.75 }}>
+                          {o.hint}
+                        </Typography>
+                      </Box>
+                    </Box>
+                  }
+                />
+              ))}
+            </RadioGroup>
+            {gateKind === 'passphrase' && (
+              <Box sx={{ mt: 1 }}>
+                <Input
+                  type="password"
+                  placeholder="Passphrase (8+ characters)"
+                  value={gatePassphrase}
+                  disabled={busy}
+                  onChange={e => {
+                    setGatePassphrase(e.target.value);
+                    setGateTouched(true);
+                  }}
+                  slotProps={{ input: { 'data-testid': 'publish-share-gate-passphrase', autoComplete: 'off' } }}
+                />
+                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                  Share it however you like - anyone with the link and passphrase can view. It&apos;s stored only as a
+                  hash; to change it later, set a new one.
+                </Typography>
+              </Box>
+            )}
+            {gateKind === 'domain' && (
+              <Box sx={{ mt: 1 }}>
+                <Input
+                  placeholder="acme.com, partner.co"
+                  value={gateDomainsText}
+                  disabled={busy}
+                  onChange={e => {
+                    setGateDomainsText(e.target.value);
+                    setGateTouched(true);
+                  }}
+                  slotProps={{ input: { 'data-testid': 'publish-share-gate-domains' } }}
+                />
+                <Typography level="body-xs" sx={{ mt: 0.5, opacity: 0.75 }}>
+                  Viewers sign in (or sign up free) with a verified email on one of these domains.
+                </Typography>
+              </Box>
+            )}
+            {phase === 'shared' && gateTouched && (
+              <Button
+                size="sm"
+                variant="outlined"
+                onClick={() => void applyGateLive()}
+                loading={busy}
+                sx={{ mt: 1, alignSelf: 'flex-start' }}
+                data-testid="publish-share-gate-apply"
+              >
+                Update access
+              </Button>
+            )}
+          </FormControl>
+        )}
 
         <FormControl
           orientation="horizontal"
@@ -463,7 +670,7 @@ export function PublishShareModal({
                   onClick={() => void copyToClipboard(url)}
                   data-testid="publish-share-copy"
                 >
-                  <ContentCopyIcon />
+                  <LinkIcon />
                 </IconButton>
               </Tooltip>
             </Box>
@@ -498,7 +705,7 @@ export function PublishShareModal({
                         onClick={() => void copyToClipboard(toShareTokenUrl(shareToken))}
                         data-testid="publish-share-token-copy"
                       >
-                        <ContentCopyIcon />
+                        <LinkIcon />
                       </IconButton>
                     </Tooltip>
                   </Box>

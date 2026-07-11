@@ -266,11 +266,11 @@ const ProfilePage = () => {
 
           {hasPublishedArtifacts && (
             <StyledTab data-testid="published-tab" value={ProfileTab.Published}>
-              <Tooltip title="Manage your published & shared artifacts">
+              <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
                   <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    Published
+                    Live Artifacts
                   </Typography>
                 </Box>
               </Tooltip>

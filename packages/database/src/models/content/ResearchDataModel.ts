@@ -34,6 +34,7 @@ const ResearchDataSchema = new mongoose.Schema(
 
 ResearchDataSchema.index({ 'metaData.url': 1, userId: 1 });
 ResearchDataSchema.index({ 'metaData.url': 1, organizationId: 1 });
+ResearchDataSchema.index({ userId: 1 }); // Gears: has-any-research existence check
 
 ResearchDataSchema.plugin(softDeletePlugin);
 

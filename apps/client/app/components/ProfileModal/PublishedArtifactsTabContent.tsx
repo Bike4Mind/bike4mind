@@ -14,7 +14,7 @@ import {
   Link,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import LinkIcon from '@mui/icons-material/Link';
 import RestoreIcon from '@mui/icons-material/Restore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
@@ -102,7 +102,7 @@ export default function PublishedArtifactsTabContent() {
   if (isError) {
     return (
       <Typography color="danger" data-testid="published-artifacts-error">
-        Failed to load your published artifacts.
+        Failed to load your Live Artifacts.
       </Typography>
     );
   }
@@ -110,11 +110,11 @@ export default function PublishedArtifactsTabContent() {
   return (
     <Box data-testid="published-artifacts-tab">
       <Typography level="title-md" sx={{ mb: 0.5 }}>
-        Published artifacts
+        Live Artifacts
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Everything you&apos;ve published. Change who can view, turn comments on or off, restore a previous version, or
-        delete.
+        Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, restore a previous
+        version, or delete.
       </Typography>
 
       {artifacts.length === 0 ? (
@@ -221,7 +221,7 @@ export default function PublishedArtifactsTabContent() {
                       }}
                       data-testid={`published-artifact-copy-${a.publicId}`}
                     >
-                      <ContentCopyIcon />
+                      <LinkIcon />
                     </IconButton>
                   </Tooltip>
 
@@ -268,7 +268,7 @@ export default function PublishedArtifactsTabContent() {
                     sx={{ opacity: 0.7 }}
                     data-testid={`published-artifact-single-version-${a.publicId}`}
                   >
-                    Only one version published — re-publish this artifact (or use AI Revise) to create version history.
+                    Only one version published - re-publish this artifact (or use AI Revise) to create version history.
                     A version switcher appears on the page once there are 2 or more versions.
                   </Typography>
                 )}

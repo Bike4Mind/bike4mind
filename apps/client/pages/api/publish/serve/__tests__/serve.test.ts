@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload } = vi.hoisted(() => ({
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockDownload: vi.fn(),
+  mockUpdateOne: vi.fn(() => Promise.resolve()),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
@@ -41,7 +42,7 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockArtifactFindOne(...a)) }),
-    updateOne: () => Promise.resolve(),
+    updateOne: (...a: unknown[]) => mockUpdateOne(...a),
   },
   Project: {
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
@@ -54,15 +55,30 @@ import handler from '../[...path]';
 // request returns a WRAPPER embedding a cross-origin iframe to {publicId}.usercontent.app.<domain>;
 // the bundle CONTENT is served in isolated mode (`uc`), reached via the /uc rewrite (__uc=1) on
 // that usercontent host. `uc` = the publicId whose isolated origin we're simulating.
-type RunOpts = { user?: unknown; host?: string; raw?: boolean; v?: string; uc?: string; format?: string };
-const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format }: RunOpts = {}) => {
+type RunOpts = {
+  user?: unknown;
+  host?: string;
+  raw?: boolean;
+  v?: string;
+  uc?: string;
+  format?: string;
+  cookie?: string;
+  userAgent?: string;
+};
+const run = (
+  segments: string[],
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent }: RunOpts = {}
+) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
   if (format) query.format = format;
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
-  const { req, res } = createMocks({ method: 'GET', query, headers: { host: effectiveHost } });
+  const headers: Record<string, string> = { host: effectiveHost };
+  if (cookie) headers.cookie = cookie;
+  if (userAgent) headers['user-agent'] = userAgent;
+  const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -85,9 +101,10 @@ beforeEach(() => {
   mockArtifactFindOne.mockReset();
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
+  mockUpdateOne.mockReset().mockResolvedValue(undefined);
 });
 
-describe('GET /api/publish/serve — sandboxed bundle', () => {
+describe('GET /api/publish/serve - sandboxed bundle', () => {
   it('app host returns a wrapper embedding the CROSS-ORIGIN isolated iframe (Approach B)', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(
@@ -131,7 +148,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
     expect(data).toContain('console.log(42)'); // bundle inlined into the srcdoc
     expect(data).not.toContain('usercontent.app.bike4mind.com'); // no cross-origin embed attempted
     const csp = res.getHeader('Content-Security-Policy') as string;
-    expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits → must permit bundle inline JS
+    expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits -> must permit bundle inline JS
   });
 
   it('isolated origin serves the bundle AS the page with inline JS + unsafe-inline CSP', async () => {
@@ -146,10 +163,10 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(data).toContain('console.log(42)'); // author inline JS runs on the isolated origin
-    expect(data).toContain('<base href='); // public tier <base> → assets stay on the isolated origin
+    expect(data).toContain('<base href='); // public tier <base> -> assets stay on the isolated origin
     expect(data).not.toContain('<iframe'); // it IS the page, not a wrapper
     const csp = res.getHeader('Content-Security-Policy') as string;
-    expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed — isolation is the origin, not stripping
+    expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed - isolation is the origin, not stripping
     // frame-ancestors is the EXACT app wrapper host, no wildcard. Since usercontent
     // origins are nested under `.app.<domain>`, a `*.app.<domain>` source would suffix-match
     // them and re-permit bundle-on-bundle framing - so assert the wildcard is absent and that
@@ -159,7 +176,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
       .find(d => d.trim().startsWith('frame-ancestors'))!
       .trim();
     expect(frameAncestors).toBe('frame-ancestors https://app.bike4mind.com');
-    expect(frameAncestors).not.toContain('*'); // no wildcard → cannot match any *.app subdomain
+    expect(frameAncestors).not.toContain('*'); // no wildcard -> cannot match any *.app subdomain
     expect(frameAncestors).not.toContain('usercontent'); // one bundle can't frame another
   });
 
@@ -291,7 +308,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
   });
 });
 
-describe('GET /api/publish/serve — gated-bundle loader shell', () => {
+describe('GET /api/publish/serve - gated-bundle loader shell', () => {
   it('returns a public loader shell (not 401) for a gated bundle index with no credential', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
 
@@ -359,7 +376,7 @@ describe('GET /api/publish/serve — gated-bundle loader shell', () => {
   });
 });
 
-describe('GET /api/publish/serve — ?raw=1 authenticated render mode', () => {
+describe('GET /api/publish/serve - ?raw=1 authenticated render mode', () => {
   it('returns the inner srcdoc as inert text/plain for an authorized gated bundle', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({
@@ -431,7 +448,7 @@ describe('GET /api/publish/serve — ?raw=1 authenticated render mode', () => {
   });
 });
 
-describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
+describe('GET /api/publish/serve - reply/fabfile path is unchanged', () => {
   it('renders a public reply with script-src none (not the iframe path)', async () => {
     mockArtifactFindOne.mockReturnValue({
       publicId: 'r1',
@@ -595,7 +612,7 @@ describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
   });
 });
 
-describe('GET /api/publish/serve — version history (?v)', () => {
+describe('GET /api/publish/serve - version history (?v)', () => {
   const versioned = (over: Record<string, unknown> = {}) =>
     bundle({ sha256Index: 'curSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'curSHA' }], ...over });
   const dl = (key: string) =>
@@ -815,7 +832,7 @@ describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
   });
 });
 
-describe('GET /api/publish/serve — comment pin bridge', () => {
+describe('GET /api/publish/serve - comment pin bridge', () => {
   const BRIDGE_MARKER = 'pin-dropped'; // distinctive to the injected pin-bridge script
   const WIDGET_MOUNT = 'b4m-annotate-root'; // the wrapper comment-overlay mount node
 
@@ -846,7 +863,7 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
   });
 
   it('injects NO bridge or overlay when comments are disabled (default)', async () => {
-    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy → 'none'
+    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy -> 'none'
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
 
     const { res, promise } = run(['u', 'scope123', 'my-slug']);
@@ -981,5 +998,228 @@ describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
     expect(data).toContain('Hello world');
     expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
     expect(res.getHeader('Cache-Control')).toContain('no-store');
+  });
+});
+
+describe('GET /api/publish/serve - access gates (issue #383)', () => {
+  const passphraseGated = () => bundle({ accessGate: { kind: 'passphrase' } });
+
+  it('passphrase-gated navigation with no proof returns the PUBLIC prompt shell, uncached', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('passphrase-protected');
+    expect(data).toContain('/api/publish/gate/passphrase');
+    // Static shell: no artifact data leaks to an anonymous viewer.
+    expect(data).not.toContain('My Artifact');
+    expect(data).not.toContain('pub1');
+    expect(res.getHeader('Cache-Control')).toBe('no-store');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex');
+    // The credential-input page must not be frame-able (clickjacking).
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain("form-action 'self'");
+  });
+
+  it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Secret page</h1></body></html>'));
+
+    const token = signGateToken({ publicId: 'pub1' });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Gated-public must NOT serve like open-public: no CDN caching, no isolated
+    // public origin (srcdoc wrapper instead of the usercontent iframe).
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+    const data = res._getData() as string;
+    expect(data).not.toContain('usercontent.app.bike4mind.com');
+  });
+
+  it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const token = signGateToken({ publicId: 'someOtherArtifact' });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('passphrase-protected');
+  });
+
+  it('?raw=1 and asset requests hard-fail the passphrase gate (no shell, no loop)', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const raw = run(['u', 'scope123', 'my-slug'], { raw: true });
+    await raw.promise;
+    expect(raw.res._getStatusCode()).toBe(401);
+
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    const asset = run(['u', 'scope123', 'my-slug', 'style.css']);
+    await asset.promise;
+    expect(asset.res._getStatusCode()).toBe(401);
+  });
+
+  it('owner bypasses their own passphrase gate without a proof', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Mine</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain('passphrase-protected');
+  });
+
+  it('domain-gated anonymous navigation gets the JWT loader shell (sign-in path), not the passphrase prompt', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).not.toContain('passphrase-protected');
+    // The standard gated-bundle loader shell re-fetches ?raw=1 with the viewer's JWT.
+    expect(data).toContain('raw=1');
+  });
+});
+
+describe('GET /api/publish/serve - isolated /uc origin is open-public-only', () => {
+  it('404s a __uc request for an artifact that GAINED a gate (stale embed must not render the passphrase shell on *.usercontent)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getData() as string).not.toContain('passphrase-protected');
+  });
+
+  it('still serves an OPEN-public artifact on the isolated origin', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+  });
+});
+
+describe('GET /api/publish/serve - domain-gated share link recovery (no dead-end)', () => {
+  it('a domain-gated /a/<token> navigation with no credential serves the loader shell, not a bare 401', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // The loader shell re-fetches ?raw=1 with the viewer's Bearer - the domain-gate recovery.
+    expect(data).toContain('raw=1');
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('honors ?raw=1 on a share link (loader re-fetch returns srcdoc, not the wrapper)', async () => {
+    // Open (ungated, Tier-1) share link: checkShareGrant grants, ?raw=1 returns the
+    // inner srcdoc as inert text/plain - previously ?raw=1 was ignored for share and
+    // returned the HTML wrapper, which is why the loader shell could never recover.
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { raw: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+  });
+});
+
+describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () => {
+  it('passphrase-gated share link with no proof returns the prompt shell (token alone is not enough)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('passphrase-protected');
+    expect(res.getHeader('Cache-Control')).toBe('no-store');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+  });
+
+  it('passphrase-gated share link WITH proof serves, inlining assets (proof cookie cannot ride opaque-origin fetches)', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        accessGate: { kind: 'passphrase' },
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><img src="logo.png"></body></html>'));
+
+    const token = signGateToken({ publicId: 'pub1' });
+    const { res, promise } = run(['a', 'tok123'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // Gated share: inline asset model, NOT the <base> self-authorizing model.
+    expect(data).not.toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+  });
+
+  it('share asset requests hard-fail the passphrase gate (no prompt shell on assets)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['a', 'tok123', 'style.css']);
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+  });
+});
+
+describe('GET /api/publish/serve - external view counting (Published gear feed)', () => {
+  const renderedReply = () => bundle({ source: { kind: 'reply' }, renderedBody: 'hi there' });
+
+  it('an AUTHENTICATED non-owner view increments externalViewCount', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
+  });
+
+  it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+
+  it('a link-preview crawler does NOT count as a visitor', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], {
+      user: { id: 'someone-else' },
+      userAgent: 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+    });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+
+  it('the signed-in OWNER does not count as an external view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' } });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
   });
 });

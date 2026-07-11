@@ -2,9 +2,13 @@ import { connectDB } from '@bike4mind/database';
 import { HTTPError } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
 import { Config } from '@server/utils/config';
+import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
 import { contextToLogs } from '@server/utils/logger';
 import { Context, SQSEvent } from 'aws-lambda';
 import { handleWarmerInvocation } from '@server/utils/warmer';
+
+// Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
+registerToolGearObserver();
 
 /**
  * Wraps an SQS queue handler with structured logging and DB connection.

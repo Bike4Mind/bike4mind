@@ -1,5 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { z } from 'zod';
+import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
 import { VisibilitySchema, CommentPolicySchema } from '@bike4mind/common';
 import { resolveVisibility, invalidatePublishCdn, toCacheTarget } from '@server/services/publish';
@@ -11,11 +12,35 @@ import { resolveVisibility, invalidatePublishCdn, toCacheTarget } from '@server/
  *   DELETE -> soft-delete / archive (owner/admin)
  */
 
+/** Registrable domain, exact form: labels + a real TLD, lowercase-normalized before test. */
+const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+
+/**
+ * Access gate on top of `visibility: 'public'` (issue #383). The passphrase
+ * arrives in plaintext ONCE here and is bcrypt-hashed before it touches the
+ * document; `null` clears the gate. Only valid while visibility is public.
+ */
+const AccessGatePatchSchema = z.union([
+  z.object({
+    kind: z.literal('passphrase'),
+    passphrase: z.string().min(8, 'Passphrase must be at least 8 characters').max(128),
+  }),
+  z.object({
+    kind: z.literal('domain'),
+    allowedDomains: z
+      .array(z.string().trim().toLowerCase().pipe(z.string().regex(DOMAIN_RE, 'Invalid domain')))
+      .min(1)
+      .max(20),
+  }),
+  z.null(),
+]);
+
 const PatchSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(1000).optional(),
   visibility: VisibilitySchema.optional(),
   commentPolicy: CommentPolicySchema.optional(),
+  accessGate: AccessGatePatchSchema.optional(),
 });
 
 function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: boolean }): boolean {
@@ -59,7 +84,10 @@ const handler = baseApi()
     }
     if (parsed.data.title !== undefined) artifact.title = parsed.data.title;
     if (parsed.data.description !== undefined) artifact.description = parsed.data.description;
-    const wasPublic = artifact.visibility === 'public';
+    // "Open public" = cacheable, anonymous, ungated. Adding a gate to a public
+    // artifact leaves `visibility` alone but must still purge the CDN, so track
+    // the gate in the before/after comparison, not just the visibility level.
+    const wasOpenPublic = artifact.visibility === 'public' && !artifact.accessGate;
     if (parsed.data.visibility !== undefined) {
       // Validate the requested visibility against the artifact's scope-tier policy
       // (same rules as publish) so PATCH can't set a tier-invalid visibility.
@@ -69,16 +97,46 @@ const handler = baseApi()
       }
       artifact.visibility = parsed.data.visibility;
     }
+    if (parsed.data.accessGate !== undefined) {
+      if (parsed.data.accessGate === null) {
+        artifact.accessGate = null;
+      } else if (parsed.data.accessGate.kind === 'passphrase') {
+        artifact.accessGate = {
+          kind: 'passphrase',
+          passphraseHash: await bcrypt.hash(parsed.data.accessGate.passphrase, 10),
+        };
+      } else {
+        artifact.accessGate = {
+          kind: 'domain',
+          allowedDomains: [...new Set(parsed.data.accessGate.allowedDomains)],
+        };
+      }
+    }
+    // A gate only means something on the public tier - reject a combination that
+    // would silently never apply (fail loud beats a gate the owner thinks is on).
+    if (artifact.accessGate && artifact.visibility !== 'public') {
+      return res.status(400).json({
+        error: 'An access gate requires visibility "public" - clear the gate or set visibility to public',
+        code: 'GATE_REQUIRES_PUBLIC',
+      });
+    }
     if (parsed.data.commentPolicy !== undefined) artifact.commentPolicy = parsed.data.commentPolicy;
     await artifact.save();
 
-    // Downgrading away from public must purge the cached public copy immediately,
-    // otherwise the now-restricted page keeps serving from cache.
-    // Fire-and-forget - the service is best-effort and swallows its own errors.
-    if (wasPublic && artifact.visibility !== 'public') {
+    // Leaving the open-public state (downgrade OR newly-gated) must purge the
+    // cached public copy immediately, otherwise the now-restricted page keeps
+    // serving from cache. Fire-and-forget - best-effort, swallows its own errors.
+    const isOpenPublicNow = artifact.visibility === 'public' && !artifact.accessGate;
+    if (wasOpenPublic && !isOpenPublicNow) {
       void invalidatePublishCdn(toCacheTarget(artifact), req.logger);
     }
-    return res.status(200).json({ artifact: artifact.toJSON() });
+    const json = artifact.toJSON() as Record<string, unknown> & {
+      accessGate?: { passphraseHash?: string | null } | null;
+    };
+    // Defense in depth: the hash is select:false, but this doc was loaded in this
+    // request's write path - never echo it.
+    if (json.accessGate && 'passphraseHash' in json.accessGate) delete json.accessGate.passphraseHash;
+    return res.status(200).json({ artifact: json });
   })
   .delete(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });
