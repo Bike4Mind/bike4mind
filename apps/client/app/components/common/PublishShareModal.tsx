@@ -442,6 +442,9 @@ export function PublishShareModal({
       await updatePublishedAccessGate(result.publicId, gate);
       setGateTouched(false);
       setGatePassphrase('');
+      // Embedding is open-public only, so hide the embed editor the moment a gate
+      // goes on (and reveal it again when the gate is cleared) - matches the server rule.
+      setEmbedGated(gate !== null);
       toast.success(
         gate === null
           ? 'Link is open to anyone again'

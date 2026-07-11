@@ -269,10 +269,11 @@ const handler = baseApi().post(async (req, res) => {
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',
-        // Written unconditionally (empty array, not undefined) so a re-publish with
-        // no grants deterministically clears a prior allowlist - $set of undefined
-        // is dropped by some Mongoose versions and would leave the old value.
-        embedOrigins: embed.value,
+        // Like accessGate, the embed allowlist is managed post-publish via PATCH and
+        // is NOT part of the normal publish payload. Only write it here when the draft
+        // explicitly carried it, so a plain re-publish (new version) PRESERVES the
+        // owner's allowlist instead of clobbering it to [] and breaking live embeds.
+        ...(manifest.embedOrigins !== undefined ? { embedOrigins: embed.value } : {}),
         ownerId: previous ? previous.ownerId : String(req.user.id),
         lastPublishedBy: String(req.user.id),
         source: manifest.source,
