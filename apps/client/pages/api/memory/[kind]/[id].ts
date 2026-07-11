@@ -3,11 +3,13 @@ import {
   agentRepository,
   deepAgentCharterRepository,
   memoryLedgerRepository,
+  memoryPrincipalKeyRepository,
   mementoRepository,
 } from '@bike4mind/database';
 import { firstMatchStore, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
-import { createLedgerMemoryStore } from '@server/memory/ledgerMemoryStore';
+import { createLedgerMemoryStore, shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
 
@@ -25,7 +27,39 @@ const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'syst
  * With `?q=<query>` the response also carries `recalled`: the beliefs ranked for that query by the
  * ACT-R retrieval score (activation + relevance), the read-time pull that a chat preamble would use.
  */
-const handler = baseApi().get(async (req, res) => {
+const handler = baseApi();
+
+/**
+ * DELETE /api/memory/:kind/:id - crypto-shred a principal's memory (delete my data).
+ *
+ * Destroys the principal's data-encryption key (so every fact, including any in DB backups, becomes
+ * permanently unreadable) and clears + flags the ledger; the hash chain still verifies and the
+ * beliefs fold to redactions. Authenticated and owner-scoped: a caller may shred only their own user
+ * memory for now (agent/org/system deletion follows the write path). Irreversible.
+ */
+handler.delete(async (req, res) => {
+  const ownerUserId = req.user?.id;
+  if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
+
+  const kind = String(req.query.kind);
+  const id = String(req.query.id);
+  if (!PRINCIPAL_KINDS.includes(kind as PrincipalKind)) {
+    return res.status(400).json({ error: `Unknown principal kind '${kind}'.` });
+  }
+  if (kind !== 'user' || id !== ownerUserId) {
+    return res.status(403).json({ error: 'You can only delete your own user memory for now.' });
+  }
+
+  const shredded = await shredPrincipalMemory(
+    memoryLedgerRepository,
+    createKeyProvider(memoryPrincipalKeyRepository),
+    { kind: 'user', id },
+    ownerUserId
+  );
+  return res.status(200).json({ ok: true, shredded });
+});
+
+handler.get(async (req, res) => {
   const ownerUserId = req.user?.id;
   if (!ownerUserId) return res.status(401).json({ error: 'Authentication required' });
 
@@ -42,7 +76,11 @@ const handler = baseApi().get(async (req, res) => {
   // falls through to the snapshot adapters unchanged (DeepAgent charter, then persona-agent journal;
   // a user id via that user's own mementos). Every store is owner-scoped.
   const store = firstMatchStore([
-    createLedgerMemoryStore({ ledger: memoryLedgerRepository, ownerUserId }),
+    createLedgerMemoryStore({
+      ledger: memoryLedgerRepository,
+      keys: createKeyProvider(memoryPrincipalKeyRepository),
+      ownerUserId,
+    }),
     createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId }),
     createPersonaAgentMemoryStore({ agents: agentRepository, ownerUserId }),
     createUserMementoMemoryStore({ mementos: mementoRepository, ownerUserId }),

@@ -9,6 +9,7 @@ import {
   type MemoryStore,
   type Principal,
 } from '@bike4mind/memory';
+import { decryptFact, encryptFact, type KeyProvider, type SealedFact } from './factCipher';
 
 /**
  * The app-server seam between the pure memory core (sealing + fold) and the persisted ledger
@@ -29,6 +30,7 @@ export interface LedgerRepo {
     principalId: string,
     ownerUserId: string
   ): Promise<IMemoryLedgerEvent[]>;
+  markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number>;
 }
 
 // A concurrent append re-reads the head and retries; a handful of attempts absorbs realistic
@@ -44,9 +46,18 @@ const MAX_APPEND_ATTEMPTS = 6;
  */
 export async function appendMemoryEvent(
   repo: LedgerRepo,
+  keys: Pick<KeyProvider, 'getOrCreateDek'>,
   ownerUserId: string,
   input: MemoryEventInput
 ): Promise<MemoryEvent> {
+  // Encrypt the fact once (outside the retry loop): the ciphertext is what we persist, never the
+  // plaintext, so destroying the key later renders it - and any backup of it - unreadable.
+  let sealedFact: SealedFact | undefined;
+  if (input.fact !== undefined) {
+    const dek = await keys.getOrCreateDek(input.principal, ownerUserId);
+    sealedFact = encryptFact(dek, input.fact);
+  }
+
   for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
     const head = await repo.head(input.principal.kind, input.principal.id);
     const sealed = sealEvent(head?.hash ?? null, input);
@@ -57,7 +68,9 @@ export async function appendMemoryEvent(
       seq: head ? head.seq + 1 : 0,
       kind: sealed.kind,
       subject: sealed.subject,
-      fact: sealed.fact,
+      factCipher: sealedFact?.cipher,
+      factIv: sealedFact?.iv,
+      factTag: sealedFact?.tag,
       evidenceTier: sealed.evidenceTier,
       salience: sealed.salience,
       at: sealed.at,
@@ -72,35 +85,49 @@ export async function appendMemoryEvent(
   throw new Error('memory ledger append: exceeded retry budget under concurrent contention');
 }
 
-/** Rehydrate a stored document into the core's `MemoryEvent` shape (dropping the persistence scope). */
-function toMemoryEvent(d: IMemoryLedgerEvent): MemoryEvent {
+/**
+ * Rehydrate a stored document into the core's `MemoryEvent` shape, decrypting the fact with the
+ * principal's `dek`. A ciphered fact that will not decrypt - because the key was destroyed (shred)
+ * or the ciphertext was altered - folds as shredded, so lost content redacts rather than leaks.
+ */
+function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
+  let fact = d.fact; // legacy plaintext, for events written before at-rest encryption
+  let shredded = d.shredded;
+  if (d.factCipher && d.factIv && d.factTag) {
+    const plain = dek ? decryptFact(dek, { cipher: d.factCipher, iv: d.factIv, tag: d.factTag }) : null;
+    if (plain === null) {
+      fact = undefined;
+      shredded = true;
+    } else {
+      fact = plain;
+    }
+  }
   return {
     principal: { kind: d.principalKind, id: d.principalId },
     kind: d.kind,
     subject: d.subject,
-    fact: d.fact,
+    fact,
     evidenceTier: d.evidenceTier as EvidenceTier | undefined,
     salience: d.salience,
     at: d.at,
     sources: d.sources,
     hash: d.hash,
     prevHash: d.prevHash,
-    // Shred-safe fields; empty for events written before this format (they fold on `fact` as before).
     salt: d.salt ?? '',
     commitment: d.commitment ?? '',
-    shredded: d.shredded,
+    shredded,
   };
 }
 
 /**
  * A persisted-ledger MemoryStore, owner-scoped. Lists the principal's chain (restricted to
- * `ownerUserId`, so a not-owned or empty chain both read as null - no existence leak) and folds it
- * to a live profile, computing ACT-R salience as of `now`. This is the store that lets real writes
- * surface through GET /api/memory/:kind/:id; it is composed ahead of the snapshot adapters, so a
- * principal with no ledger events falls through to them unchanged.
+ * `ownerUserId`, so a not-owned or empty chain both read as null - no existence leak), decrypts each
+ * fact with the principal's key (fetched once), and folds to a live profile with ACT-R salience as
+ * of `now`. Composed ahead of the snapshot adapters, so a principal with no ledger falls through.
  */
 export function createLedgerMemoryStore(deps: {
   ledger: Pick<LedgerRepo, 'listChain'>;
+  keys: Pick<KeyProvider, 'getDek'>;
   ownerUserId: string;
   now?: string;
 }): MemoryStore {
@@ -108,9 +135,26 @@ export function createLedgerMemoryStore(deps: {
     async readProfile(principal: Principal): Promise<MemoryProfile | null> {
       const docs = await deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId);
       if (docs.length === 0) return null;
-      const chain = docs.map(toMemoryEvent);
+      const dek = await deps.keys.getDek(principal);
+      const chain = docs.map(d => toMemoryEvent(d, dek));
       const beliefs = foldEvents(chain, { now: deps.now ?? new Date().toISOString() });
       return { principal, beliefs };
     },
   };
+}
+
+/**
+ * Delete a principal's memory (crypto-shred): destroy its data-encryption key so every fact -
+ * including any in DB backups - becomes permanently unreadable, then clear the payloads and mark the
+ * chain shredded. The hash chain is untouched, so it still verifies; the beliefs fold to redactions.
+ * Returns the number of events shredded.
+ */
+export async function shredPrincipalMemory(
+  repo: Pick<LedgerRepo, 'markShredded'>,
+  keys: Pick<KeyProvider, 'destroyDek'>,
+  principal: Principal,
+  ownerUserId: string
+): Promise<number> {
+  await keys.destroyDek(principal); // the irreversible act; do it first
+  return repo.markShredded(principal.kind, principal.id, ownerUserId);
 }

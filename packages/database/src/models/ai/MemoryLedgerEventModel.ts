@@ -42,7 +42,14 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
   // --- sealed event (content-addressed; see @bike4mind/memory) ---
   kind: MemoryEventKind;
   subject: string;
+  /** Plaintext fact - only for events written before at-rest encryption; new events use `factCipher`. */
   fact?: string;
+  /** AES-GCM ciphertext of the fact (base64), decryptable with the principal's key. */
+  factCipher?: string;
+  /** Initialization vector for `factCipher` (base64). */
+  factIv?: string;
+  /** GCM auth tag for `factCipher` (base64). */
+  factTag?: string;
   evidenceTier?: MemoryEvidenceTier;
   salience?: MemorySalience;
   /** ISO-8601. Part of the content hash, so it is stored verbatim to keep the hash reproducible. */
@@ -72,6 +79,9 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
     kind: { type: String, enum: MEMORY_EVENT_KINDS, required: true },
     subject: { type: String, required: true },
     fact: { type: String },
+    factCipher: { type: String },
+    factIv: { type: String },
+    factTag: { type: String },
     evidenceTier: { type: String, enum: MEMORY_EVIDENCE_TIERS },
     salience: { type: String, enum: MEMORY_SALIENCES },
     at: { type: String, required: true },
@@ -139,6 +149,21 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
   ): Promise<IMemoryLedgerEvent[]> {
     const docs = await this.model.find({ principalKind, principalId, ownerUserId }).sort({ seq: 1 });
     return docs.map(d => d.toObject());
+  }
+
+  /**
+   * Mark a principal's whole chain shredded and remove every fact payload (plaintext and
+   * ciphertext). Belt-and-suspenders to destroying the key: the key alone makes ciphertext
+   * unreadable, but clearing the payloads reclaims space and makes the shred explicit. The
+   * commitments, hashes, and links are untouched, so the chain still verifies. Returns the count of
+   * events affected.
+   */
+  async markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number> {
+    const res = await this.model.updateMany(
+      { principalKind, principalId, ownerUserId },
+      { $set: { shredded: true }, $unset: { fact: '', factCipher: '', factIv: '', factTag: '' } }
+    );
+    return res.modifiedCount ?? 0;
   }
 }
 

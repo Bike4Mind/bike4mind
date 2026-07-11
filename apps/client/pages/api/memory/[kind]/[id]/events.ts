@@ -1,5 +1,5 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { memoryLedgerRepository } from '@bike4mind/database';
+import { memoryLedgerRepository, memoryPrincipalKeyRepository } from '@bike4mind/database';
 import {
   EVIDENCE_TIERS,
   resolveSubject,
@@ -8,6 +8,7 @@ import {
   type PrincipalKind,
 } from '@bike4mind/memory';
 import { appendMemoryEvent } from '@server/memory/ledgerMemoryStore';
+import { createKeyProvider } from '@server/memory/factCipher';
 
 const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'system'];
 const EVENT_KINDS = ['assert', 'affirm', 'retract'] as const;
@@ -68,7 +69,8 @@ const handler = baseApi().post(async (req, res) => {
     sources,
   };
 
-  const sealed = await appendMemoryEvent(memoryLedgerRepository, ownerUserId, eventInput);
+  const keys = createKeyProvider(memoryPrincipalKeyRepository);
+  const sealed = await appendMemoryEvent(memoryLedgerRepository, keys, ownerUserId, eventInput);
   return res.status(201).json({ event: sealed });
 });
 
