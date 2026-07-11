@@ -216,7 +216,10 @@ export function parseEmbedOrigin(raw: string): string | null {
  *  to reject grants that fall under the app or usercontent domain (which would
  *  re-open bundle-on-bundle framing through the "external" path). */
 export function isOriginUnderHost(origin: string, host: string): boolean {
-  const h = host.trim().toLowerCase().replace(/^https?:\/\//, '');
+  const h = host
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '');
   let originHost: string;
   try {
     originHost = new URL(origin).hostname;
@@ -310,8 +313,10 @@ export const PublishedArtifactSchema = z.object({
   commentPolicy: CommentPolicySchema.prefault('none'),
 
   /** Exact external origins permitted to embed this artifact (frame-ancestors
-   *  grants). Publication-level; empty/absent means app host only. */
-  embedOrigins: z.array(z.string()).max(EMBED_ORIGINS_MAX).optional(),
+   *  grants). Publication-level; empty/absent means app host only. Uses the same
+   *  normalizing/deduping EmbedOriginsSchema as the write path so the stored
+   *  contract enforces the canonical-origin invariant, not just `string[]`. */
+  embedOrigins: EmbedOriginsSchema.optional(),
 
   ownerId: z.string(),
   lastPublishedBy: z.string().optional(),

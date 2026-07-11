@@ -193,7 +193,7 @@ export function AccessGateEditor({
             <Textarea
               value={domainsText}
               minRows={2}
-              placeholder="milliononmars.com, bike4mind.com"
+              placeholder="example.com, example.org"
               onChange={e => setDomainsText(e.target.value)}
               slotProps={{ textarea: { 'data-testid': `${testIdPrefix}-domains-input` } }}
               sx={{ mb: 1, fontFamily: 'monospace', fontSize: '13px' }}

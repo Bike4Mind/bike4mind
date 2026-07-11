@@ -133,4 +133,17 @@ describe('finalize - embed allowlist preserve-on-republish', () => {
     expect((res._getJSONData() as { code?: string }).code).toBe('EMBED_REQUIRES_OPEN_PUBLIC');
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
   });
+
+  it('rejects an allowlist when the PRESERVED previous artifact is gated (public draft, but gate survives)', async () => {
+    // A re-publish keeps the prior access gate, so "open public" must account for it -
+    // a public-visibility draft against a gated artifact is NOT open-public.
+    mockFindOne.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase' } });
+    setManifest(manifest({ visibility: 'public', embedOrigins: ['https://example.com'] }));
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(400);
+    expect((res._getJSONData() as { code?: string }).code).toBe('EMBED_REQUIRES_OPEN_PUBLIC');
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled();
+  });
 });

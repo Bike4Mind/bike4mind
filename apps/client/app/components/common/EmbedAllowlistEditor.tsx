@@ -29,8 +29,8 @@ function errMessage(err: unknown): string {
 }
 
 /**
- * Casual input sugar: turn what a user actually types (`erikbethke.com`,
- * `erikbethke.com/blog`) into a candidate https origin, then let the strict
+ * Casual input sugar: turn what a user actually types (`example.com`,
+ * `example.com/blog`) into a candidate https origin, then let the strict
  * parseEmbedOrigin validate it. Prepends `https://` when no scheme is given and
  * reduces a full URL to its origin (frame-ancestors is origin-level anyway). An
  * explicit `http://` is left as-is so parseEmbedOrigin rejects it loudly.

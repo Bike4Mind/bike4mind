@@ -26,6 +26,12 @@ export function validateEmbedOrigins(raw: string[] | undefined, ctx: { isOpenPub
     if (!parsed) {
       return { ok: false, error: `Invalid embed origin: ${origin}`, code: 'EMBED_ORIGIN_INVALID' };
     }
+    // Reject first-party (app/usercontent) origins. Intentionally a no-op when
+    // PUBLISH_HOST is empty: that only happens when SERVER_DOMAIN is unset, i.e. an
+    // unbranded local/dev/fork deployment that has NO first-party host to protect and
+    // whose serve layer already falls back to the same-origin srcdoc model (see
+    // validateBundle.ts, whose own host allowlists fail closed the same way). A real
+    // deployment always sets SERVER_DOMAIN, so this rule is active in every branded env.
     if (PUBLISH_HOST && isOriginUnderHost(parsed, PUBLISH_HOST)) {
       return { ok: false, error: 'Cannot grant embedding to a Bike4Mind host', code: 'EMBED_ORIGIN_SELF' };
     }
