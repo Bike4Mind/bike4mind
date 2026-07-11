@@ -538,6 +538,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Share links stay on the same-origin sandboxed-srcdoc model (Approach A): never the
   // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
   const artifactHost = !isShare && isOpenPublic ? usercontentHostFor(artifact.publicId) : '';
+  // Embed allowlist applies ONLY to an open-public artifact (a gated page is
+  // no-store and never framed). Appended to frame-ancestors on both the wrapper
+  // and, for the ancestor chain, the isolated bundle.
+  const embedGrants = isOpenPublic ? (artifact.embedOrigins ?? []) : [];
+  // Chrome-less render for an allowlisted embed (`?embed=1`): drop the version bar
+  // and comment overlay so the widget is just the content (the canonical link back
+  // to the real page still ships via shareMeta). Open-public, non-share only - the
+  // query flag can't relax any gate.
+  const isEmbed = !isShare && isOpenPublic && req.query.embed === '1';
 
   // -- Approach B: serve the bundle AS the page on its isolated origin. --
   // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
@@ -549,7 +558,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return res.status(404).json({ error: 'Not found' });
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req));
+    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants));
     res.setHeader('Cache-Control', bundleCacheControl);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     // No bumpViewCount here: the isolated bundle is loaded as a sub-resource of the
@@ -588,10 +597,10 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta, isShare);
+  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta, isShare, isEmbed);
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : ''));
+  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
@@ -614,7 +623,8 @@ function renderBundleWrapper(
   requestedVersion: string,
   isolatedSrc: string,
   shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
-  noindex: boolean
+  noindex: boolean,
+  embed = false
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -642,6 +652,10 @@ function renderBundleWrapper(
   const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
   const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
   const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
+  // Embedded render drops the interactive chrome (version switcher + comment
+  // overlay) so the widget is just the content. The canonical link back to the
+  // real page is already emitted for open-public renders via shareMeta.
+  const chromeBody = embed ? '' : `\n${overlay}\n${versionBar}`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -659,9 +673,7 @@ function renderBundleWrapper(
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}
-${overlay}
-${versionBar}
+${iframeTag}${chromeBody}
 <a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
 ${noscriptBody}
 </body>
@@ -730,10 +742,25 @@ function buildVersionSwitcherHtml(artifact: PublishedArtifactLean, requestedVers
  * bundle can never frame another. If a deployment ever serves the wrapper from additional
  * hosts, enumerate them here explicitly rather than reintroducing a wildcard.
  */
-function buildIsolatedBundleCsp(req: Request): string {
+/**
+ * frame-ancestors suffix for an open-public artifact's embed allowlist. Each
+ * entry is already a normalized exact https origin (validateEmbedOrigins), never
+ * a wildcard, so appending them preserves the no-wildcard property that keeps one
+ * bundle from framing another. Empty string when there are no grants.
+ */
+function embedGrantsSuffix(embedOrigins: string[]): string {
+  return embedOrigins.length ? ` ${embedOrigins.join(' ')}` : '';
+}
+
+function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): string {
   const appHost = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
   const appHostSrc = appHost ? ` ${appHost}` : '';
   const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  // frame-ancestors is evaluated against EVERY ancestor in the chain, not just the
+  // direct parent. When an external site embeds the wrapper, the embedder is an
+  // ancestor of THIS isolated bundle too, so its origin must be listed here as well
+  // as on the wrapper - otherwise the browser blocks the nested bundle frame.
+  const grants = embedGrantsSuffix(embedOrigins);
   return [
     "default-src 'none'",
     `script-src 'unsafe-inline' 'self' ${blessedScriptSrc}`,
@@ -744,11 +771,11 @@ function buildIsolatedBundleCsp(req: Request): string {
     "connect-src 'self'",
     "base-uri 'self'",
     "form-action 'none'",
-    appHost ? `frame-ancestors ${appHost}` : "frame-ancestors 'self'",
+    appHost ? `frame-ancestors ${appHost}${grants}` : `frame-ancestors 'self'${grants}`,
   ].join('; ');
 }
 
-function buildWrapperCsp(req: Request, artifactHost?: string): string {
+function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: string[] = []): string {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
   // Approach B: the wrapper embeds the bundle via a cross-origin iframe to the artifact's
   // isolated host, so frame-src must permit it. Only the exact per-artifact host is added.
@@ -781,8 +808,12 @@ function buildWrapperCsp(req: Request, artifactHost?: string): string {
     `connect-src ${docOrigin}${appHostSrc}`,
     `base-uri ${docOrigin}${appHostSrc}`,
     "form-action 'none'",
-    // App host derived from PUBLISH_HOST; 'self' alone when unconfigured.
-    PUBLISH_HOST ? `frame-ancestors 'self' ${appHost}` : "frame-ancestors 'self'",
+    // App host derived from PUBLISH_HOST; 'self' alone when unconfigured. Embed
+    // grants (open-public only) are appended so an allowlisted external site can
+    // frame the wrapper - the isolated bundle CSP lists them too (ancestor chain).
+    PUBLISH_HOST
+      ? `frame-ancestors 'self' ${appHost}${embedGrantsSuffix(embedOrigins)}`
+      : `frame-ancestors 'self'${embedGrantsSuffix(embedOrigins)}`,
   ].join('; ');
 }
 
@@ -798,6 +829,9 @@ interface PublishedArtifactLean {
   /** Optional gate on top of `public` (issue #383). passphraseHash is select:false
    *  on the schema, so it never appears in this lean read. */
   accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+  /** External https origins allowed to frame this artifact (open-public only).
+   *  Appended to frame-ancestors on both the wrapper and the isolated bundle. */
+  embedOrigins?: string[];
   commentPolicy?: 'none' | 'open' | 'restricted';
   ownerId: string;
   storageKeyPrefix: string;
