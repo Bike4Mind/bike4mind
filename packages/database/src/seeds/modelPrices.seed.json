@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-09T20:46:03.653Z",
+  "generatedAt": "2026-07-11T03:47:10.876Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -608,6 +608,48 @@
         "1050000": {
           "input": 0.000005,
           "output": 0.00003
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-luna",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.000001,
+          "output": 0.000006
+        },
+        "1050000": {
+          "input": 0.000002,
+          "output": 0.000009
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-sol",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.000005,
+          "output": 0.00003
+        },
+        "1050000": {
+          "input": 0.00001,
+          "output": 0.000045
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-terra",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.0000025,
+          "output": 0.000015
+        },
+        "1050000": {
+          "input": 0.000005,
+          "output": 0.0000225
         }
       }
     },
