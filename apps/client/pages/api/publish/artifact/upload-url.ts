@@ -126,6 +126,9 @@ const handler = baseApi().post(async (req, res) => {
     visibility: viz.visibility,
     gatedToGroupId: body.gatedToGroupId,
     commentPolicy: body.commentPolicy ?? 'none',
+    // Carried through the draft; finalize applies the host/open-public rules once
+    // the final visibility is settled (a new publish has no access gate yet).
+    embedOrigins: body.embedOrigins,
     source: body.source ?? { kind: 'bundle' as const },
     files: body.files,
   };

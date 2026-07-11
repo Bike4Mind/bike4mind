@@ -119,6 +119,12 @@ const PublishedArtifactSchema = new Schema(
      *  share-token links (/a/<token>). */
     accessGate: { type: AccessGateSubSchema, default: null },
 
+    /** Embed allowlist: external https origins permitted to frame this artifact.
+     *  Appended to the served `frame-ancestors` CSP. Meaningful ONLY for an open
+     *  public artifact (a gated page is no-store and never framed). `undefined`
+     *  (not `[]`) when unset so the field is absent rather than an empty array. */
+    embedOrigins: { type: [String], default: undefined },
+
     /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
      *  `visibility` (who may view). Defaults to `none` so existing artifacts
      *  stay read-only until the owner opts in. */

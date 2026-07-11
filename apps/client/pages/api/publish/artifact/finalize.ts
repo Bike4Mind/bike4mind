@@ -19,6 +19,7 @@ import {
   buildPublishUrlPath,
   invalidatePublishCdn,
   toCacheTarget,
+  validateEmbedOrigins,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -44,6 +45,7 @@ const DraftManifestSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
   commentPolicy: z.enum(['none', 'open', 'restricted']).optional(),
+  embedOrigins: z.array(z.string()).optional(),
   source: z.object({
     kind: z.enum(['bundle', 'reply', 'fabfile']),
     artifactId: z.string().optional(),
@@ -104,6 +106,13 @@ const handler = baseApi().post(async (req, res) => {
   const viz = resolveVisibility(manifest.tier, manifest.visibility);
   if (!viz.ok || viz.visibility !== manifest.visibility) {
     return res.status(400).json({ error: 'Draft visibility is no longer valid for this scope' });
+  }
+  // A fresh publish carries no access gate, so open-public reduces to visibility.
+  const embed = validateEmbedOrigins(manifest.embedOrigins, {
+    isOpenPublic: manifest.visibility === 'public',
+  });
+  if (!embed.ok) {
+    return res.status(400).json({ error: embed.error, code: embed.code });
   }
 
   // 3. Verify every file exists + collect metadata
@@ -260,6 +269,10 @@ const handler = baseApi().post(async (req, res) => {
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',
+        // Written unconditionally (empty array, not undefined) so a re-publish with
+        // no grants deterministically clears a prior allowlist - $set of undefined
+        // is dropped by some Mongoose versions and would leave the old value.
+        embedOrigins: embed.value,
         ownerId: previous ? previous.ownerId : String(req.user.id),
         lastPublishedBy: String(req.user.id),
         source: manifest.source,
