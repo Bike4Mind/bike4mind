@@ -134,6 +134,12 @@ export enum ChatModels {
   // GPT 5.5
   GPT5_5 = 'gpt-5.5',
 
+  // GPT 5.6 (Sol / Luna / Terra) - reasoning flagships; fixed temperature, and
+  // function tools must go through /v1/responses (see RESPONSES_API_TOOL_MODELS).
+  GPT5_6_SOL = 'gpt-5.6-sol',
+  GPT5_6_LUNA = 'gpt-5.6-luna',
+  GPT5_6_TERRA = 'gpt-5.6-terra',
+
   LLAMA3_INSTRUCT_8B_V1 = 'meta.llama3-8b-instruct-v1:0',
   LLAMA3_INSTRUCT_70B_V1 = 'meta.llama3-70b-instruct-v1:0',
 
@@ -250,6 +256,9 @@ export const REASONING_SUPPORTED_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
   ChatModels.GPT5_4_NANO,
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
 ]);
 
 /**
@@ -294,6 +303,13 @@ export const REASONING_EFFORT_INCOMPATIBLE_WITH_TOOLS_MODELS: ReadonlySet<string
   ChatModels.GPT5_4,
   ChatModels.GPT5_4_MINI,
   ChatModels.GPT5_4_NANO,
+  // GPT-5.6 (Sol/Luna/Terra) also hard-reject tools+reasoning_effort with a 400, but
+  // unlike the 5.4 family the chat-path drop does NOT rescue them (they still 400 with
+  // no reasoning_effort - the model reasons by default). They route to /v1/responses
+  // instead (RESPONSES_API_TOOL_MODELS); membership here is the required invariant.
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
 ]);
 
 /**
@@ -318,6 +334,14 @@ export const RESPONSES_API_TOOL_MODELS: ReadonlySet<string> = new Set([
   ChatModels.GPT5_NANO,
   ChatModels.GPT5_1,
   ChatModels.GPT5_2,
+  // GPT-5.6 (Sol/Luna/Terra): tools+reasoning hard-400 on /v1/chat/completions
+  // ("use /v1/responses or set reasoning_effort to 'none'"), and dropping
+  // reasoning_effort does not clear it (verified against the live API). Routing
+  // to /v1/responses keeps tools AND reasoning working, so unlike the 5.4 family
+  // (which the chat-path drop rescues) these belong here.
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
 ]);
 
 /**
