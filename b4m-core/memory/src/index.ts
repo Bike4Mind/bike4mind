@@ -1,4 +1,5 @@
 export * from './types';
+export * from './ledger';
 export * from './store';
 export * from './readPrincipalMemory';
 export * from './composeStores';
