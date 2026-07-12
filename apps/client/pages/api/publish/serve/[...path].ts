@@ -598,14 +598,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  // Lead-gen target for the embed badge: the marketing site with UTM attribution
-  // when configured, else the artifact's own canonical page on the app (still a
-  // branded destination). Runtime-derived - no hardcoded brand host.
-  const brandHref = isEmbed
-    ? WEBSITE_URL
-      ? `${WEBSITE_URL}/?utm_source=embedded-artifact&utm_medium=embed-badge&utm_campaign=publish`
-      : `${docOrigin}${canonicalPath}`
-    : '';
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
+  // site with UTM attribution when configured, else a branded fallback. The embed
+  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
+  // the app root (the viewer is already on the canonical page). The bar only renders
+  // for an own-tab open-public artifact.
+  const marketing = (medium: string) =>
+    WEBSITE_URL ? `${WEBSITE_URL}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish` : '';
+  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
   const wrapperPage = renderBundleWrapper(
     artifact,
     srcdoc,
@@ -614,8 +615,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     shareMeta,
     isShare,
     isEmbed,
-    brandHref,
-    isEmbed ? getBrandName() : ''
+    pillHref,
+    barHref,
+    pillHref || barHref ? getBrandName() : ''
   );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -644,7 +646,8 @@ function renderBundleWrapper(
   shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
   noindex: boolean,
   embed = false,
-  brandHref = '',
+  pillHref = '',
+  barHref = '',
   brandName = ''
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
@@ -677,39 +680,67 @@ function renderBundleWrapper(
   // overlay) so the widget is just the content. The canonical link back to the
   // real page is already emitted for open-public renders via shareMeta.
   const chromeBody = embed ? '' : `\n${overlay}\n${versionBar}`;
-  // Lead-gen livery for a chrome-less embed: a "Built with {brand}" pill floating
-  // over the framed artifact (top-level link, not blocked by the wrapper CSP). This
-  // is the ONLY brand mark a third-party embed carries - the bundle's own share
-  // footer is baked into the content and absent from externally-built bundles - so
-  // it makes every embed do the powered-by lead-gen job. Embed mode only.
+
+  // Lead-gen livery. The bundle's own "powered-by" footer is baked into the CONTENT
+  // and absent from externally-built bundles, so the wrapper carries brand itself:
+  //   - embed (chrome-less): a small floating "Built with {brand}" pill.
+  //   - own-tab open-public: a persistent bottom bar with a "Try {brand}" CTA
+  //     (Anthropic-style); the iframe is shortened so the bar covers nothing.
+  // Both are top-level links (CSP-safe, no JS). barPresent also relocates the Report
+  // affordance INTO the bar and lifts the version switcher above it.
   const brandBadge =
-    embed && brandHref && brandName
-      ? `\n<a class="b4m-brand" href="${escapeHtml(brandHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
+    embed && pillHref && brandName
+      ? `\n<a class="b4m-brand" href="${escapeHtml(pillHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
           brandName
         )}</a>`
       : '';
+  const barPresent = !embed && !!barHref && !!brandName;
+  const bar = barPresent
+    ? `\n<div class="b4m-bar">
+  <span>Built with <strong>${escapeHtml(brandName)}</strong></span>
+  <span class="b4m-bar-r">
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-cta" href="${escapeHtml(
+      barHref
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)} &rarr;</a>
+  </span>
+</div>`
+    : '';
+  const floatingReport = barPresent
+    ? ''
+    : `\n<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">&#9873; Report</a>`;
+  const iframeHeight = barPresent ? 'calc(100vh - 52px)' : '100vh';
+
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
 <title>${titleHtml}</title>${metaHead}
-<style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:100vh}
+<style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:${iframeHeight}}
 .b4m-report{position:fixed;bottom:10px;right:10px;z-index:2147483647;font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
 .b4m-report:hover{color:#fff;background:rgba(13,24,48,.95)}
 .b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#fff;background:#F26C1F;padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
 .b4m-brand:hover{filter:brightness(1.07)}
-.b4m-ver{position:fixed;bottom:10px;left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
+.b4m-bar{position:fixed;left:0;right:0;bottom:0;height:52px;box-sizing:border-box;z-index:2147483647;display:flex;
+  align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:#0d1830;color:#e2e8f0;
+  border-top:1px solid rgba(255,255,255,.12);font:600 13px/1 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.b4m-bar strong{color:#fff}
+.b4m-bar-r{display:flex;align-items:center;gap:14px}
+.b4m-bar-report{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
+.b4m-bar-report:hover{color:#cbd5e1}
+.b4m-bar-cta{padding:8px 14px;border-radius:9px;background:#F26C1F;color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
+.b4m-bar-cta:hover{filter:brightness(1.07)}
+.b4m-ver{position:fixed;bottom:${barPresent ? '62px' : '10px'};left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
   font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#cbd5e1;background:rgba(13,24,48,.78);
   padding:5px 9px;border-radius:8px;backdrop-filter:blur(4px)}
 .b4m-ver a{color:#8ab4ff;text-decoration:none;font-weight:600}
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}${chromeBody}${brandBadge}
-<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
+${iframeTag}${chromeBody}${brandBadge}${floatingReport}${bar}
 ${noscriptBody}
 </body>
 </html>`;
