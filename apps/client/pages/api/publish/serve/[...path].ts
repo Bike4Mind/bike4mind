@@ -604,7 +604,9 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // the app root (the viewer is already on the canonical page). The bar only renders
   // for an own-tab open-public artifact.
   const marketing = (medium: string) =>
-    WEBSITE_URL ? `${WEBSITE_URL}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish` : '';
+    WEBSITE_URL
+      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
+      : '';
   const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
   const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
   const wrapperPage = renderBundleWrapper(
@@ -627,6 +629,12 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
   return res.status(200).send(wrapperPage);
 });
+
+// Lead-gen livery palette. Reuses the SAME env knobs as the baked share footer
+// (buildShareFooterHtml), so a fork rebrands the footer and the wrapper pill/bar
+// with one set of vars; defaults are the project palette.
+const LIVERY_NAVY = process.env.NEXT_PUBLIC_SHARE_BRAND_NAVY || '#0d1830';
+const LIVERY_ORANGE = process.env.NEXT_PUBLIC_SHARE_BRAND_ORANGE || '#F26C1F';
 
 /**
  * Minimal trusted wrapper page hosting the bundle in an iframe. Runs no script of
@@ -722,16 +730,16 @@ function renderBundleWrapper(
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
 .b4m-report:hover{color:#fff;background:rgba(13,24,48,.95)}
 .b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
-  color:#fff;background:#F26C1F;padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
+  color:#fff;background:${LIVERY_ORANGE};padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
 .b4m-brand:hover{filter:brightness(1.07)}
 .b4m-bar{position:fixed;left:0;right:0;bottom:0;height:52px;box-sizing:border-box;z-index:2147483647;display:flex;
-  align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:#0d1830;color:#e2e8f0;
+  align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:${LIVERY_NAVY};color:#e2e8f0;
   border-top:1px solid rgba(255,255,255,.12);font:600 13px/1 ui-sans-serif,system-ui,-apple-system,sans-serif}
 .b4m-bar strong{color:#fff}
 .b4m-bar-r{display:flex;align-items:center;gap:14px}
 .b4m-bar-report{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
 .b4m-bar-report:hover{color:#cbd5e1}
-.b4m-bar-cta{padding:8px 14px;border-radius:9px;background:#F26C1F;color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
+.b4m-bar-cta{padding:8px 14px;border-radius:9px;background:${LIVERY_ORANGE};color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
 .b4m-bar-cta:hover{filter:brightness(1.07)}
 .b4m-ver{position:fixed;bottom:${barPresent ? '62px' : '10px'};left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
   font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#cbd5e1;background:rgba(13,24,48,.78);
