@@ -9,7 +9,7 @@ import {
   type MemoryStore,
   type Principal,
 } from '@bike4mind/memory';
-import { decryptFact, encryptFact, type KeyProvider, type SealedFact } from './factCipher';
+import { decryptFact, encryptFact, subjectHmac, type KeyProvider, type SealedFact } from './factCipher';
 
 /**
  * The app-server seam between the pure memory core (sealing + fold) and the persisted ledger
@@ -50,17 +50,17 @@ export async function appendMemoryEvent(
   ownerUserId: string,
   input: MemoryEventInput
 ): Promise<MemoryEvent> {
-  // Encrypt the fact once (outside the retry loop): the ciphertext is what we persist, never the
-  // plaintext, so destroying the key later renders it - and any backup of it - unreadable.
-  let sealedFact: SealedFact | undefined;
-  if (input.fact !== undefined) {
-    const dek = await keys.getOrCreateDek(input.principal, ownerUserId);
-    sealedFact = encryptFact(dek, input.fact);
-  }
+  // Fetch the key once (outside the retry loop) and use it to encrypt the fact AND to HMAC the
+  // subject. Neither the fact nor the subject is ever persisted in plaintext, so destroying the key
+  // later renders both - and any backup of them - unreadable. The HMAC is deterministic, so
+  // re-mentions of the same fact still coalesce.
+  const dek = await keys.getOrCreateDek(input.principal, ownerUserId);
+  const sealedFact: SealedFact | undefined = input.fact !== undefined ? encryptFact(dek, input.fact) : undefined;
+  const sealedInput: MemoryEventInput = { ...input, subject: subjectHmac(dek, input.subject) };
 
   for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
     const head = await repo.head(input.principal.kind, input.principal.id);
-    const sealed = sealEvent(head?.hash ?? null, input);
+    const sealed = sealEvent(head?.hash ?? null, sealedInput);
     const stored = await repo.tryInsert({
       principalKind: input.principal.kind,
       principalId: input.principal.id,

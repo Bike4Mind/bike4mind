@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Principal } from '@bike4mind/memory';
-import { createKeyProvider, decryptFact, encryptFact, type Keyring } from './factCipher';
+import { createKeyProvider, decryptFact, encryptFact, subjectHmac, type Keyring } from './factCipher';
 
 /** In-memory keyring for the provider tests. */
 function makeKeyring() {
@@ -42,6 +42,23 @@ describe('encryptFact / decryptFact', () => {
     const dek = randomBytes(32);
     const sealed = encryptFact(dek, 'secret');
     expect(decryptFact(dek, { ...sealed, cipher: Buffer.from('tampered').toString('base64') })).toBeNull();
+  });
+});
+
+describe('subjectHmac', () => {
+  it('is deterministic per key (so re-mentions coalesce) and never contains the plaintext', () => {
+    const dek = randomBytes(32);
+    const a = subjectHmac(dek, 'love sushi');
+    expect(subjectHmac(dek, 'love sushi')).toBe(a); // deterministic
+    expect(a).not.toContain('sushi'); // opaque - no content leak
+    expect(a).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('differs across keys and across subjects', () => {
+    const k1 = randomBytes(32);
+    const k2 = randomBytes(32);
+    expect(subjectHmac(k1, 'love sushi')).not.toBe(subjectHmac(k2, 'love sushi')); // per principal
+    expect(subjectHmac(k1, 'love sushi')).not.toBe(subjectHmac(k1, 'hate sushi')); // per subject
   });
 });
 

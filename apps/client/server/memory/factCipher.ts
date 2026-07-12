@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import type { Principal } from '@bike4mind/memory';
 
 /**
@@ -21,6 +21,19 @@ export function encryptFact(dek: Buffer, plaintext: string): SealedFact {
   const c = createCipheriv('aes-256-gcm', dek, iv);
   const cipher = Buffer.concat([c.update(plaintext, 'utf8'), c.final()]);
   return { cipher: cipher.toString('base64'), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64') };
+}
+
+/**
+ * A subject is `subjectKey(fact)` - the normalized content words of the fact - so storing it in
+ * plaintext would leak what a shredded fact was about. Instead store an HMAC of it under a key
+ * derived from the principal's DEK: opaque (irreversible, no content leak), deterministic (the same
+ * fact for the same principal yields the same HMAC, so coalescence still works), and shredded along
+ * with the fact when the DEK is destroyed. A separate derived key keeps subject-HMAC and fact-
+ * encryption cryptographically independent.
+ */
+export function subjectHmac(dek: Buffer, subjectKey: string): string {
+  const derived = createHmac('sha256', dek).update('mementos-2.0/subject-hmac/v1').digest();
+  return createHmac('sha256', derived).update(subjectKey).digest('hex');
 }
 
 /** Decrypt a sealed fact, or return null when the key is wrong/destroyed or the ciphertext was altered. */

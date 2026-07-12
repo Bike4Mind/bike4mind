@@ -98,13 +98,29 @@ describe('appendMemoryEvent', () => {
     expect(store[1].ownerUserId).toBe('u1');
   });
 
-  it('stores the fact as ciphertext, never plaintext', async () => {
+  it('stores the fact as ciphertext and the subject as an HMAC, never plaintext', async () => {
     const { repo, store } = makeFake();
     const { provider } = makeKeys();
-    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'role', fact: 'my secret fact' }));
+    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'my secret fact' }));
     expect(store[0].fact).toBeUndefined();
     expect(store[0].factCipher).toBeTruthy();
+    expect(store[0].subject).not.toBe('loves sushi'); // subject is HMAC'd, not the plaintext key
+    expect(store[0].subject).toMatch(/^[0-9a-f]{64}$/);
     expect(JSON.stringify(store[0])).not.toContain('my secret fact');
+    expect(JSON.stringify(store[0])).not.toContain('sushi');
+  });
+
+  it('HMACs the subject deterministically so re-mentions still land on one belief', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    await appendMemoryEvent(
+      repo,
+      provider,
+      'u1',
+      input({ subject: 'loves sushi', kind: 'affirm', at: '2026-07-02T00:00:00.000Z' })
+    );
+    expect(store[0].subject).toBe(store[1].subject); // same plaintext subject -> same HMAC
   });
 
   it('retries onto a fresh tip when a concurrent append wins the seq', async () => {
