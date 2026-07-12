@@ -33,6 +33,11 @@ const dedupKey = (b: Belief): string => (b.shredded ? b.id : subjectKey(b.fact) 
  * everything they have without a backfill. Beliefs are de-duplicated by normalized fact content
  * (earlier stores win, so a ledger belief takes precedence over its V1 memento twin); the profile's
  * identity fields come from the first store that answered. Returns null only when all stores do.
+ *
+ * De-dup ENRICHES rather than merely dropping: the winning belief inherits `embedding` from a later
+ * twin when it has none of its own. The two sources are complementary - a ledger belief carries the
+ * computed `activation` the memento lacks, and its V1 memento twin carries the stored `embedding`
+ * the ledger lacks - so the merged belief needs both to be ranked well by recall.
  */
 export function mergeStores(stores: MemoryStore[]): MemoryStore {
   return {
@@ -42,14 +47,20 @@ export function mergeStores(stores: MemoryStore[]): MemoryStore {
       );
       if (profiles.length === 0) return null;
 
-      const seen = new Set<string>();
+      const byKey = new Map<string, Belief>();
       const beliefs: Belief[] = [];
       for (const profile of profiles) {
         for (const belief of profile.beliefs) {
           const key = dedupKey(belief);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          beliefs.push(belief);
+          const winner = byKey.get(key);
+          if (winner) {
+            // Same fact from a later store: keep the winner, but take any field it is missing.
+            if (!winner.embedding?.length && belief.embedding?.length) winner.embedding = belief.embedding;
+            continue;
+          }
+          const copy = { ...belief };
+          byKey.set(key, copy);
+          beliefs.push(copy);
         }
       }
       // Most active first, matching the fold's own ordering.

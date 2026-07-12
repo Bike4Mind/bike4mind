@@ -53,6 +53,13 @@ export interface Belief {
   activation?: number;
   /** True when the belief's source fact has been shredded; `fact` is a redaction placeholder. */
   shredded?: boolean;
+  /**
+   * Semantic embedding of `fact`, when the source carries one (a V1 memento already stores the
+   * embedding of its summary). Lets recall score topicality by cosine similarity instead of lexical
+   * overlap - the retrieval-parity gate against V1's vector search. Optional: a belief without one
+   * falls back to the lexical scorer.
+   */
+  embedding?: number[];
   derivedFrom: string[];
   /** ISO-8601. */
   lastAffirmedAt: string;

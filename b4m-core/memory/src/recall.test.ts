@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lexicalScorer, recall } from './recall';
+import { cosineSimilarity, embeddingScorer, lexicalScorer, recall } from './recall';
 import type { Belief } from './types';
 
 const belief = (over: Partial<Belief>): Belief => ({
@@ -62,5 +62,64 @@ describe('recall', () => {
   it('is deterministic', () => {
     const args = [[pharma, quantum, hobby], 'pharma quantum', { relevanceWeight: 2 }] as const;
     expect(recall(...args)).toEqual(recall(...args));
+  });
+});
+
+describe('cosineSimilarity', () => {
+  it('is 1 for identical vectors and 0 for orthogonal ones', () => {
+    expect(cosineSimilarity([1, 0, 0], [1, 0, 0])).toBeCloseTo(1);
+    expect(cosineSimilarity([1, 0, 0], [0, 1, 0])).toBeCloseTo(0);
+  });
+
+  it('is magnitude-invariant (direction is what matters)', () => {
+    expect(cosineSimilarity([1, 2, 3], [10, 20, 30])).toBeCloseTo(1);
+  });
+
+  it('returns 0 on empty, mismatched-length, or zero-magnitude vectors', () => {
+    expect(cosineSimilarity([], [1, 2])).toBe(0);
+    expect(cosineSimilarity([1, 2, 3], [1, 2])).toBe(0);
+    expect(cosineSimilarity([0, 0], [1, 2])).toBe(0);
+  });
+});
+
+describe('embeddingScorer', () => {
+  const green = belief({ id: 'green', fact: 'favorite color is green', embedding: [1, 0, 0] });
+  const pharmaEmb = belief({ id: 'pharma', fact: 'targets pharma companies', embedding: [0, 1, 0] });
+  const noEmb = belief({ id: 'noEmb', fact: 'sailing on the bay' });
+
+  it('scores a belief by cosine against the query embedding, not lexical overlap', () => {
+    // The query shares NO tokens with the fact, so a lexical scorer would return 0 - this is exactly
+    // the V1-parity case ("what hue do I like?" -> "favorite color is green").
+    const scorer = embeddingScorer([1, 0, 0]);
+    expect(scorer('what hue do I fancy', green)).toBeCloseTo(1);
+    expect(lexicalScorer('what hue do I fancy', green)).toBe(0);
+    expect(scorer('what hue do I fancy', pharmaEmb)).toBeCloseTo(0);
+  });
+
+  it('falls back to the lexical scorer for a belief carrying no embedding', () => {
+    const scorer = embeddingScorer([1, 0, 0]);
+    expect(scorer('sailing', noEmb)).toBeGreaterThan(0); // lexical hit, not a 0 from the missing vector
+  });
+
+  it('falls back to lexical for every belief when the query embedding is unavailable', () => {
+    const scorer = embeddingScorer([]);
+    expect(scorer('green color', green)).toBeGreaterThan(0);
+  });
+
+  it('ranks the on-topic belief over a more-active off-topic one (the V2 ranking gate)', () => {
+    // The measured production bug: an off-topic belief with activation outranked the on-topic one,
+    // because lexical relevance was too small to overcome the activation gap.
+    const hotOffTopic = belief({
+      id: 'green',
+      fact: 'favorite color is green',
+      embedding: [1, 0, 0],
+      activation: 0.24,
+    });
+    const coldOnTopic = belief({ id: 'pharma', fact: 'targets pharma companies', embedding: [0, 1, 0], activation: 0 });
+    const out = recall([hotOffTopic, coldOnTopic], 'which drug companies am I chasing', {
+      scorer: embeddingScorer([0, 1, 0]),
+      relevanceWeight: 3,
+    });
+    expect(out[0].belief.id).toBe('pharma');
   });
 });

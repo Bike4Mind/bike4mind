@@ -15,6 +15,8 @@ export interface UserMementoLike {
   questId?: string;
   lastAccessedAt: Date | string;
   isArchived?: boolean;
+  /** The memento's stored summary embedding (V1's vector-search field); carried into the belief. */
+  embedding?: number[];
 }
 
 const clamp01 = (n: number): number => (n < 0 ? 0 : n > 1 ? 1 : n);
@@ -41,6 +43,9 @@ export function userMementosToProfile(userId: string, mementos: UserMementoLike[
         evidenceTier: 'engineering-proxy',
         confidence: tierConfidence(m.tier, m.weight),
         salience: asSalience(m.tier),
+        // The memento already carries the embedding of its summary (V1 computes it at creation for
+        // vector search) - carry it through so V2 recall can score topicality semantically.
+        ...(m.embedding?.length ? { embedding: m.embedding } : {}),
         derivedFrom: m.sessionId ? [m.sessionId] : m.questId ? [m.questId] : [],
         lastAffirmedAt: toIso(m.lastAccessedAt),
       })),

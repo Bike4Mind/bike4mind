@@ -33,6 +33,41 @@ export const lexicalScorer: RecallScorer = (query, belief) => {
   return union === 0 ? 0 : intersection / union;
 };
 
+/** Cosine similarity of two equal-length vectors, 0 when either is empty or zero-magnitude. */
+export function cosineSimilarity(a: readonly number[], b: readonly number[]): number {
+  if (a.length === 0 || a.length !== b.length) return 0;
+  let dot = 0;
+  let magA = 0;
+  let magB = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    magA += a[i] * a[i];
+    magB += b[i] * b[i];
+  }
+  if (magA === 0 || magB === 0) return 0;
+  return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+}
+
+/**
+ * Semantic scorer: cosine similarity between a PRE-COMPUTED query embedding and the belief's own
+ * `embedding`. This is the retrieval-parity gate against V1 (which ranks mementos by vector
+ * similarity) - lexical overlap cannot match "what hue do I like?" to "favorite color is green",
+ * and embeddings can.
+ *
+ * The query is embedded once by the host (an API call) and passed in; per-belief scoring is pure.
+ * A belief with no embedding falls back to `fallback` (lexical by default), so a mixed belief set -
+ * some sources carry embeddings, some do not - still ranks sensibly instead of scoring 0.
+ */
+export function embeddingScorer(
+  queryEmbedding: readonly number[],
+  fallback: RecallScorer = lexicalScorer
+): RecallScorer {
+  return (query, belief) =>
+    belief.embedding?.length && queryEmbedding.length
+      ? cosineSimilarity(queryEmbedding, belief.embedding)
+      : fallback(query, belief);
+}
+
 export interface RecallOptions {
   /** Relevance scorer; defaults to the pure lexical overlap. Supply embedding similarity at the host. */
   scorer?: RecallScorer;

@@ -89,4 +89,30 @@ describe('mergeStores', () => {
     const merged = await mergeStores([fixedStore(null), fixedStore(null)]).readProfile({ kind: 'user', id: 'u1' });
     expect(merged).toBeNull();
   });
+
+  it('enriches the winning belief with an embedding from its twin in a later store', async () => {
+    // The ledger belief has the computed activation but no embedding; its V1 memento twin (same fact,
+    // different id) has the stored embedding but no activation. The merged belief must carry BOTH, or
+    // recall cannot rank it semantically. This is the V2 retrieval-parity path.
+    const ledger = fixedStore(profWith('u1', [belief('lg1', 'Favorite color is green', 0.24)]));
+    const mementos = fixedStore(
+      profWith('u1', [belief('mem1', 'favorite color is green.', 0, { embedding: [0.1, 0.9] })])
+    );
+
+    const merged = await mergeStores([ledger, mementos]).readProfile({ kind: 'user', id: 'u1' });
+
+    expect(merged!.beliefs).toHaveLength(1); // still de-duped to one
+    expect(merged!.beliefs[0].id).toBe('lg1'); // ledger still wins identity
+    expect(merged!.beliefs[0].activation).toBe(0.24); // ...keeps its activation
+    expect(merged!.beliefs[0].embedding).toEqual([0.1, 0.9]); // ...and inherits the embedding
+  });
+
+  it('does not overwrite an embedding the winning belief already has', async () => {
+    const ledger = fixedStore(profWith('u1', [belief('lg1', 'same fact', 0.2, { embedding: [1, 0] })]));
+    const mementos = fixedStore(profWith('u1', [belief('mem1', 'same fact', 0, { embedding: [0, 1] })]));
+
+    const merged = await mergeStores([ledger, mementos]).readProfile({ kind: 'user', id: 'u1' });
+
+    expect(merged!.beliefs[0].embedding).toEqual([1, 0]);
+  });
 });
