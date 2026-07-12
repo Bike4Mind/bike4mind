@@ -41,13 +41,17 @@ const V2_RELEVANCE_WEIGHT = 3;
 async function embedQuery(userId: string, query: string): Promise<number[]> {
   if (!query.trim()) return [];
 
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) return [];
+  // Independent lookups - the configured model and the user's keys - so fetch them together rather
+  // than paying two serial round trips to a remote Mongo.
+  const [defaultEmbeddingModel, apiKeyTable] = await Promise.all([
+    adminSettingsRepository.getSettingsValue('defaultEmbeddingModel'),
+    apiKeyService.getEffectiveLLMApiKeys(userId, {
+      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+      getSettingsByNames,
+    }),
+  ]);
 
-  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  });
+  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) return [];
 
   const provider = getProviderFromModel(defaultEmbeddingModel);
   const config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
@@ -81,9 +85,13 @@ async function embedQuery(userId: string, query: string): Promise<number[]> {
  */
 export async function recallMementosV2(
   userId: string,
-  query: string
+  query: string,
+  opts: { enabled?: boolean } = {}
 ): Promise<{ fact: string; relevance: number }[] | null> {
-  if (!(await isMementosV2Enabled(userId))) return null;
+  // The chat resolves the opt-in from the user document it already holds and hands it over, so the
+  // common path costs no round trip. Only a caller that does not know looks it up.
+  const enabled = opts.enabled ?? (await isMementosV2Enabled(userId));
+  if (!enabled) return null;
 
   const store = mergeStores([
     createLedgerMemoryStore({
@@ -94,12 +102,17 @@ export async function recallMementosV2(
     createUserMementoMemoryStore({ mementos: mementoRepository, ownerUserId: userId }),
   ]);
 
-  const profile = await store.readProfile({ kind: 'user', id: userId });
+  // The profile read and the query embedding are INDEPENDENT - one hits Mongo, the other an
+  // embedding provider - so they run concurrently. Serially they cost their sum (~330ms + ~370ms);
+  // together they cost the slower one. This is the single biggest win on the recall path.
+  const [profile, queryEmbedding] = await Promise.all([
+    store.readProfile({ kind: 'user', id: userId }),
+    embedQuery(userId, query).catch(() => [] as number[]),
+  ]);
+
   if (!profile) return [];
 
   const live = profile.beliefs.filter(b => !b.shredded); // never inject shredded content
-
-  const queryEmbedding = await embedQuery(userId, query).catch(() => [] as number[]);
 
   return recall(live, query, {
     k: V2_RECALL_K,

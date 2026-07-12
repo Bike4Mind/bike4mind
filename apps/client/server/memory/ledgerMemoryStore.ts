@@ -158,9 +158,13 @@ export function createLedgerMemoryStore(deps: {
 }): MemoryStore {
   return {
     async readProfile(principal: Principal): Promise<MemoryProfile | null> {
-      const docs = await deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId);
+      // The chain and the principal's key are independent reads - fetch them together instead of
+      // paying two serial round trips to a remote Mongo on the chat's critical path.
+      const [docs, dek] = await Promise.all([
+        deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId),
+        deps.keys.getDek(principal),
+      ]);
       if (docs.length === 0) return null;
-      const dek = await deps.keys.getDek(principal);
       const chain = docs.map(d => toMemoryEvent(d, dek));
       const beliefs = foldEvents(chain, { now: deps.now ?? new Date().toISOString() });
       return { principal, beliefs };

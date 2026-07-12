@@ -154,10 +154,18 @@ describe('ContextSummarizationFeature', () => {
 });
 
 describe('MementoFeature - Mementos V2 injection', () => {
-  const makeCtx = (recallMementosV2: unknown) =>
+  // The V2 opt-in is stored as a Mongoose Map, and the feature reads it off the in-hand user
+  // document (no DB round trip). Model that shape here - a plain object would not exercise the
+  // Map-aware read that the chat gate depends on.
+  const v2User = (on: boolean) => ({
+    id: 'u1',
+    preferences: { experimentalFeatures: new Map([['enableMementosV2', on]]) },
+  });
+
+  const makeCtx = (recallMementosV2: unknown, user: unknown = v2User(true)) =>
     ({
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
-      user: { id: 'u1' },
+      user,
       db: {},
       recallMementosV2,
     }) as unknown as ConstructorParameters<typeof MementoFeature>[0];
@@ -177,7 +185,8 @@ describe('MementoFeature - Mementos V2 injection', () => {
       { fact: 'User works in pharma', relevance: 0.4 },
     ]);
     const messages = await call(new MementoFeature(makeCtx(recallMementosV2)));
-    expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like');
+    // The feature hands over the opt-in it already resolved, so the recall need not re-fetch the user.
+    expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like', { enabled: true });
     expect(messages.map(m => m.content)).toEqual(['[Memory] User loves sushi', '[Memory] User works in pharma']);
     expect(messages.every(m => m.role === 'system')).toBe(true);
   });
@@ -185,6 +194,18 @@ describe('MementoFeature - Mementos V2 injection', () => {
   it('injects nothing when V2 is on but the recall is empty', async () => {
     const messages = await call(new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]))));
     expect(messages).toEqual([]);
+  });
+
+  it('does NOT take the V2 path for a user who has not opted in', async () => {
+    // The regression that kept V2 dark: the flag lives in a Mongoose Map, and a dot-access read of
+    // it always yielded undefined, so this gate never fired for anyone. Off must mean off, and on
+    // must mean on - both are asserted here.
+    const recallMementosV2 = vi.fn().mockResolvedValue([{ fact: 'should not be used', relevance: 1 }]);
+    const feature = new MementoFeature(makeCtx(recallMementosV2, v2User(false)));
+
+    await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
+
+    expect(recallMementosV2).not.toHaveBeenCalled();
   });
 });
 

@@ -45,6 +45,7 @@ import {
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   ImageModerationIncident,
+  isExperimentalFeatureEnabled,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import { getRelevantMementos } from '../mementoService';
@@ -178,7 +179,16 @@ export interface IChatCompletionServiceOptions {
    * mementos, recalled); for a user on V1 it returns null so the caller keeps the classic memento
    * path. Optional so callers that do not wire it fall back to V1.
    */
-  recallMementosV2?: (userId: string, query: string) => Promise<{ fact: string; relevance: number }[] | null>;
+  /**
+   * `enabled` lets the caller hand over the V2 opt-in it has ALREADY resolved from the in-hand user
+   * document, so the recall does not re-fetch the user just to re-read a flag - a wasted remote-DB
+   * round trip (~100ms) on the critical path of every chat turn. Omitted, the recall looks it up.
+   */
+  recallMementosV2?: (
+    userId: string,
+    query: string,
+    opts?: { enabled?: boolean }
+  ) => Promise<{ fact: string; relevance: number }[] | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -404,8 +414,13 @@ export class MementoFeature implements ChatCompletionFeature {
   ): Promise<IMessage[]> {
     // Mementos V2: if this user is on V2, inject the ledger-unioned-with-mementos recall and skip
     // the V1 path (the two are mutually exclusive). A null result means the user is on V1.
-    if (this.chatCompletion.recallMementosV2) {
-      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message);
+    //
+    // The opt-in is resolved HERE, off the user document we already hold - the recall would
+    // otherwise re-fetch the user from the remote DB just to re-read the same flag, ~100ms of dead
+    // time on every chat turn. Must use the Map-aware reader: the bag is a Mongoose Map.
+    const isV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
+    if (isV2 && this.chatCompletion.recallMementosV2) {
+      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
       if (v2 !== null) {
         this.usedMementoIds = [];
         this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);
