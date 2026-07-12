@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createHash, randomBytes } from 'node:crypto';
 import type { Principal } from '@bike4mind/memory';
-import { createKeyProvider, decryptFact, encryptFact, subjectHmac, type Keyring } from './factCipher';
+import {
+  createKeyProvider,
+  decryptFact,
+  decryptVector,
+  encryptFact,
+  encryptVector,
+  subjectHmac,
+  type Keyring,
+} from './factCipher';
 
 /** In-memory keyring for the provider tests. */
 function makeKeyring() {
@@ -91,5 +99,41 @@ describe('createKeyProvider', () => {
     const sealed = encryptFact(dek, 'discovery calls');
     const fetched = await keys.getDek(user);
     expect(fetched && decryptFact(fetched, sealed)).toBe('discovery calls');
+  });
+});
+
+describe('encryptVector / decryptVector', () => {
+  const vec = [0.0125, -0.9, 0.5, 0.33333, -0.001];
+
+  it('round-trips a vector under the principal DEK', () => {
+    const dek = randomBytes(32);
+    const out = decryptVector(dek, encryptVector(dek, vec));
+    expect(out).not.toBeNull();
+    expect(out).toHaveLength(vec.length);
+    // Float32 packing keeps the ciphertext compact; cosine is insensitive to the rounding.
+    out!.forEach((v, i) => expect(v).toBeCloseTo(vec[i], 5));
+  });
+
+  it('does not store the vector in the clear', () => {
+    const dek = randomBytes(32);
+    const sealed = encryptVector(dek, vec);
+    const raw = Buffer.from(sealed.cipher, 'base64');
+    // The plaintext Float32 bytes must not appear verbatim in the ciphertext.
+    expect(raw.includes(Buffer.from(new Float32Array(vec).buffer))).toBe(false);
+  });
+
+  it('returns null under the WRONG key - this is what makes crypto-shred cover the embedding', () => {
+    // An embedding is a semantic image of the fact (inversion can partially reconstruct the text),
+    // so destroying the principal's DEK must render it unreadable exactly like the fact itself.
+    const sealed = encryptVector(randomBytes(32), vec);
+    expect(decryptVector(randomBytes(32), sealed)).toBeNull();
+  });
+
+  it('returns null on tampered ciphertext (GCM auth tag)', () => {
+    const dek = randomBytes(32);
+    const sealed = encryptVector(dek, vec);
+    const bytes = Buffer.from(sealed.cipher, 'base64');
+    bytes[0] ^= 0xff;
+    expect(decryptVector(dek, { ...sealed, cipher: bytes.toString('base64') })).toBeNull();
   });
 });

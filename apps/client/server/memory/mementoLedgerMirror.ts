@@ -32,11 +32,16 @@ export async function isMementosV2Enabled(userId: string): Promise<boolean> {
  * the summary (so re-mentions coalesce); the fact is the memento summary; the evidence tier is the
  * lowest (`engineering-proxy`) because a memento is an unverified LLM extraction. The fact is
  * encrypted at rest under the user's key, exactly like a direct ledger write.
+ *
+ * `embedding` is the vector the memento pipeline ALREADY computed for this summary - passing it here
+ * costs nothing and makes the ledger self-sufficient for semantic recall, instead of depending on a
+ * V1 memento twin to supply the vector at read time. It is encrypted under the same key as the fact.
  */
 export async function mirrorMementoToLedger(params: {
   userId: string;
   summary: string;
   sources?: string[];
+  embedding?: number[];
 }): Promise<void> {
   const subject = resolveSubject({ fact: params.summary });
   if (!subject) return; // nothing to key on (content-free summary)
@@ -49,5 +54,6 @@ export async function mirrorMementoToLedger(params: {
     evidenceTier: 'engineering-proxy',
     at: new Date().toISOString(),
     sources: params.sources,
+    embedding: params.embedding,
   });
 }

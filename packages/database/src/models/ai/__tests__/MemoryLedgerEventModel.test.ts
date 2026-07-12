@@ -62,4 +62,33 @@ describe('MemoryLedgerRepository', () => {
     expect((await memoryLedgerRepository.listChain('user', 'u1', 'u1')).map(e => e.hash)).toEqual(['a']);
     expect(await memoryLedgerRepository.head('user', 'u2')).toEqual({ hash: 'b', seq: 0 });
   });
+
+  it('markShredded clears the embedding ciphertext along with the fact', async () => {
+    // The embedding is a semantic image of the fact (inversion can partially reconstruct the source
+    // text), so a shred that cleared the fact but left the embedding behind would leave a
+    // recoverable fingerprint of the very content it destroyed.
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({
+        seq: 0,
+        hash: 'h0',
+        fact: undefined,
+        factCipher: 'fc',
+        factIv: 'fi',
+        factTag: 'ft',
+        embeddingCipher: 'ec',
+        embeddingIv: 'ei',
+        embeddingTag: 'et',
+      })
+    );
+
+    const n = await memoryLedgerRepository.markShredded('user', 'u1', 'u1');
+    expect(n).toBe(1);
+
+    const [doc] = await memoryLedgerRepository.listChain('user', 'u1', 'u1');
+    expect(doc.shredded).toBe(true);
+    expect(doc.factCipher).toBeUndefined();
+    expect(doc.embeddingCipher).toBeUndefined();
+    expect(doc.embeddingIv).toBeUndefined();
+    expect(doc.embeddingTag).toBeUndefined();
+  });
 });

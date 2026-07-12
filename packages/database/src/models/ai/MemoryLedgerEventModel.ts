@@ -50,6 +50,17 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
   factIv?: string;
   /** GCM auth tag for `factCipher` (base64). */
   factTag?: string;
+  /**
+   * AES-GCM ciphertext of the fact's embedding (base64, Float32-packed), under the SAME per-principal
+   * key as the fact. Encrypted rather than plaintext because an embedding is a semantic image of the
+   * fact that inversion can partially reconstruct - in the clear it would outlive the crypto-shred as
+   * a fingerprint of the destroyed content. Cleared by `markShredded` alongside the fact.
+   */
+  embeddingCipher?: string;
+  /** Initialization vector for `embeddingCipher` (base64). */
+  embeddingIv?: string;
+  /** GCM auth tag for `embeddingCipher` (base64). */
+  embeddingTag?: string;
   evidenceTier?: MemoryEvidenceTier;
   salience?: MemorySalience;
   /** ISO-8601. Part of the content hash, so it is stored verbatim to keep the hash reproducible. */
@@ -82,6 +93,9 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
     factCipher: { type: String },
     factIv: { type: String },
     factTag: { type: String },
+    embeddingCipher: { type: String },
+    embeddingIv: { type: String },
+    embeddingTag: { type: String },
     evidenceTier: { type: String, enum: MEMORY_EVIDENCE_TIERS },
     salience: { type: String, enum: MEMORY_SALIENCES },
     at: { type: String, required: true },
@@ -161,7 +175,20 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
   async markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number> {
     const res = await this.model.updateMany(
       { principalKind, principalId, ownerUserId },
-      { $set: { shredded: true }, $unset: { fact: '', factCipher: '', factIv: '', factTag: '' } }
+      {
+        $set: { shredded: true },
+        // The embedding goes with the fact: it is a semantic image of the same content, so leaving it
+        // behind would defeat the shred (inversion could partially reconstruct what was destroyed).
+        $unset: {
+          fact: '',
+          factCipher: '',
+          factIv: '',
+          factTag: '',
+          embeddingCipher: '',
+          embeddingIv: '',
+          embeddingTag: '',
+        },
+      }
     );
     return res.modifiedCount ?? 0;
   }

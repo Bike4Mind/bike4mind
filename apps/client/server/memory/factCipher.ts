@@ -36,6 +36,43 @@ export function subjectHmac(dek: Buffer, subjectKey: string): string {
   return createHmac('sha256', derived).update(subjectKey).digest('hex');
 }
 
+/**
+ * Encrypt a belief's embedding under the SAME per-principal DEK as its fact.
+ *
+ * An embedding must never be stored in plaintext: it is a dense semantic image of the fact, and
+ * embedding-inversion can approximately reconstruct the source text from it. Left in the clear it
+ * would survive the crypto-shred as a recoverable fingerprint of the very fact we destroyed - the
+ * same leak `subjectHmac` exists to prevent. Sharing the fact's DEK means destroying that one key
+ * makes the fact AND its embedding unreadable together.
+ *
+ * The vector is packed as Float32 (not JSON) so the ciphertext stays compact - ~6KB for a 1536-dim
+ * embedding rather than ~30KB. Embeddings are float32 at the source and cosine is insensitive to the
+ * rounding, so nothing meaningful is lost.
+ */
+export function encryptVector(dek: Buffer, vector: number[]): SealedFact {
+  const bytes = Buffer.from(new Float32Array(vector).buffer);
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', dek, iv);
+  const cipher = Buffer.concat([c.update(bytes), c.final()]);
+  return { cipher: cipher.toString('base64'), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64') };
+}
+
+/** Decrypt an embedding, or null when the key is wrong/destroyed or the ciphertext was altered. */
+export function decryptVector(dek: Buffer, sealed: SealedFact): number[] | null {
+  try {
+    const d = createDecipheriv('aes-256-gcm', dek, Buffer.from(sealed.iv, 'base64'));
+    d.setAuthTag(Buffer.from(sealed.tag, 'base64'));
+    const buf = Buffer.concat([d.update(Buffer.from(sealed.cipher, 'base64')), d.final()]);
+    if (buf.byteLength % 4 !== 0) return null;
+    // Copy into a fresh, aligned buffer: Float32Array needs 4-byte alignment and a pooled Buffer's
+    // byteOffset is not guaranteed to be one.
+    const aligned = new Uint8Array(buf).slice().buffer;
+    return Array.from(new Float32Array(aligned));
+  } catch {
+    return null;
+  }
+}
+
 /** Decrypt a sealed fact, or return null when the key is wrong/destroyed or the ciphertext was altered. */
 export function decryptFact(dek: Buffer, sealed: SealedFact): string | null {
   try {

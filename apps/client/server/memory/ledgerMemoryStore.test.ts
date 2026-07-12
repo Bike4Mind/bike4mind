@@ -42,6 +42,9 @@ function makeFake(opts: { failFirst?: number } = {}) {
           delete e.factCipher;
           delete e.factIv;
           delete e.factTag;
+          delete e.embeddingCipher;
+          delete e.embeddingIv;
+          delete e.embeddingTag;
           n += 1;
         }
       }
@@ -209,5 +212,68 @@ describe('shredPrincipalMemory', () => {
     expect(after?.beliefs).toHaveLength(1);
     expect(after?.beliefs[0].shredded).toBe(true);
     expect(after?.beliefs[0].fact).not.toBe('sensitive');
+  });
+
+  it('stores the embedding ENCRYPTED at rest and folds it back onto the belief', async () => {
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+    const principal: Principal = { kind: 'user', id: 'u1' };
+    const embedding = [0.1, -0.25, 0.75, 0.5];
+
+    await appendMemoryEvent(repo, provider, 'u1', {
+      principal,
+      kind: 'assert',
+      subject: 'color',
+      fact: 'favorite color is green',
+      at: '2026-07-01T00:00:00.000Z',
+      embedding,
+    });
+
+    // At rest: ciphertext only - the raw vector must not be readable from the document.
+    expect(store[0].embeddingCipher).toBeTruthy();
+    expect(store[0].embeddingIv).toBeTruthy();
+    expect(store[0].embeddingTag).toBeTruthy();
+    expect(JSON.stringify(store[0])).not.toContain('0.75');
+
+    // On read: decrypted and folded onto the belief, so recall can score it semantically.
+    const profile = await createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'u1' }).readProfile(
+      principal
+    );
+    const got = profile!.beliefs[0].embedding;
+    expect(got).toHaveLength(4);
+    got!.forEach((v, i) => expect(v).toBeCloseTo(embedding[i], 5));
+  });
+
+  it('crypto-shred destroys the EMBEDDING too, not just the fact', async () => {
+    // An embedding is a semantic image of the fact - inversion can partially reconstruct the source
+    // text - so a shred that left it behind would leave a recoverable fingerprint of the content it
+    // claimed to destroy. Destroying the DEK must make both unreadable.
+    const { repo, store } = makeFake();
+    const { provider, keys } = makeKeys();
+    const principal: Principal = { kind: 'user', id: 'u1' };
+
+    await appendMemoryEvent(repo, provider, 'u1', {
+      principal,
+      kind: 'assert',
+      subject: 'secret',
+      fact: 'sensitive',
+      at: '2026-07-01T00:00:00.000Z',
+      embedding: [0.9, 0.8, 0.7],
+    });
+
+    const before = await createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'u1' }).readProfile(
+      principal
+    );
+    expect(before!.beliefs[0].embedding).toHaveLength(3); // readable while the key lives
+
+    await shredPrincipalMemory(repo, provider, principal, 'u1');
+    expect(keys.size).toBe(0);
+
+    const after = await createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'u1' }).readProfile(
+      principal
+    );
+    expect(after!.beliefs[0].shredded).toBe(true);
+    expect(after!.beliefs[0].embedding).toBeUndefined(); // the semantic image is gone with the fact
+    expect(store[0].embeddingCipher).toBeUndefined(); // and the ciphertext is cleared at rest
   });
 });

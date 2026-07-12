@@ -9,7 +9,15 @@ import {
   type MemoryStore,
   type Principal,
 } from '@bike4mind/memory';
-import { decryptFact, encryptFact, subjectHmac, type KeyProvider, type SealedFact } from './factCipher';
+import {
+  decryptFact,
+  decryptVector,
+  encryptFact,
+  encryptVector,
+  subjectHmac,
+  type KeyProvider,
+  type SealedFact,
+} from './factCipher';
 
 /**
  * The app-server seam between the pure memory core (sealing + fold) and the persisted ledger
@@ -56,6 +64,11 @@ export async function appendMemoryEvent(
   // re-mentions of the same fact still coalesce.
   const dek = await keys.getOrCreateDek(input.principal, ownerUserId);
   const sealedFact: SealedFact | undefined = input.fact !== undefined ? encryptFact(dek, input.fact) : undefined;
+  // The embedding is encrypted under the SAME key as the fact: it is a semantic image of that fact,
+  // so it must die with it when the key is destroyed (see encryptVector).
+  const sealedEmbedding: SealedFact | undefined = input.embedding?.length
+    ? encryptVector(dek, input.embedding)
+    : undefined;
   const sealedInput: MemoryEventInput = { ...input, subject: subjectHmac(dek, input.subject) };
 
   for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
@@ -71,6 +84,9 @@ export async function appendMemoryEvent(
       factCipher: sealedFact?.cipher,
       factIv: sealedFact?.iv,
       factTag: sealedFact?.tag,
+      embeddingCipher: sealedEmbedding?.cipher,
+      embeddingIv: sealedEmbedding?.iv,
+      embeddingTag: sealedEmbedding?.tag,
       evidenceTier: sealed.evidenceTier,
       salience: sealed.salience,
       at: sealed.at,
@@ -102,11 +118,20 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
       fact = plain;
     }
   }
+
+  // Decrypt the embedding under the same key. A destroyed key yields null, so a shredded belief
+  // surfaces no vector - the semantic image dies with the fact.
+  const embedding =
+    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag
+      ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
+      : undefined;
+
   return {
     principal: { kind: d.principalKind, id: d.principalId },
     kind: d.kind,
     subject: d.subject,
     fact,
+    ...(embedding?.length ? { embedding } : {}),
     evidenceTier: d.evidenceTier as EvidenceTier | undefined,
     salience: d.salience,
     at: d.at,

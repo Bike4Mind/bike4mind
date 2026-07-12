@@ -63,10 +63,12 @@ export const handler = withEventContext(async (event, logger) => {
   // ledger. Additive to V1 and best-effort - a ledger failure must never break memento creation.
   const mementosV2Enabled = await isMementosV2Enabled(userId).catch(() => false);
   const mirrorSources = [sessionId, questId].filter((x): x is string => Boolean(x));
-  const mirrorToLedger = async (summary: string) => {
+  // Pass the summary embedding we already computed below: it makes the ledger self-sufficient for
+  // semantic recall (no dependency on the V1 memento twin to supply the vector at read time).
+  const mirrorToLedger = async (summary: string, embedding?: number[]) => {
     if (!mementosV2Enabled) return;
     try {
-      await mirrorMementoToLedger({ userId, summary, sources: mirrorSources });
+      await mirrorMementoToLedger({ userId, summary, sources: mirrorSources, embedding });
     } catch (error) {
       logger.warn('Mementos V2: ledger mirror failed (V1 memento unaffected)', {
         error: error instanceof Error ? error.message : String(error),
@@ -162,7 +164,7 @@ export const handler = withEventContext(async (event, logger) => {
         newSummary: evaluation.summary,
       });
 
-      await mirrorToLedger(evaluation.summary);
+      await mirrorToLedger(evaluation.summary, summaryEmbedding);
       updatedCount++;
       continue;
     }
@@ -193,7 +195,7 @@ export const handler = withEventContext(async (event, logger) => {
       embeddingLength: summaryEmbedding.length,
     });
 
-    await mirrorToLedger(evaluation.summary);
+    await mirrorToLedger(evaluation.summary, summaryEmbedding);
     createdCount++;
 
     // Add to existingMementos for subsequent similarity checks in this batch

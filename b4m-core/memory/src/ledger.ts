@@ -49,6 +49,17 @@ export interface MemoryEventInput {
   /** Free-form provenance ids (session, quest, episode, ...); order-insensitive. */
   sources?: string[];
   /**
+   * Semantic embedding of `fact`, carried so the folded belief can be recalled by cosine similarity
+   * without depending on a V1 memento twin to supply the vector.
+   *
+   * DELIBERATELY NOT part of the chain hash (see `chainCanonical`): it is DERIVED from the fact -
+   * recomputable at any time, and not itself a claim - so the chain binds the fact's commitment and
+   * stays authoritative over what was asserted. Keeping it out also means it can be dropped on shred
+   * without breaking `verifyChain`, exactly as the plaintext fact can. The host encrypts it at rest
+   * under the same key as the fact; the core stays plaintext-only.
+   */
+  embedding?: number[];
+  /**
    * Per-event random salt binding the fact into its `commitment`. Generated at seal time when
    * omitted; accept it here only to make sealing reproducible in tests. Not secret.
    */
@@ -214,6 +225,9 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
         id: e.subject,
         fact: e.shredded ? REDACTED_FACT : (e.fact ?? existing?.fact ?? e.subject),
         ...(e.shredded ? { shredded: true } : {}),
+        // A shredded event has no readable fact, so any embedding it carried is meaningless (and is
+        // dropped at rest anyway) - never surface one for a redacted belief.
+        ...(!e.shredded && e.embedding?.length ? { embedding: e.embedding } : {}),
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
         derivedFrom: [e.hash],
@@ -227,6 +241,9 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
         ...existing,
         evidenceTier: tier,
         confidence: TIER_CONFIDENCE[tier],
+        // An affirm re-witnesses the SAME claim, so it does not replace an embedding the belief
+        // already has - but it does backfill one for a belief asserted before embeddings were carried.
+        ...(!existing.embedding?.length && e.embedding?.length ? { embedding: e.embedding } : {}),
         derivedFrom: [...existing.derivedFrom, e.hash],
         lastAffirmedAt: e.at,
       });
