@@ -5,14 +5,15 @@ import type { Belief, MemoryProfile } from './types';
 
 const prof = (id: string): MemoryProfile => ({ principal: { kind: 'agent', id }, beliefs: [] });
 
-const belief = (id: string, activation: number): Belief => ({
+const belief = (id: string, fact: string, activation: number, over: Partial<Belief> = {}): Belief => ({
   id,
-  fact: id,
+  fact,
   evidenceTier: 'engineering-proxy',
   confidence: 0.4,
   activation,
   derivedFrom: [],
   lastAffirmedAt: '2026-07-01T00:00:00.000Z',
+  ...over,
 });
 
 const profWith = (id: string, beliefs: Belief[]): MemoryProfile => ({ principal: { kind: 'user', id }, beliefs });
@@ -46,26 +47,42 @@ describe('firstMatchStore', () => {
 });
 
 describe('mergeStores', () => {
-  it('unions beliefs across stores (ledger + V1 mementos), most active first', async () => {
-    const ledger = fixedStore(profWith('u1', [belief('subject-a', 0.5)]));
-    const mementos = fixedStore(profWith('u1', [belief('memento-1', 0.9), belief('memento-2', 0.1)]));
+  it('unions distinct beliefs across stores, most active first', async () => {
+    const ledger = fixedStore(profWith('u1', [belief('s-a', 'user likes hiking on weekends', 0.5)]));
+    const mementos = fixedStore(
+      profWith('u1', [belief('m-1', 'user is a software engineer', 0.9), belief('m-2', 'user lives in Seattle', 0.1)])
+    );
     const merged = await mergeStores([ledger, mementos]).readProfile({ kind: 'user', id: 'u1' });
-    expect(merged?.beliefs.map(b => b.id)).toEqual(['memento-1', 'subject-a', 'memento-2']);
+    expect(merged?.beliefs.map(b => b.id)).toEqual(['m-1', 's-a', 'm-2']);
   });
 
-  it('de-duplicates by id, earlier store winning', async () => {
-    const ledger = fixedStore(profWith('u1', [{ ...belief('shared', 0.5), fact: 'from-ledger' }]));
-    const mementos = fixedStore(profWith('u1', [{ ...belief('shared', 0.9), fact: 'from-memento' }]));
+  it('collapses the same fact from two sources (V2 ledger wins over its V1 memento twin)', async () => {
+    // Different ids, same fact - exactly the ledger-belief vs memento situation.
+    const ledger = fixedStore(
+      profWith('u1', [belief('favorite color green user', "User's favorite color is green", 0.5)])
+    );
+    const mementos = fixedStore(profWith('u1', [belief('6a53281a2ad0', "User's favorite color is green", 0.9)]));
     const merged = await mergeStores([ledger, mementos]).readProfile({ kind: 'user', id: 'u1' });
     expect(merged?.beliefs).toHaveLength(1);
-    expect(merged?.beliefs[0].fact).toBe('from-ledger');
+    expect(merged?.beliefs[0].id).toBe('favorite color green user'); // the ledger (earlier store) won
+  });
+
+  it('keeps distinct shredded ghosts separate (they share a redaction placeholder)', async () => {
+    const ledger = fixedStore(
+      profWith('u1', [
+        belief('love sushi', '[shredded]', 0.35, { shredded: true }),
+        belief('balls sucks trump', '[shredded]', 0.35, { shredded: true }),
+      ])
+    );
+    const merged = await mergeStores([ledger]).readProfile({ kind: 'user', id: 'u1' });
+    expect(merged?.beliefs).toHaveLength(2);
   });
 
   it('returns one side when the other is null (V1-only or V2-only user)', async () => {
     const ledger = fixedStore(null);
-    const mementos = fixedStore(profWith('u1', [belief('memento-1', 0.2)]));
+    const mementos = fixedStore(profWith('u1', [belief('m-1', 'user is a software engineer', 0.2)]));
     const merged = await mergeStores([ledger, mementos]).readProfile({ kind: 'user', id: 'u1' });
-    expect(merged?.beliefs.map(b => b.id)).toEqual(['memento-1']);
+    expect(merged?.beliefs.map(b => b.id)).toEqual(['m-1']);
   });
 
   it('returns null when every store returns null', async () => {
