@@ -32,6 +32,7 @@ import {
   isAppWrapperHost,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
@@ -635,6 +636,20 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 // with one set of vars; defaults are the project palette.
 const LIVERY_NAVY = process.env.NEXT_PUBLIC_SHARE_BRAND_NAVY || '#0d1830';
 const LIVERY_ORANGE = process.env.NEXT_PUBLIC_SHARE_BRAND_ORANGE || '#F26C1F';
+// Whether to ship the project's OWN brand artwork (the bicycle-spoke wordmark) and
+// registered mark on the livery. Same opt-in as the baked share footer: a fork does
+// NOT ship the upstream logo, and its brand name is not the registered mark, so both
+// are gated on this flag (fork -> text wordmark, no (R)).
+const LIVERY_BUILTIN_LOGO = process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true';
+const LIVERY_REG = LIVERY_BUILTIN_LOGO ? '<span class="b4m-reg">&reg;</span>' : '';
+
+/** Brand mark for the navy bar: the inlined spoke-wheel logo (built-in) or a text
+ *  wordmark of the brand name (fork). The logo's white artwork suits the navy bar. */
+function liveryBarMark(brandName: string): string {
+  return LIVERY_BUILTIN_LOGO
+    ? `<span class="b4m-bar-logo">${B4M_HORIZONTAL_LOGO_SVG}</span>`
+    : `<strong>${escapeHtml(brandName)}</strong>`;
+}
 
 /**
  * Minimal trusted wrapper page hosting the bundle in an iframe. Runs no script of
@@ -700,17 +715,17 @@ function renderBundleWrapper(
     embed && pillHref && brandName
       ? `\n<a class="b4m-brand" href="${escapeHtml(pillHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
           brandName
-        )}</a>`
+        )}${LIVERY_REG}</a>`
       : '';
   const barPresent = !embed && !!barHref && !!brandName;
   const bar = barPresent
     ? `\n<div class="b4m-bar">
-  <span>Built with <strong>${escapeHtml(brandName)}</strong></span>
+  <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
   <span class="b4m-bar-r">
     <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
     <a class="b4m-bar-cta" href="${escapeHtml(
       barHref
-    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)} &rarr;</a>
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
   </span>
 </div>`
     : '';
@@ -736,6 +751,10 @@ function renderBundleWrapper(
   align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:${LIVERY_NAVY};color:#e2e8f0;
   border-top:1px solid rgba(255,255,255,.12);font:600 13px/1 ui-sans-serif,system-ui,-apple-system,sans-serif}
 .b4m-bar strong{color:#fff}
+.b4m-bar-l{display:flex;align-items:center;gap:7px}
+.b4m-bar-logo{display:inline-flex;align-items:center}
+.b4m-bar-logo svg{height:22px;width:auto;display:block}
+.b4m-reg{font-size:.62em;vertical-align:super;font-weight:400;margin-left:1px}
 .b4m-bar-r{display:flex;align-items:center;gap:14px}
 .b4m-bar-report{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
 .b4m-bar-report:hover{color:#cbd5e1}

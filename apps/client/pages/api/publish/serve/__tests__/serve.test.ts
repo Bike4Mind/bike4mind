@@ -1333,5 +1333,43 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     expect(data).not.toContain('<a class="b4m-report"');
     // Chrome still present (version switcher), lifted above the bar.
     expect(data).toContain('<div class="b4m-ver">');
+    // Fork default (no NEXT_PUBLIC_SHARE_BUILTIN_LOGO): text wordmark, no logo, no (R).
+    // Assert on the ELEMENTS - the CSS rules for these classes always ship in <style>.
+    expect(data).toContain('Built with <strong>');
+    expect(data).not.toContain('<span class="b4m-bar-logo">');
+    expect(data).not.toContain('<span class="b4m-reg">');
+  });
+
+  it('own-tab bar ships the built-in spoke logo + registered mark when opted in', async () => {
+    // The logo/(R) are gated on NEXT_PUBLIC_SHARE_BUILTIN_LOGO (read at module load),
+    // so import a fresh copy of the handler with the flag set. The vi.mock factories
+    // + hoisted mocks re-apply on re-import, so the same DB/storage stubs drive it.
+    const prev = process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO;
+    process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = 'true';
+    vi.resetModules();
+    try {
+      const freshHandler = (await import('../[...path]')).default as unknown as (
+        req: unknown,
+        res: unknown
+      ) => Promise<void>;
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+      const { req, res } = createMocks({
+        method: 'GET',
+        query: { path: ['u', 'scope123', 'my-slug'] },
+        headers: { host: 'app.bike4mind.com' },
+      });
+      await freshHandler(req, res);
+      const data = res._getData() as string;
+      // Spoke-wheel logo (inlined SVG) instead of the text wordmark, plus the (R).
+      expect(data).toContain('<span class="b4m-bar-logo">');
+      expect(data).toContain('<svg');
+      expect(data).toContain('<span class="b4m-reg">&reg;</span>');
+      expect(data).not.toContain('Built with <strong>');
+    } finally {
+      if (prev === undefined) delete process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO;
+      else process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = prev;
+      vi.resetModules();
+    }
   });
 });
