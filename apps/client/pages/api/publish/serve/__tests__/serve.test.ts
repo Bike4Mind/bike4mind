@@ -1307,9 +1307,14 @@ describe('GET /api/publish/serve - embed allowlist', () => {
     // Canonical is emitted once by shareMeta (not duplicated by the embed path).
     expect(data.match(/rel="canonical"/g)?.length).toBe(1);
     expect(data).toContain('href="https://app.bike4mind.com/p/u/scope123/my-slug"');
+    // Lead-gen livery: the embed carries a "Built with ..." brand pill linking out,
+    // and NOT the persistent bottom bar (that's the own-tab treatment).
+    expect(data).toContain('<a class="b4m-brand"');
+    expect(data).toContain('Built with');
+    expect(data).not.toContain('<div class="b4m-bar">');
   });
 
-  it('normal (non-embed) render keeps the version bar', async () => {
+  it('own-tab (non-embed) open-public render shows the persistent lead-gen bar with an in-bar Report', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({ sha256Index: 'newSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }] })
     );
@@ -1317,7 +1322,16 @@ describe('GET /api/publish/serve - embed allowlist', () => {
 
     const { res, promise } = run(['u', 'scope123', 'my-slug']);
     await promise;
-
-    expect(res._getData() as string).toContain('<div class="b4m-ver">');
+    const data = res._getData() as string;
+    // The persistent bar (Anthropic-style) with a Try CTA; the floating pill is embed-only.
+    expect(data).toContain('<div class="b4m-bar">');
+    expect(data).toContain('class="b4m-bar-cta"');
+    expect(data).toContain('Try');
+    expect(data).not.toContain('<a class="b4m-brand"');
+    // Report moves INTO the bar, so the floating Report anchor is gone.
+    expect(data).toContain('class="b4m-bar-report"');
+    expect(data).not.toContain('<a class="b4m-report"');
+    // Chrome still present (version switcher), lifted above the bar.
+    expect(data).toContain('<div class="b4m-ver">');
   });
 });
