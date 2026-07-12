@@ -189,8 +189,12 @@ export interface BuildSharedToolsOptions {
   externalTools?: Record<string, ToolDefinition>;
 }
 
-// Sentinel types for wrapping
-const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem']);
+// Sentinel types for wrapping. A tool may emit one of these generic
+// optimization-console side-effects; the type must be allowlisted here so its
+// payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
+// the model-visible result) rather than echoed back to the model.
+// `populateDecomposition` loads a decomposed multi-step plan's first sub-problem.
+const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem', 'populateDecomposition']);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
 const TOOL_ATTR_RE = /(\w+)=["']([^"']*?)["']/g;
 
