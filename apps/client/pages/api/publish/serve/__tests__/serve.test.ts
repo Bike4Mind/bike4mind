@@ -1361,11 +1361,11 @@ describe('GET /api/publish/serve - embed allowlist', () => {
       });
       await freshHandler(req, res);
       const data = res._getData() as string;
-      // Spoke-wheel logo (inlined SVG) instead of the text wordmark, plus the (R).
+      // Spoke-wheel logo (inlined SVG) instead of the text wordmark, plus the (R) on bar + CTA.
       expect(data).toContain('<span class="b4m-bar-logo">');
       expect(data).toContain('<svg');
-      expect(data).toContain('<span class="b4m-reg">&reg;</span>');
       expect(data).not.toContain('Built with <strong>');
+      expect((data.match(/<span class="b4m-reg">&reg;<\/span>/g) ?? []).length).toBe(2);
     } finally {
       if (prev === undefined) delete process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO;
       else process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = prev;
