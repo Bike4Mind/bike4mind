@@ -208,3 +208,57 @@ describe('computed salience (ACT-R activation)', () => {
     expect(foldEvents(chain, { now: '2026-07-11T00:00:00.000Z' }).map(b => b.id)).toEqual(['hot', 'cold']);
   });
 });
+
+describe('foldEvents - ACT-R presentation history', () => {
+  const at = (iso: string) => iso;
+  const assertEv = (subject: string, fact: string, when: string): MemoryEventInput => ({
+    principal: { kind: 'user', id: 'u1' },
+    kind: 'assert',
+    subject,
+    fact,
+    at: at(when),
+  });
+
+  it('a RE-ASSERT of the same subject accumulates a presentation (ACT-R frequency)', () => {
+    // Regression: assert used to RESET the presentation history, so a subject re-stated on every
+    // mention - exactly what the memento mirror does - scored as if it had been seen once. Frequency,
+    // half of base-level activation, never accumulated.
+    const once = buildChain([assertEv('color', 'favorite color is green', '2026-07-01T00:00:00.000Z')]);
+    const many = buildChain([
+      assertEv('color', 'favorite color is green', '2026-07-01T00:00:00.000Z'),
+      assertEv('color', 'favorite color is green', '2026-07-02T00:00:00.000Z'),
+      assertEv('color', 'favorite color is green', '2026-07-03T00:00:00.000Z'),
+    ]);
+
+    const now = '2026-07-04T00:00:00.000Z';
+    const a1 = foldEvents(once, { now })[0].activation!;
+    const a3 = foldEvents(many, { now })[0].activation!;
+
+    expect(a3).toBeGreaterThan(a1); // mentioned three times => more top-of-mind than once
+  });
+
+  it('a re-assert still REPLACES the belief content', () => {
+    const chain = buildChain([
+      assertEv('color', 'favorite color is green', '2026-07-01T00:00:00.000Z'),
+      assertEv('color', 'favorite color is now blue', '2026-07-02T00:00:00.000Z'),
+    ]);
+    const beliefs = foldEvents(chain, { now: '2026-07-03T00:00:00.000Z' });
+    expect(beliefs).toHaveLength(1);
+    expect(beliefs[0].fact).toBe('favorite color is now blue');
+  });
+
+  it('retract clears the history, so a later assert starts fresh', () => {
+    const chain = buildChain([
+      assertEv('color', 'green', '2026-07-01T00:00:00.000Z'),
+      assertEv('color', 'green', '2026-07-02T00:00:00.000Z'),
+      { principal: { kind: 'user', id: 'u1' }, kind: 'retract', subject: 'color', at: '2026-07-03T00:00:00.000Z' },
+      assertEv('color', 'green', '2026-07-04T00:00:00.000Z'),
+    ]);
+    const revived = foldEvents(chain, { now: '2026-07-05T00:00:00.000Z' })[0].activation!;
+    const fresh = foldEvents(buildChain([assertEv('color', 'green', '2026-07-04T00:00:00.000Z')]), {
+      now: '2026-07-05T00:00:00.000Z',
+    })[0].activation!;
+
+    expect(revived).toBeCloseTo(fresh, 10); // the retracted life does not haunt the new one
+  });
+});

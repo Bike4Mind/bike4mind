@@ -73,6 +73,20 @@ class MementoRepository extends BaseRepository<IMementoDocument> implements IMem
     }
     return query.exec();
   }
+
+  /**
+   * Hard-delete every memento for a user - the V1 half of "delete my data".
+   *
+   * A ledger fact is crypto-shredded (destroy the key, the ciphertext becomes unreadable), but a
+   * memento stores its summary, the full original prompt and a plaintext embedding with no key to
+   * destroy. Archiving would only hide it: the content would remain in the collection AND keep
+   * coming back through the V2 unified read, which unions the ledger with these mementos. Deletion
+   * has to be real.
+   */
+  async deleteAllByUserId(userId: string): Promise<number> {
+    const res = await this.model.deleteMany({ userId });
+    return res.deletedCount ?? 0;
+  }
 }
 
 export const mementoRepository = new MementoRepository(Memento);

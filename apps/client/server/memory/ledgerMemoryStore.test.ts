@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import type { IMemoryLedgerEvent } from '@bike4mind/database';
-import type { MemoryEventInput, Principal } from '@bike4mind/memory';
-import { appendMemoryEvent, createLedgerMemoryStore, shredPrincipalMemory, type LedgerRepo } from './ledgerMemoryStore';
+import { mergeStores, type MemoryEventInput, type Principal } from '@bike4mind/memory';
+import { createUserMementoMemoryStore } from './userMementoMemoryStore';
+import {
+  appendMemoryEvent,
+  createLedgerMemoryStore,
+  purgeUserMemory,
+  shredPrincipalMemory,
+  type LedgerRepo,
+} from './ledgerMemoryStore';
 import type { KeyProvider } from './factCipher';
 
 /** In-memory fake ledger: enforces (principal, seq) uniqueness and can force N leading conflicts. */
@@ -275,5 +282,74 @@ describe('shredPrincipalMemory', () => {
     expect(after!.beliefs[0].shredded).toBe(true);
     expect(after!.beliefs[0].embedding).toBeUndefined(); // the semantic image is gone with the fact
     expect(store[0].embeddingCipher).toBeUndefined(); // and the ciphertext is cleared at rest
+  });
+
+  it('shredding the ledger ALONE leaves the V1 mementos readable - which is why purge exists', async () => {
+    // The unified read is mergeStores([ledger, mementos]). Shredding only the ledger therefore does
+    // NOT delete the user's memory: every memento still folds, in plaintext, and would be injected
+    // straight back into the next chat prompt. This test pins the hole that purgeUserMemory closes.
+    const { repo } = makeFake();
+    const { provider } = makeKeys();
+    const principal: Principal = { kind: 'user', id: 'u1' };
+    const mementos = [
+      { id: 'm1', summary: 'User favorite color is green', lastAccessedAt: '2026-07-01T00:00:00.000Z' },
+    ];
+
+    await appendMemoryEvent(repo, provider, 'u1', {
+      principal,
+      kind: 'assert',
+      subject: 'color',
+      fact: 'User favorite color is green',
+      at: '2026-07-01T00:00:00.000Z',
+    });
+    await shredPrincipalMemory(repo, provider, principal, 'u1');
+
+    const unified = mergeStores([
+      createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'u1' }),
+      createUserMementoMemoryStore({
+        mementos: { findByUserId: async () => mementos },
+        ownerUserId: 'u1',
+      }),
+    ]);
+    const profile = await unified.readProfile(principal);
+    const live = (profile?.beliefs ?? []).filter(b => !b.shredded);
+
+    expect(live.map(b => b.fact)).toEqual(['User favorite color is green']); // still there!
+  });
+
+  it('purgeUserMemory deletes BOTH halves, so the unified read comes back empty', async () => {
+    const { repo } = makeFake();
+    const { provider, keys } = makeKeys();
+    const principal: Principal = { kind: 'user', id: 'u1' };
+    let mementos = [{ id: 'm1', summary: 'User favorite color is green', lastAccessedAt: '2026-07-01T00:00:00.000Z' }];
+    const purger = {
+      async deleteAllByUserId(userId: string) {
+        if (userId !== 'u1') return 0;
+        const n = mementos.length;
+        mementos = [];
+        return n;
+      },
+    };
+
+    await appendMemoryEvent(repo, provider, 'u1', {
+      principal,
+      kind: 'assert',
+      subject: 'color',
+      fact: 'User favorite color is green',
+      at: '2026-07-01T00:00:00.000Z',
+    });
+
+    const result = await purgeUserMemory(repo, provider, purger, 'u1');
+    expect(result).toEqual({ eventsShredded: 1, mementosDeleted: 1 });
+    expect(keys.size).toBe(0); // ledger key destroyed
+
+    const unified = mergeStores([
+      createLedgerMemoryStore({ ledger: repo, keys: provider, ownerUserId: 'u1' }),
+      createUserMementoMemoryStore({ mementos: { findByUserId: async () => mementos }, ownerUserId: 'u1' }),
+    ]);
+    const profile = await unified.readProfile(principal);
+    const live = (profile?.beliefs ?? []).filter(b => !b.shredded);
+
+    expect(live).toEqual([]); // nothing survives - nothing to re-inject into a prompt
   });
 });

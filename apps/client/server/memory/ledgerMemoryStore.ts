@@ -177,6 +177,9 @@ export function createLedgerMemoryStore(deps: {
  * including any in DB backups - becomes permanently unreadable, then clear the payloads and mark the
  * chain shredded. The hash chain is untouched, so it still verifies; the beliefs fold to redactions.
  * Returns the number of events shredded.
+ *
+ * This covers the LEDGER only. A user's memory is the ledger UNIONED with their V1 mementos, so on
+ * its own this is not "delete my data" - see `purgeUserMemory`.
  */
 export async function shredPrincipalMemory(
   repo: Pick<LedgerRepo, 'markShredded'>,
@@ -186,4 +189,32 @@ export async function shredPrincipalMemory(
 ): Promise<number> {
   await keys.destroyDek(principal); // the irreversible act; do it first
   return repo.markShredded(principal.kind, principal.id, ownerUserId);
+}
+
+/** The memento-side surface `purgeUserMemory` needs; `mementoRepository` satisfies it. */
+export interface MementoPurger {
+  deleteAllByUserId(userId: string): Promise<number>;
+}
+
+/**
+ * Delete a USER's memory for real - both halves of what the unified read serves.
+ *
+ * Shredding the ledger alone is not deletion. The V2 read is `mergeStores([ledger, mementos])`, so a
+ * user whose ledger was shredded still had every V1 memento returned in plaintext - and injected
+ * straight back into the next chat prompt. The ledger half is crypto-shredded (its key is destroyed,
+ * so even DB backups are unreadable); the memento half has no key to destroy - summary, full prompt
+ * and embedding are all plaintext - so it is hard-deleted.
+ *
+ * Irreversible, owner-scoped, and the ledger is shredded FIRST: if the memento delete then fails,
+ * the user is left with less memory rather than a false promise of deletion.
+ */
+export async function purgeUserMemory(
+  repo: Pick<LedgerRepo, 'markShredded'>,
+  keys: Pick<KeyProvider, 'destroyDek'>,
+  mementos: MementoPurger,
+  userId: string
+): Promise<{ eventsShredded: number; mementosDeleted: number }> {
+  const eventsShredded = await shredPrincipalMemory(repo, keys, { kind: 'user', id: userId }, userId);
+  const mementosDeleted = await mementos.deleteAllByUserId(userId);
+  return { eventsShredded, mementosDeleted };
 }

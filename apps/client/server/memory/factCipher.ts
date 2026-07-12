@@ -64,10 +64,9 @@ export function decryptVector(dek: Buffer, sealed: SealedFact): number[] | null 
     d.setAuthTag(Buffer.from(sealed.tag, 'base64'));
     const buf = Buffer.concat([d.update(Buffer.from(sealed.cipher, 'base64')), d.final()]);
     if (buf.byteLength % 4 !== 0) return null;
-    // Copy into a fresh, aligned buffer: Float32Array needs 4-byte alignment and a pooled Buffer's
-    // byteOffset is not guaranteed to be one.
-    const aligned = new Uint8Array(buf).slice().buffer;
-    return Array.from(new Float32Array(aligned));
+    // Copy into a fresh buffer: Float32Array needs 4-byte alignment, and a pooled Buffer's byteOffset
+    // is not guaranteed to be one. `new Uint8Array(buf)` already copies, so no second copy is needed.
+    return Array.from(new Float32Array(new Uint8Array(buf).buffer));
   } catch {
     return null;
   }

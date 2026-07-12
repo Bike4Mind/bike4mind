@@ -220,7 +220,13 @@ export function foldEvents(chain: readonly MemoryEvent[], options: FoldOptions =
       presentations.delete(e.subject);
     } else if (e.kind === 'assert') {
       const tier = e.evidenceTier ?? 'engineering-proxy';
-      presentations.set(e.subject, [Date.parse(e.at)]);
+      // An assert REPLACES the belief's content, but it is still a PRESENTATION of that subject, so
+      // it appends to the presentation history rather than resetting it. Resetting silently killed
+      // the frequency half of ACT-R activation: a subject asserted twenty times scored exactly like
+      // one asserted once, because only the latest timestamp survived. (A write seam that re-states a
+      // fact on every mention - which the memento mirror does - hits this on every single re-mention.)
+      // `retract` still clears the history: the claim is gone, so its presentations go with it.
+      presentations.set(e.subject, [...(presentations.get(e.subject) ?? []), Date.parse(e.at)]);
       bySubject.set(e.subject, {
         id: e.subject,
         fact: e.shredded ? REDACTED_FACT : (e.fact ?? existing?.fact ?? e.subject),

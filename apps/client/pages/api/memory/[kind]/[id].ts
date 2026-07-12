@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/database';
 import { firstMatchStore, mergeStores, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
-import { createLedgerMemoryStore, shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
+import { createLedgerMemoryStore, purgeUserMemory } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
@@ -30,12 +30,18 @@ const PRINCIPAL_KINDS: readonly PrincipalKind[] = ['user', 'agent', 'org', 'syst
 const handler = baseApi();
 
 /**
- * DELETE /api/memory/:kind/:id - crypto-shred a principal's memory (delete my data).
+ * DELETE /api/memory/:kind/:id - delete a user's memory, for real (delete my data).
  *
- * Destroys the principal's data-encryption key (so every fact, including any in DB backups, becomes
- * permanently unreadable) and clears + flags the ledger; the hash chain still verifies and the
- * beliefs fold to redactions. Authenticated and owner-scoped: a caller may shred only their own user
- * memory for now (agent/org/system deletion follows the write path). Irreversible.
+ * BOTH halves of what the unified read serves, because either alone is a false promise:
+ * - the LEDGER is crypto-shredded: destroy the principal's data-encryption key, so every fact -
+ *   including any sitting in a DB backup - becomes permanently unreadable, then clear and flag the
+ *   chain. The hash chain still verifies and the beliefs fold to redactions.
+ * - the V1 MEMENTOS are hard-deleted: they carry summary, full prompt and a plaintext embedding with
+ *   no key to destroy, and the read UNIONS them with the ledger - so leaving them behind would hand
+ *   the user's "deleted" memories straight back into the next chat prompt.
+ *
+ * Authenticated and owner-scoped: a caller may delete only their own user memory for now
+ * (agent/org/system deletion follows the write path). Irreversible.
  */
 handler.delete(async (req, res) => {
   const ownerUserId = req.user?.id;
@@ -50,13 +56,16 @@ handler.delete(async (req, res) => {
     return res.status(403).json({ error: 'You can only delete your own user memory for now.' });
   }
 
-  const shredded = await shredPrincipalMemory(
+  // Both halves, or it is not deletion: the unified read serves the ledger UNIONED with the user's
+  // V1 mementos, so shredding only the ledger left every memento readable - and re-injected into the
+  // next chat prompt.
+  const { eventsShredded, mementosDeleted } = await purgeUserMemory(
     memoryLedgerRepository,
     createKeyProvider(memoryPrincipalKeyRepository),
-    { kind: 'user', id },
-    ownerUserId
+    mementoRepository,
+    id
   );
-  return res.status(200).json({ ok: true, shredded });
+  return res.status(200).json({ ok: true, shredded: eventsShredded, mementosDeleted });
 });
 
 handler.get(async (req, res) => {
