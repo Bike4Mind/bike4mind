@@ -5,8 +5,6 @@ import { enrollMfa, generateTotp } from './helpers/mfa';
 import { seedAuthOnPage } from './helpers/auth-seed';
 import type { LoginPage } from './pages/LoginPage';
 
-const timestamp = Date.now();
-
 /**
  * Submit the email step and read back the emailed OTC via the non-prod test endpoint (same
  * pattern as auth.spec.ts / signup.spec.ts - there is no test mailbox harness).
@@ -50,6 +48,7 @@ async function sendOtcAndReadCode(
 
 test.describe('MFA', () => {
   test('signs in with a TOTP code after OTC verification', async ({ basePage, loginPage, page, request }) => {
+    const timestamp = Date.now();
     const email = `mfa-signin-${timestamp}-e2e@test.com`;
     const created = await apiCreateTestUser(request, {
       username: `mfa-signin-${timestamp}`,
@@ -74,6 +73,7 @@ test.describe('MFA', () => {
   });
 
   test('signs in with a backup code after OTC verification', async ({ basePage, loginPage, page, request }) => {
+    const timestamp = Date.now();
     const email = `mfa-backup-${timestamp}-e2e@test.com`;
     const created = await apiCreateTestUser(request, {
       username: `mfa-backup-${timestamp}`,
@@ -97,7 +97,7 @@ test.describe('MFA', () => {
     await expect(page).not.toHaveURL(/.*login.*/);
   });
 
-  test('admin login-as-user requires the admin own TOTP code (login-as-with-MFA regression guard)', async ({
+  test("admin login-as-user requires the admin's own TOTP code (login-as-with-MFA regression guard)", async ({
     basePage,
     adminPage,
     page,
@@ -105,6 +105,7 @@ test.describe('MFA', () => {
   }) => {
     // Isolation: enroll MFA on a freshly-created admin, never the shared setup-admin user -
     // verify-setup bumps tokenVersion and would invalidate .auth/admin.json for every other test.
+    const timestamp = Date.now();
     const adminEmail = `mfa-admin-${timestamp}-e2e@test.com`;
     const createdAdmin = await apiCreateTestUser(request, {
       username: `mfa-admin-${timestamp}`,

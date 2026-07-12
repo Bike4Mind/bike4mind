@@ -187,11 +187,6 @@ export class AdminPage extends BasePage {
     await confirmBtn.click();
   }
 
-  /** Return from an impersonated session to the acting admin's own session. */
-  async returnToAdmin() {
-    await this.page.getByTestId('profile-menu-return').click();
-  }
-
   // --- Edit User Profile (AdminProfileModal) ---
 
   async fillProfileField(label: string, value: string) {
