@@ -13,11 +13,18 @@ import { createKeyProvider } from './factCipher';
 
 /** Per-user V2 opt-in, read from the user's experimental-features preferences. */
 export async function isMementosV2Enabled(userId: string): Promise<boolean> {
-  const user = await userRepository.findById(userId);
-  const raw = (user as { experimentalFeatures?: unknown } | null)?.experimentalFeatures;
-  if (raw instanceof Map) return raw.get('enableMementosV2') === true;
-  if (raw && typeof raw === 'object') return (raw as Record<string, unknown>).enableMementosV2 === true;
-  return false;
+  const user = (await userRepository.findById(userId)) as {
+    experimentalFeatures?: unknown;
+    preferences?: { experimentalFeatures?: unknown };
+  } | null;
+  // The per-user prefs live under `preferences.experimentalFeatures`; fall back to the top-level
+  // field for safety.
+  const read = (raw: unknown): boolean => {
+    if (raw instanceof Map) return raw.get('enableMementosV2') === true;
+    if (raw && typeof raw === 'object') return (raw as Record<string, unknown>).enableMementosV2 === true;
+    return false;
+  };
+  return read(user?.preferences?.experimentalFeatures) || read(user?.experimentalFeatures);
 }
 
 /**
