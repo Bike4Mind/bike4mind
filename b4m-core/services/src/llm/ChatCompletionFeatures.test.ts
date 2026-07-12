@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ContextSummarizationFeature,
   KnowledgeRetrievalFeature,
+  MementoFeature,
   SessionPromptFeature,
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
@@ -149,6 +150,41 @@ describe('ContextSummarizationFeature', () => {
       );
       expect(contextSummarizeSession).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('MementoFeature - Mementos V2 injection', () => {
+  const makeCtx = (recallMementosV2: unknown) =>
+    ({
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1' },
+      db: {},
+      recallMementosV2,
+    }) as unknown as ConstructorParameters<typeof MementoFeature>[0];
+
+  const call = (feature: MementoFeature) =>
+    feature.getContextMessages(
+      makeQuest(),
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what do i like',
+      1000,
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[4]
+    );
+
+  it('injects the V2 union recall as system messages and skips the V1 path', async () => {
+    const recallMementosV2 = vi.fn().mockResolvedValue([
+      { fact: 'User loves sushi', relevance: 0.9 },
+      { fact: 'User works in pharma', relevance: 0.4 },
+    ]);
+    const messages = await call(new MementoFeature(makeCtx(recallMementosV2)));
+    expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like');
+    expect(messages.map(m => m.content)).toEqual(['[Memory] User loves sushi', '[Memory] User works in pharma']);
+    expect(messages.every(m => m.role === 'system')).toBe(true);
+  });
+
+  it('injects nothing when V2 is on but the recall is empty', async () => {
+    const messages = await call(new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]))));
+    expect(messages).toEqual([]);
   });
 });
 

@@ -41,6 +41,7 @@ import { ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { Config } from '@server/utils/config';
@@ -193,6 +194,7 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
         model,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: async (

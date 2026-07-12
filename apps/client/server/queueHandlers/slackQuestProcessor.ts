@@ -66,6 +66,7 @@ import {
 } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 // Cache static ChatCompletion options that don't change between invocations
@@ -162,6 +163,7 @@ const getStaticOptions = () => {
         model,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,

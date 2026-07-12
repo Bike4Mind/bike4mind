@@ -384,6 +384,7 @@ export function computeSettlementDelta(
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
+  public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -436,6 +437,7 @@ export class ChatCompletionProcess {
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
+    this.recallMementosV2 = options.recallMementosV2;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;

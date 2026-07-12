@@ -172,6 +172,13 @@ export interface IChatCompletionServiceOptions {
     prompt: string,
     model: string
   ) => Promise<void>;
+  /**
+   * Mementos V2 retrieval, injected by the app tier (b4m-core cannot reach the ledger store). For a
+   * user on V2 it returns the beliefs to inject for `query` (the ledger unioned with their V1
+   * mementos, recalled); for a user on V1 it returns null so the caller keeps the classic memento
+   * path. Optional so callers that do not wire it fall back to V1.
+   */
+  recallMementosV2?: (userId: string, query: string) => Promise<{ fact: string; relevance: number }[] | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -309,6 +316,7 @@ export type ChatCompletionContext = Pick<
   | 'userAbility'
   | 'autoNameSession'
   | 'invokeCreateMemento'
+  | 'recallMementosV2'
   | 'logEvent'
   | 'db'
   | 'sessionId'
@@ -394,6 +402,17 @@ export class MementoFeature implements ChatCompletionFeature {
     max_tokens: number,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
+    // Mementos V2: if this user is on V2, inject the ledger-unioned-with-mementos recall and skip
+    // the V1 path (the two are mutually exclusive). A null result means the user is on V1.
+    if (this.chatCompletion.recallMementosV2) {
+      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message);
+      if (v2 !== null) {
+        this.usedMementoIds = [];
+        this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);
+        return v2.map(({ fact }) => ({ role: 'system' as const, content: `[Memory] ${fact}` }));
+      }
+    }
+
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
     const relevantMementos = await getRelevantMementos(
