@@ -4219,9 +4219,18 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled
-    if (optimizedFeatureList.includes('mementos') && enableMementos && adminSettingsEnableMementos) {
-      this.logger.log('  - Enabling Mementos feature');
+    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
+    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
+    // (the two are mutually exclusive at inject time - MementoFeature picks which). The V2 opt-in
+    // lives on the user's preferences, same field isMementosV2Enabled reads server-side.
+    const enableMementosV2 =
+      (this.user as { preferences?: { experimentalFeatures?: Record<string, boolean> } })?.preferences
+        ?.experimentalFeatures?.enableMementosV2 === true;
+    if (
+      optimizedFeatureList.includes('mementos') &&
+      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
+    ) {
+      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
       this.features.set('mementos', new MementoFeature(this));
     }
 
