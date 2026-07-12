@@ -54,6 +54,7 @@ export * from './utils/sessionRedaction';
 export * from './utils/triggerWord';
 export * from './utils/agentMentions';
 export * from './utils/agentPersona';
+export * from './utils/experimentalFeatures';
 export * from './utils/skillMentions';
 export * from './utils/skillArguments';
 export * from './utils/sessionTitle';

@@ -1,4 +1,5 @@
 import { memoryLedgerRepository, memoryPrincipalKeyRepository, userRepository } from '@bike4mind/database';
+import { isExperimentalFeatureEnabled, type HasExperimentalFeatures } from '@bike4mind/common';
 import { resolveSubject } from '@bike4mind/memory';
 import { appendMemoryEvent } from './ledgerMemoryStore';
 import { createKeyProvider } from './factCipher';
@@ -11,20 +12,15 @@ import { createKeyProvider } from './factCipher';
  * ledger failure only warns.
  */
 
-/** Per-user V2 opt-in, read from the user's experimental-features preferences. */
+/**
+ * Per-user V2 opt-in, read from the user's experimental-features preferences. Shares one Map-aware
+ * reader with the chat-completion gate (`isExperimentalFeatureEnabled`) so the read side and the
+ * write side cannot drift - they disagreed once, and V2 silently captured facts it would never
+ * inject.
+ */
 export async function isMementosV2Enabled(userId: string): Promise<boolean> {
-  const user = (await userRepository.findById(userId)) as {
-    experimentalFeatures?: unknown;
-    preferences?: { experimentalFeatures?: unknown };
-  } | null;
-  // The per-user prefs live under `preferences.experimentalFeatures`; fall back to the top-level
-  // field for safety.
-  const read = (raw: unknown): boolean => {
-    if (raw instanceof Map) return raw.get('enableMementosV2') === true;
-    if (raw && typeof raw === 'object') return (raw as Record<string, unknown>).enableMementosV2 === true;
-    return false;
-  };
-  return read(user?.preferences?.experimentalFeatures) || read(user?.experimentalFeatures);
+  const user = (await userRepository.findById(userId)) as HasExperimentalFeatures | null;
+  return isExperimentalFeatureEnabled(user, 'enableMementosV2');
 }
 
 /**

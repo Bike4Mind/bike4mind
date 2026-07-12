@@ -23,6 +23,7 @@ import {
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
+  isExperimentalFeatureEnabled,
   isImageServeable,
   QuestErrorCode,
   getQuestErrorCode,
@@ -4221,11 +4222,13 @@ When using tools that require file IDs (like edit_image), use the ID shown above
 
     // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
     // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
-    // (the two are mutually exclusive at inject time - MementoFeature picks which). The V2 opt-in
-    // lives on the user's preferences, same field isMementosV2Enabled reads server-side.
-    const enableMementosV2 =
-      (this.user as { preferences?: { experimentalFeatures?: Record<string, boolean> } })?.preferences
-        ?.experimentalFeatures?.enableMementosV2 === true;
+    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    //
+    // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
+    // Map at runtime, so reading it with dot access silently yields undefined and the feature never
+    // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
+    // prompt even for a user who had opted in.
+    const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
     if (
       optimizedFeatureList.includes('mementos') &&
       ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
