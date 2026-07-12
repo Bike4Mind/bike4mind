@@ -6,7 +6,7 @@ import {
   memoryPrincipalKeyRepository,
   mementoRepository,
 } from '@bike4mind/database';
-import { firstMatchStore, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
+import { firstMatchStore, mergeStores, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
 import { createLedgerMemoryStore, shredPrincipalMemory } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
@@ -71,20 +71,23 @@ handler.get(async (req, res) => {
       .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
   }
 
-  // Resolve the principal against each backend, first match wins. The persisted ledger comes first,
-  // so once a principal has real events they are the source of truth; a principal with no ledger
-  // falls through to the snapshot adapters unchanged (DeepAgent charter, then persona-agent journal;
-  // a user id via that user's own mementos). Every store is owner-scoped.
-  const store = firstMatchStore([
-    createLedgerMemoryStore({
-      ledger: memoryLedgerRepository,
-      keys: createKeyProvider(memoryPrincipalKeyRepository),
-      ownerUserId,
-    }),
-    createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId }),
-    createPersonaAgentMemoryStore({ agents: agentRepository, ownerUserId }),
-    createUserMementoMemoryStore({ mementos: mementoRepository, ownerUserId }),
-  ]);
+  const ledgerStore = createLedgerMemoryStore({
+    ledger: memoryLedgerRepository,
+    keys: createKeyProvider(memoryPrincipalKeyRepository),
+    ownerUserId,
+  });
+
+  // A user's memory is the UNION of their V2 ledger and their legacy V1 mementos, so V2 surfaces
+  // everything they have with no backfill (and a V1-only user, with no ledger, just sees mementos).
+  // An agent principal first-matches the ledger, then its DeepAgent charter / persona journal.
+  const store =
+    kind === 'user'
+      ? mergeStores([ledgerStore, createUserMementoMemoryStore({ mementos: mementoRepository, ownerUserId })])
+      : firstMatchStore([
+          ledgerStore,
+          createDeepAgentMemoryStore({ charters: deepAgentCharterRepository, ownerUserId }),
+          createPersonaAgentMemoryStore({ agents: agentRepository, ownerUserId }),
+        ]);
   const profile = await readPrincipalMemory({ kind: kind as PrincipalKind, id }, store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 
