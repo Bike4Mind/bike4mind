@@ -50,6 +50,12 @@ export function useSelectedArtifactContentSync(
         });
       }
     }
+    // Change detection intentionally keys on `contentKey` only (the streaming content), not on
+    // the whole `contentObject`: this is a content-propagation guard, and keying on the full
+    // object would both re-add per-render JSON.stringify churn and re-trigger on volatile fields
+    // (the handlers stamp a fresh createdAt/updatedAt each render). Consequence: a metadata-only
+    // change with identical content does not propagate - acceptable, since no such server update
+    // exists today. Revisit `contentKey` if metadata-only artifact updates ever ship.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [artifactId, artifactType, contentKey]);
 }
