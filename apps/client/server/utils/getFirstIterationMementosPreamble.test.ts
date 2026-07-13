@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import {
   getFirstIterationMementosPreamble,
@@ -57,8 +58,10 @@ describe('getFirstIterationMementosPreamble', () => {
     const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), logger);
 
     expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
-    // Verify the call passes userId, query, and the topK / minSimilarity that
-    // match MementoFeature so agent-mode and chat-mode pull the same set.
+    // Verify the call passes userId, query, and the topK / minSimilarity that match MementoFeature so
+    // agent-mode and chat-mode pull the same set. minSimilarity is asserted against the shared
+    // constant, NOT a literal: it is a raw cosine calibrated for MEMENTO_EMBEDDING_MODEL, so a literal
+    // here would just re-pin whichever number was right for the model we used to run.
     const [userId, prompt, options] = getRelevantMementosMock.mock.calls[0] as unknown as [
       string,
       string,
@@ -67,7 +70,7 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(userId).toBe('user-1');
     expect(prompt).toBe('what hobbies do I have');
     expect(options.topK).toBe(10);
-    expect(options.minSimilarity).toBe(0.75);
+    expect(options.minSimilarity).toBe(MEMENTO_MIN_SIMILARITY);
 
     expect(preamble).toContain('[KNOWN FACTS ABOUT THE USER');
     expect(preamble).toContain('[92% relevant] User enjoys playing chess on Saturdays');
