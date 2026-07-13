@@ -10,13 +10,18 @@ import { getThemeConfig } from '@client/app/utils/themes';
  * Agent Mode is admin-gated. A prior P1 fixed SessionToolbar bypassing the admin
  * gate by reading `experimentalFeatures.agentMode` directly; it now resolves the
  * Layer-1 gate via `useFeatureEnabled('agentMode')` (SessionToolbar.tsx:148-149),
- * and both the bolt (AgentModeToggleButton) and the chip render only when that
- * gate is true (SessionToolbar.tsx:339, :387).
+ * and both gate wrappers - the bolt (AgentModeToggleButton) and the chip - mount
+ * their children only when that gate is true (SessionToolbar.tsx:339, :387).
  *
- * This test locks the consumer behavior: the bolt is present when the gate is on
- * and absent when the admin kill switch is off. It fails if the render condition
- * is swapped back to a raw `experimentalFeatures.agentMode` read, because the
- * mock only controls the resolved `isFeatureEnabled('agentMode')` value.
+ * Scope: both children are stubbed to always-rendering divs, so these assertions
+ * prove the gate *wrapper* condition, not that a user sees a chip. The real
+ * AgentModeChip returns null unless agent mode is actively toggled on, so a gated
+ * admin sees the bolt and no chip until they flip it.
+ *
+ * This test locks the consumer behavior: the gated children mount when the gate is
+ * on and are absent when the admin kill switch is off. It fails if the render
+ * condition is swapped back to a raw `experimentalFeatures.agentMode` read, because
+ * the mock only controls the resolved `isFeatureEnabled('agentMode')` value.
  */
 
 const mocks = vi.hoisted(() => ({
@@ -29,6 +34,10 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({
     isFeatureEnabled: (feature: string) => (feature === 'agentMode' ? mocks.agentModeFlag.value : false),
     isAdminFeatureEnabled: () => false,
+    // SessionToolbar ignores isLoading, but the real hook returns it. Keep the mock
+    // shape complete so copies of this harness that gate on it (to suppress a flash
+    // of the gate during hydration) don't silently read undefined.
+    isLoading: false,
   }),
 }));
 
