@@ -82,6 +82,32 @@ export interface ChildExecution {
   childExecutions: Record<string, ChildExecution>;
 }
 
+/**
+ * Append an incoming step, collapsing partial-stream `final_answer` repeats.
+ *
+ * An older server build (or a replayed event stream) can emit multiple
+ * `final_answer` steps for the SAME iteration, each holding the accumulated
+ * text so far. One StepRow renders per entry, so appending them all stacks
+ * dozens of progressively longer "Final Answer" rows. The last emission's
+ * content is a superset of the earlier ones (the same contract server-side
+ * `extractFinalAnswer` relies on), so an incoming `final_answer` REPLACES an
+ * existing one for the same iteration instead of appending. Steps of other
+ * types, and `final_answer`s of other iterations, append as-is.
+ */
+function appendCollapsingFinalAnswer(iterations: IterationStep[], incoming: IterationStep): IterationStep[] {
+  if (incoming.step.type === 'final_answer') {
+    const existingIdx = iterations.findLastIndex(
+      it => it.iteration === incoming.iteration && it.step.type === 'final_answer'
+    );
+    if (existingIdx !== -1) {
+      const next = iterations.slice();
+      next[existingIdx] = incoming;
+      return next;
+    }
+  }
+  return [...iterations, incoming];
+}
+
 export interface PendingPermission {
   toolName: string;
   toolInput: unknown;
@@ -420,7 +446,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
       executions: withExecution(state, executionId, exec => ({
         ...exec,
         status: exec.status === 'pending' ? 'running' : exec.status,
-        iterations: [...exec.iterations, iteration],
+        iterations: appendCollapsingFinalAnswer(exec.iterations, iteration),
         lastKnownIteration: Math.max(exec.lastKnownIteration, iteration.iteration),
       })),
     })),
@@ -560,7 +586,7 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
           }
           return {
             ...child,
-            iterations: [...child.iterations, iteration],
+            iterations: appendCollapsingFinalAnswer(child.iterations, iteration),
             pendingTextByIteration,
           };
         })

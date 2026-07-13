@@ -10,10 +10,17 @@ import type { PublishResult } from '@bike4mind/common';
 // (the restricted->open widening regression). Mocking at the transport level keeps the real
 // publishApi helpers, whose URL/body shape is what we're verifying.
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { get: vi.fn(), post: vi.fn(), patch: vi.fn().mockResolvedValue({ data: {} }) },
+  api: {
+    get: vi.fn(),
+    post: vi.fn().mockResolvedValue({ data: {} }),
+    patch: vi.fn().mockResolvedValue({ data: {} }),
+    delete: vi.fn().mockResolvedValue({ data: {} }),
+  },
 }));
 import { api } from '@client/app/contexts/ApiContext';
 const apiPatch = api.patch as unknown as ReturnType<typeof vi.fn>;
+const apiPost = api.post as unknown as ReturnType<typeof vi.fn>;
+const apiDelete = api.delete as unknown as ReturnType<typeof vi.fn>;
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper = ({ children }: { children: React.ReactNode }) => (
@@ -272,5 +279,169 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
     expect(radio('public')).not.toBeNull();
     expect(radio('organization')).not.toBeNull();
     expect(radio('private')).toBeNull();
+  });
+});
+
+describe('PublishShareModal - domain access gate', () => {
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('sends the domain gate entries AS ENTERED on publish (subdomain not reduced)', async () => {
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(radio('domain')!);
+    fireEvent.change(screen.getByTestId('publish-share-gate-domains'), { target: { value: 'mail.acme.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
+      })
+    );
+  });
+});
+
+describe('PublishShareModal - no-sign-in (/a) share link', () => {
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const renderShared = async () => {
+    apiPost.mockClear().mockResolvedValue({ data: { shareToken: 'TOK', shareUrl: '/a/TOK' } });
+    apiDelete.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url'); // shared phase
+  };
+
+  it('mints the /a link on demand and shows it in a copyable field', async () => {
+    await renderShared();
+
+    // Lazy: no token until the owner asks. The create button is shown first.
+    expect(screen.queryByTestId('publish-share-token-url')).toBeNull();
+    fireEvent.click(screen.getByTestId('publish-share-token-create'));
+
+    const input = (await screen.findByTestId('publish-share-token-url')) as HTMLInputElement;
+    expect(input.value).toContain('/a/TOK');
+    expect(apiPost).toHaveBeenCalledWith('/api/publish/pub-1/share-token', { regenerate: false });
+  });
+
+  it('regenerate rotates the token (regenerate:true)', async () => {
+    await renderShared();
+    fireEvent.click(screen.getByTestId('publish-share-token-create'));
+    await screen.findByTestId('publish-share-token-url');
+
+    apiPost.mockResolvedValueOnce({ data: { shareToken: 'TOK2', shareUrl: '/a/TOK2' } });
+    fireEvent.click(screen.getByTestId('publish-share-token-regenerate'));
+
+    await waitFor(() => expect(apiPost).toHaveBeenCalledWith('/api/publish/pub-1/share-token', { regenerate: true }));
+  });
+
+  it('revoke drops the token and returns to the create affordance', async () => {
+    await renderShared();
+    fireEvent.click(screen.getByTestId('publish-share-token-create'));
+    await screen.findByTestId('publish-share-token-url');
+
+    fireEvent.click(screen.getByTestId('publish-share-token-revoke'));
+
+    await waitFor(() => expect(apiDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token'));
+    await waitFor(() => expect(screen.queryByTestId('publish-share-token-url')).toBeNull());
+    expect(screen.getByTestId('publish-share-token-create')).not.toBeNull();
+  });
+});
+
+describe('PublishShareModal - embed allowlist', () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const renderShared = async (seed: { embedOrigins?: string[]; accessGate?: unknown } = {}) => {
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { embedOrigins: seed.embedOrigins ?? [], accessGate: seed.accessGate ?? null } },
+    });
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url'); // shared phase
+  };
+
+  it('adds a valid origin, PATCHing the allowlist and showing a chip', async () => {
+    await renderShared();
+    await screen.findByTestId('publish-share-embed-section');
+
+    const input = screen.getByTestId('publish-share-embed-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'https://erikbethke.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+    await screen.findByTestId('publish-share-embed-chip-https://erikbethke.com');
+    // The copy-paste iframe snippet appears once an origin is allowed.
+    expect((screen.getByTestId('publish-share-embed-snippet') as HTMLTextAreaElement).value).toContain(
+      '/p/u/u1/s?embed=1'
+    );
+  });
+
+  it('seeds existing origins and removes one (PATCHing the reduced list)', async () => {
+    await renderShared({ embedOrigins: ['https://erikbethke.com'] });
+    await screen.findByTestId('publish-share-embed-chip-https://erikbethke.com');
+
+    fireEvent.click(screen.getByTestId('publish-share-embed-remove-https://erikbethke.com'));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { embedOrigins: [] }));
+  });
+
+  it('rejects a non-https origin client-side (no PATCH)', async () => {
+    await renderShared();
+    await screen.findByTestId('publish-share-embed-section');
+
+    const input = screen.getByTestId('publish-share-embed-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'http://insecure.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+
+    // No embedOrigins PATCH (other unrelated PATCHes may fire on entering shared phase).
+    expect(apiPatch.mock.calls.some(([, body]) => body && 'embedOrigins' in body)).toBe(false);
+  });
+
+  it('hides the embed section while a gate is live', async () => {
+    await renderShared({ accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] } });
+    await waitFor(() => expect(apiGet).toHaveBeenCalled());
+    expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
   });
 });

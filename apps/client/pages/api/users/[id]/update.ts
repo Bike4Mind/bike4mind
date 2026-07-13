@@ -9,6 +9,7 @@ import {
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 
@@ -89,6 +90,24 @@ const handler = baseApi().put(
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
+    // ONLY remaining Super Admin, and an admin must not remove their OWN Super
+    // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
+    // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
+    // at the actual write path, not just in the UI.
+    if (currentUser.isAdmin && body?.isAdmin === false) {
+      const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
+      if (targetUser?.isAdmin) {
+        if (currentUser.id === userId) {
+          return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
+        }
+        const adminCount = await userRepository.count({ isAdmin: true });
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
+        }
+      }
+    }
+
     if (
       incomingTelemetryLevel &&
       !VALID_TELEMETRY_LEVELS.includes(incomingTelemetryLevel as (typeof VALID_TELEMETRY_LEVELS)[number])
@@ -135,7 +154,10 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      // Keep securityQuestions + userNotes so the response stays symmetric with GET
+      // /users/[id] (ProfileDataForm round-trips them); dropping them here would blank
+      // the fields in the query cache the client seeds from this response.
+      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
     } else {
       await userService.updateUser(userId, req.body as any, {
         db: {
@@ -148,9 +170,9 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
-      // Same for non-admin updates
+      // Same for non-admin updates (keep GET/PUT symmetric - see the admin branch above)
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
     }
   })
 );

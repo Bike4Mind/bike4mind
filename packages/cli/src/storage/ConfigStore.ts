@@ -263,6 +263,9 @@ const CliConfigSchema = z.object({
      * editing the config file directly.
      */
     promptVariant: z.enum(['current', 'minimal']).optional().prefault('current'),
+    // Retention window for resumable sub-agent history (ms). Absent = use
+    // DEFAULT_SUBAGENT_HISTORY_TTL_MS. See AgentHistoryStore / resume_agent.
+    subagentHistoryTtlMs: z.number().optional(),
   }),
   tools: z.object({
     enabled: z.array(z.string()),
@@ -1074,7 +1077,7 @@ export class ConfigStore {
    *
    * Targets:
    *  - 'prod'              -> the build-time default service (clears customUrl)
-   *  - 'dev'               -> local dev server (http://localhost:3001)
+   *  - 'dev'               -> local dev server (http://localhost:3000)
    *  - { customUrl: '...' }  -> arbitrary self-hosted URL
    *
    * Mutates the cached config in place and persists via `save()` (no argument)

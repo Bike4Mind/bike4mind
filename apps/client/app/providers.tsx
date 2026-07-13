@@ -59,6 +59,12 @@ const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       retry: false,
+      // Off by default so a mobile signal-return (Android fires online +
+      // visibilitychange/focus at once) can't trigger a broad refetch storm that
+      // churns layout state and remounts the chat composer, losing typed text.
+      // Queries that genuinely need it opt in explicitly (see hooks/data/*).
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
     },
     mutations: {
       retry: false,

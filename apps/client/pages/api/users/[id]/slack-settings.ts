@@ -192,7 +192,11 @@ const handler = baseApi()
           return res.status(404).json({ error: 'User not found' });
         }
 
-        return res.json({ slackSettings: user.slackSettings || {} });
+        // slackUserToken is select:false, but a parent-level inclusion projection
+        // (.select('slackSettings')) can re-include the child on some Mongoose
+        // versions -- strip it unconditionally so the token never reaches the client.
+        const { slackUserToken: _token, ...slackSettings } = (user.slackSettings ?? {}) as Record<string, unknown>;
+        return res.json({ slackSettings });
       } catch (error) {
         Logger.error('Error fetching Slack settings:', error);
         return res.status(500).json({ error: 'Failed to fetch settings' });

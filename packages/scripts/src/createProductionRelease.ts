@@ -194,7 +194,11 @@ async function main(): Promise<void> {
         tag: nextVersion,
         name: releaseName,
         body: releaseBody,
-        targetCommitish: 'prod',
+        // Anchor the release tag to the same ref the changelog was computed
+        // against (target-branch). For the prod-branch flow this is 'prod'
+        // (unchanged); for a SHA-promote (deploy console) it is the deployed
+        // commit, so the tag lands on what actually shipped, not a stale branch.
+        targetCommitish: targetBranch,
       });
       releaseUrl = release.html_url;
       console.log(`   ✅ Release created: ${releaseUrl}\n`);

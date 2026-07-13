@@ -1,19 +1,25 @@
-import { ToolDefinition } from '../../base/types';
+import { ToolDefinition, type CodeMinifier } from '../../base/types';
 import { promises as fs } from 'fs';
 import { existsSync, statSync } from 'fs';
 import { assertPathAllowed, isPathAllowed } from '../../utils/pathValidation';
+import { MINIFY_MIN_BYTES, minifyFileContent } from './minify';
 
 interface FileReadParams {
   path: string;
   encoding?: 'utf-8' | 'ascii' | 'base64';
   offset?: number;
   limit?: number;
+  minified?: boolean;
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB limit
 
-async function readFileContent(params: FileReadParams, allowedDirectories?: string[]): Promise<string> {
-  const { path: filePath, encoding = 'utf-8', offset = 0, limit } = params;
+async function readFileContent(
+  params: FileReadParams,
+  allowedDirectories?: string[],
+  codeMinifier?: CodeMinifier
+): Promise<string> {
+  const { path: filePath, encoding = 'utf-8', offset = 0, limit, minified = false } = params;
 
   // Validate path is within allowed directories (cwd is always included)
   const resolvedPath = assertPathAllowed(filePath, allowedDirectories, 'read');
@@ -41,6 +47,22 @@ async function readFileContent(params: FileReadParams, allowedDirectories?: stri
   }
 
   const content = await fs.readFile(resolvedPath, encoding);
+
+  // Minified read: an opt-in, token-economy view with comments/whitespace stripped.
+  // No line numbers and no pagination - the model must use a plain file_read for exact
+  // text before editing. Small files skip minification (a fast path where it wouldn't help).
+  if (typeof content === 'string' && minified && encoding === 'utf-8' && stats.size > MINIFY_MIN_BYTES) {
+    const {
+      content: minifiedContent,
+      strippedComments,
+      tokensSaved,
+    } = await minifyFileContent(content, resolvedPath, codeMinifier);
+    const mode = strippedComments ? 'comments and blank-line noise stripped' : 'whitespace normalized (comments kept)';
+    const header =
+      `[Minified view of ${filePath} - ${mode}; ~${tokensSaved} tokens saved. ` +
+      `No line numbers. Use file_read WITHOUT minified for exact text/comments before editing.]\n`;
+    return `${header}\n${minifiedContent}`;
+  }
 
   // Handle pagination for text files
   if (typeof content === 'string') {
@@ -104,7 +126,7 @@ export const fileReadTool: ToolDefinition = {
       context.logger.info('📄 FileRead: Reading file', { path: params.path });
 
       try {
-        const content = await readFileContent(params, context.allowedDirectories);
+        const content = await readFileContent(params, context.allowedDirectories, context.codeMinifier);
         // Use validated resolved path instead of re-resolving
         const { resolvedPath: validatedPath } = isPathAllowed(params.path, context.allowedDirectories);
         const stats = statSync(validatedPath);
@@ -149,6 +171,11 @@ export const fileReadTool: ToolDefinition = {
             type: 'number',
             description:
               'OPTIONAL: Maximum number of lines to read from offset. Only use for extremely large files (thousands of lines) that cannot fit in context. Default behavior is to read the entire file, which is preferred for most cases.',
+          },
+          minified: {
+            type: 'boolean',
+            description:
+              'OPTIONAL (default false): return a token-economy view with comments and blank-line noise stripped (code/logic fully retained). Use ONLY to scan large comment-heavy source cheaply. This view has NO line numbers and is not byte-exact - always re-read WITHOUT minified for exact text, comments, or line numbers, and before editing. Ignored for binary/base64 reads and combined with offset/limit.',
           },
         },
         required: ['path'],

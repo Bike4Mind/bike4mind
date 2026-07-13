@@ -32,8 +32,12 @@ export function resetRedirectingGuard() {
  * to /login - so an unrecoverable session always ends in a clean sign-out
  * instead of silently flooding 401s with no prompt (the prior behavior for
  * the "already expired / no refresh token" branch).
+ *
+ * Exported so callers with their own unrecoverable-auth-failure signal (e.g.
+ * accept-policies.tsx, whose consent gate has no server session to fall back
+ * on) can reuse this teardown instead of duplicating it.
  */
-async function forceSessionExpiredRedirect(): Promise<void> {
+export async function forceSessionExpiredRedirect(): Promise<void> {
   // markSessionExpired() clears the tokens AND sets expired: true in a
   // single store write, so localStorage doesn't retain stale credentials
   // and background tabs receive exactly one storage event with the final
@@ -69,6 +73,19 @@ export const isPublicPath = (path: string): boolean => {
   // Match the /auth/*/callback pattern
   return /^\/auth\/[^/]+\/callback$/.test(path);
 };
+
+// Exported so callers outside the interceptor (e.g. accept-policies.tsx) can apply the
+// same "is this actually an unrecoverable auth rejection, or just a transient failure"
+// distinction the refresh-retry catch below makes, instead of re-deriving it per caller.
+export const getAxiosErrorStatus = (error: unknown): number | undefined =>
+  isAxiosError(error) ? error.response?.status : undefined;
+
+// Exported so callers can tell whether the interceptor already completed a full
+// refresh-succeeded-then-retried cycle for this error (stamped below as `_retryCount`) -
+// a stronger "already tried, still failed" signal than a bare 401 status, which a caller
+// can hit on its very first attempt whenever the refresh itself (not the retry) failed.
+export const getAxiosRetryCount = (error: unknown): number =>
+  (isAxiosError(error) ? (error.config as { _retryCount?: number } | undefined)?._retryCount : undefined) ?? 0;
 
 const IDEMPOTENT_METHODS = ['post', 'put', 'patch', 'delete'];
 
@@ -216,7 +233,7 @@ export const ApiProvider: React.FC<PropsWithChildren> = ({ children }) => {
               // stops the in-flight 401 cascade. The session_expired code surfaces a
               // toast on the login screen, and redirectTo returns the user to where
               // they were after re-login.
-              const refreshStatus = isAxiosError(e) ? e.response?.status : undefined;
+              const refreshStatus = getAxiosErrorStatus(e);
               if (refreshStatus === 400 || refreshStatus === 401) {
                 await forceSessionExpiredRedirect();
               }

@@ -7,9 +7,21 @@ import BaseRepository from '@bike4mind/db-core';
 export type IntegrationAuditEntityType = 'oauth' | 'webhook' | 'mcp_tool' | 'token_refresh';
 
 /**
- * Supported integration names
+ * Supported integration names. Single source of truth for BOTH the TS type and
+ * the Mongoose schema enum below - keep them derived from this one const so they
+ * can never drift (a type that listed 'optihashi' while the schema enum did not
+ * caused every OptiHashi webhook's audit-log write to fail runtime validation).
  */
-export type IntegrationAuditIntegrationName = 'github' | 'atlassian' | 'slack' | 'linear' | 'notion' | 'optihashi';
+export const INTEGRATION_AUDIT_INTEGRATION_NAMES = [
+  'github',
+  'atlassian',
+  'slack',
+  'linear',
+  'notion',
+  'optihashi',
+] as const;
+
+export type IntegrationAuditIntegrationName = (typeof INTEGRATION_AUDIT_INTEGRATION_NAMES)[number];
 
 /**
  * Outcome of the audited operation
@@ -81,7 +93,8 @@ const IntegrationAuditLogSchema = new Schema<IIntegrationAuditLogDocument>(
     integrationName: {
       type: String,
       required: true,
-      enum: ['github', 'atlassian', 'slack', 'linear', 'notion'],
+      // Derived from the shared const so this can never drift from the TS type.
+      enum: [...INTEGRATION_AUDIT_INTEGRATION_NAMES],
     },
     action: { type: String, required: true },
     userId: { type: String, index: true },

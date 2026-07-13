@@ -85,7 +85,23 @@ export const ALWAYS_DENIED_FOR_AGENTS = [
   'agent_delegate', // No agent chaining
   'create_dynamic_agent', // No recursive agent creation
   'coordinate_task', // No recursive coordination loops
+  'resume_agent', // Resume is orchestrator-only; subagents cannot resume sessions
 ] as const;
+
+/**
+ * Maximum nesting depth for spawned agents (fail-closed recursion cap).
+ *
+ * Depth convention: the main agent is depth 0, an agent it spawns is depth 1,
+ * an agent that agent spawns is depth 2, and so on. `delegateToAgent` rejects
+ * any spawn whose depth would be >= this value.
+ *
+ * ALWAYS_DENIED_FOR_AGENTS already caps the common paths (subagents cannot call
+ * the delegation tools), so today the only way past depth 1 is a forking skill
+ * invoked from within a subagent. A value of 3 preserves that existing nesting
+ * (depths 1 and 2 allowed) while bounding runaway recursion, and fails closed if
+ * a future tool or dynamic-agent path reopens delegation to subagents.
+ */
+export const MAX_SUBAGENT_DEPTH = 3;
 
 /**
  * Source location of an agent definition

@@ -10,6 +10,8 @@ import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
 import WaterOutlinedIcon from '@mui/icons-material/WaterOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
+import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
+import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
@@ -20,6 +22,7 @@ import { useOptiAccess } from '@client/app/hooks/data/opti';
 import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
+import { useGearUnlocks, type GearKey } from '@client/app/hooks/useGearsStatus';
 import { useNotebookLayout } from '..';
 
 type NavItem = {
@@ -66,6 +69,18 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // so hide the Data Lakes destination when it's off - otherwise the link lands on an
   // Explorer whose every request 403s (mirrors FileBrowser's guard).
   const isDataLakesEnabled = isAdminFeatureEnabled('EnableDataLakes');
+  // Gears (earned nav): feature rows appear once the user has USED the feature -
+  // the permanent rail is New Chat / Gears / Help. Unlocks are derived server-side
+  // (has >=1 project, agent, lake, file, publication). While the status loads we
+  // show everything (the safe default for existing users; a brand-new user sees
+  // the rail settle once, on first paint only).
+  const gearUnlocks = useGearUnlocks();
+  // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
+  // (Files, Projects, ...) were unconditional before Gears, so a loading state,
+  // a catalog that omits/renames the key, or an admin override that drops it
+  // must NOT silently remove core navigation app-wide - only a key the server
+  // returns as `false` (a known, genuinely-unearned gear) hides its row.
+  const gearOpen = (key: GearKey) => gearUnlocks === undefined || !(key in gearUnlocks) || gearUnlocks[key] === true;
   const helpOpen = useHelpPanel(s => s.open);
 
   const closeOnMobile = () => {
@@ -138,7 +153,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     // It opens the user's own lakes (browse + manage) at /data-lakes, so a non-Opti
     // user with the feature can reach their lakes too (was previously elided when
     // Opti was off, and pointed at the Opti static-registry explorer when on).
-    ...(isDataLakesEnabled
+    ...(isDataLakesEnabled && gearOpen('datalakes')
       ? [
           {
             key: 'datalakes',
@@ -152,23 +167,29 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    {
-      key: 'files',
-      label: t('files.manager', 'Files Manager'),
-      icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
-      isActive: fileBrowserOpen,
-      onClick: () => {
-        closeOnMobile();
-        setFileBrowserOpen(true);
-      },
-    },
-    ...(isAgentsEnabled
+    ...(gearOpen('files')
+      ? [
+          {
+            key: 'files',
+            label: t('files.manager', 'Files Manager'),
+            icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
+            isActive: fileBrowserOpen,
+            onClick: () => {
+              closeOnMobile();
+              setFileBrowserOpen(true);
+            },
+          },
+        ]
+      : []),
+    ...(isAgentsEnabled && gearOpen('agents')
       ? [
           {
             key: 'agents',
             label: t('agents.title'),
             icon: iconSlot(<SmartToyOutlinedIcon sx={{ fontSize: '18px' }} />),
-            isActive: location.pathname.startsWith('/agents'),
+            // Active only on the overall agents grid, not a specific agent screen (/agents/:id),
+            // which highlights its own row in the list below instead.
+            isActive: location.pathname === '/agents',
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/agents' });
@@ -176,16 +197,38 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
-    {
-      key: 'projects',
-      label: t('projects.projects'),
-      icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
-      isActive: location.pathname.startsWith('/projects'),
-      onClick: () => {
-        closeOnMobile();
-        navigate({ to: '/projects' });
-      },
-    },
+    ...(gearOpen('projects')
+      ? [
+          {
+            key: 'projects',
+            label: t('projects.projects'),
+            // Active only on the overall projects grid, not a specific project screen
+            // (/projects/:id), which highlights its own row in the list below instead.
+            icon: iconSlot(<HubOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname === '/projects',
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/projects' });
+            },
+          },
+        ]
+      : []),
+    ...(gearOpen('published')
+      ? [
+          {
+            // Live Artifacts (published shares) are the product's lead-gen surface -
+            // a first-class destination instead of Profile -> Live Artifacts (3 clicks deep).
+            key: 'published',
+            label: t('sidenav.published', 'Live Artifacts'),
+            icon: iconSlot(<PublicOutlinedIcon sx={{ fontSize: '18px' }} />),
+            isActive: location.pathname === '/profile' && (location.search as { tab?: string }).tab === 'published',
+            onClick: () => {
+              closeOnMobile();
+              navigate({ to: '/profile', search: { tab: 'published' } });
+            },
+          },
+        ]
+      : []),
     ...(isTavernEnabled
       ? [
           {
@@ -203,6 +246,17 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
           },
         ]
       : []),
+    {
+      // Permanent: the discovery surface for everything the rail hasn't earned yet.
+      key: 'gears',
+      label: t('sidenav.gears', 'Gears'),
+      icon: iconSlot(<SettingsOutlinedIcon sx={{ fontSize: '18px' }} />),
+      isActive: location.pathname === '/gears',
+      onClick: () => {
+        closeOnMobile();
+        navigate({ to: '/gears' });
+      },
+    },
     {
       key: 'help',
       label: t('sidenav.help', 'Help Center'),

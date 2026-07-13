@@ -451,6 +451,68 @@ describe('creditService - addCredits', () => {
     });
   });
 
+  describe('credit lot stamping', () => {
+    it('stamps a lot when a creditLots adapter is provided', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      const parameters: AddCreditsParameters = {
+        type: 'purchase',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 100,
+        status: CreditPurchaseStatus.Completed,
+        stripePaymentIntentId: 'pi_123',
+        packageId: 'pkg_123',
+        amount: 1000,
+      };
+
+      await addCredits(parameters, {
+        ...mockAdapters,
+        db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+      });
+
+      expect(mockCreditLotCreate).toHaveBeenCalledWith(
+        expect.objectContaining({ ownerId: 'user1', source: 'pack', amount: 100, stripeRef: 'pi_123' })
+      );
+    });
+
+    it('does not stamp a lot when no creditLots adapter is provided (leaves the grant unstamped)', async () => {
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+
+      const parameters: AddCreditsParameters = {
+        type: 'generic_add',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 50,
+      };
+
+      // mockAdapters.db has no creditLots key - should not throw, should not attempt to stamp.
+      await expect(addCredits(parameters, mockAdapters)).resolves.toEqual(mockUser);
+    });
+
+    it('does not stamp a lot on the idempotent duplicate-transactionId path', async () => {
+      mockCreditTransactionRepo.createTransaction.mockResolvedValue(null);
+      mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);
+      const mockCreditLotCreate = vi.fn().mockResolvedValue({ id: 'lot1' });
+
+      const parameters: AddCreditsParameters = {
+        type: 'generic_add',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 100,
+        transactionId: 'reservation-refund:run-1',
+      };
+
+      await addCredits(parameters, {
+        ...mockAdapters,
+        db: { ...mockAdapters.db, creditLots: { create: mockCreditLotCreate } as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
+      });
+
+      expect(mockCreditLotCreate).not.toHaveBeenCalled();
+    });
+  });
+
   describe('error handling', () => {
     it('should handle database errors gracefully', async () => {
       mockCreditHolderMethods.incrementCredits.mockResolvedValue(mockUser);

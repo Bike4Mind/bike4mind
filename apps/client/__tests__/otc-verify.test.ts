@@ -42,6 +42,19 @@ vi.mock('@bike4mind/common', () => ({
   UnprocessableEntityError,
   HTTPError,
   InternalServerError,
+  // Used by entitlements/registry.ts (reached transitively via the verify handler).
+  parseInternalStaffDomains: (raw?: string) => [
+    ...new Set(
+      (raw ?? '')
+        .split(',')
+        .map(d => d.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ],
+  // Pure serializer; mirror its toJSON normalization (secret-stripping shape is covered
+  // by toSafeUser.test.ts). These tests are about enumeration resistance, not the shape.
+  redactUserSecretsForSelf: (user: { toJSON?: () => unknown } | null | undefined) =>
+    user && typeof user.toJSON === 'function' ? user.toJSON() : user,
 }));
 
 vi.mock('@bike4mind/database', () => ({

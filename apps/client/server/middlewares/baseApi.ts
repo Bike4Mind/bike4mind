@@ -1,4 +1,5 @@
 import { authMiddleware, auth } from '@server/auth/auth';
+import { registerToolGearObserver } from '@server/services/gears/toolGearObserver';
 import { logging } from '@server/middlewares/logging';
 import errorHandler from '@server/middlewares/errorHandler';
 import { apiKeyAuth } from '@server/middlewares/apiKeyAuth';
@@ -10,6 +11,9 @@ import { ApiKeyScope } from '@bike4mind/common';
 import { Request, Response } from 'express';
 import nc from 'next-connect';
 import { Config, isDevelopment } from '@server/utils/config';
+
+// Gears: hook the shared tool pipeline once per lambda (fire-and-forget observer).
+registerToolGearObserver();
 
 interface BaseAPIOptions {
   auth: boolean;

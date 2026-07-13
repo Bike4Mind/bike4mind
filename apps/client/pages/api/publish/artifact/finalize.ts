@@ -19,6 +19,7 @@ import {
   buildPublishUrlPath,
   invalidatePublishCdn,
   toCacheTarget,
+  validateEmbedOrigins,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -44,6 +45,7 @@ const DraftManifestSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
   commentPolicy: z.enum(['none', 'open', 'restricted']).optional(),
+  embedOrigins: z.array(z.string()).optional(),
   source: z.object({
     kind: z.enum(['bundle', 'reply', 'fabfile']),
     artifactId: z.string().optional(),
@@ -188,7 +190,7 @@ const handler = baseApi().post(async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions')
+    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate')
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -197,7 +199,20 @@ const handler = baseApi().post(async (req, res) => {
       size: { totalBytes: number; fileCount: number };
       sha256Index?: string;
       versions?: Array<{ sha256Index: string }>;
+      accessGate?: unknown;
     } | null>();
+
+  // Validate the embed allowlist against the artifact's FINAL open-public state. A
+  // re-publish PRESERVES the previous access gate (it is not in the $set below), so
+  // open-public means visibility public AND no preserved gate - matching the PATCH
+  // path. Keeps validateEmbedOrigins' "fail loud" contract even for an API caller
+  // that sends embedOrigins on the upload-url path against a gated artifact.
+  const embed = validateEmbedOrigins(manifest.embedOrigins, {
+    isOpenPublic: manifest.visibility === 'public' && !previous?.accessGate,
+  });
+  if (!embed.ok) {
+    return res.status(400).json({ error: embed.error, code: embed.code });
+  }
 
   // 6. Promote draft -> canonical prefix
   const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
@@ -260,6 +275,12 @@ const handler = baseApi().post(async (req, res) => {
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',
+        // Like accessGate, the embed allowlist is managed post-publish via PATCH and
+        // is NOT part of the normal publish payload. Only write a NON-EMPTY validated
+        // list, so a plain re-publish (or an older client that defaults embedOrigins to
+        // []) can only ADD grants here, never clobber an existing allowlist to [].
+        // Clearing is done through the PATCH path.
+        ...(embed.value.length > 0 ? { embedOrigins: embed.value } : {}),
         ownerId: previous ? previous.ownerId : String(req.user.id),
         lastPublishedBy: String(req.user.id),
         source: manifest.source,

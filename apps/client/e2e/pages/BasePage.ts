@@ -38,7 +38,15 @@ export class BasePage {
   }
 
   async handleWhatsNewModal() {
-    const closeBtn = this.page.getByTestId('whats-new-slider-modal-close-btn-icon-container');
+    // The whats-new announcement renders as one of two variants once the app has fetched
+    // announcements: the multi-slide "slider" modal, or a single-card GenericModal (e.g. an
+    // "Announcement" broadcast). ModalManager shows at most one, never both. Dismiss whichever
+    // appears - either blocks the whole app behind a backdrop that intercepts pointer events, so
+    // a live announcement on the target env would otherwise fail every click/hover after it mounts.
+    const closeBtn = this.page
+      .getByTestId('whats-new-slider-modal-close-btn-icon-container')
+      .or(this.page.getByTestId('generic-modal-close-button-icon-container'))
+      .first();
     // The modal renders asynchronously after fetching announcements -
     // give it a brief window to appear before deciding it won't show.
     const appeared = await closeBtn
@@ -143,7 +151,11 @@ export class BasePage {
     // Wait for the SPA to fully hydrate before checking for modals.
     // domcontentloaded fires when HTML is parsed, but React hasn't mounted yet.
     // 'load' waits for all sub-resources (scripts, styles) so the SPA is interactive.
-    await this.page.waitForLoadState('load');
+    // Bound this wait: under parallel load a preview's 'load' event can lag well past a minute,
+    // which would hang here forever. Cap at NAVIGATION and continue - the per-page readiness
+    // assertions (e.g. an explorer/panel toBeVisible) are the real gate, and every modal handler
+    // below already probes defensively, so proceeding before 'load' is safe.
+    await this.page.waitForLoadState('load', { timeout: TIMEOUTS.NAVIGATION }).catch(() => {});
     // Clear the AUP/ToS consent gate first - while it's up, the app chrome (and every other
     // modal) isn't mounted, so this must run before we probe for the What's New / verification modals.
     await this.handleAcceptPoliciesInterstitial();
@@ -193,8 +205,7 @@ export class BasePage {
       // Set tracker to a sentinel that never matches the new value, so React
       // always detects a change - including when clearing to empty string.
       const tracker = (el as unknown as Record<string, unknown>)._valueTracker as
-        | { setValue: (v: string) => void }
-        | undefined;
+        { setValue: (v: string) => void } | undefined;
       if (tracker) tracker.setValue('__pw_dirty__');
       el.dispatchEvent(new Event('input', { bubbles: true }));
     }, value);

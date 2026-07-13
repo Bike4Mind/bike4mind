@@ -66,6 +66,12 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
   enableOktaAuth = true,
 }) => {
   const { setCurrentUser, currentUser } = useUser();
+  // Only a live session (token present) counts as "already logged in". A stale persisted
+  // `currentUser` with no access token must fall through to the login form rather than be
+  // bounced back into the app shell - otherwise a broken session is trapped in a /login <->
+  // /accept-policies loop (see issue #386 and shouldRedirectToConsent).
+  const accessToken = useAccessToken(s => s.accessToken);
+  const isLoggedIn = !!currentUser && !!accessToken;
   const [currentStep, setCurrentStep] = useState<LoginStep>('email');
   const [email, setEmail] = useState('');
   const [otcCode, setOtcCode] = useState('');
@@ -131,11 +137,11 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
 
   // Redirect if already logged in
   useEffect(() => {
-    if (currentUser) {
+    if (isLoggedIn) {
       const searchParams = new URLSearchParams(window.location.search);
       applyRedirect(router.history, searchParams.get('redirectTo'), '/new', true);
     }
-  }, [currentUser, router]);
+  }, [isLoggedIn, router]);
 
   // Surface SSO/OAuth failures
   useEffect(() => {
@@ -505,7 +511,7 @@ const MultiStepLogin: React.FC<MultiStepLoginProps> = ({
     setPendingToken(null);
   };
 
-  if (currentUser) {
+  if (isLoggedIn) {
     return null;
   }
 

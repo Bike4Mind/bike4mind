@@ -3,14 +3,13 @@
  *
  * Receives a normalized SreEventPayload (delivered via sreJobQueue with
  * jobType: 'analysis' and routed here by the sreJob handler). Performs dedup,
- * circuit breaker check, LLM root cause analysis, gate logic, and dispatches to
- * sreFixQueue if approved.
+ * circuit breaker check, LLM root cause analysis, gate logic, and emits an
+ * sre.analysis.completed event if approved (routed to sreFixQueue via EventBridge).
  */
 
 import type { Logger } from '@bike4mind/observability';
-import { Resource } from 'sst';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { sendToQueue } from '@server/utils/sqs';
+import { SreEvents } from '@server/utils/eventBus';
 import {
   adminSettingsRepository,
   apiKeyRepository,
@@ -663,7 +662,8 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
     }
   }
 
-  // 9. Dispatch to sreFixQueue
+  // 9. Emit analysis-completed event (routed to sreFixQueue by the EventBridge
+  // rule in infra/eventBus.ts, so new consumers can attach without touching this handler)
   const fixRequest: SreFixRequest = {
     trackingId: tracking.id,
     fingerprint: payload.fingerprint,
@@ -685,7 +685,7 @@ export async function runSreAnalysis(payload: SreEventPayload, logger: Logger): 
     });
   }
 
-  await sendToQueue(Resource.sreFixQueue.url, fixRequest as unknown as Record<string, unknown>);
+  await SreEvents.AnalysisCompleted.publish(fixRequest);
 
   if (isDryRun) {
     logger.info('DRY-RUN: Queue dispatch', {

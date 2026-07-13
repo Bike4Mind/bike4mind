@@ -11,9 +11,11 @@ interface AgentSidenavItemProps {
     visual?: { portraitUrl?: string };
   };
   onClick?: () => void;
+  /** Highlights the row (blue bar + focused bg) when its dedicated agent screen is open. */
+  isSelected?: boolean;
 }
 
-const AgentSidenavItem: FC<AgentSidenavItemProps> = ({ agent, onClick }) => {
+const AgentSidenavItem: FC<AgentSidenavItemProps> = ({ agent, onClick, isSelected }) => {
   const navigate = useNavigate();
 
   const handleClick = () => {
@@ -29,6 +31,7 @@ const AgentSidenavItem: FC<AgentSidenavItemProps> = ({ agent, onClick }) => {
       className="agent-sidenav-item"
       onClick={handleClick}
       sx={theme => ({
+        position: 'relative',
         borderRadius: '8px',
         gap: '12px',
         padding: '6px 12px',
@@ -36,9 +39,23 @@ const AgentSidenavItem: FC<AgentSidenavItemProps> = ({ agent, onClick }) => {
         display: 'flex',
         alignItems: 'center',
         cursor: 'pointer',
-        backgroundColor: 'transparent',
+        backgroundColor: isSelected ? theme.palette.notebooklist.focusedBackground : 'transparent',
+        // Blue left active-indicator bar, matching the notebook row's selected state.
+        '&::before': isSelected
+          ? {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              top: '50%',
+              transform: 'translateY(-50%)',
+              width: '2px',
+              height: '80%',
+              backgroundColor: theme.palette.primary[500],
+              borderRadius: '1px',
+            }
+          : {},
         '&:hover': {
-          backgroundColor: theme.palette.notebooklist.hoverBg,
+          backgroundColor: isSelected ? undefined : theme.palette.notebooklist.hoverBg,
         },
         transition: 'background 0.2s',
       })}

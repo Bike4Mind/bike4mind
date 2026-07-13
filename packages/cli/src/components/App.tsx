@@ -4,6 +4,7 @@ import { StatusBar } from './StatusBar';
 import { InputPrompt } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
 import { BackgroundAgentStatus } from './BackgroundAgentStatus';
+import { BackgroundShellStatus } from './BackgroundShellStatus';
 import { CompletedGroupNotification } from './CompletedGroupNotification';
 import { PermissionPrompt } from './PermissionPrompt';
 import type { PermissionResponse } from './PermissionPrompt';
@@ -66,6 +67,8 @@ export function App({
   const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_4_5_SONNET);
   const totalTokens = useCliStore(state => state.session?.metadata.totalTokens || 0);
   const totalCredits = useCliStore(state => state.session?.metadata.totalCredits);
+  const subagentTokens = useCliStore(state => state.session?.metadata.subagentTokens);
+  const subagentCost = useCliStore(state => state.session?.metadata.subagentCost);
   const isThinking = useCliStore(state => state.isThinking);
   const permissionPrompt = useCliStore(state => state.permissionPrompt);
   const userQuestionPrompt = useCliStore(state => state.userQuestionPrompt);
@@ -271,6 +274,9 @@ export function App({
             {/* Background agent status */}
             <BackgroundAgentStatus />
 
+            {/* Background shell session status (bash_execute run_in_background) */}
+            <BackgroundShellStatus />
+
             {/* Completed group notifications - shown when all agents in a group finish */}
             <CompletedGroupNotification />
 
@@ -335,6 +341,8 @@ export function App({
               model={currentModel}
               tokenUsage={totalTokens}
               creditsUsage={totalCredits}
+              subagentTokenUsage={subagentTokens}
+              subagentCreditsUsage={subagentCost}
             />
           </Box>
         </>

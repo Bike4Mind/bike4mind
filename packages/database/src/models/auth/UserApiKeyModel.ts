@@ -1,6 +1,12 @@
 import mongoose from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
-import { ApiKeyStatus, ApiKeyScope, IUserApiKeyDocument, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyStatus,
+  ApiKeyScope,
+  CreditHolderType,
+  IUserApiKeyDocument,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
 
 interface IUserApiKeyModel extends mongoose.Model<IUserApiKeyDocument> {}
@@ -82,6 +88,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ productId }).sort({ createdAt: -1 }).exec();
   }
 
+  findByOrganizationId(organizationId: string) {
+    return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
+  }
+
   async countActiveByProductId(productId: string): Promise<number> {
     return this.model.countDocuments({
       productId,
@@ -125,6 +135,14 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     // Overwatch ingest: product this key is bound to (required when scopes includes OVERWATCH_INGEST_WRITE)
     productId: { type: String },
     productName: { type: String },
+    // Billing target. Default User = personal key billed to `userId`. Organization
+    // routes this key's AI usage to `organizationId`'s credit pool. See IUserApiKey.
+    billingOwnerType: {
+      type: String,
+      enum: [CreditHolderType.User, CreditHolderType.Organization],
+      default: CreditHolderType.User,
+    },
+    organizationId: { type: String },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
@@ -168,6 +186,7 @@ UserApiKeySchema.index({ userId: 1, status: 1 });
 UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
+UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
 
 UserApiKeySchema.plugin(softDeletePlugin);
 

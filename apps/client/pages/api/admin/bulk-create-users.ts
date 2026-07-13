@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { AuthEvents } from '@bike4mind/common';
+import { AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -46,8 +46,6 @@ const handler = baseApi().post(
 
           const username = validatedData.email.split('@')[0];
 
-          const password = Math.random().toString(36).slice(-8);
-
           const newUser = await userService.createUser(
             {
               username,
@@ -55,7 +53,10 @@ const handler = baseApi().post(
               name: `${validatedData.first || ''} ${validatedData.last || ''}`.trim() || validatedData.email,
               initialCredits: validatedData.startingCredits ?? 0,
               record: {
-                password,
+                // Passwordless: no usable password. Store null so `password`
+                // presence stays a truthful signal. Users sign in via OTC.
+                password: null,
+                hasUsablePassword: false,
               },
             },
             {
@@ -132,9 +133,8 @@ const handler = baseApi().post(
           return {
             success: true,
             email: newUser.email,
-            // Passwordless: the generated password is unusable (no password login),
-            // so it's intentionally not returned. Users sign in via OTC.
-            user: newUser,
+            // Passwordless account (no password login); users sign in via OTC.
+            user: redactUserSecretsForSelf(newUser),
           };
         } catch (error: any) {
           if (error instanceof z.ZodError) {

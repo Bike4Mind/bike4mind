@@ -4,7 +4,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket, appFilesBucket } from './buckets';
 import { eventBus } from './bus';
-import { notebookCurationQueue } from './queues';
+import { notebookCurationQueue, sreFixQueue, sreFixQueueDLQ } from './queues';
 
 // Stripe events
 const stripeInvoicePaymentSucceededSubscription = eventBus.subscribe(
@@ -238,6 +238,19 @@ eventBus.subscribe(
 // Telemetry Alert events - sends Slack alerts and creates GitHub issues for context telemetry anomalies
 // Processes alerts asynchronously so main Lambda can terminate without blocking
 // Includes fingerprinting, deduplication, regression detection, and LLM priority determination
+//
+// Rule-target DLQ: EventBridge silently DROPS an event once the target's delivery retries
+// are exhausted and no DLQ is configured - a failed alert delivery would vanish without
+// trace. The deadLetterConfig on the rule target (set via transform.target below) captures
+// those undeliverable events instead. Alarmed in infra/dlqAlarms.ts.
+const telemetryAlertRuleDLQ = new sst.aws.Queue('telemetryAlertRuleDLQ', {
+  transform: {
+    queue: {
+      messageRetentionSeconds: 1209600, // 14 days for forensics investigation
+    },
+  },
+});
+
 const telemetryAlertSubscription = eventBus.subscribe(
   'telemetry-alert',
   {
@@ -261,8 +274,35 @@ const telemetryAlertSubscription = eventBus.subscribe(
     pattern: {
       detailType: ['telemetry.alert'],
     },
+    transform: {
+      target: {
+        deadLetterConfig: {
+          arn: telemetryAlertRuleDLQ.arn,
+        },
+      },
+    },
   }
 );
+
+// EventBridge delivers to a rule-target DLQ as the events.amazonaws.com service principal,
+// so the queue needs a resource policy granting SendMessage, scoped to this rule's ARN.
+new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
+  queueUrl: telemetryAlertRuleDLQ.url,
+  policy: $util.all([telemetryAlertRuleDLQ.arn, telemetryAlertSubscription.nodes.rule.arn]).apply(([dlqArn, ruleArn]) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'events.amazonaws.com' },
+          Action: 'sqs:SendMessage',
+          Resource: dlqArn,
+          Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+        },
+      ],
+    })
+  ),
+});
 
 // Spider events - comprehensive notebook grooming
 const spiderSubscription = eventBus.subscribe(
@@ -290,8 +330,31 @@ const spiderSubscription = eventBus.subscribe(
   }
 );
 
+// SRE Diagnostician -> Surgeon handoff. The analysis handler emits
+// sre.analysis.completed (apps/client/server/utils/eventBus.ts) and this rule
+// routes it to sreFixQueue, replacing the former direct SQS dispatch. Gives a
+// single seam for replay/inspection, and future consumers (audit, metrics)
+// attach here without touching the analysis Lambda. Failed deliveries go to
+// the existing sreFixQueueDLQ via the target's dead-letter config.
+const sreFixDispatchSubscription = eventBus.subscribeQueue('SreFixDispatch', sreFixQueue, {
+  pattern: {
+    detailType: ['sre.analysis.completed'],
+  },
+  transform: {
+    target: targetArgs => {
+      targetArgs.deadLetterConfig = { arn: sreFixQueueDLQ.arn };
+    },
+  },
+});
+
+// EventBridge needs SendMessage on the DLQ to deliver failed events (the rule
+// target's policy created by subscribeQueue only covers the main queue).
+sst.aws.Queue.createPolicy('SreFixQueueDLQEventsPolicy', sreFixQueueDLQ.arn);
+
 export {
   eventBus,
+  telemetryAlertRuleDLQ,
+  sreFixDispatchSubscription,
   sessionAutoNamingSubscription,
   sessionSummarizationSubscription,
   sessionContextSummarizationSubscription,

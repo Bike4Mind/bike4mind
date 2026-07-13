@@ -46,7 +46,9 @@ describe('collectDagChildArtifactBlocks', () => {
   });
 
   it('promotes fenced HTML documents to artifacts (parity with chat extraction)', () => {
-    const childAnswers = ['```html\n<!DOCTYPE html><html><head><title>Report</title></head><body>hi</body></html>\n```'];
+    const childAnswers = [
+      '```html\n<!DOCTYPE html><html><head><title>Report</title></head><body>hi</body></html>\n```',
+    ];
     const blocks = collectDagChildArtifactBlocks({ parentAnswer: 'Summary.', childAnswers });
     expect(blocks).toHaveLength(1);
     expect(blocks[0]).toContain('<artifact');

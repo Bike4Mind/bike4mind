@@ -63,8 +63,10 @@ vi.mock('@bike4mind/observability', () => {
 });
 
 const mockDispatchIssueToSre = vi.fn().mockResolvedValue({ dispatched: true });
+const mockSyncSreIssueStateFromWebhook = vi.fn().mockResolvedValue(undefined);
 vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: (...args: unknown[]) => mockDispatchIssueToSre(...args),
+  syncSreIssueStateFromWebhook: (...args: unknown[]) => mockSyncSreIssueStateFromWebhook(...args),
   SreIssuePayloadSchema: { safeParse: (payload: unknown) => ({ success: true, data: payload }) },
 }));
 
@@ -159,5 +161,24 @@ describe('SRE webhook handler — secret decrypt with key rotation', () => {
 
     expect(res.status).toHaveBeenCalledWith(500);
     expect(mockDispatchIssueToSre).not.toHaveBeenCalled();
+  });
+
+  it('syncs githubIssueState for a valid issues event (keeps the admin filter fresh)', async () => {
+    mockResolveWebhookSecret.mockReturnValue(secretEncryptedWithPreviousKey);
+    const closedBody = JSON.stringify({
+      action: 'closed',
+      issue: { number: 7, title: 't', body: 'b', labels: [] },
+      repository: { full_name: REPO_SLUG },
+      sender: { login: 'octocat' },
+    });
+
+    const { req, res } = createReqRes(closedBody, signPayload(closedBody, PLAINTEXT_SECRET));
+
+    await handler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(mockSyncSreIssueStateFromWebhook).toHaveBeenCalledTimes(1);
+    // Handler forwards the parsed payload; the sync fn decides open/closed from action.
+    expect(mockSyncSreIssueStateFromWebhook.mock.calls[0][0]).toMatchObject({ action: 'closed' });
   });
 });

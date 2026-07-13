@@ -1,4 +1,11 @@
-import { AuthEvents, HTTPError, InternalServerError, UnprocessableEntityError } from '@bike4mind/common';
+import {
+  AuthEvents,
+  CreditHolderType,
+  HTTPError,
+  InternalServerError,
+  UnprocessableEntityError,
+  redactUserSecretsForSelf,
+} from '@bike4mind/common';
 import {
   adminSettingsRepository,
   registrationInviteRepository,
@@ -7,7 +14,9 @@ import {
   creditTransactionRepository,
   pendingOtcTokenRepository,
 } from '@bike4mind/database';
-import { userService } from '@bike4mind/services';
+import { creditService, userService } from '@bike4mind/services';
+import { entitlementsForEmail, signupCreditsForKeys } from '@client/lib/entitlements/registry';
+import { partnerSignupGrantForEmail } from '@server/entitlements/partnerRules';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
@@ -199,9 +208,10 @@ const handler = baseApi({ auth: false })
         }
       }
 
-      // Serialize via toJSON() (not a raw spread of the Mongoose doc) so the schema's
-      // transforms apply and no internal/`select:false` field can slip into the response.
-      const safeUser = typeof existingUser.toJSON === 'function' ? existingUser.toJSON() : existingUser;
+      // Route through the shared self-view serializer (same as mfa/verify) so the login
+      // response carries the same redacted shape as GET /users/[id]. `select:false` alone
+      // does not cover every secret field, so serialize at the boundary here too.
+      const safeUser = redactUserSecretsForSelf(existingUser);
       return res.status(200).json({ ...safeUser, ...tokens });
     }
 
@@ -306,6 +316,52 @@ const handler = baseApi({ auth: false })
       req.logger.info('Self-host bootstrap: first registered user promoted to admin', { userId: newUser.id });
     }
 
+    // Domain-grant signup credits (mirrors /api/email/verify Phase 2b). OTC proved email
+    // ownership and registerViaOTC set emailVerified=true, so the now-verified domain may
+    // confer a one-time signup grant - ADDITIVE on top of the flat defaultFreeCredits
+    // registerViaOTC already granted (distinct transactionId). Idempotent via the stable
+    // `domain-grant-credits:${userId}` id - the SAME id email/verify uses, so a user who
+    // somehow hits both paths is never double-granted.
+    //
+    // Source precedence (issue #293): a DB-backed PartnerSignupRule wins; the env registry
+    // (`entitlementsForEmail` / `signupCreditsForKeys`) is the migration fallback for a domain
+    // not yet in the collection. `matched` lets a DB rule grant access with 0 bonus credits
+    // without falling through to the env amount.
+    //
+    // Wrapped whole (resolve + grant) so a failure can't 500 a completed registration: the
+    // account exists and the client already holds a token, the same post-rotation invariant as
+    // the analytics call below. The stable transactionId makes an admin/maintenance retry safe.
+    try {
+      const partnerGrant = await partnerSignupGrantForEmail(normalizedEmail, true);
+      const signupCredits = partnerGrant.matched
+        ? partnerGrant.signupCredits
+        : signupCreditsForKeys(entitlementsForEmail(normalizedEmail, true));
+      if (signupCredits > 0) {
+        const updatedHolder = await creditService.addCredits(
+          {
+            ownerId: newUser.id,
+            ownerType: CreditHolderType.User,
+            credits: signupCredits,
+            type: 'generic_add',
+            transactionId: `domain-grant-credits:${newUser.id}`,
+            reason: 'domain-grant signup credits',
+          },
+          { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+        );
+        // Reflect the grant in the returned user so the client shows the full balance immediately.
+        newUser.currentCredits = updatedHolder.currentCredits;
+        req.logger.info(
+          `Granted ${signupCredits} one-time domain-grant signup credits to OTC-registered user ${newUser.id}`
+        );
+      }
+    } catch (grantError) {
+      req.logger.error(
+        `OTC registration succeeded for user ${newUser.id} but domain-grant signup-credit grant failed; ` +
+          `idempotent transactionId domain-grant-credits:${newUser.id} makes a retry safe`,
+        grantError
+      );
+    }
+
     // Analytics only - the account already exists, so a counter-write failure must not 500 a
     // completed registration (post-rotation, that would strand the client on a success).
     await logEvent({
@@ -315,7 +371,7 @@ const handler = baseApi({ auth: false })
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
 
     return res.status(200).json({
-      user: newUser,
+      user: redactUserSecretsForSelf(newUser),
       ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
     });
   });

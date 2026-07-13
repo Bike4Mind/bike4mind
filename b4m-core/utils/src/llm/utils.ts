@@ -1157,6 +1157,20 @@ export function includeArtifactSystemMessage(messages: IMessage[], userPrompt: s
     'demo',
     'prototype',
     'showcase',
+    // Long-form / shareable content requests: the model tends to emit a full HTML
+    // document for these, so steer it to wrap that in a text/html artifact instead of
+    // returning raw markup that renders as a wall of source in the chat.
+    'article',
+    'blog',
+    'essay',
+    'newsletter',
+    'web page',
+    'webpage',
+    'landing page',
+    'poster',
+    'brochure',
+    'flyer',
+    'infographic',
   ];
 
   const hasArtifactRequest = artifactTriggerKeywords.some(keyword =>

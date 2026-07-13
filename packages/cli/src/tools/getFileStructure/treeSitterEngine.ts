@@ -17,7 +17,11 @@ interface TSPoint {
 
 interface TSNode {
   text: string;
+  type: string;
   startPosition: TSPoint;
+  startIndex: number;
+  endIndex: number;
+  children: (TSNode | null)[];
 }
 
 interface TSQueryCapture {
@@ -248,4 +252,64 @@ export function getSupportedLanguages(): string[] {
 
 export function getLanguageForExtension(ext: string): string | null {
   return EXTENSION_TO_LANGUAGE[ext] || null;
+}
+
+/** Collect the byte spans of every `comment` node in the tree (depth-first). */
+function collectCommentSpans(root: TSNode): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  const stack: TSNode[] = [root];
+  while (stack.length) {
+    const node = stack.pop();
+    if (!node) continue;
+    if (node.type === 'comment') {
+      spans.push([node.startIndex, node.endIndex]);
+      continue; // comments have no children worth descending into
+    }
+    for (const child of node.children) {
+      if (child) stack.push(child);
+    }
+  }
+  return spans;
+}
+
+/**
+ * Return `sourceCode` with comment text removed via tree-sitter, or `null` when the
+ * extension is unsupported or the source fails to parse - the caller then falls back
+ * to whitespace-only normalization (comments preserved), so worst case is "no reduction,"
+ * never "wrong content." Only `comment` AST nodes are excised; Python docstrings are
+ * `string` expression nodes (semantically live via `__doc__`) and are deliberately kept.
+ * Whitespace normalization is intentionally NOT done here - the caller owns that so the
+ * fallback and AST paths share one normalizer.
+ */
+export async function stripComments(sourceCode: string, ext: string): Promise<string | null> {
+  const languageId = getLanguageForExtension(ext);
+  if (!languageId) return null;
+
+  try {
+    await ensureInitialized();
+    const language = await loadLanguage(languageId);
+    const parser = new TreeSitter.Parser();
+    let tree: TSTree | null = null;
+    try {
+      parser.setLanguage(language);
+      tree = parser.parse(sourceCode);
+      if (!tree) return null;
+
+      const spans = collectCommentSpans(tree.rootNode);
+      if (spans.length === 0) return sourceCode;
+
+      // Excise spans from the end so earlier offsets stay valid.
+      spans.sort((a, b) => b[0] - a[0]);
+      let result = sourceCode;
+      for (const [start, end] of spans) {
+        result = result.slice(0, start) + result.slice(end);
+      }
+      return result;
+    } finally {
+      tree?.delete();
+      parser.delete();
+    }
+  } catch {
+    return null;
+  }
 }

@@ -3,6 +3,7 @@ import type { Session, Message } from '../storage';
 import type { PermissionResponse } from '../components';
 import type { BackgroundAgentJob, BackgroundAgentStatus } from '../agents/types.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
+import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
 import type { HeartbeatLogEntry } from '../features/tavern/types.js';
 import type { ReviewGateResponse } from '../tools/reviewGateTool.js';
 
@@ -27,6 +28,11 @@ function nextInteractionMode(current: InteractionMode): InteractionMode {
 /** Check if a job status is active (running or queued) */
 function isActiveStatus(status: BackgroundAgentStatus): boolean {
   return ACTIVE_STATUSES.has(status);
+}
+
+/** A shell session is active only while running; all other states are terminal. */
+function isActiveShellStatus(status: ShellSessionStatus): boolean {
+  return status === 'running';
 }
 
 interface PermissionPromptState {
@@ -66,6 +72,12 @@ interface CliStore {
   session: Session | null;
   setSession: (session: Session | null) => void;
   addMessage: (message: Session['messages'][0]) => void;
+  /**
+   * Roll a completed subagent run's usage into session metadata. Uses the
+   * functional set() form (reads latest state at call time) so a background
+   * job completing mid-turn can't be lost to a stale-closure overwrite.
+   */
+  recordSubagentUsage: (usage: { tokens: number; credits?: number }) => void;
 
   // Pending messages (ongoing, not yet complete)
   pendingMessages: Message[];
@@ -153,6 +165,11 @@ interface CliStore {
   upsertBackgroundAgent: (job: BackgroundAgentJob) => void;
   cleanupCompletedBackgroundAgents: () => void;
 
+  // Background shell sessions (bash_execute run_in_background / yield_time_ms)
+  backgroundShells: ShellSession[];
+  upsertBackgroundShell: (session: ShellSession) => void;
+  cleanupCompletedBackgroundShells: () => void;
+
   // Completed group notifications (shown to user when all agents in a group finish)
   completedGroupNotifications: Array<{ notification: string; groupDescription?: string; timestamp: number }>;
   addCompletedGroupNotification: (notification: string, groupDescription?: string) => void;
@@ -180,6 +197,22 @@ export const useCliStore = create<CliStore>(set => ({
           ...state.session,
           messages: [...state.session.messages, message],
           updatedAt: new Date().toISOString(),
+        },
+      };
+    }),
+  recordSubagentUsage: ({ tokens, credits }) =>
+    set(state => {
+      if (!state.session) return state;
+      const metadata = state.session.metadata;
+      return {
+        session: {
+          ...state.session,
+          metadata: {
+            ...metadata,
+            subagentCalls: (metadata.subagentCalls || 0) + 1,
+            subagentTokens: (metadata.subagentTokens || 0) + tokens,
+            subagentCost: (metadata.subagentCost || 0) + (credits || 0),
+          },
         },
       };
     }),
@@ -361,6 +394,23 @@ export const useCliStore = create<CliStore>(set => ({
       backgroundAgents: state.backgroundAgents.filter(j => isActiveStatus(j.status)),
     })),
 
+  // Background shell sessions
+  backgroundShells: [],
+  upsertBackgroundShell: session =>
+    set(state => {
+      const existing = state.backgroundShells.findIndex(s => s.id === session.id);
+      if (existing >= 0) {
+        const updated = [...state.backgroundShells];
+        updated[existing] = session;
+        return { backgroundShells: updated };
+      }
+      return { backgroundShells: [...state.backgroundShells, session] };
+    }),
+  cleanupCompletedBackgroundShells: () =>
+    set(state => ({
+      backgroundShells: state.backgroundShells.filter(s => isActiveShellStatus(s.status)),
+    })),
+
   // Completed group notifications
   completedGroupNotifications: [],
   addCompletedGroupNotification: (notification, groupDescription) =>
@@ -397,4 +447,18 @@ export const selectActiveBackgroundAgents = (state: CliStore): BackgroundAgentJo
 export const selectCompletedBackgroundAgents = (state: CliStore): BackgroundAgentJob[] => {
   const completed = state.backgroundAgents.filter(j => !isActiveStatus(j.status));
   return completed.length === 0 ? EMPTY_JOBS : completed;
+};
+
+const EMPTY_SHELLS = [] as ShellSession[];
+
+/** Select only running background shell sessions */
+export const selectActiveBackgroundShells = (state: CliStore): ShellSession[] => {
+  const active = state.backgroundShells.filter(s => isActiveShellStatus(s.status));
+  return active.length === 0 ? EMPTY_SHELLS : active;
+};
+
+/** Select only terminal (exited/killed/timed_out) background shell sessions */
+export const selectCompletedBackgroundShells = (state: CliStore): ShellSession[] => {
+  const completed = state.backgroundShells.filter(s => !isActiveShellStatus(s.status));
+  return completed.length === 0 ? EMPTY_SHELLS : completed;
 };

@@ -64,7 +64,7 @@ outputs:
     description: "'true' if the run touched deployable paths (or the range was unresolved); 'false' to skip test + deploy."
     value: ${{ steps.filter.outputs.deployable }}
   docs-changed:
-    description: "'true' if the run touched docs-site/ paths (or the range was unresolved); 'false' otherwise. Gates verify-docs-build."
+    description: "'true' if the run touched docs-site/ paths (or the range was unresolved); 'false' otherwise. Currently unconsumed (the docs build check was removed until the Docusaurus scaffolding lands in this repo)."
     value: ${{ steps.filter.outputs.docs-changed }}
 
 runs:

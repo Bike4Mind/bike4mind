@@ -3,6 +3,7 @@ import FeedbackTab from '@client/app/components/admin/Feedbacks';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
 import WorldTimeTab from '@client/app/components/admin/WorldTime';
 import SystemPromptsTab from '@client/app/components/admin/SystemPromptsTab';
+import ManageGearsTab from '@client/app/components/admin/ManageGearsTab';
 import EmailVerificationTab from '@client/app/components/admin/EmailVerificationTab';
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -84,6 +85,7 @@ const MigrateUsersTab = dynamic(() => import('./MigrateUsersTab'), { ssr: false 
 const AgentOpsTab = dynamic(() => import('./AgentOpsTab'), { ssr: false });
 const AgentExecutionsTab = dynamic(() => import('./AgentExecutionsTab'), { ssr: false });
 const SubscribersTab = dynamic(() => import('./SubscribersTab'), { ssr: false });
+const PartnerSignupRulesTab = dynamic(() => import('./PartnerSignupRulesTab'), { ssr: false });
 const ModelMetricsTab = dynamic(() => import('./ModelMetrics'), { ssr: false });
 const EventMetricsTab = dynamic(() => import('./EventMetrics'), { ssr: false });
 const SecurityDashboardMock = dynamic(() => import('./SecurityDashboardMock'), { ssr: false });
@@ -534,6 +536,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.Subscribers}>
                 {activeTab === AdminTab.Subscribers && <SubscribersTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.PartnerSignupRules} sx={{ padding: 0 }}>
+                {activeTab === AdminTab.PartnerSignupRules && <PartnerSignupRulesTab />}
+              </TabPanel>
               <TabPanel value={AdminTab.Subscriptions}>
                 {activeTab === AdminTab.Subscriptions && <AdminSubscriptions />}
               </TabPanel>
@@ -566,6 +571,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.SlackMetrics}>
                 {activeTab === AdminTab.SlackMetrics && <SlackMetricsPage />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ManageGears}>
+                {activeTab === AdminTab.ManageGears && <ManageGearsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.SystemPrompts}>
                 {activeTab === AdminTab.SystemPrompts && <SystemPromptsTab />}

@@ -15,7 +15,7 @@ const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
   const userEmail = currentUser?.email;
 
   const { data: inbox } = useGetInbox(currentUser?.id || '');
-  const { data: invites } = useGetUserInvites(currentUser!.id);
+  const { data: invites } = useGetUserInvites(currentUser?.id || '');
 
   const debounceFetch = useMemo(
     () =>
@@ -52,7 +52,7 @@ const InboxBadge: FC<{ children: ReactNode }> = ({ children }) => {
     const unreadInbox = inbox?.some(item => {
       // Only count messages that would actually be displayed in the message list
       // Skip messages without sender data (except SYSTEM messages)
-      if (item.userId !== 'SYSTEM' && !(item as any).sender) {
+      if (item.userId !== 'SYSTEM' && !item.sender) {
         return false;
       }
       return !item.readAt;

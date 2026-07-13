@@ -9,6 +9,7 @@ export * from './DeviceAuthorizationModel';
 export * from './IdentityProviderModel';
 export * from './OAuthAuthorizationCodeModel';
 export * from './OAuthClientModel';
+export * from './PartnerSignupRuleModel';
 export * from './PendingOtcTokenModel';
 export * from './RegistrationInviteModel';
 export * from './SessionModel';

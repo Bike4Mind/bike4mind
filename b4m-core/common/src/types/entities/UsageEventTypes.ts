@@ -16,6 +16,12 @@ export const USAGE_EVENT_FEATURES = [
   'agent_execution',
   'completion_api',
   'tool',
+  // Operational-model spend the app incurs on the user's behalf outside a direct
+  // chat turn (auto-naming, summarization, tagging, context summarization). Billed
+  // to the user/org only when the billOperationalUsage admin setting is on.
+  'operations',
+  // Query-embedding spend (e.g. every search_knowledge_base semantic search).
+  'embedding',
 ] as const;
 
 export type UsageEventFeature = (typeof USAGE_EVENT_FEATURES)[number];
@@ -45,15 +51,17 @@ export const UsageEvent = z.object({
   /** Exact model id string used for the call. */
   model: z.string(),
 
-  // Token quantities. inputTokens/outputTokens are the BILLING basis (currently
-  // the local tokenizer). providerInputTokens/providerOutputTokens are what the
-  // provider reported; the delta quantifies the known local over-count.
+  // Token quantities. inputTokens/outputTokens are ALWAYS the local tokenizer
+  // estimate and providerInputTokens/providerOutputTokens ALWAYS the provider's
+  // counts, so the delta stays a comparable estimate-quality metric across all
+  // rows. settledBasis says which of the two priced costUsd/creditsCharged.
   inputTokens: z.number().default(0),
   outputTokens: z.number().default(0),
   cachedInputTokens: z.number().default(0),
   cacheWriteTokens: z.number().default(0),
   providerInputTokens: z.number().optional(),
   providerOutputTokens: z.number().optional(),
+  settledBasis: z.enum(['provider', 'local']).optional(),
   /** Images generated / video seconds, for per-unit modalities. */
   units: z.number().optional(),
 
@@ -61,6 +69,12 @@ export const UsageEvent = z.object({
   costUsd: z.number(),
   /** Credits actually debited from the owner for this call. */
   creditsCharged: z.number(),
+  /**
+   * Credits written off by the zero-balance shortfall clamp (quest-level,
+   * recorded on the settlement event). Collected revenue is
+   * sum(creditsCharged) - sum(writtenOffCredits); absent means nothing written off.
+   */
+  writtenOffCredits: z.number().optional(),
 
   status: z.enum(USAGE_EVENT_STATUSES).default('ok'),
   latencyMs: z.number().optional(),
@@ -102,6 +116,87 @@ export interface IProviderMonthCogs {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * One aggregation bucket of settlement basis (provider vs local pricing).
+ * Rows with settledBasis unset (events predating this field) are excluded,
+ * not bucketed as a third basis - they'd misrepresent estimate quality.
+ */
+export interface ISettlementBreakdown {
+  settledBasis: 'provider' | 'local';
+  requests: number;
+  creditsCharged: number;
+  writtenOffCredits: number;
+  /** Total (providerInputTokens - inputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  inputTokenDelta: number;
+  /** Total (providerOutputTokens - outputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  outputTokenDelta: number;
+  /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
+  deltaSampleSize: number;
+}
+
+/** Shared spend totals for any owner-scoped usage aggregation bucket. */
+export interface IUsageSpendBucket {
+  requests: number;
+  /** True provider COGS in USD over the bucket. */
+  cogsUsd: number;
+  /** Credits debited from the owner over the bucket. */
+  creditsCharged: number;
+}
+
+/** Owner spend for one UTC day (burn chart point). */
+export interface IOwnerSpendDay extends IUsageSpendBucket {
+  day: string; // YYYY-MM-DD (UTC)
+}
+
+/** Owner spend attributed to one member (the user who ran the call). */
+export interface IOwnerSpendMember extends IUsageSpendBucket {
+  userId: string;
+}
+
+/** Owner spend for one provider/model pair. */
+export interface IOwnerSpendModel extends IUsageSpendBucket {
+  provider: string;
+  model: string;
+}
+
+/** Owner spend for one product surface (chat, agent_execution, operations, embedding, ...). */
+export interface IOwnerSpendFeature extends IUsageSpendBucket {
+  feature: UsageEventFeature;
+}
+
+/**
+ * One owner's usage rolled up every way the dashboard needs it, computed in a
+ * single pass so the cuts always reconcile against the same event set.
+ * `overTime` is ascending by day (chart order); the breakdowns are descending
+ * by creditsCharged (biggest spenders first).
+ */
+export interface IOwnerUsageSummary {
+  overTime: IOwnerSpendDay[];
+  byMember: IOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  totals: IUsageSpendBucket;
+}
+
+/** A member spend bucket with the user id resolved to a display name by the API. */
+export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
+
+/**
+ * Wire shape of GET /api/admin/org-usage: an owner usage summary with member
+ * ids resolved to names, plus the echo of the query that produced it.
+ */
+export interface IOrgUsageDashboardResponse {
+  organizationId: string;
+  /** Trailing window the summary covers. */
+  days: number;
+  overTime: IOwnerSpendDay[];
+  byMember: NamedOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  totals: IUsageSpendBucket;
 }
 
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
@@ -116,4 +211,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Monthly COGS per provider for invoice reconciliation, newest month first. */
   monthlyCogsByProvider(): Promise<IProviderMonthCogs[]>;
+
+  /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
+  settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /**
+   * All spend for one credit holder (org/user/agent) over the trailing N days
+   * (default 30), rolled up by day, member, model, and feature in a single
+   * aggregation. Powers the per-org usage dashboard.
+   */
+  ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
 }

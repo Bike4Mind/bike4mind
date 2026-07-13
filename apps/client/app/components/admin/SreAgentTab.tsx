@@ -17,6 +17,7 @@ import {
   Button,
   Card,
   CardContent,
+  Checkbox,
   Chip,
   CircularProgress,
   DialogActions,
@@ -51,10 +52,13 @@ import {
   SreAgentConfigSchema,
   SreRepoConfigSchema,
   SRE_SECRET_PLACEHOLDER,
+  SRE_METRICS_WINDOWS,
   getConfiguredRepoSlugs,
   type ModelInfo,
   type SreAgentConfig,
   type SreRepoConfig,
+  type SreMetrics,
+  type SreMetricsWindow,
 } from '@bike4mind/common';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
@@ -1061,7 +1065,10 @@ function SreConfigPanel() {
   if (!config) return <Typography>Loading configuration...</Typography>;
 
   return (
-    <Box>
+    // pb clears the fixed "AI Chat" pill (bottom:20 + ~40px tall, zIndex 1300) the admin page
+    // floats at the viewport's bottom-right, so the Save/Reset bar below isn't obscured by it.
+    // See FloatingChatWindow.tsx.
+    <Box sx={{ pb: 10 }}>
       {/* Multi-Repo Configuration */}
       <ConfigSection title="Repositories">
         <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
@@ -1162,6 +1169,7 @@ type TrackingDocSummary = Partial<Pick<ISreErrorTracking, 'id'>> &
     | 'classification'
     | 'fixPrNumber'
     | 'githubIssueNumber'
+    | 'githubIssueState'
     | 'createdAt'
     | 'updatedAt'
   > & {
@@ -1175,6 +1183,44 @@ function getDocId(doc: TrackingDocSummary): string | undefined {
 }
 
 export { type TrackingDocSummary, getDocId };
+
+/**
+ * A doc is hidden by the "hide closed GitHub issues" filter only when its
+ * denormalized githubIssueState is 'closed'. CloudWatch-sourced docs (no linked
+ * issue) and GitHub docs whose state has not been observed yet (githubIssueState
+ * absent, or 'open') always stay visible - so the filter never hides in-flight
+ * work on a false or missing state.
+ */
+export function isClosedGithubIssueDoc(doc: Pick<TrackingDocSummary, 'githubIssueState'>): boolean {
+  return doc.githubIssueState === 'closed';
+}
+
+/** sessionStorage key persisting the Pipeline Status "hide closed GH issues" toggle across the session. */
+const HIDE_CLOSED_ISSUES_STORAGE_KEY = 'sre-pipeline-hide-closed-issues';
+
+/**
+ * Session-persisted boolean toggle, defaulting to `true` (hide closed-issue
+ * tracking on first open, per the issue's default view). Persistence uses
+ * sessionStorage so it survives tab navigation but resets in a new session.
+ */
+function useHideClosedIssues(): [boolean, (next: boolean) => void] {
+  const [hide, setHide] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.sessionStorage.getItem(HIDE_CLOSED_ISSUES_STORAGE_KEY);
+    return stored === null ? true : stored === 'true';
+  });
+
+  const update = useCallback((next: boolean) => {
+    setHide(next);
+    try {
+      window.sessionStorage.setItem(HIDE_CLOSED_ISSUES_STORAGE_KEY, String(next));
+    } catch {
+      // sessionStorage can throw (private mode / quota) - persistence is best-effort.
+    }
+  }, []);
+
+  return [hide, update];
+}
 
 // Keep in sync with RETRYABLE_STATUSES in packages/database/src/models/SreErrorTrackingModel.ts
 // (cannot import from @bike4mind/database in client components - pulls in node:fs via documentdb-cert-manager)
@@ -1223,7 +1269,11 @@ export function PipelineTrackingCard({ doc }: { doc: TrackingDocSummary }) {
     staleTime: 30_000,
   });
 
-  const isGithubIssue = doc.source === 'GITHUB_ISSUE' && !!doc.githubIssueNumber;
+  // Fire the issue-state self-heal for any GitHub-issue doc, even one whose issue
+  // number is not yet backfilled onto githubIssueNumber (it still lives in the
+  // server-side sourceRef URL, which the endpoint parses and backfills). Gating on
+  // githubIssueNumber here would leave such a doc unable to reconcile from its card.
+  const isGithubIssue = doc.source === 'GITHUB_ISSUE';
 
   const { data: issueState } = useQuery({
     queryKey: ['sre-issue-state', docId],
@@ -1894,8 +1944,175 @@ function ScanSection({ repoSlugs }: { repoSlugs: string[] }) {
   );
 }
 
-function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
+// SRE Activity Metrics Widget
+
+const METRIC_WINDOW_LABELS: Record<SreMetricsWindow, string> = {
+  '24h': '24h',
+  '7d': '7d',
+  '30d': '30d',
+};
+
+/** Compact number format for large token counts (e.g. 950, 12.3K, 4.5M). */
+function formatCompact(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(1)}K`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
+/** Headline stat tile for a single metric. */
+function MetricTile({ label, value, testId }: { label: string; value: React.ReactNode; testId: string }) {
+  return (
+    <Card variant="soft" size="sm" sx={{ flex: '1 1 110px', minWidth: 110, gap: 0.25 }} data-testid={testId}>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary' }} noWrap>
+        {label}
+      </Typography>
+      <Typography level="title-lg">{value}</Typography>
+    </Card>
+  );
+}
+
+/**
+ * Activity dashboard: pipeline metrics over a selectable time window, scoped to
+ * the panel's current repo filter. Counts come from the server-side aggregation
+ * at /api/sre/metrics (no client-side scan). Success rate is derived from the
+ * status breakdown - resolved (fixed + already_fixed) over resolved + failed
+ * outcomes (failed + dispatch_failed + low_confidence).
+ */
+export function SreMetricsWidget({ repoSlug }: { repoSlug: string }) {
+  const [selectedWindow, setSelectedWindow] = useState<SreMetricsWindow>('7d');
+
+  const { data, isLoading, isError, error } = useQuery({
+    queryKey: ['sre-metrics', selectedWindow, repoSlug],
+    queryFn: async () => {
+      const params = new URLSearchParams({ window: selectedWindow });
+      if (repoSlug) params.set('repoSlug', repoSlug);
+      const { data } = await api.get<SreMetrics>(`/api/sre/metrics?${params.toString()}`);
+      return data;
+    },
+    staleTime: 30_000,
+  });
+
+  const successRate = useMemo(() => {
+    if (!data) return null;
+    const { byStatus } = data;
+    const resolved = (byStatus.fixed ?? 0) + (byStatus.already_fixed ?? 0);
+    const failed = (byStatus.failed ?? 0) + (byStatus.dispatch_failed ?? 0) + (byStatus.low_confidence ?? 0);
+    const terminal = resolved + failed;
+    return terminal > 0 ? Math.round((resolved / terminal) * 100) : null;
+  }, [data]);
+
+  const statusEntries = useMemo(() => (data ? Object.entries(data.byStatus).sort((a, b) => b[1] - a[1]) : []), [data]);
+
+  return (
+    <Card variant="outlined" data-testid="sre-metrics-widget">
+      <CardContent>
+        <Stack
+          direction="row"
+          alignItems="center"
+          justifyContent="space-between"
+          sx={{ mb: 1.5, flexWrap: 'wrap', gap: 1 }}
+        >
+          <Typography level="title-md">Activity</Typography>
+          <Stack direction="row" spacing={0.5}>
+            {SRE_METRICS_WINDOWS.map(w => (
+              <Button
+                key={w}
+                size="sm"
+                variant={selectedWindow === w ? 'solid' : 'outlined'}
+                color={selectedWindow === w ? 'primary' : 'neutral'}
+                onClick={() => setSelectedWindow(w)}
+                data-testid={`sre-metrics-window-${w}`}
+              >
+                {METRIC_WINDOW_LABELS[w]}
+              </Button>
+            ))}
+          </Stack>
+        </Stack>
+
+        {isLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }} data-testid="sre-metrics-loading">
+            <CircularProgress size="sm" />
+          </Box>
+        ) : isError ? (
+          <Alert variant="soft" color="danger" data-testid="sre-metrics-error">
+            Failed to load metrics{error instanceof Error ? `: ${error.message}` : ''}
+          </Alert>
+        ) : !data || !data.total ? (
+          <Alert variant="soft" color="neutral" data-testid="sre-metrics-empty">
+            No pipeline activity in the selected window.
+          </Alert>
+        ) : (
+          <Stack spacing={1.5}>
+            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+              <MetricTile label="Errors ingested" value={data.total.toLocaleString()} testId="sre-metric-total" />
+              <MetricTile label="Analyses run" value={data.analysesRun.toLocaleString()} testId="sre-metric-analyses" />
+              <MetricTile
+                label="Fixes dispatched"
+                value={data.fixesDispatched.toLocaleString()}
+                testId="sre-metric-dispatched"
+              />
+              <MetricTile
+                label="PRs created"
+                value={data.prsCreated.toLocaleString()}
+                testId="sre-metric-prs-created"
+              />
+              <MetricTile label="PRs merged" value={data.prsMerged.toLocaleString()} testId="sre-metric-prs-merged" />
+              <MetricTile
+                label="Tokens (in / out)"
+                value={
+                  <Typography level="body-md" sx={{ fontWeight: 'lg' }}>
+                    {formatCompact(data.tokens.input)} / {formatCompact(data.tokens.output)}
+                  </Typography>
+                }
+                testId="sre-metric-tokens"
+              />
+              {successRate != null && (
+                <MetricTile label="Success rate" value={`${successRate}%`} testId="sre-metric-success-rate" />
+              )}
+            </Box>
+
+            {/* Source breakdown */}
+            <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                Source:
+              </Typography>
+              <Chip size="sm" variant="soft" data-testid="sre-metric-source-cloudwatch">
+                CloudWatch {data.bySource.CLOUDWATCH}
+              </Chip>
+              <Chip size="sm" variant="soft" data-testid="sre-metric-source-github">
+                GitHub {data.bySource.GITHUB_ISSUE}
+              </Chip>
+            </Stack>
+
+            {/* Status breakdown */}
+            {statusEntries.length > 0 && (
+              <Stack direction="row" spacing={0.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  Status:
+                </Typography>
+                {statusEntries.map(([status, count]) => (
+                  <Chip
+                    key={status}
+                    size="sm"
+                    variant="soft"
+                    color={STATUS_COLORS[status] || 'neutral'}
+                    data-testid={`sre-metric-status-${status}`}
+                  >
+                    {status} {count}
+                  </Chip>
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+export function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
   const [selectedRepo, setSelectedRepo] = useState<string>('');
+  const [hideClosedIssues, setHideClosedIssues] = useHideClosedIssues();
 
   const { data: trackingDocs, isLoading } = useQuery({
     queryKey: ['sre-tracking-recent', selectedRepo],
@@ -1907,6 +2124,13 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
+
+  const visibleDocs = useMemo(
+    () => (hideClosedIssues ? (trackingDocs ?? []).filter(doc => !isClosedGithubIssueDoc(doc)) : (trackingDocs ?? [])),
+    [trackingDocs, hideClosedIssues]
+  );
+
+  const hiddenByFilterCount = (trackingDocs?.length ?? 0) - visibleDocs.length;
 
   return (
     <Stack spacing={1.5}>
@@ -1928,6 +2152,14 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
           </Select>
         </FormControl>
       )}
+      <SreMetricsWidget repoSlug={selectedRepo} />
+      <Checkbox
+        size="sm"
+        label="Hide tracking for closed GitHub issues"
+        checked={hideClosedIssues}
+        onChange={e => setHideClosedIssues(e.target.checked)}
+        data-testid="sre-pipeline-hide-closed-toggle"
+      />
       <ManualTriggerSection repoSlugs={repoSlugs} />
       <ScanSection repoSlugs={repoSlugs} />
       {isLoading ? (
@@ -1936,11 +2168,26 @@ function PipelineStatusPanel({ repoSlugs }: { repoSlugs: string[] }) {
         <Alert variant="soft" color="neutral">
           No tracked errors yet. The pipeline will populate this once errors are ingested.
         </Alert>
+      ) : !visibleDocs.length ? (
+        <Alert variant="soft" color="neutral" data-testid="sre-pipeline-all-hidden">
+          {hiddenByFilterCount === 1
+            ? '1 tracked error is for a closed GitHub issue. Uncheck the filter above to see it.'
+            : `${hiddenByFilterCount} tracked errors are for closed GitHub issues. Uncheck the filter above to see them.`}
+        </Alert>
       ) : (
-        trackingDocs.map(doc => {
-          const key = getDocId(doc) ?? doc.errorFingerprint;
-          return <PipelineTrackingCard key={key} doc={doc} />;
-        })
+        <>
+          {hideClosedIssues && hiddenByFilterCount > 0 && (
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }} data-testid="sre-pipeline-hidden-count">
+              {hiddenByFilterCount === 1
+                ? '1 closed-issue doc hidden'
+                : `${hiddenByFilterCount} closed-issue docs hidden`}
+            </Typography>
+          )}
+          {visibleDocs.map(doc => {
+            const key = getDocId(doc) ?? doc.errorFingerprint;
+            return <PipelineTrackingCard key={key} doc={doc} />;
+          })}
+        </>
       )}
     </Stack>
   );

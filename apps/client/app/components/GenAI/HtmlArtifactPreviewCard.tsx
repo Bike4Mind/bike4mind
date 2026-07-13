@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFull as ExpandIcon,
@@ -11,6 +11,7 @@ import {
 } from '@mui/icons-material';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import useSessionLayout, { setSessionLayout, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
+import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -42,17 +43,24 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
 
   // Default to expanded if artifacts are disabled
   const [isExpanded, setIsExpanded] = useState(!artifactsEnabled);
-  const [showRenderedPreview, setShowRenderedPreview] = useState(false);
+  // Default an expanded artifact to the rendered view, not raw source (users asking for
+  // an "article" should see the article, not a wall of HTML). Source stays a click away.
+  const [showRenderedPreview, setShowRenderedPreview] = useState(true);
 
   // Artifact should already have complete ID from PromptReplies
   const effectiveArtifact = artifact;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === effectiveArtifact.id;
 
-  // Toggle inline preview (card click behavior)
+  // Card click: expanding from collapsed opens straight into the rendered view; once
+  // expanded, a click toggles between rendered and source.
   const handleToggleInlinePreview = (e?: React.MouseEvent) => {
     e?.stopPropagation();
-    setIsExpanded(true);
+    if (!isExpanded) {
+      setIsExpanded(true);
+      setShowRenderedPreview(true);
+      return;
+    }
     setShowRenderedPreview(!showRenderedPreview);
   };
 
@@ -112,26 +120,9 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
     }
   };
 
-  // Listen for selected artifact content changes and update the knowledge viewer
-  useEffect(() => {
-    const currentState = useSessionLayout.getState();
-
-    // Only update if this artifact is currently selected and the content has actually changed
-    if (currentState.selectedArtifactId === effectiveArtifact.id && currentState.artifactData?.type === 'html') {
-      const currentContent = currentState.artifactData.content as HtmlArtifact;
-
-      // Compare the actual content to avoid unnecessary updates
-      if (JSON.stringify(currentContent) !== JSON.stringify(effectiveArtifact)) {
-        setSessionLayout({
-          artifactData: {
-            ...currentState.artifactData,
-            content: effectiveArtifact,
-          },
-        });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveArtifact.id, effectiveArtifact.content, effectiveArtifact.metadata]);
+  // Propagate live content changes to the Knowledge Base without letting a scroll-driven
+  // (re)mount of a same-id card clobber the newest version - see the hook for the #457 detail.
+  useSelectedArtifactContentSync(effectiveArtifact.id, 'html', effectiveArtifact.content, effectiveArtifact);
 
   const lineCount = effectiveArtifact.content.split('\n').length;
   const complexityColor = getComplexityColor(effectiveArtifact.content);

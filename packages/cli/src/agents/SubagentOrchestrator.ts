@@ -1,7 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import { randomBytes } from 'crypto';
 import { z } from 'zod';
 import { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, ThoroughnessLevel } from '@bike4mind/agents';
+import type { IMessage } from '@bike4mind/common';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import type { PermissionManager } from '../utils/PermissionManager.js';
@@ -19,7 +21,10 @@ import {
 } from '../utils/toolsAdapter.js';
 import type { AgentStore } from './AgentStore.js';
 import type { AgentDefinition } from './types.js';
-import { ALWAYS_DENIED_FOR_AGENTS, HookBlockedError } from './types.js';
+import { ALWAYS_DENIED_FOR_AGENTS, MAX_SUBAGENT_DEPTH, HookBlockedError } from './types.js';
+import { clampInteractionMode } from './interactionModeClamp.js';
+import { resolveEffectiveModel } from './resolveEffectiveModel.js';
+import type { InteractionMode } from '../bootstrap/types.js';
 import type { SharedContextAccess } from './types.js';
 import type { SharedAgentContext } from './SharedAgentContext.js';
 import { filterToolsByPatterns } from './toolFilter.js';
@@ -29,6 +34,7 @@ import { createSkillTool } from '../tools/skillTool.js';
 import { buildSkillsPromptSection } from '../core/skillsPrompt.js';
 import { isReadOnlyTool } from '../config/toolSafety.js';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
+import type { AgentHistoryStore } from './AgentHistoryStore.js';
 
 // Re-export ThoroughnessLevel for convenience
 export type { ThoroughnessLevel };
@@ -44,6 +50,23 @@ export type BeforeRunCallback = (agent: ReActAgent, agentName: string) => void;
 export type AfterRunCallback = (agent: ReActAgent, agentName: string) => void;
 
 /**
+ * Usage totals reported for a single delegateToAgent() run, fired on every
+ * return path (normal completion and HookBlockedError) so callers can roll
+ * subagent token/credit usage up into session metadata regardless of which
+ * spawn path (inline, background, coordinator, dynamic, skill) triggered it.
+ */
+export interface SubagentUsage {
+  agentName: string;
+  totalTokens: number;
+  totalCredits?: number;
+}
+
+/**
+ * Callback invoked once per delegateToAgent() call with that run's usage totals
+ */
+export type SubagentUsageCallback = (usage: SubagentUsage) => void;
+
+/**
  * Options for spawning an agent
  */
 export interface SpawnAgentOptions {
@@ -57,6 +80,17 @@ export interface SpawnAgentOptions {
   variables?: Record<string, string>;
   /** Parent session ID */
   parentSessionId: string;
+  /**
+   * Resume id to store this run's history under. When omitted, delegateToAgent
+   * generates one. Background runs pass their job id so the resumable key matches
+   * the id the model already sees.
+   */
+  resumeId?: string;
+  /**
+   * Prior conversation to replay into the agent (from a stored checkpoint) so a
+   * resumed run continues with full context. See resume_agent.
+   */
+  previousMessages?: IMessage[];
   /** Override model for this execution (takes precedence over agent default) */
   model?: string;
   /** Additional tool restrictions (merged with agent definition) */
@@ -71,6 +105,29 @@ export interface SpawnAgentOptions {
   additionalTools?: ICompletionOptionTools[];
   /** Shared context for inter-agent communication within a pipeline */
   sharedContext?: SharedAgentContext;
+  /**
+   * Nesting depth of the agent being spawned (main agent = 0, its subagents = 1, ...).
+   * Spawns at/above MAX_SUBAGENT_DEPTH are rejected. Defaults to 1 (a direct child
+   * of the main agent) when a caller omits it.
+   */
+  depth?: number;
+  /**
+   * Parent agent's effective interaction mode - the ceiling the child cannot
+   * exceed. Defaults to the live store mode (the main agent's mode) when omitted,
+   * so direct children inherit the main agent's authority.
+   */
+  parentInteractionMode?: InteractionMode;
+  /**
+   * Interaction mode requested for the child. Clamped to parentInteractionMode,
+   * so a request more permissive than the parent is capped. Defaults to inheriting
+   * the parent's mode when omitted.
+   */
+  interactionMode?: InteractionMode;
+  /**
+   * Parent agent's effective model. A child with no explicit or agent-declared
+   * model inherits this rather than silently defaulting to a different model.
+   */
+  parentModel?: string;
 }
 
 /**
@@ -85,6 +142,8 @@ export interface AgentExecutionResult extends AgentResult {
   summary: string;
   /** Parent session ID this agent was spawned from */
   parentSessionId: string;
+  /** Id under which this run's history was stored; pass to resume_agent to continue it. */
+  resumeId: string;
 }
 
 /**
@@ -108,6 +167,10 @@ export interface OrchestratorDependencies {
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Optional: Checkpoint store for file change recovery */
   checkpointStore?: CheckpointStore | null;
+  /** Optional: fired with usage totals after every delegateToAgent() run, for session rollup */
+  onSubagentUsage?: SubagentUsageCallback;
+  /** Optional: retains completed sub-agent conversations for resume_agent. */
+  historyStore?: AgentHistoryStore | null;
 }
 
 /**
@@ -154,6 +217,29 @@ export class SubagentOrchestrator {
   async delegateToAgent(options: SpawnAgentOptions): Promise<AgentExecutionResult> {
     const { task, agentName, thoroughness, variables, parentSessionId, model, allowedTools, abortSignal } = options;
 
+    // Recursion-depth cap (fail closed). A spawned agent is at least depth 1;
+    // reject anything at/above the cap before doing any work.
+    const depth = options.depth ?? 1;
+    if (depth >= MAX_SUBAGENT_DEPTH) {
+      throw new Error(
+        `Cannot spawn agent "${agentName}": subagent nesting depth ${depth} reached the limit ` +
+          `of ${MAX_SUBAGENT_DEPTH}. Deeper delegation is blocked to prevent unbounded recursion.`
+      );
+    }
+
+    // Id this run's history is stored under; background runs supply their job id.
+    const resumeId = options.resumeId ?? `sub-${randomBytes(4).toString('hex')}`;
+
+    // Clamp the child's interaction mode so it never runs more permissively than
+    // its parent. The parent ceiling defaults to the live store mode (the main
+    // agent's mode) for a direct child; nested spawns pass it explicitly.
+    const { useCliStore } = await import('../store/index.js');
+    const parentInteractionMode = options.parentInteractionMode ?? useCliStore.getState().interactionMode;
+    const effectiveInteractionMode = clampInteractionMode(
+      options.interactionMode ?? parentInteractionMode,
+      parentInteractionMode
+    );
+
     // Get agent definition: use inline definition if provided, otherwise look up from store
     let agentDef: AgentDefinition;
     if (options.agentDefinition) {
@@ -167,18 +253,18 @@ export class SubagentOrchestrator {
       agentDef = storedDef;
     }
 
-    // Determine model (options > agent default > main session model if unresolved)
-    let effectiveModel = model || agentDef.model;
-    if (!model && !agentDef.modelResolved) {
-      // Agent's model wasn't resolved - inherit the main session's model
-      const config = await this.deps.configStore.get();
-      if (config?.defaultModel) {
-        this.deps.logger.debug(
-          `Agent "${agentName}" model unresolved, inheriting main session model: ${config.defaultModel}`
-        );
-        effectiveModel = config.defaultModel;
-      }
-    }
+    // Resolve the model through the explicit inherit path (see resolveEffectiveModel):
+    // an unresolved agent inherits the parent's model - or the main session model -
+    // rather than silently defaulting to a possibly-stronger model.
+    const sessionDefaultModel =
+      !model && !agentDef.modelResolved ? (await this.deps.configStore.get())?.defaultModel : undefined;
+    const effectiveModel = resolveEffectiveModel({
+      requestedModel: model,
+      agentModel: agentDef.model,
+      agentModelResolved: agentDef.modelResolved,
+      parentModel: options.parentModel,
+      sessionDefaultModel,
+    });
 
     // Determine thoroughness (param > agent default > medium)
     const effectiveThoroughness = thoroughness || agentDef.defaultThoroughness;
@@ -225,7 +311,10 @@ export class SubagentOrchestrator {
       this.deps.apiClient,
       undefined, // toolFilter (applied below via filterToolsByPatterns)
       this.deps.showUserQuestion,
-      this.deps.checkpointStore
+      this.deps.checkpointStore,
+      undefined, // sandboxOrchestrator (not wired for subagents)
+      undefined, // allowedDirectories (not wired for subagents)
+      effectiveInteractionMode
     );
 
     // Apply wildcard filtering
@@ -247,6 +336,12 @@ export class SubagentOrchestrator {
         subagentOrchestrator: this,
         sessionId: parentSessionId,
         allowedSkills: agentDef.skills,
+        // This agent runs at `depth`; a skill it forks must spawn one level deeper.
+        parentDepth: depth,
+        // Onward forks inherit this agent's clamped mode as their ceiling.
+        parentInteractionMode: effectiveInteractionMode,
+        // Onward forks inherit this agent's model unless they declare their own.
+        parentModel: effectiveModel,
       });
       filteredTools.push(skillTool);
 
@@ -308,6 +403,7 @@ export class SubagentOrchestrator {
             parallelExecution: this.deps.enableParallelToolExecution === true,
             isReadOnlyTool,
             maxHistoryIterations: 4,
+            previousMessages: options.previousMessages,
           }),
         {
           maxRetries: agentDef.retry.maxRetries,
@@ -330,11 +426,13 @@ export class SubagentOrchestrator {
         if (this.afterRunCallback) {
           this.afterRunCallback(agent, agentName);
         }
+        this.deps.onSubagentUsage?.({ agentName, totalTokens: 0, totalCredits: 0 });
         return {
           agentName,
           thoroughness: effectiveThoroughness,
           summary: `Agent blocked: ${error.message}`,
           parentSessionId,
+          resumeId,
           finalAnswer: error.message,
           steps: [],
           completionInfo: {
@@ -380,6 +478,33 @@ export class SubagentOrchestrator {
     // Generate summary
     const summary = this.summarizeResult(result, agentDef);
 
+    this.deps.onSubagentUsage?.({
+      agentName,
+      totalTokens: result.completionInfo.totalTokens,
+      totalCredits: result.completionInfo.totalCredits,
+    });
+
+    // Persist the finished conversation so resume_agent can continue it.
+    if (this.deps.historyStore) {
+      const checkpoint = agent.toCheckpoint();
+      // run() records the final answer as a step, not a message, so the agent's
+      // own conclusion is absent from the checkpoint history. Append it as an
+      // assistant turn so a resumed run sees what it previously concluded (the
+      // whole point of "resume to fix the bug you found").
+      const last = checkpoint.messages[checkpoint.messages.length - 1];
+      if (result.finalAnswer && !(last?.role === 'assistant' && last.content === result.finalAnswer)) {
+        checkpoint.messages.push({ role: 'assistant', content: result.finalAnswer });
+      }
+      this.deps.historyStore.set(resumeId, {
+        checkpoint,
+        agentName,
+        agentDefinition: agentDef,
+        thoroughness: effectiveThoroughness,
+        parentSessionId,
+        endTime: Date.now(),
+      });
+    }
+
     // Return agent result
     return {
       ...result,
@@ -387,6 +512,7 @@ export class SubagentOrchestrator {
       thoroughness: effectiveThoroughness,
       summary,
       parentSessionId,
+      resumeId,
     };
   }
 

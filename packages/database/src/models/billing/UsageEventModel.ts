@@ -4,10 +4,17 @@ import {
   CreditHolderType,
   IMongoDocument,
   IModelDayMargin,
+  IOwnerSpendDay,
+  IOwnerSpendFeature,
+  IOwnerSpendMember,
+  IOwnerSpendModel,
+  IOwnerUsageSummary,
   IProviderMonthCogs,
+  ISettlementBreakdown,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
+  IUsageSpendBucket,
   IUserMargin,
   USAGE_EVENT_FEATURES,
   USAGE_EVENT_STATUSES,
@@ -37,10 +44,12 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
     cacheWriteTokens: { type: Number, required: true, default: 0 },
     providerInputTokens: { type: Number, required: false },
     providerOutputTokens: { type: Number, required: false },
+    settledBasis: { type: String, required: false, enum: ['provider', 'local'] },
     units: { type: Number, required: false },
 
     costUsd: { type: Number, required: true },
     creditsCharged: { type: Number, required: true },
+    writtenOffCredits: { type: Number, required: false },
 
     status: { type: String, required: true, enum: [...USAGE_EVENT_STATUSES], default: 'ok' },
     latencyMs: { type: Number, required: false },
@@ -55,6 +64,10 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
 UsageEventSchema.index({ userId: 1, createdAt: -1 });
 UsageEventSchema.index({ provider: 1, model: 1, createdAt: -1 });
 UsageEventSchema.index({ createdAt: -1 });
+// Supports settlementBreakdown()'s $match on createdAt + settledBasis without an in-memory scan/filter.
+UsageEventSchema.index({ createdAt: -1, settledBasis: 1 });
+// Supports ownerUsageSummary()'s $match on ownerId + ownerType + createdAt (per-org dashboard).
+UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -143,6 +156,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           inputTokens: { $sum: '$inputTokens' },
           outputTokens: { $sum: '$outputTokens' },
           cachedInputTokens: { $sum: '$cachedInputTokens' },
+          cacheWriteTokens: { $sum: '$cacheWriteTokens' },
         },
       },
       {
@@ -155,10 +169,123 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           inputTokens: 1,
           outputTokens: 1,
           cachedInputTokens: 1,
+          cacheWriteTokens: 1,
         },
       },
       { $sort: { month: -1, provider: 1 } },
     ]);
+  }
+
+  async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // Both provider counts must be real positive counts to compare against the
+    // local estimate. A row settled 'local' can still carry a partial provider
+    // report (one axis zero); gating on > 0 keeps those out of the delta.
+    const hasProviderCounts = {
+      $and: [
+        { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
+        { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
+      ],
+    };
+    return this.model.aggregate<ISettlementBreakdown>([
+      { $match: { createdAt: { $gte: from }, settledBasis: { $in: ['provider', 'local'] } } },
+      {
+        $group: {
+          _id: '$settledBasis',
+          requests: { $sum: 1 },
+          creditsCharged: { $sum: '$creditsCharged' },
+          writtenOffCredits: { $sum: { $ifNull: ['$writtenOffCredits', 0] } },
+          inputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerInputTokens', '$inputTokens'] }, 0] },
+          },
+          outputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerOutputTokens', '$outputTokens'] }, 0] },
+          },
+          deltaSampleSize: { $sum: { $cond: [hasProviderCounts, 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          settledBasis: '$_id',
+          requests: 1,
+          creditsCharged: 1,
+          writtenOffCredits: 1,
+          inputTokenDelta: 1,
+          outputTokenDelta: 1,
+          deltaSampleSize: 1,
+        },
+      },
+      { $sort: { settledBasis: 1 } },
+    ]);
+  }
+
+  async ownerUsageSummary(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    days: number = 30
+  ): Promise<IOwnerUsageSummary> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+
+    // Every breakdown shares the same three sums, so $group + $project them once.
+    const spendSums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+    } as const;
+    const spendFields = { requests: 1, cogsUsd: 1, creditsCharged: 1 } as const;
+
+    // One $match, then fan out with $facet so all cuts reconcile against the
+    // same event set in a single index scan.
+    const [result] = await this.model.aggregate<{
+      overTime: IOwnerSpendDay[];
+      byMember: IOwnerSpendMember[];
+      byModel: IOwnerSpendModel[];
+      byFeature: IOwnerSpendFeature[];
+      totals: IUsageSpendBucket[];
+    }>([
+      { $match: { ownerId, ownerType, createdAt: { $gte: from } } },
+      {
+        $facet: {
+          overTime: [
+            {
+              $group: {
+                _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: 'UTC' } },
+                ...spendSums,
+              },
+            },
+            { $project: { _id: 0, day: '$_id', ...spendFields } },
+            { $sort: { day: 1 } },
+          ],
+          byMember: [
+            { $group: { _id: '$userId', ...spendSums } },
+            { $project: { _id: 0, userId: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...spendSums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          byFeature: [
+            { $group: { _id: '$feature', ...spendSums } },
+            { $project: { _id: 0, feature: '$_id', ...spendFields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          totals: [{ $group: { _id: null, ...spendSums } }, { $project: { _id: 0, ...spendFields } }],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendBucket = { requests: 0, cogsUsd: 0, creditsCharged: 0 };
+    return {
+      overTime: result?.overTime ?? [],
+      byMember: result?.byMember ?? [],
+      byModel: result?.byModel ?? [],
+      byFeature: result?.byFeature ?? [],
+      // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.
+      totals: result?.totals?.[0] ?? emptyTotals,
+    };
   }
 }
 

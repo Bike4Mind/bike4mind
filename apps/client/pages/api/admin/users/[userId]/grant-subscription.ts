@@ -1,4 +1,5 @@
 import {
+  creditLotRepository,
   creditTransactionRepository,
   organizationRepository,
   userRepository,
@@ -121,6 +122,7 @@ const handler = baseApi().post(
           {
             db: {
               creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
             },
             creditHolderMethods: userRepository,
           }
@@ -258,6 +260,7 @@ const handler = baseApi().post(
           {
             db: {
               creditTransactions: creditTransactionRepository,
+              creditLots: creditLotRepository,
             },
             creditHolderMethods: organizationRepository,
           }

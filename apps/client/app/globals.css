@@ -585,6 +585,23 @@ ul.custom-mentions-menu-upward > li[aria-selected="true"] {
   }
 }
 
+/* KaTeX renders a visually-hidden MathML duplicate of every equation (default
+   output: 'htmlAndMathml'). It stays in the DOM for screen readers, but must be
+   excluded from text selection so partial copy does not pull in the duplicated
+   LaTeX/MathML alongside the visible equation (especially on mobile). */
+.katex-mathml {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Wide display equations get their own horizontal scroll. KaTeX ships no
+   overflow on .katex-display, and the reply body is no longer a scroll
+   container, so without this a wide equation would push the page sideways. */
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 /* KaTeX Dark Mode Support */
 /* Override KaTeX default colors for dark mode compatibility */
 @media (prefers-color-scheme: dark) {

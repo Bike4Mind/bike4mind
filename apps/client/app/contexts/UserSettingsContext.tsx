@@ -50,6 +50,7 @@ export interface UserSettings {
   toolsCatalogCollapsed: boolean;
   /** Layer-2 Agent-mode preference. Default `'off'` per `IUserPreferences`. */
   agentModeDefault: 'off' | 'auto' | 'on';
+  showFunTools: boolean;
 }
 
 interface UserSettingsContextProps {
@@ -96,6 +97,7 @@ const defaultSettings: UserSettings = {
   rechartsDisplayMode: 'inline',
   toolsCatalogCollapsed: false,
   agentModeDefault: 'off',
+  showFunTools: false,
 };
 
 /** Scalar keys shared between IUserPreferences and UserSettings. */
@@ -110,6 +112,7 @@ const SCALAR_PREF_KEYS = [
   'rechartsDisplayMode',
   'toolsCatalogCollapsed',
   'agentModeDefault',
+  'showFunTools',
 ] as const;
 
 /** Apply server preferences on top of defaults. Non-null server values win. */
@@ -243,6 +246,10 @@ export const UserSettingsProvider: React.FC<PropsWithChildren<{}>> = ({ children
             }
           : {}),
       };
+      // Write through to the store, not just the server: otherwise the stale value is persisted and
+      // reseeded as identify initialData (5-min staleTime skips the refetch), reverting on reload when
+      // the `users` socket is silent. See useGetIdentify initialData guard.
+      useUser.getState().setCurrentUser({ ...currentUser, preferences: fullPreferences });
       updateUserToServer(currentUser.id, { preferences: fullPreferences }).catch(() => {
         console.warn('[UserSettings] Failed to write preferences to server');
       });

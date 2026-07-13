@@ -9,8 +9,10 @@ import type { SandboxOrchestrator } from '../sandbox/SandboxOrchestrator.js';
 import { generateCliTools, loadContextFiles, type AgentContext, type PermissionManager } from '../utils';
 import { McpManager } from '../utils/mcpAdapter';
 import { AgentStore } from '../agents/AgentStore.js';
-import { SubagentOrchestrator } from '../agents/SubagentOrchestrator.js';
+import { SubagentOrchestrator, type SubagentUsageCallback } from '../agents/SubagentOrchestrator.js';
 import { BackgroundAgentManager } from '../agents/BackgroundAgentManager.js';
+import { AgentHistoryStore } from '../agents/AgentHistoryStore.js';
+import { DEFAULT_SUBAGENT_HISTORY_TTL_MS } from '../config/constants.js';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import type { PermissionResponse } from '../components';
@@ -42,6 +44,12 @@ export interface BuildSupportingStoresInput {
   onBackgroundStatusChange: Parameters<BackgroundAgentManager['setOnStatusChange']>[0];
   /** Background-agent group-completion callback (wired to Zustand in the shell). */
   onGroupCompletion: Parameters<BackgroundAgentManager['setOnGroupCompletion']>[0];
+  /**
+   * Optional: fired with usage totals after every subagent run (inline, background,
+   * coordinator, dynamic, skill - all funnel through the same orchestrator call).
+   * Omitted in headless mode, which has no StatusBar to surface it in.
+   */
+  onSubagentUsage?: SubagentUsageCallback;
 }
 
 export interface SupportingStores {
@@ -53,6 +61,7 @@ export interface SupportingStores {
   deferredB4mTools: CliToolList;
   orchestrator: SubagentOrchestrator;
   backgroundManager: BackgroundAgentManager;
+  historyStore: AgentHistoryStore;
 }
 
 /**
@@ -86,6 +95,7 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     silentLogger,
     onBackgroundStatusChange,
     onGroupCompletion,
+    onSubagentUsage,
   } = input;
 
   // Generate CLI-friendly tools with permission wrapping, server routing, and observation tracking
@@ -158,6 +168,11 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
       `${agentSummary.builtin} built-in, ${agentSummary.global} global, ${agentSummary.project} project`
   );
 
+  // Retains completed sub-agent conversations for resume_agent.
+  const historyStore = new AgentHistoryStore(
+    config.preferences.subagentHistoryTtlMs ?? DEFAULT_SUBAGENT_HISTORY_TTL_MS
+  );
+
   // Initialize subagent orchestrator with agent store
   const orchestrator = new SubagentOrchestrator({
     userId: config.userId,
@@ -175,6 +190,8 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     enableParallelToolExecution: config.preferences.enableParallelToolExecution === true,
     showUserQuestion: userQuestionFn,
     checkpointStore,
+    onSubagentUsage,
+    historyStore,
   });
 
   // Create background agent manager
@@ -191,5 +208,6 @@ export async function buildSupportingStores(input: BuildSupportingStoresInput): 
     deferredB4mTools,
     orchestrator,
     backgroundManager,
+    historyStore,
   };
 }

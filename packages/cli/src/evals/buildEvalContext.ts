@@ -32,6 +32,8 @@ import { getPromptVariant, type PromptVariant } from './prompts.js';
 const EVAL_MODE_DENIED_TOOLS: readonly string[] = [
   'bash_execute',
   'bash_execute_async',
+  'write_shell_stdin',
+  'kill_background_shell',
   'web_search',
   'web_fetch',
   'ask_user_question',
@@ -95,15 +97,15 @@ export async function buildEvalContext(options: BuildEvalContextOptions): Promis
 
   // Discover the completions URL from server config (matches index.tsx pattern).
   // Fallback to /api/ai/v1/completions which ServerLlmBackend handles internally.
-  let completionsUrl: string | undefined;
+  let sseCompletionsUrl: string | undefined;
   try {
-    const serverConfig = await apiClient.get<{ completionsUrl?: string }>('/api/settings/serverConfig');
-    completionsUrl = serverConfig?.completionsUrl;
+    const serverConfig = await apiClient.get<{ sseCompletionsUrl?: string }>('/api/settings/serverConfig');
+    sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
   } catch {
     // Server config endpoint optional - ServerLlmBackend has a sensible default.
   }
 
-  const llm: ICompletionBackend = new ServerLlmBackend({ apiClient, model, completionsUrl });
+  const llm: ICompletionBackend = new ServerLlmBackend({ apiClient, model, sseCompletionsUrl });
 
   // Pre-flight: verify the model is registered on the server. Catches the
   // common failure mode where the user's config has a model id that the
@@ -227,6 +229,10 @@ async function listAllToolNames(): Promise<string[]> {
     'grep_search',
     'bash_execute',
     'bash_execute_async',
+    'check_shell_output',
+    'write_shell_stdin',
+    'list_background_shells',
+    'kill_background_shell',
     'find_definition',
     'get_file_structure',
     'log_decision',
