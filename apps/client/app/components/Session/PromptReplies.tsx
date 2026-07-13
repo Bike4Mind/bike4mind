@@ -37,7 +37,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
@@ -1441,6 +1441,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     isEnabled: isExpandable,
   });
 
+  // Reruns a full-content regex pass, so memoize like the other whole-reply
+  // transforms above (cleanReply, processedContent) - this component re-renders on
+  // every streamed token.
+  const mathReadyContent = useMemo(() => promoteInlineLatexDollars(displayContent), [displayContent]);
+
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
   }
@@ -1778,7 +1783,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             rehypePlugins={[rehypeKatex]}
                             remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
                           >
-                            {displayContent}
+                            {mathReadyContent}
                           </ReactMarkdown>
                         )}
                       </>

@@ -15,6 +15,7 @@ import { useContentTruncation } from '@client/app/hooks/useContentTruncation';
 import remarkBreaks from 'remark-breaks';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
+import { promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import { Components } from 'react-markdown';
 import { extractSnippetMeta } from '@bike4mind/common';
 import EditModeContent from './EditModeContent';
@@ -186,7 +187,7 @@ const PromptContent: FC<{
       rehypePlugins={[rehypeKatex]}
       components={markdownComponents}
     >
-      {content}
+      {promoteInlineLatexDollars(content)}
     </ReactMarkdown>
   );
 };
