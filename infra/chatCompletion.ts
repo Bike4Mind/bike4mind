@@ -48,7 +48,7 @@ const chatCompletionImage = process.env.CHAT_COMPLETION_IMAGE || (isCI ? '' : LO
 if (isCI && !chatCompletionImage) {
   throw new Error(
     'CHAT_COMPLETION_IMAGE must be set in CI — the deploy workflow builds & pushes the ' +
-      'chat-completion image to ECR before `sst deploy` (see .github/workflows/_deploy-env.yml). ' +
+      'chat-completion image to ECR before `sst deploy` (see infra/deploy-contract.json). ' +
       'For local `sst dev` (no CI=true) a neutral public placeholder is used automatically.'
   );
 }
