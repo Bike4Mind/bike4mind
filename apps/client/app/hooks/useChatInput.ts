@@ -2,6 +2,12 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { IResolvedPromptDispatch } from '@bike4mind/common';
 
+// Stable draft key for a brand-new / unsaved notebook that has no session id yet.
+// Lets the in-progress text ride the persisted `drafts` map (session-scoped) so a
+// full-page reload before the first send doesn't lose it. Cleared once the notebook
+// resolves to a real session id. See useMessageDraft.
+export const NEW_NOTEBOOK_DRAFT_KEY = '__new_notebook__';
+
 interface ChatInputStore {
   // Current active session's input value (for real-time editing)
   chatInputValue: string;
