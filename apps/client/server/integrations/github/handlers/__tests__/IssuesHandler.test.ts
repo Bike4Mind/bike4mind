@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Hoist mock functions to avoid initialization issues
-const { mockNotify, mockFindByOrgAndRepo, mockUserFind, mockDispatchIssueToSre } = vi.hoisted(() => ({
-  mockNotify: vi.fn(),
-  mockFindByOrgAndRepo: vi.fn(),
-  mockUserFind: vi.fn(),
-  mockDispatchIssueToSre: vi.fn(),
-}));
+const { mockNotify, mockFindByOrgAndRepo, mockUserFind, mockDispatchIssueToSre, mockSyncSreIssueState } = vi.hoisted(
+  () => ({
+    mockNotify: vi.fn(),
+    mockFindByOrgAndRepo: vi.fn(),
+    mockUserFind: vi.fn(),
+    mockDispatchIssueToSre: vi.fn(),
+    mockSyncSreIssueState: vi.fn(),
+  })
+);
 
 vi.mock('@bike4mind/slack', () => ({
   GitHubSlackNotifier: vi.fn().mockImplementation(function () {
@@ -28,6 +31,7 @@ vi.mock('@bike4mind/database', () => ({
 
 vi.mock('@server/integrations/github/sreWebhookDispatch', () => ({
   dispatchIssueToSre: mockDispatchIssueToSre,
+  syncSreIssueStateFromWebhook: mockSyncSreIssueState,
 }));
 
 import { IssuesHandler } from '@server/integrations/github/handlers/IssuesHandler';
@@ -76,6 +80,7 @@ describe('IssuesHandler', () => {
       }),
     });
     mockDispatchIssueToSre.mockResolvedValue({ dispatched: false, reason: 'pipeline-disabled' });
+    mockSyncSreIssueState.mockResolvedValue(undefined);
     const notifier = new GitHubSlackNotifier({} as never);
     handler = new IssuesHandler(notifier);
   });
@@ -165,6 +170,39 @@ describe('IssuesHandler', () => {
         expect(mockDispatchIssueToSre).toHaveBeenCalled();
       }
     );
+  });
+
+  describe('githubIssueState sync (admin "hide closed issues" filter)', () => {
+    it('syncs issue state on "closed" so the tracking doc reflects the close', async () => {
+      const payload = createIssuesPayload({ action: 'closed' });
+      (payload as GitHubIssuesPayload).sender = { login: 'closer-user' } as GitHubIssuesPayload['sender'];
+      await handler.handle(payload, mockMcpServer);
+      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
+      expect(mockSyncSreIssueState.mock.calls[0][0]).toBe(payload);
+    });
+
+    it('syncs issue state on "closed" even when the author closed their own issue (no Slack notification path)', async () => {
+      // Author == closer short-circuits the Slack notification, but the state
+      // sync must still run - it's placed before that early return.
+      const payload = createIssuesPayload({ action: 'closed', author: 'self-closer' });
+      (payload as GitHubIssuesPayload).sender = { login: 'self-closer' } as GitHubIssuesPayload['sender'];
+      await handler.handle(payload, mockMcpServer);
+      expect(mockNotify).not.toHaveBeenCalled();
+      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
+    });
+
+    it('syncs issue state on "reopened"', async () => {
+      const payload = createIssuesPayload({ action: 'reopened' });
+      await handler.handle(payload, mockMcpServer);
+      expect(mockSyncSreIssueState).toHaveBeenCalledTimes(1);
+      expect(mockSyncSreIssueState.mock.calls[0][0]).toBe(payload);
+    });
+
+    it('does not sync issue state on "opened" (state is already open at creation)', async () => {
+      const payload = createIssuesPayload({ action: 'opened' });
+      await handler.handle(payload, mockMcpServer);
+      expect(mockSyncSreIssueState).not.toHaveBeenCalled();
+    });
   });
 
   describe('handleOpened - assignee notifications', () => {

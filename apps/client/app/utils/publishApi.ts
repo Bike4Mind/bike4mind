@@ -81,6 +81,14 @@ export async function publishReply(input: {
   messageId: string;
   title?: string;
   visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/r` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `replyPublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
 }): Promise<PublishResult> {
   const { data } = await api.post<PublishResult>('/api/publish/reply', {
     visibility: DEFAULT_SHARE_VISIBILITY,
@@ -94,12 +102,65 @@ export async function publishFabFile(input: {
   fabFileId: string;
   title?: string;
   visibility?: PublishVisibility;
+  /**
+   * Scope tier to publish under. Defaults to `'user'` (a personal `/p/f` page). Pass
+   * `'organization'` with `scopeId` set to the org id for an org-scoped page the serve gate
+   * authorizes to org members - see `fabFilePublisher`.
+   */
+  tier?: PublishScopeTier;
+  /** Scope id for `tier` (the org id for org tier). Server defaults it to the caller for user tier. */
+  scopeId?: string;
 }): Promise<PublishResult> {
   const { data } = await api.post<PublishResult>('/api/publish/fabfile', {
     visibility: DEFAULT_SHARE_VISIBILITY,
     ...input,
   });
   return data;
+}
+
+/**
+ * Map a share-dialog visibility pick to the scope-tier fields the publish endpoints expect.
+ * Org visibility publishes a real org-tier page (scopeId = org id) so same-org members can view
+ * it - the ONLY combination the serve gate authorizes to org members (a user-tier record's
+ * scopeId is the user id, never the viewer's org id, so org visibility on it 403s everyone but
+ * the owner). Requires an active org; the dialog only offers the Team option when one exists, so
+ * this branch is unreachable without orgId. The server re-validates org membership before
+ * trusting the scope. Mirrors `artifactBundlePublisher`.
+ */
+function orgTierFields(
+  visibility: PublishVisibility,
+  orgId?: string
+): { tier: PublishScopeTier; scopeId: string } | Record<string, never> {
+  return visibility === 'organization' && orgId ? { tier: 'organization', scopeId: orgId } : {};
+}
+
+/**
+ * Build the share-dialog publish callback for a chat reply. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function replyPublisher(input: {
+  sessionId: string;
+  messageId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...reply } = input;
+  return visibility => publishReply({ ...reply, visibility, ...orgTierFields(visibility, orgId) });
+}
+
+/**
+ * Build the share-dialog publish callback for a FabFile. When the caller is in an org ("Team")
+ * account context, `orgId` lets a Team pick publish an org-scoped page. See `orgTierFields`.
+ */
+export function fabFilePublisher(input: {
+  fabFileId: string;
+  title?: string;
+  /** The caller's active org, when in a "Team" account context. Undefined for personal scope. */
+  orgId?: string;
+}): (visibility: PublishVisibility) => Promise<PublishResult> {
+  const { orgId, ...file } = input;
+  return visibility => publishFabFile({ ...file, visibility, ...orgTierFields(visibility, orgId) });
 }
 
 /** Report a public page for abuse. Requires an authenticated caller. */
@@ -122,6 +183,62 @@ export async function updatePublishedVisibility(publicId: string, visibility: Pu
 /** Change who may comment on a published item (owner/admin). */
 export async function updatePublishedCommentPolicy(publicId: string, commentPolicy: CommentPolicy): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
+}
+
+/** Access gate on top of `visibility: 'public'` - see issue #383. */
+export type PublishAccessGateInput =
+  { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/**
+ * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * The passphrase is sent once and stored only as a hash server-side; there is
+ * no API to read it back - rotating means setting a new one.
+ */
+export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
+/**
+ * Set or clear the embed allowlist - the external https origins allowed to frame
+ * this artifact (owner/admin). Only honored while the item is open-public (no
+ * gate); `[]` clears it. The server normalizes and re-validates each origin.
+ */
+export async function updatePublishedEmbedOrigins(publicId: string, embedOrigins: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { embedOrigins });
+}
+
+/**
+ * Current embed-allowlist state for seeding the editor: the allowlisted origins
+ * plus whether a gate is live (embedding is open-public only, so the editor hides
+ * when `gated`).
+ */
+export async function getPublishedEmbedState(publicId: string): Promise<{ embedOrigins: string[]; gated: boolean }> {
+  const { data } = await api.get<{ artifact?: { embedOrigins?: string[]; accessGate?: unknown } }>(
+    `/api/publish/artifacts/${publicId}`
+  );
+  return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
+}
+
+/** Read shape of a live access gate (the passphrase hash is stripped server-side). */
+export type PublishAccessGateRead = { kind: 'passphrase' } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/** Everything the per-artifact manage panel needs to seed its editors (owner/admin). */
+export interface PublishedManageState {
+  visibility: PublishVisibility;
+  accessGate: PublishAccessGateRead;
+  embedOrigins: string[];
+  commentPolicy: CommentPolicy;
+}
+
+export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
+  const { data } = await api.get<{ artifact?: Partial<PublishedManageState> }>(`/api/publish/artifacts/${publicId}`);
+  const a = data.artifact ?? {};
+  return {
+    visibility: a.visibility ?? 'private',
+    accessGate: a.accessGate ?? null,
+    embedOrigins: a.embedOrigins ?? [],
+    commentPolicy: a.commentPolicy ?? 'none',
+  };
 }
 
 /**
@@ -239,7 +356,7 @@ export interface ArtifactPublishOpts {
  *
  * When the caller is in an org ("Team") account context, `orgId` enables the dialog's
  * Team option: picking `'organization'` visibility publishes an org-tier page
- * (`tier:'organization'`, `scopeId=orgId` → `/p/o/{orgId}/{slug}`). This is the ONLY
+ * (`tier:'organization'`, `scopeId=orgId` -> `/p/o/{orgId}/{slug}`). This is the ONLY
  * combination the serve gate authorizes to org members - a user-tier page with org
  * visibility would 403 for everyone but the owner (its scopeId is the user id, never the
  * viewer's org id). The server re-validates org membership before trusting the scope.
@@ -259,9 +376,8 @@ export function artifactBundlePublisher(input: {
       ...bundle,
       visibility,
       // Org visibility publishes a real org-tier page (scopeId = org id) so same-org members
-      // can view it. Requires an active org; the dialog only offers the Team option when one
-      // exists, so this branch is unreachable without orgId.
-      ...(visibility === 'organization' && orgId ? { tier: 'organization' as const, scopeId: orgId } : {}),
+      // can view it - see orgTierFields.
+      ...orgTierFields(visibility, orgId),
       // 'update' pins the existing slug so finalize appends a version; 'new' with a prior
       // publication forces a unique slug so it can't collide back onto ANY existing one.
       ...(opts?.mode === 'update' && opts.existingSlug
@@ -360,4 +476,38 @@ export function toShareUrl(result: Pick<PublishResult, 'url'>): string {
     return `${window.location.origin}${result.url}`;
   }
   return result.url;
+}
+
+/** Absolute no-sign-in share URL for a share token (e.g. https://app.example.com/a/<token>). */
+export function toShareTokenUrl(shareToken: string): string {
+  const path = `/a/${shareToken}`;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
+
+/**
+ * Mint (idempotent) or fetch the no-sign-in share token for a published artifact
+ * (owner/admin). Pass `regenerate: true` to rotate it, which immediately revokes
+ * every outstanding `/a` link. Returns the token and its relative `/a/<token>` path.
+ */
+export async function createOrGetShareToken(
+  publicId: string,
+  regenerate = false
+): Promise<{ shareToken: string; shareUrl: string }> {
+  const { data } = await api.post<{ shareToken: string; shareUrl: string }>(`/api/publish/${publicId}/share-token`, {
+    regenerate,
+  });
+  return data;
+}
+
+/** Rotate the share token (revokes all outstanding `/a` links), returning the new one. */
+export async function regenerateShareToken(publicId: string): Promise<{ shareToken: string; shareUrl: string }> {
+  return createOrGetShareToken(publicId, true);
+}
+
+/** Revoke the share token so every `/a` link 404s immediately (owner/admin). */
+export async function revokeShareToken(publicId: string): Promise<void> {
+  await api.delete(`/api/publish/${publicId}/share-token`);
 }

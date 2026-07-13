@@ -169,7 +169,7 @@ export interface CliConfig {
   auth?: AuthTokens; // OAuth authentication tokens for the active environment (optional)
   /**
    * Per-environment auth token cache, keyed by resolved API URL
-   * (e.g. "https://app.example.com", "http://localhost:3001").
+   * (e.g. "https://app.example.com", "http://localhost:3000").
    * Lets `--dev`/`--prod` flip between environments without forcing a
    * re-login each time you return to one you've already authenticated.
    */
@@ -211,6 +211,11 @@ export interface CliConfig {
     promptVariant?: 'current' | 'minimal';
     /** Show the agent's thought steps in the chat trace. Default true. */
     showThoughts?: boolean;
+    /**
+     * How long a completed sub-agent's conversation history is retained for
+     * resume_agent, in ms. Defaults to DEFAULT_SUBAGENT_HISTORY_TTL_MS.
+     */
+    subagentHistoryTtlMs?: number;
   };
   /** Opt-in feature module toggles */
   features?: {

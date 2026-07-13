@@ -97,6 +97,52 @@ describe('ShellSessionManager', () => {
     expect(second?.offset).toBe('hello world'.length);
   });
 
+  it('reassembles a multibyte char split across two stdout chunks', () => {
+    const child = new MockChild();
+    const { manager } = buildManager({ children: [child] });
+    const { id } = manager.spawn('echo', '/tmp', ENV);
+
+    // '😀' (U+1F600) is F0 9F 98 80; split mid-codepoint across two data events.
+    const bytes = Buffer.from('😀', 'utf8');
+    child.stdout.emit('data', bytes.subarray(0, 2));
+    child.stdout.emit('data', bytes.subarray(2));
+
+    const out = manager.getOutput(id);
+    expect(out?.output).toBe('😀');
+    expect(out?.output).not.toContain('�');
+  });
+
+  it('keeps stdout and stderr decoders independent (a split byte is not completed by the other stream)', () => {
+    const child = new MockChild();
+    const { manager } = buildManager({ children: [child] });
+    const { id } = manager.spawn('echo', '/tmp', ENV);
+
+    const eAcute = Buffer.from('é', 'utf8'); // C3 A9
+    // First half of 'é' on stdout, then an unrelated ASCII stderr chunk, then the rest.
+    child.stdout.emit('data', eAcute.subarray(0, 1));
+    child.stderr.emit('data', Buffer.from('x'));
+    child.stdout.emit('data', eAcute.subarray(1));
+
+    const out = manager.getOutput(id);
+    // stderr's 'x' must not have consumed stdout's pending byte; 'é' reassembles intact.
+    expect(out?.output).toBe('xé');
+    expect(out?.output).not.toContain('�');
+  });
+
+  it('flushes an incomplete trailing byte at close as a single replacement char', () => {
+    const child = new MockChild();
+    const { manager } = buildManager({ children: [child] });
+    const { id } = manager.spawn('echo', '/tmp', ENV);
+
+    // First byte of 'é' (0xC3) with no continuation byte; the decoder buffers it.
+    child.stdout.emit('data', Buffer.from([0xc3]));
+    expect(manager.getOutput(id)?.output).toBe(''); // buffered, nothing emitted yet
+
+    // The close handler's decoder.end() flushes the dangling byte as one U+FFFD.
+    child.close(0);
+    expect(manager.getOutput(id)?.output).toBe('�');
+  });
+
   it('drops old output past the buffer cap and flags truncation', () => {
     const child = new MockChild();
     const { manager } = buildManager({ children: [child], maxOutputChars: 10 });

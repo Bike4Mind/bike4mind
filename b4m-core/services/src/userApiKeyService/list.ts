@@ -25,3 +25,23 @@ export const listUserApiKeys = async (
 
   return apiKeys;
 };
+
+/**
+ * List the API keys billed to an organization's credit pool. Used by the org
+ * management surface so any org administrator - not just the minter - can see
+ * the org's keys. Authorization (is the caller an administrator of this org?)
+ * is the caller's responsibility.
+ */
+export const listOrganizationApiKeys = async (
+  organizationId: string,
+  adapters: ListUserApiKeysAdapters,
+  options: ListUserApiKeysOptions = {}
+): Promise<IUserApiKeyDocument[]> => {
+  const apiKeys = await adapters.db.userApiKeys.findByOrganizationId(organizationId);
+
+  if (!options.includeDisabled) {
+    return apiKeys.filter(key => key.status === 'active');
+  }
+
+  return apiKeys;
+};

@@ -71,6 +71,8 @@ const GPT5_4_MODELS: string[] = [ChatModels.GPT5_4, ChatModels.GPT5_4_MINI, Chat
 
 const GPT5_5_MODELS: string[] = [ChatModels.GPT5_5];
 
+const GPT5_6_MODELS: string[] = [ChatModels.GPT5_6_SOL, ChatModels.GPT5_6_LUNA, ChatModels.GPT5_6_TERRA];
+
 // Map complexity to reasoning effort.
 // Supported values: 'none', 'low', 'medium', 'high', 'xhigh'
 // 'minimal' is NOT supported by the Chat Completions API
@@ -324,6 +326,78 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           "OpenAI's compact reasoning model optimized for fast, cost-efficient performance with strong multimodal and agentic capabilities. Excellent for STEM tasks and coding.",
         isSlowModel: true,
+      },
+
+      // GPT 5.6 (Sol / Luna / Terra) - reasoning flagships. Tiered pricing: the higher
+      // rate applies once the prompt exceeds 272k input tokens (long context).
+      {
+        id: ChatModels.GPT5_6_SOL,
+        type: 'text' as const,
+        name: 'GPT-5.6 Sol',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 1_050_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        pricing: {
+          272_000: { input: 5.0 / 1_000_000, output: 30.0 / 1_000_000 }, // <=272k: $5.00 / 1M in, $30.00 / 1M out
+          1_050_000: { input: 10.0 / 1_000_000, output: 45.0 / 1_000_000 }, // >272k: $10.00 / 1M in, $45.00 / 1M out
+        },
+        supportsVision: true,
+        supportsImageVariation: false,
+        supportsTools: true,
+        logoFile: 'OpenAI_Logo.svg',
+        rank: 0,
+        trainingCutoff: '2026-01-01',
+        releaseDate: '2026-06-23',
+        description:
+          "OpenAI's GPT-5.6 Sol - flagship of the 5.6 family. Top-tier reasoning, coding, and vision with a 1M+ context window and native tool use for the most demanding professional work.",
+      },
+      {
+        id: ChatModels.GPT5_6_TERRA,
+        type: 'text' as const,
+        name: 'GPT-5.6 Terra',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 1_050_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        pricing: {
+          272_000: { input: 2.5 / 1_000_000, output: 15.0 / 1_000_000 }, // <=272k: $2.50 / 1M in, $15.00 / 1M out
+          1_050_000: { input: 5.0 / 1_000_000, output: 22.5 / 1_000_000 }, // >272k: $5.00 / 1M in, $22.50 / 1M out
+        },
+        supportsVision: true,
+        supportsImageVariation: false,
+        supportsTools: true,
+        logoFile: 'OpenAI_Logo.svg',
+        rank: 1,
+        trainingCutoff: '2026-01-01',
+        releaseDate: '2026-06-23',
+        description:
+          'GPT-5.6 Terra - the balanced GPT-5.6 variant. Strong reasoning and vision at mid-tier cost, a reliable workhorse for everyday professional tasks.',
+      },
+      {
+        id: ChatModels.GPT5_6_LUNA,
+        type: 'text' as const,
+        name: 'GPT-5.6 Luna',
+        backend: ModelBackend.OpenAI,
+        contextWindow: 1_050_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        pricing: {
+          272_000: { input: 1.0 / 1_000_000, output: 6.0 / 1_000_000 }, // <=272k: $1.00 / 1M in, $6.00 / 1M out
+          1_050_000: { input: 2.0 / 1_000_000, output: 9.0 / 1_000_000 }, // >272k: $2.00 / 1M in, $9.00 / 1M out
+        },
+        supportsVision: true,
+        supportsImageVariation: false,
+        supportsTools: true,
+        logoFile: 'OpenAI_Logo.svg',
+        rank: 1,
+        trainingCutoff: '2026-01-01',
+        releaseDate: '2026-06-23',
+        description:
+          'GPT-5.6 Luna - the fast, cost-efficient GPT-5.6 variant. Great for high-volume workloads that still need solid reasoning, vision, and tool use.',
       },
 
       // GPT 5.5
@@ -887,8 +961,9 @@ export class OpenAIBackend implements ICompletionBackend {
     const isGPT5_2Model = GPT5_2_MODELS.includes(model);
     const isGPT5_4Model = GPT5_4_MODELS.includes(model);
     const isGPT5_5Model = GPT5_5_MODELS.includes(model);
+    const isGPT5_6Model = GPT5_6_MODELS.includes(model);
     const usesMaxCompletionTokens =
-      isO1Model || isGPT5Model || isGPT5_1Model || isGPT5_2Model || isGPT5_4Model || isGPT5_5Model;
+      isO1Model || isGPT5Model || isGPT5_1Model || isGPT5_2Model || isGPT5_4Model || isGPT5_5Model || isGPT5_6Model;
     // GPT-5.1/5.2/5.4 share the same complexity->reasoning-effort mapping (effortMap_GPT5_1_2).
     const usesGPT5EffortMap = isGPT5_1Model || isGPT5_2Model || isGPT5_4Model;
 
@@ -1655,7 +1730,8 @@ export class OpenAIBackend implements ICompletionBackend {
       GPT5_1_MODELS.includes(model) ||
       GPT5_2_MODELS.includes(model) ||
       GPT5_4_MODELS.includes(model) ||
-      GPT5_5_MODELS.includes(model);
+      GPT5_5_MODELS.includes(model) ||
+      GPT5_6_MODELS.includes(model);
 
     // For GPT-5 models: do NOT list tool names in the system prompt when tools are provided
     // via the API's `tools` parameter. GPT-5 gets confused by dual descriptions (text + API)

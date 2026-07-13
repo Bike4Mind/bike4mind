@@ -49,6 +49,7 @@ import {
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
+import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
   buildHandoffPrompt,
@@ -116,7 +117,6 @@ function renderBanner(startupLog: string[] = []): void {
 
 import { useCliStore } from './store';
 import { ServerLlmBackend } from './llm/ServerLlmBackend';
-import { isTransientNetworkError } from './llm/retryPolicy';
 import { WebSocketLlmBackend } from './llm/WebSocketLlmBackend';
 import { NotifyingLlmBackend } from './llm/NotifyingLlmBackend.js';
 import { MultiLlmBackend } from './llm/MultiLlmBackend.js';
@@ -140,6 +140,7 @@ import { createAgentDelegateTool } from './agents/delegateTool.js';
 import { createDynamicAgentTool } from './agents/dynamicAgentTool.js';
 import { BackgroundAgentManager } from './agents/BackgroundAgentManager.js';
 import { createBackgroundAgentTools } from './agents/backgroundTools.js';
+import { createResumeAgentTool } from './agents/resumeAgentTool.js';
 import { createCoordinateTaskTool } from './agents/coordinatorTool.js';
 import { parseAgentConfig } from './tools/skillTool.js';
 import { deferredToolRegistry } from './tools/deferredToolRegistry.js';
@@ -168,6 +169,7 @@ import { buildSupportingStores } from './bootstrap/buildSupportingStores.js';
 import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
+import { runTurn } from './session/turnController.js';
 import { printDecisions, printBlockers, printReviewGates } from './commands/handlers/workflowViews.js';
 
 interface PermissionPromptState {
@@ -775,6 +777,7 @@ function CliApp() {
         deferredB4mTools,
         orchestrator,
         backgroundManager,
+        historyStore,
       } = await buildSupportingStores({
         config,
         llm,
@@ -812,6 +815,9 @@ function CliApp() {
 
       // Create background agent control tools
       const backgroundTools = createBackgroundAgentTools(backgroundManager);
+
+      // Create resume_agent tool (orchestrator-only; continues a prior session)
+      const resumeAgentTool = createResumeAgentTool(orchestrator, historyStore, backgroundManager);
 
       // Wrap with FallbackLlmBackend if fallback models are configured
       const llmWithFallback =
@@ -887,6 +893,7 @@ function CliApp() {
       const cliTools = [
         agentDelegateTool,
         ...backgroundTools,
+        resumeAgentTool,
         writeTodosTool,
         decisionLogTool,
         ...blockerTools,
@@ -1269,6 +1276,10 @@ function CliApp() {
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
           isReadOnlyTool,
+          // Mid-loop recovery if a provider context-window error interrupts this
+          // turn: compact the in-flight history once and retry, instead of
+          // failing the turn and losing the user's work.
+          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
@@ -1439,329 +1450,27 @@ function CliApp() {
     }
   };
 
-  const handleMessage = async (message: string) => {
-    // Read session fresh from the Zustand store. The React `state.session`
-    // captured by this closure can be stale when handleMessage is invoked
-    // again via the message-queue drain: the previous turn already wrote
-    // its user message into the store, but the closure's `state` reference
-    // still points at the pre-turn session object. Reading `state.session`
-    // and then writing back would clobber the previous turn's user prompt
-    // (the queued message would appear to "disappear" from history).
-    const storeSession = useCliStore.getState().session;
-    if (!state.agent || !storeSession) {
-      console.error('❌ CLI failed to initialize. Try restarting b4m.\n');
-      return;
-    }
-
-    // Process-hook (host action_required signal): a new user prompt clears any
-    // stale block sentinel.
-    void getProcessHooks()?.fireUserPromptSubmit();
-
-    // Mirror the user turn into the tavern transcript so remote viewers see
-    // it immediately. `text` clamped to the schema's 4000-char cap; the
-    // bridge is a no-op if cc-bridge isn't running.
-    void bridgePresence.emitEvent({ type: 'message', role: 'user', text: message.slice(0, 4000) });
-    void bridgePresence.emitEvent({ type: 'status', status: 'running', text: message.slice(0, 240) });
-
-    // Add to command history
-    await state.commandHistoryStore.add(message);
-    const updatedHistory = await state.commandHistoryStore.list();
-    setCommandHistory(updatedHistory);
-
-    // Check for auto-compact before processing
-    const config = state.config;
-    let activeSession = storeSession;
-    if (config?.preferences.autoCompact !== false && activeSession.messages.length >= 6) {
-      const tokenCounter = getTokenCounter();
-      const contextWindow = tokenCounter.getContextWindow(activeSession.model, state.availableModels);
-
-      const systemPrompt = buildSystemPrompt(config?.preferences.promptVariant ?? 'current', {
-        contextContent: state.contextContent,
-        agentStore: state.agentStore || undefined,
-        customCommands: state.customCommandStore.getAllCommands(),
-        enableSkillTool: config?.preferences.enableSkillTool !== false,
-        additionalDirectories: state.additionalDirectories,
-        featureModulePrompts: state.featureRegistry?.getSystemPromptSections() || undefined,
-        deferredToolNames: deferredToolRegistry.getDirectoryNames(),
-      });
-
-      // ConversationContext owns the compaction trigger: it measures the full
-      // session as it would actually be replayed (bounded tool traces included)
-      // plus the system prompt, so a session whose weight lives in tool traces
-      // still compacts at the 80% mark.
-      const systemPromptTokens = tokenCounter.countTokens(systemPrompt);
-      const shouldCompact = ConversationContext.fromSession(activeSession).needsCompaction(
-        systemPromptTokens,
-        { model: activeSession.model, contextWindow },
-        0.8
-      );
-
-      if (shouldCompact) {
-        console.log('\n\u26A0\uFE0F  Context window 80% full. Auto-compacting...\n');
-
-        // Set thinking state for compaction
-        useCliStore.getState().setIsThinking(true);
-
-        try {
-          const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(activeSession.messages, {
-            claudeMdInstructions: extractCompactInstructions(state.contextContent || ''),
-          });
-
-          if (compactionPrompt) {
-            const result = await state.agent.run(compactionPrompt, { maxIterations: 1 });
-
-            await state.sessionStore.save(activeSession);
-            const newSession = createCompactedSession(
-              activeSession,
-              result.finalAnswer,
-              preservedMessages,
-              !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
-            );
-
-            await logger.initialize(newSession.id);
-            setStoreSession(newSession);
-            useCliStore.getState().clearPendingMessages();
-
-            console.log('\u2705 Auto-compacted. Continuing with your message...\n');
-
-            // Update local reference to use new session for remaining code
-            activeSession = newSession;
-          }
-        } finally {
-          useCliStore.getState().setIsThinking(false);
-        }
-      }
-    }
-
-    // Set thinking state to show loading indicator
-    useCliStore.getState().setIsThinking(true);
-
-    // Create abort controller for this operation
-    const abortController = new AbortController();
-    setState(prev => ({ ...prev, abortController }));
-
-    try {
-      // Check if message contains images and build multimodal message if needed
-      let messageContent: any = message;
-      let userMessageContent = message;
-
-      if (state.messageBuilder && state.messageBuilder.hasImages(message)) {
-        const { message: multimodalMessage } = await state.messageBuilder.buildMessage(message);
-        messageContent = multimodalMessage.content;
-        userMessageContent = message; // Keep original text with placeholders for display
-      }
-
-      // Create user message
-      const userMessage: Message = {
-        id: uuidv4(),
-        role: 'user',
-        content: userMessageContent,
-        timestamp: new Date().toISOString(),
-      };
-
-      // Create a pending assistant message to show steps as they come in
-      const pendingAssistantMessage: Message = {
-        id: uuidv4(),
-        role: 'assistant',
-        content: '...',
-        timestamp: new Date().toISOString(),
-        metadata: {
-          steps: [],
-        },
-      };
-
-      // Add user message to session.messages (already complete)
-      // Use activeSession which may have been updated by auto-compact
-      const sessionWithUserMessage: Session = {
-        ...activeSession,
-        messages: [...activeSession.messages, userMessage],
-        updatedAt: new Date().toISOString(),
-      };
-      setStoreSession(sessionWithUserMessage);
-
-      // Add pending assistant message to pendingMessages (dynamic, will update in real-time)
-      useCliStore.getState().addPendingMessage(pendingAssistantMessage);
-
-      // Build conversation history through the one owner of turn assembly:
-      // token-aware windowing + lossless mapping, replacing the old slice(-20).
-      // Built from activeSession (before the user message just added).
-      const contextWindow = getTokenCounter().getContextWindow(activeSession.model, state.availableModels);
-      const previousMessages = ConversationContext.fromSession(activeSession).buildPreviousMessages(messageContent, {
-        model: activeSession.model,
-        contextWindow,
-      });
-
-      // Run agent with conversation history, using multimodal content if images present
-      const cliConfig = await state.configStore.get();
-
-      // Set turn ID for grouped background agent notifications
-      const turnId = `turn-${randomBytes(4).toString('hex')}`;
-      state.backgroundManager?.setCurrentTurn(turnId);
-
-      let result;
-      try {
-        result = await state.agent.run(messageContent, {
-          previousMessages: previousMessages.length > 0 ? previousMessages : undefined,
-          signal: abortController.signal,
-          parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
-          isReadOnlyTool,
-        });
-      } finally {
-        state.backgroundManager?.setCurrentTurn(null);
-      }
-
-      // Check if permission was denied
-      const permissionDenied = result.finalAnswer.startsWith('Permission denied for tool');
-
-      // Provide immediate feedback if permission was denied
-      if (permissionDenied) {
-        console.log('\n⚠️  Action denied by user\n');
-      }
-
-      // Count successful tool calls from result.steps (observations = completed tools)
-      const successfulToolCalls = result.steps.filter(s => s.type === 'observation').length;
-
-      // Create the final assistant message. richContent carries the lossless
-      // tool trace so the next turn can replay tool results, not just the prose.
-      const richContent = reconstructTurnBlocks(result.steps, result.finalAnswer);
-      const finalAssistantMessage: Message = {
-        id: pendingAssistantMessage.id, // Preserve the original message ID
-        role: 'assistant',
-        content: result.finalAnswer,
-        ...(richContent ? { richContent } : {}),
-        timestamp: pendingAssistantMessage.timestamp,
-        metadata: {
-          tokenUsage: {
-            prompt: 0,
-            completion: 0,
-            total: result.completionInfo.totalTokens,
-          },
-          creditsUsed: result.completionInfo.totalCredits,
-          steps: result.steps.map(formatStep), // Complete history: thoughts, actions, observations
-          permissionDenied,
-        },
-      };
-
-      // Move the pending message to session.messages (history)
-      useCliStore.getState().completePendingMessage(0, finalAssistantMessage);
-
-      // Get the updated session and update metadata
-      const currentSession = useCliStore.getState().session;
-      if (!currentSession) return;
-
-      const updatedSession: Session = {
-        ...currentSession,
-        metadata: {
-          ...currentSession.metadata,
-          totalTokens: currentSession.metadata.totalTokens + result.completionInfo.totalTokens,
-          totalCredits: (currentSession.metadata.totalCredits || 0) + (result.completionInfo.totalCredits || 0),
-          toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
-        },
-      };
-
-      setStoreSession(updatedSession);
-
-      // Auto-save session
-      await state.sessionStore.save(updatedSession);
-    } catch (error) {
-      // Clear pending messages on error
-      useCliStore.getState().clearPendingMessages();
-
-      // Handle abort (user pressed ESC)
-      if (error instanceof Error && error.name === 'AbortError') {
-        logger.debug('[ABORT] Operation aborted by user');
-
-        // Add cancellation message to session
-        const currentSession = useCliStore.getState().session;
-        if (currentSession) {
-          const cancelMessage: Message = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: '⚠️ Operation cancelled by user',
-            timestamp: new Date().toISOString(),
-            metadata: {
-              cancelled: true,
-            },
-          };
-
-          const sessionWithCancel: Session = {
-            ...currentSession,
-            messages: [...currentSession.messages, cancelMessage],
-            updatedAt: new Date().toISOString(),
-          };
-
-          setStoreSession(sessionWithCancel);
-          await state.sessionStore.save(sessionWithCancel);
-        }
-        return;
-      }
-
-      // Handle authentication errors gracefully (without stack trace)
-      if (error instanceof Error) {
-        if (error.message.includes('Authentication failed') || error.message.includes('Authentication expired')) {
-          console.log('\n❌ Authentication failed');
-          console.log('💡 Run /login to authenticate with your API environment.\n');
-          return;
-        }
-      }
-
-      // Defense in depth: a bare network-level abort (e.g. `Error: aborted`
-      // from a TLS socket close, the symptom that rendered as a cryptic
-      // "❌ aborted") is not the user cancelling - it's the connection dropping.
-      // The streaming backend retries these and rewrites the message, but if a
-      // bare one ever reaches here from another path (other backends, etc.),
-      // surface something the user can act on rather than a one-word error.
-      // Reuse the shared retry-policy classifier so this stays in lockstep with
-      // the full set of transient patterns both transports retry (ETIMEDOUT,
-      // terminated, fetch failed, UND_ERR_SOCKET, ...) - not a hand-maintained subset.
-      const rawMessage = error instanceof Error ? error.message : String(error);
-      if (error instanceof Error && isTransientNetworkError(error)) {
-        console.error('\n❌ The connection to the server dropped mid-response. Type "continue" to resume.\n');
-        logger.debug(`Full error details: ${error.stack || error.message}`);
-        return;
-      }
-
-      // Handle other errors - clean message for users, full stack in debug logs
-      console.error(`\n❌ ${rawMessage}\n`);
-      logger.debug(`Full error details: ${error instanceof Error ? error.stack || error.message : String(error)}`);
-    } finally {
-      // Tavern: the ReAct turn has settled. Parity with Claude Code's
-      // tavern integration: a finished turn means "your turn now" - emit
-      // `awaiting_input` so the chime/toast/tab-badge fire and a remote
-      // user knows to come back. The exception is a user-initiated abort
-      // (ESC): they're already at the keyboard, so emit silent `idle`.
-      // Read from the local `abortController` captured at the top of this
-      // turn - `state.abortController` is already null by now because the
-      // ESC handler clears it eagerly.
-      const wasAborted = abortController.signal.aborted;
-      setState(prev => ({ ...prev, abortController: null }));
-      useCliStore.getState().setIsThinking(false);
-      // Process-hook (host action_required signal): end of turn - clear any block
-      // sentinel (covers a *denied* permission, which never reaches PostToolUse).
-      void getProcessHooks()?.fireStop();
-      void bridgePresence.emitEvent({
-        type: 'status',
-        status: wasAborted ? 'idle' : 'awaiting_input',
-      });
-      // Drain the user-message queue: if the user submitted more messages
-      // while this one was processing, collate ALL of them into a single
-      // combined prompt (separated by blank lines) and submit as one
-      // request. Fewer round-trips and the model can address everything
-      // at once. ESC clears the queue (see ESC handler), so an aborted
-      // turn falls through with an empty queue. setImmediate defers the
-      // recursive call out of this finally to avoid re-entering
-      // handleMessage synchronously.
-      if (!wasAborted) {
-        const queued = useCliStore.getState().dequeueAllMessages();
-        if (queued.length > 0) {
-          const combined = queued.join('\n\n');
-          setImmediate(() => {
-            void handleMessage(combined);
-          });
-        }
-      }
-    }
-  };
+  // Thin wrapper over the extracted turn lifecycle (session/turnController.ts,
+  // issue #228). Builds a React-free TurnContext from the current render state;
+  // all turn logic lives in runTurn so it can be tested without mounting Ink.
+  const handleMessage = (message: string): Promise<void> =>
+    runTurn(message, {
+      agent: state.agent,
+      sessionStore: state.sessionStore,
+      configStore: state.configStore,
+      commandHistoryStore: state.commandHistoryStore,
+      customCommandStore: state.customCommandStore,
+      messageBuilder: state.messageBuilder,
+      config: state.config,
+      availableModels: state.availableModels,
+      agentStore: state.agentStore,
+      contextContent: state.contextContent,
+      additionalDirectories: state.additionalDirectories,
+      featureRegistry: state.featureRegistry,
+      backgroundManager: state.backgroundManager,
+      setCommandHistory,
+      setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
+    });
   handleMessageRef.current = handleMessage;
 
   /**

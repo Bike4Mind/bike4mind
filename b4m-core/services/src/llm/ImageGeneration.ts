@@ -33,6 +33,8 @@ import {
   isGeminiImageModel,
   isImageServeable,
   requiresImageInput,
+  insufficientCreditsError,
+  getQuestErrorCode,
 } from '@bike4mind/common';
 import {
   aiImageService,
@@ -439,7 +441,7 @@ export class ImageGenerationService {
 
     if (credits < requiredCredits) {
       const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw new UnprocessableEntityError(
+      throw insufficientCreditsError(
         `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
       );
     }
@@ -510,6 +512,7 @@ export class ImageGenerationService {
         type: quest.type,
         status: quest.status,
         images: quest.images,
+        errorCode: quest.errorCode,
       };
     };
 
@@ -1217,7 +1220,10 @@ export class ImageGenerationService {
             feature: 'image_generation',
             provider: modelInfo.backend,
             model,
-            inputTokens: 0,
+            // Prompt tokens actually sent to the model: the full encoded prompt, or TRUNCATE_TO
+            // when it was trimmed above (see the modelMaxTokens branch). Image models bill
+            // per-image (costUsd/units), so this is analytics-only completeness, not billing.
+            inputTokens: promptTokens.length > modelMaxTokens ? TRUNCATE_TO : promptTokens.length,
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
@@ -1235,6 +1241,8 @@ export class ImageGenerationService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
+      // Tag genuine out-of-credits failures so the client renders the "Add Credits" CTA.
+      quest.errorCode = getQuestErrorCode(error);
       // Targeted partial update: only persist the error fields. A full-object update would
       // re-send a poisoned numeric field (e.g. a non-finite creditsUsed) and throw a CastError,
       // swallowing the error and leaving the quest stuck forever. This guarantees the error surfaces.
@@ -1244,6 +1252,7 @@ export class ImageGenerationService {
         reply: quest.reply,
         type: quest.type,
         status: quest.status,
+        errorCode: quest.errorCode,
         promptMeta: quest.promptMeta,
       });
       await clientMessageSender.sendToClient(userId, wsEndpoint, {

@@ -30,3 +30,5 @@ export * from './DungeonInstanceModel';
 export * from './TavernMapModel';
 export * from './TavernQuestModel';
 export * from './TavernWorldModel';
+export * from './GearStampModel';
+export * from './GearOverrideModel';

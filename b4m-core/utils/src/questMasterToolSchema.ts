@@ -56,6 +56,9 @@ const GPT5_MODELS_WITH_TOOL_SUPPORT: string[] = [
   ChatModels.GPT5_4_MINI,
   ChatModels.GPT5_4_NANO,
   ChatModels.GPT5_5,
+  ChatModels.GPT5_6_SOL,
+  ChatModels.GPT5_6_LUNA,
+  ChatModels.GPT5_6_TERRA,
 ];
 
 /**

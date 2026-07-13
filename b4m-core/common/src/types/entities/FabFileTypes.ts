@@ -3,12 +3,7 @@ import { IShareableStaticMethods, type IShareableDocument } from './ShareableDoc
 
 // Define a type for the MIME types
 export type MimeType =
-  | 'text/plain'
-  | 'application/pdf'
-  | 'text/csv'
-  | 'application/json'
-  | 'text/markdown'
-  | 'text/html';
+  'text/plain' | 'application/pdf' | 'text/csv' | 'application/json' | 'text/markdown' | 'text/html';
 
 export const MimeTypes: MimeType[] = ['text/plain', 'text/markdown', 'application/pdf', 'application/json'];
 

@@ -118,6 +118,24 @@ export interface IProviderMonthCogs {
   cachedInputTokens: number;
 }
 
+/**
+ * One aggregation bucket of settlement basis (provider vs local pricing).
+ * Rows with settledBasis unset (events predating this field) are excluded,
+ * not bucketed as a third basis - they'd misrepresent estimate quality.
+ */
+export interface ISettlementBreakdown {
+  settledBasis: 'provider' | 'local';
+  requests: number;
+  creditsCharged: number;
+  writtenOffCredits: number;
+  /** Total (providerInputTokens - inputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  inputTokenDelta: number;
+  /** Total (providerOutputTokens - outputTokens) across bucketed rows; only rows with both counts > 0 contribute. */
+  outputTokenDelta: number;
+  /** Count of rows contributing to the token deltas above (providerInputTokens/providerOutputTokens both > 0). */
+  deltaSampleSize: number;
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
@@ -130,4 +148,7 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Monthly COGS per provider for invoice reconciliation, newest month first. */
   monthlyCogsByProvider(): Promise<IProviderMonthCogs[]>;
+
+  /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
+  settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
 }

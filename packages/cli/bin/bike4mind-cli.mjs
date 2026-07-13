@@ -59,7 +59,7 @@ const argv = await yargs(hideBin(process.argv))
   // (`argv.dev` / `argv.prod`) are never read.
   .option('dev', {
     type: 'boolean',
-    description: 'Point the CLI at the local dev server (http://localhost:3001) and remember it',
+    description: 'Point the CLI at the local dev server (http://localhost:3000) and remember it',
   })
   .option('prod', {
     type: 'boolean',
@@ -101,6 +101,10 @@ const argv = await yargs(hideBin(process.argv))
     type: 'boolean',
     description: 'When using -p, auto-allow all tool permission prompts (use with caution in CI/CD)',
     default: false,
+  })
+  .option('permission-policy', {
+    type: 'string',
+    description: 'When using -p, path to a JSON permission policy for unattended runs (allow/deny/risk rules)',
   })
   .option('ollama-host', {
     type: 'string',
@@ -365,6 +369,7 @@ if (argv.prompt !== undefined) {
       dangerouslySkipPermissions: argv['dangerously-skip-permissions'] || false,
       verbose: argv.verbose || false,
       addDirs: rawAddDirs.map(d => resolve(d)),
+      permissionPolicyPath: argv['permission-policy'] ? resolve(argv['permission-policy']) : undefined,
     });
     // handleHeadlessCommand calls process.exit internally, but handle the case it doesn't
     process.exit(0);

@@ -15,7 +15,16 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  ModelInfo,
 } from '@bike4mind/common';
+
+/**
+ * Strips comments from source code, returning the stripped text, or `null` when the
+ * language is unsupported or unparsable (caller falls back to whitespace-only
+ * normalization). Injected by the CLI host, which owns the web-tree-sitter dependency;
+ * absent in other harnesses. Used by the opt-in `minified` mode of `file_read`.
+ */
+export type CodeMinifier = (source: string, ext: string) => Promise<string | null>;
 
 export interface ToolContext {
   userId: string;
@@ -70,6 +79,13 @@ export interface ToolContext {
   onFinish?: (toolName: string, data: any) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
+  /**
+   * Model catalog for the current request, used to resolve provider + COGS pricing when a
+   * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
+   * Present on the chat/agent path (from precomputed models); absent on lean harnesses,
+   * where cost degrades to 0 but the usage event is still written.
+   */
+  availableModels?: ModelInfo[];
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.
@@ -77,6 +93,8 @@ export interface ToolContext {
    * Additional directories can be added via --add-dir or /add-dir.
    */
   allowedDirectories?: string[];
+  /** Optional code minifier for `file_read`'s opt-in `minified` mode. See CodeMinifier. */
+  codeMinifier?: CodeMinifier;
 }
 
 export interface ToolDefinition {

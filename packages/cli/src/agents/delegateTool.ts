@@ -37,7 +37,9 @@ export function createAgentDelegateTool(
   orchestrator: SubagentOrchestrator,
   agentStore: AgentStore,
   parentSessionId: string,
-  backgroundManager?: BackgroundAgentManager
+  backgroundManager?: BackgroundAgentManager,
+  /** Nesting depth of the agent that owns this tool (main agent = 0). Spawns run at parentDepth + 1. */
+  parentDepth = 0
 ): ICompletionOptionTools {
   // Build dynamic agent list for tool description
   const agents = agentStore.getAllAgents();
@@ -70,6 +72,7 @@ export function createAgentDelegateTool(
         thoroughness: params.thoroughness,
         variables: params.variables,
         parentSessionId,
+        depth: parentDepth + 1,
       };
 
       // Background execution: return job ID immediately
@@ -83,7 +86,7 @@ export function createAgentDelegateTool(
 
       // Foreground execution (default): block until complete
       const result = await orchestrator.delegateToAgent(spawnOptions);
-      return result.summary;
+      return `${result.summary}\n\n[resume id: ${result.resumeId} - use resume_agent with this id to continue this session]`;
     },
     toolSchema: {
       name: 'agent_delegate',

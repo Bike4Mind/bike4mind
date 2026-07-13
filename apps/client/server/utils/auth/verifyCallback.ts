@@ -6,12 +6,7 @@ import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
-import {
-  isProviderEmailVerified,
-  selectProviderEmail,
-  ACCOUNT_LINK_VERIFICATION_REQUIRED,
-  ACCOUNT_LINK_EMAIL_MISMATCH,
-} from './oauthAccountLink';
+import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { OAuthFailureReason } from './oauthFailureReason';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
@@ -82,6 +77,7 @@ async function createUniqueOAuthUser(params: {
     name: safeName,
     username,
     password: null,
+    hasUsablePassword: false,
     isAdmin: false,
     oauthCredentials,
     authProviders: [oauthCredentials],
@@ -190,48 +186,49 @@ const authenticateUser = async (
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
+      let promoteEmailVerified = false;
       if (!existingSameIdentity) {
-        const providerEmailVerified = isProviderEmailVerified(profile);
-        const localEmailVerified = user.emailVerified === true;
-        if (!providerEmailVerified || !localEmailVerified) {
+        // Shared account-takeover gate (see decideAutoLink). This path feeds it the
+        // passport email-array shape via isProviderEmailVerified(); okta/callback.ts
+        // feeds the OIDC boolean. Both consume one decision so the two paths can't drift.
+        const decision = decideAutoLink({
+          providerEmailVerified: isProviderEmailVerified(profile),
+          providerEmail: email,
+          localEmail: user.email ?? null,
+          localEmailVerified: user.emailVerified === true,
+          hasUsablePassword: !!user.hasUsablePassword,
+        });
+        if (decision.action === 'refuse') {
           // Propagate the targeted email so [strategy]/callback.ts can write
           // it onto the auth-fail log row for forensic review during attacks.
-          done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
+          done(decision.reason, undefined, email ? { email } : undefined);
           return;
         }
-        // Both emails are verified but they must also match (case-insensitive).
-        // Verification alone is not sufficient: an attacker with a verified email
-        // on a colliding username/email could otherwise link into a victim account.
-        const localEmail = user.email ?? null;
-        if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
-          done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
-          return;
-        }
+        promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
-      if (existingProviderIndex !== -1) {
-        authProviders[existingProviderIndex] = oauthCredentials;
-      } else {
-        authProviders.push(oauthCredentials);
-      }
+      // Shared account-link write (see applyAccountLink): the tokenVersion bump on
+      // a new link and the emailVerified promotion stay in lockstep with
+      // okta/callback.ts. Mutates authProviders in place, so it must run BEFORE the
+      // omit(user) below for linkedUser to observe the linked provider.
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider,
+        promoteEmailVerified,
+        currentTokenVersion: user.tokenVersion,
+      });
+      await User.updateOne({ _id: user._id }, update);
 
-      // Linking a NEW auth provider to an existing account is a security-relevant
-      // change: bump tokenVersion to invalidate any other active sessions. The
-      // session being established here is kept valid by reflecting the new
-      // version on the returned user, so the token minted for this login matches.
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;
         isNewOAuthLink?: boolean;
+        emailVerified?: boolean;
+        emailVerifiedAt?: Date;
       };
-      if (isNewProvider) {
-        await User.updateOne(
-          { _id: user._id },
-          { $set: { oauthCredentials, authProviders }, $inc: { tokenVersion: 1 } }
-        );
-        linkedUser.tokenVersion = (user.tokenVersion ?? 0) + 1;
-      } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders });
-      }
+      // Reflect the persisted tokenVersion/emailVerified onto the returned user so
+      // the token minted for this login matches what was just written.
+      Object.assign(linkedUser, reflect);
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.
       linkedUser.isNewOAuthLink = isNewProvider;

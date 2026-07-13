@@ -16,6 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
+import { parseInternalStaffDomains } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -25,6 +26,19 @@ import { isTestMode } from '@client/lib/subscriptions/constants';
 export function normalizeTag(tag: string): string {
   return tag.trim().toLowerCase();
 }
+
+/**
+ * Reserved universal entitlement key held by EVERY authenticated user (injected
+ * in `getUserEntitlements`). It is the baseline-access signal that replaces the
+ * old "stamp a `Customer` tag on every account" workaround: a model declaring
+ * `allowedEntitlements: ['base']` is public to all authenticated users, while
+ * `isModelAccessible` stays fail-closed for a genuinely ungated (empty tags AND
+ * empty entitlements) config. Deliberately NOT a grant row / NOT in
+ * `KNOWN_ENTITLEMENT_KEYS`: it is not an admin-assignable product, it is granted
+ * to everyone unconditionally. Normalized form is lowercase (matches
+ * `normalizeEntitlementKey`).
+ */
+export const BASE_ENTITLEMENT_KEY = 'base';
 
 /**
  * A product's Stripe price ids, authored per-stage and captured BEFORE the
@@ -136,7 +150,7 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
  * customer and couple a fork to our deals. Empty/unset (a fork, or CI type-check)
  * -> no external grant, the correct default. Set the NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS
  * repo/org variable per stage - a JSON array of `{ domain, entitlements }` - to
- * activate; the value flows in via _deploy-env.yml.
+ * activate; the value is injected at deploy time per infra/deploy-contract.json.
  *
  * Every domain granted here confers paid entitlements AND a one-time signup
  * credit allotment (see below) to any verified email on that domain. NEVER list a
@@ -169,16 +183,13 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
  * couple a fork to our infrastructure. Empty/unset (a fork, or CI type-check)
  * -> no internal-domain grant, which is the correct default. Set the
  * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
- * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ * domain list) per stage to activate; the value is injected at deploy time per infra/deploy-contract.json.
+ *
+ * Parsed via the shared helper so analytics resolves the same domains (#172).
  */
-const INTERNAL_STAFF_DOMAINS: readonly string[] = [
-  ...new Set(
-    (process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ?? '')
-      .split(',')
-      .map(d => normalizeTag(d))
-      .filter(Boolean)
-  ),
-];
+const INTERNAL_STAFF_DOMAINS: readonly string[] = parseInternalStaffDomains(
+  process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+);
 
 /** Domains already covered by an external row (derived - no brand literals to keep in sync). */
 const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row.domain));

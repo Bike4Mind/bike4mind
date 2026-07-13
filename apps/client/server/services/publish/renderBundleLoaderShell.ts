@@ -93,7 +93,7 @@ export function renderBundleLoaderShell(): string {
 <body>
 <iframe id="b4m-frame" sandbox="allow-scripts" title="${sharedTitle}" style="display:none"></iframe>
 <div id="b4m-msg"></div>
-<noscript><div style="max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;font-family:system-ui,sans-serif">This shared item requires JavaScript to view. If you're signed in it will load automatically; otherwise <a href="/login">sign in</a>.</div></noscript>
+<noscript><div style="max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;font-family:system-ui,sans-serif">This is a private item. <a href="/login">Sign in</a> to view it.</div></noscript>
 <script>${bootstrap}</script>
 </body>
 </html>`;

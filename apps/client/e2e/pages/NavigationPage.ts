@@ -7,7 +7,10 @@ export class NavigationPage extends BasePage {
   }
 
   async openProjects() {
-    await this.page.getByTestId('sidenav-nav-projects').click();
+    // Projects is an earned-nav destination (Gears): the sidenav row is hidden until
+    // the account has a project. Navigate directly, like a first-time user (Gears CTA).
+    await this.page.goto('/projects');
+    await this.page.waitForLoadState('domcontentloaded');
   }
 
   async openProfile() {
@@ -16,7 +19,10 @@ export class NavigationPage extends BasePage {
   }
 
   async openAgents() {
-    await this.page.getByTestId('sidenav-nav-agents').click();
+    // Agents is an earned-nav destination (Gears): the sidenav row is hidden until
+    // the account has an agent. Navigate directly, like a first-time user (Gears CTA).
+    await this.page.goto('/agents');
+    await this.page.waitForLoadState('domcontentloaded');
   }
 
   async openMenu() {

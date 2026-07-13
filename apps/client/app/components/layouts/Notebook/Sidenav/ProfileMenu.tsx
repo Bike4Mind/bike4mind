@@ -39,6 +39,7 @@ import AdminPanelSettingsIcon from '@mui/icons-material/AdminPanelSettingsOutlin
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import GavelIcon from '@mui/icons-material/GavelOutlined';
 import ExtensionIcon from '@mui/icons-material/ExtensionOutlined';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -114,10 +115,12 @@ type AccountCardProps = {
   onSelect: () => void;
   // Sole account (no team/other accounts to switch to): hide the radio, it's not a choice.
   bare?: boolean;
+  // Nothing decrements while enforceCredits is off, so the balance is misleading - hide it.
+  showCredits: boolean;
 };
 
 /** Account switcher card (Personal / Team) shown at the top of the expanded profile menu. */
-const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare }: AccountCardProps) => (
+export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare, showCredits }: AccountCardProps) => (
   <Box
     data-testid="profile-account-option"
     onClick={onSelect}
@@ -167,23 +170,25 @@ const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare }: Acc
         />
       )}
     </Box>
-    <Chip
-      size="sm"
-      variant="plain"
-      startDecorator={<Bike4MindIcon size="12" />}
-      sx={theme => ({
-        alignSelf: 'flex-start',
-        backgroundColor: 'transparent',
-        border: 'none',
-        px: 0,
-        fontSize: '13px',
-        gap: '6px',
-        // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
-        '--Icon-color': theme.palette.text.tertiary,
-      })}
-    >
-      {credits.toLocaleString()}
-    </Chip>
+    {showCredits && (
+      <Chip
+        size="sm"
+        variant="plain"
+        startDecorator={<Bike4MindIcon size="12" />}
+        sx={theme => ({
+          alignSelf: 'flex-start',
+          backgroundColor: 'transparent',
+          border: 'none',
+          px: 0,
+          fontSize: '13px',
+          gap: '6px',
+          // Bike4MindIcon fills with var(--Icon-color); tint it tertiary.
+          '--Icon-color': theme.palette.text.tertiary,
+        })}
+      >
+        {credits.toLocaleString()}
+      </Chip>
+    )}
   </Box>
 );
 
@@ -213,7 +218,7 @@ const ProfileMenu = () => {
   // filterVisiblePremiumNavItems - see its doc comment and unit tests.
   const { data: entitlements } = useEntitlements();
   const visiblePremiumNavItems = filterVisiblePremiumNavItems(premiumNavItems, entitlements, currentUser?.tags);
-  const isCreditsEnabled = useGetSettingsValue('enforceCredits');
+  const isCreditsEnabled = !!useGetSettingsValue('enforceCredits');
 
   const { setOpen: setInboxOpen } = useInbox.getState();
   const toggleReferralModal = useReferralModal(s => s.toggle);
@@ -256,6 +261,13 @@ const ProfileMenu = () => {
       document.removeEventListener('mousedown', handlePointerDown);
       document.removeEventListener('keydown', handleKeyDown);
     };
+  }, [open]);
+
+  // Collapse the "More" flyout whenever the panel closes, so it doesn't reopen
+  // already-expanded next time. Covers every close path (card toggle, Escape,
+  // outside click, navigation) uniformly, not just the closeAll() ones.
+  useEffect(() => {
+    if (!open) setMoreOpen(false);
   }, [open]);
 
   const planLabel =
@@ -301,6 +313,7 @@ const ProfileMenu = () => {
                 selected={selectedAccount?.id === account.id}
                 onSelect={() => setSelectedAccount(account)}
                 bare={accounts.length === 1}
+                showCredits={isCreditsEnabled}
               />
             ))}
           </Stack>
@@ -340,6 +353,15 @@ const ProfileMenu = () => {
             label={t('skills.title', 'Skills')}
             onClick={() => {
               navigate({ to: '/skills' });
+              setOpen(false);
+            }}
+          />
+          <MenuRow
+            testId="profile-menu-api-keys"
+            icon={<KeyOutlinedIcon sx={{ fontSize: '18px' }} />}
+            label={t('apiKeys.title', 'API Keys')}
+            onClick={() => {
+              navigate({ to: '/profile', search: { tab: 'api-keys' } });
               setOpen(false);
             }}
           />
@@ -468,15 +490,17 @@ const ProfileMenu = () => {
               icon={<FormatListBulletedIcon sx={{ fontSize: '18px' }} />}
               label={t('common.more', 'More')}
               endDecorator={
-                <ChevronLeftIcon
-                  sx={{
-                    fontSize: '18px',
-                    color: 'text.tertiary',
-                    transition: 'transform 0.2s ease',
-                    // Points right when closed; rotates to the open (left) state on expand.
-                    transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
-                  }}
-                />
+                <InboxBadge>
+                  <ChevronLeftIcon
+                    sx={{
+                      fontSize: '18px',
+                      color: 'text.tertiary',
+                      transition: 'transform 0.2s ease',
+                      // Points right when closed; rotates to the open (left) state on expand.
+                      transform: moreOpen ? 'rotate(0deg)' : 'rotate(180deg)',
+                    }}
+                  />
+                </InboxBadge>
               }
               onClick={() => setMoreOpen(v => !v)}
             />

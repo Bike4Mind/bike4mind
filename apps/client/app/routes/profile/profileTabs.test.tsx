@@ -3,10 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
 // Mocks
 const mockNavigate = vi.fn();
 let searchValue: Record<string, unknown> = {};
+let mockUser: Record<string, unknown> | null = { id: 'u1', name: 'Test User', isAdmin: false };
+let mockPublishedArtifacts: unknown[] = [];
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate,
@@ -18,7 +21,7 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@client/app/contexts/UserContext', () => ({
-  useUser: () => ({ currentUser: { id: 'u1', name: 'Test User' }, isAdmin: false }),
+  useUser: () => ({ currentUser: mockUser }),
 }));
 
 vi.mock('@client/app/contexts/SessionsContext', () => ({
@@ -37,6 +40,10 @@ vi.mock('@client/app/components/help', () => ({
   ContextHelpButton: () => null,
 }));
 
+vi.mock('@client/app/utils/publishApi', () => ({
+  listMyPublishedArtifacts: () => Promise.resolve(mockPublishedArtifacts),
+}));
+
 // next/dynamic + static tab content are irrelevant to the strip itself; stub them
 // so the test stays focused on which tabs render and the redirect behavior.
 vi.mock('next/dynamic', () => ({
@@ -52,9 +59,14 @@ vi.mock('@client/app/components/ProfileModal/CommunityTabContent', () => ({
 import ProfilePage from './index';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
-const Wrapper = ({ children }: { children: React.ReactNode }) => (
-  <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
-);
+const Wrapper = ({ children }: { children: React.ReactNode }) => {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return (
+    <QueryClientProvider client={queryClient}>
+      <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
+    </QueryClientProvider>
+  );
+};
 
 const renderPage = () =>
   render(
@@ -67,18 +79,36 @@ describe('ProfilePage tab strip', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     searchValue = {};
+    mockUser = { id: 'u1', name: 'Test User', isAdmin: false };
+    mockPublishedArtifacts = [];
   });
 
-  it('renders exactly the six consolidated top-level tabs', () => {
+  it('renders the core tabs visible to all users (no Security or Published for non-admin with no artifacts)', () => {
     renderPage();
 
     expect(screen.getByTestId('profile-tab')).toBeInTheDocument();
     expect(screen.getByTestId('community-tab')).toBeInTheDocument();
     expect(screen.getByTestId('settings-tab')).toBeInTheDocument();
-    // Credit Usage promoted to its own top-level tab.
     expect(screen.getByTestId('usage-tab')).toBeInTheDocument();
     expect(screen.getByTestId('integrations-tab')).toBeInTheDocument();
+    // Non-admin: Security tab hidden
+    expect(screen.queryByTestId('security-tab')).not.toBeInTheDocument();
+    // No published artifacts: Published tab hidden
+    expect(screen.queryByTestId('published-tab')).not.toBeInTheDocument();
+  });
+
+  it('shows the Security tab for admin users', () => {
+    mockUser = { id: 'u1', name: 'Admin User', isAdmin: true };
+    renderPage();
+
     expect(screen.getByTestId('security-tab')).toBeInTheDocument();
+  });
+
+  it('hides the Security tab for non-admin users', () => {
+    mockUser = { id: 'u1', name: 'Test User', isAdmin: false };
+    renderPage();
+
+    expect(screen.queryByTestId('security-tab')).not.toBeInTheDocument();
   });
 
   it('no longer renders the tabs that moved into /admin or Settings', () => {
@@ -141,6 +171,26 @@ describe('ProfilePage tab strip', () => {
 
   it('does not redirect for a current, valid tab', () => {
     searchValue = { tab: 'settings' };
+    renderPage();
+
+    expect(mockNavigate).not.toHaveBeenCalled();
+  });
+
+  it('redirects non-admin away from ?tab=security', () => {
+    mockUser = { id: 'u1', name: 'Test User', isAdmin: false };
+    searchValue = { tab: 'security' };
+    renderPage();
+
+    expect(mockNavigate).toHaveBeenCalledWith({
+      to: '/profile',
+      search: { tab: '' },
+      replace: true,
+    });
+  });
+
+  it('does not redirect admin away from ?tab=security', () => {
+    mockUser = { id: 'u1', name: 'Admin User', isAdmin: true };
+    searchValue = { tab: 'security' };
     renderPage();
 
     expect(mockNavigate).not.toHaveBeenCalled();

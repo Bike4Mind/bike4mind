@@ -34,7 +34,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "dev": "tsx src/index.tsx",
+    "dev": "B4M_SOURCE_MODE=1 tsx src/index.tsx",
     "build": "tsdown",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
@@ -59,9 +59,6 @@
     "@aws-sdk/client-transcribe": "^3.1080.0",
     "@aws-sdk/credential-provider-node": "^3.972.63",
     "@aws-sdk/s3-request-presigner": "^3.1080.0",
-    "@bike4mind/fab-pipeline": "workspace:*",
-    "@bike4mind/llm-adapters": "workspace:*",
-    "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
     "@joplin/turndown-plugin-gfm": "^1.0.67",
@@ -94,6 +91,7 @@
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "lodash": "^4.18.1",
     "mammoth": "^1.12.0",
     "marked": "^15.0.11",
@@ -106,7 +104,7 @@
     "p-limit": "^7.3.0",
     "picomatch": "^4.0.5",
     "qrcode": "^1.5.4",
-    "react": "^19.2.6",
+    "react": "^19.2.7",
     "sharp": "^0.35.3",
     "shell-quote": "^1.8.4",
     "speakeasy": "^2.0.0",
@@ -129,14 +127,17 @@
   "devDependencies": {
     "@bike4mind/agents": "workspace:*",
     "@bike4mind/common": "workspace:*",
+    "@bike4mind/fab-pipeline": "workspace:*",
+    "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
+    "@bike4mind/observability": "workspace:*",
     "@bike4mind/services": "workspace:*",
     "@bike4mind/utils": "workspace:*",
     "@types/better-sqlite3": "^7.6.13",
     "@types/jsonwebtoken": "^9.0.4",
     "@types/node": "^24.0.0",
     "@types/picomatch": "^4.0.3",
-    "@types/react": "^19.2.15",
+    "@types/react": "^19.2.17",
     "@types/shell-quote": "^1.7.5",
     "@types/ws": "^8.18.1",
     "@types/yargs": "^17.0.35",
@@ -144,7 +145,7 @@
     "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "optionalDependencies": {
     "@vscode/ripgrep": "^1.18.0"

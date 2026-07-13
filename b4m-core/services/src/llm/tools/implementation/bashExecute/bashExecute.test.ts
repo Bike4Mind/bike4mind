@@ -1,8 +1,17 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import type { spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { ShellSessionManager } from './ShellSessionManager';
-import { executeBackgroundSession, formatSessionResult } from './index';
+import { executeBackgroundSession, executeBashCommand, formatSessionResult } from './index';
+
+// The foreground path calls the module-level child_process.spawn directly (session
+// mode uses an injected spawnFn instead), so mock spawn to drive it. Session-mode
+// tests inject their own spawnFn and never hit this mock.
+vi.mock('child_process', async importActual => {
+  const actual = await importActual<typeof import('child_process')>();
+  return { ...actual, spawn: vi.fn() };
+});
+const mockSpawn = vi.mocked(spawn);
 
 /** Controllable ChildProcess stand-in. */
 class MockChild extends EventEmitter {
@@ -80,6 +89,42 @@ describe('bash_execute session mode', () => {
     const result = await executeBackgroundSession({ command: 'sleep 100', run_in_background: true }, 5, manager);
     expect(result).toContain('[cannot start background session]');
     expect(result).toContain('kill_background_shell');
+  });
+});
+
+describe('bash_execute foreground mode', () => {
+  it('reassembles a multibyte char split across two stdout chunks', async () => {
+    const child = new MockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    // spawn + handlers attach synchronously inside the Promise executor.
+    const promise = executeBashCommand({ command: 'printf smiley' });
+
+    // '😀' (U+1F600) is F0 9F 98 80; split mid-codepoint across two data events.
+    const bytes = Buffer.from('😀', 'utf8');
+    child.stdout.emit('data', bytes.subarray(0, 2));
+    child.stdout.emit('data', bytes.subarray(2));
+    child.close(0);
+
+    const result = await promise;
+    expect(result.stdout).toBe('😀');
+    expect(result.stdout).not.toContain('�');
+    expect(result.exitCode).toBe(0);
+  });
+
+  it('flushes an incomplete trailing byte at close as a single replacement char', async () => {
+    const child = new MockChild();
+    mockSpawn.mockReturnValue(child as unknown as ReturnType<typeof spawn>);
+
+    const promise = executeBashCommand({ command: 'printf partial' });
+
+    // First byte of 'é' (0xC3) with no continuation; decoder.end() in the close
+    // handler flushes it as one U+FFFD.
+    child.stdout.emit('data', Buffer.from([0xc3]));
+    child.close(0);
+
+    const result = await promise;
+    expect(result.stdout).toBe('�');
   });
 });
 

@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { EventBridgeClient, PutEventsCommand } from '@aws-sdk/client-eventbridge';
 import { Resource } from 'sst';
 import { QuestStartBodySchema } from '@bike4mind/services';
-import { ContextTelemetrySchema, ContextTelemetryAlertsSchema } from '@bike4mind/common';
+import {
+  ContextTelemetrySchema,
+  ContextTelemetryAlertsSchema,
+  SRE_ANALYSIS_COMPLETED_EVENT,
+  type SreFixRequest,
+} from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
 // Self-host has no EventBridge. Deliver email.send straight to the mailer and
@@ -382,5 +387,16 @@ export const TelemetryEvents = {
       alertConfig: ContextTelemetryAlertsSchema,
       requestId: z.string().optional(), // Quest ID for correlation
     })
+  ),
+};
+
+export const SreEvents = {
+  // Diagnostician -> Surgeon handoff. Routed to sreFixQueue by an EventBridge rule
+  // (infra/eventBus.ts) so additional consumers (audit, metrics) can attach without
+  // touching the analysis handler. The strict payload schema lives with the consumer
+  // (queueHandlers/sreFix.ts); publish-side stays typed via SreFixRequest.
+  AnalysisCompleted: event(
+    SRE_ANALYSIS_COMPLETED_EVENT,
+    z.custom<SreFixRequest>((v: unknown) => typeof v === 'object' && v !== null)
   ),
 };

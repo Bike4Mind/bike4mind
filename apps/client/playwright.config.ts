@@ -64,6 +64,18 @@ const specProjects = [
     testMatch: /(?:^|\/)search\.spec\.ts$/,
     auth: './e2e/.auth/search-user.json',
   },
+  {
+    name: 'data-lake',
+    setupMatch: /(?:^|\/)data-lake\.setup\.ts$/,
+    testMatch: /(?:^|\/)data-lake\.spec\.ts$/,
+    auth: './e2e/.auth/data-lake-user.json',
+  },
+  {
+    name: 'skills',
+    setupMatch: /(?:^|\/)skills\.setup\.ts$/,
+    testMatch: /(?:^|\/)skills\.spec\.ts$/,
+    auth: './e2e/.auth/skills-user.json',
+  },
   // AI latency suites: only included when AI_LATENCY_RUN=true (e2e-ai-latency workflow)
   ...(process.env.AI_LATENCY_RUN === 'true'
     ? [
@@ -143,7 +155,7 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/],
+      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/, /(?:^|\/)mfa\.spec\.ts$/],
       dependencies: ['setup-core', 'setup-projects'],
     },
     // Admin specs

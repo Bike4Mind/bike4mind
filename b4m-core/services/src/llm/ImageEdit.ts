@@ -36,7 +36,6 @@ import {
   OpenaiModerationsService,
   TiktokenTokenizer,
   usdToCredits,
-  UnprocessableEntityError,
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
@@ -54,6 +53,7 @@ import { fromZodError } from 'zod-validation-error';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { moderateImageOrThrow } from './imageModerationGate';
 import { startQuestHeartbeat } from './questHeartbeat';
+import { insufficientCreditsError, getQuestErrorCode } from '@bike4mind/common';
 
 export const ImageEditBodySchema = OpenAIImageGenerationInput.extend({
   sessionId: z.string(),
@@ -254,7 +254,7 @@ export class ImageEditService {
 
     if (credits < requiredCredits) {
       const creditsOwner = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw new UnprocessableEntityError(
+      throw insufficientCreditsError(
         `${creditsOwner} not have enough credits to complete this request. ${creditsSource === 'organization' ? 'Organization' : 'You'} currently have ${credits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
       );
     }
@@ -307,6 +307,7 @@ export class ImageEditService {
         type: quest.type,
         status: quest.status,
         images: quest.images,
+        errorCode: quest.errorCode,
       };
     };
 
@@ -589,6 +590,8 @@ export class ImageEditService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
+      // Tag genuine out-of-credits failures so the client renders the "Add Credits" CTA.
+      quest.errorCode = getQuestErrorCode(error);
       // Targeted partial update (mirrors ImageGeneration's catch): a full-object update would
       // re-send a poisoned numeric field (e.g. a non-finite creditsUsed) and throw a CastError,
       // swallowing the error and leaving the quest stuck forever. This guarantees the error surfaces.
@@ -598,6 +601,7 @@ export class ImageEditService {
         reply: quest.reply,
         type: quest.type,
         status: quest.status,
+        errorCode: quest.errorCode,
         promptMeta: quest.promptMeta,
       });
       await clientMessageSender.sendToClient(userId, wsEndpoint, {

@@ -343,6 +343,11 @@ export function extractImagesFromChat(messages: IChatHistoryItem[]): string[] {
         }
       });
     }
+
+    // NOTE: IChatHistoryItem.images is intentionally NOT read here. It holds
+    // storage bucket keys (not URLs) and can include non-image artifacts, so it
+    // would need key filtering + URL resolution before it could feed imageUrl.
+    // Only the {type:'image'|attachments} shapes above carry ready-to-use URLs.
   });
 
   return images;
@@ -350,9 +355,23 @@ export function extractImagesFromChat(messages: IChatHistoryItem[]): string[] {
 
 // Summarize chat context
 export function summarizeChatContext(messages: IChatHistoryItem[]): string {
-  // Simple summarization - in production, use LLM
+  // Simple summarization - in production, use LLM.
+  // Reads both the legacy {content,text} shape and the real IChatHistoryItem
+  // {prompt,reply/replies} shape so real chat history is actually reflected.
   const texts = messages
-    .map(m => (m as { content?: string; text?: string }).content || (m as { text?: string }).text)
+    .map(m => {
+      const extra = m as unknown as {
+        content?: string;
+        text?: string;
+        reply?: string | null;
+        replies?: string[];
+      };
+      // Prefer a single prompt source (legacy content/text OR the real prompt)
+      // so a message carrying both shapes is not concatenated twice.
+      const prompt = extra.content || extra.text || m.prompt;
+      const reply = extra.reply || extra.replies?.find(Boolean);
+      return [prompt, reply].filter(Boolean).join(' ').trim();
+    })
     .filter(Boolean);
   return texts.join(' ').slice(-500); // Last 500 chars
 }
@@ -413,6 +432,33 @@ export function aiGenerateModalContent(params: {
   };
 
   return baseModal;
+}
+
+// Shown when a from-context request has no recent chat to summarize, so callers
+// surface a clear message instead of a generic empty modal.
+export const NO_CHAT_CONTEXT_MESSAGE =
+  'No recent chat context found to build a modal from. Have a conversation first, then try `/admin modal from-context` again.';
+
+// Build modal content from recent chat context. Returns null when there is no
+// usable context (no text and no images) so callers can surface a clear
+// "nothing to summarize" message rather than a generic empty modal.
+export function generateModalContentFromContext(
+  messages: IChatHistoryItem[],
+  options: { type?: 'modal' | 'banner'; intent?: string } = {}
+): Partial<IModal> | null {
+  const summary = summarizeChatContext(messages);
+  const images = extractImagesFromChat(messages);
+
+  if (!summary.trim() && images.length === 0) {
+    return null;
+  }
+
+  return aiGenerateModalContent({
+    summary,
+    images,
+    type: options.type || 'modal',
+    intent: options.intent || '',
+  });
 }
 
 // Generate modal from natural language

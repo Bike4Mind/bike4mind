@@ -58,6 +58,10 @@ import LowercaseAgentTriggerWords from './20260626000000_lowercase-agent-trigger
 import BackfillPolicyAcceptanceGrandfather from './20260702010000_backfill-policy-acceptance-grandfather';
 import HashMfaBackupCodes from './20260702000000_hash-mfa-backup-codes';
 import BackfillCreditLots from './20260707120000_backfill-credit-lots';
+import AddHasUsablePasswordToUsers from './20260709120000_add-hasusablepassword-to-users';
+import BaseEntitlementOnDefaultModels from './20260709130000_base-entitlement-on-default-models';
+import NullShellAccountPasswords from './20260710120000_null-shell-account-passwords';
+import BaseEntitlementCoverDriftedSeedConfigs from './20260710160000_base-entitlement-cover-drifted-seed-configs';
 
 export interface MigrationFile {
   id: number;
@@ -119,4 +123,8 @@ export const AvailableMigrations: MigrationFile[] = [
   BackfillPolicyAcceptanceGrandfather,
   HashMfaBackupCodes,
   BackfillCreditLots,
+  AddHasUsablePasswordToUsers,
+  BaseEntitlementOnDefaultModels,
+  NullShellAccountPasswords,
+  BaseEntitlementCoverDriftedSeedConfigs,
 ];

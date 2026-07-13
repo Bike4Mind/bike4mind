@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { userRepository } from '@bike4mind/database';
+import { mcpServerRepository, userRepository } from '@bike4mind/database';
+import { McpServerName } from '@bike4mind/common';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
-import { decryptToken } from '@server/security/tokenEncryption';
+import { decryptToken, decryptEnvVariables, encryptEnvVariables } from '@server/security/tokenEncryption';
 
 const NOTION_UUID_REGEX = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 const MAX_ALLOWED_PAGES = 50;
@@ -122,6 +123,21 @@ const handler = baseApi().patch(async (req, res) => {
       } catch (syncError) {
         console.warn('[Notion Settings] MCP sync failed after settings update:', syncError);
       }
+    } else {
+      // Token decryption failed (e.g. key rotation) but the MCP server may still
+      // have working env vars. Patch the settings-related env vars in place.
+      console.warn('[Notion Settings] Token decryption failed, using fallback env var patch');
+      try {
+        await patchMcpServerEnvVars(userId, {
+          writeEnabled: typeof writeEnabled === 'boolean' ? writeEnabled : user.notionConnect.writeEnabled,
+          rootPageId: rootPageId !== undefined ? rootPageId : (user.notionConnect.rootPageId ?? null),
+          accessMode: accessMode ?? user.notionConnect.accessMode ?? 'all',
+          allowedPages: allowedPages ?? user.notionConnect.allowedPages ?? [],
+          excludedPageIds: excludedPageIds ?? user.notionConnect.excludedPageIds ?? [],
+        });
+      } catch (patchError) {
+        console.warn('[Notion Settings] Fallback MCP env patch failed:', patchError);
+      }
     }
 
     res.status(200).json({ success: true });
@@ -130,5 +146,66 @@ const handler = baseApi().patch(async (req, res) => {
     res.status(500).json({ error: 'Failed to update Notion settings' });
   }
 });
+
+/**
+ * Patches settings-related env vars on an existing Notion MCP server without
+ * needing the raw access token. Used when the User model's encrypted token
+ * can't be decrypted but the MCP server's own env vars are still valid.
+ */
+async function patchMcpServerEnvVars(
+  userId: string,
+  settings: {
+    writeEnabled?: boolean;
+    rootPageId: string | null;
+    accessMode: 'all' | 'selected';
+    allowedPages: AllowedPage[];
+    excludedPageIds: string[];
+  }
+) {
+  const notionServer = await mcpServerRepository.findOne({
+    name: McpServerName.Notion,
+    userId,
+  });
+
+  if (!notionServer?.envVariables?.length) {
+    console.warn('[Notion Settings] No existing MCP server to patch');
+    return;
+  }
+
+  const envVars = decryptEnvVariables(notionServer.envVariables);
+  const envMap = new Map(envVars.map(v => [v.key, v.value]));
+
+  envMap.set('NOTION_WRITE_ENABLED', settings.writeEnabled ? 'true' : 'false');
+
+  if (settings.rootPageId) {
+    envMap.set('NOTION_ROOT_PAGE_ID', settings.rootPageId);
+  } else {
+    envMap.delete('NOTION_ROOT_PAGE_ID');
+  }
+
+  envMap.set('NOTION_ACCESS_MODE', settings.accessMode);
+
+  if (settings.accessMode === 'selected' && settings.allowedPages.length > 0) {
+    const compactPages = settings.allowedPages.map(p => ({ id: p.id, access: p.access }));
+    envMap.set('NOTION_ALLOWED_PAGES', JSON.stringify(compactPages));
+  } else {
+    envMap.delete('NOTION_ALLOWED_PAGES');
+  }
+
+  if (settings.excludedPageIds.length > 0) {
+    envMap.set('NOTION_EXCLUDED_PAGE_IDS', settings.excludedPageIds.join(','));
+  } else {
+    envMap.delete('NOTION_EXCLUDED_PAGE_IDS');
+  }
+
+  const updatedVars = Array.from(envMap, ([key, value]) => ({ key, value }));
+
+  await mcpServerRepository.update({
+    id: notionServer.id,
+    envVariables: encryptEnvVariables(updatedVars),
+  });
+
+  console.log('[Notion Settings] Patched MCP server env vars via fallback path');
+}
 
 export default handler;

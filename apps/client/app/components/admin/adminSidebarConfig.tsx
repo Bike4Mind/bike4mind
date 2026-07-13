@@ -14,6 +14,7 @@ import BusinessIcon from '@mui/icons-material/Business';
 import CreditCardIcon from '@mui/icons-material/CreditCard';
 import SecurityIcon from '@mui/icons-material/Security';
 import DescriptionIcon from '@mui/icons-material/Description';
+import SettingsSuggestIcon from '@mui/icons-material/SettingsSuggest';
 import AccountBoxIcon from '@mui/icons-material/AccountBox';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import CleaningServicesIcon from '@mui/icons-material/CleaningServices';
@@ -80,6 +81,7 @@ export enum AdminTab {
   DlqReplay = 42,
   IntegrationHealth = 43,
   SreAgent = 44,
+  ManageGears = 56,
   ApiReference = 45,
   ArchitectureDiagrams = 47,
   Dependencies = 48,
@@ -194,6 +196,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: CleaningServicesIcon, tab: AdminTab.AgentExecutions, label: 'Stuck Agent Executions' },
       { Icon: BuildIcon, tab: AdminTab.ToolDefinitions, label: 'Tool Definitions' },
       { Icon: DescriptionIcon, tab: AdminTab.SystemPrompts, label: 'System Prompts' },
+      { Icon: SettingsSuggestIcon, tab: AdminTab.ManageGears, label: 'Manage Gears' },
       { Icon: SpeedIcon, tab: AdminTab.RapidReply, label: 'Rapid Reply' },
       { Icon: GraphicEqIcon, tab: AdminTab.VoiceSettings, label: 'Voice Settings' },
       { Icon: PsychologyIcon, tab: AdminTab.LLMDashboard, label: 'LLM Dashboard' },
