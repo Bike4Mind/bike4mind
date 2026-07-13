@@ -73,6 +73,94 @@ export const CONTRADICTION: EvalBelief = {
   presentations: 1,
 };
 
+/**
+ * The de-dup corpus: pairs that decide whether a newly extracted fact is a RESTATEMENT of something
+ * the user already told us (coalesce it, and count the re-mention as a presentation) or a NEW belief
+ * (store it separately).
+ *
+ * Both errors are bad in different ways, which is why this needs two sides:
+ *   - merge too eagerly and a genuinely new fact overwrites an old one. The user told us something and
+ *     we destroyed a different thing they told us. Silent, and unrecoverable.
+ *   - merge too shyly and memory fills with near-identical restatements, each diluting the others'
+ *     activation and burning prompt budget on the same fact five times.
+ *
+ * `MERGE` pairs are the SAME belief said differently - paraphrase, tense, pronoun, British spelling.
+ * `DISTINCT` pairs are the hard part: same subject, same vocabulary, DIFFERENT claim. They are much
+ * closer in vector space than an unrelated fact, so they set the real ceiling on the threshold.
+ */
+export interface DedupPair {
+  id: string;
+  a: string;
+  b: string;
+  note?: string;
+}
+
+export const DEDUP_MERGE: DedupPair[] = [
+  {
+    id: 'd-color',
+    a: "Dana's favorite color is teal.",
+    b: 'Dana said her favourite colour is teal.',
+    note: 'British spelling + reported speech',
+  },
+  {
+    id: 'd-allergy',
+    a: 'Dana is severely allergic to shellfish.',
+    b: 'Dana has a serious shellfish allergy.',
+    note: 'noun/adjective inversion',
+  },
+  {
+    id: 'd-job',
+    a: 'Dana works as a marine biologist studying coral reef restoration.',
+    b: 'Dana is a marine biologist whose research is coral reef restoration.',
+    note: 'clause restructure',
+  },
+  {
+    id: 'd-daughter',
+    a: "Dana's daughter Mira is seven years old.",
+    b: 'Dana has a seven-year-old daughter named Mira.',
+    note: 'possessive vs existential',
+  },
+  {
+    id: 'd-car',
+    a: 'Dana drives a blue Subaru Outback.',
+    b: 'Dana owns a blue Subaru Outback.',
+    note: 'drives vs owns - same fact in practice',
+  },
+];
+
+export const DEDUP_DISTINCT: DedupPair[] = [
+  {
+    id: 'x-color-value',
+    a: "Dana's favorite color is teal.",
+    b: "Dana's favorite color is burnt orange.",
+    note: 'SAME subject, contradictory value - the retraction case. Must NOT silently merge.',
+  },
+  {
+    id: 'x-allergy-food',
+    a: 'Dana is severely allergic to shellfish.',
+    b: 'Dana is severely allergic to peanuts.',
+    note: 'one word apart, and a medical error if merged',
+  },
+  {
+    id: 'x-child-age',
+    a: "Dana's daughter Mira is seven years old.",
+    b: "Dana's son Theo is seven years old.",
+    note: 'different child',
+  },
+  {
+    id: 'x-car-color',
+    a: 'Dana drives a blue Subaru Outback.',
+    b: 'Dana drives a red Toyota Tacoma.',
+    note: 'same frame, different vehicle',
+  },
+  {
+    id: 'x-job-detail',
+    a: 'Dana works as a marine biologist studying coral reef restoration.',
+    b: 'Dana works as a marine biologist studying deep-sea hydrothermal vents.',
+    note: 'same role, different research - a real distinction to keep',
+  },
+];
+
 export const CORPUS_QUERIES: EvalQuery[] = [
   // --- POSITIVES: near-zero lexical overlap with the belief they must retrieve ---
   { id: 'q-color-1', query: 'What shade should I paint the trim if I want to please her?', relevant: ['color'], note: 'shade vs color; no shared content word' },

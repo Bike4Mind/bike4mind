@@ -5,18 +5,33 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import {
   ChatModels,
+  MEMENTO_DEDUP_SIMILARITY,
   MEMENTO_EMBEDDING_MODEL,
   mementoEmbeddingIsCurrent,
   MementoTier,
   MementoType,
 } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
-import { isMementosV2Enabled, mirrorMementoToLedger } from '@server/memory/mementoLedgerMirror';
+import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
 
 const { findMostSimilarMemento } = mementoService;
 
 export const handler = withEventContext(async (event, logger) => {
-  const { userId, prompt, model, sessionId, questId } = LLMEvents.CompletionCompleted.schema.parse(event.properties);
+  const { userId, prompt, model, sessionId, questId, ...flags } = LLMEvents.CompletionCompleted.schema.parse(
+    event.properties
+  );
+
+  // WHICH pipelines capture this turn. The publisher resolves both (it is the only place that sees the
+  // user's opt-ins AND the admin override) - but an event in flight from before those fields existed
+  // has neither, and could only have come from the V1-gated publisher, so a missing `enableMementos`
+  // reads as true.
+  const writeV1 = flags.enableMementos ?? true;
+  const writeV2 = flags.enableMementosV2 ?? (await isMementosV2Enabled(userId).catch(() => false));
+
+  if (!writeV1 && !writeV2) {
+    logger.info('Neither memento pipeline is enabled for this user, skipping');
+    return;
+  }
 
   logger.updateMetadata({
     userId,
@@ -24,6 +39,8 @@ export const handler = withEventContext(async (event, logger) => {
     model,
     sessionId,
     questId,
+    writeV1,
+    writeV2,
   });
 
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
@@ -59,20 +76,20 @@ export const handler = withEventContext(async (event, logger) => {
 
   console.debug('Evaluation results:', { count: evaluations.length, evaluations });
 
-  // Mementos V2 dual-write: if the user is on V2, also mirror each persisted memento into their
-  // ledger. Additive to V1 and best-effort - a ledger failure must never break memento creation.
-  const mementosV2Enabled = await isMementosV2Enabled(userId).catch(() => false);
-  const mirrorSources = [sessionId, questId].filter((x): x is string => Boolean(x));
-  // Pass the summary embedding we already computed below: it makes the ledger self-sufficient for
-  // semantic recall (no dependency on the V1 memento twin to supply the vector at read time).
-  const mirrorToLedger = async (summary: string, embedding?: number[]) => {
-    if (!mementosV2Enabled) return;
+  // The V2 write. When V1 is also on the two run side by side (a flip back to V1 loses nothing); when
+  // V1 is OFF this is the only thing that persists the fact, which is what makes V2 standalone.
+  //
+  // Best-effort ONLY while V1 is also writing - if V2 is the sole pipeline, a swallowed failure would
+  // mean the user told us something and we quietly dropped it, so it must surface.
+  const sources = [sessionId, questId].filter((x): x is string => Boolean(x));
+  const writeToLedger = async (summary: string, embedding?: number[]) => {
+    if (!writeV2) return;
     try {
-      await mirrorMementoToLedger({ userId, summary, sources: mirrorSources, embedding });
+      await writeFactToLedger({ userId, summary, sources, embedding });
     } catch (error) {
-      logger.warn('Mementos V2: ledger mirror failed (V1 memento unaffected)', {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      const message = error instanceof Error ? error.message : String(error);
+      if (!writeV1) throw new Error(`Mementos V2 is the only enabled pipeline and its write failed: ${message}`);
+      logger.warn('Mementos V2: ledger write failed (V1 memento unaffected)', { error: message });
     }
   };
 
@@ -100,11 +117,14 @@ export const handler = withEventContext(async (event, logger) => {
   const embeddingFactory = new EmbeddingFactory(embeddingConfig);
   const embeddingService = embeddingFactory.createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
 
-  // STEP 3: Get existing HOT mementos once (shared across all evaluations)
-  const SIMILARITY_THRESHOLD = 0.88;
-  const hotMementos = await Memento.find({ userId, tier: MementoTier.HOT }).select(
-    'summary embedding embeddingModel weight lastAccessedAt fullContent tags'
-  );
+  // STEP 3: Get existing HOT mementos once (shared across all evaluations). V1 ONLY - these exist to
+  // de-dup against the V1 collection, and a V2-only user does not have one. V2 de-dups against its own
+  // ledger inside writeFactToLedger.
+  const hotMementos = writeV1
+    ? await Memento.find({ userId, tier: MementoTier.HOT }).select(
+        'summary embedding embeddingModel weight lastAccessedAt fullContent tags'
+      )
+    : [];
 
   // De-dup compares the new summary's vector against these by cosine, so a memento embedded in a
   // DIFFERENT model's space cannot take part: the similarity would be noise, and noise below the
@@ -132,13 +152,22 @@ export const handler = withEventContext(async (event, logger) => {
     const summaryEmbedding = await embeddingService.generateEmbedding(evaluation.summary);
     logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
 
+    // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
+    // against its own ledger. It does not wait on, or read, anything V1 does below.
+    await writeToLedger(evaluation.summary, summaryEmbedding);
+
+    if (!writeV1) {
+      createdCount++;
+      continue;
+    }
+
     const { memento: mostSimilarMemento, similarity: highestSimilarity } = findMostSimilarMemento(
       summaryEmbedding,
       existingMementos
     );
 
     // STEP 5: Handle similar personal information - update existing memento
-    if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
+    if (highestSimilarity >= MEMENTO_DEDUP_SIMILARITY && mostSimilarMemento) {
       console.info('Similar personal information found, updating existing memento', {
         existingMementoId: mostSimilarMemento.id,
         similarity: highestSimilarity.toFixed(3),
@@ -172,7 +201,6 @@ export const handler = withEventContext(async (event, logger) => {
         newSummary: evaluation.summary,
       });
 
-      await mirrorToLedger(evaluation.summary, summaryEmbedding);
       updatedCount++;
       continue;
     }
@@ -204,7 +232,6 @@ export const handler = withEventContext(async (event, logger) => {
       embeddingLength: summaryEmbedding.length,
     });
 
-    await mirrorToLedger(evaluation.summary, summaryEmbedding);
     createdCount++;
 
     // Add to existingMementos for subsequent similarity checks in this batch

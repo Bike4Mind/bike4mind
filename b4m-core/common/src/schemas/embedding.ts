@@ -77,6 +77,29 @@ export const MEMENTO_EMBEDDING_MODEL: SupportedEmbeddingModel = OpenAIEmbeddingM
 export const MEMENTO_MIN_SIMILARITY = 0.25;
 
 /**
+ * De-dup threshold: at or above this cosine, a newly extracted fact is treated as a RESTATEMENT of a
+ * belief the user already has - it updates that belief in place and counts as another presentation of
+ * it (raising its ACT-R activation) rather than becoming a second belief.
+ *
+ * Like MEMENTO_MIN_SIMILARITY this is a raw cosine and therefore a property of MEMENTO_EMBEDDING_MODEL,
+ * so it lives next to it. The two failure modes are asymmetric and both bad:
+ *   - too LOW: a genuinely new fact silently OVERWRITES a different one. "Allergic to shellfish" and
+ *     "allergic to peanuts" are one word apart; merging them is a medical error we would never see.
+ *   - too HIGH: memory fills with restatements of the same fact, each diluting the others' activation
+ *     and spending prompt budget several times over on one thing.
+ *
+ * Measured (b4m-core/memory/src/eval/dedup.test.ts): restatements score 0.928-0.957, while DISTINCT
+ * facts about the same subject in the same words top out at 0.854 ("same role, different research").
+ * The band is cleanly separable and 0.89 is its midpoint, so this sits as far from both walls as the
+ * evidence allows.
+ *
+ * Note the old threshold was 0.88, chosen against ada-002. It happens to land inside 3-small's band
+ * too - but by luck, not design, and nothing would have told us if it had not. That is the entire
+ * reason it is now a measured constant here instead of a literal in the write path.
+ */
+export const MEMENTO_DEDUP_SIMILARITY = 0.89;
+
+/**
  * Is this memento's stored vector in the CURRENT space, i.e. can it legally be compared against a
  * query embedded with MEMENTO_EMBEDDING_MODEL?
  *

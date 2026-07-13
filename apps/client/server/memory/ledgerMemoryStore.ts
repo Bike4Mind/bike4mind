@@ -57,7 +57,19 @@ export async function appendMemoryEvent(
   repo: LedgerRepo,
   keys: Pick<KeyProvider, 'getOrCreateDek'>,
   ownerUserId: string,
-  input: MemoryEventInput
+  input: MemoryEventInput,
+  options: {
+    /**
+     * `input.subject` is ALREADY the HMAC - store it verbatim rather than hashing it again.
+     *
+     * This exists because the subject a caller reads back OUT of the ledger is the hash: it is never
+     * persisted in plaintext, so a folded belief's id is HMAC(subject), and there is no way to invert
+     * it. A caller that has found the belief it wants to re-assert (semantic de-dup on the write path)
+     * therefore holds the hash, and passing it through the normal path would hash it TWICE - producing
+     * a key that matches nothing and silently minting a duplicate belief instead of coalescing.
+     */
+    subjectIsHashed?: boolean;
+  } = {}
 ): Promise<MemoryEvent> {
   // Fetch the key once (outside the retry loop) and use it to encrypt the fact AND to HMAC the
   // subject. Neither the fact nor the subject is ever persisted in plaintext, so destroying the key
@@ -70,7 +82,10 @@ export async function appendMemoryEvent(
   const sealedEmbedding: SealedFact | undefined = input.embedding?.length
     ? encryptVector(dek, input.embedding)
     : undefined;
-  const sealedInput: MemoryEventInput = { ...input, subject: subjectHmac(dek, input.subject) };
+  const sealedInput: MemoryEventInput = {
+    ...input,
+    subject: options.subjectIsHashed ? input.subject : subjectHmac(dek, input.subject),
+  };
 
   for (let attempt = 0; attempt < MAX_APPEND_ATTEMPTS; attempt++) {
     const head = await repo.head(input.principal.kind, input.principal.id);

@@ -133,6 +133,49 @@ describe('appendMemoryEvent', () => {
     expect(store[0].subject).toBe(store[1].subject); // same plaintext subject -> same HMAC
   });
 
+  it('subjectIsHashed re-asserts onto an EXISTING belief instead of hashing the hash', async () => {
+    // The write path's semantic de-dup finds the belief to re-assert by FOLDING the ledger - and a
+    // folded belief's id is the stored subject, which is the HMAC (the plaintext is never persisted and
+    // cannot be recovered). Feeding that back in as a plaintext subject hashes it a SECOND time, so the
+    // assert keys to HMAC(HMAC(subject)) - matching nothing, silently minting a duplicate belief rather
+    // than coalescing, and losing the re-mention's contribution to ACT-R frequency.
+    //
+    // Caught only by driving the real write path: with a mocked ledger the double hash is invisible.
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+
+    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    const storedSubject = store[0].subject; // what a folded belief's id actually is
+
+    await appendMemoryEvent(
+      repo,
+      provider,
+      'u1',
+      input({ subject: storedSubject, fact: 'A restated', at: '2026-07-02T00:00:00.000Z' }),
+      { subjectIsHashed: true }
+    );
+
+    expect(store[1].subject).toBe(storedSubject); // same key -> the fold coalesces these into one belief
+  });
+
+  it('WITHOUT subjectIsHashed the same call double-hashes and would fork a duplicate belief', async () => {
+    // The bug, pinned. If this ever starts passing as equal, the guard above has stopped guarding.
+    const { repo, store } = makeFake();
+    const { provider } = makeKeys();
+
+    await appendMemoryEvent(repo, provider, 'u1', input({ subject: 'loves sushi', fact: 'A' }));
+    const storedSubject = store[0].subject;
+
+    await appendMemoryEvent(
+      repo,
+      provider,
+      'u1',
+      input({ subject: storedSubject, fact: 'A restated', at: '2026-07-02T00:00:00.000Z' })
+    );
+
+    expect(store[1].subject).not.toBe(storedSubject); // HMAC(HMAC(x)) - a belief that coalesces with nothing
+  });
+
   it('retries onto a fresh tip when a concurrent append wins the seq', async () => {
     const { repo, store } = makeFake({ failFirst: 2 });
     const { provider } = makeKeys();
