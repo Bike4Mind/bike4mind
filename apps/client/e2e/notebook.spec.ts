@@ -154,6 +154,9 @@ test.describe('Notebook - Router resilience', () => {
       });
 
       await test.step('back/forward navigate between notebook and projects', async () => {
+        // The What's New / announcement popup re-appears after the hard reload above and
+        // overlays the sidenav; without clearing it the nav click is intercepted and times out.
+        await basePage.dismissModals();
         await page.getByTestId('sidenav-nav-projects').click();
         await expect(page).toHaveURL(/\/projects/);
 
