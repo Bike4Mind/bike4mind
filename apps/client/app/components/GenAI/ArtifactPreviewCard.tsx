@@ -67,6 +67,11 @@ export interface ArtifactPreviewCardProps {
   actions?: { copy?: boolean; save?: boolean; codeToggle?: boolean };
   /** Expand straight into the live render (HTML) rather than the source (React). */
   defaultRenderedView?: boolean;
+  /**
+   * Types whose body IS the artifact (SVG) set this false: the graphic is always shown,
+   * the chevron is dropped, and clicking the card does not collapse it.
+   */
+  collapsible?: boolean;
   onExpand?: () => void;
 }
 
@@ -97,6 +102,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   renderSource,
   actions = {},
   defaultRenderedView = true,
+  collapsible = true,
   onExpand,
 }) => {
   const { currentSession, setCurrentSession, currentSessionId } = useSessions();
@@ -111,8 +117,10 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // A code toggle only means something when there are two views to flip between.
   const showCodeToggle = !!actions.codeToggle && hasPreview && hasSource;
 
-  const [isExpanded, setIsExpanded] = useState(!artifactsEnabled);
+  const [collapsedState, setIsExpanded] = useState(!artifactsEnabled);
   const [showRenderedPreview, setShowRenderedPreview] = useState(defaultRenderedView);
+
+  const isExpanded = collapsible ? collapsedState : true;
 
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
 
@@ -125,6 +133,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // expanded, a click flips between render and source (only meaningful when both exist).
   const handleToggleInlinePreview = (e?: React.MouseEvent) => {
     e?.stopPropagation();
+    if (!collapsible) return;
     if (!isExpanded) {
       setIsExpanded(true);
       if (hasPreview) setShowRenderedPreview(true);
@@ -207,11 +216,10 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         borderWidth: 1,
         borderColor: isSelected ? 'primary.500' : 'neutral.outlinedBorder',
         transition: 'all 0.2s ease-in-out',
-        cursor: 'pointer',
+        cursor: collapsible ? 'pointer' : 'default',
         '&:hover': {
           transform: 'translateY(-2px)',
           boxShadow: 'sm',
-          cursor: 'pointer',
         },
       }}
       onClick={handleToggleInlinePreview}
@@ -234,20 +242,22 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       {/* No padding here: the Card already provides it. */}
       <Box>
         <Stack direction="row" spacing={1} alignItems="center" mb={1}>
-          <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={e => {
-                e.stopPropagation();
-                setIsExpanded(!isExpanded);
-              }}
-              data-testid={`${testIdPrefix}-artifact-toggle-btn`}
-            >
-              {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </IconButton>
-          </Tooltip>
+          {collapsible && (
+            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                onClick={e => {
+                  e.stopPropagation();
+                  setIsExpanded(!isExpanded);
+                }}
+                data-testid={`${testIdPrefix}-artifact-toggle-btn`}
+              >
+                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+            </Tooltip>
+          )}
 
           <Typography
             level="title-sm"
