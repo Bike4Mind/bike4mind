@@ -618,4 +618,123 @@ describe('SreErrorTrackingModel — recurrence queries', () => {
       expect((await SreErrorTrackingModel.findById(doc.id).lean())?.githubIssueState).toBe('open');
     });
   });
+
+  describe('getMetrics (#270)', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const diagnosis = { rootCause: 'x', proposedFix: 'y', confidence: 80, riskAssessment: 'low', affectedFiles: [] };
+
+    it('returns zeroed metrics for an empty window', async () => {
+      const m = await sreErrorTrackingRepository.getMetrics(DAY);
+      expect(m.total).toBe(0);
+      expect(m.bySource).toEqual({ CLOUDWATCH: 0, GITHUB_ISSUE: 0 });
+      expect(m.byStatus).toEqual({});
+      expect(m.analysesRun).toBe(0);
+      expect(m.fixesDispatched).toBe(0);
+      expect(m.prsCreated).toBe(0);
+      expect(m.prsMerged).toBe(0);
+      expect(m.tokens).toEqual({ input: 0, output: 0 });
+    });
+
+    it('aggregates counts by source, status, field-existence branches, and tokens', async () => {
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-fixed',
+        repoSlug: 'owner/repo',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log',
+        status: 'fixed',
+        diagnosisResult: diagnosis,
+        dispatchedAt: new Date(),
+        fixPrNumber: 101,
+        fixMergedAt: new Date(),
+        llmTokensUsed: { input: 100, output: 50 },
+      });
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-failed',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/2',
+        status: 'failed',
+        diagnosisResult: diagnosis,
+        dispatchedAt: new Date(),
+        fixPrNumber: 102, // PR created but never merged
+        llmTokensUsed: { input: 200, output: 80 },
+      });
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-detected',
+        repoSlug: 'owner/repo',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repo/issues/3',
+        status: 'detected', // no diagnosis, no dispatch, no PR, no tokens
+      });
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-analyzing',
+        repoSlug: 'owner/repo',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log',
+        status: 'analyzing',
+        diagnosisResult: diagnosis,
+        llmTokensUsed: { input: 10, output: 5 },
+      });
+
+      const m = await sreErrorTrackingRepository.getMetrics(DAY);
+      expect(m.total).toBe(4);
+      expect(m.bySource).toEqual({ CLOUDWATCH: 2, GITHUB_ISSUE: 2 });
+      expect(m.byStatus).toEqual({ fixed: 1, failed: 1, detected: 1, analyzing: 1 });
+      expect(m.analysesRun).toBe(3); // docs carrying a diagnosisResult
+      expect(m.fixesDispatched).toBe(2); // docs with dispatchedAt
+      expect(m.prsCreated).toBe(2); // docs with fixPrNumber
+      expect(m.prsMerged).toBe(1); // docs with fixMergedAt
+      expect(m.tokens).toEqual({ input: 310, output: 135 });
+    });
+
+    it('excludes docs created before the window', async () => {
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-recent',
+        repoSlug: 'owner/repo',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log',
+        status: 'fixed',
+      });
+      // Raw insert bypasses the timestamps plugin so createdAt can be backdated.
+      await SreErrorTrackingModel.collection.insertOne({
+        errorFingerprint: 'm-old',
+        repoSlug: 'owner/repo',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log',
+        status: 'fixed',
+        createdAt: new Date(Date.now() - 10 * DAY),
+        updatedAt: new Date(Date.now() - 10 * DAY),
+      });
+
+      const week = await sreErrorTrackingRepository.getMetrics(7 * DAY);
+      expect(week.total).toBe(1); // only the recent doc
+
+      const fortnight = await sreErrorTrackingRepository.getMetrics(14 * DAY);
+      expect(fortnight.total).toBe(2); // window now reaches the backdated doc
+    });
+
+    it('scopes counts to a repoSlug when provided', async () => {
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-a',
+        repoSlug: 'owner/repoA',
+        source: 'CLOUDWATCH',
+        sourceRef: 'log',
+        status: 'fixed',
+      });
+      await SreErrorTrackingModel.create({
+        errorFingerprint: 'm-b',
+        repoSlug: 'owner/repoB',
+        source: 'GITHUB_ISSUE',
+        sourceRef: 'https://github.com/owner/repoB/issues/1',
+        status: 'failed',
+      });
+
+      const scoped = await sreErrorTrackingRepository.getMetrics(DAY, 'owner/repoA');
+      expect(scoped.total).toBe(1);
+      expect(scoped.byStatus).toEqual({ fixed: 1 });
+
+      const all = await sreErrorTrackingRepository.getMetrics(DAY);
+      expect(all.total).toBe(2);
+    });
+  });
 });
