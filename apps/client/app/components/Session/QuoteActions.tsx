@@ -19,13 +19,34 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
   const floatingButtonsRef = useRef<HTMLDivElement>(null);
 
+  // This feature is driven entirely by desktop mouse events (mouseup/mousedown).
+  // On touch devices those events are emulated mid long-press / handle-drag, so
+  // clearing and re-reading the selection actively fights the native touch
+  // selection and makes partial copy glitchy. Gate it to fine (mouse) pointers.
+  const [isFinePointer, setIsFinePointer] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: fine)');
+    setIsFinePointer(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsFinePointer(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   const handleTextSelection = useCallback(() => {
     // short delay to allow the selection to be made
     setTimeout(() => {
       const selection = window.getSelection();
       const selectionText = selection?.toString().trim() || '';
+      const container = containerRef.current;
 
-      if (selectionText) {
+      // The listener lives on document (so it still works when the reply bubble
+      // streams in after this component mounts), so scope to selections that
+      // actually start inside this reply's container.
+      const anchorNode = selection?.anchorNode ?? null;
+      const isInsideContainer = !!(container && anchorNode && container.contains(anchorNode));
+
+      if (selectionText && isInsideContainer) {
         const range = selection?.getRangeAt(0);
         const rect = range?.getBoundingClientRect();
         if (rect) {
@@ -40,7 +61,7 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
         setShowFloatingButtons(false);
       }
     }, 100);
-  }, []);
+  }, [containerRef]);
 
   const handleTextAction = useCallback(
     (text: string) => {
@@ -59,6 +80,8 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
   }, []);
 
   useEffect(() => {
+    if (!isFinePointer) return;
+
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       const isInsideContainer = containerRef.current?.contains(target);
@@ -74,19 +97,18 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [containerRef, showFloatingButtons, clearSelection]);
+  }, [isFinePointer, containerRef, showFloatingButtons, clearSelection]);
 
   useEffect(() => {
-    const element = containerRef.current;
-    if (element) {
-      element.addEventListener('mouseup', handleTextSelection);
-      return () => {
-        element.removeEventListener('mouseup', handleTextSelection);
-      };
-    }
-  }, [containerRef, handleTextSelection]);
+    if (!isFinePointer) return;
 
-  if (!showFloatingButtons) return null;
+    document.addEventListener('mouseup', handleTextSelection);
+    return () => {
+      document.removeEventListener('mouseup', handleTextSelection);
+    };
+  }, [isFinePointer, handleTextSelection]);
+
+  if (!isFinePointer || !showFloatingButtons) return null;
 
   return (
     <FloatingButtons
