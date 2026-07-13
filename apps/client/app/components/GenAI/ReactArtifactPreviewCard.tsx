@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   Code as ReactIcon,
@@ -12,6 +12,7 @@ import {
 } from '@mui/icons-material';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import useSessionLayout, { setSessionLayout, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
+import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -114,26 +115,9 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
     }
   };
 
-  // Listen for selected artifact content changes and update the knowledge viewer
-  useEffect(() => {
-    const currentState = useSessionLayout.getState();
-
-    // Only update if this artifact is currently selected and the content has actually changed
-    if (currentState.selectedArtifactId === effectiveArtifact.id && currentState.artifactData?.type === 'react') {
-      const currentContent = currentState.artifactData.content as ReactArtifact;
-
-      // Compare the actual content to avoid unnecessary updates
-      if (JSON.stringify(currentContent) !== JSON.stringify(effectiveArtifact)) {
-        setSessionLayout({
-          artifactData: {
-            ...currentState.artifactData,
-            content: effectiveArtifact,
-          },
-        });
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [effectiveArtifact.id, effectiveArtifact.content, effectiveArtifact.metadata]);
+  // Propagate live content changes to the Knowledge Base without letting a scroll-driven
+  // (re)mount of a same-id card clobber the newest version - see the hook for the #457 detail.
+  useSelectedArtifactContentSync(effectiveArtifact.id, 'react', effectiveArtifact.content, effectiveArtifact);
 
   const dependencies = effectiveArtifact.metadata?.dependencies || [];
   const lineCount = effectiveArtifact.content.split('\n').length;
