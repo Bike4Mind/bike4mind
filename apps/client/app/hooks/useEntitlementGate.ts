@@ -45,9 +45,7 @@ export const useEntitlementGate = (entitlementKey?: string): EntitlementGateResu
     if (bypass) {
       state = 'satisfied';
     } else if (entitlementQuery.isSuccess) {
-      state = (entitlementQuery.data ?? []).includes(normalizeTag(entitlementKey))
-        ? 'satisfied'
-        : 'denied';
+      state = (entitlementQuery.data ?? []).includes(normalizeTag(entitlementKey)) ? 'satisfied' : 'denied';
     } else if (entitlementQuery.isError) {
       state = 'satisfied';
     } else {

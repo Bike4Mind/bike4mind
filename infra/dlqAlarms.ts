@@ -1,7 +1,7 @@
 /**
  * DLQ Health Monitoring - Alarms and Dashboard
  *
- * Unified monitoring for all 27 Dead Letter Queues across the application.
+ * Unified monitoring for all 28 Dead Letter Queues across the application.
  * Uses a single shared SNS topic for all DLQ alarm notifications.
  *
  * Default alarm thresholds (per-queue overrides available via DlqDescriptor):
@@ -42,6 +42,7 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
 } from './queues';
+import { telemetryAlertRuleDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
 import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
@@ -61,7 +62,7 @@ const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process
 
 /**
  * Shared SNS topic for all DLQ alarm notifications.
- * Subscribe once to receive alerts from all 27 DLQs.
+ * Subscribe once to receive alerts from all 28 DLQs.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
 
@@ -408,6 +409,17 @@ if (isMonitoredStage) {
     displayName: 'FabFile Moderation',
     application: 'FabFileProcessing',
     queue: fabFileModerationDLQ,
+  });
+
+  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
+  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
+  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
+  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  createDlqAlarms({
+    label: 'telemetry-alert-rule',
+    displayName: 'Telemetry Alert Rule',
+    application: 'TelemetryAlerts',
+    queue: telemetryAlertRuleDLQ,
   });
 }
 

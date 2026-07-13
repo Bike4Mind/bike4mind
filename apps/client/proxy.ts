@@ -146,7 +146,15 @@ export function proxy(request: NextRequest) {
   // be EXCLUDED too — it sets its own CSP, and the global `X-Frame-Options: SAMEORIGIN`
   // here would BLOCK the app-origin wrapper from framing the cross-origin usercontent
   // bundle. Its own `frame-ancestors` (scoped to the app host) is the correct control.
-  if (!pathname.startsWith('/api/') && !pathname.startsWith('/p/') && !pathname.startsWith('/uc/')) {
+  // `/a/*` (no-sign-in share links) rewrites to the same serve handler and likewise
+  // sets its own per-response CSP for the sandboxed bundle - the global app CSP would
+  // weaken/break it, so exclude it here too.
+  if (
+    !pathname.startsWith('/api/') &&
+    !pathname.startsWith('/p/') &&
+    !pathname.startsWith('/uc/') &&
+    !pathname.startsWith('/a/')
+  ) {
     response.headers.set('Content-Security-Policy', cspHeader);
     response.headers.set('X-Frame-Options', 'SAMEORIGIN');
     response.headers.set('X-XSS-Protection', '1; mode=block');
@@ -158,7 +166,11 @@ export function proxy(request: NextRequest) {
 
   // Transport-level headers apply to all routes including API.
   response.headers.set('X-Content-Type-Options', 'nosniff');
-  response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  // `/a/*` share links set their own `Referrer-Policy: no-referrer` (the token must not
+  // leak via Referer on author outbound links) - don't clobber it with the app default.
+  if (!pathname.startsWith('/a/')) {
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  }
   if (!request.nextUrl.hostname.includes('localhost')) {
     // preload omitted until subdomain audit confirms all *.bike4mind.com subdomains
     // (preview envs, internal tools) are HTTPS-only — preload list inclusion is permanent.

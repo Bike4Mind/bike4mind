@@ -91,12 +91,10 @@ const handler = baseApi({ auth: false })
     // 2. Federation gate - only clients with a populated federated trust config may mint AI keys.
     const federatedIdp = client.federatedIdp;
     if (!federatedIdp) {
-      return res
-        .status(403)
-        .json({
-          error: 'access_denied',
-          error_description: 'Client is not configured for federated AI-token exchange',
-        });
+      return res.status(403).json({
+        error: 'access_denied',
+        error_description: 'Client is not configured for federated AI-token exchange',
+      });
     }
 
     // 3. Per-client_id rate limit. Runs after client auth so failed-secret probes
@@ -109,12 +107,10 @@ const handler = baseApi({ auth: false })
     if (!rl.success) {
       const retryAfter = Math.max(1, Math.ceil((rl.expiresAt.getTime() - Date.now()) / 1000));
       res.setHeader('Retry-After', retryAfter);
-      return res
-        .status(429)
-        .json({
-          error: 'temporarily_unavailable',
-          error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
-        });
+      return res.status(429).json({
+        error: 'temporarily_unavailable',
+        error_description: `Rate limit exceeded. Try again in ${retryAfter} seconds.`,
+      });
     }
 
     // 4. Verify the Cognito ID token against the *client's* pool JWKS and resolve the B4M user id.

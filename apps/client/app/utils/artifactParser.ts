@@ -160,6 +160,34 @@ export function parseArtifacts(
   };
 }
 
+/**
+ * parseArtifacts, then run the code-block/HTML fallback promotion on the LEFTOVER content
+ * and merge any newly-promoted artifacts in. parseArtifacts strips the tags it parses, so
+ * re-parsing the converted content alone would drop the original set - hence the merge.
+ * This lets a mixed reply (an explicit <artifact> plus a bare/fenced HTML document, e.g. an
+ * "article") surface both. When nothing was parsed first, cleanedContent is the full input,
+ * so this is equivalent to convert-then-parse on the raw content.
+ *
+ * Shared by the render path (PromptReplies) and the persistence path
+ * (useStreamingArtifactPersistence) so both agree on what a reply contains.
+ */
+export function parseArtifactsWithFallback(
+  content: string,
+  options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
+): ArtifactParseResult {
+  const parseResult = parseArtifacts(content, options);
+  const contentForConversion = parseResult.cleanedContent || content;
+  const convertedContent = convertCodeBlocksToArtifacts(contentForConversion);
+  if (convertedContent === contentForConversion) {
+    return parseResult;
+  }
+  const converted = parseArtifacts(convertedContent, options);
+  return {
+    artifacts: [...parseResult.artifacts, ...converted.artifacts],
+    cleanedContent: converted.cleanedContent,
+  };
+}
+
 // mapMimeTypeToArtifactType is the single source of truth in @bike4mind/common.
 
 /**

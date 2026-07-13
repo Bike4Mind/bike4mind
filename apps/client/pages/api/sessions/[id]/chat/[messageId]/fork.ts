@@ -10,6 +10,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sessionService } from '@bike4mind/services';
 import { redactSessionForClient } from '@bike4mind/common';
+import { stampGear } from '@server/services/gears/stampGear';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string; messageId?: string }>(async (req, res) => {
@@ -34,6 +35,7 @@ const handler = baseApi().post(
       )
     );
 
+    stampGear(req.user.id, 'forknotebook');
     return res.json(redactSessionForClient(newSession));
   })
 );

@@ -3,6 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { NotebookDownloadRequestSchema } from '../../../types/api';
 import { getFilesStorage } from '@server/utils/storage';
+import { stampGear } from '@server/services/gears/stampGear';
 import { notebookCurationService } from '@bike4mind/services';
 import { z } from 'zod';
 import archiver from 'archiver';
@@ -173,6 +174,7 @@ const handler = baseApi().post(
             fileCount: filesToArchive.length,
           });
 
+          stampGear(userId, 'downloadnotebook');
           return res.status(200).json({
             success: true,
             message: 'Batch download URL generated successfully',
@@ -309,6 +311,7 @@ const handler = baseApi().post(
         format,
       });
 
+      stampGear(userId, 'downloadnotebook');
       return res.status(200).json({
         success: true,
         message: 'Download URL generated successfully',

@@ -72,7 +72,7 @@ describe('resolveApiEndpoint', () => {
     process.env.B4M_SOURCE_MODE = '1';
     expect(resolveApiEndpoint(undefined)).toEqual({
       status: 'configured',
-      url: 'http://localhost:3001',
+      url: 'http://localhost:3000',
       source: 'dev-default',
     });
   });
@@ -144,7 +144,7 @@ describe('getEnvironmentName', () => {
   });
 
   it('reads as Local Dev for a loopback custom URL', () => {
-    expect(getEnvironmentName({ customUrl: 'http://localhost:3001' })).toBe('Local Dev');
+    expect(getEnvironmentName({ customUrl: 'http://localhost:3000' })).toBe('Local Dev');
   });
 
   it('reads as Self-Hosted for any other custom URL', () => {

@@ -76,6 +76,8 @@ class UserCreator {
           record: {
             password: this.options.password,
             isAdmin: this.options.isAdmin,
+            // Operator typed this password interactively - it's a real, usable credential.
+            hasUsablePassword: !!this.options.password,
           },
           tags,
         },

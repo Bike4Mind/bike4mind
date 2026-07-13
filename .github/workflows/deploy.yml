@@ -2,7 +2,13 @@ name: Deploy
 
 on:
   push:
-    branches: [main, prod]
+    # Production is no longer shipped by pushing to a `prod` branch. It is promoted
+    # from the deploy console (deploy.bike4mind.com), which dispatches deploy-tier.yml
+    # + prod-release.yml directly. Dropping `prod` here retires the old main->prod PR
+    # path so merging into `prod` no longer deploys. The now-unreachable prod-specific
+    # steps below (is_push_prod matrix entry, prod-failure alert) are dead and can be
+    # cleaned up in a follow-up.
+    branches: [main]
   pull_request:
     # Exclude prod-targeted PRs — those are the staging→production promotion
     # and `main` already validates them; a redundant CI run isn't worth it.
@@ -13,8 +19,7 @@ on:
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips test + deploy on non-deployable
     # changes, while still reporting the required Deploy/Run Tests checks (a
-    # paths-ignore-skipped workflow never reports them and hangs the PR). It
-    # also gates the docs build independently via docs-changed.
+    # paths-ignore-skipped workflow never reports them and hangs the PR).
   merge_group:
     branches: [main]
 
@@ -37,9 +42,12 @@ jobs:
   # Changes gate: evaluate the changeset that fired this run (whole-PR
   # merge-base diff on pull_request, push range on push) and emit two
   # orthogonal signals: `deployable` (run test + deploy) and `docs-changed`
-  # (run the Docusaurus build verification). Cheap, always runs, so the
-  # required checks always have a status to report. Logic + the default
-  # exclude list live in the local composite action. Fails open on both.
+  # (currently unconsumed: the Docusaurus build verification was removed
+  # because this repo carries only docs-site markdown, not the site
+  # scaffolding; the output stays wired for when the check returns).
+  # Cheap, always runs, so the required checks always have a status to
+  # report. Logic + the default exclude list live in the local composite
+  # action. Fails open on both.
   changes:
     # Root of the whole DAG.
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
@@ -519,14 +527,12 @@ jobs:
         env:
           CI: true
 
-  verify-docs-build:
-    name: Verify Docs Build
-    needs: changes
-    if: needs.changes.outputs.docs-changed == 'true'
-    uses: ./.github/workflows/_verify-docs-build.yml
-    permissions:
-      contents: read
-      pull-requests: write
+  # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
+  # lockfile, config) is not tracked in this repo, so the build can never succeed
+  # here and was failing the required Deploy check on every docs-touching PR.
+  # Markdown content is still validated by the help-content tests in the test
+  # suite. Restore the job (and .github/workflows/_verify-docs-build.yml) when
+  # the scaffolding lands.
 
   # build-subscriber removed 2026-05-30: subscriber-fanout is now built and
   # published by MillionOnMars/subscriber-fanout. The image URI is pinned
@@ -617,7 +623,7 @@ jobs:
   # tenants independent.
   # ============================================================
   deploy:
-    needs: [core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan]
+    needs: [core-build, typecheck, lint, test, cli-e2e, plan]
     if: |
       always() &&
       needs.plan.result == 'success' &&
@@ -673,7 +679,7 @@ jobs:
   # ============================================================
   deploy-status:
     name: Deploy
-    needs: [changes, core-build, typecheck, lint, test, cli-e2e, verify-docs-build, plan, deploy]
+    needs: [changes, core-build, typecheck, lint, test, cli-e2e, plan, deploy]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -685,16 +691,13 @@ jobs:
           LINT: ${{ needs.lint.result }}
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
-          VERIFY_DOCS: ${{ needs.verify-docs-build.result }}
           PLAN: ${{ needs.plan.result }}
           DEPLOY: ${{ needs.deploy.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E verify-docs-build=$VERIFY_DOCS plan=$PLAN deploy=$DEPLOY"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E plan=$PLAN deploy=$DEPLOY"
           # An upstream gate that genuinely failed flips Deploy red. Skipped
-          # (non-deployable / empty-plan / non-docs run) is treated as passing.
-          # verify-docs-build is included so a broken docs build on a docs-only
-          # PR (where core-build..plan all skip) can't green the Deploy check.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E" "$VERIFY_DOCS" "$PLAN"; do
+          # (non-deployable / empty-plan) is treated as passing.
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E" "$PLAN"; do
             if [ "$r" = "failure" ]; then
               echo "::error::An upstream gate failed; failing the Deploy check."
               exit 1

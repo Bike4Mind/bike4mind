@@ -6,6 +6,8 @@ import {
   ICounterLogRepository,
   IUserDocument,
   FacetResults,
+  parseInternalStaffDomains,
+  internalStaffEmailRegex,
 } from '@bike4mind/common';
 import { dayjs } from '@bike4mind/common';
 import utc from 'dayjs/plugin/utc';
@@ -151,6 +153,13 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
       ? dayjs(lastMonthEnd).utc().subtract(30, 'days').startOf('day').toDate()
       : null;
 
+    // Internal-user match from the shared NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS list
+    // (all internal domains, not a hardcoded one) so it can't drift from the
+    // entitlement layer (#172). Null == none configured -> facet matches nothing.
+    const internalStaffRegex = internalStaffEmailRegex(
+      parseInternalStaffDomains(process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS)
+    );
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const facetStages: any = {
       // For daily reports, last24h is the main metric
@@ -255,12 +264,12 @@ class CounterLogRepository extends BaseRepository<ICounterLogDocument> implement
           },
         },
         {
-          $match: {
-            $or: [
-              { userEmail: { $regex: /@milliononmars\.com$/ } },
-              { 'user.email': { $regex: /@milliononmars\.com$/ } },
-            ],
-          },
+          $match: internalStaffRegex
+            ? {
+                $or: [{ userEmail: { $regex: internalStaffRegex } }, { 'user.email': { $regex: internalStaffRegex } }],
+              }
+            : // None configured: count no internal users.
+              { $expr: false },
         },
         {
           $group: {

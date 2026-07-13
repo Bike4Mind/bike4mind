@@ -48,8 +48,14 @@ export class FileUploadPage extends BasePage {
   }
 
   async openFileBrowser() {
-    // Close any existing dialog first to ensure the sidebar is accessible
+    // Close any existing dialog first to ensure the sidebar is accessible.
     await this.closeFileBrowser();
+    // NOTE: `files` is an earned-nav destination (Gears) - the sidenav row is hidden
+    // until the account has a file. That is NOT a problem here: every caller uploads
+    // or relies on a seeded file BEFORE opening the browser, so `files` is already
+    // earned and the row is present. The browser is also a global drawer opened OVER
+    // the current page (e.g. the notebook the file is being added to), so it must NOT
+    // be reached by navigating away.
     await this.page.getByTestId('sidenav-nav-files').click();
   }
 

@@ -24,6 +24,7 @@ import LoginIcon from '@mui/icons-material/Login';
 import EmailIcon from '@mui/icons-material/Email';
 import PersonIcon from '@mui/icons-material/Person';
 import SecurityIcon from '@mui/icons-material/Security';
+import VerifiedUserIcon from '@mui/icons-material/VerifiedUser';
 import SettingsIcon from '@mui/icons-material/Settings';
 import DangerousIcon from '@mui/icons-material/Dangerous';
 import AccessTimeIcon from '@mui/icons-material/AccessTime';
@@ -36,12 +37,14 @@ import UserSubscriptionStatus from '../Details/UserSubscriptionStatus';
 import SpicyUserActions from '../SpicyUserActions';
 import { useComplianceModal } from '../ComplianceModal';
 import UserPermissions from '../UserPermissions';
+import ProductAccess from '../ProductAccess';
 import SystemMessageModal from '../SystemMessageModal';
 import { useFullUserViewModal } from '@client/app/components/admin/Users/Views/FullUserViewModal';
 import { useDeleteUser, useUpdateUser, useLoginAsUser } from '@client/app/hooks/data/user';
 import { IUserDocument, UserLevelType, WithOrgRef } from '@bike4mind/common';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useShallow } from 'zustand/shallow';
+import { useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
 import { useNavigate } from '@tanstack/react-router';
@@ -61,6 +64,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
   const deleteUser = useDeleteUser();
   const updateUser = useUpdateUser();
   const loginAsUser = useLoginAsUser();
+  const queryClient = useQueryClient();
   const setFullUserViewUserId = useFullUserViewModal(state => state.setUserId);
   const setComplianceUserId = useComplianceModal(state => state.setUserId);
   const { currentUser, setCurrentUser } = useUser(
@@ -128,6 +132,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
       { id: user.id, data },
       {
         onSuccess: async () => {
+          // Product Access reads server-resolved sources (bypass follows the Role/isAdmin
+          // just saved); refresh them so its chips aren't stale after a save.
+          queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', user.id] });
           // Check if the updated user is the current logged-in user
           if (currentUser && user.id === currentUser.id) {
             try {
@@ -251,7 +258,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
         <Box sx={{ p: { xs: 1, sm: 2 } }}>
           <Grid container spacing={3}>
             {/* User Details Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <PersonIcon fontSize="small" color="primary" />
@@ -269,13 +276,13 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
               </Stack>
             </Grid>
 
-            {/* User Permissions Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            {/* Roles Section */}
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SecurityIcon fontSize="small" color="primary" />
                   <Typography level="title-sm" fontWeight="bold">
-                    Permissions
+                    Roles
                   </Typography>
                 </Stack>
                 <Divider />
@@ -285,12 +292,32 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
                   editedFields={editedFields}
                   onFieldChange={handleFormFieldChange}
                   handleUserLevelButtonChange={handleUserLevelButtonChange}
+                  isSelf={currentUser?.id === user.id}
+                />
+              </Stack>
+            </Grid>
+
+            {/* Product Access Section - separate axis from Role (what they ARE) vs
+                what products they can use, and where that access comes from. */}
+            <Grid xs={12} sm={6} md={2}>
+              <Stack spacing={2}>
+                <Stack direction="row" alignItems="center" spacing={1}>
+                  <VerifiedUserIcon fontSize="small" color="primary" />
+                  <Typography level="title-sm" fontWeight="bold">
+                    Product Access
+                  </Typography>
+                </Stack>
+                <Divider />
+                <ProductAccess
+                  user={formState}
+                  key={`product-access-${user.id}`}
+                  onFieldChange={handleFormFieldChange}
                 />
               </Stack>
             </Grid>
 
             {/* Subscription Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SubscriptionsIcon fontSize="small" color="primary" />
@@ -304,7 +331,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
             </Grid>
 
             {/* B4M Settings Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <SettingsIcon fontSize="small" color="primary" />
@@ -349,7 +376,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
             </Grid>
 
             {/* Activity & Profile Section */}
-            <Grid xs={12} sm={6} md={2.4}>
+            <Grid xs={12} sm={6} md={2}>
               <Stack spacing={2}>
                 <Stack direction="row" alignItems="center" spacing={1}>
                   <AccessTimeIcon fontSize="small" color="primary" />

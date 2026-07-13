@@ -22,6 +22,12 @@ import { editLocalFileTool } from './implementation/editLocalFile';
 import { recentChangesTool } from './implementation/recentChanges';
 import { askUserQuestionTool } from './implementation/askUserQuestion';
 import {
+  checkShellOutputTool,
+  writeShellStdinTool,
+  listBackgroundShellsTool,
+  killBackgroundShellTool,
+} from './implementation/shellSession';
+import {
   latticeCreateModelTool,
   latticeAddEntityTool,
   latticeSetValueTool,
@@ -29,6 +35,14 @@ import {
   latticeQueryTool,
   latticeExplainTool,
 } from './implementation/lattice';
+
+// Re-export the shell-session manager through this CLI-only entry so the CLI can
+// subscribe to / reap the SAME singleton the tools use, without a deep import.
+export {
+  getShellSessionManager,
+  type ShellSession,
+  type ShellSessionStatus,
+} from './implementation/bashExecute/ShellSessionManager';
 
 /**
  * The 6 Lattice tool implementations as a resolvable map keyed by tool name.
@@ -80,6 +94,11 @@ export const getCliOnlyTools = async (): Promise<{
     delete_file: deleteFileTool,
     // Shell execution
     bash_execute: bashExecuteTool,
+    // Background shell sessions (poll/stdin/list/kill for backgrounded bash_execute)
+    check_shell_output: checkShellOutputTool,
+    write_shell_stdin: writeShellStdinTool,
+    list_background_shells: listBackgroundShellsTool,
+    kill_background_shell: killBackgroundShellTool,
     // Git operations
     recent_changes: recentChangesTool,
 

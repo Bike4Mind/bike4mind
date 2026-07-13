@@ -16,6 +16,8 @@ import { ProfilePage } from './pages/ProfilePage';
 import { AgentsPage } from './pages/AgentsPage';
 import { AdminPage } from './pages/AdminPage';
 import { TavernPage } from './pages/TavernPage';
+import { DataLakePage } from './pages/DataLakePage';
+import { SkillsPage } from './pages/SkillsPage';
 import { getTestUsers } from './helpers/test-users';
 
 type VerifyAnswersOptions = {
@@ -40,6 +42,8 @@ type TestFixtures = {
   agentsPage: AgentsPage;
   adminPage: AdminPage;
   tavernPage: TavernPage;
+  dataLakePage: DataLakePage;
+  skillsPage: SkillsPage;
   loginAsAdmin: () => Promise<void>;
   loginAsUser: (user: { accessToken: string; refreshToken: string }) => Promise<void>;
 
@@ -111,6 +115,14 @@ export const test = base.extend<TestFixtures>({
 
   tavernPage: async ({ page }, use) => {
     await use(new TavernPage(page));
+  },
+
+  dataLakePage: async ({ page }, use) => {
+    await use(new DataLakePage(page));
+  },
+
+  skillsPage: async ({ page }, use) => {
+    await use(new SkillsPage(page));
   },
 
   loginAsAdmin: async ({ page }, use) => {

@@ -1,54 +1,18 @@
 import { withWebSocketContext, sendToClient } from '@server/websocket/utils';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
-import { CreditHolderType, IVoiceSessionEndedAction, VoiceSessionEndedAction } from '@bike4mind/common';
-import { getSettingsMap, getSettingsValue, NotFoundError, usdToCredits } from '@bike4mind/utils';
+import { pickRealtimeVoiceTier } from '@server/voice/realtimeVoicePricing';
+import { CreditHolderType, IModelPrice, VoiceSessionEndedAction, computeRealtimeVoiceUsd } from '@bike4mind/common';
+import { getSettingsMap, getSettingsValue, NotFoundError, usdToCreditsStochastic } from '@bike4mind/utils';
 import {
   adminSettingsRepository,
   Connection,
   creditTransactionRepository,
+  modelPriceRepository,
   sessionRepository,
   usageEventRepository,
   userRepository,
 } from '@bike4mind/database';
 import { sessionService, creditService } from '@bike4mind/services';
-
-const GPT_REALTIME_PRICING_TABLE = {
-  text: {
-    input: 4 / 1_000_000,
-    cachedInput: 0.4 / 1_000_000,
-    output: 16 / 1_000_000,
-  },
-  audio: {
-    input: 32 / 1_000_000,
-    cachedInput: 0.4 / 1_000_000,
-    output: 64 / 1_000_000,
-  },
-} as const;
-
-function calculateGPTRealtimeCredits(usage: IVoiceSessionEndedAction['usage']) {
-  let credits: number = 0;
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.text.input * usage.textInputTokens);
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.text.cachedInput * usage.textCachedInputTokens);
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.text.output * usage.textOutputTokens);
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.audio.input * usage.audioInputTokens);
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.audio.cachedInput * usage.audioCachedInputTokens);
-  credits += usdToCredits(GPT_REALTIME_PRICING_TABLE.audio.output * usage.audioOutputTokens);
-
-  return credits;
-}
-
-// USD twin of calculateGPTRealtimeCredits for the usage-event dual write: same
-// per-component amounts, summed before credit conversion. Analytics only, never billing.
-function calculateGPTRealtimeUsd(usage: IVoiceSessionEndedAction['usage']) {
-  return (
-    GPT_REALTIME_PRICING_TABLE.text.input * usage.textInputTokens +
-    GPT_REALTIME_PRICING_TABLE.text.cachedInput * usage.textCachedInputTokens +
-    GPT_REALTIME_PRICING_TABLE.text.output * usage.textOutputTokens +
-    GPT_REALTIME_PRICING_TABLE.audio.input * usage.audioInputTokens +
-    GPT_REALTIME_PRICING_TABLE.audio.cachedInput * usage.audioCachedInputTokens +
-    GPT_REALTIME_PRICING_TABLE.audio.output * usage.audioOutputTokens
-  );
-}
 
 export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async (event, context, logger) => {
   const { userId, sessionId, model, usage } = VoiceSessionEndedAction.parse(JSON.parse(event.body ?? ''));
@@ -59,7 +23,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   const connectionId = event.requestContext.connectionId;
   const connection = await Connection.findOne({ connectionId });
   if (!connection || connection.userId !== userId) {
-    logger.warn('voiceSessionEnded userId mismatch or unknown connection — rejecting', {
+    logger.warn('voiceSessionEnded userId mismatch or unknown connection - rejecting', {
       connectionId,
       claimedUserId: userId,
     });
@@ -86,11 +50,23 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
   // Idempotency guard: voiceSessionStartedAt is set at session start and cleared here on first
   // successful processing. If null, the session either never had voice or was already reconciled.
   if (!session.voiceSessionStartedAt) {
-    logger.warn(`voiceSessionEnded: session ${sessionId} has no active voice session — ignoring (possible replay)`);
+    logger.warn(`voiceSessionEnded: session ${sessionId} has no active voice session - ignoring (possible replay)`);
     return { statusCode: 200 };
   }
 
-  let actualCredits: number = calculateGPTRealtimeCredits(usage);
+  // Rates come from the versioned price catalog (reprices reach voice as data
+  // rows); the adapter literal is the fail-safe when the catalog is unreachable.
+  let priceRows: IModelPrice[] = [];
+  try {
+    priceRows = await modelPriceRepository.rowsInForce();
+  } catch (err) {
+    logger.warn('Model price catalog unavailable; settling voice from fallback rates', err);
+  }
+  const { tier } = pickRealtimeVoiceTier(model, priceRows);
+  const totalUsd = computeRealtimeVoiceUsd(tier, usage);
+  // Single stochastic draw per settlement (pricing.ts policy); the old
+  // per-component ceil overcharged up to ~6 credits per session.
+  let actualCredits: number = usdToCreditsStochastic(totalUsd);
 
   const { voiceReservedCredits, voiceSessionStartedAt } = session;
 
@@ -99,7 +75,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     const sessionDurationMs = Date.now() - new Date(voiceSessionStartedAt).getTime();
     const SIXTY_MIN_MS = 60 * 60 * 1000;
     if (sessionDurationMs > SIXTY_MIN_MS) {
-      logger.warn(`Voice session ${sessionId} exceeded 60-min cap — clamping credits`, {
+      logger.warn(`Voice session ${sessionId} exceeded 60-min cap - clamping credits`, {
         actualCredits,
         voiceReservedCredits,
         durationMinutes: Math.round(sessionDurationMs / 60000),
@@ -165,7 +141,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       outputTokens: usage.textOutputTokens + usage.audioOutputTokens,
       cachedInputTokens: usage.textCachedInputTokens + usage.audioCachedInputTokens,
       cacheWriteTokens: 0,
-      costUsd: calculateGPTRealtimeUsd(usage),
+      costUsd: totalUsd,
       creditsCharged: actualCredits,
       status: 'ok',
       latencyMs: Date.now() - new Date(session.voiceSessionStartedAt).getTime(),

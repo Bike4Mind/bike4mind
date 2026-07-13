@@ -50,6 +50,7 @@ const SettingsTabContent = () => {
   // of the tree until both admin + user settings hydrate to avoid a flash.
   const { isFeatureEnabled, isLoading } = useFeatureEnabled();
   const enableMementos = !isLoading && isFeatureEnabled('enableMementos');
+  const hasEmailIntegration = !!currentUser?.platformEmailAddress;
 
   // Fall back to General when the requested sub-tab isn't actually rendered - e.g.
   // `?subtab=mementos` with the flag off (the legacy `?tab=mementos` redirect always
@@ -60,7 +61,7 @@ const SettingsTabContent = () => {
   const renderedSubTabs = new Set<string>([
     SettingsSubTab.General,
     SettingsSubTab.CustomInstructions,
-    SettingsSubTab.EmailInbox,
+    ...(hasEmailIntegration ? [SettingsSubTab.EmailInbox] : []),
     ...(enableMementos ? [SettingsSubTab.Mementos] : []),
   ]);
   const requestedSubTab = search?.subtab || SettingsSubTab.General;
@@ -93,12 +94,14 @@ const SettingsTabContent = () => {
           </Box>
         </StyledSubTab>
 
-        <StyledSubTab data-testid="settings-subtab-email-inbox" value={SettingsSubTab.EmailInbox}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-            <MailOutlineIcon sx={{ fontSize: '16px' }} />
-            <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>Email Inbox</Typography>
-          </Box>
-        </StyledSubTab>
+        {hasEmailIntegration && (
+          <StyledSubTab data-testid="settings-subtab-email-inbox" value={SettingsSubTab.EmailInbox}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+              <MailOutlineIcon sx={{ fontSize: '16px' }} />
+              <Typography sx={{ display: { xs: 'none', sm: 'block' } }}>Email Inbox</Typography>
+            </Box>
+          </StyledSubTab>
+        )}
 
         {enableMementos && (
           <StyledSubTab data-testid="settings-subtab-mementos" value={SettingsSubTab.Mementos}>
@@ -118,9 +121,11 @@ const SettingsTabContent = () => {
         {activeSubTab === SettingsSubTab.CustomInstructions && currentUser && <SystemPromptsTab user={currentUser} />}
       </StyledSubTabPanel>
 
-      <StyledSubTabPanel value={SettingsSubTab.EmailInbox}>
-        {activeSubTab === SettingsSubTab.EmailInbox && <EmailInboxTabContent />}
-      </StyledSubTabPanel>
+      {hasEmailIntegration && (
+        <StyledSubTabPanel value={SettingsSubTab.EmailInbox}>
+          {activeSubTab === SettingsSubTab.EmailInbox && <EmailInboxTabContent />}
+        </StyledSubTabPanel>
+      )}
 
       {enableMementos && (
         <StyledSubTabPanel value={SettingsSubTab.Mementos}>

@@ -18,6 +18,10 @@ export interface IUserApiKeyCreatedEvent extends IBaseEvent {
     scopes: string[];
     expiresAt?: string;
     createdFrom: 'dashboard' | 'cli' | 'api' | 'bridge';
+    /** 'Organization' for org-billed keys, 'User' (or absent) for personal keys. */
+    billingOwnerType?: string;
+    /** Set for org-billed keys: the organization charged for this key's usage. */
+    organizationId?: string;
   };
 }
 

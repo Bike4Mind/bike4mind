@@ -2,7 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { optionalAuth } from '@server/middlewares/optionalAuth';
 import { PublishedArtifact } from '@bike4mind/database';
 import type { CanCommentResponse, CommentPolicy, PublishVisibility } from '@bike4mind/common';
-import { checkVisibility, canAnnotate, toPublishUser } from '@server/services/publish';
+import { checkVisibility, canAnnotate, toPublishUser, requestHasGateProof } from '@server/services/publish';
 
 /**
  * GET /api/publish/annotations/[publicId]/can-comment - the PER-VIEWER comment
@@ -17,6 +17,9 @@ interface ArtifactGateLean {
   ownerId: string;
   scopeId: string;
   commentPolicy: CommentPolicy;
+  // Required (explicit null) to match VisibilityCheckArtifact; a lean read of a
+  // pre-gate doc may omit it, so it's coerced `?? null` at the call below.
+  accessGate: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
 }
 
 const handler = baseApi({ auth: false })
@@ -29,13 +32,16 @@ const handler = baseApi({ auth: false })
     const publicId = String(req.query.publicId ?? '');
     if (!publicId) return res.status(400).json({ error: 'Missing publicId' });
 
-    const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
-      .select('publicId visibility ownerId scopeId commentPolicy')
-      .lean<ArtifactGateLean>();
-    if (!artifact) return res.status(404).json({ error: 'Not found' });
+    const doc = await PublishedArtifact.findOne({ publicId, deletedAt: null })
+      .select('publicId visibility ownerId scopeId commentPolicy accessGate')
+      .lean<Omit<ArtifactGateLean, 'accessGate'> & { accessGate?: ArtifactGateLean['accessGate'] }>();
+    if (!doc) return res.status(404).json({ error: 'Not found' });
+    const artifact: ArtifactGateLean = { ...doc, accessGate: doc.accessGate ?? null };
 
     const publishUser = toPublishUser(req.user);
-    const vis = await checkVisibility(artifact, publishUser);
+    const vis = await checkVisibility(artifact, publishUser, {
+      passphraseVerified: artifact.accessGate?.kind === 'passphrase' && requestHasGateProof(req, artifact.publicId),
+    });
     if (!vis.ok) return res.status(vis.status).json({ error: vis.error });
 
     const response: CanCommentResponse = {

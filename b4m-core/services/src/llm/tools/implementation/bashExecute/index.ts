@@ -1,11 +1,25 @@
 import { ToolDefinition } from '../../base/types';
 import { spawn } from 'child_process';
 import path from 'path';
+import { StringDecoder } from 'string_decoder';
+import {
+  getShellSessionManager,
+  isTerminalShellStatus,
+  type ShellSession,
+  type ShellSessionManager,
+} from './ShellSessionManager';
 
 interface BashExecuteParams {
   command: string;
   cwd?: string;
   timeout?: number;
+  /** Start the command as a background session and return a session_id immediately. */
+  run_in_background?: boolean;
+  /**
+   * Foreground grace window (ms). If the command is still running after this, it is
+   * promoted to a background session (returning a session_id) instead of being killed.
+   */
+  yield_time_ms?: number;
 }
 
 interface BashExecuteResult {
@@ -205,13 +219,18 @@ function isSafeCommandPrefix(command: string): boolean {
   return SAFE_COMMAND_PREFIXES.some(safe => baseCommand === safe || baseCommand.endsWith(`/${safe}`));
 }
 
-/**
- * Execute a bash command with safety checks
- */
-async function executeBashCommand(params: BashExecuteParams): Promise<BashExecuteResult> {
-  const { command, cwd: relativeCwd, timeout = DEFAULT_TIMEOUT_MS } = params;
+/** Max hard timeout for a foreground command (5 minutes). */
+const MAX_FOREGROUND_TIMEOUT_MS = 5 * 60 * 1000;
 
-  // Validate command is not empty
+/** Grace window before a `run_in_background` command returns its session id. */
+const BACKGROUND_GRACE_MS = 250;
+
+/**
+ * Run the empty-command and dangerous-pattern safety checks shared by the
+ * foreground and background paths. Returns a blocked result, or null if the
+ * command may proceed.
+ */
+function precheckCommand(command: string): BashExecuteResult | null {
   if (!command || command.trim().length === 0) {
     return {
       stdout: '',
@@ -223,7 +242,6 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     };
   }
 
-  // Check for dangerous patterns
   const dangerCheck = checkDangerousPatterns(command);
   if (dangerCheck.blocked) {
     return {
@@ -236,27 +254,51 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     };
   }
 
-  // Resolve working directory (allows any path, including outside cwd)
+  return null;
+}
+
+/** Resolve a (possibly relative) cwd against the process cwd. */
+function resolveCwd(relativeCwd?: string): string {
   const baseCwd = process.cwd();
-  const targetCwd = relativeCwd ? path.resolve(baseCwd, relativeCwd) : baseCwd;
+  return relativeCwd ? path.resolve(baseCwd, relativeCwd) : baseCwd;
+}
+
+/** Environment for spawned commands: inherit, but suppress color codes. */
+function buildEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    NO_COLOR: '1',
+    FORCE_COLOR: '0',
+  };
+}
+
+/**
+ * Execute a bash command with safety checks (foreground, blocking).
+ */
+export async function executeBashCommand(params: BashExecuteParams): Promise<BashExecuteResult> {
+  const { command, cwd: relativeCwd, timeout = DEFAULT_TIMEOUT_MS } = params;
+
+  const blocked = precheckCommand(command);
+  if (blocked) return blocked;
+
+  // Resolve working directory (allows any path, including outside cwd)
+  const targetCwd = resolveCwd(relativeCwd);
 
   // Ensure timeout is reasonable (max 5 minutes)
-  const effectiveTimeout = Math.min(timeout, 5 * 60 * 1000);
+  const effectiveTimeout = Math.min(timeout, MAX_FOREGROUND_TIMEOUT_MS);
 
   return new Promise(resolve => {
     let stdout = '';
     let stderr = '';
     let timedOut = false;
+    // Per-stream decoders so a multibyte char split across data chunks isn't garbled.
+    const outDecoder = new StringDecoder('utf8');
+    const errDecoder = new StringDecoder('utf8');
 
     // Spawn bash process
     const proc = spawn('bash', ['-c', command], {
       cwd: targetCwd,
-      env: {
-        ...process.env,
-        // Prevent color codes that might be hard to read
-        NO_COLOR: '1',
-        FORCE_COLOR: '0',
-      },
+      env: buildEnv(),
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
@@ -275,7 +317,7 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Collect stdout with size limit
     proc.stdout.on('data', (data: Buffer) => {
       if (stdout.length < MAX_OUTPUT_SIZE) {
-        stdout += data.toString();
+        stdout += outDecoder.write(data);
         if (stdout.length > MAX_OUTPUT_SIZE) {
           stdout = stdout.slice(0, MAX_OUTPUT_SIZE) + '\n... [output truncated]';
         }
@@ -285,7 +327,7 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Collect stderr with size limit
     proc.stderr.on('data', (data: Buffer) => {
       if (stderr.length < MAX_OUTPUT_SIZE) {
-        stderr += data.toString();
+        stderr += errDecoder.write(data);
         if (stderr.length > MAX_OUTPUT_SIZE) {
           stderr = stderr.slice(0, MAX_OUTPUT_SIZE) + '\n... [output truncated]';
         }
@@ -295,6 +337,9 @@ async function executeBashCommand(params: BashExecuteParams): Promise<BashExecut
     // Handle process completion
     proc.on('close', exitCode => {
       clearTimeout(timeoutId);
+      // Flush any bytes buffered mid-codepoint at stream end.
+      stdout += outDecoder.end();
+      stderr += errDecoder.end();
       resolve({
         stdout: stdout.trim(),
         stderr: stderr.trim(),
@@ -371,6 +416,89 @@ function formatResult(result: BashExecuteResult, command: string): string {
   return parts.join('\n');
 }
 
+/** Resolve when the session reaches a terminal status, or after `timeoutMs`. */
+function waitForSettleOrTimeout(
+  manager: ShellSessionManager,
+  sessionId: string,
+  timeoutMs: number
+): Promise<ShellSession | undefined> {
+  return new Promise(resolve => {
+    const current = manager.get(sessionId);
+    if (!current || isTerminalShellStatus(current.status)) {
+      resolve(current);
+      return;
+    }
+
+    const finish = () => {
+      clearTimeout(timer);
+      unsubscribe();
+      resolve(manager.get(sessionId));
+    };
+
+    const timer = setTimeout(finish, timeoutMs);
+    const unsubscribe = manager.subscribe(session => {
+      if (session.id === sessionId && isTerminalShellStatus(session.status)) {
+        finish();
+      }
+    });
+  });
+}
+
+/** Format the outcome of a background/yield session for the model. */
+export function formatSessionResult(session: ShellSession, output: string): string {
+  const parts: string[] = [`$ ${session.command}`, ''];
+
+  if (isTerminalShellStatus(session.status)) {
+    const exit = session.exitCode === null ? session.status : `exit ${session.exitCode}`;
+    parts.push(`[session ${session.id} finished: ${exit}]`);
+    if (output.trim()) {
+      parts.push('', output.trim());
+    } else {
+      parts.push('', '(no output)');
+    }
+    return parts.join('\n');
+  }
+
+  // Still running - hand back a session id and the polling contract.
+  parts.push(`[background session started: ${session.id} - still running]`);
+  parts.push(
+    `Poll with check_shell_output (session_id: "${session.id}"), send input with write_shell_stdin, stop with kill_background_shell.`
+  );
+  if (output.trim()) {
+    parts.push('', 'Output so far:', output.trim());
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Run a command as a shell session, waiting up to `waitMs` for it to settle.
+ * Returns the full output if it finishes in time, otherwise a session id to poll.
+ */
+export async function executeBackgroundSession(
+  params: BashExecuteParams,
+  waitMs: number,
+  manager: ShellSessionManager = getShellSessionManager()
+): Promise<string> {
+  const blocked = precheckCommand(params.command);
+  if (blocked) return formatResult(blocked, params.command);
+
+  let session: ShellSession;
+  try {
+    session = manager.spawn(params.command, resolveCwd(params.cwd), buildEnv());
+  } catch (error) {
+    // e.g. the concurrent-running-session cap was hit - surface it so the model
+    // knows to free a slot rather than treating it as an execution failure.
+    return `$ ${params.command}\n\n[cannot start background session] ${
+      error instanceof Error ? error.message : String(error)
+    }`;
+  }
+
+  const settled = await waitForSettleOrTimeout(manager, session.id, waitMs);
+  const current = settled ?? session;
+  const output = manager.getOutput(session.id)?.output ?? '';
+  return formatSessionResult(current, output);
+}
+
 export const bashExecuteTool: ToolDefinition = {
   name: 'bash_execute',
   implementation: context => ({
@@ -394,6 +522,22 @@ export const bashExecuteTool: ToolDefinition = {
       }
 
       try {
+        // Session mode: run_in_background returns a session id after a short grace;
+        // yield_time_ms promotes a still-running foreground command to a session
+        // instead of killing it at the timeout.
+        const isSessionMode = params.run_in_background === true || typeof params.yield_time_ms === 'number';
+        if (isSessionMode) {
+          const waitMs = params.run_in_background
+            ? BACKGROUND_GRACE_MS
+            : Math.min(Math.max(params.yield_time_ms ?? BACKGROUND_GRACE_MS, 0), MAX_FOREGROUND_TIMEOUT_MS);
+          const sessionResult = await executeBackgroundSession(params, waitMs);
+
+          if (context.onFinish) {
+            await context.onFinish('bash_execute', { command: params.command, background: true });
+          }
+          return sessionResult;
+        }
+
         const result = await executeBashCommand(params);
         const formattedResult = formatResult(result, params.command);
 
@@ -438,6 +582,13 @@ SAFETY NOTES:
 - Output is limited to prevent overwhelming responses
 - This tool ALWAYS requires user permission before execution
 
+LONG-RUNNING / BACKGROUND COMMANDS:
+- Set run_in_background: true for dev servers, watchers, or anything long-lived. Returns a
+  session_id immediately instead of blocking. Then poll it with check_shell_output, feed it
+  input with write_shell_stdin, and stop it with kill_background_shell.
+- Set yield_time_ms to run a command in the foreground but, if it is still going after that
+  window, hand back a session_id (and keep it running) instead of killing it at the timeout.
+
 COMMON USE CASES:
 - Running build commands: npm run build, make, cargo build
 - Git operations: git status, git log, git diff
@@ -467,7 +618,17 @@ BLOCKED OPERATIONS:
           timeout: {
             type: 'number',
             description:
-              'Timeout in milliseconds (optional, default: 60000, max: 300000). Command will be terminated if it exceeds this time.',
+              'Timeout in milliseconds (optional, default: 60000, max: 300000). Command will be terminated if it exceeds this time. Ignored in background/yield mode.',
+          },
+          run_in_background: {
+            type: 'boolean',
+            description:
+              'Optional. Start the command as a background session and return a session_id immediately (for dev servers, watchers, long builds). Poll with check_shell_output.',
+          },
+          yield_time_ms: {
+            type: 'number',
+            description:
+              'Optional. Run in the foreground but, if still running after this many ms, return a session_id and keep it running instead of killing it.',
           },
         },
         required: ['command'],

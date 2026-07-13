@@ -18,6 +18,16 @@ export const MODEL_NAME_COLUMN_WIDTH = 18;
 export const USAGE_CACHE_TTL = 5 * 60 * 1000;
 
 /**
+ * Default TTL for a completed sub-agent's persisted conversation history, in ms
+ * (1 hour). After this, the checkpoint is evicted and the session can no longer
+ * be resumed. Overridable via CliConfig.preferences.subagentHistoryTtlMs.
+ */
+export const DEFAULT_SUBAGENT_HISTORY_TTL_MS = 60 * 60 * 1000;
+
+/** Hard cap on retained sub-agent histories, to bound memory if the TTL never fires. */
+export const MAX_SUBAGENT_HISTORY_ENTRIES = 100;
+
+/**
  * Minimum number of lines in a paste to trigger the compact indicator
  * instead of rendering all pasted text inline
  */

@@ -16,6 +16,7 @@
  */
 import type { DomainGrantRow, EntitlementKey, PriceEntitlementRow, TagGrantRow } from './types';
 import { isTestMode } from '@client/lib/subscriptions/constants';
+import { parseInternalStaffDomains } from '@bike4mind/common';
 
 /**
  * Canonical tag/key normalization - the ONE comparison rule for the
@@ -25,6 +26,19 @@ import { isTestMode } from '@client/lib/subscriptions/constants';
 export function normalizeTag(tag: string): string {
   return tag.trim().toLowerCase();
 }
+
+/**
+ * Reserved universal entitlement key held by EVERY authenticated user (injected
+ * in `getUserEntitlements`). It is the baseline-access signal that replaces the
+ * old "stamp a `Customer` tag on every account" workaround: a model declaring
+ * `allowedEntitlements: ['base']` is public to all authenticated users, while
+ * `isModelAccessible` stays fail-closed for a genuinely ungated (empty tags AND
+ * empty entitlements) config. Deliberately NOT a grant row / NOT in
+ * `KNOWN_ENTITLEMENT_KEYS`: it is not an admin-assignable product, it is granted
+ * to everyone unconditionally. Normalized form is lowercase (matches
+ * `normalizeEntitlementKey`).
+ */
+export const BASE_ENTITLEMENT_KEY = 'base';
 
 /**
  * A product's Stripe price ids, authored per-stage and captured BEFORE the
@@ -90,10 +104,18 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // matching PRICE_ENTITLEMENTS row is deferred to the subscriptions phase (no
   // OptiHashi Stripe price minted yet); the email-domain grant lives in
   // DOMAIN_GRANT_ROWS below.
-  // The `opti` tag confers all OptiHashi access via the single `optihashi:pro`
-  // entitlement, including the external-compute (hardware-bridge) surfaces - there
-  // is one product tier, so no second entitlement key or comp tag to bridge.
+  // The `opti` tag confers local OptiHashi access via `optihashi:pro` (solver
+  // race, problem/run CRUD, UI/routing).
   { tag: 'opti', entitlements: ['optihashi:pro'] },
+  // Remote compute is a SEPARATE, stricter tier from local OptiHashi: the
+  // `opti-compute` tag bridges to `optihashi:compute`. Holding `optihashi:pro`
+  // alone will NOT confer remote compute once the server gate checks
+  // `optihashi:compute` (see M2) - until then this row is inert (no gate reads
+  // the key yet). Granted-only for now (no Stripe price yet); deliberately absent
+  // from DOMAIN_GRANT_ROWS / INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS -
+  // internal users reach it via admin/developer bypass, and no signup credits
+  // attach to the compute tier.
+  { tag: 'opti-compute', entitlements: ['optihashi:compute'] },
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed
@@ -162,15 +184,12 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
  * -> no internal-domain grant, which is the correct default. Set the
  * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
  * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ *
+ * Parsed via the shared helper so analytics resolves the same domains (#172).
  */
-const INTERNAL_STAFF_DOMAINS: readonly string[] = [
-  ...new Set(
-    (process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS ?? '')
-      .split(',')
-      .map(d => normalizeTag(d))
-      .filter(Boolean)
-  ),
-];
+const INTERNAL_STAFF_DOMAINS: readonly string[] = parseInternalStaffDomains(
+  process.env.NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+);
 
 /** Domains already covered by an external row (derived - no brand literals to keep in sync). */
 const EXTERNAL_GRANT_DOMAINS = new Set(EXTERNAL_DOMAIN_GRANT_ROWS.map(row => row.domain));
@@ -224,6 +243,31 @@ export const TAG_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Ma
 export const DOMAIN_GRANTS: ReadonlyMap<string, readonly EntitlementKey[]> = new Map(
   DOMAIN_GRANT_ROWS.map(row => [normalizeTag(row.domain), row.entitlements])
 );
+
+/**
+ * Every entitlement key the registry recognizes as a grantable product, sorted - the union of
+ * every grant source (price, comp-tag, email-domain) via `allKnownEntitlementKeys`, so there is
+ * one source of truth for "what products exist" (e.g. `optihashi:pro`, `libreoncology:pro`). New
+ * products surface here automatically as their rows are added above. Admin surfaces that let an
+ * operator pick an entitlement to grant (LLM model gating, partner signup rules) source their
+ * options from this so a typo can't persist a dead grant.
+ */
+export const KNOWN_ENTITLEMENT_KEYS: readonly EntitlementKey[] = [...allKnownEntitlementKeys()].sort();
+
+/**
+ * The entitlement keys in `keys` the registry does NOT recognize (normalized, de-duplicated).
+ * Empty means every key is a known grantable product. Used to reject typo'd keys at admin
+ * write boundaries before they persist as a silent no-op grant.
+ */
+export function unknownEntitlementKeys(keys: Iterable<string>): string[] {
+  const known = new Set(KNOWN_ENTITLEMENT_KEYS);
+  const unknown = new Set<string>();
+  for (const raw of keys) {
+    const key = normalizeTag(raw);
+    if (key && !known.has(key)) unknown.add(key);
+  }
+  return [...unknown];
+}
 
 /** Entitlement keys granted by the given Stripe priceIds. */
 export function entitlementsForPriceIds(priceIds: readonly string[]): Set<EntitlementKey> {
@@ -322,6 +366,42 @@ export function resolveEntitlements(input: {
     keys.add(key);
   }
   return [...keys];
+}
+
+/**
+ * Every entitlement key any grant source can confer - derived from the row
+ * VALUES (tag remaps, domain grants, price grants), not a separately
+ * maintained list. Admin Product Access panel uses this to enumerate every
+ * product it should show, so a new product row here is picked up
+ * automatically with no second list to update.
+ */
+export function allKnownEntitlementKeys(): EntitlementKey[] {
+  const keys = new Set<EntitlementKey>();
+  for (const grantedKeys of TAG_GRANTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of DOMAIN_GRANTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  for (const grantedKeys of PRICE_ENTITLEMENTS.values()) {
+    for (const key of grantedKeys) keys.add(key);
+  }
+  return [...keys];
+}
+
+/**
+ * The single comp tag that grants `key` via TAG_GRANTS, or undefined if the
+ * key has no tag-based grant path (e.g. `libreoncology:pro`, which is
+ * subscription-only post-retirement - see the TAG_GRANT_ROWS comment above).
+ * Assumes at most one granting tag per key (true of every row today); the
+ * registry invariant tests would need extending if that ever changes.
+ */
+export function grantTagForEntitlement(key: EntitlementKey): string | undefined {
+  const normalized = normalizeTag(key);
+  for (const [tag, grantedKeys] of TAG_GRANTS) {
+    if (grantedKeys.includes(normalized)) return tag;
+  }
+  return undefined;
 }
 
 /** Exposed for the registry invariant tests (not for feature code). */

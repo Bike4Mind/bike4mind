@@ -1,4 +1,5 @@
 import {
+  creditLotRepository,
   creditTransactionRepository,
   organizationRepository,
   userRepository,
@@ -56,6 +57,7 @@ const addOrganizationCredits = async ({
       {
         db: {
           creditTransactions: creditTransactionRepository,
+          creditLots: creditLotRepository,
         },
         creditHolderMethods: organizationRepository,
       }
@@ -505,6 +507,7 @@ export const handleUserSubscriptionInvoice = async (
             {
               db: {
                 creditTransactions: creditTransactionRepository,
+                creditLots: creditLotRepository,
               },
               creditHolderMethods: userRepository,
             }
@@ -549,6 +552,7 @@ export const handleUserSubscriptionInvoice = async (
             {
               db: {
                 creditTransactions: creditTransactionRepository,
+                creditLots: creditLotRepository,
               },
               creditHolderMethods: userRepository,
             }

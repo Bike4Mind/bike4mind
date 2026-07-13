@@ -3,6 +3,7 @@ import {
   useCreateUserApiKey,
   useRotateUserApiKey,
   useRevokeUserApiKey,
+  useBillingOrganizations,
   CreateUserApiKeyRequest,
 } from '@client/app/hooks/data/userApiKeys';
 import { useTheme } from '@mui/joy';
@@ -168,6 +169,9 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
   });
   const [expirationDays, setExpirationDays] = useState<string>('never');
 
+  const { data: billingOrgs } = useBillingOrganizations();
+  const canBillOrg = (billingOrgs?.length ?? 0) > 0;
+
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
       onSuccess(result.key);
@@ -235,6 +239,34 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
               className="project-api-keys-name-input"
             />
           </FormControl>
+
+          {canBillOrg && (
+            <FormControl className="project-api-keys-billing-control">
+              <FormLabel>Bill usage to</FormLabel>
+              <Select
+                value={formData.organizationId ?? 'personal'}
+                onChange={(_, value) =>
+                  setFormData(fd => ({
+                    ...fd,
+                    organizationId: value && value !== 'personal' ? (value as string) : undefined,
+                  }))
+                }
+                data-testid="api-key-billing-select"
+              >
+                <Option value="personal">Personal (your credits)</Option>
+                {billingOrgs?.map(org => (
+                  <Option key={org.id} value={org.id}>
+                    {org.name} (organization credits)
+                  </Option>
+                ))}
+              </Select>
+              <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+                {formData.organizationId
+                  ? "This key's AI usage will debit the organization's shared credit pool."
+                  : 'This key bills your personal credit balance.'}
+              </Typography>
+            </FormControl>
+          )}
 
           <FormControl className="project-api-keys-access-level-control">
             <FormLabel>Access level</FormLabel>
@@ -1667,6 +1699,8 @@ ai_response = response.json()`,
 
 export default function UserApiKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
+  const { data: billingOrgs } = useBillingOrganizations();
+  const orgNameById = new Map((billingOrgs ?? []).map(org => [org.id, org.name]));
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [showKeyCreatedModal, setShowKeyCreatedModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
@@ -1766,6 +1800,7 @@ export default function UserApiKeysTab() {
                 <thead>
                   <tr>
                     <th>Name</th>
+                    <th>Billing</th>
                     <th>Key Prefix</th>
                     <th>Scopes</th>
                     <th>Status</th>
@@ -1780,6 +1815,23 @@ export default function UserApiKeysTab() {
                     <tr key={key.id}>
                       <td>
                         <Typography fontWeight="lg">{key.name}</Typography>
+                      </td>
+                      <td>
+                        {key.organizationId ? (
+                          <Tooltip
+                            title={`Usage bills the ${orgNameById.get(key.organizationId) ?? 'organization'} credit pool`}
+                            variant="soft"
+                            size="sm"
+                          >
+                            <Chip size="sm" variant="soft" color="primary" data-testid="api-key-billing-badge">
+                              {orgNameById.get(key.organizationId) ?? 'Organization'}
+                            </Chip>
+                          </Tooltip>
+                        ) : (
+                          <Chip size="sm" variant="soft" color="neutral" data-testid="api-key-billing-badge">
+                            Personal
+                          </Chip>
+                        )}
                       </td>
                       <td>
                         <Typography fontFamily="monospace" fontSize="sm">

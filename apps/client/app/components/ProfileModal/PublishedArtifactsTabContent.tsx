@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Box,
@@ -14,10 +14,11 @@ import {
   Link,
 } from '@mui/joy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
+import LinkIcon from '@mui/icons-material/Link';
 import RestoreIcon from '@mui/icons-material/Restore';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import VisibilityIcon from '@mui/icons-material/Visibility';
+import CodeIcon from '@mui/icons-material/Code';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { PublishVisibility } from '@bike4mind/common';
@@ -30,6 +31,7 @@ import {
   toArtifactSharePath,
   type ManagedArtifact,
 } from '@client/app/utils/publishApi';
+import { ManageSharingPanel } from '@client/app/components/common/ManageSharingPanel';
 
 const QUERY_KEY = ['published-artifacts', 'mine'] as const;
 
@@ -97,12 +99,14 @@ export default function PublishedArtifactsTabContent() {
   });
 
   const busy = visibilityMut.isPending || commentsMut.isPending || restoreMut.isPending || deleteMut.isPending;
+  // One row's sharing panel open at a time.
+  const [manageOpen, setManageOpen] = useState<string | null>(null);
 
   if (isLoading) return <LinearProgress data-testid="published-artifacts-loading" />;
   if (isError) {
     return (
       <Typography color="danger" data-testid="published-artifacts-error">
-        Failed to load your published artifacts.
+        Failed to load your Live Artifacts.
       </Typography>
     );
   }
@@ -110,11 +114,11 @@ export default function PublishedArtifactsTabContent() {
   return (
     <Box data-testid="published-artifacts-tab">
       <Typography level="title-md" sx={{ mb: 0.5 }}>
-        Published artifacts
+        Live Artifacts
       </Typography>
       <Typography level="body-sm" sx={{ mb: 2, opacity: 0.8 }}>
-        Everything you&apos;ve published. Change who can view, turn comments on or off, restore a previous version, or
-        delete.
+        Everything you&apos;ve published as a live link. Change who can view, turn comments on or off, restore a
+        previous version, or delete.
       </Typography>
 
       {artifacts.length === 0 ? (
@@ -206,6 +210,19 @@ export default function PublishedArtifactsTabContent() {
 
                   <Box sx={{ flex: 1 }} />
 
+                  <Tooltip title="Share, gate & embed">
+                    <IconButton
+                      size="sm"
+                      variant={manageOpen === a.publicId ? 'soft' : 'plain'}
+                      color={manageOpen === a.publicId ? 'primary' : 'neutral'}
+                      onClick={() => setManageOpen(cur => (cur === a.publicId ? null : a.publicId))}
+                      data-testid={`published-artifact-manage-${a.publicId}`}
+                      aria-expanded={manageOpen === a.publicId}
+                    >
+                      <CodeIcon />
+                    </IconButton>
+                  </Tooltip>
+
                   <Tooltip title="Copy link">
                     <IconButton
                       size="sm"
@@ -221,7 +238,7 @@ export default function PublishedArtifactsTabContent() {
                       }}
                       data-testid={`published-artifact-copy-${a.publicId}`}
                     >
-                      <ContentCopyIcon />
+                      <LinkIcon />
                     </IconButton>
                   </Tooltip>
 
@@ -260,6 +277,19 @@ export default function PublishedArtifactsTabContent() {
                   </Tooltip>
                 </Box>
 
+                {/* Lazily mounted so the manage-state fetch (gate + embed list) only
+                    fires for the row the owner actually opens. */}
+                {manageOpen === a.publicId && (
+                  <Box sx={{ mt: 0.5, pt: 1.5, borderTop: '1px solid', borderColor: 'divider' }}>
+                    <ManageSharingPanel
+                      publicId={a.publicId}
+                      title={a.title}
+                      shareUrl={url}
+                      visibility={a.visibility}
+                    />
+                  </Box>
+                )}
+
                 {/* Single-version artifacts have no version switcher yet - explain why
                     and how to create history instead of leaving a silent absence. */}
                 {isBundle && (a.versionsCount ?? 0) < 2 && (
@@ -268,7 +298,7 @@ export default function PublishedArtifactsTabContent() {
                     sx={{ opacity: 0.7 }}
                     data-testid={`published-artifact-single-version-${a.publicId}`}
                   >
-                    Only one version published — re-publish this artifact (or use AI Revise) to create version history.
+                    Only one version published - re-publish this artifact (or use AI Revise) to create version history.
                     A version switcher appears on the page once there are 2 or more versions.
                   </Typography>
                 )}

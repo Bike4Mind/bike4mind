@@ -1,4 +1,10 @@
-import { ApiKeyScope, ApiKeyStatus, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyBillingOwnerType,
+  ApiKeyScope,
+  ApiKeyStatus,
+  CreditHolderType,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
 import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
@@ -25,6 +31,11 @@ const createUserApiKeySchema = z.object({
   }),
   productId: z.string().optional(),
   productName: z.string().optional(),
+  // Billing target. Organization keys route usage to `organizationId`'s credit
+  // pool. Authorization (is the caller allowed to mint for this org?) is enforced
+  // by the route; the service only enforces the field-shape invariant below.
+  billingOwnerType: z.enum(CreditHolderType).optional(),
+  organizationId: z.string().optional(),
 });
 
 export type CreateUserApiKeyParameters = z.infer<typeof createUserApiKeySchema>;
@@ -57,6 +68,8 @@ export interface CreateUserApiKeyResult {
   };
   productId?: string;
   productName?: string;
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  organizationId?: string;
   createdAt: Date;
 }
 
@@ -83,6 +96,17 @@ export const createUserApiKey = async (
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
+  }
+
+  // Billing-target invariant: Organization iff organizationId is set. Keys bill a
+  // user or an org, never an agent. The route is responsible for verifying the
+  // caller may mint against this org; here we only guarantee a coherent record.
+  if (params.billingOwnerType === CreditHolderType.Agent) {
+    throw new BadRequestError('API keys cannot be billed to an agent');
+  }
+  const billsOrg = params.billingOwnerType === CreditHolderType.Organization;
+  if (billsOrg !== !!params.organizationId) {
+    throw new BadRequestError('organizationId must be set exactly when billingOwnerType is Organization');
   }
 
   // Per-product cap: max 20 active keys (counts ACTIVE + RATE_LIMITED)
@@ -129,6 +153,8 @@ export const createUserApiKey = async (
     metadata: params.metadata,
     productId: params.productId,
     productName: params.productName,
+    billingOwnerType: params.billingOwnerType ?? CreditHolderType.User,
+    organizationId: params.organizationId,
   });
 
   return {
@@ -143,6 +169,8 @@ export const createUserApiKey = async (
     metadata: apiKeyDocument.metadata,
     productId: apiKeyDocument.productId,
     productName: apiKeyDocument.productName,
+    billingOwnerType: apiKeyDocument.billingOwnerType,
+    organizationId: apiKeyDocument.organizationId,
     createdAt: apiKeyDocument.createdAt,
   };
 };

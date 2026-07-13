@@ -6,6 +6,7 @@ import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import SettingsIcon from '@mui/icons-material/Settings';
 import InsightsIcon from '@mui/icons-material/Insights';
 import SecurityIcon from '@mui/icons-material/Security';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import { Badge, Box, LinearProgress, Tab, TabList, TabPanel, Tabs, Tooltip, Typography, IconButton } from '@mui/joy';
 import { styled } from '@mui/system';
@@ -20,6 +21,8 @@ import { useSessions } from '@client/app/contexts/SessionsContext';
 import CommunityTabContent from '@client/app/components/ProfileModal/CommunityTabContent';
 import { ContextHelpButton } from '@client/app/components/help';
 import { profileTabListSx } from './profileTabListSx';
+import { useQuery } from '@tanstack/react-query';
+import { listMyPublishedArtifacts } from '@client/app/utils/publishApi';
 
 const SettingsTabContent = dynamic(() => import('@client/app/components/ProfileModal/SettingsTabContent'), {
   ssr: false,
@@ -33,6 +36,10 @@ const CreditAnalyticsTabContent = dynamic(
   }
 );
 const IntegrationsTabContent = dynamic(() => import('@client/app/components/ProfileModal/IntegrationsTabContent'), {
+  ssr: false,
+  loading: () => <LinearProgress />,
+});
+const ApiTabContent = dynamic(() => import('@client/app/components/ProfileModal/ApiTabContent'), {
   ssr: false,
   loading: () => <LinearProgress />,
 });
@@ -52,6 +59,7 @@ export enum ProfileTab {
   Profile = '',
   Community = 'community',
   Settings = 'settings',
+  ApiKeys = 'api-keys',
   Usage = 'usage',
   Integrations = 'integrations',
   Security = 'security',
@@ -81,6 +89,17 @@ const ProfilePage = () => {
   const { t } = useTranslation();
   const { data: friendRequests } = useGetFriendRequests(currentUser?.id);
   const { currentSession } = useSessions();
+  const isAdmin = currentUser?.isAdmin ?? false;
+  const {
+    data: publishedArtifacts,
+    isPending: publishedPending,
+    isError: publishedError,
+  } = useQuery({
+    queryKey: ['published-artifacts', 'mine'],
+    queryFn: listMyPublishedArtifacts,
+    enabled: !!currentUser,
+  });
+  const hasPublishedArtifacts = (publishedArtifacts?.length ?? 0) > 0;
 
   // Redirect legacy tab values to their new homes (see LEGACY_SETTINGS_REDIRECTS).
   useEffect(() => {
@@ -99,8 +118,21 @@ const ProfilePage = () => {
     const subtab = LEGACY_SETTINGS_REDIRECTS[rawTab];
     if (subtab) {
       navigate({ to: '/profile', search: { tab: ProfileTab.Settings, subtab }, replace: true });
+      return;
     }
-  }, [rawTab, rawSubtab, navigate]);
+    // Redirect to Profile if user navigates to a hidden tab.
+    // Wait for currentUser to hydrate before checking admin status, and for
+    // the published query to settle, to avoid bouncing users who are still loading.
+    if (!currentUser) return;
+    if (rawTab === ProfileTab.Security && !isAdmin) {
+      navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
+      return;
+    }
+    if (rawTab === ProfileTab.Published && !publishedPending && !publishedError && !hasPublishedArtifacts) {
+      navigate({ to: '/profile', search: { tab: ProfileTab.Profile }, replace: true });
+      return;
+    }
+  }, [rawTab, rawSubtab, navigate, currentUser, isAdmin, publishedPending, publishedError, hasPublishedArtifacts]);
 
   const profileName = currentUser?.name || currentUser?.username;
   useDocumentTitle(profileName ? `${profileName}'s Profile` : 'Profile');
@@ -192,6 +224,15 @@ const ProfilePage = () => {
             </Tooltip>
           </StyledTab>
 
+          <StyledTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
+            <Tooltip title="Manage your API keys">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
+                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>API Keys</Typography>
+              </Box>
+            </Tooltip>
+          </StyledTab>
+
           <StyledTab data-testid="usage-tab" value={ProfileTab.Usage}>
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -212,23 +253,29 @@ const ProfilePage = () => {
             </Tooltip>
           </StyledTab>
 
-          <StyledTab data-testid="security-tab" value={ProfileTab.Security}>
-            <Tooltip title="View security events and alerts">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Security</Typography>
-              </Box>
-            </Tooltip>
-          </StyledTab>
+          {isAdmin && (
+            <StyledTab data-testid="security-tab" value={ProfileTab.Security}>
+              <Tooltip title="View security events and alerts">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <SecurityIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
+                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Security</Typography>
+                </Box>
+              </Tooltip>
+            </StyledTab>
+          )}
 
-          <StyledTab data-testid="published-tab" value={ProfileTab.Published}>
-            <Tooltip title="Manage your published & shared artifacts">
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
-                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>Published</Typography>
-              </Box>
-            </Tooltip>
-          </StyledTab>
+          {hasPublishedArtifacts && (
+            <StyledTab data-testid="published-tab" value={ProfileTab.Published}>
+              <Tooltip title="Manage your Live Artifacts (published & shared)">
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                  <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
+                  <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
+                    Live Artifacts
+                  </Typography>
+                </Box>
+              </Tooltip>
+            </StyledTab>
+          )}
         </TabList>
 
         {/* Tab Panels */}
@@ -245,6 +292,10 @@ const ProfilePage = () => {
           {activeTab === ProfileTab.Settings && <SettingsTabContent />}
         </StyledTabPanel>
 
+        <StyledTabPanel value={ProfileTab.ApiKeys}>
+          {activeTab === ProfileTab.ApiKeys && <ApiTabContent />}
+        </StyledTabPanel>
+
         <StyledTabPanel value={ProfileTab.Usage}>
           {activeTab === ProfileTab.Usage && <CreditAnalyticsTabContent />}
         </StyledTabPanel>
@@ -253,13 +304,17 @@ const ProfilePage = () => {
           {activeTab === ProfileTab.Integrations && <IntegrationsTabContent />}
         </StyledTabPanel>
 
-        <StyledTabPanel value={ProfileTab.Security}>
-          {activeTab === ProfileTab.Security && <SecurityTabContent />}
-        </StyledTabPanel>
+        {isAdmin && (
+          <StyledTabPanel value={ProfileTab.Security}>
+            {activeTab === ProfileTab.Security && <SecurityTabContent />}
+          </StyledTabPanel>
+        )}
 
-        <StyledTabPanel value={ProfileTab.Published}>
-          {activeTab === ProfileTab.Published && <PublishedArtifactsTabContent />}
-        </StyledTabPanel>
+        {hasPublishedArtifacts && (
+          <StyledTabPanel value={ProfileTab.Published}>
+            {activeTab === ProfileTab.Published && <PublishedArtifactsTabContent />}
+          </StyledTabPanel>
+        )}
       </Tabs>
     </Box>
   );

@@ -27,7 +27,7 @@ import {
   buildIssueAssignedBlocks,
 } from '@bike4mind/slack';
 import { webhookSubscriptionRepository, User } from '@bike4mind/database';
-import { dispatchIssueToSre } from '../sreWebhookDispatch';
+import { dispatchIssueToSre, syncSreIssueStateFromWebhook } from '../sreWebhookDispatch';
 import { emptyNotifyResult, mergeNotifyResults, toHandlerResult } from './notifyResultUtils';
 
 export class IssuesHandler implements GitHubEventHandler {
@@ -228,6 +228,10 @@ export class IssuesHandler implements GitHubEventHandler {
     repo: string,
     options?: { orgId?: string }
   ): Promise<NotifyResult> {
+    // Keep the denormalized githubIssueState fresh for the SRE admin filter.
+    // Runs before the self-close early-return below so state is always recorded.
+    await syncSreIssueStateFromWebhook(issues, this.logger);
+
     const issueAuthor = issues.issue.user.login;
     const closedBy = issues.sender?.login || 'unknown';
 
@@ -313,6 +317,9 @@ export class IssuesHandler implements GitHubEventHandler {
    * prior fix on the same fingerprint and escalates to a human.
    */
   private async handleReopened(issues: GitHubIssuesPayload, repo: string): Promise<void> {
+    // Record the reopen (issue is open again) before re-dispatching for analysis.
+    await syncSreIssueStateFromWebhook(issues, this.logger);
+
     try {
       await this.dispatchToSreIfMatching(issues, repo);
     } catch (error) {

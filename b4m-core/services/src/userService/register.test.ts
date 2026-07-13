@@ -90,6 +90,9 @@ describe('registerUser', () => {
     const createdUser = mockAdapters.db.users.create.mock.calls[0][0];
     expect(createdUser.tags).toContain(PENDING_FREE_CREDITS_TAG);
     expect(createdUser.pendingCreditGrant).toBe(10);
+    // This path is OTC-only (the sole caller always passes password: ''), so the
+    // account is passwordless by construction regardless of what `password` was set to here.
+    expect(createdUser.hasUsablePassword).toBe(false);
     expect(mockAdapters.db.registrationInvites.update).toHaveBeenCalledWith(
       expect.objectContaining({
         status: RegInviteStatusType.used,

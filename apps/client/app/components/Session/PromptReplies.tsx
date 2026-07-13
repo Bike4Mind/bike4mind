@@ -37,7 +37,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
@@ -49,7 +49,7 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { parseArtifacts, convertCodeBlocksToArtifacts, validateMermaidSyntax } from '@client/app/utils/artifactParser';
+import { parseArtifactsWithFallback, validateMermaidSyntax } from '@client/app/utils/artifactParser';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -1388,15 +1388,10 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       }
     }
 
-    let parseResult = parseArtifacts(preprocessedContent, { rechartsDisplayMode });
-
-    if (parseResult.artifacts.length === 0) {
-      const contentForConversion = parseResult.cleanedContent || preprocessedContent;
-      const convertedContent = convertCodeBlocksToArtifacts(contentForConversion);
-      if (convertedContent !== contentForConversion) {
-        parseResult = parseArtifacts(convertedContent, { rechartsDisplayMode });
-      }
-    }
+    // Parse explicit <artifact> tags, then promote any bare/fenced HTML document left in the
+    // prose (e.g. an "article" reply) so it renders as a previewable artifact rather than raw
+    // source - even when the reply also contains an explicit artifact.
+    const parseResult = parseArtifactsWithFallback(preprocessedContent, { rechartsDisplayMode });
 
     return {
       artifacts: parseResult.artifacts,
@@ -1445,6 +1440,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     content: processedContent,
     isEnabled: isExpandable,
   });
+
+  // Reruns a full-content regex pass, so memoize like the other whole-reply
+  // transforms above (cleanReply, processedContent) - this component re-renders on
+  // every streamed token.
+  const mathReadyContent = useMemo(() => promoteInlineLatexDollars(displayContent), [displayContent]);
 
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
@@ -1783,7 +1783,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             rehypePlugins={[rehypeKatex]}
                             remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
                           >
-                            {displayContent}
+                            {mathReadyContent}
                           </ReactMarkdown>
                         )}
                       </>
