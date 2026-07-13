@@ -170,7 +170,7 @@
     "next-connect": "^0.13.0",
     "nodemailer": "^9.0.3",
     "nuqs": "^2.9.0",
-    "openai": "^6.38.0",
+    "openai": "^6.46.0",
     "openid-client": "^6.8.4",
     "p-limit": "^7.3.0",
     "papaparse": "^5.5.4",

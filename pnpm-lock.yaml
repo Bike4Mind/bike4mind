@@ -510,8 +510,8 @@ importers:
         specifier: ^2.9.0
         version: 2.9.0(@tanstack/react-router@1.170.17(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(next@16.2.10(@babel/core@7.29.7)(@opentelemetry/api@1.9.0)(@playwright/test@1.61.1)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react@19.2.7)
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.66)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       openid-client:
         specifier: ^6.8.4
         version: 6.8.4
@@ -1050,8 +1050,8 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
@@ -1126,8 +1126,8 @@ importers:
         specifier: ^0.6.3
         version: 0.6.3
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.66)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       undici:
         specifier: ^7.28.0
         version: 7.28.0
@@ -1308,8 +1308,8 @@ importers:
         specifier: ^8.24.1
         version: 8.24.1(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       p-limit:
         specifier: ^7.3.0
         version: 7.3.0
@@ -1530,8 +1530,8 @@ importers:
         specifier: ^3.0.2
         version: 3.0.2
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.66)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
@@ -1748,8 +1748,8 @@ importers:
         specifier: ^11.0.0
         version: 11.0.0
       openai:
-        specifier: ^6.38.0
-        version: 6.38.0(ws@8.21.0)(zod@4.4.3)
+        specifier: ^6.46.0
+        version: 6.46.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3)
       p-limit:
         specifier: ^7.3.0
         version: 7.3.0
@@ -9862,13 +9862,22 @@ packages:
     resolution: {integrity: sha512-smsWv2LzFjP03xmvFoJ331ss6h+jixfA4UUV/Bsiyuu4YJPfN+FIQGOIiv4w9/+MoHkfkJ22UIaQWRVFRfH6Vw==}
     engines: {node: '>=20'}
 
-  openai@6.38.0:
-    resolution: {integrity: sha512-AoMplt2UalrpgUDMh3L09QWjNRlgJPipclQvA6sYAaeF6nHNBMgmikAZGmcYLn8on4d9sQY9Q8bOLfrBS7Lc8g==}
+  openai@6.46.0:
+    resolution: {integrity: sha512-DFg6jEPT2RO+oAyXtddeUJU8zkGy1OQ1AjGzNIJUMQG03TTqvCpy9tBpQ+2VVVnvrl3E56F8GEin2JYtWpITtA==}
     hasBin: true
     peerDependencies:
+      '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
+      '@smithy/hash-node': '>=4.3.0 <5'
+      '@smithy/signature-v4': '>=5.4.0 <6'
       ws: ^8.18.0
       zod: ^3.25 || ^4.0
     peerDependenciesMeta:
+      '@aws-sdk/credential-provider-node':
+        optional: true
+      '@smithy/hash-node':
+        optional: true
+      '@smithy/signature-v4':
+        optional: true
       ws:
         optional: true
       zod:
@@ -21566,8 +21575,17 @@ snapshots:
       powershell-utils: 0.1.0
       wsl-utils: 0.3.0
 
-  openai@6.38.0(ws@8.21.0)(zod@4.4.3):
+  openai@6.46.0(@aws-sdk/credential-provider-node@3.972.63)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3):
     optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.63
+      '@smithy/signature-v4': 5.6.4
+      ws: 8.21.0
+      zod: 4.4.3
+
+  openai@6.46.0(@aws-sdk/credential-provider-node@3.972.66)(@smithy/signature-v4@5.6.4)(ws@8.21.0)(zod@4.4.3):
+    optionalDependencies:
+      '@aws-sdk/credential-provider-node': 3.972.66
+      '@smithy/signature-v4': 5.6.4
       ws: 8.21.0
       zod: 4.4.3
 
