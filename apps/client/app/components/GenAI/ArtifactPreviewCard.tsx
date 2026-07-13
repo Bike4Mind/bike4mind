@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { brand } from '@client/app/utils/themes/colors';
+import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 
 export interface ArtifactSaveFile {
   fileName: string;
@@ -274,6 +275,30 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
           <Box sx={{ flex: 1 }} />
 
+          {/* The toggle leads the action group so it grows leftward: copy/save/viewer keep
+              the same right-anchored positions whether or not a type has a toggle. */}
+          {showCodeToggle && (
+            // The card's own onClick collapses it, so swallow clicks meant for the toggle.
+            <Box
+              onClick={e => e.stopPropagation()}
+              data-testid={`${testIdPrefix}-artifact-preview-btn`}
+              sx={{ display: 'flex', flexShrink: 0 }}
+            >
+              <SwitchSelector
+                options={[
+                  { value: 'preview', icon: PreviewIcon, tooltip: 'Show preview' },
+                  { value: 'code', icon: CodeViewIcon, tooltip: 'Show code' },
+                ]}
+                value={showRenderedPreview ? 'preview' : 'code'}
+                onChange={next => {
+                  setIsExpanded(true);
+                  setShowRenderedPreview(next === 'preview');
+                }}
+                size="sm"
+              />
+            </Box>
+          )}
+
           {actions.copy && source && (
             <Tooltip title={copyTooltip} placement="top">
               <IconButton
@@ -298,24 +323,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 data-testid={`${testIdPrefix}-artifact-save-btn`}
               >
                 <SaveIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-
-          {showCodeToggle && (
-            <Tooltip title={showRenderedPreview ? 'Show code' : 'Show preview'} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color={showRenderedPreview ? 'primary' : 'neutral'}
-                onClick={e => {
-                  e.stopPropagation();
-                  setIsExpanded(true);
-                  setShowRenderedPreview(!showRenderedPreview);
-                }}
-                data-testid={`${testIdPrefix}-artifact-preview-btn`}
-              >
-                {showRenderedPreview ? <CodeViewIcon /> : <PreviewIcon />}
               </IconButton>
             </Tooltip>
           )}
