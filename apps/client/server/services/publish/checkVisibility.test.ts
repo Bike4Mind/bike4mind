@@ -140,11 +140,43 @@ describe('checkVisibility - domain gate', () => {
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com', emailVerified: false });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403, reason: 'domain' });
   });
-  it('rejects a verified email on the wrong domain - exact match only, no suffix tricks', async () => {
+  it('rejects a verified email on a lookalike domain - registrable-domain match, no suffix tricks', async () => {
+    // evilacme.com -> evilacme.com, acme.com.evil.io -> evil.io; neither is acme.com.
     mockUserFindById.mockResolvedValue({ email: 'jo@evilacme.com', emailVerified: true });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403 });
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com.evil.io', emailVerified: true });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403 });
+  });
+  it('admits a verified viewer on a SUBDOMAIN of an allowlisted org domain (eTLD+1)', async () => {
+    mockUserFindById.mockResolvedValue({ email: 'jo@mail.acme.com', emailVerified: true });
+    expect(await checkVisibility(gated, gViewer)).toEqual({ ok: true });
+  });
+  it('reduces allowlist entries to their registrable domain too (subdomain entry matches the org)', async () => {
+    const subEntry = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['mail.acme.com'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@acme.com', emailVerified: true });
+    expect(await checkVisibility(subEntry, gViewer)).toEqual({ ok: true });
+  });
+  it('matches correctly across a multi-level public suffix (acme.co.uk)', async () => {
+    const coUk = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['acme.co.uk'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@sub.acme.co.uk', emailVerified: true });
+    expect(await checkVisibility(coUk, gViewer)).toEqual({ ok: true });
+  });
+  it('fails closed when the allowlist has only invalid (public-suffix) entries', async () => {
+    const bogus = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['co.uk'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@anything.co.uk', emailVerified: true });
+    expect(await checkVisibility(bogus, gViewer)).toMatchObject({ ok: false, status: 403 });
   });
   it('fails closed on a misconfigured empty allowlist', async () => {
     const empty = {

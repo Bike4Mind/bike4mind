@@ -1,4 +1,5 @@
 import type { PublishVisibility } from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import type { PublishUser } from './checkScopePermission';
 
 /**
@@ -116,9 +117,12 @@ export async function checkAccessGate(
   if (!user?.id) {
     return { ok: false, status: 401, error: 'Authentication required', reason: 'domain' };
   }
-  const allowed = (gate.allowedDomains ?? []).map(d => d.toLowerCase());
-  if (allowed.length === 0) {
-    // A domain gate with no domains is a misconfiguration; fail closed.
+  // Match on the registrable domain (eTLD+1): a viewer at any subdomain of an
+  // allowlisted org domain passes (mail.acme.com -> acme.com), while a lookalike
+  // (evilacme.com) does not. Entries with no registrable domain (a bare public
+  // suffix like co.uk) are dropped; an all-invalid or empty allowlist fails closed.
+  const allowed = new Set((gate.allowedDomains ?? []).map(registrableDomain).filter((d): d is string => d !== null));
+  if (allowed.size === 0) {
     return { ok: false, status: 403, error: 'Not authorized', reason: 'domain' };
   }
   const { User } = await import('@bike4mind/database');
@@ -126,10 +130,10 @@ export async function checkAccessGate(
     .select('email emailVerified')
     .lean<{ email?: string; emailVerified?: boolean } | null>();
   const email = viewer?.email?.toLowerCase() ?? '';
-  const domain = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
-  // Exact domain match only - no substring/suffix matching - and only for
-  // VERIFIED emails (same rule as the entitlement domain grants).
-  if (viewer?.emailVerified === true && domain && allowed.includes(domain)) return { ok: true };
+  const emailDomain = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
+  const viewerDomain = registrableDomain(emailDomain);
+  // Only VERIFIED emails match (same rule as the entitlement domain grants).
+  if (viewer?.emailVerified === true && viewerDomain && allowed.has(viewerDomain)) return { ok: true };
   return {
     ok: false,
     status: 403,

@@ -11,6 +11,7 @@ import {
   type PublishAccessGateInput,
   type PublishAccessGateRead,
 } from '@client/app/utils/publishApi';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 export interface AccessGateEditorProps {
   publicId: string;
@@ -29,7 +30,8 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNod
   { value: 'passphrase', label: 'Passphrase', icon: <KeyIcon sx={{ fontSize: 16 }} /> },
   { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
 ];
-/** Registrable domain, exact form (mirrors the server DOMAIN_RE). */
+/** Syntactic domain pre-filter (mirrors the server DOMAIN_RE); entries are then
+ *  reduced to their registrable domain (eTLD+1) before being sent/stored. */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 function errMessage(err: unknown): string {
@@ -85,7 +87,15 @@ export function AccessGateEditor({
       toast.error(`Invalid domain: ${bad}`);
       return 'invalid';
     }
-    return { kind: 'domain', allowedDomains: domains };
+    // Canonicalize to registrable domains (eTLD+1) so chips match what the server
+    // stores; a bare public suffix (co.uk) has no registrable domain and is rejected.
+    const canonical = domains.map(d => ({ input: d, reg: registrableDomain(d) }));
+    const noReg = canonical.find(c => c.reg === null);
+    if (noReg) {
+      toast.error(`Enter a registrable domain (e.g. acme.com), not: ${noReg.input}`);
+      return 'invalid';
+    }
+    return { kind: 'domain', allowedDomains: [...new Set(canonical.map(c => c.reg as string))] };
   };
 
   const apply = async () => {

@@ -4,6 +4,7 @@ import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
 import { VisibilitySchema, CommentPolicySchema, EMBED_ORIGINS_MAX } from '@bike4mind/common';
 import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOrigins } from '@server/services/publish';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 /**
  * /api/publish/artifacts/[id] - manage one published artifact by its publicId.
@@ -12,7 +13,9 @@ import { resolveVisibility, invalidatePublishCdn, toCacheTarget, validateEmbedOr
  *   DELETE -> soft-delete / archive (owner/admin)
  */
 
-/** Registrable domain, exact form: labels + a real TLD, lowercase-normalized before test. */
+/** Syntactic domain check: labels + a real TLD, lowercase-normalized before test.
+ *  A pre-filter only - entries are then reduced to their registrable domain (eTLD+1)
+ *  below, which is what actually gets stored and matched. */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 /**
@@ -110,9 +113,19 @@ const handler = baseApi()
           passphraseHash: await bcrypt.hash(parsed.data.accessGate.passphrase, 10),
         };
       } else {
+        // Store canonical registrable domains (eTLD+1) so matching is subdomain-aware.
+        // A bare public suffix (e.g. co.uk) has no registrable domain and is rejected -
+        // a co.uk gate would otherwise admit the entire UK.
+        const canonical = parsed.data.accessGate.allowedDomains.map(registrableDomain);
+        if (canonical.some(d => d === null)) {
+          return res.status(400).json({
+            error: 'Each allowed domain must be a registrable domain (e.g. acme.com), not a public suffix like co.uk',
+            code: 'INVALID_DOMAIN',
+          });
+        }
         artifact.accessGate = {
           kind: 'domain',
-          allowedDomains: [...new Set(parsed.data.accessGate.allowedDomains)],
+          allowedDomains: [...new Set(canonical as string[])],
         };
       }
     }

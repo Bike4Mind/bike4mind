@@ -25,6 +25,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import {
@@ -121,7 +122,8 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: 
   },
 ];
 
-/** Parse the domains textarea into normalized domains; null when any entry is invalid. */
+/** Parse the domains textarea into canonical registrable domains (eTLD+1); null when
+ *  any entry is invalid. Mirrors the server: chips shown = what gets stored/matched. */
 function parseDomains(text: string): string[] | null {
   const items = [
     ...new Set(
@@ -132,7 +134,10 @@ function parseDomains(text: string): string[] | null {
     ),
   ];
   if (items.length === 0 || items.length > 20) return null;
-  return items.every(d => DOMAIN_RE.test(d)) ? items : null;
+  if (!items.every(d => DOMAIN_RE.test(d))) return null;
+  const canonical = items.map(registrableDomain);
+  if (canonical.some(d => d === null)) return null;
+  return [...new Set(canonical as string[])];
 }
 
 function errorMessage(err: unknown): string {

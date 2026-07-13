@@ -24,7 +24,8 @@ export interface PublishedArtifactAccessGate {
   kind: 'passphrase' | 'domain';
   /** bcrypt hash; `select: false` in the schema so reads never leak it by default. */
   passphraseHash?: string | null;
-  /** Lowercased registrable domains, exact-match only (no substrings). */
+  /** Lowercased registrable domains (eTLD+1). A viewer's verified email domain
+   *  matches when its registrable domain equals an entry (mail.acme.com -> acme.com). */
   allowedDomains?: string[];
 }
 
