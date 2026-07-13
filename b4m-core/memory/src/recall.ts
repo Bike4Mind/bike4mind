@@ -73,12 +73,28 @@ export interface RecallOptions {
   scorer?: RecallScorer;
   /** Maximum results to return. */
   k?: number;
-  /** Weight blending relevance into the ACT-R activation score. Raise it to let topicality dominate. */
-  relevanceWeight?: number;
   /**
-   * Topicality floor: drop beliefs whose relevance is below this. Default 0 keeps everything (so an
-   * empty query still returns the most-active beliefs). Set it above 0 to require an on-topic match
-   * and keep a merely-hot-but-off-topic belief out of the results.
+   * How far a belief's ACT-R activation may move it RELATIVE to topicality. 0 = rank purely on
+   * topic; 1 = heat counts as much as topic. Default 0.1: swept on the eval corpus, it is the
+   * largest weight at which heat only reorders genuine near-ties - MRR holds at parity with plain
+   * vector search up to 0.10 and degrades beyond it.
+   *
+   * Both axes are normalized to 0..1 across the candidate set before they are blended, because they
+   * are otherwise on incompatible scales and a raw sum silently hands the ranking to whichever one
+   * happens to have the wider spread. Activation is an UNBOUNDED log quantity (ln of a sum of decayed
+   * presentations); relevance is a BOUNDED similarity, and a compressed embedding model squeezes it
+   * into a narrow band. Measured on the eval corpus: activation spread 3.29 against a cosine spread
+   * of 0.09 - so an unnormalized sum ranked purely by heat, buried the correct belief beneath
+   * whatever was merely recent, and dropped hit rate to 69% where plain vector search got 100%.
+   */
+  activationWeight?: number;
+  /**
+   * Topicality floor, applied to the RAW relevance (not the normalized one - a floor has to mean the
+   * same thing from query to query). Beliefs below it are not returned at all. Default 0 keeps
+   * everything, so an empty query still degrades to "the most active beliefs" - the profile.
+   *
+   * Above 0 this is what keeps a merely-hot, off-topic belief out of the prompt, and with it the
+   * invitation to confabulate from a memory that has nothing to do with the question.
    */
   minRelevance?: number;
 }
@@ -87,30 +103,55 @@ export interface RecalledBelief {
   belief: Belief;
   /** The scorer's relevance for this query, 0..1 for the lexical default. */
   relevance: number;
-  /** activation + relevanceWeight * relevance - the ACT-R retrieval score this ranks by. */
+  /** normalized relevance + activationWeight * normalized activation - what this ranks by. */
   score: number;
 }
 
 const DEFAULT_K = 8;
-const DEFAULT_RELEVANCE_WEIGHT = 1;
+const DEFAULT_ACTIVATION_WEIGHT = 0.1;
+
+/** Min-max to 0..1 over the candidate set. A degenerate spread (every value equal) maps to 0. */
+const normalizer = (values: readonly number[]): ((v: number) => number) => {
+  const min = Math.min(...values);
+  const spread = Math.max(...values) - min;
+  return spread > 1e-9 ? (v: number) => (v - min) / spread : () => 0;
+};
 
 /**
- * Rank a principal's beliefs for a query by ACT-R retrieval score (activation + associative match),
- * returning the top `k`. An empty query scores every belief 0 on relevance, so results fall back to
- * pure activation order - i.e. the most top-of-mind beliefs.
+ * Rank a principal's beliefs for a query by ACT-R retrieval score - topicality (associative match)
+ * led, activation (recency + frequency) breaking ties - and return the top `k`.
+ *
+ * The two axes are NORMALIZED across the candidate set before being blended: they are otherwise on
+ * incompatible scales, and the raw sum this used to compute silently handed the ranking to whichever
+ * one had the wider spread (see `activationWeight`). An empty query scores every belief 0, the
+ * relevance spread degenerates to 0, and the ranking falls back to pure activation order - the
+ * most top-of-mind beliefs, i.e. the profile. That fallback is intentional and preserved.
  */
 export function recall(beliefs: readonly Belief[], query: string, options: RecallOptions = {}): RecalledBelief[] {
   const scorer = options.scorer ?? lexicalScorer;
-  const relevanceWeight = options.relevanceWeight ?? DEFAULT_RELEVANCE_WEIGHT;
+  const activationWeight = options.activationWeight ?? DEFAULT_ACTIVATION_WEIGHT;
   const k = options.k ?? DEFAULT_K;
   const minRelevance = options.minRelevance ?? 0;
 
-  return beliefs
-    .map((belief): RecalledBelief => {
-      const relevance = scorer(query, belief);
-      return { belief, relevance, score: (belief.activation ?? 0) + relevanceWeight * relevance };
-    })
-    .filter(r => r.relevance >= minRelevance)
+  // Score, then apply the floor on RAW relevance, then normalize over what survives - so the
+  // normalization describes the beliefs actually in contention.
+  const candidates = beliefs
+    .map(belief => ({ belief, relevance: scorer(query, belief), activation: belief.activation ?? 0 }))
+    .filter(c => c.relevance >= minRelevance);
+
+  if (candidates.length === 0) return [];
+
+  const normRel = normalizer(candidates.map(c => c.relevance));
+  const normAct = normalizer(candidates.map(c => c.activation));
+
+  return candidates
+    .map(
+      (c): RecalledBelief => ({
+        belief: c.belief,
+        relevance: c.relevance,
+        score: normRel(c.relevance) + activationWeight * normAct(c.activation),
+      })
+    )
     .sort((a, b) => b.score - a.score || b.relevance - a.relevance || a.belief.id.localeCompare(b.belief.id))
     .slice(0, k);
 }

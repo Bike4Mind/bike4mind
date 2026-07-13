@@ -19,15 +19,32 @@ import { isMementosV2Enabled } from './mementoLedgerMirror';
 const V2_RECALL_K = 10;
 
 /**
- * How hard topicality outweighs heat when ranking. The chat prompt is a QUERY, so what the user just
- * asked about should be the primary axis and ACT-R activation the tiebreaker - not the other way
- * round. Measured on real data: activation spans ~0..0.25 while cosine relevance spans ~0.3..0.9, so
- * an unweighted sum let a merely-hot, off-topic belief outrank a cold but perfectly on-topic one.
- * Weighting relevance makes the semantic signal dominant while heat still breaks ties between
- * equally-relevant beliefs. A generic query ("what do you know about me?") scores everything
- * similarly, so ranking degrades to activation order - the profile fallback - which is what we want.
+ * How far heat (ACT-R activation) may move a belief relative to topicality. The chat prompt is a
+ * QUERY, so what the user just asked about is the primary axis and recency/frequency the tiebreaker.
+ * `recall` normalizes both axes before blending, so this is a ratio, not a raw scale factor. Swept on
+ * the eval corpus (b4m-core/memory/src/eval): 0.1 is the largest weight at which heat only reorders
+ * genuine near-ties - ranking quality holds at parity with plain vector search up to 0.10 and
+ * degrades beyond it.
  */
-const V2_RELEVANCE_WEIGHT = 3;
+const V2_ACTIVATION_WEIGHT = 0.1;
+
+/**
+ * Topicality floor: a belief below this cosine to the query is not injected at all.
+ *
+ * THIS IS CALIBRATED PER EMBEDDING MODEL and cannot be a single constant, because the cosine scale is
+ * a property of the model. `text-embedding-ada-002` is notoriously compressed - even unrelated text
+ * scores ~0.72 - so the entire signal lives in a narrow band and 0.76 is the highest floor that loses
+ * no relevant belief on the eval corpus while cutting the memory injected into an OFF-topic question
+ * from 10 beliefs to 1.7.
+ *
+ * An UNKNOWN model deliberately falls back to NO floor. That degrades to the previous behaviour -
+ * inject the top k, noisy but complete - rather than silently dropping a user's entire memory because
+ * someone changed the embedding model and its cosine scale moved out from under a hardcoded number.
+ * If you change the model: re-run the eval sweep and add the model here.
+ */
+const MIN_RELEVANCE_BY_MODEL: Record<string, number> = {
+  'text-embedding-ada-002': 0.76,
+};
 
 /**
  * Embed the query in the SAME vector space as the stored memento embeddings - i.e. with the
@@ -38,8 +55,9 @@ const V2_RELEVANCE_WEIGHT = 3;
  * Returns [] on any failure (no key, no model configured, provider error): recall then falls back to
  * the lexical scorer rather than breaking the chat.
  */
-async function embedQuery(userId: string, query: string): Promise<number[]> {
-  if (!query.trim()) return [];
+async function embedQuery(userId: string, query: string): Promise<{ vector: number[]; model: string }> {
+  const none = { vector: [] as number[], model: '' };
+  if (!query.trim()) return none;
 
   // Independent lookups - the configured model and the user's keys - so fetch them together rather
   // than paying two serial round trips to a remote Mongo.
@@ -51,22 +69,22 @@ async function embedQuery(userId: string, query: string): Promise<number[]> {
     }),
   ]);
 
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) return [];
+  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) return none;
 
   const provider = getProviderFromModel(defaultEmbeddingModel);
   const config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
   if (provider === 'openai') {
-    if (!apiKeyTable?.openai) return [];
+    if (!apiKeyTable?.openai) return none;
     config.openaiApiKey = apiKeyTable.openai;
   } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) return [];
+    if (!apiKeyTable?.voyageai) return none;
     config.voyageApiKey = apiKeyTable.voyageai;
   }
 
   const embeddingService = new EmbeddingFactory(config).createEmbeddingService(
     defaultEmbeddingModel as SupportedEmbeddingModel
   );
-  return embeddingService.generateEmbedding(query);
+  return { vector: await embeddingService.generateEmbedding(query), model: defaultEmbeddingModel };
 }
 
 /**
@@ -105,7 +123,7 @@ export async function recallMementosV2(
   // The profile read and the query embedding are INDEPENDENT - one hits Mongo, the other an
   // embedding provider - so they run concurrently. Serially they cost their sum (~330ms + ~370ms);
   // together they cost the slower one. This is the single biggest win on the recall path.
-  const [profile, queryEmbedding] = await Promise.all([
+  const [profile, embedded] = await Promise.all([
     store.readProfile({ kind: 'user', id: userId }),
     embedQuery(userId, query).catch(err => {
       // Falling back to lexical is the right call - never fail a chat turn over recall - but do it
@@ -116,9 +134,10 @@ export async function recallMementosV2(
           err instanceof Error ? err.message : String(err)
         }`
       );
-      return [] as number[];
+      return { vector: [] as number[], model: '' };
     }),
   ]);
+  const { vector: queryEmbedding, model: embeddingModel } = embedded;
 
   if (!profile) return [];
 
@@ -126,7 +145,14 @@ export async function recallMementosV2(
 
   return recall(live, query, {
     k: V2_RECALL_K,
-    relevanceWeight: V2_RELEVANCE_WEIGHT,
-    ...(queryEmbedding.length ? { scorer: embeddingScorer(queryEmbedding) } : {}),
+    activationWeight: V2_ACTIVATION_WEIGHT,
+    // The floor only means anything in the vector space it was calibrated for; with no embedding the
+    // scorer is lexical and its scale is different again, so no floor applies.
+    ...(queryEmbedding.length
+      ? {
+          scorer: embeddingScorer(queryEmbedding),
+          minRelevance: MIN_RELEVANCE_BY_MODEL[embeddingModel] ?? 0,
+        }
+      : {}),
   }).map(r => ({ fact: r.belief.fact, relevance: r.relevance }));
 }

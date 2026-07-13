@@ -31,7 +31,7 @@ describe('recall', () => {
   const hobby = belief({ id: 'hobby', fact: 'Enjoys sailing on weekends', activation: 0.15 });
 
   it('ranks an on-topic belief above a more-active off-topic one', () => {
-    const out = recall([pharma, quantum, hobby], 'pharma clients', { relevanceWeight: 3 });
+    const out = recall([pharma, quantum, hobby], 'pharma clients', { activationWeight: 0.25 });
     expect(out[0].belief.id).toBe('pharma');
     expect(out[0].relevance).toBeGreaterThan(0);
   });
@@ -55,12 +55,12 @@ describe('recall', () => {
 
   it('uses an injected scorer (e.g. an embedding stand-in)', () => {
     const scorer = (_q: string, b: Belief) => (b.id === 'quantum' ? 1 : 0);
-    const out = recall([pharma, quantum, hobby], 'anything', { scorer, relevanceWeight: 5 });
+    const out = recall([pharma, quantum, hobby], 'anything', { scorer, activationWeight: 0.25 });
     expect(out[0].belief.id).toBe('quantum');
   });
 
   it('is deterministic', () => {
-    const args = [[pharma, quantum, hobby], 'pharma quantum', { relevanceWeight: 2 }] as const;
+    const args = [[pharma, quantum, hobby], 'pharma quantum', { activationWeight: 0.25 }] as const;
     expect(recall(...args)).toEqual(recall(...args));
   });
 });
@@ -118,7 +118,6 @@ describe('embeddingScorer', () => {
     const coldOnTopic = belief({ id: 'pharma', fact: 'targets pharma companies', embedding: [0, 1, 0], activation: 0 });
     const out = recall([hotOffTopic, coldOnTopic], 'which drug companies am I chasing', {
       scorer: embeddingScorer([0, 1, 0]),
-      relevanceWeight: 3,
     });
     expect(out[0].belief.id).toBe('pharma');
   });
