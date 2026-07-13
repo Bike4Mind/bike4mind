@@ -26,10 +26,6 @@ const handler = baseApi().put(
       throw new NotFoundError('Ability not found');
     }
 
-    if (!req.ability.can('update', FeedbackModel)) {
-      throw new NotFoundError('Permission denied');
-    }
-
     const updateData = UpdateFeedbackRequestSchema.parse(req.body);
 
     const feedback = await FeedbackModel.findById(id);
@@ -39,7 +35,11 @@ const handler = baseApi().put(
     }
     const { content, status, username } = updateData;
 
-    if (!req.ability.can('update', FeedbackModel)) {
+    // Authorize against the document instance, not the model class: a by-class
+    // CASL check does not evaluate the { userId } ownership condition, so
+    // ownership is only enforced when checked against the instance. Admins keep
+    // their unconditional update rule and still pass.
+    if (!req.ability.can('update', feedback)) {
       throw new NotFoundError('Permission denied');
     }
 

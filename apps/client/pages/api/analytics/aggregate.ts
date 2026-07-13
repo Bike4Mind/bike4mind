@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { Request, Response } from 'express';
 import { CounterLog } from '@bike4mind/database';
 import { dayjs } from '@bike4mind/common';
+import { ensureAdmin } from '@server/utils/errors';
 
 interface AggregateQueryParams {
   startDate?: string;
@@ -24,6 +25,9 @@ interface DailyAggregation {
 }
 
 const handler = baseApi().get(async (req: Request<{}, unknown, unknown, AggregateQueryParams>, res: Response) => {
+  // Cross-tenant analytics (event volumes grouped by organization). Admin-only.
+  ensureAdmin(req.user?.isAdmin);
+
   const { startDate, endDate, groupBy = 'day' } = req.query;
 
   // Default to last 30 days if no dates provided
