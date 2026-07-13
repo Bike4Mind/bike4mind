@@ -63,6 +63,7 @@ import ImageIcon from '@mui/icons-material/Image';
 import ChatIcon from '@mui/icons-material/Chat';
 import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
 import NightsStayIcon from '@mui/icons-material/NightsStay';
+import SpeedIcon from '@mui/icons-material/Speed';
 
 const HEADER_HEIGHT = '100px';
 
@@ -338,7 +339,9 @@ type IconMapType = {
   [K: string]: React.FC<{ sx?: SvgIconProps['sx'] }>;
 };
 
-const IconMap: IconMapType = {
+// Exported for the icon-completeness test that guards against unmapped config
+// icon names (an unmapped name renders <undefined /> and crashes admin settings).
+export const IconMap: IconMapType = {
   SmartToy: JoyIcon(SmartToyIcon),
   Psychology: JoyIcon(PsychologyIcon),
   Assistant: JoyIcon(AssistantIcon),
@@ -369,6 +372,7 @@ const IconMap: IconMapType = {
   Chat: JoyIcon(ChatIcon),
   PictureAsPdf: JoyIcon(PictureAsPdfIcon),
   NightsStay: JoyIcon(NightsStayIcon),
+  Speed: JoyIcon(SpeedIcon),
 };
 
 const settingConfigs = Object.values(settingsMap);
@@ -693,7 +697,9 @@ const AdminSettingsTab: React.FC = () => {
 
   const renderSettingGroup = (settings: typeof settingConfigs, groupName?: string, groupId?: string) => {
     const groupInfo = groupId ? Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId) : null;
-    const IconComponent = groupInfo?.icon ? IconMap[groupInfo.icon] : IconMap.Settings;
+    // Fall back to the Settings gear for a missing OR unmapped icon name so an
+    // unknown key never renders <undefined /> and crashes the tree.
+    const IconComponent = (groupInfo?.icon && IconMap[groupInfo.icon]) || IconMap.Settings;
 
     // Split settings into top-level entries and inline children.
     // A setting is an inline child when:
@@ -864,9 +870,7 @@ const AdminSettingsTab: React.FC = () => {
     data: { ungrouped: typeof settingConfigs; groups: Record<string, typeof settingConfigs> }
   ) => {
     const { ungrouped, groups } = data;
-    const CategoryIconComponent = CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]
-      ? IconMap[CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]]
-      : IconMap.Settings;
+    const CategoryIconComponent = IconMap[CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]] || IconMap.Settings;
     return (
       <Stack key={`category-${category}`} spacing={2}>
         <Stack direction="row" alignItems="center" spacing={1}>
@@ -994,7 +998,7 @@ const AdminSettingsTab: React.FC = () => {
                 }}
               >
                 {Object.entries(SETTING_TABS).map(([tabId, tabInfo]) => {
-                  const TabIcon = IconMap[tabInfo.icon];
+                  const TabIcon = IconMap[tabInfo.icon] || IconMap.Settings;
                   return (
                     <Tab
                       key={tabId}
