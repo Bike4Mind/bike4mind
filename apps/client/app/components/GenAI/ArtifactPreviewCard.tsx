@@ -114,19 +114,13 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   // With no source to fall back to, the live render is the only body there is.
   const renderedView = hasPreview && (hasSource ? showRenderedPreview : true);
 
-  // Clicking the card body always opens into the live render -- that is the payoff of
-  // clicking an artifact. `defaultRenderedView` only decides what the chevron reveals,
-  // which is why React starts on source but still previews on a card click. Once
-  // expanded, a click flips between render and source (only meaningful when both exist).
-  const handleToggleInlinePreview = (e?: React.MouseEvent) => {
+  // Clicking anywhere on the card means exactly one thing: expand/collapse, same as the
+  // chevron. Switching between the render and the source is the code/preview button's job
+  // alone -- overloading the card click stole the collapse gesture users expect.
+  const handleToggleExpand = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     if (!collapsible) return;
-    if (!isExpanded) {
-      setIsExpanded(true);
-      if (hasPreview) setShowRenderedPreview(true);
-      return;
-    }
-    if (showCodeToggle) setShowRenderedPreview(!showRenderedPreview);
+    setIsExpanded(!isExpanded);
   };
 
   const handleOpenInViewer = (e?: React.MouseEvent) => {
@@ -209,7 +203,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           boxShadow: 'sm',
         },
       }}
-      onClick={handleToggleInlinePreview}
+      onClick={handleToggleExpand}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card
           corner, so the header row carries only the title and the actions. */}
@@ -269,10 +263,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                     '--Icon-fontSize': '16px',
                     '--Icon-color': theme.vars.palette.text.tertiary,
                   })}
-                  onClick={e => {
-                    e.stopPropagation();
-                    setIsExpanded(!isExpanded);
-                  }}
+                  onClick={handleToggleExpand}
                   data-testid={`${testIdPrefix}-artifact-toggle-btn`}
                 >
                   {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
