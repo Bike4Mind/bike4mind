@@ -38,8 +38,15 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
     setTimeout(() => {
       const selection = window.getSelection();
       const selectionText = selection?.toString().trim() || '';
+      const container = containerRef.current;
 
-      if (selectionText) {
+      // The listener lives on document (so it still works when the reply bubble
+      // streams in after this component mounts), so scope to selections that
+      // actually start inside this reply's container.
+      const anchorNode = selection?.anchorNode ?? null;
+      const isInsideContainer = !!(container && anchorNode && container.contains(anchorNode));
+
+      if (selectionText && isInsideContainer) {
         const range = selection?.getRangeAt(0);
         const rect = range?.getBoundingClientRect();
         if (rect) {
@@ -54,7 +61,7 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
         setShowFloatingButtons(false);
       }
     }, 100);
-  }, []);
+  }, [containerRef]);
 
   const handleTextAction = useCallback(
     (text: string) => {
@@ -95,14 +102,11 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
   useEffect(() => {
     if (!isFinePointer) return;
 
-    const element = containerRef.current;
-    if (element) {
-      element.addEventListener('mouseup', handleTextSelection);
-      return () => {
-        element.removeEventListener('mouseup', handleTextSelection);
-      };
-    }
-  }, [isFinePointer, containerRef, handleTextSelection]);
+    document.addEventListener('mouseup', handleTextSelection);
+    return () => {
+      document.removeEventListener('mouseup', handleTextSelection);
+    };
+  }, [isFinePointer, handleTextSelection]);
 
   if (!isFinePointer || !showFloatingButtons) return null;
 
