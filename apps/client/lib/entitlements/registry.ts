@@ -150,7 +150,7 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
  * customer and couple a fork to our deals. Empty/unset (a fork, or CI type-check)
  * -> no external grant, the correct default. Set the NEXT_PUBLIC_PREMIUM_DOMAIN_GRANTS
  * repo/org variable per stage - a JSON array of `{ domain, entitlements }` - to
- * activate; the value flows in via _deploy-env.yml.
+ * activate; the value is injected at deploy time per infra/deploy-contract.json.
  *
  * Every domain granted here confers paid entitlements AND a one-time signup
  * credit allotment (see below) to any verified email on that domain. NEVER list a
@@ -183,7 +183,7 @@ const EXTERNAL_DOMAIN_GRANT_ROWS: DomainGrantRow[] = (() => {
  * couple a fork to our infrastructure. Empty/unset (a fork, or CI type-check)
  * -> no internal-domain grant, which is the correct default. Set the
  * NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS repo/org variable (a comma-separated
- * domain list) per stage to activate; the value flows in via _deploy-env.yml.
+ * domain list) per stage to activate; the value is injected at deploy time per infra/deploy-contract.json.
  *
  * Parsed via the shared helper so analytics resolves the same domains (#172).
  */
