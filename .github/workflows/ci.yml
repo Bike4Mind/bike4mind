@@ -3,8 +3,8 @@ name: CI
 # App CI: build, typecheck, lint, unit tests, and the CLI e2e harness. The merge
 # gate for this repo. Deploys no longer run here: staging + production are handled
 # by the internal deployer (deploy.bike4mind.com), and PR previews are created on
-# demand by maintainers there. See the `deploy-status` job for why the required
-# check is still named "Deploy".
+# demand by maintainers there. See the `ci-complete` job for the single required
+# "CI Complete" aggregate check.
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
-    # changes, while still reporting the required Deploy/Run Tests checks (a
+    # changes, while still reporting the required CI Complete/Run Tests checks (a
     # paths-ignore-skipped workflow never reports them and hangs the PR).
   merge_group:
     branches: [main]
@@ -523,30 +523,30 @@ jobs:
 
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
-  # here and was failing the required Deploy check on every docs-touching PR.
+  # here and was failing the required CI Complete check on every docs-touching PR.
   # Markdown content is still validated by the help-content tests in the test
   # suite. Restore the job (and .github/workflows/_verify-docs-build.yml) when
   # the scaffolding lands.
 
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
-  # require a status check named exactly "Deploy". Deploy itself moved out of
-  # this repo to the internal deployer, so this job no longer gates a deploy;
-  # it re-exposes a single stable "Deploy" check that turns red if any CI leg
-  # failed. The check name is deliberately kept as "Deploy" so the existing
-  # rulesets keep matching; renaming it to "CI" is a follow-up that must edit
-  # both rulesets in the same change (a required check with no matching job
-  # hangs every PR).
+  # require a single status check named exactly "CI Complete". Deploy moved out
+  # of this repo to the internal deployer, so there is no deploy to gate; this
+  # job re-exposes one stable check that turns red if any CI leg failed.
   #
   # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
   # failures (none of which are individually required checks) through the one
-  # required "Deploy" check instead of letting them pass silently.
+  # required "CI Complete" check instead of letting them pass silently.
+  #
+  # NOTE: this job name IS the required-check context. Renaming it must happen
+  # in lockstep with editing both rulesets, or a required check with no matching
+  # job hangs every PR.
   # ============================================================
-  deploy-status:
-    name: Deploy
+  ci-complete:
+    name: CI Complete
     needs: [changes, core-build, typecheck, lint, test, cli-e2e]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
