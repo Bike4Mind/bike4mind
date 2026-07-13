@@ -30,7 +30,7 @@ import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import { useChatInput } from '@client/app/hooks/useChatInput';
+import { useChatInput, NEW_NOTEBOOK_DRAFT_KEY } from '@client/app/hooks/useChatInput';
 import useSessionLayout, {
   setSessionLayout,
   setPendingMessageFiles,
@@ -900,6 +900,10 @@ export function useSendMessage({
         });
         setChatInputValue('');
         clearDraft(dispatchSessionId);
+        // A first send from a new notebook drafted under the new-notebook key
+        // (currentSessionId was null); clear it too so the sent text can't
+        // resurface in a later new notebook if the composer remounts mid-resolve.
+        clearDraft(NEW_NOTEBOOK_DRAFT_KEY);
         if (chatInputRef.current) chatInputRef.current.value = '';
         setPendingMessageFiles([]);
         setSubmitting(false);
@@ -930,6 +934,10 @@ export function useSendMessage({
     if (currentSessionId) {
       clearDraft(currentSessionId);
     }
+    // Also drop the new-notebook draft: a first send starts with a null
+    // currentSessionId, so the guarded clear above misses the key the text was
+    // saved under, and it would otherwise resurface in a later new notebook.
+    clearDraft(NEW_NOTEBOOK_DRAFT_KEY);
     if (chatInputRef.current) {
       chatInputRef.current.value = '';
     }
