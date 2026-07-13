@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events';
 import { PermissionDeniedError, type IMessage, type MessageContent, type ICacheStrategy } from '@bike4mind/common';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import { isContextLimitError } from './errors';
 import type {
   AgentCheckpoint,
   AgentContext,
@@ -161,6 +162,44 @@ export class ReActAgent extends EventEmitter {
   }
 
   /**
+   * One-shot, non-reentrant text completion: a single non-streaming LLM call
+   * with no tools, isolated from `run()`'s instance state (steps, messages,
+   * iterations, token totals are all left untouched). Unlike `run()`, this is
+   * safe to call WHILE already inside a `run()` call stack - e.g. the CLI's
+   * reactive-compaction `onContextLimit` callback uses this to summarize the
+   * in-flight history without recursing into `run()` (which would reset
+   * `this.steps`/`this.messages`/`this.iterations` mid-loop).
+   */
+  async completeText(
+    prompt: string,
+    options: { model?: string; maxTokens?: number; temperature?: number; signal?: AbortSignal } = {}
+  ): Promise<string> {
+    const model = options.model ?? this.context.model;
+    const maxTokens = options.maxTokens ?? this.context.maxTokens ?? 4096;
+    const temperature = options.temperature ?? this.context.temperature ?? 0.7;
+
+    let text = '';
+    await this.context.llm.complete(
+      model,
+      [{ role: 'user', content: prompt }],
+      {
+        stream: false,
+        tools: [],
+        maxTokens,
+        temperature,
+        abortSignal: options.signal,
+        executeTools: false,
+      },
+      async texts => {
+        for (const chunk of texts) {
+          if (chunk) text += chunk;
+        }
+      }
+    );
+    return text.trim();
+  }
+
+  /**
    * Run the agent to completion
    *
    * @param query - The user's question or task (can be text or multimodal content with images)
@@ -190,6 +229,10 @@ export class ReActAgent extends EventEmitter {
     // Declare variables that need to be accessible in catch block
     let iterations = 0;
     let reachedMaxTotalTokens = false;
+    // One-shot guard: reactive compaction (see options.onContextLimit) may
+    // fire at most once per run() - a second consecutive context-limit error
+    // rethrows rather than looping.
+    let reactiveCompactionAttempted = false;
 
     try {
       // Build initial message array with conversation history
@@ -287,159 +330,205 @@ export class ReActAgent extends EventEmitter {
         // The backend callback fires per-delta with `texts` containing only the
         // new chunk(s) at the active content-block index.
         const iterationIndex = iterations - 1;
-        await this.context.llm.complete(
-          this.context.model,
-          messages,
-          {
-            stream: true,
-            tools: this.context.tools,
-            maxTokens,
-            temperature,
-            abortSignal: options.signal,
-            tool_choice: this.context.toolChoice,
-            executeTools: false,
-            thinking: this.context.thinking,
-            cacheStrategy,
-          },
-          async (texts, completionInfo) => {
-            // Collect text chunks and emit deltas for live token streaming
-            for (const text of texts) {
-              if (text) {
-                currentText += text;
-                this.emit('text_delta', { delta: text, iteration: iterationIndex });
-              }
-            }
 
-            // Handle completion info (includes tool calls and token usage)
-            if (completionInfo) {
-              // Update token usage
-              const inputTokens = completionInfo.inputTokens || 0;
-              const outputTokens = completionInfo.outputTokens || 0;
-              this.totalTokens += inputTokens + outputTokens;
-              this.totalInputTokens += inputTokens;
-              this.totalOutputTokens += outputTokens;
+        // Snapshot mutable run-level counters/steps immediately before the
+        // per-iteration LLM call so a reactive-compaction retry (catch below)
+        // can roll back partial accounting from a failed attempt instead of
+        // double-counting it alongside the successful retry.
+        const preCallTotalTokens = this.totalTokens;
+        const preCallTotalInputTokens = this.totalInputTokens;
+        const preCallTotalOutputTokens = this.totalOutputTokens;
+        const preCallTotalCredits = this.totalCredits;
+        const preCallCacheReadTokens = this.totalCacheReadTokens;
+        const preCallCacheWriteTokens = this.totalCacheWriteTokens;
+        const preCallStepsLength = this.steps.length;
 
-              // Preserve the last non-null stop reason (see lastStopReason).
-              // Early streaming frames carry none; the final frame does.
-              if (completionInfo.stopReason != null) {
-                this.lastStopReason = completionInfo.stopReason;
-              }
-
-              // Accumulate cache stats if available
-              if (completionInfo.cacheStats) {
-                this.totalCacheReadTokens += completionInfo.cacheStats.cacheReadTokens || 0;
-                this.totalCacheWriteTokens += completionInfo.cacheStats.cacheWriteTokens || 0;
+        try {
+          await this.context.llm.complete(
+            this.context.model,
+            messages,
+            {
+              stream: true,
+              tools: this.context.tools,
+              maxTokens,
+              temperature,
+              abortSignal: options.signal,
+              tool_choice: this.context.toolChoice,
+              executeTools: false,
+              thinking: this.context.thinking,
+              cacheStrategy,
+            },
+            async (texts, completionInfo) => {
+              // Collect text chunks and emit deltas for live token streaming
+              for (const text of texts) {
+                if (text) {
+                  currentText += text;
+                  this.emit('text_delta', { delta: text, iteration: iterationIndex });
+                }
               }
 
-              // Update credit usage
-              // TODO: deprecate creditsUsed from complete callback as this is always empty
-              // Instead compute used credits base on input and output tokens or total tokens
-              if (completionInfo.creditsUsed) {
-                this.totalCredits += completionInfo.creditsUsed;
-              }
+              // Handle completion info (includes tool calls and token usage)
+              if (completionInfo) {
+                // Update token usage
+                const inputTokens = completionInfo.inputTokens || 0;
+                const outputTokens = completionInfo.outputTokens || 0;
+                this.totalTokens += inputTokens + outputTokens;
+                this.totalInputTokens += inputTokens;
+                this.totalOutputTokens += outputTokens;
 
-              // Handle tool calls.
-              // The final-answer / no-tools decision is deferred until after
-              // `complete()` resolves (see post-stream block below).
-              // Per-frame detection is unsafe: streaming backends pass
-              // `{ toolsUsed }` on every text_delta cb, and `toolsUsed` only
-              // populates as `tool_use` blocks finish. A preamble like
-              // "I'll execute the tool calls now..." emitted before tool_use
-              // would mis-fire the guard and end the loop at iteration 1.
-              if (completionInfo.toolsUsed && completionInfo.toolsUsed.length > 0) {
-                hadToolCalls = true;
-
-                // Emit the model's preamble as a single thought step before
-                // the first action of this iteration. Deduped across
-                // multi-frame streaming via `thoughtEmitted`.
-                if (!thoughtEmitted && currentText.trim()) {
-                  const thoughtStep: AgentStep = {
-                    type: 'thought',
-                    content: currentText.trim(),
-                    metadata: {
-                      timestamp: Date.now(),
-                    },
-                  };
-
-                  this.steps.push(thoughtStep);
-                  this.emit('thought', thoughtStep);
-                  thoughtEmitted = true;
+                // Preserve the last non-null stop reason (see lastStopReason).
+                // Early streaming frames carry none; the final frame does.
+                if (completionInfo.stopReason != null) {
+                  this.lastStopReason = completionInfo.stopReason;
                 }
 
-                // Get thinking blocks from completion info (for extended thinking)
-                // These are required by Anthropic API when extended thinking is enabled
-                const thinkingBlocks = (completionInfo as { thinking?: unknown[] }).thinking || [];
-
-                // Filter to unprocessed tools only
-                const unprocessedTools: ToolUseInfo[] = [];
-                for (const toolUse of completionInfo.toolsUsed) {
-                  const toolCallIdStr = getToolId(toolUse);
-                  if (!processedToolIds.has(toolCallIdStr)) {
-                    processedToolIds.add(toolCallIdStr);
-                    unprocessedTools.push(toolUse);
-                  }
+                // Accumulate cache stats if available
+                if (completionInfo.cacheStats) {
+                  this.totalCacheReadTokens += completionInfo.cacheStats.cacheReadTokens || 0;
+                  this.totalCacheWriteTokens += completionInfo.cacheStats.cacheWriteTokens || 0;
                 }
 
-                if (unprocessedTools.length === 0) {
-                  // All tools already processed, skip
-                } else if (
-                  options.parallelExecution &&
-                  shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
-                ) {
-                  // PARALLEL EXECUTION PATH
-                  this.context.logger.debug(
-                    `[ReActAgent] Parallel execution enabled for ${unprocessedTools.length} tools`
-                  );
+                // Update credit usage
+                // TODO: deprecate creditsUsed from complete callback as this is always empty
+                // Instead compute used credits base on input and output tokens or total tokens
+                if (completionInfo.creditsUsed) {
+                  this.totalCredits += completionInfo.creditsUsed;
+                }
 
-                  // Phase 1: Emit all action steps first (so user sees them in order)
-                  for (const toolUse of unprocessedTools) {
-                    this.emitActionStep(toolUse);
+                // Handle tool calls.
+                // The final-answer / no-tools decision is deferred until after
+                // `complete()` resolves (see post-stream block below).
+                // Per-frame detection is unsafe: streaming backends pass
+                // `{ toolsUsed }` on every text_delta cb, and `toolsUsed` only
+                // populates as `tool_use` blocks finish. A preamble like
+                // "I'll execute the tool calls now..." emitted before tool_use
+                // would mis-fire the guard and end the loop at iteration 1.
+                if (completionInfo.toolsUsed && completionInfo.toolsUsed.length > 0) {
+                  hadToolCalls = true;
+
+                  // Emit the model's preamble as a single thought step before
+                  // the first action of this iteration. Deduped across
+                  // multi-frame streaming via `thoughtEmitted`.
+                  if (!thoughtEmitted && currentText.trim()) {
+                    const thoughtStep: AgentStep = {
+                      type: 'thought',
+                      content: currentText.trim(),
+                      metadata: {
+                        timestamp: Date.now(),
+                      },
+                    };
+
+                    this.steps.push(thoughtStep);
+                    this.emit('thought', thoughtStep);
+                    thoughtEmitted = true;
                   }
 
-                  // Phase 2: Categorize and execute tools in parallel. On abort this
-                  // returns the partial results gathered so far instead of throwing,
-                  // so Phase 3 still pairs a tool_result with every advertised tool_use.
-                  const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
-                  const results = await this.runToolBatchAbortTolerant(plan, options.signal);
+                  // Get thinking blocks from completion info (for extended thinking)
+                  // These are required by Anthropic API when extended thinking is enabled
+                  const thinkingBlocks = (completionInfo as { thinking?: unknown[] }).thinking || [];
 
-                  // Phase 3: Build messages and emit observations in original order.
-                  // Tools that never ran (dropped when the abort unwound the batch)
-                  // are backfilled with a "cancelled before execution" placeholder.
-                  for (const toolUse of unprocessedTools) {
-                    const result = results.get(getToolId(toolUse));
-                    const observation = observationForResult(result);
-
-                    this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
-                    this.emitObservationStep(toolUse.name, observation);
+                  // Filter to unprocessed tools only
+                  const unprocessedTools: ToolUseInfo[] = [];
+                  for (const toolUse of completionInfo.toolsUsed) {
+                    const toolCallIdStr = getToolId(toolUse);
+                    if (!processedToolIds.has(toolCallIdStr)) {
+                      processedToolIds.add(toolCallIdStr);
+                      unprocessedTools.push(toolUse);
+                    }
                   }
-                } else {
-                  // SEQUENTIAL EXECUTION PATH
-                  for (const toolUse of unprocessedTools) {
-                    this.emitActionStep(toolUse);
 
-                    // Check for queued observation first (backward compatibility with old pattern)
-                    const queuedObs = this.observationQueue.find(obs => obs.toolId === getToolId(toolUse));
-                    let observation: string;
+                  if (unprocessedTools.length === 0) {
+                    // All tools already processed, skip
+                  } else if (
+                    options.parallelExecution &&
+                    shouldUseParallelExecution(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool)
+                  ) {
+                    // PARALLEL EXECUTION PATH
+                    this.context.logger.debug(
+                      `[ReActAgent] Parallel execution enabled for ${unprocessedTools.length} tools`
+                    );
 
-                    if (queuedObs) {
-                      // Old pattern: use queued observation (backend executed tool)
-                      const result = queuedObs.result;
-                      const index = this.observationQueue.indexOf(queuedObs);
-                      this.observationQueue.splice(index, 1);
-                      observation = typeof result === 'string' ? result : JSON.stringify(result);
-                    } else {
-                      // New pattern: execute tool locally (for executeTools=false backends)
-                      observation = await this.executeToolWithQueueFallback(toolUse);
-                      this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
+                    // Phase 1: Emit all action steps first (so user sees them in order)
+                    for (const toolUse of unprocessedTools) {
+                      this.emitActionStep(toolUse);
                     }
 
-                    this.emitObservationStep(toolUse.name, observation);
+                    // Phase 2: Categorize and execute tools in parallel. On abort this
+                    // returns the partial results gathered so far instead of throwing,
+                    // so Phase 3 still pairs a tool_result with every advertised tool_use.
+                    const plan = categorizeTools(unprocessedTools, options.isReadOnlyTool ?? defaultIsReadOnlyTool);
+                    const results = await this.runToolBatchAbortTolerant(plan, options.signal);
+
+                    // Phase 3: Build messages and emit observations in original order.
+                    // Tools that never ran (dropped when the abort unwound the batch)
+                    // are backfilled with a "cancelled before execution" placeholder.
+                    for (const toolUse of unprocessedTools) {
+                      const result = results.get(getToolId(toolUse));
+                      const observation = observationForResult(result);
+
+                      this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
+                      this.emitObservationStep(toolUse.name, observation);
+                    }
+                  } else {
+                    // SEQUENTIAL EXECUTION PATH
+                    for (const toolUse of unprocessedTools) {
+                      this.emitActionStep(toolUse);
+
+                      // Check for queued observation first (backward compatibility with old pattern)
+                      const queuedObs = this.observationQueue.find(obs => obs.toolId === getToolId(toolUse));
+                      let observation: string;
+
+                      if (queuedObs) {
+                        // Old pattern: use queued observation (backend executed tool)
+                        const result = queuedObs.result;
+                        const index = this.observationQueue.indexOf(queuedObs);
+                        this.observationQueue.splice(index, 1);
+                        observation = typeof result === 'string' ? result : JSON.stringify(result);
+                      } else {
+                        // New pattern: execute tool locally (for executeTools=false backends)
+                        observation = await this.executeToolWithQueueFallback(toolUse);
+                        this.appendToolMessages(messages, toolUse, observation, thinkingBlocks);
+                      }
+
+                      this.emitObservationStep(toolUse.name, observation);
+                    }
                   }
                 }
               }
             }
+          );
+        } catch (completionError) {
+          if (!reactiveCompactionAttempted && options.onContextLimit && isContextLimitError(completionError)) {
+            reactiveCompactionAttempted = true;
+            const compacted = await options.onContextLimit(messages);
+
+            if (compacted && compacted.length > 0 && compacted.length < messages.length) {
+              this.context.logger.info(
+                `[ReActAgent] Context limit hit at iteration ${iterations}; compacting history from ${messages.length} to ${compacted.length} messages and retrying`
+              );
+
+              // Roll back this failed attempt's partial accounting before retrying.
+              this.totalTokens = preCallTotalTokens;
+              this.totalInputTokens = preCallTotalInputTokens;
+              this.totalOutputTokens = preCallTotalOutputTokens;
+              this.totalCredits = preCallTotalCredits;
+              this.totalCacheReadTokens = preCallCacheReadTokens;
+              this.totalCacheWriteTokens = preCallCacheWriteTokens;
+              this.steps.length = preCallStepsLength;
+
+              messages.length = 0;
+              messages.push(...compacted);
+
+              // Retry the same iteration: undo this attempt's increment so the
+              // top-of-loop iterations++ lands back on the same iteration number.
+              iterations--;
+              this.iterations = iterations;
+              continue;
+            }
           }
-        );
+
+          throw completionError;
+        }
 
         // Final-answer decision deferred from the streaming callback.
         // Only safe to decide "no more tools" once `complete()` has resolved -
@@ -1620,23 +1709,29 @@ function trimSteps(steps: AgentStep[], maxIterations: number): void {
 }
 
 /**
- * Trim conversation history to keep the protected prefix (system + previousMessages
- * + current user query) plus the last N iterations of assistant/tool/user messages.
+ * Index in `messages` where the last `keepIterations` ReAct iterations begin,
+ * using the "user nudge" heuristic: a plain-string user message marks an
+ * iteration boundary ("Based on the tool results above..." or the original
+ * user query), so slicing at this index never falls mid tool_use/tool_result
+ * pair. Returns `protectedPrefixCount` (i.e. "keep everything dynamic") when
+ * there are `keepIterations` or fewer iterations to begin with.
  *
- * Each ReAct iteration adds ~3-5 messages (assistant with tool calls, tool results,
- * user nudge). Keeping all iterations causes input tokens to grow quadratically.
- * Trimming to the last N iterations keeps the agent grounded in recent context
- * while dramatically reducing token accumulation.
+ * Exported so hosts can find the same provider-safe cut point for their own
+ * purposes - e.g. the CLI's reactive-compaction callback uses it to keep
+ * recent iterations verbatim while summarizing everything older.
  *
- * @param protectedPrefixCount - Length of the initial messages array before any
- *   ReAct iteration messages were appended. Required when previousMessages is
- *   used, otherwise prior-turn user messages get mistaken for iteration nudges
- *   and trimmed away (including, eventually, the current user query itself).
+ * @param protectedPrefixCount - Length of the initial messages array (system +
+ *   previousMessages + current user query) before any ReAct iteration messages
+ *   were appended. Required when previousMessages is used, otherwise prior-turn
+ *   user messages get mistaken for iteration nudges.
  */
-function trimConversationHistory(messages: IMessage[], maxIterations: number, protectedPrefixCount: number): void {
-  const dynamicStart = protectedPrefixCount;
-  const dynamicMessages = messages.slice(dynamicStart);
-  if (dynamicMessages.length === 0) return;
+export function findIterationBoundary(
+  messages: IMessage[],
+  keepIterations: number,
+  protectedPrefixCount: number
+): number {
+  const dynamicMessages = messages.slice(protectedPrefixCount);
+  if (dynamicMessages.length === 0) return protectedPrefixCount;
 
   // Count iterations by counting user nudge messages ("Based on the tool results above...")
   // Each iteration ends with a user nudge (except possibly the last)
@@ -1647,13 +1742,23 @@ function trimConversationHistory(messages: IMessage[], maxIterations: number, pr
     }
   }
 
-  // If we have more iterations than the max, trim older ones
-  if (nudgeIndices.length <= maxIterations) return;
+  if (nudgeIndices.length <= keepIterations) return protectedPrefixCount;
 
   // Keep messages from the Nth-from-last nudge onward
-  const cutoffNudgeIndex = nudgeIndices[nudgeIndices.length - maxIterations];
-  const keepFrom = dynamicStart + cutoffNudgeIndex;
+  const cutoffNudgeIndex = nudgeIndices[nudgeIndices.length - keepIterations];
+  return protectedPrefixCount + cutoffNudgeIndex;
+}
 
-  // Replace: keep initial messages + recent iterations
-  messages.splice(dynamicStart, keepFrom - dynamicStart);
+/**
+ * Trim conversation history to keep the protected prefix (system + previousMessages
+ * + current user query) plus the last N iterations of assistant/tool/user messages.
+ *
+ * Each ReAct iteration adds ~3-5 messages (assistant with tool calls, tool results,
+ * user nudge). Keeping all iterations causes input tokens to grow quadratically.
+ * Trimming to the last N iterations keeps the agent grounded in recent context
+ * while dramatically reducing token accumulation.
+ */
+function trimConversationHistory(messages: IMessage[], maxIterations: number, protectedPrefixCount: number): void {
+  const keepFrom = findIterationBoundary(messages, maxIterations, protectedPrefixCount);
+  messages.splice(protectedPrefixCount, keepFrom - protectedPrefixCount);
 }

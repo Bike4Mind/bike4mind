@@ -89,7 +89,7 @@ describe('e2e — structural baselines', () => {
       expect(
         distExists,
         'packages/cli/dist/ missing in CI — build the CLI before running test:e2e ' +
-          '(see the "Build CLI" step in .github/workflows/deploy.yml).'
+          '(see the "Build CLI" step in .github/workflows/ci.yml).'
       ).toBe(true);
     }
   });
