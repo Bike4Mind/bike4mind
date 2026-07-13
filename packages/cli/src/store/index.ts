@@ -72,6 +72,12 @@ interface CliStore {
   session: Session | null;
   setSession: (session: Session | null) => void;
   addMessage: (message: Session['messages'][0]) => void;
+  /**
+   * Roll a completed subagent run's usage into session metadata. Uses the
+   * functional set() form (reads latest state at call time) so a background
+   * job completing mid-turn can't be lost to a stale-closure overwrite.
+   */
+  recordSubagentUsage: (usage: { tokens: number; credits?: number }) => void;
 
   // Pending messages (ongoing, not yet complete)
   pendingMessages: Message[];
@@ -191,6 +197,22 @@ export const useCliStore = create<CliStore>(set => ({
           ...state.session,
           messages: [...state.session.messages, message],
           updatedAt: new Date().toISOString(),
+        },
+      };
+    }),
+  recordSubagentUsage: ({ tokens, credits }) =>
+    set(state => {
+      if (!state.session) return state;
+      const metadata = state.session.metadata;
+      return {
+        session: {
+          ...state.session,
+          metadata: {
+            ...metadata,
+            subagentCalls: (metadata.subagentCalls || 0) + 1,
+            subagentTokens: (metadata.subagentTokens || 0) + tokens,
+            subagentCost: (metadata.subagentCost || 0) + (credits || 0),
+          },
         },
       };
     }),

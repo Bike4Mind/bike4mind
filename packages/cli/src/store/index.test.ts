@@ -1,7 +1,25 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { useCliStore, selectActiveBackgroundShells, selectCompletedBackgroundShells } from './index.js';
 import type { PermissionResponse } from '../components';
+import type { Session } from '../storage';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
+
+function makeSession(overrides?: Partial<Session['metadata']>): Session {
+  return {
+    id: 'session-1',
+    name: 'Test session',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    model: 'claude',
+    messages: [],
+    metadata: {
+      totalTokens: 0,
+      totalCost: 0,
+      toolCallCount: 0,
+      ...overrides,
+    },
+  };
+}
 
 describe('interactionMode cycle', () => {
   beforeEach(() => {
@@ -67,6 +85,61 @@ describe('paste state', () => {
     expect(state.pastedContent).toBeNull();
     expect(state.pastedLineCount).toBe(0);
     expect(state.inputValue).toBe('');
+  });
+});
+
+describe('recordSubagentUsage', () => {
+  beforeEach(() => {
+    useCliStore.setState({ session: null });
+  });
+
+  it('is a no-op when there is no active session', () => {
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 5 });
+    expect(useCliStore.getState().session).toBeNull();
+  });
+
+  it('initializes and increments calls/tokens/credits on the first call', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 150, credits: 3 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(1);
+    expect(metadata?.subagentTokens).toBe(150);
+    expect(metadata?.subagentCost).toBe(3);
+  });
+
+  it('accumulates across multiple calls', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 2 });
+    useCliStore.getState().recordSubagentUsage({ tokens: 50, credits: 1 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(2);
+    expect(metadata?.subagentTokens).toBe(150);
+    expect(metadata?.subagentCost).toBe(3);
+  });
+
+  it('treats undefined credits as 0 without producing NaN', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 42 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(1);
+    expect(metadata?.subagentTokens).toBe(42);
+    expect(metadata?.subagentCost).toBe(0);
+  });
+
+  it('leaves other metadata fields untouched', () => {
+    useCliStore.setState({ session: makeSession({ totalTokens: 999, toolCallCount: 7 }) });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 10 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.totalTokens).toBe(999);
+    expect(metadata?.toolCallCount).toBe(7);
   });
 });
 
