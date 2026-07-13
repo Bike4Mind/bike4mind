@@ -262,7 +262,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
 
         {/* Loading skeleton for large code blocks */}
         {!isContentReady ? (
-          <Box sx={{ mt: 1 }}>
+          <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
               Loading large code block ({data.lineCount} lines)...
             </Typography>
@@ -296,7 +296,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             {/* Code Preview (expandable) */}
             <Box
               sx={{
-                mt: 1,
+                mt: 2,
                 borderRadius: 'sm',
                 overflow: 'auto',
                 maxHeight: isExpanded ? '400px' : '60px',

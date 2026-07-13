@@ -351,16 +351,16 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         {extra}
 
         {isExpanded && renderedView ? (
-          <Box sx={{ mt: 1 }} onClick={e => e.stopPropagation()}>
+          <Box sx={{ mt: 2 }} onClick={e => e.stopPropagation()}>
             {renderPreview?.()}
           </Box>
         ) : hasSource ? (
           renderSource ? (
-            <Box sx={{ mt: 1 }}>{renderSource()}</Box>
+            <Box sx={{ mt: 2 }}>{renderSource()}</Box>
           ) : (
             <Box
               sx={{
-                mt: 1,
+                mt: 2,
                 p: 1,
                 borderRadius: 'sm',
                 bgcolor: 'background.level2',
