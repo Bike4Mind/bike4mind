@@ -164,29 +164,33 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
 
       {/* Title and domain merged */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        <Typography
-          level="body-sm"
-          sx={{
-            fontWeight: 'md',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-            color: 'text.primary',
-          }}
-        >
-          {source.title}
-          {hostname && (
-            <Typography
-              component="span"
-              level="body-xs"
-              sx={{
-                color: 'text.tertiary',
-                ml: 1,
-              }}
-            >
-              {hostname}
-            </Typography>
-          )}
+        {/* Row so the truncation badge stays visible instead of being ellipsised with a long title. */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+          <Typography
+            level="body-sm"
+            sx={{
+              fontWeight: 'md',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: 'text.primary',
+              minWidth: 0,
+            }}
+          >
+            {source.title}
+            {hostname && (
+              <Typography
+                component="span"
+                level="body-xs"
+                sx={{
+                  color: 'text.tertiary',
+                  ml: 1,
+                }}
+              >
+                {hostname}
+              </Typography>
+            )}
+          </Typography>
           {isTruncated && (
             <Tooltip
               size="sm"
@@ -196,11 +200,11 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
             >
               <TruncatedIcon
                 data-testid="citable-truncated-badge"
-                sx={{ fontSize: '0.9rem', color: 'warning.500', ml: 0.5, verticalAlign: 'text-bottom' }}
+                sx={{ fontSize: '0.9rem', color: 'warning.500', flexShrink: 0 }}
               />
             </Tooltip>
           )}
-        </Typography>
+        </Box>
 
         {source.description && (
           <Typography

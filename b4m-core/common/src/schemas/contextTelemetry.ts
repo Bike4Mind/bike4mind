@@ -176,7 +176,8 @@ export const ToolTelemetrySchema = z.object({
    * Content-size metrics for tools that extract text (currently web_fetch, issue #452).
    * Zero-PII integer counts, so kept at both basic and enhanced capture levels.
    */
-  /** Invocations whose extracted content was truncated at the tool's size cap. */
+  /** Count of unique truncated citables at the tool's size cap (citables dedupe by url,
+   *  so same-url refetches within a completion collapse to one - see WebFetchContentTelemetry). */
   truncatedInvocationCount: z.number().optional(),
   /** Largest single extracted (post-cap) content length across invocations. */
   maxExtractedChars: z.number().optional(),

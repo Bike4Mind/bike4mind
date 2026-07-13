@@ -144,7 +144,7 @@ export async function firecrawlFetch(
   const markdown = result.markdown.slice(0, WEB_FETCH_CONTENT_CAP);
   const truncated = originalChars > WEB_FETCH_CONTENT_CAP;
   Logger.globalInstance.log(
-    `📄 WebFetch Tool: Extracted ${markdown.length} of ${originalChars} characters` +
+    `📄 WebFetch Tool: Extracted ${markdown.length} of ${originalChars} characters in ${durationMs}ms` +
       (truncated ? ` (truncated at cap ${WEB_FETCH_CONTENT_CAP})` : '')
   );
 
