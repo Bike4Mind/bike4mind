@@ -51,6 +51,9 @@ const handler = baseApi({ auth: false }).post(
         name,
         record: {
           password,
+          // E2E harness supplies this password directly (not an auto-generated
+          // placeholder), so it's a real, usable credential for this test account.
+          hasUsablePassword: !!password,
           // Stamp AUP/ToS acceptance so the seeded user clears the consent gate and isn't bounced
           // to /accept-policies on first load. Defaults on; opt out to test the gate itself.
           ...((acceptedPolicies ?? true) ? { aupAcceptedVersion: CURRENT_POLICY_VERSION } : {}),

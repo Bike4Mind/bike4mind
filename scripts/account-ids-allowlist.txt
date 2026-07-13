@@ -20,6 +20,11 @@ vitest\.setup\.ts.*SERVER_DOMAIN
 # resolve the internal-domain rows. Real config is sourced from the NEXT_PUBLIC_INTERNAL_
 # STAFF_DOMAINS repo/org variable at deploy, never hardcoded in shippable code.
 vitest\.setup\.ts.*NEXT_PUBLIC_INTERNAL_STAFF_DOMAINS
+# Test-env seed of the curated internal-org display-name map (#350). Same as the staff-domains
+# seed above: not shipped runtime config — lets inferOrganizationFromEmail tests group under the
+# curated label. Real config is sourced from the NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES repo/org
+# variable at deploy, never hardcoded in shippable code.
+vitest\.setup\.ts.*NEXT_PUBLIC_INTERNAL_ORG_DISPLAY_NAMES
 
 # Developer/test tooling — example & seed emails in usage docs and DB-seed helpers, not
 # shippable runtime that couples a fork to B4M infra. PII sanitization (example.com persona)

@@ -133,6 +133,8 @@ describe('buildDefaultOrchestrationProfile', () => {
       'edit_local_file',
       'delete_file',
       'bash_execute',
+      'write_shell_stdin',
+      'kill_background_shell',
       'blog_draft',
       'blog_edit',
       'blog_publish',

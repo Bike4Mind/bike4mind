@@ -12,6 +12,7 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
+import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { buildRedirectTo, shouldRedirectToConsent } from '@client/app/utils/authRedirect';
 
 // Keep layout components as eager imports for optimal performance
@@ -27,6 +28,7 @@ const NotebookPage = lazy(() => import('./routes/notebooks/$id'));
 const ProjectsPage = lazy(() => import('./routes/projects'));
 const ProjectPage = lazy(() => import('./routes/projects/$id'));
 const ProfilePage = lazy(() => import('./routes/profile/index'));
+const GearsPage = lazy(() => import('./routes/gears/index'));
 const ProfileDetailPage = lazy(() => import('./routes/profile/$id'));
 const SubscriptionsCheckoutPage = lazy(() => import('./routes/subscriptions/checkout'));
 const AgentsPage = lazy(() => import('./routes/agents'));
@@ -191,8 +193,11 @@ const layoutRoute = createRoute({
     // server consent-gate middleware is the real enforcement - but it turns opaque 403s into a
     // smooth redirect. Gated on `isHydrated` so a rehydrated pre-deploy session (whose persisted
     // user stub predates `aupAcceptedVersion`) does not flash the interstitial before /api/identify
-    // refetches the server-authoritative value - see shouldRedirectToConsent.
-    if (shouldRedirectToConsent({ currentUser, isHydrated })) {
+    // refetches the server-authoritative value, and on a live `accessToken` so a token-less/broken
+    // session goes to /login (which can re-auth) rather than being trapped in a /login <->
+    // /accept-policies loop - see shouldRedirectToConsent and issue #386.
+    const { accessToken } = useAccessToken.getState();
+    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
       const redirectTo = buildRedirectTo(
         location.pathname,
         location.searchStr,
@@ -292,6 +297,17 @@ const notebookRoute = createRoute({
       projectId: search.projectId ? String(search.projectId) : undefined,
     };
   },
+});
+
+// Gears - the earned-nav progression page (one card per major feature).
+const gearsRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/gears',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <GearsPage />
+    </Suspense>
+  ),
 });
 
 // Projects index route (replaces /projects/index.tsx)
@@ -836,10 +852,30 @@ const atlassianSelectSiteRoute = createRoute({
   ),
 });
 
-// Device activation route (OAuth device flow)
+// Device activation route (OAuth device flow). A rootRoute child (own chrome, not the notebook
+// layout), so it does NOT inherit the layoutRoute consent guard. Re-run just the consent check here
+// so an authenticated-but-not-yet-consented user is routed to /accept-policies (preserving a return
+// path back to /activate?code=...) instead of being shown the form only to have Approve Device fail
+// the server consent gate with a misleading 403. The unauthenticated -> /login redirect stays in the
+// component (shouldRedirectToConsent is a no-op without a currentUser). See issue #369.
 const activateRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activate',
+  beforeLoad: ({ location }) => {
+    const { currentUser, isHydrated } = useUser.getState();
+    const { accessToken } = useAccessToken.getState();
+    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
+      const redirectTo = buildRedirectTo(
+        location.pathname,
+        location.searchStr,
+        location.hash ? `#${location.hash}` : ''
+      );
+      throw redirect({
+        to: '/accept-policies',
+        search: redirectTo ? { redirectTo } : undefined,
+      });
+    }
+  },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <ActivatePage />
@@ -928,6 +964,7 @@ const routeTree = rootRoute.addChildren([
     indexRoute,
     newRoute,
     notebookRoute,
+    gearsRoute,
     projectsRoute,
     projectRoute,
     profileRoute,

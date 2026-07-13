@@ -245,6 +245,9 @@ export const registerUser = async (
     email,
     name,
     password: password ? await hashPassword(password) : null,
+    // This registration path is OTC-only (the only caller, registerViaOTC, always
+    // passes password: ''), so the account is passwordless by construction.
+    hasUsablePassword: false,
     tags: tags ?? null,
     systemFiles: [],
     mementos: [],

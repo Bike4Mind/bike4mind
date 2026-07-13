@@ -10,6 +10,7 @@
 
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import type { SreMetrics } from '@bike4mind/common';
 
 /**
  * Build a repoSlug filter for queries.
@@ -80,12 +81,35 @@ export interface ISreErrorTracking {
   };
   /** GitHub issue number (if applicable) */
   githubIssueNumber?: number;
+  /**
+   * Denormalized open/closed state of the linked GitHub issue.
+   * Kept fresh by the webhook handlers (issues.closed/reopened) and self-healed
+   * on-view by the issue-state endpoint. Absent for CloudWatch-sourced docs and
+   * for GitHub docs whose state has not yet been observed. The admin Pipeline
+   * Status filter hides docs where this is 'closed' by default.
+   */
+  githubIssueState?: 'open' | 'closed';
   /** Fix PR number */
   fixPrNumber?: number;
   /** Fix PR SHA (for rollback detection) */
   fixPrSha?: string;
   /** When the fix PR was merged */
   fixMergedAt?: Date;
+  /**
+   * Human verdict on whether the merged SRE fix was actually correct (#271).
+   * Recorded when a reviewer applies the `sre-fix-correct` / `sre-fix-incorrect`
+   * label to the fix PR - a merge alone is not proof the fix was right. Feeds the
+   * confidence-threshold tuning + activity dashboard items in #184.
+   * Last-write-wins: applying the opposite label overrides a prior verdict.
+   */
+  fixVerdict?: {
+    /** 'correct' or 'incorrect' - the reviewer's thumbs up/down */
+    value: 'correct' | 'incorrect';
+    /** GitHub login of the reviewer who applied the label */
+    by: string;
+    /** When the verdict was recorded */
+    at: Date;
+  };
   /** When affected users were notified */
   userNotifiedAt?: Date;
   /** GitHub Actions workflow run URL */
@@ -161,9 +185,17 @@ const SreErrorTrackingSchema = new mongoose.Schema(
     affectedUserIds: { type: [String], default: [] },
     diagnosisResult: { type: mongoose.Schema.Types.Mixed },
     githubIssueNumber: { type: Number },
+    githubIssueState: { type: String, enum: ['open', 'closed'] },
     fixPrNumber: { type: Number },
     fixPrSha: { type: String },
     fixMergedAt: { type: Date },
+    fixVerdict: {
+      type: {
+        value: { type: String, enum: ['correct', 'incorrect'] },
+        by: { type: String },
+        at: { type: Date },
+      },
+    },
     userNotifiedAt: { type: Date },
     workflowRunUrl: { type: String },
     dispatchedAt: { type: Date },
@@ -202,10 +234,21 @@ SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1 }, { 
 SreErrorTrackingSchema.index({ affectedUserIds: 1 });
 // For looking up by PR number (scoped to repo - PR numbers are unique per-repo, not globally)
 SreErrorTrackingSchema.index({ repoSlug: 1, fixPrNumber: 1 }, { sparse: true });
+// For webhook-driven githubIssueState updates: setGithubIssueState filters on { repoSlug, githubIssueNumber }
+SreErrorTrackingSchema.index({ repoSlug: 1, githubIssueNumber: 1 }, { sparse: true });
 // Covers recurrence guard queries: { errorFingerprint, status: 'fixed', fixMergedAt: { $gte } }
 SreErrorTrackingSchema.index({ repoSlug: 1, errorFingerprint: 1, status: 1, fixMergedAt: 1 });
 // For staleness timeout detection
 SreErrorTrackingSchema.index({ repoSlug: 1, status: 1, dispatchedAt: 1 });
+// For querying recorded fix verdicts (#271) - feeds confidence tuning + dashboard.
+// partialFilterExpression (not sparse): on a compound index sparse only skips a
+// doc when ALL keys are absent, and repoSlug is required, so a sparse index would
+// cover every doc. Filtering on fixVerdict.value indexes only the small subset of
+// docs that actually carry a human verdict.
+SreErrorTrackingSchema.index(
+  { repoSlug: 1, 'fixVerdict.value': 1 },
+  { partialFilterExpression: { 'fixVerdict.value': { $exists: true } } }
+);
 // TTL - auto-delete after 30 days
 SreErrorTrackingSchema.index({ createdAt: 1 }, { expireAfterSeconds: 2592000 });
 
@@ -294,6 +337,18 @@ export const DISMISSABLE_STATUSES: ISreErrorTracking['status'][] = [
   'low_confidence',
   'rate_limited',
 ];
+
+/** Raw shape returned by the getMetrics $facet aggregation (one row per branch). */
+interface SreMetricsFacet {
+  total: Array<{ count: number }>;
+  bySource: Array<{ _id: ISreErrorTracking['source'] | null; count: number }>;
+  byStatus: Array<{ _id: ISreErrorTracking['status'] | null; count: number }>;
+  analysesRun: Array<{ count: number }>;
+  fixesDispatched: Array<{ count: number }>;
+  prsCreated: Array<{ count: number }>;
+  prsMerged: Array<{ count: number }>;
+  tokens: Array<{ _id: null; input: number; output: number }>;
+}
 
 class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   constructor(private sreErrorTrackingModel: mongoose.Model<ISreErrorTracking>) {
@@ -404,6 +459,36 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   }
 
   /**
+   * Denormalize the linked GitHub issue's open/closed state onto every tracking
+   * doc for that issue. Called from the webhook handlers (issues.closed/reopened)
+   * and the issue-state endpoint (self-heal on view). Updates ALL docs for the
+   * (repoSlug, issueNumber) pair - a single issue can have multiple tracking docs
+   * across its lifecycle (different statuses + dismissed audit history), and all
+   * should reflect the same current issue state for the admin filter.
+   *
+   * Returns the number of docs updated (0 when no tracking doc exists for the
+   * issue, which is the common case for issues that never entered the pipeline).
+   */
+  async setGithubIssueState(repoSlug: string, issueNumber: number, state: 'open' | 'closed'): Promise<number> {
+    const result = await this.model.updateMany(
+      { repoSlug, githubIssueNumber: issueNumber },
+      { $set: { githubIssueState: state } }
+    );
+    return result.modifiedCount ?? 0;
+  }
+
+  /**
+   * Backstop for the on-view self-heal: reconcile githubIssueState on a single
+   * doc by its _id. setGithubIssueState scopes its bulk update by repoSlug, so a
+   * doc missing repoSlug is silently skipped there (the fallback repoSlug won't
+   * match an absent field). The issue-state endpoint holds the viewed doc's id
+   * and calls this to guarantee that doc is reconciled regardless of repoSlug.
+   */
+  async setGithubIssueStateById(id: string, state: 'open' | 'closed'): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { githubIssueState: state } });
+  }
+
+  /**
    * Atomic state transition: only updates if current status matches expectedStatus.
    * Returns the updated document, or null if the transition was not possible.
    */
@@ -507,6 +592,28 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
     if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
     const result = await this.model.findOne(filter);
     return result?.toObject() ?? null;
+  }
+
+  /**
+   * Record a human verdict on whether the merged SRE fix was correct (#271).
+   * Maps a `sre-fix-correct` / `sre-fix-incorrect` PR label back to the tracking
+   * doc via its fixPrNumber. Last-write-wins: applying the opposite label
+   * overrides the prior verdict. Returns the updated doc, or null when no
+   * tracking doc exists for this PR (non-SRE PR - ignored gracefully).
+   */
+  async setFixVerdict(
+    prNumber: number,
+    verdict: NonNullable<ISreErrorTracking['fixVerdict']>,
+    repoSlug?: string
+  ): Promise<ISreErrorTracking | null> {
+    const filter: Record<string, unknown> = { fixPrNumber: prNumber };
+    if (repoSlug) Object.assign(filter, repoSlugFilter(repoSlug));
+    const result = await this.model.findOneAndUpdate(
+      filter,
+      { $set: { fixVerdict: verdict } },
+      { returnDocument: 'after' }
+    );
+    return result ? result.toObject() : null;
   }
 
   /**
@@ -731,6 +838,70 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   async findFullById(id: string): Promise<ISreErrorTracking | null> {
     const doc = await this.model.findById(id).lean<ISreErrorTracking>({ virtuals: true });
     return doc ?? null;
+  }
+
+  /**
+   * Aggregate pipeline metrics for the admin activity dashboard (#270).
+   * A single-pass $facet over docs CREATED within `windowMs` computes every
+   * headline count, so all numbers reconcile with the underlying records for
+   * the window. Optionally scoped to a repoSlug. Runs entirely server-side -
+   * no client-side collection scan. Field-existence branches use `$ne: null`,
+   * which excludes both missing and explicitly-null values.
+   */
+  async getMetrics(windowMs: number, repoSlug?: string): Promise<SreMetrics> {
+    const since = new Date(Date.now() - windowMs);
+    const match: Record<string, unknown> = { createdAt: { $gte: since } };
+    if (repoSlug) Object.assign(match, repoSlugFilter(repoSlug));
+
+    const [facet] = await this.model.aggregate<SreMetricsFacet>([
+      { $match: match },
+      {
+        $facet: {
+          total: [{ $count: 'count' }],
+          bySource: [{ $group: { _id: '$source', count: { $sum: 1 } } }],
+          byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          analysesRun: [{ $match: { diagnosisResult: { $ne: null } } }, { $count: 'count' }],
+          fixesDispatched: [{ $match: { dispatchedAt: { $ne: null } } }, { $count: 'count' }],
+          prsCreated: [{ $match: { fixPrNumber: { $ne: null } } }, { $count: 'count' }],
+          prsMerged: [{ $match: { fixMergedAt: { $ne: null } } }, { $count: 'count' }],
+          tokens: [
+            {
+              $group: {
+                _id: null,
+                input: { $sum: '$llmTokensUsed.input' },
+                output: { $sum: '$llmTokensUsed.output' },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const countOf = (branch?: Array<{ count: number }>): number => branch?.[0]?.count ?? 0;
+
+    const bySource = { CLOUDWATCH: 0, GITHUB_ISSUE: 0 };
+    for (const row of facet?.bySource ?? []) {
+      if (row._id) bySource[row._id] = row.count;
+    }
+
+    const byStatus: Record<string, number> = {};
+    for (const row of facet?.byStatus ?? []) {
+      if (row._id) byStatus[row._id] = row.count;
+    }
+
+    const tokensRow = facet?.tokens?.[0];
+
+    return {
+      windowMs,
+      total: countOf(facet?.total),
+      bySource,
+      byStatus,
+      analysesRun: countOf(facet?.analysesRun),
+      fixesDispatched: countOf(facet?.fixesDispatched),
+      prsCreated: countOf(facet?.prsCreated),
+      prsMerged: countOf(facet?.prsMerged),
+      tokens: { input: tokensRow?.input ?? 0, output: tokensRow?.output ?? 0 },
+    };
   }
 }
 

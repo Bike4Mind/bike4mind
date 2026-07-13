@@ -1,5 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { isProviderEmailVerified, selectProviderEmail, isVerifiedFlag } from './oauthAccountLink';
+import {
+  isProviderEmailVerified,
+  selectProviderEmail,
+  isVerifiedFlag,
+  decideAutoLink,
+  applyAccountLink,
+  ACCOUNT_LINK_VERIFICATION_REQUIRED,
+  ACCOUNT_LINK_EMAIL_MISMATCH,
+  type AutoLinkInput,
+} from './oauthAccountLink';
+import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 
 describe('isVerifiedFlag', () => {
   it('returns true for boolean true', () => expect(isVerifiedFlag(true)).toBe(true));
@@ -137,5 +147,190 @@ describe('isProviderEmailVerified', () => {
         _json: { email_verified: true },
       })
     ).toBe(false);
+  });
+});
+
+describe('decideAutoLink', () => {
+  // A fully-safe baseline (verified both sides, matching emails); each test flips
+  // one field to isolate that dimension of the gate.
+  const base: AutoLinkInput = {
+    providerEmailVerified: true,
+    providerEmail: 'user@b.com',
+    localEmail: 'user@b.com',
+    localEmailVerified: true,
+    hasUsablePassword: true,
+  };
+
+  it('links when both sides are verified and emails match', () => {
+    expect(decideAutoLink(base)).toEqual({ action: 'link' });
+  });
+
+  it('is case-insensitive on the email match', () => {
+    expect(decideAutoLink({ ...base, providerEmail: 'USER@B.COM' })).toEqual({ action: 'link' });
+  });
+
+  it('refuses (verification required) when the provider email is unverified', () => {
+    expect(decideAutoLink({ ...base, providerEmailVerified: false })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+      detail: 'provider_email_unverified',
+    });
+  });
+
+  it('provider-unverified takes priority over an email mismatch', () => {
+    // Refuse-reason ordering matters: an unverified provider is reported as
+    // verification-required (provider-side), never as a mismatch.
+    expect(decideAutoLink({ ...base, providerEmailVerified: false, providerEmail: 'other@b.com' })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+      detail: 'provider_email_unverified',
+    });
+  });
+
+  it('refuses (email mismatch) when both emails are present and differ', () => {
+    expect(decideAutoLink({ ...base, providerEmail: 'attacker@b.com' })).toEqual({
+      action: 'refuse',
+      reason: ACCOUNT_LINK_EMAIL_MISMATCH,
+      detail: 'email_mismatch',
+    });
+  });
+
+  describe('local account not yet verified', () => {
+    const unverifiedLocal: AutoLinkInput = { ...base, localEmailVerified: false };
+
+    it('promotes-and-links a passwordless account on a matching verified email', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false })).toEqual({
+        action: 'promote-and-link',
+      });
+    });
+
+    it('refuses a password-holding account (reverse-takeover setup)', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: true })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+
+    it('does NOT promote on a username-only match (no local email)', () => {
+      // localEmail null is not an identity assertion; promoting would let a
+      // colliding username stamp its email onto an emailless passwordless shell.
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false, localEmail: null })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+
+    it('does NOT promote when the provider email is absent', () => {
+      expect(decideAutoLink({ ...unverifiedLocal, hasUsablePassword: false, providerEmail: null })).toEqual({
+        action: 'refuse',
+        reason: ACCOUNT_LINK_VERIFICATION_REQUIRED,
+        detail: 'local_email_unverified',
+      });
+    });
+  });
+
+  describe('one-sided emails (username-only match)', () => {
+    it('links when local is already verified even though local email is null', () => {
+      // No mismatch is possible without both emails; the verified local side
+      // still permits the link.
+      expect(decideAutoLink({ ...base, localEmail: null })).toEqual({ action: 'link' });
+    });
+
+    it('links when the provider email is null but local is verified', () => {
+      expect(decideAutoLink({ ...base, providerEmail: null })).toEqual({ action: 'link' });
+    });
+  });
+});
+
+describe('applyAccountLink', () => {
+  const cred = (strategy: AuthStrategy, id: string): IAuthProviders => ({ id, strategy }) as unknown as IAuthProviders;
+
+  describe('new provider link', () => {
+    it('pushes the provider, sets fields under $set and bumps tokenVersion', () => {
+      const authProviders: IAuthProviders[] = [];
+      const oauthCredentials = cred(AuthStrategy.Google, 'sub-1');
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: true,
+        promoteEmailVerified: false,
+        currentTokenVersion: 3,
+      });
+
+      expect(authProviders).toEqual([oauthCredentials]);
+      expect(update.$set).toMatchObject({ oauthCredentials, authProviders });
+      expect((update.$set as Record<string, unknown>).emailVerified).toBeUndefined();
+      expect(update.$inc).toEqual({ tokenVersion: 1 });
+      expect(reflect).toEqual({ tokenVersion: 4 });
+    });
+
+    it('treats a missing tokenVersion as 0 when bumping', () => {
+      const { reflect } = applyAccountLink({
+        authProviders: [],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: true,
+        promoteEmailVerified: false,
+        currentTokenVersion: undefined,
+      });
+      expect(reflect.tokenVersion).toBe(1);
+    });
+
+    it('rides the emailVerified promotion on the same $set and reflects it', () => {
+      const { update, reflect } = applyAccountLink({
+        authProviders: [],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: true,
+        promoteEmailVerified: true,
+        currentTokenVersion: 0,
+      });
+
+      const set = update.$set as Record<string, unknown>;
+      expect(set.emailVerified).toBe(true);
+      expect(set.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(update.$inc).toEqual({ tokenVersion: 1 });
+      expect(reflect.tokenVersion).toBe(1);
+      expect(reflect.emailVerified).toBe(true);
+      expect(reflect.emailVerifiedAt).toBe(set.emailVerifiedAt);
+    });
+  });
+
+  describe('refresh of an already-linked provider', () => {
+    it('replaces the existing entry in place with no $set/$inc and no tokenVersion bump', () => {
+      const existing = cred(AuthStrategy.Google, 'old-sub');
+      const authProviders: IAuthProviders[] = [existing];
+      const oauthCredentials = cred(AuthStrategy.Google, 'new-sub');
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: false,
+        promoteEmailVerified: false,
+        currentTokenVersion: 7,
+      });
+
+      expect(authProviders).toEqual([oauthCredentials]);
+      expect(update.$set).toBeUndefined();
+      expect(update.$inc).toBeUndefined();
+      expect(update).toMatchObject({ oauthCredentials, authProviders });
+      expect(reflect).toEqual({});
+    });
+
+    it('promotes emailVerified on a refresh without bumping tokenVersion', () => {
+      const { update, reflect } = applyAccountLink({
+        authProviders: [cred(AuthStrategy.Google, 'sub-1')],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: false,
+        promoteEmailVerified: true,
+        currentTokenVersion: 7,
+      });
+
+      expect(update.emailVerified).toBe(true);
+      expect(update.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(update.$inc).toBeUndefined();
+      expect(reflect.tokenVersion).toBeUndefined();
+      expect(reflect.emailVerified).toBe(true);
+      expect(reflect.emailVerifiedAt).toBe(update.emailVerifiedAt);
+    });
   });
 });

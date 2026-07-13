@@ -18,12 +18,14 @@ test.describe('Agents - Navigation, CRUD & Validation', () => {
     agentsPage,
   }) => {
     test.slow();
-    await test.step('navigate to agents via sidenav', async () => {
-      await page.goto('/');
+    await test.step('navigate to agents', async () => {
+      // Agents is an earned-nav destination (Gears): its sidenav row appears only
+      // once the account has >=1 agent. A fresh run starts with zero (the prior run
+      // deletes the agent it created), so the row is hidden - navigate directly, the
+      // way a first-time user reaches it via the Gears "Build your first agent" CTA.
+      await page.goto('/agents');
       await page.waitForLoadState('domcontentloaded');
       await basePage.dismissModals();
-
-      await page.getByTestId('sidenav-nav-agents').click();
 
       // Verify we landed on the agents page
       await expect(page).toHaveURL(/.*\/agents.*/);

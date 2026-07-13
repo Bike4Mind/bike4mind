@@ -199,6 +199,13 @@ const nextConfig = {
         source: '/uc/:path*',
         destination: '/api/publish/serve/:path*?__uc=1',
       },
+      // No-sign-in share links: `/a/<shareToken>[/asset]` resolve to the same serve
+      // handler by capability token. `:path*` so bundle asset sub-paths route through
+      // too. Served same-origin, sandboxed, always noindex/no-store (see the handler).
+      {
+        source: '/a/:path*',
+        destination: '/api/publish/serve/a/:path*',
+      },
     ];
   },
   poweredByHeader: false,

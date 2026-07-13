@@ -154,7 +154,9 @@ test.describe('Notebook - Router resilience', () => {
       });
 
       await test.step('back/forward navigate between notebook and projects', async () => {
-        await page.getByTestId('sidenav-nav-projects').click();
+        // Direct nav (projects is earned-nav; the sidenav row may be hidden). goto still
+        // pushes a history entry, so the goBack/goForward assertions below hold.
+        await page.goto('/projects');
         await expect(page).toHaveURL(/\/projects/);
 
         await page.goBack();

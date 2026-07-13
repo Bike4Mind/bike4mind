@@ -72,7 +72,31 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
         logger,
       }
     )
-  );
+  ).catch(async (err: unknown) => {
+    // chunkFabfile can throw on a genuinely bad file (e.g. a corrupt PDF). Without this,
+    // the file would sit at chunkCount:0 with no error - visually identical to a
+    // silently-dropped record. Persist a per-file error and account it as failed in its
+    // batch (so the batch still reaches a terminal state), mirroring fabFileVectorize's
+    // failure handling, then re-throw so SQS retries then routes to the DLQ.
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const isFirstFailure = await fabFileRepository.markFailedIfNotAlready(fabFileId, errorMessage);
+    if (fabFile.batchId && isFirstFailure) {
+      try {
+        await dataLakeBatchRepository.updateFileStatus(fabFile.batchId, fabFileId, 'failed', errorMessage);
+        const batch = await dataLakeBatchRepository.incrementCounter(fabFile.batchId, 'failedFiles');
+        await finalizeBatchIfComplete(batch, logger);
+        await sendToClient(userId, Resource.websocket.managementEndpoint, {
+          action: 'data_lake_batch_progress',
+          batchId: fabFile.batchId,
+          failedFiles: batch?.failedFiles ?? 1,
+          status: isBatchComplete(batch) ? (batch!.failedFiles > 0 ? 'completed_with_errors' : 'completed') : undefined,
+        });
+      } catch (innerErr) {
+        logger.error(`Error reporting batch chunk failure: ${innerErr}`);
+      }
+    }
+    throw err;
+  });
 
   logger.updateMetadata({
     fabFileChunksCount: fabFileChunks.length,

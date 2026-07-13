@@ -7,7 +7,6 @@ import JupyterIntegrationSection from './SettingsTabContent/JupyterIntegrationSe
 import BlogIntegrationSection from './SettingsTabContent/BlogIntegrationSection';
 import ConnectedAppsSection from './SettingsTabContent/ConnectedAppsSection';
 import TokenRotationSection from './SettingsTabContent/TokenRotationSection';
-import ApiKeySection from './ApiKeySection';
 import WebhookSubscriptionSection from './SettingsTabContent/WebhookSubscriptionSection';
 import JiraWebhookSection from './SettingsTabContent/JiraWebhookSection';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -27,7 +26,6 @@ import { ContextHelpButton } from '@client/app/components/help';
  * - Jira Notifications (when Atlassian connected)
  * - Blog Publishing
  * - MCP Servers
- * - API Keys
  */
 const IntegrationsTabContent = () => {
   const { currentUser } = useUser();
@@ -73,9 +71,6 @@ const IntegrationsTabContent = () => {
 
         {/* MCP Servers */}
         <McpSection />
-
-        {/* API Keys */}
-        <ApiKeySection />
       </Stack>
     </Box>
   );

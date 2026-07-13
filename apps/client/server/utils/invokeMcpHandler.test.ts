@@ -47,6 +47,8 @@ vi.mock('@bike4mind/database', () => ({
     getLatestByIntegration: vi.fn().mockResolvedValue(null),
     create: vi.fn(),
   },
+  // invokeMcpHandler builds AUDITABLE_INTEGRATIONS from this at module load.
+  INTEGRATION_AUDIT_INTEGRATION_NAMES: ['github', 'atlassian', 'slack', 'linear', 'notion', 'optihashi'],
 }));
 
 vi.mock('@server/utils/cloudwatch', () => ({

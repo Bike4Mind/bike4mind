@@ -6,67 +6,49 @@ import type { AxiosResponse } from 'axios';
 import { isAxiosError } from 'axios';
 import { logger } from '../utils/Logger';
 import { StreamLogger } from '../utils/StreamLogger';
-import { StreamAccumulator } from './streamAccumulator';
-import { parseStreamEvent } from './streamEvents';
+import { parseStreamEvent, type StreamEvent } from './streamEvents';
+import { runCompletion } from './runCompletion';
+import { createTransientRetryPolicy } from './retryPolicy';
+import { bridgeToAsyncIterable } from './streamBridge';
+import type { CompletionRequest, StreamTransport } from './streamTransport';
 
 /**
- * Connection-level failures that should be retried rather than surfaced to the
- * user. Mirrors the canonical retryable-error list in `@bike4mind/llm-adapters`
- * (retry.ts): the most common offender is a TLS socket
- * close mid-stream, which Node surfaces as `Error: aborted` thrown from
- * `node:_http_client` `socketCloseListener`. This happens when the SSE
- * connection sits idle during a long extended-thinking step and an intermediary
- * (or the socket itself) times out the idle connection.
+ * Server-side LLM backend that proxies requests through the Bike4Mind API over
+ * Server-Sent Events (SSE). API keys remain secure on the server.
  *
- * Crucially this is NOT a user cancel - those are detected separately via
- * `options.abortSignal` before this classifier is consulted. Matching is on the
- * lowercased message so we catch the various wordings undici/Node emit.
+ * This class is purely the SSE *transport*: `open()` makes the streaming request
+ * and yields decoded {@link StreamEvent}s. The retry / accumulate /
+ * finalize-exactly-once / empty / abort policy lives in {@link runCompletion},
+ * which `complete()` delegates to - shared verbatim with `WebSocketLlmBackend`.
  */
-const TRANSIENT_NETWORK_ERROR_PATTERNS = [
-  'aborted', // TLS socket close (node:_http_client socketCloseListener)
-  'socket closed',
-  'socket hang up',
-  'connection closed',
-  'econnreset',
-  'etimedout',
-  'terminated',
-  'network error',
-  'fetch failed',
-  'und_err_socket',
-];
-
-export function isTransientNetworkError(error: Error): boolean {
-  const message = error.message?.toLowerCase() ?? '';
-  return TRANSIENT_NETWORK_ERROR_PATTERNS.some(pattern => message.includes(pattern));
-}
-
-/**
- * Server-side LLM backend that proxies requests through Bike4Mind API
- * Uses Server-Sent Events (SSE) for streaming responses
- * API keys remain secure on server - never exposed to CLI
- */
-export class ServerLlmBackend implements ICompletionBackend {
+export class ServerLlmBackend implements ICompletionBackend, StreamTransport {
   private apiClient: ApiClient;
   public currentModel: string;
   private readonly completionsEndpoint: string;
-  /** Max retries for transient stream failures (e.g. missing [DONE]) */
-  private static readonly MAX_STREAM_RETRIES = 2;
 
-  constructor(options: { apiClient: ApiClient; model: string; completionsUrl?: string }) {
+  constructor(options: { apiClient: ApiClient; model: string; sseCompletionsUrl?: string }) {
     this.apiClient = options.apiClient;
     this.currentModel = options.model;
-    if (options.completionsUrl) {
-      this.completionsEndpoint = options.completionsUrl;
+    if (options.sseCompletionsUrl) {
+      this.completionsEndpoint = options.sseCompletionsUrl;
+    } else if (process.env.B4M_COMPLETIONS_URL) {
+      // Escape hatch for stacks whose app origin doesn't route /api/ai/v1/* to the
+      // ChatCompletion service (e.g. a self-host compose stack, where the service is
+      // published on its own port). Point this at the full completions endpoint,
+      // e.g. http://localhost:8788/api/ai/v1/completions.
+      this.completionsEndpoint = process.env.B4M_COMPLETIONS_URL;
+      logger.debug(`[ServerLlmBackend] Using B4M_COMPLETIONS_URL override: ${this.completionsEndpoint}`);
     } else {
-      logger.debug('[ServerLlmBackend] No completionsUrl from server — is sst dev running?');
+      logger.debug('[ServerLlmBackend] No sseCompletionsUrl from server - is sst dev running?');
       this.completionsEndpoint = '/api/ai/v1/completions';
     }
   }
 
   /**
-   * Make authenticated LLM completion request via server
-   * Parses SSE stream and invokes callback for each event.
-   * Automatically retries on transient stream failures (e.g. stream ending prematurely).
+   * Run a completion. Delegates the whole lifecycle (retry / accumulate /
+   * deliver-once / empty / abort) to the shared core; this class only supplies
+   * the SSE transport via `open()` and the retry policy (a transient network
+   * drop is retried).
    */
   async complete(
     model: string,
@@ -74,390 +56,229 @@ export class ServerLlmBackend implements ICompletionBackend {
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
   ): Promise<void> {
-    let lastError: Error | undefined;
-
-    // Track whether the current attempt delivered any content to the agent.
-    // `accumulator.finalize()` invokes the callback exactly once and ONLY when
-    // it has accumulated content (tools or text), so any invocation means the
-    // full response was delivered. Retrying after that would duplicate the
-    // assistant message and burn credits - so a delivered attempt is never
-    // retried (a late stream error after [DONE], e.g. a socket abort during
-    // teardown, is post-delivery noise).
-    let delivered = false;
-    const trackingCallback: typeof callback = (text, info) => {
-      delivered = true;
-      return callback(text, info);
-    };
-
-    for (let attempt = 0; attempt <= ServerLlmBackend.MAX_STREAM_RETRIES; attempt++) {
-      if (attempt > 0) {
-        logger.warn(
-          `[ServerLlmBackend] Retrying stream (attempt ${attempt + 1}/${ServerLlmBackend.MAX_STREAM_RETRIES + 1})...`
-        );
-      }
-
-      try {
-        await this.completeOnce(model, messages, options, trackingCallback);
-        return; // Success — exit retry loop
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // User-initiated cancel (ESC) is never retried - propagate so the
-        // caller's abort path handles it gracefully.
-        if (options.abortSignal?.aborted) {
-          throw lastError;
-        }
-
-        // If this attempt already delivered the full response, a late error is
-        // post-delivery noise: don't retry (would duplicate output + burn
-        // credits) and, for a transient connection drop, don't surface it as a
-        // failure either - the agent already has the complete turn.
-        if (delivered) {
-          if (isTransientNetworkError(lastError)) {
-            logger.warn(`[ServerLlmBackend] Ignoring post-delivery transient stream error: ${lastError.message}`);
-            return;
-          }
-          throw lastError;
-        }
-
-        // Retry transient failures on an attempt that delivered nothing:
-        //   1. The server dropped the stream without [DONE] and sent no data
-        //      ('Stream ended prematurely').
-        //   2. The connection dropped mid-stream - e.g. a TLS socket close
-        //      during a long thinking step surfaces as `Error: aborted`.
-        //      Previously this leaked through and was shown to the user as a
-        //      cryptic bare "aborted" error.
-        const isRetryable =
-          lastError.message.includes('Stream ended prematurely') || isTransientNetworkError(lastError);
-
-        if (!isRetryable) {
-          throw lastError; // Not retryable — propagate immediately
-        }
-
-        logger.warn(
-          `[ServerLlmBackend] Transient stream failure (attempt ${attempt + 1}/${
-            ServerLlmBackend.MAX_STREAM_RETRIES + 1
-          }): ${lastError.message}`
-        );
-
-        // Brief linear backoff so we don't immediately re-hit a connection
-        // that's mid-flap. Skip the wait after the final attempt.
-        if (attempt < ServerLlmBackend.MAX_STREAM_RETRIES) {
-          await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
-        }
-      }
-    }
-
-    // All retries exhausted. For a network drop, surface a clear, actionable
-    // message instead of the bare "aborted" the socket layer throws - the user
-    // should understand it was the connection, not their input, and how to
-    // resume.
-    if (lastError && isTransientNetworkError(lastError) && !options.abortSignal?.aborted) {
-      logger.error('[ServerLlmBackend] Stream failed after all retries due to a network drop', lastError);
-      throw new Error(
-        'The connection to the Bike4Mind server dropped mid-response (likely a network timeout during a long ' +
-          'thinking step). It was retried automatically but kept failing — type "continue" to resume.'
-      );
-    }
-    throw lastError ?? new Error('Stream failed after all retry attempts');
+    return runCompletion(
+      this,
+      { model, messages, options },
+      callback,
+      createTransientRetryPolicy(),
+      options.abortSignal
+    );
   }
 
   /**
-   * Single attempt at completing a streaming request.
+   * Open a single SSE attempt: make the streaming request, then yield decoded
+   * events until `[DONE]` / stream end (returns) or a wire failure (throws). A
+   * server-sent `error` event is surfaced as a throw so the core can classify
+   * it; a transient socket drop throws its raw error so the retry policy sees it.
    */
-  private async completeOnce(
-    model: string,
-    messages: IMessage[],
-    options: Partial<ICompletionOptions>,
-    callback: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>
-  ): Promise<void> {
-    logger.debug(`[ServerLlmBackend] Starting complete() with model: ${model}`);
+  open(req: CompletionRequest, signal?: AbortSignal): AsyncIterable<StreamEvent> {
+    return this.streamCompletion(req, signal);
+  }
 
-    // Check if already aborted before starting
-    if (options.abortSignal?.aborted) {
+  private async *streamCompletion(req: CompletionRequest, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+    logger.debug(`[ServerLlmBackend] Starting complete() with model: ${req.model}`);
+
+    if (signal?.aborted) {
       logger.debug('[ServerLlmBackend] Request aborted before start');
       return;
     }
 
-    // Make streaming request to server completions endpoint (outside promise executor)
     logger.debug('[ServerLlmBackend] Making streaming request...');
-    let response: Awaited<ReturnType<typeof this.makeStreamingRequest>>;
+    let response: AxiosResponse;
     try {
-      response = await this.makeStreamingRequest(model, messages, options);
+      response = await this.makeStreamingRequest(req.model, req.messages, req.options);
     } catch (error) {
-      // Handle abort/cancel gracefully - don't treat as error
-      if (options.abortSignal?.aborted) {
+      // Abort / cancel is graceful - end the stream, don't surface an error.
+      if (signal?.aborted) {
         logger.debug('[ServerLlmBackend] Request was aborted, resolving gracefully');
         return;
       }
-
-      // Check for axios cancel error (CanceledError)
       if (isAxiosError(error) && error.code === 'ERR_CANCELED') {
         logger.debug('[ServerLlmBackend] Request was canceled, resolving gracefully');
         return;
       }
-
-      logger.error('LLM completion failed', error);
-
-      // Handle axios errors specifically
-      if (isAxiosError(error)) {
-        logger.debug(
-          `[ServerLlmBackend] Axios error details: ${JSON.stringify({
-            status: error.response?.status,
-            statusText: error.response?.statusText,
-            url: error.config?.url,
-            method: error.config?.method,
-          })}`
-        );
-
-        // For 403 errors, try to extract meaningful error from response
-        if (error.response?.status === 403 && error.response.data) {
-          let errorDetails = '';
-
-          try {
-            let responseText = '';
-
-            // response.data is a stream when responseType: 'stream'
-            // Try to read from the stream's buffer
-            const stream = error.response.data;
-
-            if (Buffer.isBuffer(stream)) {
-              responseText = stream.toString('utf-8');
-            } else if (stream?._readableState?.buffer?.length > 0) {
-              const chunks: Buffer[] = [];
-              for (const chunk of stream._readableState.buffer) {
-                if (chunk?.data) {
-                  chunks.push(Buffer.from(chunk.data));
-                }
-              }
-              responseText = Buffer.concat(chunks).toString('utf-8');
-            } else if (typeof stream === 'string') {
-              responseText = stream;
-            }
-
-            logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
-
-            // If it's HTML, try to extract error message
-            if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
-              const titleMatch = responseText.match(/<title>(.*?)<\/title>/i);
-              const h1Match = responseText.match(/<h1>(.*?)<\/h1>/i);
-
-              if (titleMatch && titleMatch[1] !== 'Error') {
-                errorDetails = titleMatch[1].trim();
-              } else if (h1Match) {
-                errorDetails = h1Match[1].trim();
-              }
-            } else if (responseText) {
-              // Not HTML, use first 100 chars as error
-              errorDetails = responseText.substring(0, 100).trim();
-            }
-          } catch (extractError) {
-            logger.error('[ServerLlmBackend] Error extracting response:', extractError);
-          }
-
-          const errorMsg = errorDetails
-            ? `403 Forbidden: ${errorDetails}`
-            : '403 Forbidden - Request blocked by server. Check debug logs at ~/.bike4mind/debug/';
-          throw new Error(errorMsg);
-        }
-
-        // For other status codes
-        if (error.response) {
-          throw new Error(
-            `Request failed with status ${error.response.status}: ${error.response.statusText || 'Unknown error'}`
-          );
-        }
-      }
-
-      // Handle other network and auth errors
-      if (error instanceof Error) {
-        if (error.message.includes('Authentication expired') || error.message.includes('Authentication failed')) {
-          throw error; // Pass through auth errors with clear message
-        } else if (error.message.includes('ECONNREFUSED')) {
-          throw new Error('Cannot connect to Bike4Mind server. Please check your internet connection.');
-        } else if (error.message.includes('Rate limit exceeded')) {
-          throw error;
-        } else {
-          throw new Error(`Failed to complete LLM request: ${error.message}`);
-        }
-      } else {
-        throw error;
-      }
+      throw this.toStreamingRequestError(error);
     }
 
     logger.debug('[ServerLlmBackend] Got response, setting up SSE parser');
+    yield* this.readSseStream(response, signal);
+  }
 
-    return new Promise((resolve, reject) => {
-      // Initialize StreamLogger for intelligent batching
-      const isVerbose = process.env.B4M_VERBOSE === '1';
-      const isUltraVerbose = process.env.B4M_DEBUG_STREAM === '1';
-      const streamLogger = new StreamLogger(logger, 'ServerLlmBackend', isVerbose, isUltraVerbose);
-      streamLogger.streamStart();
+  /**
+   * Bridge the push-based eventsource-parser + Node response stream into a
+   * pull-based iterable of {@link StreamEvent}s. `[DONE]` / stream `end` ends
+   * iteration, a server `error` event or stream `error` throws. The abort
+   * listener and socket teardown run in the bridge's teardown, so an early
+   * `break` by the core (on cancel) also destroys the socket.
+   */
+  private readSseStream(response: AxiosResponse, signal?: AbortSignal): AsyncGenerator<StreamEvent> {
+    const isVerbose = process.env.B4M_VERBOSE === '1';
+    const isUltraVerbose = process.env.B4M_DEBUG_STREAM === '1';
+    const streamLogger = new StreamLogger(logger, 'ServerLlmBackend', isVerbose, isUltraVerbose);
+    streamLogger.streamStart();
 
-      let eventCount = 0;
-      const accumulator = new StreamAccumulator();
-      let receivedDone = false; // Track if we received [DONE] to prevent race condition
-      // Track when the server already sent an SSE `error` event so the `end`
-      // handler doesn't ALSO log a noisy "Stream ended without [DONE]" warning
-      // and double-reject the promise. The error is the real signal here; the
-      // missing [DONE] is just the natural consequence of the server closing
-      // the stream after writing the error.
-      let receivedError = false;
+    // A running copy of the text purely so the verbose StreamLogger can report
+    // accumulated length / preview; the core owns the real accumulation.
+    let loggedText = '';
+    let eventCount = 0;
 
+    return bridgeToAsyncIterable<StreamEvent>(sink => {
       const parser = createParser({
         onEvent: event => {
           eventCount++;
-          streamLogger.onEvent(eventCount, event.data || '');
           const data = event.data;
+          streamLogger.onEvent(eventCount, data || '');
 
           if (data === '[DONE]') {
-            receivedDone = true;
-            streamLogger.onCriticalEvent(
-              eventCount,
-              '[DONE]',
-              `accumulated text length: ${accumulator.accumulatedLength}`
-            );
-
-            // Log stream completion BEFORE callback (which may block on tool permissions)
-            streamLogger.streamComplete(accumulator.rawText);
-
-            accumulator
-              .finalize(callback)
-              .catch(err => {
-                logger.error('[ServerLlmBackend] Callback error:', err);
-                reject(err);
-              })
-              .then(() => {
-                logger.debug('[ServerLlmBackend] Callback completed, resolving');
-                resolve();
-              });
+            streamLogger.streamComplete(loggedText);
+            sink.end();
             return;
           }
 
           try {
-            const event = parseStreamEvent(JSON.parse(data));
+            const parsed = parseStreamEvent(JSON.parse(data));
+            // Unknown event shape - silently skip, preserving prior fall-through.
+            if (!parsed) return;
 
-            // Unrecognized event shape - preserve the prior fall-through
-            // behavior where an unknown `type` was silently ignored rather
-            // than treated as an error. (Malformed JSON is caught below.)
-            if (!event) {
+            if (parsed.type === 'error') {
+              streamLogger.onCriticalEvent(eventCount, 'ERROR', parsed.message || 'Server error');
+              sink.fail(new Error(parsed.message || 'Server error'));
               return;
             }
 
-            // Handle different event types
-            if (event.type === 'error') {
-              receivedError = true;
-              streamLogger.onCriticalEvent(eventCount, 'ERROR', event.message || 'Server error');
-              reject(new Error(event.message || 'Server error'));
-              return;
+            if (parsed.type === 'content') {
+              loggedText += parsed.text ?? '';
+              streamLogger.onContent(eventCount, parsed.text || '', loggedText);
+            } else if (parsed.type === 'tool_use') {
+              streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${parsed.tools?.length}`);
+              if (parsed.text) loggedText += parsed.text;
             }
 
-            if (event.type === 'content') {
-              accumulator.apply(event);
-              streamLogger.onContent(eventCount, event.text || '', accumulator.rawText);
-            } else if (event.type === 'tool_use') {
-              streamLogger.onCriticalEvent(eventCount, 'TOOL_USE', `tools: ${event.tools?.length}`);
-
-              // Log tool use request
-              if (event.tools && event.tools.length > 0) {
-                for (const tool of event.tools) {
-                  logger.debug(`TOOL REQUEST: ${tool.name}`);
-                  try {
-                    // `arguments` is a raw JSON string on the wire (see toolUseSchema).
-                    logger.debug(`  Params: ${tool.arguments ?? '{}'}`);
-                  } catch {
-                    logger.debug(`  Params: [Unable to stringify]`);
-                  }
-                }
-              }
-
-              accumulator.apply(event);
-
-              if (event.thinking && event.thinking.length > 0) {
-                streamLogger.onCriticalEvent(eventCount, 'THINKING', `${event.thinking.length} thinking blocks`);
-              }
-            }
+            sink.push(parsed);
           } catch (parseError) {
             streamLogger.streamError(parseError);
-            // Continue processing other events
+            // Continue processing other events (matches prior behavior).
           }
         },
       });
 
-      // Handle abort signal - destroy the stream when aborted
-      if (options.abortSignal) {
-        const abortHandler = () => {
-          logger.debug('[ServerLlmBackend] Abort signal received, destroying stream');
-          response.data.destroy();
-          resolve(); // Resolve gracefully on abort
-        };
+      const onData = (chunk: Buffer) => {
+        if (signal?.aborted) return;
+        parser.feed(chunk.toString());
+      };
+      // Stream closed. If we never saw [DONE] and accumulated nothing, the core's
+      // empty-completion handling retries; if we accumulated content, it delivers.
+      const onEnd = () => sink.end();
+      // An abort-caused stream error is benign - end gracefully; the core sees the
+      // aborted signal and settles without the callback. Otherwise surface it.
+      const onError = (error: Error) => (signal?.aborted ? sink.end() : sink.fail(error));
+      const onAbort = () => {
+        logger.debug('[ServerLlmBackend] Abort signal received, destroying stream');
+        response.data.destroy();
+        sink.end();
+      };
 
-        // Check if already aborted
-        if (options.abortSignal.aborted) {
-          abortHandler();
-          return;
-        }
-
-        // Listen for abort
-        options.abortSignal.addEventListener('abort', abortHandler, { once: true });
-
-        // Clean up listener when stream ends
-        response.data.on('close', () => {
-          options.abortSignal?.removeEventListener('abort', abortHandler);
-        });
+      response.data.on('data', onData);
+      response.data.on('end', onEnd);
+      response.data.on('error', onError);
+      if (signal) {
+        if (signal.aborted) onAbort();
+        else signal.addEventListener('abort', onAbort, { once: true });
       }
 
-      // Feed response stream to parser
-      response.data.on('data', (chunk: Buffer) => {
-        // Skip processing if aborted
-        if (options.abortSignal?.aborted) {
-          return;
-        }
-        parser.feed(chunk.toString());
-      });
-
-      response.data.on('end', () => {
-        // Server already sent an explicit error event - that's the real signal.
-        // The missing [DONE] is just the natural consequence of the server
-        // closing the stream after writing the error; don't log a misleading
-        // "stream ended without [DONE]" warning or double-reject.
-        if (receivedError) {
-          logger.debug('[ServerLlmBackend] Stream ended after server-sent error event');
-          return;
-        }
-
-        // Only handle here if we didn't receive [DONE]
-        // (handles edge case where stream ends without [DONE] signal)
-        if (!receivedDone) {
-          logger.warn(
-            `[ServerLlmBackend] Stream ended without [DONE] signal. ` +
-              `Accumulated text: ${accumulator.accumulatedLength} chars, tools: ${accumulator.toolCount}`
-          );
-
-          if (!accumulator.isEmpty()) {
-            // Deliver whatever we accumulated - the server sent data but dropped the [DONE] marker
-            streamLogger.streamComplete(accumulator.rawText);
-            accumulator.finalize(callback).then(() => resolve(), reject);
-          } else {
-            // No data at all - reject so the caller knows the request failed
-            reject(
-              new Error('Stream ended prematurely without receiving any data. The server may be experiencing issues.')
-            );
-          }
-        } else {
-          logger.debug('[ServerLlmBackend] Stream ended, [DONE] handler will resolve');
-        }
-      });
-
-      response.data.on('error', (error: Error) => {
-        // Don't reject on abort-caused errors
-        if (options.abortSignal?.aborted) {
-          resolve();
-          return;
-        }
-        reject(error);
-      });
+      return () => {
+        signal?.removeEventListener('abort', onAbort);
+        response.data.off?.('data', onData);
+        response.data.off?.('end', onEnd);
+        response.data.off?.('error', onError);
+        response.data.destroy?.();
+      };
     });
+  }
+
+  /**
+   * Map a streaming-request (pre-stream) failure to a clear Error: the axios
+   * 403-with-HTML-error-page case, other HTTP statuses, and common network / auth
+   * errors. Abort and ERR_CANCELED are handled by the caller, not here.
+   */
+  private toStreamingRequestError(error: unknown): Error {
+    logger.error('LLM completion failed', error);
+
+    if (isAxiosError(error)) {
+      logger.debug(
+        `[ServerLlmBackend] Axios error details: ${JSON.stringify({
+          status: error.response?.status,
+          statusText: error.response?.statusText,
+          url: error.config?.url,
+          method: error.config?.method,
+        })}`
+      );
+
+      if (error.response?.status === 403 && error.response.data) {
+        let errorDetails = '';
+        try {
+          let responseText = '';
+          // response.data is a stream when responseType: 'stream'
+          const stream = error.response.data;
+
+          if (Buffer.isBuffer(stream)) {
+            responseText = stream.toString('utf-8');
+          } else if (stream?._readableState?.buffer?.length > 0) {
+            const chunks: Buffer[] = [];
+            for (const chunk of stream._readableState.buffer) {
+              if (chunk?.data) {
+                chunks.push(Buffer.from(chunk.data));
+              }
+            }
+            responseText = Buffer.concat(chunks).toString('utf-8');
+          } else if (typeof stream === 'string') {
+            responseText = stream;
+          }
+
+          logger.debug(`[ServerLlmBackend] Response preview: ${responseText.substring(0, 200)}`);
+
+          // If it's HTML, try to extract a meaningful error message
+          if (responseText.includes('<!DOCTYPE') || responseText.includes('<html')) {
+            const titleMatch = responseText.match(/<title>(.*?)<\/title>/i);
+            const h1Match = responseText.match(/<h1>(.*?)<\/h1>/i);
+
+            if (titleMatch && titleMatch[1] !== 'Error') {
+              errorDetails = titleMatch[1].trim();
+            } else if (h1Match) {
+              errorDetails = h1Match[1].trim();
+            }
+          } else if (responseText) {
+            errorDetails = responseText.substring(0, 100).trim();
+          }
+        } catch (extractError) {
+          logger.error('[ServerLlmBackend] Error extracting response:', extractError);
+        }
+
+        return new Error(
+          errorDetails
+            ? `403 Forbidden: ${errorDetails}`
+            : '403 Forbidden - Request blocked by server. Check debug logs at ~/.bike4mind/debug/'
+        );
+      }
+
+      if (error.response) {
+        return new Error(
+          `Request failed with status ${error.response.status}: ${error.response.statusText || 'Unknown error'}`
+        );
+      }
+    }
+
+    if (error instanceof Error) {
+      if (error.message.includes('Authentication expired') || error.message.includes('Authentication failed')) {
+        return error; // Pass through auth errors with their clear message
+      } else if (error.message.includes('ECONNREFUSED')) {
+        return new Error('Cannot connect to Bike4Mind server. Please check your internet connection.');
+      } else if (error.message.includes('Rate limit exceeded')) {
+        return error;
+      }
+      return new Error(`Failed to complete LLM request: ${error.message}`);
+    }
+    return new Error(String(error));
   }
 
   pushToolMessages(

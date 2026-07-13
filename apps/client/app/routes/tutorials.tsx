@@ -5,8 +5,9 @@ import { useNavigate } from '@tanstack/react-router';
 const TutorialsPage = () => {
   const navigate = useNavigate();
 
+  // Dismissing the tutorial behaves like the sidebar "New Chat" button: a blank session view.
   const handleComplete = () => {
-    navigate({ to: '/' });
+    navigate({ to: '/new' });
   };
 
   return (

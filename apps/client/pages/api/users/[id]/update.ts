@@ -89,6 +89,24 @@ const handler = baseApi().put(
       return res.status(403).json({ error: 'Forbidden' });
     }
 
+    // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
+    // ONLY remaining Super Admin, and an admin must not remove their OWN Super
+    // Admin role (self-demote). The old checkbox UI allowed both - a pre-existing
+    // footgun the Roles radio (admin-roles-product-access-redesign M1) closes here,
+    // at the actual write path, not just in the UI.
+    if (currentUser.isAdmin && body?.isAdmin === false) {
+      const targetUser = (await User.findById(userId).select('isAdmin').lean()) as Record<string, unknown> | null;
+      if (targetUser?.isAdmin) {
+        if (currentUser.id === userId) {
+          return res.status(400).json({ error: 'You cannot remove your own Super Admin role.' });
+        }
+        const adminCount = await userRepository.count({ isAdmin: true });
+        if (adminCount <= 1) {
+          return res.status(400).json({ error: 'Cannot remove the last remaining Super Admin.' });
+        }
+      }
+    }
+
     if (
       incomingTelemetryLevel &&
       !VALID_TELEMETRY_LEVELS.includes(incomingTelemetryLevel as (typeof VALID_TELEMETRY_LEVELS)[number])

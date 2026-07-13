@@ -53,7 +53,9 @@ interface DynamicAgentParams {
 export function createDynamicAgentTool(
   orchestrator: SubagentOrchestrator,
   parentSessionId: string,
-  backgroundManager?: BackgroundAgentManager
+  backgroundManager?: BackgroundAgentManager,
+  /** Nesting depth of the agent that owns this tool (main agent = 0). Spawns run at parentDepth + 1. */
+  parentDepth = 0
 ): ICompletionOptionTools {
   return {
     toolFn: async (args: unknown) => {
@@ -100,6 +102,7 @@ export function createDynamicAgentTool(
         model: params.model,
         allowedTools: params.allowedTools,
         agentDefinition,
+        depth: parentDepth + 1,
       };
 
       // Background execution: return job ID immediately

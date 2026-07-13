@@ -67,7 +67,7 @@
     "@types/unzipper": "^0.10.11",
     "tsdown": "^0.22.3",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.97.1",

@@ -189,8 +189,12 @@ export interface BuildSharedToolsOptions {
   externalTools?: Record<string, ToolDefinition>;
 }
 
-// Sentinel types for wrapping
-const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem']);
+// Sentinel types for wrapping. A tool may emit one of these generic
+// optimization-console side-effects; the type must be allowlisted here so its
+// payload is dispatched via onUiSideEffect (and the terse displayMessage replaces
+// the model-visible result) rather than echoed back to the model.
+// `populateDecomposition` loads a decomposed multi-step plan's first sub-problem.
+const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem', 'populateDecomposition']);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
 const TOOL_ATTR_RE = /(\w+)=["']([^"']*?)["']/g;
 
@@ -256,7 +260,9 @@ export function buildSharedTools(
     allToolDefinitions,
     undefined, // allowedDirectories - not used in this path
     entitlementKeys ?? [],
-    callbacks.sessionId
+    callbacks.sessionId,
+    undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
+    deps.precomputed?.models
   );
 
   // Filter to enabled tools only
@@ -278,7 +284,7 @@ export function buildSharedTools(
 
     // Wrap all tools for sentinel extraction
     if (tools) {
-      wrapToolsForSentinels(tools, logger, callbacks);
+      wrapToolsForSentinels(tools, logger, callbacks, userId);
     }
   }
 
@@ -429,7 +435,34 @@ function wrapNavigateViewTool(
   };
 }
 
-function wrapToolsForSentinels(tools: ICompletionOptionTools[], logger: Logger, callbacks: ToolBuilderCallbacks): void {
+// ---------------------------------------------------------------------------
+// Tool-finish observer (host seam)
+// ---------------------------------------------------------------------------
+
+export interface ToolFinishObservation {
+  toolName: string;
+  userId?: string;
+}
+
+/**
+ * Optional host-registered observer called after ANY tool completes on the
+ * shared pipeline (chat, agents, quests). Fire-and-forget by contract: it is
+ * invoked synchronously, never awaited, and exceptions are swallowed - an
+ * observer can never add latency to or break a tool call. First consumer: the
+ * Gears progression system.
+ */
+let toolFinishObserver: ((observation: ToolFinishObservation) => void) | null = null;
+
+export function setToolFinishObserver(observer: ((observation: ToolFinishObservation) => void) | null): void {
+  toolFinishObserver = observer;
+}
+
+function wrapToolsForSentinels(
+  tools: ICompletionOptionTools[],
+  logger: Logger,
+  callbacks: ToolBuilderCallbacks,
+  userId?: string
+): void {
   for (let i = 0; i < tools.length; i++) {
     const originalToolFn = tools[i].toolFn;
     const toolName = tools[i].toolSchema?.name || `tool-${i}`;
@@ -437,6 +470,16 @@ function wrapToolsForSentinels(tools: ICompletionOptionTools[], logger: Logger, 
       ...tools[i],
       toolFn: async (args: unknown) => {
         const result = await originalToolFn(args);
+
+        // Non-blocking host observer (see setToolFinishObserver): sync call,
+        // no await, exceptions swallowed - zero added latency by contract.
+        if (toolFinishObserver) {
+          try {
+            toolFinishObserver({ toolName, userId });
+          } catch {
+            // observers must never break or slow a tool call
+          }
+        }
 
         // Extract __uiSideEffect sentinel
         if (callbacks.onUiSideEffect) {

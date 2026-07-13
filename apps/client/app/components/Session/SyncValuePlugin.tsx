@@ -12,7 +12,12 @@ interface SyncValuePluginProps {
 export function SyncValuePlugin({ value, skipSyncRef }: SyncValuePluginProps): null {
   const [editor] = useLexicalComposerContext();
   const isUpdatingRef = useRef(false);
-  const previousValueRef = useRef(value);
+  // Seed empty (not `value`) so the first effect run hydrates the editor from a
+  // non-empty `value` on mount. On a remount (e.g. a layout flip rebuilds this
+  // subtree) the store still holds the in-progress text, and seeding to `value`
+  // would early-return on equality and leave the editor blank - dropping the
+  // draft. The currentText check below keeps the mount-time write idempotent.
+  const previousValueRef = useRef('');
 
   useEffect(() => {
     // Skip if we're in the middle of an update

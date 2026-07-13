@@ -8,6 +8,7 @@ import {
   usageEventRepository,
   userRepository,
   userApiKeyRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   verifyJwtToken,
@@ -116,8 +117,11 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
         creditTransactions: creditTransactionRepository,
         users: userRepository,
         usageEvents: usageEventRepository,
+        organizations: organizationRepository,
       },
       apiKeyInfo: apiKeyInfoForCompletion,
+      // Org-billed API keys settle to the org's shared pool.
+      billingOrganizationId: apiKeyInfo?.organizationId,
       requestId,
       logger: logger as unknown as Logger,
       onChunk: async (text, info) => {

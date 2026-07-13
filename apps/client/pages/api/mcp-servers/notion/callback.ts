@@ -1,6 +1,11 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
-import { getNotionOAuthConfig, NOTION_OAUTH_TOKEN_URL } from '@server/integrations/notion';
+import {
+  getNotionOAuthConfig,
+  NOTION_OAUTH_TOKEN_URL,
+  NOTION_API_BASE_URL,
+  NOTION_VERSION,
+} from '@server/integrations/notion';
 import { NotionTokenManager } from '@server/integrations/notion/notionTokenManager';
 import { Config } from '@server/utils/config';
 import crypto from 'crypto';
@@ -8,6 +13,7 @@ import { IntegrationAuditLogger } from '@server/integrations/integrationAuditLog
 import { encryptToken } from '@server/security/tokenEncryption';
 
 const OAUTH_TIMEOUT = 30000;
+const NOTION_API_TIMEOUT = 10000;
 
 interface NotionTokenResponse {
   access_token: string;
@@ -213,7 +219,20 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
     `[Notion Callback] Successfully obtained access token for workspace: ${tokenData.workspace_name || tokenData.workspace_id}`
   );
 
-  // Step 2: Store tokens in User model
+  // Step 2: Auto-detect a root page ID from pages the integration can access
+  let rootPageId: string | undefined;
+  try {
+    rootPageId = await detectRootPageId(tokenData.access_token);
+    if (rootPageId) {
+      console.log(`[Notion Callback] Auto-detected root page ID: ${rootPageId}`);
+    } else {
+      console.log('[Notion Callback] No root page auto-detected (user can set one manually)');
+    }
+  } catch (detectError) {
+    console.warn('[Notion Callback] Root page detection failed, skipping:', detectError);
+  }
+
+  // Step 3: Store tokens in User model
   const notionConnect = {
     accessToken: encryptToken(tokenData.access_token)!,
     workspaceId: tokenData.workspace_id,
@@ -235,6 +254,8 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
       : undefined,
     connectedAt: new Date(),
     status: 'connected' as const,
+    writeEnabled: true,
+    ...(rootPageId && { rootPageId }),
   };
 
   await userRepository.update({
@@ -244,19 +265,66 @@ const handler = baseApi({ auth: false }).get(async (req, res) => {
 
   console.log(`[Notion Callback] Tokens stored for user ${userId}, status: connected`);
 
-  // Step 3: Set up MCP server
+  // Step 4: Set up MCP server
   try {
     await NotionTokenManager.syncMcpServer(userId, tokenData.access_token, tokenData.workspace_id);
   } catch (mcpError) {
-    // Don't fail the callback if MCP setup fails
     console.error('[Notion Callback] MCP server setup failed, but OAuth succeeded:', mcpError);
   }
 
   auditLogger.success({ workspaceName: tokenData.workspace_name });
 
-  // Step 4: Set cookie and redirect to profile page with success status
+  // Step 5: Set cookie and redirect to profile page with success status
   res.setHeader('Set-Cookie', [`notion_connected=true; Path=/; Max-Age=60; SameSite=Lax; Secure`]);
   return res.redirect('/profile?tab=integrations&notion=connected');
 });
+
+/**
+ * Queries the Notion search API for top-level pages accessible to the integration
+ * and returns the first one as a default root page. This gives new connections a
+ * working write target without manual configuration.
+ */
+async function detectRootPageId(accessToken: string): Promise<string | undefined> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), NOTION_API_TIMEOUT);
+
+  try {
+    const response = await fetch(`${NOTION_API_BASE_URL}/search`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Notion-Version': NOTION_VERSION,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        filter: { value: 'page', property: 'object' },
+        // Ascending = oldest-edited first, so we pick the longest-lived root page
+        sort: { direction: 'ascending', timestamp: 'last_edited_time' },
+        page_size: 10,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) return undefined;
+
+    const data = (await response.json()) as {
+      results: Array<{
+        id: string;
+        parent?: { type: string; workspace?: boolean };
+      }>;
+    };
+
+    // Prefer a workspace-level page (top of the tree)
+    const workspacePage = data.results.find(p => p.parent?.type === 'workspace');
+    if (workspacePage) return workspacePage.id;
+
+    // Fall back to the first accessible page
+    return data.results[0]?.id;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
 export default handler;

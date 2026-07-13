@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
-import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
+import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import { MarginDashboard } from './components/MarginDashboard';
-import { ModelCostSettings } from './components/ModelCostSettings';
+import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -22,10 +22,10 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>User Credits</Box>
             </Box>
           </Tab>
-          <Tab value="models">
+          <Tab value="pricing" data-testid="credit-analysis-pricing-tab">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <PriceChangeIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Cost Settings</Box>
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Pricing</Box>
             </Box>
           </Tab>
           <Tab value="margins" data-testid="credit-analysis-margins-tab">
@@ -41,8 +41,8 @@ export const CreditAnalyticsTab: React.FC = () => {
           <UserCreditsManager />
         </TabPanel>
 
-        <TabPanel value="models" sx={{ p: 0 }}>
-          <ModelCostSettings />
+        <TabPanel value="pricing" sx={{ p: 0 }}>
+          <ModelPricingCatalog />
         </TabPanel>
 
         <TabPanel value="margins" sx={{ p: 0 }}>

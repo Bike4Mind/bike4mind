@@ -40,21 +40,12 @@ import {
 } from '@client/app/hooks/data/llmModelConfig';
 import { useGetUsers } from '@client/app/hooks/data/user';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
-import { PRICE_ENTITLEMENTS, TAG_GRANTS } from '@client/lib/entitlements/registry';
-
-// Entitlement keys known to the subscription registry (e.g. `medlib:pro`),
-// offered as columns alongside the user-tag gates so an admin can grant a model
-// to a subscription product without minting a comp tag. New products surface
-// here automatically as they are added to the registry - no edit needed.
-const KNOWN_ENTITLEMENT_KEYS: string[] = Array.from(
-  new Set([...PRICE_ENTITLEMENTS.values(), ...TAG_GRANTS.values()].flatMap(keys => [...keys]))
-).sort();
+import { KNOWN_ENTITLEMENT_KEYS } from '@client/lib/entitlements/registry';
 
 // Available user tags for permissions (used in table display)
 // 'admin' access is handled via user.isAdmin property, not tags
 const AVAILABLE_USER_TAGS = [
   { value: 'developer', label: 'Developer', color: 'warning' as const },
-  { value: 'analyst', label: 'Analyst', color: 'primary' as const },
   { value: 'customer', label: 'Customer', color: 'danger' as const },
 ];
 

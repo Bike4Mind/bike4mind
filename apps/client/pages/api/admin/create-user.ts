@@ -7,7 +7,6 @@ import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
 import { Config } from '@server/utils/config';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
 import { z } from 'zod';
 
 const createUserSchema = z.object({
@@ -62,9 +61,12 @@ const handler = baseApi().post(
           // rather than null so a tag-less user isn't stuck "Loading AI models...".
           tags: validatedData.tags,
           record: {
-            // No usable password in passwordless mode; store a random unusable
-            // value when the admin doesn't supply one. The user signs in via OTC.
-            password: validatedData.password ?? randomUUID(), // Will be hashed by the service
+            // Passwordless mode: store null rather than a fake password when the
+            // admin doesn't supply one, so `password` presence stays a truthful
+            // signal. The user signs in via OTC. hasUsablePassword mirrors whether
+            // a real password was supplied.
+            password: validatedData.password ?? null,
+            hasUsablePassword: !!validatedData.password,
             storageLimit: validatedData.storageLimit,
           },
         },
