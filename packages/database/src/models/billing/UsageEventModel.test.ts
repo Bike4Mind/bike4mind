@@ -126,6 +126,30 @@ describe('UsageEventRepository', () => {
       });
       expect(bedrock!.month).toMatch(/^\d{4}-\d{2}$/);
     });
+
+    it('sums cacheWriteTokens', async () => {
+      await record({ cacheWriteTokens: 300 });
+      await record({ cacheWriteTokens: 50 });
+
+      const rows = await usageEventRepository.monthlyCogsByProvider();
+
+      expect(rows[0].cacheWriteTokens).toBe(350);
+    });
+
+    // Reconciliation invariant: providers invoice ALL traffic, so the COGS
+    // baseline must include org-pool-billed and operational rows. A future
+    // owner/feature filter here would silently understate recorded COGS.
+    it('includes Organization-owned and operations-feature rows in the baseline', async () => {
+      await record({ costUsd: 0.01 });
+      await record({ costUsd: 0.02, ownerType: CreditHolderType.Organization, ownerId: 'org-1' });
+      await record({ costUsd: 0.04, feature: 'operations', creditsCharged: 0 });
+
+      const rows = await usageEventRepository.monthlyCogsByProvider();
+
+      expect(rows).toHaveLength(1);
+      expect(rows[0].requests).toBe(3);
+      expect(rows[0].cogsUsd).toBeCloseTo(0.07, 10);
+    });
   });
 
   describe('settlementBreakdown', () => {

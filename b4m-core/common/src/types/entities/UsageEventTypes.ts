@@ -116,6 +116,7 @@ export interface IProviderMonthCogs {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteTokens: number;
 }
 
 /**
