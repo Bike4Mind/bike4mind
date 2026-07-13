@@ -2,9 +2,8 @@
 // Manage premium-overlay.lock.json entries for branch-based preview testing.
 //
 // The lock file already supports pinning an overlay to a branch instead of a
-// SHA (bootstrap-premium.sh and _deploy-env.yml both accept either), and
-// ci.yml's merge-queue gate + _deploy-env.yml's post-merge backstop
-// already refuse to let a branch pin reach main. This CLI is a thin,
+// SHA (bootstrap-premium.sh accepts either), and ci.yml's merge-queue gate
+// already refuses to let a branch pin reach main. This CLI is a thin,
 // deterministic wrapper over that existing mechanism, not a replacement for
 // it - it never touches CI, only this file.
 //

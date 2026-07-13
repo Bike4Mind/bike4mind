@@ -87,11 +87,11 @@ jobs:
       # Pre-merge gate: a PR may point premium-overlay.lock.json at a b4m-overwatch
       # BRANCH while preview-testing a premium change, but that must be bumped to a
       # 40-char SHA before landing on main. This fails the merge queue so a branch
-      # pin can't reach main; the _deploy-env.yml guard is the post-merge backstop
-      # for direct pushes to main/prod.
+      # pin can't reach main. (The deploy-time backstop moved to the internal
+      # deployer along with deploys.)
       # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
-      # covered without editing this step. Mirrors the post-merge guard in
-      # _deploy-env.yml, and the same [0-9a-f]{40} check `pnpm premium:pin --check`
+      # covered without editing this step. The same [0-9a-f]{40} check
+      # `pnpm premium:pin --check`
       # (scripts/premium-pin.mjs) runs locally - keep the two in sync if this
       # regex ever changes.
       - name: Verify premium overlay pins are SHAs (merge-queue gate)
