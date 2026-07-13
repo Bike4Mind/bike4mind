@@ -59,11 +59,22 @@ export const MEMENTO_EMBEDDING_MODEL: SupportedEmbeddingModel = OpenAIEmbeddingM
  * literally every memento. The eval caught exactly that: V1 scored hit@10 of 0.0%, memory silently
  * dark, no error anywhere.
  *
- * 0.313 is the strictest floor that still loses no relevant belief on the eval corpus (the rule: a
- * higher floor buys precision by forgetting something the user actually told us, and that trade is not
- * ours to make silently). Re-derive it with b4m-core/memory/src/eval/tuning.test.ts if the model moves.
+ * The rule: the strictest floor that still forgets NOTHING. A higher floor buys precision by dropping
+ * something the user actually told us, and that trade is not ours to make silently.
+ *
+ * 0.25, not the 0.313 the eval corpus alone would pick - and the gap is the interesting part. The
+ * corpus states facts crisply ("Dana is severely allergic to shellfish"), but mementos are written by
+ * an LLM summarising a conversation, and it HEDGES: "User conducts discovery calls, suggesting a role
+ * in sales". Hedged, abstract phrasing sits measurably further from a plain question than a crisp fact
+ * does. Measured against a real user's mementos: the best match for "what do I do for work" scores
+ * 0.2991 - a genuine, useful memory that the corpus-optimal 0.313 would silently discard, while true
+ * noise ("what is the capital of Peru") tops out around 0.14. The synthetic corpus is a proxy and it
+ * FLATTERS us on this axis; the margin is what pays for that.
+ *
+ * Re-derive with b4m-core/memory/src/eval/tuning.test.ts if the model moves - and sanity-check the
+ * result against real mementos, because the corpus will keep telling you a higher floor is safe.
  */
-export const MEMENTO_MIN_SIMILARITY = 0.313;
+export const MEMENTO_MIN_SIMILARITY = 0.25;
 
 /**
  * Is this memento's stored vector in the CURRENT space, i.e. can it legally be compared against a

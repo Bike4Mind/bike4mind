@@ -43,14 +43,14 @@ const embeddings = fixture.vectors as Record<string, number[]>;
  * - an eval of parameters nobody ships is theatre. The floor is the one calibrated for this fixture's
  * model (ada-002); see tuning.test.ts for the sweep it comes from.
  */
-const SHIPPED = { k: K, activationWeight: 0.15, minRelevance: 0.313 };
+const SHIPPED = { k: K, activationWeight: 0.05, minRelevance: 0.25 };
 
 /**
  * V1 as deployed. It reads the SAME mementos from the SAME vector space, so it gets the same floor -
  * anything else would be comparing V2 against a straw man. What separates the two policies here is
  * only what they do with the scores, which is the thing worth measuring.
  */
-const V1_SHIPPED = { topK: K, minSimilarity: 0.313 };
+const V1_SHIPPED = { topK: K, minSimilarity: 0.25 };
 
 /** The floor V1 shipped with when mementos ran on ada-002. See the regression test at the bottom. */
 const V1_ADA_ERA_FLOOR = 0.75;

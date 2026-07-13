@@ -36,7 +36,7 @@ const QUERY_ID = 'q-color-1';
 const STALE = 'color'; // "favorite color is teal" - 300h old
 const CURRENT = 'color-superseding'; // "now says burnt orange, not teal" - 5h old
 
-const SHIPPED = { k: K, activationWeight: 0.15, minRelevance: 0.313 };
+const SHIPPED = { k: K, activationWeight: 0.05, minRelevance: 0.25 };
 
 describe('Mementos recall: a retracted fact must not outrank the one that replaced it', () => {
   it('V2 ranks the CURRENT belief above the stale one it supersedes', () => {
@@ -64,7 +64,7 @@ describe('Mementos recall: a retracted fact must not outrank the one that replac
     // overturns is 300 is information V1 simply does not carry.
     //
     // This is the one axis where V2 is not merely at parity with V1 but can do something V1 cannot.
-    const ranked = retrieveV1(beliefs, emb[QUERY_ID], { topK: K, minSimilarity: 0.313 });
+    const ranked = retrieveV1(beliefs, emb[QUERY_ID], { topK: K, minSimilarity: 0.25 });
 
     expect(ranked.indexOf(STALE)).toBeLessThan(ranked.indexOf(CURRENT));
   });

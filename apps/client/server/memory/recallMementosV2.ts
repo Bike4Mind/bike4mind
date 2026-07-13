@@ -21,12 +21,13 @@ const V2_RECALL_K = 10;
 /**
  * How far heat (ACT-R activation) may move a belief relative to topicality. The chat prompt is a
  * QUERY, so what the user just asked about is the primary axis and recency/frequency the tiebreaker.
- * `recall` normalizes both axes before blending, so this is a ratio, not a raw scale factor. Swept on
- * the eval corpus (b4m-core/memory/src/eval): 0.1 is the largest weight at which heat only reorders
- * genuine near-ties - ranking quality holds at parity with plain vector search up to 0.10 and
- * degrades beyond it.
+ * `recall` squashes activation into 0..1 and leaves relevance raw, so this reads directly as "how much
+ * cosine is a maximally hot memory worth". Swept on the eval corpus (b4m-core/memory/src/eval), which
+ * walls it in tightly on both sides: at 0.02 heat is too weak to rank a user's RETRACTION above the
+ * fact it overturns; by 0.08 heat starts overriding topicality outright. 0.05 is the midpoint of the
+ * only band that does both.
  */
-const V2_ACTIVATION_WEIGHT = 0.1;
+const V2_ACTIVATION_WEIGHT = 0.05;
 
 
 /**

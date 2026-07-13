@@ -1,4 +1,5 @@
 import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/database';
+import { MEMENTO_EMBEDDING_MODEL } from '@bike4mind/common';
 import {
   foldEvents,
   sealEvent,
@@ -87,6 +88,9 @@ export async function appendMemoryEvent(
       embeddingCipher: sealedEmbedding?.cipher,
       embeddingIv: sealedEmbedding?.iv,
       embeddingTag: sealedEmbedding?.tag,
+      // Stamp the space this vector lives in. The ledger is append-only - this can never be corrected
+      // later, so an unstamped or stale-model vector must be ignored at read time rather than trusted.
+      ...(sealedEmbedding ? { embeddingModel: MEMENTO_EMBEDDING_MODEL } : {}),
       evidenceTier: sealed.evidenceTier,
       salience: sealed.salience,
       at: sealed.at,
@@ -121,8 +125,15 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
 
   // Decrypt the embedding under the same key. A destroyed key yields null, so a shredded belief
   // surfaces no vector - the semantic image dies with the fact.
+  //
+  // A vector from ANOTHER model's space is worse than no vector: cosine against it is noise, and
+  // because this ledger belief WINS the union de-dup against its memento twin (mergeStores keeps the
+  // first store's belief and only borrows fields it is missing), a stale vector here shadows the
+  // twin's freshly re-embedded one. Dropping it is what lets the fresh memento vector through.
+  // The ledger cannot be re-embedded in place - it is append-only - so this gate is permanent, not a
+  // migration shim.
   const embedding =
-    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag
+    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_MODEL
       ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
       : undefined;
 

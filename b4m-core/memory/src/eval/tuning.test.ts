@@ -38,8 +38,8 @@ const K = 10;
 const NOW = Date.parse('2026-07-12T00:00:00.000Z');
 const emb = fixture.vectors as Record<string, number[]>;
 
-const SHIPPED_FLOOR = 0.313;
-const SHIPPED_WEIGHT = 0.15;
+const SHIPPED_FLOOR = 0.25;
+const SHIPPED_WEIGHT = 0.05;
 
 const activationOf = (t: number[], n: number) => baseLevelActivation(t, n, DEFAULT_ACTIVATION);
 const beliefs = buildBeliefs(CORPUS_BELIEFS, emb, NOW, activationOf);
@@ -47,7 +47,7 @@ const positives = CORPUS_QUERIES.filter(q => q.relevant.length > 0);
 const negatives = CORPUS_QUERIES.filter(q => q.relevant.length === 0);
 
 const FLOORS = [0, 0.25, 0.28, 0.3, 0.313, 0.32, 0.34, 0.36, 0.4];
-const WEIGHTS = [0, 0.02, 0.05, 0.15, 0.25, 0.4];
+const WEIGHTS = [0, 0.02, 0.05, 0.08, 0.1, 0.12, 0.15, 0.25, 0.4];
 
 const at = (minRelevance: number, activationWeight: number) => {
   const opts = { k: K, activationWeight, minRelevance };
@@ -95,11 +95,18 @@ for (const floor of FLOORS) {
 }
 
 describe('V2 parameter tuning', () => {
-  it('the shipped floor is the strictest one that still forgets nothing', () => {
+  it('the shipped floor forgets nothing - and is deliberately BELOW the corpus optimum', () => {
     const lossless = FLOORS.filter(f => at(f, SHIPPED_WEIGHT).pos.hitRate === 1);
-
     expect(lossless).toContain(SHIPPED_FLOOR);
-    expect(Math.max(...lossless)).toBe(SHIPPED_FLOOR);
+
+    // The corpus would happily let us go higher, and that is exactly the trap. Its facts are stated
+    // crisply; real mementos are LLM summaries and they HEDGE ("User conducts discovery calls,
+    // suggesting a role in sales"), which sits measurably further from a plain question. Measured on a
+    // real user's memory, the best match for "what do I do for work" scores 0.2991 - a genuine memory
+    // that the corpus-optimal floor would silently bin. So the shipped floor keeps margin BELOW what
+    // this corpus alone would justify, and this assertion exists to stop a well-meaning future tweak
+    // from "optimising" that margin away on synthetic evidence.
+    expect(Math.max(...lossless)).toBeGreaterThan(SHIPPED_FLOOR);
   });
 
   it('the floor is what silences memory on an unanswerable question', () => {
@@ -111,8 +118,8 @@ describe('V2 parameter tuning', () => {
   it('the shipped weight is high enough that heat settles a tie topicality cannot', () => {
     expect(retractionWins(SHIPPED_WEIGHT)).toBe(true);
 
-    // The lower wall is real and close: at 0.02 the retraction loses. This is what rules out "just set
-    // the weight small enough to be safe" - too small IS the unsafe end.
+    // The lower wall is real and CLOSE: at 0.02 the retraction already loses. This is what rules out
+    // "just set the weight small enough to be safe" - too small IS an unsafe end, not a cautious one.
     expect(retractionWins(0.02)).toBe(false);
   });
 
@@ -121,7 +128,9 @@ describe('V2 parameter tuning', () => {
 
     expect(at(SHIPPED_FLOOR, SHIPPED_WEIGHT).pos.mrr).toBeGreaterThanOrEqual(bestMrr);
 
-    // The upper wall: by 0.40, merely-recent beliefs start climbing over the on-topic one.
-    expect(at(SHIPPED_FLOOR, 0.4).pos.mrr).toBeLessThan(bestMrr);
+    // The upper wall is close too: by 0.08 merely-recent beliefs already start climbing over the
+    // on-topic one. Between this and the assertion above, the usable band is 0.02..0.08 - narrow, and
+    // it MOVES when minRelevance moves. Re-sweep; do not nudge.
+    expect(at(SHIPPED_FLOOR, 0.08).pos.mrr).toBeLessThan(bestMrr);
   });
 });

@@ -61,6 +61,17 @@ export interface IMemoryLedgerEvent extends IMongoDocument {
   embeddingIv?: string;
   /** GCM auth tag for `embeddingCipher` (base64). */
   embeddingTag?: string;
+  /**
+   * Which model produced the (encrypted) embedding. Plaintext on purpose: it is metadata about the
+   * vector, not a semantic image of the fact, so it leaks nothing a shred needs to destroy - and it
+   * has to be readable WITHOUT the key in order to decide whether the vector is even worth decrypting.
+   *
+   * The ledger is append-only, so a vector written here can never be re-embedded in place. That makes
+   * the stamp load-bearing: an event from an older embedding model must be recognisable as such and
+   * its vector ignored, or it silently shadows the re-embedded memento twin (see mergeStores) and
+   * every cosine becomes cross-space noise.
+   */
+  embeddingModel?: string;
   evidenceTier?: MemoryEvidenceTier;
   salience?: MemorySalience;
   /** ISO-8601. Part of the content hash, so it is stored verbatim to keep the hash reproducible. */
@@ -96,6 +107,7 @@ const MemoryLedgerEventSchema = new Schema<IMemoryLedgerEvent>(
     embeddingCipher: { type: String },
     embeddingIv: { type: String },
     embeddingTag: { type: String },
+    embeddingModel: { type: String },
     evidenceTier: { type: String, enum: MEMORY_EVIDENCE_TIERS },
     salience: { type: String, enum: MEMORY_SALIENCES },
     at: { type: String, required: true },
@@ -187,6 +199,7 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
           embeddingCipher: '',
           embeddingIv: '',
           embeddingTag: '',
+          embeddingModel: '',
         },
       }
     );
