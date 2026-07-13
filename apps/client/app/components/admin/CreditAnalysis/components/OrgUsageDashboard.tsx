@@ -34,9 +34,13 @@ type OrgOption = { id: string; name: string };
 const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], days: number) => {
   const byDay = new Map(overTime.map(d => [d.day, d.creditsCharged]));
   const today = new Date();
-  return Array.from({ length: days }, (_, i) => {
+  // days + 1 points spanning today-days .. today (UTC). The aggregation's window
+  // start is a rolling `now - days*24h`, whose calendar day is `today - days`;
+  // include that leading day or its (partial) spend drops off the chart while
+  // still counting in the totals, leaving the bars unable to reconcile.
+  return Array.from({ length: days + 1 }, (_, i) => {
     const d = new Date(today);
-    d.setUTCDate(d.getUTCDate() - (days - 1 - i));
+    d.setUTCDate(d.getUTCDate() - (days - i));
     const day = d.toISOString().slice(0, 10);
     return { day, credits: byDay.get(day) ?? 0 };
   });
