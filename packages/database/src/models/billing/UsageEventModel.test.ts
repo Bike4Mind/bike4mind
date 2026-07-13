@@ -206,4 +206,77 @@ describe('UsageEventRepository', () => {
       expect(rows).toHaveLength(0);
     });
   });
+
+  describe('ownerUsageSummary', () => {
+    const orgEvent = (overrides: Partial<IUsageEventInput> = {}) =>
+      record({ ownerId: 'org-1', ownerType: CreditHolderType.Organization, ...overrides });
+
+    it('rolls up an owner spend by day, member, model, and feature', async () => {
+      await orgEvent({ userId: 'user-a', feature: 'chat', costUsd: 0.01, creditsCharged: 50 });
+      await orgEvent({ userId: 'user-a', feature: 'agent_execution', costUsd: 0.02, creditsCharged: 100 });
+      await orgEvent({
+        userId: 'user-b',
+        feature: 'chat',
+        provider: 'openai',
+        model: 'gpt-4o',
+        costUsd: 0.05,
+        creditsCharged: 250,
+      });
+
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+
+      expect(summary.totals).toMatchObject({ requests: 3, creditsCharged: 400 });
+      expect(summary.totals.cogsUsd).toBeCloseTo(0.08, 10);
+
+      // Breakdowns are ordered biggest-spender first.
+      expect(summary.byMember).toMatchObject([
+        { userId: 'user-b', creditsCharged: 250, requests: 1 },
+        { userId: 'user-a', creditsCharged: 150, requests: 2 },
+      ]);
+      expect(summary.byModel).toMatchObject([
+        { provider: 'openai', model: 'gpt-4o', creditsCharged: 250 },
+        { provider: 'bedrock', model: 'claude-sonnet-4-5', creditsCharged: 150 },
+      ]);
+      expect(summary.byFeature).toMatchObject([
+        { feature: 'chat', creditsCharged: 300 },
+        { feature: 'agent_execution', creditsCharged: 100 },
+      ]);
+
+      expect(summary.overTime).toHaveLength(1);
+      expect(summary.overTime[0]).toMatchObject({ requests: 3, creditsCharged: 400 });
+      expect(summary.overTime[0].day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    it('scopes strictly to the given owner id and type', async () => {
+      await orgEvent({ userId: 'user-a', creditsCharged: 100 });
+      // Same id, different type: an agent that happens to share the org id.
+      await record({ ownerId: 'org-1', ownerType: CreditHolderType.Agent, creditsCharged: 999 });
+      // Different owner entirely.
+      await record({ ownerId: 'org-2', ownerType: CreditHolderType.Organization, creditsCharged: 999 });
+
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization);
+
+      expect(summary.totals).toMatchObject({ requests: 1, creditsCharged: 100 });
+    });
+
+    it('excludes events outside the trailing window', async () => {
+      await orgEvent({ creditsCharged: 100 });
+      await UsageEvent.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+      const summary = await usageEventRepository.ownerUsageSummary('org-1', CreditHolderType.Organization, 30);
+      expect(summary.overTime).toHaveLength(0);
+      expect(summary.byMember).toHaveLength(0);
+      expect(summary.totals).toEqual({ requests: 0, cogsUsd: 0, creditsCharged: 0 });
+    });
+
+    it('returns zeroed totals for an owner with no events', async () => {
+      const summary = await usageEventRepository.ownerUsageSummary('org-empty', CreditHolderType.Organization);
+      expect(summary).toEqual({
+        overTime: [],
+        byMember: [],
+        byModel: [],
+        byFeature: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0 },
+      });
+    });
+  });
 });
