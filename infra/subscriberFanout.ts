@@ -7,8 +7,9 @@ import { websocketApi } from './websocket';
 // Image source: subscriber-fanout lives in its own repo and is consumed as a
 // published linux/amd64 image. The container registry is account-tied, so the
 // image reference comes from the SUBSCRIBER_FANOUT_IMAGE env var with no brand
-// fallback — set it per deployment in .github/workflows/deploy.yml (repo/org
-// variable). A fork publishes its own image and points this at its own registry.
+// fallback - set it per deployment as a repo/org variable, injected at deploy
+// time per infra/deploy-contract.json. A fork publishes its own image and points
+// this at its own registry.
 //
 // CI must set it (throws otherwise). `sst remove`, `sst secrets list`,
 // `sst diagnostic`, and infra typechecks load this module too; gating the throw
@@ -24,7 +25,7 @@ const fanoutImage = process.env.SUBSCRIBER_FANOUT_IMAGE || (isCI ? '' : LOCAL_PL
 if (isCI && !fanoutImage) {
   throw new Error(
     'SUBSCRIBER_FANOUT_IMAGE must be set in CI — provide your subscriber-fanout image reference ' +
-      '(see .github/workflows/deploy.yml). For local sst dev (no CI=true), a neutral public ' +
+      '(see infra/deploy-contract.json). For local sst dev (no CI=true), a neutral public ' +
       'placeholder is used automatically.'
   );
 }

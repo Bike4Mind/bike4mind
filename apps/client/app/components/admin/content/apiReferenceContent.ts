@@ -851,6 +851,8 @@ Admin endpoints require the \`admin:*\` scope or superuser role.
 | GET | /api/admin/model-logs | LLM request logs |
 | GET | /api/admin/event-metrics | Event metrics |
 | GET | /api/admin/help-analytics | Help system analytics |
+| GET | /api/admin/model-prices | Model price catalog rows in force (?history=modelId for audit trail) |
+| POST | /api/admin/model-prices | Append an operator reprice or revert a model to seed pricing |
 
 ### DLQ (Dead Letter Queue) Management
 

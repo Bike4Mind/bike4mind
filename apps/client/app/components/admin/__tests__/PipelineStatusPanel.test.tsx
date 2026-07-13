@@ -25,9 +25,25 @@ vi.mock('@client/app/utils/react-query', () => ({
 }));
 
 import { PipelineStatusPanel, isClosedGithubIssueDoc, type TrackingDocSummary } from '../SreAgentTab';
+import type { SreMetrics } from '@bike4mind/common';
 
 const HIDE_TOGGLE_LABEL = 'Hide tracking for closed GitHub issues';
 const STORAGE_KEY = 'sre-pipeline-hide-closed-issues';
+
+// The panel embeds SreMetricsWidget, which fetches /api/sre/metrics on mount.
+// These tests exercise the closed-issue filter, not metrics, so serve an empty
+// window (the widget renders its own empty state and stays out of the way).
+const EMPTY_METRICS: SreMetrics = {
+  windowMs: 7 * 24 * 60 * 60 * 1000,
+  total: 0,
+  bySource: { CLOUDWATCH: 0, GITHUB_ISSUE: 0 },
+  byStatus: {},
+  analysesRun: 0,
+  fixesDispatched: 0,
+  prsCreated: 0,
+  prsMerged: 0,
+  tokens: { input: 0, output: 0 },
+};
 
 // A: open GitHub issue (visible always). B: closed GitHub issue (hidden by default).
 // C: CloudWatch, no linked issue (visible always). D: GitHub issue, state never observed (visible always).
@@ -110,6 +126,7 @@ describe('PipelineStatusPanel - closed-issue filter', () => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     mockGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/sre/metrics')) return Promise.resolve({ data: EMPTY_METRICS });
       if (url.endsWith('/issue-state')) return Promise.resolve({ data: { state: 'open' } });
       if (url === '/api/sre/tracking' || url.startsWith('/api/sre/tracking?')) {
         return Promise.resolve({ data: docs });
@@ -199,6 +216,7 @@ describe('PipelineStatusPanel - closed-issue filter', () => {
       updatedAt: new Date('2026-07-05T00:00:00.000Z'),
     };
     mockGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/sre/metrics')) return Promise.resolve({ data: EMPTY_METRICS });
       if (url.endsWith('/issue-state')) return Promise.resolve({ data: { state: 'open' } });
       if (url === '/api/sre/tracking' || url.startsWith('/api/sre/tracking?')) {
         return Promise.resolve({ data: [numberless, docs[2]] }); // numberless GH doc + a CloudWatch doc
@@ -217,6 +235,7 @@ describe('PipelineStatusPanel - closed-issue filter', () => {
 
   it('shows an explanatory message when every doc is filtered out', async () => {
     mockGet.mockImplementation((url: string) => {
+      if (url.startsWith('/api/sre/metrics')) return Promise.resolve({ data: EMPTY_METRICS });
       if (url.endsWith('/issue-state')) return Promise.resolve({ data: { state: 'closed' } });
       if (url === '/api/sre/tracking' || url.startsWith('/api/sre/tracking?')) {
         return Promise.resolve({ data: [docs[1]] }); // only the closed-issue doc

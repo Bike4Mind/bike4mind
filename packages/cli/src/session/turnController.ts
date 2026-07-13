@@ -27,6 +27,7 @@ import { buildSystemPrompt } from '../core/prompts';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { ConversationContext, reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
+import { createReactiveCompactionHandler } from '../utils/reactiveCompaction.js';
 import { formatStep, extractCompactInstructions } from '../utils';
 import { logger } from '../utils/Logger';
 import { isTransientNetworkError } from '../llm/retryPolicy';
@@ -127,8 +128,12 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // ConversationContext owns the compaction trigger: it measures the full
     // session as it would actually be replayed (bounded tool traces included)
     // plus the system prompt, so a session whose weight lives in tool traces
-    // still compacts at the 80% mark.
-    const systemPromptTokens = tokenCounter.countTokens(systemPrompt);
+    // still compacts at the 80% mark. Tool schemas ship with every completion
+    // request too (same accounting the /context meter uses), so a tool-heavy
+    // session is folded in here as well - otherwise it could slip past the
+    // 80% check on message text alone.
+    const systemPromptTokens =
+      tokenCounter.countTokens(systemPrompt) + tokenCounter.countToolSchemaTokens(agent.getTools());
     const shouldCompact = ConversationContext.fromSession(activeSession).needsCompaction(
       systemPromptTokens,
       { model: activeSession.model, contextWindow },
@@ -246,6 +251,10 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool,
+        // Mid-loop recovery if a provider context-window error interrupts this
+        // turn: compact the in-flight history once and retry, instead of
+        // failing the turn and losing the user's work.
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
       });
     } finally {
       backgroundManager?.setCurrentTurn(null);
