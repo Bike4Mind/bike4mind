@@ -371,7 +371,6 @@ export const InlineChessBoard: React.FC<{
       key={`chess-board-${fen}`}
       data-testid="artifact-preview-chess"
       sx={{
-        mb: 2,
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'center',

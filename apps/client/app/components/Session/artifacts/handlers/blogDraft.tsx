@@ -33,7 +33,7 @@ const BlogDraftPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifa
     return (
       <Box
         data-testid="artifact-preview-blog-draft-error"
-        sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
+        sx={{ p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
       >
         <Typography level="body-sm" color="danger">
           Error rendering blog draft
@@ -43,7 +43,7 @@ const BlogDraftPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifa
   }
 
   return (
-    <Box data-testid={`artifact-preview-blog-draft-${artifactId}`} sx={{ my: 2 }}>
+    <Box data-testid={`artifact-preview-blog-draft-${artifactId}`}>
       <ContentTransformPreviewCard
         data={{
           title: parsed.title,
