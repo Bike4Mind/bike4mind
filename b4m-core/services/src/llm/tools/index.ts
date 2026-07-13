@@ -299,7 +299,8 @@ export const generateMcpTools = async (
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: any) => {
         // Use original tool name when calling the MCP server
-        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
+        // TEMP(mcp-verify): info-level to confirm the MCP round-trip on preview. Name only - NO args (secrets/PII). Revert before merge.
+        Logger.info(`Calling ${originalToolName} tool via ${mcpData.serverName}`);
         try {
           const toolResult = await mcpData.callTool(originalToolName, args);
           const contentBlocks = (toolResult as any)?.content;
@@ -312,12 +313,14 @@ export const generateMcpTools = async (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            // TEMP(mcp-verify): info-level for preview. Length only - NO content (secrets/PII). Revert before merge.
+            Logger.info(`[Tool Result] ${originalToolName}: ${normalized.length} chars`);
             return normalized;
           }
 
           const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-          Logger.debug(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
+          // TEMP(mcp-verify): info-level for preview. No content logged. Revert before merge.
+          Logger.info(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
           return serialized;
         } catch (error) {
           // Handle Atlassian token expiration
@@ -381,7 +384,8 @@ export const generateMcpToolsFromCache = (
     const parameters = normalizeToolParameters(rest as Record<string, unknown>);
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: unknown) => {
-        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
+        // TEMP(mcp-verify): info-level to confirm the MCP round-trip on preview. Name only - NO args (secrets/PII). Revert before merge.
+        Logger.info(`Calling ${originalToolName} tool via ${serverName}`);
         try {
           const toolResult = await callTool(originalToolName, args);
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
@@ -394,12 +398,14 @@ export const generateMcpToolsFromCache = (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
+            // TEMP(mcp-verify): info-level for preview. Length only - NO content (secrets/PII). Revert before merge.
+            Logger.info(`[Tool Result] ${originalToolName}: ${normalized.length} chars`);
             return normalized;
           }
 
           const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-          Logger.debug(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
+          // TEMP(mcp-verify): info-level for preview. No content logged. Revert before merge.
+          Logger.info(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
           return serialized;
         } catch (error) {
           // Handle Atlassian token expiration

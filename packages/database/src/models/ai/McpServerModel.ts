@@ -66,6 +66,10 @@ McpServerSchema.index(
   { sparse: true, name: 'github_webhook_routing_token' }
 );
 
+// Enabled-servers-for-a-user lookup, on the hot path of every chat completion and
+// agent execution (ToolBuilder.buildMcpTools + loadAgentMcpTools both query this).
+McpServerSchema.index({ userId: 1, enabled: 1 }, { name: 'mcp_user_enabled' });
+
 export interface IMcpServerModel extends Model<IMcpServerDocument & IMongoDocument> {}
 export const McpServer: IMcpServerModel =
   mongoose.models.McpServer ?? model<IMcpServerDocument>('McpServer', McpServerSchema);
