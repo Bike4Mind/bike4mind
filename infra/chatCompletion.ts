@@ -127,8 +127,8 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
     // secrets; both default 'not-configured', so the consumer degrades to its fallback
     // until ops sets them. No dependency on the service resource (which is created later)
     // — the URL is a secret, sidestepping any creation-order coupling.
-    INSTANCE_SERVICE_URL: secrets.INSTANCE_SERVICE_URL.value,
-    INSTANCE_SERVICE_TOKEN: secrets.INSTANCE_SERVICE_TOKEN.value,
+    OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
+    OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
   },
   logging: {
     retention: '3 days',

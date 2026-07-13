@@ -153,11 +153,11 @@ export default $config({
     const { contributeInfra: contributeOptiInfra } =
       await import('./infra/premium-generated/optihashi-infra.generated');
     // Stand the external instance-service up ONLY when its image has been published (ops
-    // sets the INSTANCE_SERVICE_IMAGE repo var). Until then, thread none of the
+    // sets the OPTIHASHI_INSTANCE_SERVICE_IMAGE repo var). Until then, thread none of the
     // optional wiring so contributeOptiInfra skips the service and the Deploy graph stays
     // valid on every stage. Activation is pure config (set the image var + token secrets) —
     // no code change. Same external-image model as SUBSCRIBER_FANOUT_IMAGE.
-    const instanceServiceWired = !!process.env.INSTANCE_SERVICE_IMAGE;
+    const instanceServiceWired = !!process.env.OPTIHASHI_INSTANCE_SERVICE_IMAGE;
     contributeOptiInfra({
       lambdaVpc,
       allSecrets,
@@ -169,8 +169,8 @@ export default $config({
             resolvedVpcId,
             isProductionScaleStage: PRODUCTION_STAGES.includes($app.stage),
             instanceServiceSecrets: {
-              token: secrets.INSTANCE_SERVICE_TOKEN,
-              tokenPrevious: secrets.INSTANCE_SERVICE_TOKEN_PREVIOUS,
+              token: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN,
+              tokenPrevious: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS,
             },
           }
         : {}),
