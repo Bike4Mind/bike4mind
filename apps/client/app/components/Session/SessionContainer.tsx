@@ -26,6 +26,7 @@ import { useStreamingState } from '@client/app/hooks/useStreamingState';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFileDropZone } from './hooks/useFileDropZone';
 import { useSessionCacheMigration } from './hooks/useSessionCacheMigration';
+import { ChatCompletionProvider } from '@client/app/contexts/ChatCompletionContext';
 
 /**
  * Decide whether to (re)invoke `changeSession` for the routed session id.
@@ -389,118 +390,237 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   }, [currentSessionId, setShowPinnedOnly]);
 
   return (
-    <Box
-      sx={{
-        display: 'flex',
-        flexDirection: layout === 'horizontal' || (isMobile && layout === 'vertical') ? 'column' : 'row',
-        rowGap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
-        p: isMobile ? '0px' : '0px',
-        height: '100%',
-        width: '100%',
-        position: layout === 'pip' ? 'static' : 'relative',
-        gap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
-      }}
-    >
-      {layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom' && (
-        <Box ref={knowledgeRef} sx={{ transition: 'all 0.3s ease', ...layoutStyles.knowledge }}>
-          <KnowledgeViewer autoHideOnEmpty={autoHideOnEmpty} />
-        </Box>
-      )}
-      {/* Resizable splitter - only show in vertical layout when KnowledgeViewer is visible (and not on mobile) */}
-      {layout === 'vertical' && !isMobile && <ResizableSplitter />}
+    <ChatCompletionProvider sessionId={currentSessionId ?? null}>
       <Box
-        ref={chatContainerRef}
-        display="flex"
         sx={{
-          transition: 'all 0.3s ease',
-          visibility: 'visible',
-          opacity: 1,
-          ...(layout === 'pip' ? {} : layoutStyles.chat),
-          ...layoutStyles.session,
-          position: layout === 'pip' ? 'fixed' : 'relative',
+          display: 'flex',
+          flexDirection: layout === 'horizontal' || (isMobile && layout === 'vertical') ? 'column' : 'row',
+          rowGap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
+          p: isMobile ? '0px' : '0px',
+          height: '100%',
+          width: '100%',
+          position: layout === 'pip' ? 'static' : 'relative',
+          gap: layout === 'horizontal' || (isMobile && layout === 'vertical') ? '10px' : '0px',
         }}
       >
+        {layout !== 'hide' && layout !== 'dockRight' && layout !== 'dockBottom' && (
+          <Box ref={knowledgeRef} sx={{ transition: 'all 0.3s ease', ...layoutStyles.knowledge }}>
+            <KnowledgeViewer autoHideOnEmpty={autoHideOnEmpty} />
+          </Box>
+        )}
+        {/* Resizable splitter - only show in vertical layout when KnowledgeViewer is visible (and not on mobile) */}
+        {layout === 'vertical' && !isMobile && <ResizableSplitter />}
         <Box
-          flexGrow={1}
-          onDragEnter={handleDragEnter}
-          onDragLeave={handleDragLeave}
-          onDragOver={handleDragOver}
-          onDrop={handleDrop}
+          ref={chatContainerRef}
+          display="flex"
+          sx={{
+            transition: 'all 0.3s ease',
+            visibility: 'visible',
+            opacity: 1,
+            ...(layout === 'pip' ? {} : layoutStyles.chat),
+            ...layoutStyles.session,
+            position: layout === 'pip' ? 'fixed' : 'relative',
+          }}
         >
-          {isDraggingOver && (
+          <Box
+            flexGrow={1}
+            onDragEnter={handleDragEnter}
+            onDragLeave={handleDragLeave}
+            onDragOver={handleDragOver}
+            onDrop={handleDrop}
+          >
+            {isDraggingOver && (
+              <Box
+                sx={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '100%',
+                  display: 'flex',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  backgroundColor: (theme: any) => theme.palette.session.overlayBackground,
+                  backdropFilter: 'blur(10px)',
+                  zIndex: 110,
+                  outline: '2px dashed',
+                  outlineColor: 'primary',
+                  outlineOffset: '-10px',
+                }}
+              >
+                <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
+                  <CloudUploadIcon />
+                  <span>Drop files here to upload</span>
+                </Box>
+              </Box>
+            )}
             <Box
               sx={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
                 width: '100%',
                 height: '100%',
+                border: layout === 'hide' || layout === 'pip' ? 'none' : '1px solid',
+                borderRadius: '8px',
+                borderColor: 'divider',
+                marginX: 'auto',
+                position: 'relative',
                 display: 'flex',
-                justifyContent: 'center',
-                alignItems: 'center',
-                backgroundColor: (theme: any) => theme.palette.session.overlayBackground,
-                backdropFilter: 'blur(10px)',
-                zIndex: 110,
-                outline: '2px dashed',
-                outlineColor: 'primary',
-                outlineOffset: '-10px',
+                flexDirection: 'column',
+                // overflow: 'hidden', // Prevent content from escaping flex container on mobile
+                pt: {
+                  xs: project ? '60px' : 0,
+                  sm: '60px',
+                },
               }}
             >
-              <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                <CloudUploadIcon />
-                <span>Drop files here to upload</span>
+              {/** SessionTop component */}
+              <Box
+                sx={theme => ({
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: '60px',
+                  borderColor: 'divider',
+                  background: theme.palette.background.body,
+                  zIndex: 1,
+                  padding: '0px 0 0px 12px',
+                  display: {
+                    xs: project ? 'block' : 'none',
+                    sm: 'block',
+                  },
+                })}
+              >
+                <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
               </Box>
-            </Box>
-          )}
-          <Box
-            sx={{
-              width: '100%',
-              height: '100%',
-              border: layout === 'hide' || layout === 'pip' ? 'none' : '1px solid',
-              borderRadius: '8px',
-              borderColor: 'divider',
-              marginX: 'auto',
-              position: 'relative',
-              display: 'flex',
-              flexDirection: 'column',
-              // overflow: 'hidden', // Prevent content from escaping flex container on mobile
-              pt: {
-                xs: project ? '60px' : 0,
-                sm: '60px',
-              },
-            }}
-          >
-            {/** SessionTop component */}
-            <Box
-              sx={theme => ({
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                width: '100%',
-                height: '60px',
-                borderColor: 'divider',
-                background: theme.palette.background.body,
-                zIndex: 1,
-                padding: '0px 0 0px 12px',
-                display: {
-                  xs: project ? 'block' : 'none',
-                  sm: 'block',
-                },
-              })}
-            >
-              <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
-            </Box>
-            {/* Skip rendering chat content when floatingChat/dock is active — FloatingChatWindow
+              {/* Skip rendering chat content when floatingChat/dock is active — FloatingChatWindow
                 or DockedChatPanel renders its own SessionMiddle + SessionBottom. Rendering duplicates
                 here causes the hidden editor's SyncValuePlugin to call selectEnd() on every keystroke,
                 which updates the global browser Selection API and steals focus from the visible editor. */}
-            {layout !== 'floatingChat' && layout !== 'dockRight' && layout !== 'dockBottom' && (
-              <>
+              {layout !== 'floatingChat' && layout !== 'dockRight' && layout !== 'dockBottom' && (
+                <>
+                  {!currentSessionId ? (
+                    customSplash || <NotebookSplash />
+                  ) : (
+                    <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
+                      <SessionMiddle isFullWidth={isFullWidth} sessionId={currentSessionId} />
+                      {pendingFirstMessage && (
+                        <Box
+                          sx={{
+                            position: 'absolute',
+                            inset: 0,
+                            zIndex: 10,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            backgroundColor: 'background.body',
+                          }}
+                        >
+                          <PendingFirstMessage message={pendingFirstMessage} />
+                        </Box>
+                      )}
+                    </Box>
+                  )}
+                  {/* ActiveAgentExecutions used to live here as a fixed block
+                    above SessionBottom, which created visual disconnect between
+                    the user's prompt (rendered in the scrollable chat middle)
+                    and the agent's live activity (parked at the bottom of the
+                    viewport). It now renders inside ChatHistory's footer so
+                    iteration streams and permission cards appear directly under
+                    the last chat bubble and scroll with the rest of the
+                    conversation. SessionBottom stays as the fixed input bar. */}
+                  <Box
+                    sx={{
+                      flexShrink: 0,
+                      width: '100%',
+                      borderColor: 'divider',
+                      backgroundColor: 'background.body',
+                      zIndex: 10,
+                    }}
+                  >
+                    <SessionBottom ref={sessionBottomRef} />
+                  </Box>
+                </>
+              )}
+            </Box>
+          </Box>
+
+          {!!pastedFile && (
+            <Modal open onClose={() => handleConfirmUpload(false)}>
+              <ModalDialog maxWidth="sm">
+                <Typography component="h2">Confirm Upload</Typography>
+                <Typography>Do you want to upload the file {pastedFile?.name}?</Typography>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
+                  <Button onClick={() => handleConfirmUpload(false)} color="neutral" variant="plain">
+                    Cancel
+                  </Button>
+                  <Button onClick={() => handleConfirmUpload(true)} sx={{ marginLeft: '0.5rem' }}>
+                    Upload
+                  </Button>
+                </div>
+              </ModalDialog>
+            </Modal>
+          )}
+        </Box>
+
+        {/* Floating Chat Window - renders when layout is floatingChat */}
+        {layout === 'floatingChat' && (
+          <FloatingChatWindow headerActions={floatingChatHeaderActions}>
+            <Box
+              ref={containerRef}
+              sx={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                backgroundColor: 'background.surface',
+              }}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              {isDraggingOver && (
+                <Box
+                  sx={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    height: '100%',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: (theme: unknown) =>
+                      (theme as { palette: { session: { overlayBackground: string } } }).palette.session
+                        .overlayBackground,
+                    backdropFilter: 'blur(10px)',
+                    zIndex: 110,
+                    outline: '2px dashed',
+                    outlineColor: 'primary',
+                    outlineOffset: '-10px',
+                  }}
+                >
+                  <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
+                    <CloudUploadIcon />
+                    <span>Drop files here to upload</span>
+                  </Box>
+                </Box>
+              )}
+              {/* Chat content without SessionTop header for compact floating view */}
+              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
-                  <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                    <SessionMiddle isFullWidth={isFullWidth} sessionId={currentSessionId} />
+                  <Box
+                    sx={{
+                      position: 'relative',
+                      flex: 1,
+                      minHeight: 0,
+                      overflow: 'hidden',
+                      display: 'flex',
+                      flexDirection: 'column',
+                    }}
+                  >
+                    <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
                     {pendingFirstMessage && (
                       <Box
                         sx={{
@@ -517,207 +637,90 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                     )}
                   </Box>
                 )}
-                {/* ActiveAgentExecutions used to live here as a fixed block
-                    above SessionBottom, which created visual disconnect between
-                    the user's prompt (rendered in the scrollable chat middle)
-                    and the agent's live activity (parked at the bottom of the
-                    viewport). It now renders inside ChatHistory's footer so
-                    iteration streams and permission cards appear directly under
-                    the last chat bubble and scroll with the rest of the
-                    conversation. SessionBottom stays as the fixed input bar. */}
+              </Box>
+              {/* Input area */}
+              <Box
+                sx={{
+                  flexShrink: 0,
+                  width: '100%',
+                  borderTop: '1px solid',
+                  borderColor: 'divider',
+                  backgroundColor: 'background.body',
+                }}
+              >
+                <SessionBottom ref={sessionBottomRef} />
+              </Box>
+            </Box>
+          </FloatingChatWindow>
+        )}
+
+        {/* Docked Chat Panel - renders when layout is dockRight or dockBottom */}
+        {(layout === 'dockRight' || layout === 'dockBottom') && (
+          <DockedChatPanel headerActions={floatingChatHeaderActions}>
+            <Box
+              ref={containerRef}
+              sx={{
+                width: '100%',
+                height: '100%',
+                display: 'flex',
+                flexDirection: 'column',
+                backgroundColor: 'background.surface',
+              }}
+              onDragEnter={handleDragEnter}
+              onDragLeave={handleDragLeave}
+              onDragOver={handleDragOver}
+              onDrop={handleDrop}
+            >
+              {isDraggingOver && (
                 <Box
                   sx={{
-                    flexShrink: 0,
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
                     width: '100%',
-                    borderColor: 'divider',
-                    backgroundColor: 'background.body',
-                    zIndex: 10,
+                    height: '100%',
+                    display: 'flex',
+                    justifyContent: 'center',
+                    alignItems: 'center',
+                    backgroundColor: (theme: unknown) =>
+                      (theme as { palette: { session: { overlayBackground: string } } }).palette.session
+                        .overlayBackground,
+                    backdropFilter: 'blur(10px)',
+                    zIndex: 110,
+                    outline: '2px dashed',
+                    outlineColor: 'primary',
+                    outlineOffset: '-10px',
                   }}
                 >
-                  <SessionBottom ref={sessionBottomRef} />
+                  <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
+                    <CloudUploadIcon />
+                    <span>Drop files here to upload</span>
+                  </Box>
                 </Box>
-              </>
-            )}
-          </Box>
-        </Box>
-
-        {!!pastedFile && (
-          <Modal open onClose={() => handleConfirmUpload(false)}>
-            <ModalDialog maxWidth="sm">
-              <Typography component="h2">Confirm Upload</Typography>
-              <Typography>Do you want to upload the file {pastedFile?.name}?</Typography>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '1rem' }}>
-                <Button onClick={() => handleConfirmUpload(false)} color="neutral" variant="plain">
-                  Cancel
-                </Button>
-                <Button onClick={() => handleConfirmUpload(true)} sx={{ marginLeft: '0.5rem' }}>
-                  Upload
-                </Button>
-              </div>
-            </ModalDialog>
-          </Modal>
+              )}
+              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                {!currentSessionId ? (
+                  customSplash || <NotebookSplash />
+                ) : (
+                  <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
+                )}
+              </Box>
+              <Box
+                sx={{
+                  flexShrink: 0,
+                  width: '100%',
+                  borderTop: '1px solid',
+                  borderColor: 'divider',
+                  backgroundColor: 'background.body',
+                }}
+              >
+                <SessionBottom ref={sessionBottomRef} />
+              </Box>
+            </Box>
+          </DockedChatPanel>
         )}
       </Box>
-
-      {/* Floating Chat Window - renders when layout is floatingChat */}
-      {layout === 'floatingChat' && (
-        <FloatingChatWindow headerActions={floatingChatHeaderActions}>
-          <Box
-            ref={containerRef}
-            sx={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              backgroundColor: 'background.surface',
-            }}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          >
-            {isDraggingOver && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '100%',
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: (theme: unknown) =>
-                    (theme as { palette: { session: { overlayBackground: string } } }).palette.session
-                      .overlayBackground,
-                  backdropFilter: 'blur(10px)',
-                  zIndex: 110,
-                  outline: '2px dashed',
-                  outlineColor: 'primary',
-                  outlineOffset: '-10px',
-                }}
-              >
-                <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                  <CloudUploadIcon />
-                  <span>Drop files here to upload</span>
-                </Box>
-              </Box>
-            )}
-            {/* Chat content without SessionTop header for compact floating view */}
-            <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              {!currentSessionId ? (
-                customSplash || <NotebookSplash />
-              ) : (
-                <Box
-                  sx={{
-                    position: 'relative',
-                    flex: 1,
-                    minHeight: 0,
-                    overflow: 'hidden',
-                    display: 'flex',
-                    flexDirection: 'column',
-                  }}
-                >
-                  <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
-                  {pendingFirstMessage && (
-                    <Box
-                      sx={{
-                        position: 'absolute',
-                        inset: 0,
-                        zIndex: 10,
-                        display: 'flex',
-                        flexDirection: 'column',
-                        backgroundColor: 'background.body',
-                      }}
-                    >
-                      <PendingFirstMessage message={pendingFirstMessage} />
-                    </Box>
-                  )}
-                </Box>
-              )}
-            </Box>
-            {/* Input area */}
-            <Box
-              sx={{
-                flexShrink: 0,
-                width: '100%',
-                borderTop: '1px solid',
-                borderColor: 'divider',
-                backgroundColor: 'background.body',
-              }}
-            >
-              <SessionBottom ref={sessionBottomRef} />
-            </Box>
-          </Box>
-        </FloatingChatWindow>
-      )}
-
-      {/* Docked Chat Panel - renders when layout is dockRight or dockBottom */}
-      {(layout === 'dockRight' || layout === 'dockBottom') && (
-        <DockedChatPanel headerActions={floatingChatHeaderActions}>
-          <Box
-            ref={containerRef}
-            sx={{
-              width: '100%',
-              height: '100%',
-              display: 'flex',
-              flexDirection: 'column',
-              backgroundColor: 'background.surface',
-            }}
-            onDragEnter={handleDragEnter}
-            onDragLeave={handleDragLeave}
-            onDragOver={handleDragOver}
-            onDrop={handleDrop}
-          >
-            {isDraggingOver && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '100%',
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: (theme: unknown) =>
-                    (theme as { palette: { session: { overlayBackground: string } } }).palette.session
-                      .overlayBackground,
-                  backdropFilter: 'blur(10px)',
-                  zIndex: 110,
-                  outline: '2px dashed',
-                  outlineColor: 'primary',
-                  outlineOffset: '-10px',
-                }}
-              >
-                <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                  <CloudUploadIcon />
-                  <span>Drop files here to upload</span>
-                </Box>
-              </Box>
-            )}
-            <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-              {!currentSessionId ? (
-                customSplash || <NotebookSplash />
-              ) : (
-                <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
-              )}
-            </Box>
-            <Box
-              sx={{
-                flexShrink: 0,
-                width: '100%',
-                borderTop: '1px solid',
-                borderColor: 'divider',
-                backgroundColor: 'background.body',
-              }}
-            >
-              <SessionBottom ref={sessionBottomRef} />
-            </Box>
-          </Box>
-        </DockedChatPanel>
-      )}
-    </Box>
+    </ChatCompletionProvider>
   );
 };
 
