@@ -20,10 +20,12 @@ const SOURCE_BY_GRANT_TYPE: Record<CreditLotGrantType, CreditLotSource> = {
 // type (subscription, promo/signup, transfer) gets 90 days.
 const TWELVE_MONTH_GRANT_TYPES = new Set<CreditLotGrantType>(['purchase', 'legacy']);
 
+// UTC arithmetic: local-calendar math shifts the instant by an hour when a
+// DST transition falls inside the window, making expiry host-TZ-dependent.
 function expiresAtForGrantType(grantType: CreditLotGrantType, now: Date): Date {
   return TWELVE_MONTH_GRANT_TYPES.has(grantType)
-    ? dayjs(now).add(12, 'month').toDate()
-    : dayjs(now).add(90, 'day').toDate();
+    ? dayjs.utc(now).add(12, 'month').toDate()
+    : dayjs.utc(now).add(90, 'day').toDate();
 }
 
 export interface StampCreditLotParams {
