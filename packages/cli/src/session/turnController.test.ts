@@ -5,6 +5,7 @@ import type { Session, Message, CliConfig, SessionStore, ConfigStore, CommandHis
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
+import type { ModelInfo } from '@bike4mind/common';
 
 /**
  * Boundary tests for the extracted turn lifecycle (issue #228, phase 2). They
@@ -208,6 +209,41 @@ describe('runTurn', () => {
     expect(session!.messages[0].role).toBe('user');
     expect(useCliStore.getState().pendingMessages).toHaveLength(0);
     expect(useCliStore.getState().isThinking).toBe(false);
+  });
+
+  it('counts tool-definition tokens in the proactive auto-compact estimate', async () => {
+    // Tiny messages/system prompt alone stay well under 80% of a 500-token
+    // window; a tool-heavy agent should push the estimate over regardless.
+    seedSession(
+      Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'hi',
+        timestamp: ISO,
+      }))
+    );
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
+      makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
+    );
+    const ctx = makeCtx({
+      agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+      config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+      availableModels: [{ id: 'claude-sonnet-4-6', contextWindow: 500 } as unknown as ModelInfo],
+    });
+
+    await runTurn('next message', ctx);
+
+    // The compaction call (maxIterations: 1) only happens when shouldCompact
+    // fired; the main-turn call follows it.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
   });
 
   it('drains queued messages into a follow-up turn after the current one settles', async () => {

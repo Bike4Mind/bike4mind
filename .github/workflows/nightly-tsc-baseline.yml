@@ -64,7 +64,7 @@ jobs:
         run: pnpm turbo:core:build
 
       # Pure classic tsc — the authoritative baseline. Mirrors the pre-tsgo
-      # deploy.yml gate. No `:fast`, no tsgo: this is the divergence detector.
+      # ci.yml gate. No `:fast`, no tsgo: this is the divergence detector.
       - name: Pure tsc typecheck (authoritative baseline)
         run: pnpm -w typecheck && pnpm --recursive typecheck
 

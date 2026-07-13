@@ -38,16 +38,14 @@ export interface DataLakeConfig {
  * doesn't belong in shippable code. Empty/unset in the open-core fork (or CI type-check)
  * means only the opti-knowledge base lake below, the correct default. Set the
  * NEXT_PUBLIC_PREMIUM_DATA_LAKES repo/org variable per stage to a JSON array of
- * DataLakeConfig objects to activate; the value flows in via _deploy-env.yml.
+ * DataLakeConfig objects to activate; the value is injected at deploy time per infra/deploy-contract.json.
  */
 const PREMIUM_DATA_LAKES: DataLakeConfig[] = (() => {
   const raw = process.env.NEXT_PUBLIC_PREMIUM_DATA_LAKES;
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as DataLakeConfig[];
-    return Array.isArray(parsed)
-      ? parsed.filter(l => l && l.id && l.slug && l.fileTagPrefix && l.datalakeTag)
-      : [];
+    return Array.isArray(parsed) ? parsed.filter(l => l && l.id && l.slug && l.fileTagPrefix && l.datalakeTag) : [];
   } catch {
     // Malformed value -> no premium lakes (fail closed); never throw at module load.
     return [];

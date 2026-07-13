@@ -290,7 +290,7 @@ test.afterAll(async ({ request }) => {
 
 ## CI Integration
 
-E2E tests run automatically on **pull request preview deployments** via GitHub Actions (`.github/workflows/deploy.yml`):
+E2E tests run automatically on **pull request preview deployments** via GitHub Actions (`.github/workflows/ci.yml`):
 
 1. After the preview deploys, CI waits for the URL to become healthy
 2. Tests run headless with 3 workers against the preview URL
