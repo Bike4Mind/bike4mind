@@ -49,6 +49,7 @@ import {
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
+import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
   buildHandoffPrompt,
@@ -1278,6 +1279,10 @@ function CliApp() {
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
           isReadOnlyTool,
+          // Mid-loop recovery if a provider context-window error interrupts this
+          // turn: compact the in-flight history once and retry, instead of
+          // failing the turn and losing the user's work.
+          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
