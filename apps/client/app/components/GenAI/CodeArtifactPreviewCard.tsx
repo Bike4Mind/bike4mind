@@ -11,6 +11,7 @@ import {
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -140,25 +141,9 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
     }
   };
 
-  // Listen for selected artifact content changes and update the knowledge viewer
-  useEffect(() => {
-    const currentState = useSessionLayout.getState();
-
-    // Only update if this artifact is currently selected and the content has actually changed
-    if (currentState.selectedArtifactId === artifactId && currentState.artifactData?.type === 'code') {
-      const currentContent = currentState.artifactData.content as CodeArtifactData;
-
-      // Compare the actual content to avoid unnecessary updates
-      if (JSON.stringify(currentContent) !== JSON.stringify(data)) {
-        setSessionLayout({
-          artifactData: {
-            ...currentState.artifactData,
-            content: data,
-          },
-        });
-      }
-    }
-  }, [artifactId, data.code, data.title, data.description]);
+  // Propagate live content changes to the Knowledge Base without letting a scroll-driven
+  // (re)mount of a same-id card clobber the newest version - see the hook for the #457 detail.
+  useSelectedArtifactContentSync(artifactId, 'code', data.code, data);
 
   return (
     <Card
