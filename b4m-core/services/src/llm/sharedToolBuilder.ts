@@ -256,7 +256,9 @@ export function buildSharedTools(
     allToolDefinitions,
     undefined, // allowedDirectories - not used in this path
     entitlementKeys ?? [],
-    callbacks.sessionId
+    callbacks.sessionId,
+    undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
+    deps.precomputed?.models
   );
 
   // Filter to enabled tools only

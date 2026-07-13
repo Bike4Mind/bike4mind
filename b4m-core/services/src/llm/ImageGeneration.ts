@@ -1220,7 +1220,10 @@ export class ImageGenerationService {
             feature: 'image_generation',
             provider: modelInfo.backend,
             model,
-            inputTokens: 0,
+            // Prompt tokens actually sent to the model: the full encoded prompt, or TRUNCATE_TO
+            // when it was trimmed above (see the modelMaxTokens branch). Image models bill
+            // per-image (costUsd/units), so this is analytics-only completeness, not billing.
+            inputTokens: promptTokens.length > modelMaxTokens ? TRUNCATE_TO : promptTokens.length,
             outputTokens: 0,
             cachedInputTokens: 0,
             cacheWriteTokens: 0,
