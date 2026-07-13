@@ -42,6 +42,9 @@ const SwitchSelector: FC<SwitchSelectorProps> = ({ options, value, onChange, wid
 
   return (
     <Box
+      // Backstop: if the pointer leaves the track without a segment's own mouseleave
+      // firing (e.g. it exits across the tooltip popper), clear the hover anyway.
+      onMouseLeave={() => setHoveredIdx(null)}
       sx={{
         position: 'relative',
         display: 'flex',
@@ -144,11 +147,14 @@ const SwitchSelector: FC<SwitchSelectorProps> = ({ options, value, onChange, wid
             key={v}
             title={tooltip}
             placement="top"
-            disableInteractive
             open={hoveredIdx === idx}
             disableHoverListener
             disableFocusListener
             disableTouchListener
+            // The popup overlaps the track, so it must never swallow pointer events --
+            // otherwise the segment under it stops seeing enter/leave and the tooltip
+            // it belongs to never closes.
+            sx={{ pointerEvents: 'none' }}
           >
             {content}
           </Tooltip>

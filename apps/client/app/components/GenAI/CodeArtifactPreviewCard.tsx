@@ -1,11 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
-  OpenInFull as ExpandIcon,
-  ContentCopy as CopyIcon,
-  Save as SaveIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
+  OpenInFullOutlined as ExpandIcon,
+  ContentCopyOutlined as CopyIcon,
+  SaveOutlined as SaveIcon,
+  ExpandMoreOutlined as ExpandMoreIcon,
+  ExpandLessOutlined as ExpandLessIcon,
 } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
@@ -15,6 +15,7 @@ import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
 import { brand } from '@client/app/utils/themes/colors';
+import { actionButtonSx } from './ArtifactPreviewCard';
 
 interface CodeArtifactData {
   title: string;
@@ -195,7 +196,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
         {/* Title leads the row so the stats line below aligns flush with it; the chevron
             follows immediately. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
-          <Stack direction="row" alignItems="center" sx={{ minWidth: 0 }}>
+          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
             <Typography
               className="code-artifact-title"
               level="title-sm"
@@ -222,8 +223,14 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
                 sx={theme => ({
                   flexShrink: 0,
                   marginLeft: 0,
+                  // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
+                  // lose to its minWidth/minHeight defaults.
+                  '--IconButton-size': '24px',
+                  minWidth: '24px',
+                  minHeight: '24px',
                   '--Icon-fontSize': '16px',
                   '--Icon-color': theme.vars.palette.text.tertiary,
+                  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
                 })}
                 onClick={handleToggleExpand}
                 data-testid="code-artifact-toggle-btn"
@@ -236,13 +243,19 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           <Box sx={{ flex: 1 }} />
 
           <Tooltip title="Copy code to clipboard" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" onClick={handleCopy}>
+            <IconButton
+              size="sm"
+              variant="plain"
+              color="neutral"
+              sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
+              onClick={handleCopy}
+            >
               <CopyIcon />
             </IconButton>
           </Tooltip>
 
           <Tooltip title="Save as file to workbench" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" onClick={handleSaveAsFile}>
+            <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
               <SaveIcon />
             </IconButton>
           </Tooltip>
@@ -252,6 +265,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
               size="sm"
               variant="plain"
               color="neutral"
+              sx={actionButtonSx}
               onClick={handleOpenInViewer}
               data-testid="code-artifact-expand-btn"
             >

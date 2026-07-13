@@ -1,13 +1,14 @@
 import React, { useEffect, useState, type ReactNode } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
+import type { Theme } from '@mui/joy';
 import {
-  OpenInFull as ExpandIcon,
-  ContentCopy as CopyIcon,
-  Save as SaveIcon,
-  PlayArrow as PreviewIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
-  Code as CodeViewIcon,
+  OpenInFullOutlined as ExpandIcon,
+  ContentCopyOutlined as CopyIcon,
+  SaveOutlined as SaveIcon,
+  PlayArrowOutlined as PreviewIcon,
+  ExpandMoreOutlined as ExpandMoreIcon,
+  ExpandLessOutlined as ExpandLessIcon,
+  CodeOutlined as CodeViewIcon,
 } from '@mui/icons-material';
 import useSessionLayout, { setSessionLayout, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
@@ -18,6 +19,18 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { brand } from '@client/app/utils/themes/colors';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
+
+// Shared by copy / save / open-in-viewer: 18px glyphs dimmed to 70%, brightening to full
+// on hover, over the same hover fill the sidebar items use (notebooklist.hoverBg) rather
+// than Joy's default plain-variant hover. Joy icons take their color from --Icon-color.
+export const actionButtonSx = (theme: Theme) => ({
+  '--Icon-fontSize': '18px',
+  '--Icon-color': theme.vars.palette.text.primary70,
+  '&:hover': {
+    backgroundColor: theme.palette.notebooklist.hoverBg,
+    '--Icon-color': theme.vars.palette.text.primary,
+  },
+});
 
 export interface ArtifactSaveFile {
   fileName: string;
@@ -236,7 +249,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         {/* Title leads the row so the stats line below aligns flush with it. Title and
             chevron are their own 4px group; the outer 8px spacing stays for the actions. */}
         <Stack direction="row" spacing={1} alignItems="center">
-          <Stack direction="row" alignItems="center" sx={{ minWidth: 0 }}>
+          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
             <Typography
               level="title-sm"
               sx={{
@@ -263,8 +276,14 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                   sx={theme => ({
                     flexShrink: 0,
                     marginLeft: 0,
+                    // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
+                    // lose to its minWidth/minHeight defaults.
+                    '--IconButton-size': '24px',
+                    minWidth: '24px',
+                    minHeight: '24px',
                     '--Icon-fontSize': '16px',
                     '--Icon-color': theme.vars.palette.text.tertiary,
+                    '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
                   })}
                   onClick={handleToggleExpand}
                   data-testid={`${testIdPrefix}-artifact-toggle-btn`}
@@ -307,6 +326,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 size="sm"
                 variant="plain"
                 color="neutral"
+                sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
                 onClick={handleCopy}
                 data-testid={`${testIdPrefix}-artifact-copy-btn`}
               >
@@ -321,6 +341,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
                 size="sm"
                 variant="plain"
                 color="neutral"
+                sx={actionButtonSx}
                 onClick={handleSaveAsFile}
                 data-testid={`${testIdPrefix}-artifact-save-btn`}
               >
@@ -334,6 +355,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
               size="sm"
               variant="plain"
               color="neutral"
+              sx={actionButtonSx}
               onClick={handleOpenInViewer}
               data-testid={`${testIdPrefix}-artifact-expand-btn`}
             >
