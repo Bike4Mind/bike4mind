@@ -100,15 +100,25 @@ describe('toSafeUser', () => {
     expectNoSecretValues(safe);
   });
 
-  it('same-org and self scopes add email but nothing else', () => {
-    for (const scope of ['same-org', 'self'] as const) {
-      const safe = toSafeUser(fullUser, scope);
-      expect(safe!.email).toBe('jane@example.com');
-      expect(Object.keys(safe!).sort()).toEqual(
-        ['email', 'id', 'isOnline', 'lastActiveAt', 'name', 'photoUrl', 'username'].sort()
-      );
-      expectNoSecretValues(safe);
-    }
+  it('self scope adds email but nothing else', () => {
+    const safe = toSafeUser(fullUser, 'self');
+    expect(safe!.email).toBe('jane@example.com');
+    expect(Object.keys(safe!).sort()).toEqual(
+      ['email', 'id', 'isOnline', 'lastActiveAt', 'name', 'photoUrl', 'username'].sort()
+    );
+    expectNoSecretValues(safe);
+  });
+
+  it('same-org scope adds email + isBanned (org-member "Deactivated" chip) but no secrets', () => {
+    const safe = toSafeUser(fullUser, 'same-org');
+    expect(safe!.email).toBe('jane@example.com');
+    expect('isBanned' in safe!).toBe(true);
+    expect(Object.keys(safe!).sort()).toEqual(
+      ['email', 'id', 'isBanned', 'isOnline', 'lastActiveAt', 'name', 'photoUrl', 'username'].sort()
+    );
+    // a banned member's flag propagates so the chip can render
+    expect(toSafeUser({ ...fullUser, isBanned: true }, 'same-org')!.isBanned).toBe(true);
+    expectNoSecretValues(safe);
   });
 
   it('defaults to public scope', () => {

@@ -82,6 +82,9 @@ export type SafeUserScope = 'public' | 'same-org' | 'self';
 
 export type SafeUser = Pick<IUser, 'id' | 'name' | 'username' | 'photoUrl' | 'isOnline' | 'lastActiveAt'> & {
   email?: string | null;
+  // Only populated for the 'same-org' scope: org-member cards (UserCard.tsx) render a
+  // "Deactivated" chip from isBanned.
+  isBanned?: boolean;
 };
 
 // Accept anything user-doc-shaped (Mongoose doc, toJSON()'d object, or lean result).
@@ -89,7 +92,7 @@ type UserLike = (Partial<IUser> & { _id?: unknown }) | null | undefined;
 
 /**
  * Whitelist-serialize a user for exposure to ANOTHER user. `public` returns
- * name/username/photo only; `same-org` and `self` additionally include email.
+ * name/username/photo only; `self` adds email; `same-org` adds email + isBanned.
  * For a user's OWN full profile (integration status, preferences, etc.) do NOT
  * use this -- use `redactUserSecretsForSelf`.
  */
@@ -106,6 +109,10 @@ export function toSafeUser(user: UserLike, scope: SafeUserScope = 'public'): Saf
   };
   if (scope === 'same-org' || scope === 'self') {
     safe.email = user.email ?? null;
+  }
+  if (scope === 'same-org') {
+    // Org-member cards render a "Deactivated" chip from isBanned.
+    safe.isBanned = user.isBanned ?? false;
   }
   return safe;
 }
