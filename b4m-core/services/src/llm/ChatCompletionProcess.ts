@@ -3015,9 +3015,11 @@ export class ChatCompletionProcess {
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
         // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters, whose input_tokens EXCLUDE cached tokens.
-        // OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache and must not
-        // forward cache counts here without also subtracting them from input.
+        // Anthropic-family adapters - the direct Anthropic adapter and
+        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
+        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
+        // and must not forward cache counts here without also subtracting them
+        // from input.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so
