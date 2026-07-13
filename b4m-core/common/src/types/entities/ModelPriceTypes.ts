@@ -11,13 +11,25 @@ export const MODEL_PRICE_UNITS = ['per_token', 'per_minute', 'per_image'] as con
 
 export type ModelPriceUnit = (typeof MODEL_PRICE_UNITS)[number];
 
-/** One pricing tier, same shape as ModelInfo.pricing values. */
+/**
+ * One pricing tier, same shape as ModelInfo.pricing values. The audio_*
+ * fields exist for realtime voice models, whose provider bills audio tokens
+ * at their own rates (text maps onto input/cache_read/output); absent audio
+ * fields mean "not an audio model". Must stay in sync with normalizePricing
+ * in packages/database/src/seeds/seedModelPrices.ts, or a reprice touching
+ * only the unlisted field compares as "same price" and never propagates.
+ */
 export const ModelPriceTier = z.object({
   input: z.number().nonnegative(),
   output: z.number().nonnegative(),
   cache_read: z.number().nonnegative().optional(),
   cache_write: z.number().nonnegative().optional(),
+  audio_input: z.number().nonnegative().optional(),
+  audio_cache_read: z.number().nonnegative().optional(),
+  audio_output: z.number().nonnegative().optional(),
 });
+
+export type IModelPriceTier = z.infer<typeof ModelPriceTier>;
 
 /**
  * One versioned provider price for one model. Rows are append-only: a

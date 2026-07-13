@@ -16,17 +16,28 @@ export interface ModelPriceSeedFile {
   entries: ModelPriceSeedEntry[];
 }
 
+/** Rate fields compared for price equality. Must cover every ModelPriceTier
+ * field, or a reprice touching only the missing one never propagates. */
+const TIER_RATE_FIELDS = [
+  'input',
+  'output',
+  'cache_read',
+  'cache_write',
+  'audio_input',
+  'audio_cache_read',
+  'audio_output',
+] as const;
+
 /** Stable serialization for price equality (key order normalized). */
 function normalizePricing(pricing: ModelPriceSeedEntry['pricing'] | IModelPrice['pricing']): string {
   const out: Record<string, unknown> = {};
   for (const key of Object.keys(pricing).sort()) {
-    const tier = pricing[key];
-    out[key] = {
-      input: tier.input,
-      output: tier.output,
-      ...(tier.cache_read !== undefined ? { cache_read: tier.cache_read } : {}),
-      ...(tier.cache_write !== undefined ? { cache_write: tier.cache_write } : {}),
-    };
+    const tier = pricing[key] as Record<string, number | undefined>;
+    const normalized: Record<string, number> = {};
+    for (const field of TIER_RATE_FIELDS) {
+      if (tier[field] !== undefined) normalized[field] = tier[field];
+    }
+    out[key] = normalized;
   }
   return JSON.stringify(out);
 }

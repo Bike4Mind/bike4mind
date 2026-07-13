@@ -12,6 +12,19 @@ describe('ModelPriceRepository', () => {
     await ModelPrice.deleteMany({});
   });
 
+  it('round-trips audio tier fields (undeclared sub-schema fields get silently stripped)', async () => {
+    await modelPriceRepository.append({
+      modelId: 'gpt-realtime-x',
+      unit: 'per_token',
+      pricing: { '0': { ...tier, audio_input: 32e-6, audio_cache_read: 0.4e-6, audio_output: 64e-6 } },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      note: SEED_NOTE,
+    });
+
+    const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
+    expect(row.pricing['0']).toMatchObject({ audio_input: 32e-6, audio_cache_read: 0.4e-6, audio_output: 64e-6 });
+  });
+
   it('round-trips a row including the pricing tier map', async () => {
     await modelPriceRepository.append({
       modelId: 'gpt-x',
