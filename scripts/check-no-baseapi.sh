@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Fails if any file under apps/client/pages/api/ lacks baseApi() and is not on the allowlist.
-# Run in CI on every PR (deploy.yml) and locally via husky pre-commit.
+# Run in CI on every PR (ci.yml) and locally via husky pre-commit.
 #
 # To add a legitimate exception:
 #   1. Add the path to scripts/no-baseapi-allowlist.txt

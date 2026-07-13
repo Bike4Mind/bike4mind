@@ -10,13 +10,24 @@ const { mocks } = vi.hoisted(() => ({
   },
 }));
 
+const { lockout } = vi.hoisted(() => ({
+  lockout: {
+    checkLock: vi.fn(),
+    recordFailure: vi.fn(),
+    clear: vi.fn(() => Promise.resolve()),
+  },
+}));
+
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     const h: Record<string, (req: unknown, res: unknown) => unknown> = {};
-    const chain = Object.assign((req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res), {
-      use: () => chain,
-      post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
-    });
+    const chain = Object.assign(
+      (req: unknown, res: unknown) => h[(req as { method?: string }).method ?? 'GET']?.(req, res),
+      {
+        use: () => chain,
+        post: (...fns: ((req: unknown, res: unknown) => unknown)[]) => ((h.POST = fns[fns.length - 1]), chain),
+      }
+    );
     return chain;
   },
 }));
@@ -43,6 +54,7 @@ vi.mock('@server/services/publish/parsePublishPath', () => ({
   parsePublishPath: () => ({ kind: 'bundle', tier: 'user', scopeId: 'scope', slug: 'slug', assetPath: null }),
 }));
 vi.mock('@server/services/publish/publishGateToken', () => ({ setGateProofCookie: () => true }));
+vi.mock('@server/services/publish/passphraseLockout', () => lockout);
 vi.mock('bcryptjs', () => ({ default: { compare: () => Promise.resolve(true) } }));
 
 import handler from '../passphrase';
@@ -53,14 +65,21 @@ const run = (body: unknown) => {
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
 
+const gated = () =>
+  mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
+
 beforeEach(() => {
+  vi.restoreAllMocks(); // reset bcrypt.compare spy history between tests
   Object.values(mocks).forEach(m => (m as { mockReset?: () => void }).mockReset?.());
   mocks.stamp.mockResolvedValue(undefined);
+  lockout.checkLock.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
+  lockout.recordFailure.mockReset().mockResolvedValue({ locked: false, retryAfterMs: 0 });
+  lockout.clear.mockReset().mockResolvedValue(undefined);
 });
 
 describe('POST /api/publish/gate/passphrase - projection safety (regression: MongoDB path collision)', () => {
   it('never projects a parent path together with its child sub-path', async () => {
-    mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
+    gated();
 
     const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'hunter2secret' });
     await promise;
@@ -82,10 +101,65 @@ describe('POST /api/publish/gate/passphrase - projection safety (regression: Mon
   it('rejects a wrong passphrase with 403', async () => {
     const bcrypt = (await import('bcryptjs')).default as { compare: () => Promise<boolean> };
     vi.spyOn(bcrypt, 'compare').mockResolvedValueOnce(false);
-    mocks.lean.mockResolvedValue({ publicId: 'pub1', accessGate: { kind: 'passphrase', passphraseHash: 'h' } });
+    gated();
 
     const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'wrongpassword' });
     await promise;
     expect(res._getStatusCode()).toBe(403);
+  });
+});
+
+describe('POST /api/publish/gate/passphrase - per-artifact lockout', () => {
+  it('returns 423 with Retry-After when the gate is already locked, before checking bcrypt', async () => {
+    const bcrypt = (await import('bcryptjs')).default as { compare: () => Promise<boolean> };
+    const compareSpy = vi.spyOn(bcrypt, 'compare');
+    lockout.checkLock.mockResolvedValue({ locked: true, retryAfterMs: 90_000 });
+    gated();
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'anything123' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(423);
+    expect(res.getHeader('Retry-After')).toBe(90);
+    expect(compareSpy).not.toHaveBeenCalled();
+    expect(lockout.recordFailure).not.toHaveBeenCalled();
+  });
+
+  it('returns 423 when a wrong attempt trips the lock', async () => {
+    const bcrypt = (await import('bcryptjs')).default as { compare: () => Promise<boolean> };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValueOnce(false);
+    lockout.recordFailure.mockResolvedValue({ locked: true, retryAfterMs: 120_000 });
+    gated();
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'wrongpassword' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(423);
+    expect(res.getHeader('Retry-After')).toBe(120);
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+  });
+
+  it('records a failure but stays 403 while under the cap', async () => {
+    const bcrypt = (await import('bcryptjs')).default as { compare: () => Promise<boolean> };
+    vi.spyOn(bcrypt, 'compare').mockResolvedValueOnce(false);
+    lockout.recordFailure.mockResolvedValue({ locked: false, retryAfterMs: 0 });
+    gated();
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'wrongpassword' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(403);
+    expect(lockout.recordFailure).toHaveBeenCalledWith('pub1');
+  });
+
+  it('clears the lock on a correct passphrase', async () => {
+    gated();
+
+    const { res, promise } = run({ path: '/p/u/scope/slug', passphrase: 'hunter2secret' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(204);
+    expect(lockout.clear).toHaveBeenCalledWith('pub1');
+    expect(lockout.recordFailure).not.toHaveBeenCalled();
   });
 });

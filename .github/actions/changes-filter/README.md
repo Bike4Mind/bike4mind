@@ -26,7 +26,7 @@ a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
 
 - **Per-PR, not per-push.** GitHub `paths-ignore` (and `dorny/paths-filter`'s PR
   mode) match the *whole PR diff vs base*; a workflow-level `paths-ignore` also
-  skips the entire workflow, so a required `Deploy`/`Run Tests` context never
+  skips the entire workflow, so a required `CI Complete`/`Run Tests` context never
   reports and the PR hangs. Here the `changes` gate job always runs and downstream
   jobs skip via `if:`, which branch protection counts as passing.
 - **Merge-base scoped (per #4540).** On every `pull_request` action the diff is the
