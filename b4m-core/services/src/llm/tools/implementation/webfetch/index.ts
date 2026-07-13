@@ -14,12 +14,36 @@ interface WebFetchParams {
 }
 
 interface WebFetchResult {
+  /** Extracted content, capped at WEB_FETCH_CONTENT_CAP characters. */
   markdown: string;
   title?: string;
+  /** Length of the returned (capped) markdown. */
+  extractedChars: number;
+  /** Length Firecrawl actually extracted, before the cap was applied. */
+  originalChars: number;
+  /** True when originalChars exceeded the cap and content was dropped. */
+  truncated: boolean;
+  /** The cap that was applied (WEB_FETCH_CONTENT_CAP). */
+  cap: number;
+  /** Wall-clock duration of the Firecrawl scrape, in ms. */
+  durationMs: number;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const PDF_TIMEOUT_MS = 90_000;
+
+// Max extracted characters kept from a fetched page. Anything past this is dropped
+// (see the silent-truncation incident in issue #452); truncation is now surfaced
+// via the in-band marker and citable/telemetry fields rather than dropped silently.
+const WEB_FETCH_CONTENT_CAP = 50_000;
+
+/**
+ * ASCII-only in-band marker appended to a truncated tool result so the model can
+ * reason about incompleteness instead of hallucinating a full read.
+ */
+export function truncationMarker(originalChars: number, cap: number): string {
+  return `\n\n[TRUNCATED at ${cap} of ~${originalChars} chars - content continues]`;
+}
 
 function isPdfUrl(url: string): boolean {
   try {
@@ -43,7 +67,7 @@ type FirecrawlFetchOptions = {
  * @param adapters - Database adapters for fetching Firecrawl API key
  * @param url - URL to fetch
  * @param options - Optional configuration (e.g. maxTimeoutMs for Lambda-constrained callers)
- * @returns Markdown content and title
+ * @returns Capped markdown, title, and size/truncation metrics (see WebFetchResult)
  */
 export async function firecrawlFetch(
   adapters: GetEffectiveApiKeyAdapters,
@@ -76,6 +100,7 @@ export async function firecrawlFetch(
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
   const baseParams = { formats: ['markdown' as const], timeout: timeoutMs };
 
+  const startedAt = Date.now();
   let result;
   if (isPdf) {
     result = await app.scrapeUrl(url, baseParams);
@@ -100,6 +125,7 @@ export async function firecrawlFetch(
       }
     }
   }
+  const durationMs = Date.now() - startedAt;
 
   if (!result || result.error) {
     const errorMessage = result?.error || 'Unknown error';
@@ -112,13 +138,24 @@ export async function firecrawlFetch(
     throw new Error('No content could be extracted from the URL');
   }
 
-  // Limit content size (50KB max to prevent memory issues)
-  const markdown = result.markdown.slice(0, 50000);
-  Logger.globalInstance.log(`📄 WebFetch Tool: Extracted ${markdown.length} characters of content`);
+  // Cap content size to bound memory. Capture the pre-cap length so callers can
+  // surface truncation instead of silently dropping the tail (issue #452).
+  const originalChars = result.markdown.length;
+  const markdown = result.markdown.slice(0, WEB_FETCH_CONTENT_CAP);
+  const truncated = originalChars > WEB_FETCH_CONTENT_CAP;
+  Logger.globalInstance.log(
+    `📄 WebFetch Tool: Extracted ${markdown.length} of ${originalChars} characters in ${durationMs}ms` +
+      (truncated ? ` (truncated at cap ${WEB_FETCH_CONTENT_CAP})` : '')
+  );
 
   return {
     markdown,
     title: result.metadata?.title,
+    extractedChars: markdown.length,
+    originalChars,
+    truncated,
+    cap: WEB_FETCH_CONTENT_CAP,
+    durationMs,
   };
 }
 
@@ -145,7 +182,10 @@ export const webFetchTool: ToolDefinition = {
           status: 'complete' as const,
           metadata: {
             sourceSystem: 'web_fetch',
-            contentLength: result.markdown.length,
+            contentLength: result.extractedChars,
+            truncated: result.truncated,
+            originalContentLength: result.originalChars,
+            cap: result.cap,
           },
         };
 
@@ -160,7 +200,11 @@ export const webFetchTool: ToolDefinition = {
 
         Logger.globalInstance.log(`📚 WebFetch Tool: Stored citable source for ${params.url}`);
 
-        return result.markdown;
+        // Surface truncation in-band so the model reasons about incompleteness
+        // rather than assuming it received the whole page.
+        return result.truncated
+          ? result.markdown + truncationMarker(result.originalChars, result.cap)
+          : result.markdown;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 

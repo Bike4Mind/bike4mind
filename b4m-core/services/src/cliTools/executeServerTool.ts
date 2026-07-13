@@ -1,6 +1,6 @@
 import { GetEffectiveApiKeyAdapters } from '../apiKeyService';
 import { ToolExecutionRequest, ToolExecutionResult, ToolErrorType } from './types';
-import { firecrawlFetch } from '../llm/tools/implementation/webfetch';
+import { firecrawlFetch, truncationMarker } from '../llm/tools/implementation/webfetch';
 import { performWebSearch, WebSearchParams } from '../llm/tools/implementation/websearch';
 import { fetchWeatherData, WeatherParams } from '../llm/tools/implementation/weather';
 
@@ -76,7 +76,10 @@ export async function executeServerTool(
 
       case 'web_fetch': {
         const result = await firecrawlFetch({ db: adapters.db }, request.input.url);
-        content = result.markdown;
+        // Surface truncation in-band, consistent with the web_fetch tool and HTTP endpoint (issue #452).
+        content = result.truncated
+          ? result.markdown + truncationMarker(result.originalChars, result.cap)
+          : result.markdown;
         break;
       }
 
