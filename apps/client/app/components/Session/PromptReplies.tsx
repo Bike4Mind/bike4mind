@@ -1472,7 +1472,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncated-artifact recovery banner: the response hit the output-token
           limit before the artifact closed. The partial is best-effort recovered into a
-          card above; never leak the raw HTML into the bubble. */}
+          card below the reply; never leak the raw HTML into the bubble. */}
       {isTruncatedArtifact && (
         <Alert
           data-testid="artifact-truncated-warning"
@@ -1486,63 +1486,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             be incomplete — ask me to regenerate it (or to continue or shorten it) for a complete version.
           </Typography>
         </Alert>
-      )}
-
-      {/* Chess board — rendered directly, bypasses artifact registry */}
-      {chessArtifacts.length > 0 &&
-        (() => {
-          const artifact = chessArtifacts[chessArtifacts.length - 1];
-          try {
-            const toolChessArtifact = promptMeta?.artifacts?.find(
-              (a: { metadata?: Record<string, unknown> }) =>
-                a.metadata?.source === 'tool_result' && a.metadata?.artifactType === 'application/vnd.ant.chess'
-            );
-
-            const jsonStr = toolChessArtifact ? toolChessArtifact.content : extractChessJson(artifact.content);
-            if (!jsonStr) return null;
-            const chessData = JSON.parse(jsonStr);
-            const rawFen = chessData.fen || chessData.resultingFen;
-            if (!rawFen) return null;
-
-            let fenResult: ChessFenResult;
-            if (toolChessArtifact) {
-              fenResult = { fen: rawFen };
-            } else if (currentSessionId) {
-              fenResult = validateChessFen(currentSessionId, rawFen, chessData);
-            } else {
-              fenResult = { fen: rawFen };
-            }
-
-            return (
-              <InlineChessBoard
-                fen={fenResult.fen}
-                chessData={chessData}
-                fenResult={fenResult}
-                onOpenPanel={() =>
-                  openChessInSidePanel(fenResult.fen, jsonStr, chessData, currentSessionId ?? undefined)
-                }
-              />
-            );
-          } catch {
-            return null;
-          }
-        })()}
-
-      {/* Other artifacts — rendered via registry */}
-      {nonChessArtifacts.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <Stack spacing={2}>
-            {nonChessArtifacts.map((artifact, index) => (
-              <ArtifactRenderer
-                key={`${artifact.type}_${artifact.identifier}_${index}`}
-                artifact={artifact}
-                index={index}
-                messageId={messageId ?? 'unknown'}
-                sessionId={currentSessionId ?? undefined}
-              />
-            ))}
-          </Stack>
-        </Box>
       )}
 
       {showSyntaxHighlight ? (
@@ -1797,6 +1740,63 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
+
+      {/* Chess board — rendered directly, bypasses artifact registry */}
+      {chessArtifacts.length > 0 &&
+        (() => {
+          const artifact = chessArtifacts[chessArtifacts.length - 1];
+          try {
+            const toolChessArtifact = promptMeta?.artifacts?.find(
+              (a: { metadata?: Record<string, unknown> }) =>
+                a.metadata?.source === 'tool_result' && a.metadata?.artifactType === 'application/vnd.ant.chess'
+            );
+
+            const jsonStr = toolChessArtifact ? toolChessArtifact.content : extractChessJson(artifact.content);
+            if (!jsonStr) return null;
+            const chessData = JSON.parse(jsonStr);
+            const rawFen = chessData.fen || chessData.resultingFen;
+            if (!rawFen) return null;
+
+            let fenResult: ChessFenResult;
+            if (toolChessArtifact) {
+              fenResult = { fen: rawFen };
+            } else if (currentSessionId) {
+              fenResult = validateChessFen(currentSessionId, rawFen, chessData);
+            } else {
+              fenResult = { fen: rawFen };
+            }
+
+            return (
+              <InlineChessBoard
+                fen={fenResult.fen}
+                chessData={chessData}
+                fenResult={fenResult}
+                onOpenPanel={() =>
+                  openChessInSidePanel(fenResult.fen, jsonStr, chessData, currentSessionId ?? undefined)
+                }
+              />
+            );
+          } catch {
+            return null;
+          }
+        })()}
+
+      {/* Other artifacts — rendered via registry */}
+      {nonChessArtifacts.length > 0 && (
+        <Box sx={{ my: 2 }}>
+          <Stack spacing={2}>
+            {nonChessArtifacts.map((artifact, index) => (
+              <ArtifactRenderer
+                key={`${artifact.type}_${artifact.identifier}_${index}`}
+                artifact={artifact}
+                index={index}
+                messageId={messageId ?? 'unknown'}
+                sessionId={currentSessionId ?? undefined}
+              />
+            ))}
+          </Stack>
+        </Box>
+      )}
 
       {pendingAction && completed && (
         <PendingActionButtons
