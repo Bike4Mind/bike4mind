@@ -46,6 +46,11 @@ describe('recordGatedView', () => {
     );
   });
 
+  it("stores nothing for the 'unknown' sourceIp sentinel", async () => {
+    await recordGatedView({ publicId: 'pub-1', viewerId: 'user-1', gateKind: 'domain', sourceIp: 'unknown' });
+    expect(mockCreateLog).toHaveBeenCalledWith(expect.objectContaining({ sourceIp: undefined }));
+  });
+
   it('never throws when the audit write fails (best-effort)', async () => {
     mockCreateLog.mockRejectedValue(new Error('db down'));
     await expect(

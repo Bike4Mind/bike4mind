@@ -27,7 +27,9 @@ export async function recordGatedView(input: RecordGatedViewInput): Promise<void
       viewerId: input.viewerId,
       gateKind: input.gateKind,
       viewerEmailDomain: registrableDomain(emailDomain) ?? undefined,
-      sourceIp: input.sourceIp,
+      // getClientIp returns the literal 'unknown' when it can't resolve a real IP;
+      // store nothing rather than pollute the audit with that sentinel.
+      sourceIp: input.sourceIp && input.sourceIp !== 'unknown' ? input.sourceIp : undefined,
       userAgent: input.userAgent,
     });
   } catch {

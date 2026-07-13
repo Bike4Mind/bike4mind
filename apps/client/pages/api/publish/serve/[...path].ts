@@ -1011,7 +1011,9 @@ function bumpViewCount(
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
   const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
   void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
-  if (gateView && viewer?.id) {
+  // Audit non-owner authenticated gate views only: the point is who OTHER than the
+  // owner reached a gated artifact, and the owner bypasses their own gate anyway.
+  if (gateView && viewer?.id && !isOwner) {
     void recordGatedView({
       publicId: artifact.publicId,
       viewerId: String(viewer.id),
