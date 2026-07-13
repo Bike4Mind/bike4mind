@@ -15,7 +15,7 @@ import { ExitHandoffPrompt } from './ExitHandoffPrompt';
 import { ConfigEditor } from './ConfigEditor';
 import { McpViewer } from './McpViewer';
 import { MessageItem } from './MessageItem';
-import { useCliStore } from '../store';
+import { useCliStore, selectLiveSubagentTokens, selectLiveSubagentCredits } from '../store';
 import { useShallow } from 'zustand/react/shallow';
 import type { CliConfig } from '../storage';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
@@ -67,6 +67,14 @@ export function App({
   const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_4_5_SONNET);
   const totalTokens = useCliStore(state => state.session?.metadata.totalTokens || 0);
   const totalCredits = useCliStore(state => state.session?.metadata.totalCredits);
+  // Spawned-agent usage: completed runs (session metadata) + currently-running ones (live map)
+  const subagentTokens = useCliStore(
+    state => (state.session?.metadata.subagentTokens || 0) + selectLiveSubagentTokens(state)
+  );
+  const subagentCredits = useCliStore(
+    state => (state.session?.metadata.subagentCost || 0) + selectLiveSubagentCredits(state)
+  );
+  const subagentActive = useCliStore(state => Object.keys(state.liveSubagentUsage).length > 0);
   const isThinking = useCliStore(state => state.isThinking);
   const permissionPrompt = useCliStore(state => state.permissionPrompt);
   const userQuestionPrompt = useCliStore(state => state.userQuestionPrompt);
@@ -339,6 +347,9 @@ export function App({
               model={currentModel}
               tokenUsage={totalTokens}
               creditsUsage={totalCredits}
+              subagentTokens={subagentTokens}
+              subagentCredits={subagentCredits}
+              subagentActive={subagentActive}
             />
           </Box>
         </>

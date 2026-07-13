@@ -7,6 +7,12 @@ interface StatusBarProps {
   model: string;
   tokenUsage: number;
   creditsUsage?: number;
+  /** Spawned-agent tokens: session rollup plus live usage of running agents */
+  subagentTokens?: number;
+  /** Spawned-agent credits: session rollup plus live usage of running agents */
+  subagentCredits?: number;
+  /** True while at least one spawned agent is running (live-updating value) */
+  subagentActive?: boolean;
 }
 
 export const StatusBar = React.memo(function StatusBar({
@@ -14,6 +20,9 @@ export const StatusBar = React.memo(function StatusBar({
   model,
   tokenUsage,
   creditsUsage,
+  subagentTokens = 0,
+  subagentCredits = 0,
+  subagentActive = false,
 }: StatusBarProps) {
   const interactionMode = useCliStore(state => state.interactionMode);
 
@@ -41,6 +50,12 @@ export const StatusBar = React.memo(function StatusBar({
         {creditsUsage !== undefined && creditsUsage > 0 && (
           <Text dimColor>
             {creditsUsage.toLocaleString()} {creditsUsage === 1 ? 'credit' : 'credits'}
+          </Text>
+        )}
+        {(subagentTokens > 0 || subagentActive) && (
+          <Text color={subagentActive ? 'cyan' : undefined} dimColor={!subagentActive}>
+            agents: {subagentTokens.toLocaleString()} tokens
+            {subagentCredits > 0 ? ` / ${subagentCredits.toLocaleString()} credits` : ''}
           </Text>
         )}
         <Text dimColor>{model}</Text>

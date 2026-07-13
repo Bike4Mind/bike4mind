@@ -140,20 +140,51 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // Mirror subagent events through the same step + tavern handlers so delegated
   // work surfaces in the transcript. A single registration suffices -
   // SubagentOrchestrator's before/after-run setters are single-slot.
-  orchestrator.setBeforeRunCallback((subagent, _subagentType) => {
+  //
+  // Usage tracking: each spawned agent gets a live-usage entry in the store
+  // (updated per step, driving the status bar), and on completion its final
+  // totals are folded into session.metadata subagent rollups. Keyed by a
+  // per-run id (agent instances are not reused; names can run concurrently).
+  const subagentRunState = new WeakMap<ReActAgent, { runId: string; usageHandler: () => void }>();
+  let nextSubagentRunId = 0;
+  orchestrator.setBeforeRunCallback((subagent, subagentType) => {
     subagent.on('thought', stepHandler);
     subagent.on('observation', stepHandler);
     subagent.on('action', stepHandler);
     subagent.on('action', tavernActionHandler);
     subagent.on('observation', tavernObservationHandler);
     subagent.on('final_answer', tavernFinalAnswerHandler);
+
+    const runId = `run-${nextSubagentRunId++}`;
+    const usageHandler = () => {
+      useCliStore
+        .getState()
+        .updateLiveSubagentUsage(runId, subagentType, subagent.getTokenUsage(), subagent.getCreditsUsage());
+    };
+    subagentRunState.set(subagent, { runId, usageHandler });
+    usageHandler();
+    // Totals update after each LLM call, before the resulting step events fire.
+    subagent.on('thought', usageHandler);
+    subagent.on('observation', usageHandler);
+    subagent.on('final_answer', usageHandler);
   });
-  orchestrator.setAfterRunCallback((subagent, _subagentType) => {
+  orchestrator.setAfterRunCallback((subagent, subagentType) => {
     subagent.off('thought', stepHandler);
     subagent.off('observation', stepHandler);
     subagent.off('action', stepHandler);
     subagent.off('action', tavernActionHandler);
     subagent.off('observation', tavernObservationHandler);
     subagent.off('final_answer', tavernFinalAnswerHandler);
+
+    const runState = subagentRunState.get(subagent);
+    if (runState) {
+      subagent.off('thought', runState.usageHandler);
+      subagent.off('observation', runState.usageHandler);
+      subagent.off('final_answer', runState.usageHandler);
+      subagentRunState.delete(subagent);
+      const { removeLiveSubagentUsage, recordSubagentCompletion } = useCliStore.getState();
+      removeLiveSubagentUsage(runState.runId);
+      recordSubagentCompletion(subagentType, subagent.getTokenUsage(), subagent.getCreditsUsage());
+    }
   });
 }

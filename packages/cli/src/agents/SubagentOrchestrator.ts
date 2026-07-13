@@ -621,10 +621,14 @@ export class SubagentOrchestrator {
 
     // Build concise summary
     const capitalizedName = agentDef.name.charAt(0).toUpperCase() + agentDef.name.slice(1);
+    const usage =
+      completionInfo.totalCredits !== undefined
+        ? `${completionInfo.totalTokens.toLocaleString()} tokens (${completionInfo.totalCredits.toLocaleString()} credits)`
+        : `${completionInfo.totalTokens.toLocaleString()} tokens`;
     const lines = [
       `**${capitalizedName} Agent Results**\n`,
       `*${agentDef.description}*`,
-      `*Execution: ${completionInfo.iterations} iterations, ${completionInfo.toolCalls} tool calls*\n`,
+      `*Execution: ${completionInfo.iterations} iterations, ${completionInfo.toolCalls} tool calls, ${usage}*\n`,
     ];
 
     // Add exploration stats if the agent used exploration tools

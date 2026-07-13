@@ -159,6 +159,15 @@ interface CliStore {
   upsertBackgroundAgent: (job: BackgroundAgentJob) => void;
   cleanupCompletedBackgroundAgents: () => void;
 
+  // Live usage of currently-running spawned agents, keyed by run id.
+  // Entries appear on spawn, update per step, and are removed on completion
+  // (final usage is folded into session.metadata by recordSubagentCompletion).
+  liveSubagentUsage: Record<string, { agentName: string; tokens: number; credits: number }>;
+  updateLiveSubagentUsage: (runId: string, agentName: string, tokens: number, credits: number) => void;
+  removeLiveSubagentUsage: (runId: string) => void;
+  /** Fold a finished spawned agent's usage into session.metadata subagent rollups. */
+  recordSubagentCompletion: (agentName: string, tokens: number, credits: number) => void;
+
   // Background shell sessions (bash_execute run_in_background / yield_time_ms)
   backgroundShells: ShellSession[];
   upsertBackgroundShell: (session: ShellSession) => void;
@@ -372,6 +381,44 @@ export const useCliStore = create<CliStore>(set => ({
       backgroundAgents: state.backgroundAgents.filter(j => isActiveStatus(j.status)),
     })),
 
+  // Live spawned-agent usage
+  liveSubagentUsage: {},
+  updateLiveSubagentUsage: (runId, agentName, tokens, credits) =>
+    set(state => ({
+      liveSubagentUsage: { ...state.liveSubagentUsage, [runId]: { agentName, tokens, credits } },
+    })),
+  removeLiveSubagentUsage: runId =>
+    set(state => {
+      if (!(runId in state.liveSubagentUsage)) return state;
+      const { [runId]: _removed, ...rest } = state.liveSubagentUsage;
+      return { liveSubagentUsage: rest };
+    }),
+  recordSubagentCompletion: (agentName, tokens, credits) =>
+    set(state => {
+      if (!state.session) return state;
+      const metadata = state.session.metadata;
+      const perAgent = metadata.subagentUsage?.[agentName];
+      return {
+        session: {
+          ...state.session,
+          metadata: {
+            ...metadata,
+            subagentCalls: (metadata.subagentCalls || 0) + 1,
+            subagentTokens: (metadata.subagentTokens || 0) + tokens,
+            subagentCost: (metadata.subagentCost || 0) + credits,
+            subagentUsage: {
+              ...metadata.subagentUsage,
+              [agentName]: {
+                calls: (perAgent?.calls || 0) + 1,
+                tokens: (perAgent?.tokens || 0) + tokens,
+                credits: (perAgent?.credits || 0) + credits,
+              },
+            },
+          },
+        },
+      };
+    }),
+
   // Background shell sessions
   backgroundShells: [],
   upsertBackgroundShell: session =>
@@ -420,6 +467,14 @@ const EMPTY_JOBS = [] as BackgroundAgentJob[];
 /** Select only active (running or queued) background agents */
 export const selectActiveBackgroundAgents = (state: CliStore): BackgroundAgentJob[] =>
   state.backgroundAgents.filter(j => isActiveStatus(j.status));
+
+/** Sum live token usage across all currently-running spawned agents */
+export const selectLiveSubagentTokens = (state: CliStore): number =>
+  Object.values(state.liveSubagentUsage).reduce((sum, u) => sum + u.tokens, 0);
+
+/** Sum live credit usage across all currently-running spawned agents */
+export const selectLiveSubagentCredits = (state: CliStore): number =>
+  Object.values(state.liveSubagentUsage).reduce((sum, u) => sum + u.credits, 0);
 
 /** Select only completed background agents */
 export const selectCompletedBackgroundAgents = (state: CliStore): BackgroundAgentJob[] => {
