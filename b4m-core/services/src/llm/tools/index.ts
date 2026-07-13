@@ -299,8 +299,7 @@ export const generateMcpTools = async (
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: any) => {
         // Use original tool name when calling the MCP server
-        // TEMP(mcp-verify): info-level to confirm the MCP round-trip on preview. Name only - NO args (secrets/PII). Revert before merge.
-        Logger.info(`Calling ${originalToolName} tool via ${mcpData.serverName}`);
+        Logger.debug(`Calling ${originalToolName} tool via ${mcpData.serverName}`, args);
         try {
           const toolResult = await mcpData.callTool(originalToolName, args);
           const contentBlocks = (toolResult as any)?.content;
@@ -313,14 +312,12 @@ export const generateMcpTools = async (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            // TEMP(mcp-verify): info-level for preview. Length only - NO content (secrets/PII). Revert before merge.
-            Logger.info(`[Tool Result] ${originalToolName}: ${normalized.length} chars`);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
             return normalized;
           }
 
           const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-          // TEMP(mcp-verify): info-level for preview. No content logged. Revert before merge.
-          Logger.info(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
+          Logger.debug(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
           return serialized;
         } catch (error) {
           // Handle Atlassian token expiration
@@ -384,8 +381,7 @@ export const generateMcpToolsFromCache = (
     const parameters = normalizeToolParameters(rest as Record<string, unknown>);
     const optionTools: ICompletionOptionTools = {
       toolFn: async (args: unknown) => {
-        // TEMP(mcp-verify): info-level to confirm the MCP round-trip on preview. Name only - NO args (secrets/PII). Revert before merge.
-        Logger.info(`Calling ${originalToolName} tool via ${serverName}`);
+        Logger.debug(`Calling ${originalToolName} tool via ${serverName}`, args);
         try {
           const toolResult = await callTool(originalToolName, args);
           const contentBlocks = (toolResult as Record<string, unknown>)?.content;
@@ -398,14 +394,12 @@ export const generateMcpToolsFromCache = (
                 return JSON.stringify(entry);
               })
               .join('\n');
-            // TEMP(mcp-verify): info-level for preview. Length only - NO content (secrets/PII). Revert before merge.
-            Logger.info(`[Tool Result] ${originalToolName}: ${normalized.length} chars`);
+            Logger.debug(`[Tool Result] ${originalToolName}:`, normalized);
             return normalized;
           }
 
           const serialized = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-          // TEMP(mcp-verify): info-level for preview. No content logged. Revert before merge.
-          Logger.info(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
+          Logger.debug(`[Tool Result] Unexpected format for ${originalToolName}, returning serialized output`);
           return serialized;
         } catch (error) {
           // Handle Atlassian token expiration
