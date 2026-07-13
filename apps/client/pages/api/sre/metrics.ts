@@ -18,8 +18,10 @@ const handler = baseApi().get(
     const query = req.query as Record<string, string | string[] | undefined>;
     const repoSlug = typeof query.repoSlug === 'string' ? query.repoSlug : undefined;
     const windowParam = typeof query.window === 'string' ? query.window : undefined;
+    // Object.hasOwn (not `in`) so prototype keys like ?window=toString don't
+    // resolve to a Function and flow NaN into the window math downstream.
     const window: SreMetricsWindow =
-      windowParam && windowParam in SRE_METRICS_WINDOW_MS
+      windowParam && Object.hasOwn(SRE_METRICS_WINDOW_MS, windowParam)
         ? (windowParam as SreMetricsWindow)
         : DEFAULT_SRE_METRICS_WINDOW;
 
