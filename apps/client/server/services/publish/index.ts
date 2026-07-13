@@ -35,5 +35,30 @@ export {
 } from './collectInlineAssets';
 export { renderBundleLoaderShell } from './renderBundleLoaderShell';
 export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
-export { checkVisibility, type VisibilityCheckArtifact, type VisibilityResult } from './checkVisibility';
+export { generateShareToken } from './shareToken';
+export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
+export { renderPassphraseShell } from './renderPassphraseShell';
+export {
+  checkVisibility,
+  type VisibilityCheckArtifact,
+  type VisibilityContext,
+  type VisibilityResult,
+} from './checkVisibility';
+export {
+  parsePublishPath,
+  segmentsFromViewerPathname,
+  TIER_BY_PREFIX,
+  type ResolvedPath,
+  type ResolvedBundlePath,
+  type ResolvedShortPath,
+} from './parsePublishPath';
+export {
+  gateCookieName,
+  requestHasGateProof,
+  setGateProofCookie,
+  signGateToken,
+  verifyGateToken,
+  GATE_TOKEN_TTL_SECONDS,
+} from './publishGateToken';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
+export { validateEmbedOrigins, type EmbedOriginsResult } from './embedOrigins';

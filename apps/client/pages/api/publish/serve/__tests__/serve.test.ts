@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const { mockArtifactFindOne, mockProjectFindOne, mockDownload } = vi.hoisted(() => ({
+const { mockArtifactFindOne, mockProjectFindOne, mockDownload, mockUpdateOne } = vi.hoisted(() => ({
   mockArtifactFindOne: vi.fn(),
   mockProjectFindOne: vi.fn(),
   mockDownload: vi.fn(),
+  mockUpdateOne: vi.fn(() => Promise.resolve()),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is handler.
@@ -29,6 +30,10 @@ vi.mock('@server/middlewares/apiKeyAuth', () => ({
 vi.mock('@server/middlewares/optionalJwtAuth', () => ({
   optionalJwtAuth: () => (_req: unknown, _res: unknown, next: () => void) => next(),
 }));
+// Rate limiter: pass-through so share-branch requests proceed. rateLimit itself is unit-tested.
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: unknown, _res: unknown, next: () => void) => next(),
+}));
 
 vi.mock('@server/utils/storage', () => ({
   getPublishedArtifactsStorage: () => ({ download: mockDownload }),
@@ -37,7 +42,7 @@ vi.mock('@server/utils/storage', () => ({
 vi.mock('@bike4mind/database', () => ({
   PublishedArtifact: {
     findOne: (...a: unknown[]) => ({ lean: () => Promise.resolve(mockArtifactFindOne(...a)) }),
-    updateOne: () => Promise.resolve(),
+    updateOne: (...a: unknown[]) => mockUpdateOne(...a),
   },
   Project: {
     findOne: (...a: unknown[]) => ({ select: () => ({ lean: () => Promise.resolve(mockProjectFindOne(...a)) }) }),
@@ -50,15 +55,32 @@ import handler from '../[...path]';
 // request returns a WRAPPER embedding a cross-origin iframe to {publicId}.usercontent.app.<domain>;
 // the bundle CONTENT is served in isolated mode (`uc`), reached via the /uc rewrite (__uc=1) on
 // that usercontent host. `uc` = the publicId whose isolated origin we're simulating.
-type RunOpts = { user?: unknown; host?: string; raw?: boolean; v?: string; uc?: string; format?: string };
-const run = (segments: string[], { user, host = 'app.bike4mind.com', raw, v, uc, format }: RunOpts = {}) => {
+type RunOpts = {
+  user?: unknown;
+  host?: string;
+  raw?: boolean;
+  v?: string;
+  uc?: string;
+  format?: string;
+  cookie?: string;
+  userAgent?: string;
+  embed?: boolean;
+};
+const run = (
+  segments: string[],
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed }: RunOpts = {}
+) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
   if (format) query.format = format;
+  if (embed) query.embed = '1';
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
-  const { req, res } = createMocks({ method: 'GET', query, headers: { host: effectiveHost } });
+  const headers: Record<string, string> = { host: effectiveHost };
+  if (cookie) headers.cookie = cookie;
+  if (userAgent) headers['user-agent'] = userAgent;
+  const { req, res } = createMocks({ method: 'GET', query, headers });
   if (user) (req as Record<string, unknown>).user = user;
   return { res, promise: (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res) };
 };
@@ -81,9 +103,10 @@ beforeEach(() => {
   mockArtifactFindOne.mockReset();
   mockProjectFindOne.mockReset().mockResolvedValue(null);
   mockDownload.mockReset();
+  mockUpdateOne.mockReset().mockResolvedValue(undefined);
 });
 
-describe('GET /api/publish/serve — sandboxed bundle', () => {
+describe('GET /api/publish/serve - sandboxed bundle', () => {
   it('app host returns a wrapper embedding the CROSS-ORIGIN isolated iframe (Approach B)', async () => {
     mockArtifactFindOne.mockReturnValue(bundle());
     mockDownload.mockResolvedValue(
@@ -127,7 +150,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
     expect(data).toContain('console.log(42)'); // bundle inlined into the srcdoc
     expect(data).not.toContain('usercontent.app.bike4mind.com'); // no cross-origin embed attempted
     const csp = res.getHeader('Content-Security-Policy') as string;
-    expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits → must permit bundle inline JS
+    expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits -> must permit bundle inline JS
   });
 
   it('isolated origin serves the bundle AS the page with inline JS + unsafe-inline CSP', async () => {
@@ -142,10 +165,10 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
     expect(res._getStatusCode()).toBe(200);
     const data = res._getData() as string;
     expect(data).toContain('console.log(42)'); // author inline JS runs on the isolated origin
-    expect(data).toContain('<base href='); // public tier <base> → assets stay on the isolated origin
+    expect(data).toContain('<base href='); // public tier <base> -> assets stay on the isolated origin
     expect(data).not.toContain('<iframe'); // it IS the page, not a wrapper
     const csp = res.getHeader('Content-Security-Policy') as string;
-    expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed — isolation is the origin, not stripping
+    expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed - isolation is the origin, not stripping
     // frame-ancestors is the EXACT app wrapper host, no wildcard. Since usercontent
     // origins are nested under `.app.<domain>`, a `*.app.<domain>` source would suffix-match
     // them and re-permit bundle-on-bundle framing - so assert the wildcard is absent and that
@@ -155,7 +178,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
       .find(d => d.trim().startsWith('frame-ancestors'))!
       .trim();
     expect(frameAncestors).toBe('frame-ancestors https://app.bike4mind.com');
-    expect(frameAncestors).not.toContain('*'); // no wildcard → cannot match any *.app subdomain
+    expect(frameAncestors).not.toContain('*'); // no wildcard -> cannot match any *.app subdomain
     expect(frameAncestors).not.toContain('usercontent'); // one bundle can't frame another
   });
 
@@ -287,7 +310,7 @@ describe('GET /api/publish/serve — sandboxed bundle', () => {
   });
 });
 
-describe('GET /api/publish/serve — gated-bundle loader shell', () => {
+describe('GET /api/publish/serve - gated-bundle loader shell', () => {
   it('returns a public loader shell (not 401) for a gated bundle index with no credential', async () => {
     mockArtifactFindOne.mockReturnValue(bundle({ visibility: 'private', ownerId: 'owner1' }));
 
@@ -355,7 +378,7 @@ describe('GET /api/publish/serve — gated-bundle loader shell', () => {
   });
 });
 
-describe('GET /api/publish/serve — ?raw=1 authenticated render mode', () => {
+describe('GET /api/publish/serve - ?raw=1 authenticated render mode', () => {
   it('returns the inner srcdoc as inert text/plain for an authorized gated bundle', async () => {
     mockArtifactFindOne.mockReturnValue(
       bundle({
@@ -427,7 +450,7 @@ describe('GET /api/publish/serve — ?raw=1 authenticated render mode', () => {
   });
 });
 
-describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
+describe('GET /api/publish/serve - reply/fabfile path is unchanged', () => {
   it('renders a public reply with script-src none (not the iframe path)', async () => {
     mockArtifactFindOne.mockReturnValue({
       publicId: 'r1',
@@ -455,7 +478,143 @@ describe('GET /api/publish/serve — reply/fabfile path is unchanged', () => {
   });
 });
 
-describe('GET /api/publish/serve — version history (?v)', () => {
+describe('GET /api/publish/serve - reply/fabfile organization visibility', () => {
+  // Org-tier reply/fabfile records store the org id as scopeId; the gate authorizes a viewer
+  // whose organizationId matches. This is the path #174 re-enables for reply/fabfile shares.
+  const orgReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'r-org',
+    title: 'Org reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Org only',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-org',
+    ...over,
+  });
+
+  it('serves an org reply to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('Org only');
+  });
+
+  it('403s an org reply for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+
+  it('serves the loader shell (not 401) for an anonymous nav to a gated org reply', async () => {
+    // A top-level nav carries no Authorization header; the shell recovers the localStorage
+    // JWT and re-fetches ?raw=1 - same path bundles use. See the loader-shell describe below.
+    mockArtifactFindOne.mockReturnValue(orgReply());
+    const { res, promise } = run(['r', 'r-org']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  });
+
+  it('serves an org fabfile to a same-org member (200)', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('org file body');
+  });
+
+  it('403s an org fabfile for a viewer in a different org', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      orgReply({ publicId: 'f-org', source: { kind: 'fabfile' }, renderedBody: 'org file body', slug: 'f-org' })
+    );
+    const { res, promise } = run(['f', 'f-org'], { user: { id: 'someone-else', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+  });
+});
+
+describe('GET /api/publish/serve - gated reply/fabfile loader shell', () => {
+  // Gated reply/fabfile pages are top-level navigations that carry no Authorization header, so
+  // (like bundles) they get the public loader shell, whose script re-fetches ?raw=1 with the
+  // localStorage JWT. This is what makes an org-shared reply/fabfile actually viewable in a
+  // browser after being authorized by the gate.
+  const gatedReply = (over = {}) => ({
+    publicId: 'r-gated',
+    title: 'Gated reply',
+    visibility: 'organization',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: '# Secret org reply',
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'organization',
+    scopeId: 'org_42',
+    slug: 'r-gated',
+    ...over,
+  });
+
+  it('returns the loader shell (not 401) for an anonymous nav to a gated reply', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+    expect(data).not.toContain('allow-same-origin');
+    expect(data).toContain("localStorage.getItem('access-token-storage')");
+    expect(data).toContain("'raw=1'");
+    // Shell must NOT leak the gated reply's content or title.
+    expect(data).not.toContain('Secret org reply');
+  });
+
+  it('returns the loader shell for an anonymous nav to a gated fabfile', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      gatedReply({ publicId: 'f-gated', source: { kind: 'fabfile' }, slug: 'f-gated' })
+    );
+    const { res, promise } = run(['f', 'f-gated']);
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('<iframe id="b4m-frame" sandbox="allow-scripts"');
+  });
+
+  it('does NOT return the shell for a gated reply ?raw=1 with no credential (stays 401, no loop)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true });
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+    expect(res._getData() as string).not.toContain('b4m-frame');
+  });
+
+  it('renders the reply for a gated ?raw=1 fetch from a same-org member (the shell re-fetch)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { raw: true, user: { id: 'member', organizationId: 'org_42' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Secret org reply');
+    // The srcdoc-injected page keeps script-src 'none' via its own CSP meta (the shell's iframe
+    // is allow-scripts, so this backstop must ride along in the HTML, not just the HTTP header).
+    expect(data).toContain("script-src 'none'");
+  });
+
+  it('does NOT return the shell for a gated reply when authed-but-outside-org (stays 403)', async () => {
+    mockArtifactFindOne.mockReturnValue(gatedReply());
+    const { res, promise } = run(['r', 'r-gated'], { user: { id: 'outsider', organizationId: 'org_99' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(403);
+    expect(res._getData() as string).not.toContain('b4m-frame');
+  });
+});
+
+describe('GET /api/publish/serve - version history (?v)', () => {
   const versioned = (over: Record<string, unknown> = {}) =>
     bundle({ sha256Index: 'curSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'curSHA' }], ...over });
   const dl = (key: string) =>
@@ -675,7 +834,7 @@ describe('GET /api/publish/serve - ?format=raw plain-text alternate', () => {
   });
 });
 
-describe('GET /api/publish/serve — comment pin bridge', () => {
+describe('GET /api/publish/serve - comment pin bridge', () => {
   const BRIDGE_MARKER = 'pin-dropped'; // distinctive to the injected pin-bridge script
   const WIDGET_MOUNT = 'b4m-annotate-root'; // the wrapper comment-overlay mount node
 
@@ -706,7 +865,7 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
   });
 
   it('injects NO bridge or overlay when comments are disabled (default)', async () => {
-    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy → 'none'
+    mockArtifactFindOne.mockReturnValue(bundle()); // no commentPolicy -> 'none'
     mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
 
     const { res, promise } = run(['u', 'scope123', 'my-slug']);
@@ -725,5 +884,492 @@ describe('GET /api/publish/serve — comment pin bridge', () => {
     await promise;
 
     expect(res._getData() as string).toContain(BRIDGE_MARKER);
+  });
+});
+
+describe('GET /api/publish/serve - /a/<shareToken> no-sign-in links', () => {
+  it('serves a public bundle via token: same-origin srcdoc + <base> at /a, noindex + no-store', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // Same-origin sandbox model - never the cross-origin usercontent embed.
+    expect(data).toContain('srcdoc=');
+    expect(data).not.toContain('usercontent.app.bike4mind.com');
+    // <base> points assets back through the token path so they self-authorize. It lives
+    // inside the srcdoc attribute, so its quotes are HTML-escaped in the wrapper.
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    // Always noindex; never the public SEO/raw surface.
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(data).not.toContain('link rel="alternate"');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+  });
+
+  it('grants read to a PRIVATE bundle via token (possession is the capability), using <base> not inlining', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        visibility: 'private',
+        ownerId: 'owner1',
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><img src="logo.png"></body></html>'));
+
+    // No credential at all - the token alone authorizes the read.
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    expect(data).not.toContain('data:image/png;base64,'); // share never inlines - assets self-authorize via the token
+    expect(data).not.toContain('b4m-frame'); // no loader shell on the share path
+  });
+
+  it('404s an unknown/revoked token (never 401/403, no enumeration signal)', async () => {
+    mockArtifactFindOne.mockReturnValue(null);
+
+    const { res, promise } = run(['a', 'gone']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(mockDownload).not.toHaveBeenCalled();
+  });
+
+  it('serves a bundle asset through the token path with no-store + noindex', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('PNGBYTES'));
+
+    const { res, promise } = run(['a', 'tok123', 'logo.png']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('image/png');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex, nofollow');
+  });
+
+  it('disables ?format=raw on a share link (no plain-text surface)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { format: 'raw' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Not honored: returns the HTML wrapper, not the text/plain alternate.
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('renders a reply via token with the viewer page + noindex meta', async () => {
+    mockArtifactFindOne.mockReturnValue({
+      publicId: 'r1',
+      title: 'A reply',
+      visibility: 'public',
+      ownerId: 'owner1',
+      source: { kind: 'reply' },
+      renderedBody: '# Hello world',
+      storageKeyPrefix: '',
+      manifest: [],
+      tier: 'user',
+      scopeId: 's',
+      slug: 'x',
+    });
+
+    const { res, promise } = run(['a', 'tokreply']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('Hello world');
+    expect(data).toContain('<meta name="robots" content="noindex,nofollow">');
+    expect(res.getHeader('Cache-Control')).toContain('no-store');
+  });
+});
+
+describe('GET /api/publish/serve - access gates (issue #383)', () => {
+  const passphraseGated = () => bundle({ accessGate: { kind: 'passphrase' } });
+
+  it('passphrase-gated navigation with no proof returns the PUBLIC prompt shell, uncached', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('passphrase-protected');
+    expect(data).toContain('/api/publish/gate/passphrase');
+    // Static shell: no artifact data leaks to an anonymous viewer.
+    expect(data).not.toContain('My Artifact');
+    expect(data).not.toContain('pub1');
+    expect(res.getHeader('Cache-Control')).toBe('no-store');
+    expect(res.getHeader('X-Robots-Tag')).toBe('noindex');
+    // The credential-input page must not be frame-able (clickjacking).
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("frame-ancestors 'self'");
+    expect(csp).toContain("form-action 'self'");
+  });
+
+  it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Secret page</h1></body></html>'));
+
+    const token = signGateToken({ publicId: 'pub1' });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    // Gated-public must NOT serve like open-public: no CDN caching, no isolated
+    // public origin (srcdoc wrapper instead of the usercontent iframe).
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+    const data = res._getData() as string;
+    expect(data).not.toContain('usercontent.app.bike4mind.com');
+  });
+
+  it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const token = signGateToken({ publicId: 'someOtherArtifact' });
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).toContain('passphrase-protected');
+  });
+
+  it('?raw=1 and asset requests hard-fail the passphrase gate (no shell, no loop)', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+
+    const raw = run(['u', 'scope123', 'my-slug'], { raw: true });
+    await raw.promise;
+    expect(raw.res._getStatusCode()).toBe(401);
+
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    const asset = run(['u', 'scope123', 'my-slug', 'style.css']);
+    await asset.promise;
+    expect(asset.res._getStatusCode()).toBe(401);
+  });
+
+  it('owner bypasses their own passphrase gate without a proof', async () => {
+    mockArtifactFindOne.mockReturnValue(passphraseGated());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Mine</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { user: { id: 'owner1' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData() as string).not.toContain('passphrase-protected');
+  });
+
+  it('domain-gated anonymous navigation gets the JWT loader shell (sign-in path), not the passphrase prompt', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).not.toContain('passphrase-protected');
+    // The standard gated-bundle loader shell re-fetches ?raw=1 with the viewer's JWT.
+    expect(data).toContain('raw=1');
+  });
+});
+
+describe('GET /api/publish/serve - isolated /uc origin is open-public-only', () => {
+  it('404s a __uc request for an artifact that GAINED a gate (stale embed must not render the passphrase shell on *.usercontent)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body>ok</body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(res._getData() as string).not.toContain('passphrase-protected');
+  });
+
+  it('still serves an OPEN-public artifact on the isolated origin', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+  });
+});
+
+describe('GET /api/publish/serve - domain-gated share link recovery (no dead-end)', () => {
+  it('a domain-gated /a/<token> navigation with no credential serves the loader shell, not a bare 401', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'domain', allowedDomains: ['acme.com'] } }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // The loader shell re-fetches ?raw=1 with the viewer's Bearer - the domain-gate recovery.
+    expect(data).toContain('raw=1');
+    expect(res.getHeader('Content-Type')).toBe('text/html; charset=utf-8');
+  });
+
+  it('honors ?raw=1 on a share link (loader re-fetch returns srcdoc, not the wrapper)', async () => {
+    // Open (ungated, Tier-1) share link: checkShareGrant grants, ?raw=1 returns the
+    // inner srcdoc as inert text/plain - previously ?raw=1 was ignored for share and
+    // returned the HTML wrapper, which is why the loader shell could never recover.
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>ok</h1></body></html>'));
+
+    const { res, promise } = run(['a', 'tok123'], { raw: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toBe('text/plain; charset=utf-8');
+  });
+});
+
+describe('GET /api/publish/serve - access gates on /a/<shareToken> links', () => {
+  it('passphrase-gated share link with no proof returns the prompt shell (token alone is not enough)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['a', 'tok123']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('passphrase-protected');
+    expect(res.getHeader('Cache-Control')).toBe('no-store');
+    expect(res.getHeader('Referrer-Policy')).toBe('no-referrer');
+  });
+
+  it('passphrase-gated share link WITH proof serves, inlining assets (proof cookie cannot ride opaque-origin fetches)', async () => {
+    const { signGateToken } = await import('@server/services/publish/publishGateToken');
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        accessGate: { kind: 'passphrase' },
+        manifest: [
+          { path: 'index.html', mimeType: 'text/html' },
+          { path: 'logo.png', mimeType: 'image/png' },
+        ],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><img src="logo.png"></body></html>'));
+
+    const token = signGateToken({ publicId: 'pub1' });
+    const { res, promise } = run(['a', 'tok123'], { cookie: `b4m_pg_pub1=${token}` });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // Gated share: inline asset model, NOT the <base> self-authorizing model.
+    expect(data).not.toContain('<base href=&quot;https://app.bike4mind.com/a/tok123/&quot;>');
+    expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
+  });
+
+  it('share asset requests hard-fail the passphrase gate (no prompt shell on assets)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ accessGate: { kind: 'passphrase' } }));
+
+    const { res, promise } = run(['a', 'tok123', 'style.css']);
+    await promise;
+    expect(res._getStatusCode()).toBe(401);
+  });
+});
+
+describe('GET /api/publish/serve - external view counting (Published gear feed)', () => {
+  const renderedReply = () => bundle({ source: { kind: 'reply' }, renderedBody: 'hi there' });
+
+  it('an AUTHENTICATED non-owner view increments externalViewCount', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'someone-else' } });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1, externalViewCount: 1 } });
+  });
+
+  it('an ANONYMOUS view does NOT count as external - the serve route cannot tell the owner from a stranger without a credential (self-grant bypass)', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { userAgent: 'Mozilla/5.0 (Macintosh) Safari/605.1' });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+
+  it('a link-preview crawler does NOT count as a visitor', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], {
+      user: { id: 'someone-else' },
+      userAgent: 'Slackbot-LinkExpanding 1.0 (+https://api.slack.com/robots)',
+    });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+
+  it('the signed-in OWNER does not count as an external view', async () => {
+    mockArtifactFindOne.mockReturnValue(renderedReply());
+    const { promise } = run(['r', 'pub1'], { user: { id: 'owner1' } });
+    await promise;
+    expect(mockUpdateOne).toHaveBeenCalledWith({ publicId: 'pub1' }, { $inc: { viewCount: 1 } });
+  });
+});
+
+describe('GET /api/publish/serve - embed allowlist', () => {
+  const frameAncestorsOf = (res: { getHeader: (n: string) => unknown }) =>
+    (res.getHeader('Content-Security-Policy') as string)
+      .split(';')
+      .find(d => d.trim().startsWith('frame-ancestors'))!
+      .trim();
+
+  it('appends an allowlisted origin to the WRAPPER frame-ancestors (open-public)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://app.bike4mind.com https://erikbethke.com");
+  });
+
+  it('appends the origin to the ISOLATED bundle frame-ancestors too (ancestor-chain rule)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle({ embedOrigins: ['https://erikbethke.com'] }));
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { uc: 'pub1' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const fa = frameAncestorsOf(res);
+    // The external embedder is an ancestor of the nested bundle, so it must be listed
+    // here as well as on the wrapper - but the app host stays and no wildcard appears.
+    expect(fa).toBe('frame-ancestors https://app.bike4mind.com https://erikbethke.com');
+    expect(fa).not.toContain('*');
+  });
+
+  it('adds nothing to frame-ancestors when there is no allowlist (regression)', async () => {
+    mockArtifactFindOne.mockReturnValue(bundle());
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://app.bike4mind.com");
+  });
+
+  it('does NOT honor an allowlist on a gated artifact (loader shell CSP omits the origin)', async () => {
+    // A domain gate serves the anonymous loader shell; its CSP must never carry the
+    // embed grant (defense in depth - a gated page is no-store and must not be framed).
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] },
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).not.toContain('erikbethke.com');
+  });
+
+  it('?embed=1 renders chrome-less (no version bar) but keeps exactly one canonical link', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({
+        embedOrigins: ['https://erikbethke.com'],
+        sha256Index: 'newSHA',
+        versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }],
+      })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug'], { embed: true });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    // The version-switcher ELEMENT is dropped (its CSS class always lives in <style>).
+    expect(data).not.toContain('<div class="b4m-ver">');
+    // Canonical is emitted once by shareMeta (not duplicated by the embed path).
+    expect(data.match(/rel="canonical"/g)?.length).toBe(1);
+    expect(data).toContain('href="https://app.bike4mind.com/p/u/scope123/my-slug"');
+    // Lead-gen livery: the embed carries a "Built with ..." brand pill linking out,
+    // and NOT the persistent bottom bar (that's the own-tab treatment).
+    expect(data).toContain('<a class="b4m-brand"');
+    expect(data).toContain('Built with');
+    expect(data).not.toContain('<div class="b4m-bar">');
+  });
+
+  it('own-tab (non-embed) open-public render shows the persistent lead-gen bar with an in-bar Report', async () => {
+    mockArtifactFindOne.mockReturnValue(
+      bundle({ sha256Index: 'newSHA', versions: [{ sha256Index: 'oldSHA' }, { sha256Index: 'newSHA' }] })
+    );
+    mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+
+    const { res, promise } = run(['u', 'scope123', 'my-slug']);
+    await promise;
+    const data = res._getData() as string;
+    // The persistent bar (Anthropic-style) with a Try CTA; the floating pill is embed-only.
+    expect(data).toContain('<div class="b4m-bar">');
+    expect(data).toContain('class="b4m-bar-cta"');
+    expect(data).toContain('Try');
+    expect(data).not.toContain('<a class="b4m-brand"');
+    // Report moves INTO the bar, so the floating Report anchor is gone.
+    expect(data).toContain('class="b4m-bar-report"');
+    expect(data).not.toContain('<a class="b4m-report"');
+    // Chrome still present (version switcher), lifted above the bar.
+    expect(data).toContain('<div class="b4m-ver">');
+    // Fork default (no NEXT_PUBLIC_SHARE_BUILTIN_LOGO): text wordmark, no logo, no (R).
+    // Assert on the ELEMENTS - the CSS rules for these classes always ship in <style>.
+    expect(data).toContain('Built with <strong>');
+    expect(data).not.toContain('<span class="b4m-bar-logo">');
+    expect(data).not.toContain('<span class="b4m-reg">');
+  });
+
+  it('own-tab bar ships the built-in spoke logo + registered mark when opted in', async () => {
+    // The logo/(R) are gated on NEXT_PUBLIC_SHARE_BUILTIN_LOGO (read at module load),
+    // so import a fresh copy of the handler with the flag set. The vi.mock factories
+    // + hoisted mocks re-apply on re-import, so the same DB/storage stubs drive it.
+    const prev = process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO;
+    process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = 'true';
+    vi.resetModules();
+    try {
+      const freshHandler = (await import('../[...path]')).default as unknown as (
+        req: unknown,
+        res: unknown
+      ) => Promise<void>;
+      mockArtifactFindOne.mockReturnValue(bundle());
+      mockDownload.mockResolvedValue(Buffer.from('<html><head></head><body><h1>Hi</h1></body></html>'));
+      const { req, res } = createMocks({
+        method: 'GET',
+        query: { path: ['u', 'scope123', 'my-slug'] },
+        headers: { host: 'app.bike4mind.com' },
+      });
+      await freshHandler(req, res);
+      const data = res._getData() as string;
+      // Spoke-wheel logo (inlined SVG) instead of the text wordmark, plus the (R) on bar + CTA.
+      expect(data).toContain('<span class="b4m-bar-logo">');
+      expect(data).toContain('<svg');
+      expect(data).not.toContain('Built with <strong>');
+      expect((data.match(/<span class="b4m-reg">&reg;<\/span>/g) ?? []).length).toBe(2);
+    } finally {
+      if (prev === undefined) delete process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO;
+      else process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO = prev;
+      vi.resetModules();
+    }
   });
 });

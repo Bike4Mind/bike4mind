@@ -106,6 +106,9 @@ export const MODEL_ALIASES: Record<string, string> = {
   'gpt-5.4-mini': ChatModels.GPT5_4_MINI,
   'gpt-5.4-nano': ChatModels.GPT5_4_NANO,
   'gpt-5.5': ChatModels.GPT5_5,
+  'gpt-5.6-sol': ChatModels.GPT5_6_SOL,
+  'gpt-5.6-luna': ChatModels.GPT5_6_LUNA,
+  'gpt-5.6-terra': ChatModels.GPT5_6_TERRA,
 
   // OpenAI reasoning models (o-series)
   o1: ChatModels.O1,

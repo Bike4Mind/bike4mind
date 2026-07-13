@@ -1,4 +1,5 @@
 import { IBaseRepository, IMongoDocument } from '.';
+import { CreditHolderType } from './CreditHolderTypes';
 
 export enum ApiKeyScope {
   READ_NOTEBOOKS = 'notebooks:read',
@@ -93,7 +94,23 @@ export interface IUserApiKey {
   productId?: string;
   /** Human-readable product name, stored for display in admin UI. */
   productName?: string;
+  /**
+   * Billing target for this key's usage. Absent/`User` = personal key billed to
+   * `userId`. `Organization` = the key's AI usage debits `organizationId`'s
+   * shared credit pool instead of the minting user; the minter stays in `userId`
+   * for attribution + management. Invariant: `Organization` iff `organizationId`
+   * is set. Only `User` and `Organization` are valid here (never `Agent`).
+   */
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */
+  organizationId?: string;
 }
+
+/**
+ * The billing owner an API key can settle usage to. A subset of
+ * {@link CreditHolderType} - keys bill a person or an org, never an agent.
+ */
+export type ApiKeyBillingOwnerType = CreditHolderType.User | CreditHolderType.Organization;
 
 export interface IUserApiKeyDocument extends IUserApiKey, IMongoDocument {}
 
@@ -110,4 +127,6 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByProductId: (productId: string) => Promise<IUserApiKeyDocument[]>;
   /** Counts keys with status ACTIVE or RATE_LIMITED for a product. */
   countActiveByProductId: (productId: string) => Promise<number>;
+  /** All keys billed to an organization's credit pool (any status), newest first. */
+  findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
 }

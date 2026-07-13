@@ -1,6 +1,7 @@
 import { ImageModels, ModelInfo, IOrganizationDocument, isGPTImageModel, isGeminiImageModel } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { usdToCredits, UnprocessableEntityError } from '@bike4mind/utils';
+import { insufficientCreditsError } from '@bike4mind/common';
 import { OpenAICostInput, OpenAIImageCostCalculator } from '../../imageCostCalculator/OpenAIImageCostCalculator';
 import { FluxImageCostCalculator } from '../../imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from '../../imageCostCalculator/GeminiImageCostCalculator';
@@ -63,7 +64,7 @@ export async function validateUserCredits(
 
   if (userCredits < requiredCredits) {
     const creditsType = organization ? 'organization' : 'personal';
-    throw new UnprocessableEntityError(
+    throw insufficientCreditsError(
       `You do not have enough ${creditsType} credits to complete this request. You currently have ${userCredits} credits, and this request requires approximately ${requiredCredits} credits. Try reducing the number of images to lower the credit cost.`
     );
   }

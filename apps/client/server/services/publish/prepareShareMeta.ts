@@ -72,16 +72,24 @@ export function prepareShareMeta(input: ShareMetaInput): ShareMetaOutput {
   const rawEsc = input.rawUrl ? escapeHtml(input.rawUrl) : '';
   const siteEsc = input.siteName ? escapeHtml(input.siteName) : '';
 
+  // Unfurl CTA: shared links are the product's lead-gen surface (chat clients
+  // render og:/twitter:description in the link card), so append a short
+  // brand-derived call to action there. The plain `meta name="description"`
+  // stays CTA-free - that one feeds search snippets, not link cards.
+  const ctaText = input.siteName ? `Build and share with ${input.siteName}.` : '';
+  const unfurlDesc = descText ? (ctaText ? `${descText} - ${ctaText}` : descText) : ctaText;
+  const unfurlDescEsc = unfurlDesc ? escapeHtml(unfurlDesc) : '';
+
   const metaTags = [
     descEsc ? `<meta name="description" content="${descEsc}">` : '',
     `<meta property="og:title" content="${titleEsc}">`,
-    descEsc ? `<meta property="og:description" content="${descEsc}">` : '',
+    unfurlDescEsc ? `<meta property="og:description" content="${unfurlDescEsc}">` : '',
     `<meta property="og:type" content="article">`,
     `<meta property="og:url" content="${canonicalEsc}">`,
     siteEsc ? `<meta property="og:site_name" content="${siteEsc}">` : '',
     `<meta name="twitter:card" content="summary">`,
     `<meta name="twitter:title" content="${titleEsc}">`,
-    descEsc ? `<meta name="twitter:description" content="${descEsc}">` : '',
+    unfurlDescEsc ? `<meta name="twitter:description" content="${unfurlDescEsc}">` : '',
     `<link rel="canonical" href="${canonicalEsc}">`,
   ]
     .filter(Boolean)

@@ -130,6 +130,8 @@ describe('/api/reg-invites/migrate', () => {
         username: 'JohnDoe',
         email: 'john@example.com',
         name: 'John Doe',
+        // Passwordless shell account: null password (not a fake hash) + flag false.
+        record: { password: null, hasUsablePassword: false },
       }),
       expect.any(Object)
     );

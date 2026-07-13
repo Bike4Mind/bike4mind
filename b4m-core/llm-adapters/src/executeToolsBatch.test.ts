@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { PermissionDeniedError } from '@bike4mind/common';
+import { PermissionDeniedError, insufficientCreditsError } from '@bike4mind/common';
 import { executeToolsBatch, DEFAULT_MAX_PARALLEL_TOOLS } from './executeToolsBatch';
 
 /** Helper: create a task that resolves after a delay */
@@ -169,6 +169,34 @@ describe('executeToolsBatch', () => {
     });
   });
 
+  // Out-of-credits errors are tagged terminal (via insufficientCreditsError) so the batch
+  // short-circuits like a PermissionDeniedError instead of feeding a dead-end error to the model.
+  describe('terminal out-of-credits errors', () => {
+    it('throws the tagged credit error before returning any results (parallel)', async () => {
+      const tasks = [
+        delayedTask('ok', 5),
+        failingTask(insufficientCreditsError('You do not have enough credits.'), 10),
+        delayedTask('also-ok', 15),
+      ];
+
+      await expect(executeToolsBatch(tasks, { parallel: true })).rejects.toThrow('You do not have enough credits.');
+    });
+
+    it('breaks the sequential loop on a credit error — subsequent tools do NOT execute', async () => {
+      const taskC = vi.fn(async () => 'C-result');
+      const tasks = [async () => 'A-result' as string, failingTask(insufficientCreditsError('Out of credits.')), taskC];
+
+      await expect(executeToolsBatch(tasks, { parallel: false })).rejects.toThrow('Out of credits.');
+      expect(taskC).not.toHaveBeenCalled();
+    });
+
+    it('throws a credit error immediately for a single tool', async () => {
+      const task = () => Promise.reject(insufficientCreditsError('No credits left.'));
+
+      await expect(executeToolsBatch([task], { parallel: true })).rejects.toThrow('No credits left.');
+    });
+  });
+
   describe('concurrency limiting (maxConcurrency)', () => {
     it('respects maxConcurrency cap', async () => {
       let activeTasks = 0;
@@ -214,12 +242,13 @@ describe('executeToolsBatch', () => {
       const log: Array<{ id: string; event: string; time: number }> = [];
       const tasks = [timedTask('A', 30, log), timedTask('B', 30, log)];
 
-      const startTime = Date.now();
       await executeToolsBatch(tasks, { parallel: true, maxConcurrency: 10 });
-      const elapsed = Date.now() - startTime;
 
-      // Should run concurrently (not limited)
-      expect(elapsed).toBeLessThan(55);
+      // Both tasks start before either ends. This interleaving check is jitter-immune,
+      // unlike a raw wall-clock bound which flaked on loaded CI runners.
+      const lastStart = Math.max(...log.filter(e => e.event === 'start').map(e => e.time));
+      const firstEnd = Math.min(...log.filter(e => e.event === 'end').map(e => e.time));
+      expect(lastStart).toBeLessThanOrEqual(firstEnd);
     });
 
     it('handles PermissionDeniedError with concurrency limiting', async () => {

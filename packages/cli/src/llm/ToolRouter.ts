@@ -2,6 +2,7 @@ import { ApiClient } from '../auth/ApiClient';
 import { ServerToolExecutor } from './ServerToolExecutor';
 import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
 import { logger } from '../utils/Logger';
+import { sanitizeToolOutput } from '../utils/toolOutputSanitizer';
 
 /** Optional WebSocket executor for server-side tools (bypasses CloudFront timeout) */
 let wsToolExecutor: WebSocketToolExecutor | null = null;
@@ -87,6 +88,32 @@ export function isLocalTool(toolName: string): toolName is LocalToolName {
  * @returns Tool execution result as string
  */
 export async function executeTool(
+  toolName: string,
+  input: Record<string, unknown>,
+  apiClient: ApiClient,
+  localToolFn?: (args: Record<string, unknown>) => Promise<unknown>
+): Promise<string> {
+  // Single choke point: EVERY tool result - success or error - is redacted and
+  // size-capped here before it can reach the model. Errors returned as strings
+  // (server tools) sanitize via the success path; thrown errors sanitize in the
+  // catch and are re-thrown so callers still see a failure. Keep this the only
+  // place tool output crosses back to the agent, so nothing can bypass it.
+  try {
+    return sanitizeToolOutput(await routeTool(toolName, input, apiClient, localToolFn));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const sanitized = sanitizeToolOutput(message);
+    if (error instanceof Error) {
+      // Mutate in place so the error subtype and any custom fields survive - the
+      // adapter re-inspects `.message` (e.g. isPathAccessDenial) downstream.
+      error.message = sanitized;
+      throw error;
+    }
+    throw new Error(sanitized);
+  }
+}
+
+async function routeTool(
   toolName: string,
   input: Record<string, unknown>,
   apiClient: ApiClient,

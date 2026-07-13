@@ -16,7 +16,7 @@
  * (ACCESS_MODEL §3.2) adds seat-membership resolution HERE - callers never
  * change. Note the webhook invalidation fan-out for seats is separate work.
  */
-import { resolveEntitlements, normalizeTag } from '@client/lib/entitlements/registry';
+import { resolveEntitlements, normalizeTag, BASE_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { partnerEntitlementsForEmail } from '@server/entitlements/partnerRules';
@@ -74,6 +74,13 @@ export async function getUserEntitlements(user: EntitlementUser): Promise<Entitl
   for (const key of partnerKeys) {
     keys.add(key);
   }
+  // Baseline access: every authenticated user holds the reserved `base` key, so
+  // any model gated only on `base` (the default for base models) is reachable
+  // without a per-account tag. This is what lets tag-less OAuth/SSO/admin-created
+  // accounts see base models. It is injected HERE (the single "what does this user
+  // hold" chokepoint feeding both the client `/api/entitlements` and the server
+  // admission gate) rather than in the pure registry, which stays grant-rows-only.
+  keys.add(BASE_ENTITLEMENT_KEY);
   return [...keys];
 }
 

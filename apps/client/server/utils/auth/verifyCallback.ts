@@ -6,12 +6,7 @@ import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
-import {
-  isProviderEmailVerified,
-  selectProviderEmail,
-  ACCOUNT_LINK_VERIFICATION_REQUIRED,
-  ACCOUNT_LINK_EMAIL_MISMATCH,
-} from './oauthAccountLink';
+import { isProviderEmailVerified, selectProviderEmail, decideAutoLink } from './oauthAccountLink';
 import { OAuthFailureReason } from './oauthFailureReason';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
@@ -193,45 +188,23 @@ const authenticateUser = async (
 
       let promoteEmailVerified = false;
       if (!existingSameIdentity) {
-        const providerEmailVerified = isProviderEmailVerified(profile);
-        if (!providerEmailVerified) {
+        // Shared account-takeover gate (see decideAutoLink). This path feeds it the
+        // passport email-array shape via isProviderEmailVerified(); okta/callback.ts
+        // feeds the OIDC boolean. Both consume one decision so the two paths can't drift.
+        const decision = decideAutoLink({
+          providerEmailVerified: isProviderEmailVerified(profile),
+          providerEmail: email,
+          localEmail: user.email ?? null,
+          localEmailVerified: user.emailVerified === true,
+          hasUsablePassword: !!user.hasUsablePassword,
+        });
+        if (decision.action === 'refuse') {
           // Propagate the targeted email so [strategy]/callback.ts can write
           // it onto the auth-fail log row for forensic review during attacks.
-          done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
+          done(decision.reason, undefined, email ? { email } : undefined);
           return;
         }
-        // The provider email is verified but it must also match the local
-        // account's email (case-insensitive). Verification alone is not sufficient:
-        // an attacker with a verified email on a colliding username could otherwise
-        // link into a victim account.
-        const localEmail = user.email ?? null;
-        if (email && localEmail && email.toLowerCase() !== localEmail.toLowerCase()) {
-          done(ACCOUNT_LINK_EMAIL_MISMATCH, undefined, { email });
-          return;
-        }
-        // Local-verified half: required UNLESS the local account has no usable password
-        // (hasUsablePassword === false). An account with a real password and an
-        // unverified email is a classic reverse-takeover setup - an attacker pre-creates
-        // the victim's email locally (unverified, password known only to the attacker)
-        // and waits for the victim to SSO in and get absorbed. `hasUsablePassword` is the
-        // discriminator (NOT `!user.password`): admin/migration "shell" accounts store an
-        // auto-generated, unusable password that is bcrypt-hashed and therefore
-        // indistinguishable from a real one - see UserModel.ts's field comment. A
-        // genuinely passwordless account can't be squatted that way, and the provider
-        // round-trip above just cryptographically attested control of this email, so
-        // linking is safe - promote the local email to verified instead of dead-ending
-        // the user. Promote ONLY on a real verified-email match, though: a username-only
-        // match (local email null) is not an identity assertion, so promoting on it
-        // would let a colliding username link into an emailless passwordless shell
-        // and stamp the attacker's email onto it.
-        if (user.emailVerified !== true) {
-          if (!user.hasUsablePassword && email && localEmail && email.toLowerCase() === localEmail.toLowerCase()) {
-            promoteEmailVerified = true;
-          } else {
-            done(ACCOUNT_LINK_VERIFICATION_REQUIRED, undefined, email ? { email } : undefined);
-            return;
-          }
-        }
+        promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
       if (existingProviderIndex !== -1) {

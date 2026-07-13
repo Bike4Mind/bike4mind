@@ -1,0 +1,937 @@
+{
+  "generatedAt": "2026-07-11T03:47:10.876Z",
+  "entries": [
+    {
+      "modelId": "ai21.j2-mid-v1",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 0.0000125,
+          "output": 0.0000125
+        }
+      }
+    },
+    {
+      "modelId": "ai21.j2-ultra-v1",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 0.0000188,
+          "output": 0.0000188
+        }
+      }
+    },
+    {
+      "modelId": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000014999999999999999
+        }
+      }
+    },
+    {
+      "modelId": "anthropic.claude-3-haiku-20240307-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 2.5e-7,
+          "output": 0.00000125
+        }
+      }
+    },
+    {
+      "modelId": "claude-3-5-haiku-20241022",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 8.000000000000001e-7,
+          "output": 0.000004
+        }
+      }
+    },
+    {
+      "modelId": "claude-3-5-sonnet-20241022",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "claude-3-7-sonnet-20250219",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "claude-3-opus-20240229",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000015,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "claude-fable-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.00001,
+          "output": 0.00005
+        }
+      }
+    },
+    {
+      "modelId": "claude-haiku-4-5-20251001",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000001,
+          "output": 0.000005
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-1-20250805",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000015,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-20250514",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000015,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-5-20251101",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-6",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-7",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-opus-4-8",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-20250514",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-5-20250929",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "claude-sonnet-4-6",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "claude-sonnet-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "deepseek.v3-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "32768": {
+          "input": 0.00000135,
+          "output": 0.0000054
+        }
+      }
+    },
+    {
+      "modelId": "gemini-1.5-flash",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 7.5e-8,
+          "output": 3e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-1.5-flash-8b",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 3.75e-8,
+          "output": 1.5e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-1.5-pro",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 0.00000125,
+          "output": 0.000005
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.0-flash-exp",
+      "unit": "per_token",
+      "pricing": {
+        "4000": {
+          "input": 1.0000000000000001e-7,
+          "output": 4.0000000000000003e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 7.5e-8,
+          "output": 6e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash-lite",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 3.75e-8,
+          "output": 3e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.5-flash-preview-09-25",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 7.5e-8,
+          "output": 3e-7
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.5-pro",
+      "unit": "per_token",
+      "pricing": {
+        "2097152": {
+          "input": 0.00000125,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gemini-2.5-pro-preview-05-06",
+      "unit": "per_token",
+      "pricing": {
+        "2097152": {
+          "input": 0.00000125,
+          "output": 0.000005
+        }
+      }
+    },
+    {
+      "modelId": "gemini-3-flash-preview",
+      "unit": "per_token",
+      "pricing": {
+        "2097152": {
+          "input": 0.000002,
+          "output": 0.000001
+        }
+      }
+    },
+    {
+      "modelId": "gemini-3-pro-preview",
+      "unit": "per_token",
+      "pricing": {
+        "2097152": {
+          "input": 0.000002,
+          "output": 0.000018
+        }
+      }
+    },
+    {
+      "modelId": "gemini-3.1-flash-lite",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 2.5e-7,
+          "output": 0.0000015
+        }
+      }
+    },
+    {
+      "modelId": "gemini-3.1-pro-preview",
+      "unit": "per_token",
+      "pricing": {
+        "2097152": {
+          "input": 0.000002,
+          "output": 0.000018
+        }
+      }
+    },
+    {
+      "modelId": "gemini-3.5-flash",
+      "unit": "per_token",
+      "pricing": {
+        "1048576": {
+          "input": 0.0000015,
+          "output": 0.000009
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-5-20251101-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-6-v1",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000015,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-7",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-opus-4-8",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-4-6",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "global.anthropic.claude-sonnet-5",
+      "unit": "per_token",
+      "pricing": {
+        "1000000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 0.00003,
+          "output": 0.00006
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4-turbo",
+      "unit": "per_token",
+      "pricing": {
+        "128000": {
+          "input": 0.00001,
+          "output": 0.00003
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4.1-2025-04-14",
+      "unit": "per_token",
+      "pricing": {
+        "1047576": {
+          "input": 0.000002,
+          "output": 0.000008
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4.1-mini-2025-04-14",
+      "unit": "per_token",
+      "pricing": {
+        "1047576": {
+          "input": 4.0000000000000003e-7,
+          "output": 0.0000016000000000000001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4.1-nano-2025-04-14",
+      "unit": "per_token",
+      "pricing": {
+        "1047576": {
+          "input": 1.0000000000000001e-7,
+          "output": 4.0000000000000003e-7
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4.5-preview-2025-02-27",
+      "unit": "per_token",
+      "pricing": {
+        "128000": {
+          "input": 0.000075,
+          "output": 0.00015
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4o",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 0.0000025,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-4o-mini",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 1.5e-7,
+          "output": 6e-7
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.00000125,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5-chat-latest",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.00000125,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5-mini",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 2.5e-7,
+          "output": 0.000002
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5-nano",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 5.0000000000000004e-8,
+          "output": 4.0000000000000003e-7
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.1",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.00000125,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.1-chat-latest",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.00000125,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.2",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.00000175,
+          "output": 0.000014
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.2-chat-latest",
+      "unit": "per_token",
+      "pricing": {
+        "128000": {
+          "input": 0.00000175,
+          "output": 0.000014
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.4",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 0.0000025,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.4-mini",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 7.5e-7,
+          "output": 0.0000045
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.4-nano",
+      "unit": "per_token",
+      "pricing": {
+        "400000": {
+          "input": 2.0000000000000002e-7,
+          "output": 0.00000125
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.5",
+      "unit": "per_token",
+      "pricing": {
+        "1050000": {
+          "input": 0.000005,
+          "output": 0.00003
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-luna",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.000001,
+          "output": 0.000006
+        },
+        "1050000": {
+          "input": 0.000002,
+          "output": 0.000009
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-sol",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.000005,
+          "output": 0.00003
+        },
+        "1050000": {
+          "input": 0.00001,
+          "output": 0.000045
+        }
+      }
+    },
+    {
+      "modelId": "gpt-5.6-terra",
+      "unit": "per_token",
+      "pricing": {
+        "272000": {
+          "input": 0.0000025,
+          "output": 0.000015
+        },
+        "1050000": {
+          "input": 0.000005,
+          "output": 0.0000225
+        }
+      }
+    },
+    {
+      "modelId": "grok-2-1212",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 0.000002,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "grok-2-vision-1212",
+      "unit": "per_token",
+      "pricing": {
+        "8192": {
+          "input": 0.000002,
+          "output": 0.00001
+        }
+      }
+    },
+    {
+      "modelId": "grok-3",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "grok-3-fast",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 0.000005,
+          "output": 0.000025
+        }
+      }
+    },
+    {
+      "modelId": "grok-3-mini",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 3e-7,
+          "output": 5e-7
+        }
+      }
+    },
+    {
+      "modelId": "grok-3-mini-fast",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 6e-7,
+          "output": 0.000004
+        }
+      }
+    },
+    {
+      "modelId": "grok-4-0709",
+      "unit": "per_token",
+      "pricing": {
+        "256000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "grok-beta",
+      "unit": "per_token",
+      "pricing": {
+        "131072": {
+          "input": 0.000005,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "grok-vision-beta",
+      "unit": "per_token",
+      "pricing": {
+        "8192": {
+          "input": 0.000005,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "meta.llama3-70b-instruct-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 0.00000265,
+          "output": 0.0000035
+        }
+      }
+    },
+    {
+      "modelId": "meta.llama3-8b-instruct-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 3e-7,
+          "output": 6e-7
+        }
+      }
+    },
+    {
+      "modelId": "o1-2024-12-17",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000015,
+          "output": 0.00006
+        }
+      }
+    },
+    {
+      "modelId": "o1-mini-2024-09-12",
+      "unit": "per_token",
+      "pricing": {
+        "128000": {
+          "input": 0.0000011,
+          "output": 0.0000044
+        }
+      }
+    },
+    {
+      "modelId": "o1-preview-2024-09-12",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000015,
+          "output": 0.00006
+        }
+      }
+    },
+    {
+      "modelId": "o3-2025-04-16",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000002,
+          "output": 0.000008
+        }
+      }
+    },
+    {
+      "modelId": "o3-mini-2025-01-31",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.0000011,
+          "output": 0.0000044
+        }
+      }
+    },
+    {
+      "modelId": "o4-mini-2025-04-16",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.0000011,
+          "output": 0.0000044
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-5-haiku-20241022-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 8.000000000000001e-7,
+          "output": 0.000004
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000014999999999999999
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 3e-7,
+          "output": 0.0000015
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000001,
+          "output": 0.000005
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-opus-4-1-20250805-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000014999999999999999,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-opus-4-20250514-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000014999999999999999,
+          "output": 0.000075
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-sonnet-4-20250514-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000014999999999999999
+        }
+      }
+    },
+    {
+      "modelId": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000003,
+          "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "us.deepseek.r1-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "32768": {
+          "input": 0.00000135,
+          "output": 0.0000054
+        }
+      }
+    },
+    {
+      "modelId": "us.meta.llama4-maverick-17b-instruct-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 0.000001,
+          "output": 0.000002
+        }
+      }
+    },
+    {
+      "modelId": "us.meta.llama4-scout-17b-instruct-v1:0",
+      "unit": "per_token",
+      "pricing": {
+        "8000": {
+          "input": 0.000001,
+          "output": 0.000002
+        }
+      }
+    }
+  ]
+}

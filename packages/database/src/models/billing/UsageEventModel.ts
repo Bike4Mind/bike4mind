@@ -5,6 +5,7 @@ import {
   IMongoDocument,
   IModelDayMargin,
   IProviderMonthCogs,
+  ISettlementBreakdown,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
@@ -57,6 +58,8 @@ const UsageEventSchema = new Schema<IUsageEventDocument>(
 UsageEventSchema.index({ userId: 1, createdAt: -1 });
 UsageEventSchema.index({ provider: 1, model: 1, createdAt: -1 });
 UsageEventSchema.index({ createdAt: -1 });
+// Supports settlementBreakdown()'s $match on createdAt + settledBasis without an in-memory scan/filter.
+UsageEventSchema.index({ createdAt: -1, settledBasis: 1 });
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -160,6 +163,50 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
         },
       },
       { $sort: { month: -1, provider: 1 } },
+    ]);
+  }
+
+  async settlementBreakdown(days: number = 30): Promise<ISettlementBreakdown[]> {
+    const from = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    // Both provider counts must be real positive counts to compare against the
+    // local estimate. A row settled 'local' can still carry a partial provider
+    // report (one axis zero); gating on > 0 keeps those out of the delta.
+    const hasProviderCounts = {
+      $and: [
+        { $gt: [{ $ifNull: ['$providerInputTokens', 0] }, 0] },
+        { $gt: [{ $ifNull: ['$providerOutputTokens', 0] }, 0] },
+      ],
+    };
+    return this.model.aggregate<ISettlementBreakdown>([
+      { $match: { createdAt: { $gte: from }, settledBasis: { $in: ['provider', 'local'] } } },
+      {
+        $group: {
+          _id: '$settledBasis',
+          requests: { $sum: 1 },
+          creditsCharged: { $sum: '$creditsCharged' },
+          writtenOffCredits: { $sum: { $ifNull: ['$writtenOffCredits', 0] } },
+          inputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerInputTokens', '$inputTokens'] }, 0] },
+          },
+          outputTokenDelta: {
+            $sum: { $cond: [hasProviderCounts, { $subtract: ['$providerOutputTokens', '$outputTokens'] }, 0] },
+          },
+          deltaSampleSize: { $sum: { $cond: [hasProviderCounts, 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          settledBasis: '$_id',
+          requests: 1,
+          creditsCharged: 1,
+          writtenOffCredits: 1,
+          inputTokenDelta: 1,
+          outputTokenDelta: 1,
+          deltaSampleSize: 1,
+        },
+      },
+      { $sort: { settledBasis: 1 } },
     ]);
   }
 }

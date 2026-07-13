@@ -13,10 +13,9 @@ import {
   showHelp,
   buildModalFromParams,
   generateModalFromNaturalLanguage,
-  extractImagesFromChat,
-  summarizeChatContext,
+  generateModalContentFromContext,
+  NO_CHAT_CONTEXT_MESSAGE,
   suggestTags,
-  aiGenerateModalContent,
 } from './modalToolHelpers';
 
 /**
@@ -113,8 +112,17 @@ export class ModalManagementToolClient implements AdminTool {
     try {
       let modalData: Partial<IModal>;
 
-      if ((params.data as ModalGenerationParams)?.fromContext && context.chatHistory) {
-        modalData = await this.generateModalFromContext(context, params);
+      // from-context always builds from recent chat; if there is none we return
+      // a clear message rather than falling back to any query text below.
+      if ((params.data as ModalGenerationParams)?.fromContext) {
+        const contextModal = await this.generateModalFromContext(context, params);
+        if (!contextModal) {
+          return {
+            success: false,
+            error: NO_CHAT_CONTEXT_MESSAGE,
+          };
+        }
+        modalData = contextModal;
       } else if (params.query) {
         modalData = generateModalFromNaturalLanguage(
           params.query,
@@ -173,7 +181,7 @@ export class ModalManagementToolClient implements AdminTool {
                   type: finalModal.isBanner ? ('banner' as const) : ('modal' as const),
                 },
               },
-              message: `✅ ${finalModal.isBanner ? 'Banner' : 'Modal'} "${finalModal.title}" created successfully!`,
+              message: `✅ ${finalModal.isBanner ? 'Banner' : 'Modal'} "${finalModal.title || finalModal.textMessage}" created successfully!`,
             };
           },
         },
@@ -186,20 +194,23 @@ export class ModalManagementToolClient implements AdminTool {
     }
   }
 
-  // Generate modal from chat context
-  private async generateModalFromContext(context: AdminToolContext, params: AdminToolParams): Promise<Partial<IModal>> {
+  // Generate modal from chat context. Returns null when there is no usable
+  // recent context so the caller can surface a clear message.
+  private async generateModalFromContext(
+    context: AdminToolContext,
+    params: AdminToolParams
+  ): Promise<Partial<IModal> | null> {
     const contextMessages = (params.data as ModalGenerationParams)?.contextMessages || 5;
     const recentMessages = context.chatHistory?.slice(-contextMessages) || [];
 
-    const summary = summarizeChatContext(recentMessages);
-    const images = extractImagesFromChat(recentMessages);
-
-    const generatedContent = aiGenerateModalContent({
-      summary,
-      images,
+    const generatedContent = generateModalContentFromContext(recentMessages, {
       type: (params.data as ModalGenerationParams)?.type || 'modal',
       intent: params.query || '',
     });
+
+    if (!generatedContent) {
+      return null;
+    }
 
     return {
       ...generatedContent,

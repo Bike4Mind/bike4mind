@@ -3,6 +3,7 @@ import FeedbackTab from '@client/app/components/admin/Feedbacks';
 import AdminFilesTab from '@client/app/components/admin/FilesTab';
 import WorldTimeTab from '@client/app/components/admin/WorldTime';
 import SystemPromptsTab from '@client/app/components/admin/SystemPromptsTab';
+import ManageGearsTab from '@client/app/components/admin/ManageGearsTab';
 import EmailVerificationTab from '@client/app/components/admin/EmailVerificationTab';
 import AdminSystemHealthTab from '@client/app/components/admin/AdminSystemHealthTab';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -570,6 +571,9 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               </TabPanel>
               <TabPanel value={AdminTab.SlackMetrics}>
                 {activeTab === AdminTab.SlackMetrics && <SlackMetricsPage />}
+              </TabPanel>
+              <TabPanel value={AdminTab.ManageGears}>
+                {activeTab === AdminTab.ManageGears && <ManageGearsTab />}
               </TabPanel>
               <TabPanel value={AdminTab.SystemPrompts}>
                 {activeTab === AdminTab.SystemPrompts && <SystemPromptsTab />}

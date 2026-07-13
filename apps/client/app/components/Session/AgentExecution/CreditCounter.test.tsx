@@ -6,6 +6,7 @@ import { getThemeConfig } from '@client/app/utils/themes';
 
 const mocks = vi.hoisted(() => ({
   totalCreditsUsed: undefined as number | undefined,
+  enforceCredits: true as unknown,
 }));
 
 vi.mock('@client/app/stores/useAgentExecutionStore', () => {
@@ -13,6 +14,10 @@ vi.mock('@client/app/stores/useAgentExecutionStore', () => {
   const useAgentExecutionStore = (selector: (s: unknown) => unknown) => selector({});
   return { useAgentExecutionStore, selectExecution };
 });
+
+vi.mock('@client/app/hooks/data/settings', () => ({
+  useGetSettingsValue: () => mocks.enforceCredits,
+}));
 
 import CreditCounter from './CreditCounter';
 
@@ -26,6 +31,7 @@ const EXECUTION_ID = 'exec-credit-1';
 describe('CreditCounter', () => {
   beforeEach(() => {
     mocks.totalCreditsUsed = undefined;
+    mocks.enforceCredits = true;
   });
 
   it('renders null when execution is missing from the store', () => {
@@ -56,5 +62,27 @@ describe('CreditCounter', () => {
       </TestWrapper>
     );
     expect(screen.getByText('1,235 credits')).toBeInTheDocument();
+  });
+
+  it('renders null when enforceCredits is off, even mid-run', () => {
+    mocks.enforceCredits = false;
+    mocks.totalCreditsUsed = 42;
+    const { container } = render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(container.firstChild).toBeNull();
+  });
+
+  it('renders null when enforceCredits is undefined (settings still resolving)', () => {
+    mocks.enforceCredits = undefined;
+    mocks.totalCreditsUsed = 42;
+    const { container } = render(
+      <TestWrapper>
+        <CreditCounter executionId={EXECUTION_ID} />
+      </TestWrapper>
+    );
+    expect(container.firstChild).toBeNull();
   });
 });

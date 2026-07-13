@@ -16,6 +16,7 @@
 import { FC } from 'react';
 import { Chip } from '@mui/joy';
 import { useAgentExecutionStore, selectExecution } from '@client/app/stores/useAgentExecutionStore';
+import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 
 interface CreditCounterProps {
   executionId: string;
@@ -30,7 +31,11 @@ function formatCredits(credits: number): string {
 }
 
 const CreditCounter: FC<CreditCounterProps> = ({ executionId }) => {
+  const enforceCredits = !!useGetSettingsValue('enforceCredits');
   const totalCreditsUsed = useAgentExecutionStore(state => selectExecution(executionId)(state)?.totalCreditsUsed);
+
+  // Nothing decrements while enforcement is off, so a running tally would be cosmetic.
+  if (!enforceCredits) return null;
 
   // `undefined` only when the execution isn't in the store yet; once it's
   // there the field is 0+. Hide on undefined; show even at 0 so the user
