@@ -38,6 +38,7 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
@@ -118,6 +119,8 @@ import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
+import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import type { Context, SQSEvent } from 'aws-lambda';
@@ -510,6 +513,29 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
 // Core execution logic
 // ---------------------------------------------------------------------------
 
+/**
+ * Load the user's enabled MCP servers' tools, degrading to none on failure.
+ * Shared by the top-level and re-dispatch handlers (each runs in its own Lambda
+ * invocation). agent_executor never touched mcpServerRepository before this
+ * wiring, so a transient DB error here must not take down runs that use no MCP
+ * tools (mirrors the userAgents/orgAgents fallbacks in each caller).
+ */
+async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMcpTools> {
+  const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
+  try {
+    return await loadAgentMcpTools(
+      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, logger },
+      { userId, enableMCPServer }
+    );
+  } catch (err) {
+    logger.warn('[AgentExecutor][MCP] Failed to load MCP tools; continuing without MCP overlay', {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+  }
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -777,7 +803,28 @@ async function processExecution(
         });
       }
     }
-    const agentStore = new ServerAgentStore({}, { userAgents, orgAgents });
+    // Load the user's enabled MCP servers' tools so delegated subagents
+    // (e.g. project_manager -> atlassian) actually receive them. Agent Mode had
+    // NO MCP wiring, so exclusive-MCP subagents spawned with 0 tools and the
+    // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(execution.userId, logger);
+    const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
+    // MCP servers claimed exclusively by an agent (e.g. atlassian by
+    // project_manager). Withheld from the parent LLM's tool list; reach the
+    // delegated subagent via buildSharedTools' internal parentTools closure.
+    const agentOnlyMcpServers = agentStore.getExclusiveMcpServers();
+    // An agent that EXCLUSIVELY claims a server spawns with 0 tools if that server produced none
+    // (disabled / no cached schemas / load failed) - the exact failure this fix targets. Surface it
+    // by server name so it is not a silent fabrication again.
+    const missingExclusive = agentOnlyMcpServers.filter(s => !mcpToolsByServer[s]?.length);
+    if (missingExclusive.length > 0) {
+      logger.warn(
+        '[AgentExecutor][MCP] Exclusive MCP server(s) loaded 0 tools - dependent subagents will spawn empty-handed',
+        {
+          missingExclusive,
+        }
+      );
+    }
     logger.info(
       `[AgentStore] Loaded ${agentStore.getAllAgents().length} agents (user: ${userAgents.length}, org: ${orgAgents.length})`,
       {
@@ -1162,6 +1209,8 @@ async function processExecution(
       enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
       externalTools: { ...premiumLlmTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
+      mcpToolsByServer,
+      agentOnlyMcpServers,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -1174,6 +1223,7 @@ async function processExecution(
         toolNames: tools.map(t => t.toolSchema?.name).filter(Boolean),
         count: tools.length,
         hasCoordinateTask: tools.some(t => t.toolSchema?.name === 'coordinate_task'),
+        agentOnlyMcpServers,
       });
     }
 
@@ -2216,7 +2266,10 @@ async function processSubagentDispatch(
         });
       }
     }
-    const agentStore = new ServerAgentStore({}, { userAgents, orgAgents });
+    // Rebuild MCP tools on THIS invocation - a re-dispatched subagent runs in its
+    // own Lambda, so the top-level path's load does not carry over. See Task 3.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(child.userId, logger);
+    const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
       await agentExecutionRepository.markFailed(childExecutionId, {
@@ -2309,6 +2362,14 @@ async function processSubagentDispatch(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       config: subagentToolConfig,
+      mcpToolsByServer,
+      // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
+      // tools are excluded from the return), and that return is passed as the
+      // orchestrator's parentTools below. So MCP tools must land in `tools`
+      // here; the dispatched agent's allowedTools (e.g. atlassian__*) scopes
+      // them. Marking them agent-only here would hide them and reproduce the
+      // 0-tools bug.
+      agentOnlyMcpServers: [],
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 
@@ -2413,6 +2474,12 @@ async function processSubagentDispatch(
     const childArtifactEmissionPrompt = childArtifactsEnabled
       ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
       : undefined;
+
+    logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {
+      agentName,
+      poolSize: tools.length,
+      mcpToolNames: tools.map(t => t.toolSchema?.name).filter((n): n is string => !!n && n.includes('__')),
+    });
 
     const orchestrator = new ServerSubagentOrchestrator({
       userId: child.userId,
