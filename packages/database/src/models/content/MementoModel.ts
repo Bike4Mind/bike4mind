@@ -34,6 +34,10 @@ const MementoSchema = new Schema<IMementoDocument, IMementoModel>(
     fullContent: { type: String, required: true },
     tags: [{ type: String }],
     embedding: { type: [Number] },
+    // Which model produced `embedding`. Without it a vector is uninterpretable: cosine across two
+    // models' spaces is noise, so a read path cannot tell a usable vector from a booby-trapped one.
+    // Un-stamped (pre-migration) mementos are treated as untrusted until the re-embed backfill runs.
+    embeddingModel: { type: String },
     lastAccessedAt: { type: Date, required: true, default: Date.now },
   },
   {

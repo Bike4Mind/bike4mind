@@ -6,7 +6,7 @@ import {
   mementoRepository,
 } from '@bike4mind/database';
 import { embeddingScorer, mergeStores, recall } from '@bike4mind/memory';
-import { isSupportedEmbeddingModel, type SupportedEmbeddingModel } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_MODEL, MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -28,50 +28,25 @@ const V2_RECALL_K = 10;
  */
 const V2_ACTIVATION_WEIGHT = 0.1;
 
-/**
- * Topicality floor: a belief below this cosine to the query is not injected at all.
- *
- * THIS IS CALIBRATED PER EMBEDDING MODEL and cannot be a single constant, because the cosine scale is
- * a property of the model. `text-embedding-ada-002` is notoriously compressed - even unrelated text
- * scores ~0.72 - so the entire signal lives in a narrow band and 0.76 is the highest floor that loses
- * no relevant belief on the eval corpus while cutting the memory injected into an OFF-topic question
- * from 10 beliefs to 1.7.
- *
- * An UNKNOWN model deliberately falls back to NO floor. That degrades to the previous behaviour -
- * inject the top k, noisy but complete - rather than silently dropping a user's entire memory because
- * someone changed the embedding model and its cosine scale moved out from under a hardcoded number.
- * If you change the model: re-run the eval sweep and add the model here.
- */
-const MIN_RELEVANCE_BY_MODEL: Record<string, number> = {
-  'text-embedding-ada-002': 0.76,
-};
 
 /**
- * Embed the query in the SAME vector space as the stored memento embeddings - i.e. with the
- * admin-configured default embedding model and the user's effective API keys, exactly as V1's
- * `getRelevantMementos` and `createMemento` do. Cosine between vectors from different models is
- * meaningless, so this must stay in lockstep with them.
+ * Embed the query in the SAME vector space the mementos were written in - MEMENTO_EMBEDDING_MODEL,
+ * which the memento write path pins and stamps. Cosine between vectors from different models is
+ * meaningless, so this must stay in lockstep with `createMemento` and `getRelevantMementos`.
  *
- * Returns [] on any failure (no key, no model configured, provider error): recall then falls back to
- * the lexical scorer rather than breaking the chat.
+ * Returns an empty vector on any failure (no key, provider error): recall then falls back to the
+ * lexical scorer rather than breaking the chat.
  */
 async function embedQuery(userId: string, query: string): Promise<{ vector: number[]; model: string }> {
   const none = { vector: [] as number[], model: '' };
   if (!query.trim()) return none;
 
-  // Independent lookups - the configured model and the user's keys - so fetch them together rather
-  // than paying two serial round trips to a remote Mongo.
-  const [defaultEmbeddingModel, apiKeyTable] = await Promise.all([
-    adminSettingsRepository.getSettingsValue('defaultEmbeddingModel'),
-    apiKeyService.getEffectiveLLMApiKeys(userId, {
-      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-      getSettingsByNames,
-    }),
-  ]);
+  const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(userId, {
+    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+    getSettingsByNames,
+  });
 
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) return none;
-
-  const provider = getProviderFromModel(defaultEmbeddingModel);
+  const provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
   const config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
   if (provider === 'openai') {
     if (!apiKeyTable?.openai) return none;
@@ -81,10 +56,8 @@ async function embedQuery(userId: string, query: string): Promise<{ vector: numb
     config.voyageApiKey = apiKeyTable.voyageai;
   }
 
-  const embeddingService = new EmbeddingFactory(config).createEmbeddingService(
-    defaultEmbeddingModel as SupportedEmbeddingModel
-  );
-  return { vector: await embeddingService.generateEmbedding(query), model: defaultEmbeddingModel };
+  const embeddingService = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+  return { vector: await embeddingService.generateEmbedding(query), model: MEMENTO_EMBEDDING_MODEL };
 }
 
 /**
@@ -137,7 +110,7 @@ export async function recallMementosV2(
       return { vector: [] as number[], model: '' };
     }),
   ]);
-  const { vector: queryEmbedding, model: embeddingModel } = embedded;
+  const { vector: queryEmbedding } = embedded;
 
   if (!profile) return [];
 
@@ -146,13 +119,11 @@ export async function recallMementosV2(
   return recall(live, query, {
     k: V2_RECALL_K,
     activationWeight: V2_ACTIVATION_WEIGHT,
-    // The floor only means anything in the vector space it was calibrated for; with no embedding the
-    // scorer is lexical and its scale is different again, so no floor applies.
+    // The floor is a cosine calibrated for MEMENTO_EMBEDDING_MODEL, so it only means anything when we
+    // actually scored with that model. With no embedding the scorer is lexical, whose scale is
+    // unrelated, and applying a cosine floor to a Jaccard score would reject everything.
     ...(queryEmbedding.length
-      ? {
-          scorer: embeddingScorer(queryEmbedding),
-          minRelevance: MIN_RELEVANCE_BY_MODEL[embeddingModel] ?? 0,
-        }
+      ? { scorer: embeddingScorer(queryEmbedding), minRelevance: MEMENTO_MIN_SIMILARITY }
       : {}),
   }).map(r => ({ fact: r.belief.fact, relevance: r.relevance }));
 }

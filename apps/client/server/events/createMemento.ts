@@ -5,10 +5,10 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import {
   ChatModels,
-  isSupportedEmbeddingModel,
+  MEMENTO_EMBEDDING_MODEL,
+  mementoEmbeddingIsCurrent,
   MementoTier,
   MementoType,
-  SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
 import { isMementosV2Enabled, mirrorMementoToLedger } from '@server/memory/mementoLedgerMirror';
@@ -76,16 +76,10 @@ export const handler = withEventContext(async (event, logger) => {
     }
   };
 
-  // STEP 2: Get embedding model and setup embedding service
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-    throw new Error('Default embedding model not configured. Please configure it in admin settings.');
-  }
-
-  logger.debug('Using embedding model:', defaultEmbeddingModel);
-
-  const requiredProvider = getProviderFromModel(defaultEmbeddingModel);
+  // STEP 2: Set up the embedding service. Mementos pin their OWN model rather than following the
+  // `defaultEmbeddingModel` admin setting (which governs the FAB file corpus) - the two corpora
+  // migrate on their own schedules. See MEMENTO_EMBEDDING_MODEL.
+  const requiredProvider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
 
   // Only include the API key the chosen provider actually needs
   const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
@@ -104,13 +98,26 @@ export const handler = withEventContext(async (event, logger) => {
   // Bedrock uses AWS credentials, no API key needed
 
   const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-  const embeddingService = embeddingFactory.createEmbeddingService(defaultEmbeddingModel as SupportedEmbeddingModel);
+  const embeddingService = embeddingFactory.createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
 
   // STEP 3: Get existing HOT mementos once (shared across all evaluations)
   const SIMILARITY_THRESHOLD = 0.88;
-  const existingMementos = await Memento.find({ userId, tier: MementoTier.HOT }).select(
-    'summary embedding weight lastAccessedAt fullContent tags'
+  const hotMementos = await Memento.find({ userId, tier: MementoTier.HOT }).select(
+    'summary embedding embeddingModel weight lastAccessedAt fullContent tags'
   );
+
+  // De-dup compares the new summary's vector against these by cosine, so a memento embedded in a
+  // DIFFERENT model's space cannot take part: the similarity would be noise, and noise below the
+  // threshold reads exactly like "not a duplicate" - so the same fact gets stored twice, forever.
+  // Excluding them means a stale memento may be duplicated once; including them would corrupt the
+  // decision silently. The backfill re-embeds them and the exclusion empties out.
+  const existingMementos = hotMementos.filter(mementoEmbeddingIsCurrent);
+  const staleCount = hotMementos.length - existingMementos.length;
+  if (staleCount > 0) {
+    logger.warn(
+      `${staleCount} of ${hotMementos.length} HOT mementos carry a vector from another embedding model and are excluded from de-dup; run the memento re-embed backfill`
+    );
+  }
 
   logger.debug(`Retrieved ${existingMementos.length} existing HOT mementos for similarity checking`);
 
@@ -151,6 +158,7 @@ export const handler = withEventContext(async (event, logger) => {
             summary: evaluation.summary,
             fullContent: updatedFullContent, // append new prompt to history
             embedding: summaryEmbedding,
+            embeddingModel: MEMENTO_EMBEDDING_MODEL,
             weight: newWeight,
             lastAccessedAt: new Date(),
             tags: mergedTags,
@@ -185,6 +193,7 @@ export const handler = withEventContext(async (event, logger) => {
       fullContent: prompt,
       tags: evaluation.tags || [],
       embedding: summaryEmbedding,
+      embeddingModel: MEMENTO_EMBEDDING_MODEL,
       lastAccessedAt: new Date(),
     });
 

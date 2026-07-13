@@ -26,6 +26,8 @@ export interface IMemento {
   summary: string;
   fullContent: string;
   embedding?: number[];
+  /** The embedding model that produced `embedding`. Absent on mementos written before it was recorded. */
+  embeddingModel?: string;
   metadata?: Record<string, unknown>;
   lastAccessedAt: Date;
   isArchived: boolean;

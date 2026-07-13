@@ -74,18 +74,22 @@ export interface RecallOptions {
   /** Maximum results to return. */
   k?: number;
   /**
-   * How far a belief's ACT-R activation may move it RELATIVE to topicality. 0 = rank purely on
-   * topic; 1 = heat counts as much as topic. Default 0.1: swept on the eval corpus, it is the
-   * largest weight at which heat only reorders genuine near-ties - MRR holds at parity with plain
-   * vector search up to 0.10 and degrades beyond it.
+   * How far a belief's ACT-R activation may move it relative to topicality: `score = relevance +
+   * activationWeight * recallProbability(activation)`. Because activation is squashed into 0..1, this
+   * is the maximum cosine a belief can gain by being maximally top-of-mind - so it reads directly as
+   * "how much similarity is a hot memory worth".
    *
-   * Both axes are normalized to 0..1 across the candidate set before they are blended, because they
-   * are otherwise on incompatible scales and a raw sum silently hands the ranking to whichever one
-   * happens to have the wider spread. Activation is an UNBOUNDED log quantity (ln of a sum of decayed
-   * presentations); relevance is a BOUNDED similarity, and a compressed embedding model squeezes it
-   * into a narrow band. Measured on the eval corpus: activation spread 3.29 against a cosine spread
-   * of 0.09 - so an unnormalized sum ranked purely by heat, buried the correct belief beneath
-   * whatever was merely recent, and dropped hit rate to 69% where plain vector search got 100%.
+   * Default 0.15, and the eval corpus bounds it on BOTH sides:
+   *   - below ~0.05, heat is too weak to break a genuine tie. A fact the user has RETRACTED still
+   *     outranks the retraction (they score 0.344 and 0.329 - the same, for practical purposes), and
+   *     recall confidently serves a belief its owner has taken back.
+   *   - at ~0.40 and above, heat stops breaking ties and starts overriding topic: MRR falls as merely
+   *     recent beliefs climb over the on-topic one.
+   * 0.15 sits near the middle of that window with roughly 3x margin either way.
+   *
+   * Do NOT normalize relevance to make this weight "feel" scale-free - see `recallProbability`. The
+   * whole point is that relevance keeps its true magnitudes, so a near-tie stays a near-tie and heat
+   * is allowed to settle it.
    */
   activationWeight?: number;
   /**
@@ -103,29 +107,42 @@ export interface RecalledBelief {
   belief: Belief;
   /** The scorer's relevance for this query, 0..1 for the lexical default. */
   relevance: number;
-  /** normalized relevance + activationWeight * normalized activation - what this ranks by. */
+  /** relevance + activationWeight * recallProbability(activation) - what this ranks by. */
   score: number;
 }
 
 const DEFAULT_K = 8;
-const DEFAULT_ACTIVATION_WEIGHT = 0.1;
+const DEFAULT_ACTIVATION_WEIGHT = 0.15;
 
-/** Min-max to 0..1 over the candidate set. A degenerate spread (every value equal) maps to 0. */
-const normalizer = (values: readonly number[]): ((v: number) => number) => {
-  const min = Math.min(...values);
-  const spread = Math.max(...values) - min;
-  return spread > 1e-9 ? (v: number) => (v - min) / spread : () => 0;
-};
+/**
+ * Squash an unbounded ACT-R activation into 0..1 - the recall PROBABILITY of a belief with that
+ * activation, which is ACT-R's own retrieval equation (P = 1 / (1 + e^-((A - tau) / s))) at tau = 0,
+ * s = 1. So this is not an arbitrary sigmoid picked to make the numbers behave; it is the model's
+ * native way of turning "how top-of-mind is this" into a bounded quantity.
+ *
+ * Bounding activation is the ONLY normalization recall needs. Relevance arrives already bounded and
+ * already calibrated (a cosine, or the lexical Jaccard), so its absolute differences MEAN something
+ * and are left alone. Min-maxing relevance across the candidate set - which this used to do - is
+ * actively wrong: it rescales whatever spread happens to be present up to the full 0..1 range, so two
+ * beliefs that are all but equally on-topic get torn apart into 1.0 and 0.0. With a small candidate
+ * set that is catastrophic. Measured: a user states a preference, later retracts it, and asks about
+ * it. Both beliefs clear the floor at cosine 0.344 and 0.329 - a 0.015 gap, i.e. a tie. Min-max
+ * turned that tie into the maximum possible gap, and activation could not overturn it at ANY weight:
+ * recall confidently served the fact the user had explicitly taken back.
+ */
+const recallProbability = (activation: number): number => 1 / (1 + Math.exp(-activation));
 
 /**
  * Rank a principal's beliefs for a query by ACT-R retrieval score - topicality (associative match)
  * led, activation (recency + frequency) breaking ties - and return the top `k`.
  *
- * The two axes are NORMALIZED across the candidate set before being blended: they are otherwise on
- * incompatible scales, and the raw sum this used to compute silently handed the ranking to whichever
- * one had the wider spread (see `activationWeight`). An empty query scores every belief 0, the
- * relevance spread degenerates to 0, and the ranking falls back to pure activation order - the
- * most top-of-mind beliefs, i.e. the profile. That fallback is intentional and preserved.
+ * Relevance is used RAW and activation is squashed into 0..1 (see `recallProbability`), so the two
+ * are commensurable without distorting either. Activation alone needs bounding: it is an unbounded log
+ * quantity, and summing it raw against a cosine hands the ranking entirely to heat - measured on the
+ * eval corpus, an unbounded sum dropped hit rate to 69% where plain vector search got 100%.
+ *
+ * An empty query scores every belief 0, so the ranking falls back to pure activation order - the most
+ * top-of-mind beliefs, i.e. the profile. That fallback is intentional and preserved.
  */
 export function recall(beliefs: readonly Belief[], query: string, options: RecallOptions = {}): RecalledBelief[] {
   const scorer = options.scorer ?? lexicalScorer;
@@ -141,15 +158,12 @@ export function recall(beliefs: readonly Belief[], query: string, options: Recal
 
   if (candidates.length === 0) return [];
 
-  const normRel = normalizer(candidates.map(c => c.relevance));
-  const normAct = normalizer(candidates.map(c => c.activation));
-
   return candidates
     .map(
       (c): RecalledBelief => ({
         belief: c.belief,
         relevance: c.relevance,
-        score: normRel(c.relevance) + activationWeight * normAct(c.activation),
+        score: c.relevance + activationWeight * recallProbability(c.activation),
       })
     )
     .sort((a, b) => b.score - a.score || b.relevance - a.relevance || a.belief.id.localeCompare(b.belief.id))

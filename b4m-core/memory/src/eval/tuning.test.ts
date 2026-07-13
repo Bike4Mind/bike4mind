@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { baseLevelActivation, DEFAULT_ACTIVATION } from '../activation';
-import { buildBeliefs, CORPUS_BELIEFS, CORPUS_QUERIES } from './corpus';
+import { buildBeliefs, CONTRADICTION, CORPUS_BELIEFS, CORPUS_QUERIES } from './corpus';
 import { aggregate, scoreNegatives, scoreQuery } from './metrics';
 import { retrieveV2 } from './policies';
 import fixture from './embeddings.fixture.json';
@@ -10,93 +10,118 @@ import fixture from './embeddings.fixture.json';
  * re-derive them instead of trusting a magic number.
  *
  * RUN THIS WHENEVER THE EMBEDDING MODEL CHANGES. `minRelevance` is a raw cosine, and the cosine scale
- * is a property of the model, not of the memory system - `text-embedding-ada-002` is famously
- * compressed (unrelated text still scores ~0.72), so its usable band is roughly 0.72-0.81 and the
- * floor that works there is meaningless in another vector space. Regenerate the fixture against the
- * new model, run this, and put the winning floor in MIN_RELEVANCE_BY_MODEL
- * (apps/client/server/memory/recallMementosV2.ts).
+ * is a property of the MODEL, not of the memory system. That is not a theoretical worry: mementos used
+ * to run on ada-002, whose cosines are crushed into a ~0.72-0.81 band, and three call sites floored at
+ * ~0.75. The same corpus under text-embedding-3-small scores 0.28-0.38, so the old floor rejects every
+ * memento that exists - memory silently dark, no error. Regenerate the fixture against the new model,
+ * run this, and update MEMENTO_MIN_SIMILARITY (@bike4mind/common), which is deliberately glued to
+ * MEMENTO_EMBEDDING_MODEL so the two cannot drift apart.
  *
- * What the surface says at the time of writing (ada-002, k=10). Reading down the floor column, the
- * two parameters trade against completely different failure modes:
+ * The two parameters answer to completely different failure modes, and each is pinned by a RULE rather
+ * than a taste, so a future tweak has to argue with the rule:
  *
- *   - floor 0    : hit 100%, MRR 0.953, precision 10% | negatives: 10.0 beliefs injected, always.
- *                  Every question drags the user's ENTIRE memory into the prompt.
- *   - floor 0.76 : hit 100%, MRR 0.953, precision 45% | negatives: 1.7 injected, 86% of the time.
- *                  <- SHIPPED. The highest floor that still loses no relevant belief.
- *   - floor 0.78 : hit  94%, MRR 0.938, precision 81% | negatives: 0.3 injected, 29% of the time.
- *                  Tempting, and rejected: it buys a much quieter prompt by silently forgetting a
- *                  fact the user actually told us. A miss is the one failure the user cannot route
- *                  around - they said the thing, and we act like they never did.
- *   - floor 0.80+: hit drops to 81%. Not a memory system any more.
+ *   minRelevance -> the strictest floor that still forgets NOTHING. Raising it further buys precision
+ *     by silently dropping a fact the user actually told us, and that trade is not ours to make. A
+ *     miss is the one failure a user cannot route around: they said the thing, and we act as if they
+ *     never did.
  *
- * And activationWeight, at the shipped floor: MRR is flat at 0.953 up to w=0.10 and drops to 0.919
- * at w=0.15. That is the line between heat breaking genuine near-ties (what ACT-R is for) and heat
- * overriding topicality (what the normalization bug used to do at full strength). 0.10 sits on it.
+ *   activationWeight -> bounded on BOTH sides, so it is a window rather than a maximum:
+ *     - too LOW and heat cannot settle a genuine tie. A fact and the user's later RETRACTION of it are
+ *       equally on-topic by construction (cosine 0.344 vs 0.329), so topicality cannot separate them
+ *       and recall serves the belief its owner has taken back.
+ *     - too HIGH and heat stops breaking ties and starts overriding topic: merely-recent beliefs climb
+ *       over the on-topic one and ranking quality falls.
+ *     The shipped value sits near the middle of that window with margin either way.
  */
 
 const K = 10;
 const NOW = Date.parse('2026-07-12T00:00:00.000Z');
 const emb = fixture.vectors as Record<string, number[]>;
 
-const beliefs = buildBeliefs(CORPUS_BELIEFS, emb, NOW, (t, n) =>
-  baseLevelActivation(t, n, DEFAULT_ACTIVATION)
-);
+const SHIPPED_FLOOR = 0.313;
+const SHIPPED_WEIGHT = 0.15;
+
+const activationOf = (t: number[], n: number) => baseLevelActivation(t, n, DEFAULT_ACTIVATION);
+const beliefs = buildBeliefs(CORPUS_BELIEFS, emb, NOW, activationOf);
 const positives = CORPUS_QUERIES.filter(q => q.relevant.length > 0);
 const negatives = CORPUS_QUERIES.filter(q => q.relevant.length === 0);
 
-const FLOORS = [0, 0.74, 0.76, 0.775, 0.78, 0.785, 0.79, 0.8];
-const WEIGHTS = [0, 0.05, 0.1, 0.15, 0.25];
+const FLOORS = [0, 0.25, 0.28, 0.3, 0.313, 0.32, 0.34, 0.36, 0.4];
+const WEIGHTS = [0, 0.02, 0.05, 0.15, 0.25, 0.4];
 
 const at = (minRelevance: number, activationWeight: number) => {
   const opts = { k: K, activationWeight, minRelevance };
   return {
     pos: aggregate(
-      positives.map(q =>
-        scoreQuery(retrieveV2(beliefs, emb[q.id], q.query, opts), new Set(q.relevant), K)
-      )
+      positives.map(q => scoreQuery(retrieveV2(beliefs, emb[q.id], q.query, opts), new Set(q.relevant), K))
     ),
     neg: scoreNegatives(negatives.map(q => retrieveV2(beliefs, emb[q.id], q.query, opts).length)),
   };
 };
 
+/**
+ * Does recall rank a user's RETRACTION above the fact it overturns? The two are indistinguishable on
+ * topicality, so this isolates the activation term: it is true only when heat is strong enough to
+ * settle a tie that similarity cannot.
+ */
+const retractionWins = (activationWeight: number): boolean => {
+  const withRetraction = buildBeliefs([...CORPUS_BELIEFS, CONTRADICTION], emb, NOW, activationOf);
+  const ranked = retrieveV2(
+    withRetraction,
+    emb['q-color-1'],
+    'What shade should I paint the trim if I want to please her?',
+    { k: K, activationWeight, minRelevance: SHIPPED_FLOOR }
+  );
+  return ranked.indexOf('color-superseding') < ranked.indexOf('color');
+};
+
 const pct = (x: number) => `${(x * 100).toFixed(0)}%`;
-const rows = FLOORS.flatMap(floor => WEIGHTS.map(w => ({ floor, w, ...at(floor, w) })));
 
 console.info(`
 === V2 parameter sweep (model=${fixture.model}, k=${K}) ===
                       POSITIVES                 NEGATIVES
-floor   weight   hit@${K}    MRR   precision |  injected  false-inject`);
-for (const r of rows) {
-  console.info(
-    `${r.floor.toFixed(3)}   ${r.w.toFixed(2)}    ${pct(r.pos.hitRate).padStart(5)}  ${r.pos.mrr.toFixed(3)}  ${pct(
-      r.pos.precision
-    ).padStart(8)}  |  ${r.neg.meanInjected.toFixed(1).padStart(6)}  ${pct(r.neg.falseInjectionRate).padStart(11)}`
-  );
+floor   weight   hit@${K}    MRR   precision |  injected  false-inject  | retraction wins?`);
+for (const floor of FLOORS) {
+  for (const w of WEIGHTS) {
+    const r = at(floor, w);
+    console.info(
+      `${floor.toFixed(3)}   ${w.toFixed(2)}    ${pct(r.pos.hitRate).padStart(5)}  ${r.pos.mrr.toFixed(3)}  ${pct(
+        r.pos.precision
+      ).padStart(8)}  |  ${r.neg.meanInjected.toFixed(1).padStart(6)}  ${pct(r.neg.falseInjectionRate).padStart(11)}  |  ${
+        retractionWins(w) ? 'yes' : 'NO'
+      }`
+    );
+  }
 }
 
 describe('V2 parameter tuning', () => {
   it('the shipped floor is the strictest one that still forgets nothing', () => {
-    // The rule that picked 0.76, encoded so a future tweak has to argue with it: raising the floor
-    // buys precision with a user's memory, and that trade is not ours to make silently.
-    const SHIPPED_FLOOR = 0.76;
-    const lossless = FLOORS.filter(f => at(f, 0.1).pos.hitRate === 1);
+    const lossless = FLOORS.filter(f => at(f, SHIPPED_WEIGHT).pos.hitRate === 1);
 
     expect(lossless).toContain(SHIPPED_FLOOR);
     expect(Math.max(...lossless)).toBe(SHIPPED_FLOOR);
   });
 
-  it('the shipped weight is the largest at which heat only breaks ties, never overrides topic', () => {
-    const SHIPPED_WEIGHT = 0.1;
-    const bestMrr = at(0.76, 0).pos.mrr; // pure topicality: the ceiling activation must not damage
-    const harmless = WEIGHTS.filter(w => at(0.76, w).pos.mrr >= bestMrr);
-
-    expect(harmless).toContain(SHIPPED_WEIGHT);
-    expect(Math.max(...harmless)).toBe(SHIPPED_WEIGHT);
-  });
-
   it('the floor is what silences memory on an unanswerable question', () => {
     // Without it, EVERY off-topic question is answered with the user's entire memory in context.
-    expect(at(0, 0.1).neg.meanInjected).toBe(10);
-    expect(at(0.76, 0.1).neg.meanInjected).toBeLessThan(2);
+    expect(at(0, SHIPPED_WEIGHT).neg.meanInjected).toBe(K);
+    expect(at(SHIPPED_FLOOR, SHIPPED_WEIGHT).neg.meanInjected).toBeLessThan(2);
+  });
+
+  it('the shipped weight is high enough that heat settles a tie topicality cannot', () => {
+    expect(retractionWins(SHIPPED_WEIGHT)).toBe(true);
+
+    // The lower wall is real and close: at 0.02 the retraction loses. This is what rules out "just set
+    // the weight small enough to be safe" - too small IS the unsafe end.
+    expect(retractionWins(0.02)).toBe(false);
+  });
+
+  it('the shipped weight is low enough that heat never overrides topic', () => {
+    const bestMrr = at(SHIPPED_FLOOR, 0).pos.mrr; // pure topicality - the ceiling heat must not damage
+
+    expect(at(SHIPPED_FLOOR, SHIPPED_WEIGHT).pos.mrr).toBeGreaterThanOrEqual(bestMrr);
+
+    // The upper wall: by 0.40, merely-recent beliefs start climbing over the on-topic one.
+    expect(at(SHIPPED_FLOOR, 0.4).pos.mrr).toBeLessThan(bestMrr);
   });
 });

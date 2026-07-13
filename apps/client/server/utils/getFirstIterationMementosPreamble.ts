@@ -30,6 +30,7 @@
 
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
+import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
 import { mementoService } from '@bike4mind/services';
 
@@ -61,7 +62,6 @@ function sanitizeSummary(summary: string): string {
  * agent-mode and chat-mode show the same set of mementos for the same prompt.
  */
 const MEMENTO_TOP_K = 10;
-const MEMENTO_MIN_SIMILARITY = 0.75;
 
 export interface MementosPreambleResult {
   preamble: string;

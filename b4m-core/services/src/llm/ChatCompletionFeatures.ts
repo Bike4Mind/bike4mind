@@ -46,6 +46,7 @@ import {
   SupportedEmbeddingModel,
   ImageModerationIncident,
   isExperimentalFeatureEnabled,
+  MEMENTO_MIN_SIMILARITY,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import { getRelevantMementos } from '../mementoService';
@@ -435,7 +436,7 @@ export class MementoFeature implements ChatCompletionFeature {
       message,
       {
         topK: 10,
-        minSimilarity: 0.75,
+        minSimilarity: MEMENTO_MIN_SIMILARITY,
         embeddingModel: embeddingFactory.getDefaultEmbeddingModel(),
         logger: this.logger,
       },

@@ -56,11 +56,18 @@ export const CORPUS_BELIEFS: EvalBelief[] = [
 ];
 
 /**
- * A later, superseding statement of `color`. Same subject, newer, different value - a fold must let
- * the newer one win, and recall must not surface the stale one alongside it.
+ * A later, superseding statement of `color`: same subject, newer, different value. Carries its own id
+ * so it can sit ALONGSIDE the stale belief in a recall set - which is the situation that actually
+ * arises, because two mementos extracted from two different conversations are two rows, not one.
+ *
+ * This is the case that justifies `activationWeight` existing at all. Both beliefs are about Dana's
+ * favorite color, so they are near-identical on topicality and semantic similarity cannot separate
+ * them - the tiebreak has to come from somewhere else, and ACT-R activation (this one is 5 hours old,
+ * the stale one 300) is that somewhere. Rank the stale one first and we confidently tell the user a
+ * fact they have explicitly retracted.
  */
 export const CONTRADICTION: EvalBelief = {
-  id: 'color',
+  id: 'color-superseding',
   fact: 'Dana now says her favorite color is burnt orange, not teal.',
   ageHours: 5,
   presentations: 1,
