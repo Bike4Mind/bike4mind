@@ -191,7 +191,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       variant="outlined"
       data-testid={`${testIdPrefix}-artifact-card`}
       sx={{
-        backgroundColor: 'background.level1',
+        // surface2 is the sidebar/header surface. Joy's background.level1 default is not
+        // defined by this theme, so the cards would otherwise sit on an unpicked color.
+        backgroundColor: 'background.surface2',
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',

@@ -148,7 +148,9 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       className="code-artifact-preview-card"
       variant="outlined"
       sx={{
-        backgroundColor: 'background.level1',
+        // Matches ArtifactPreviewCard: the sidebar/header surface, not Joy's undefined
+        // background.level1 default.
+        backgroundColor: 'background.surface2',
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
