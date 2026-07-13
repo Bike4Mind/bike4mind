@@ -38,7 +38,15 @@ export class BasePage {
   }
 
   async handleWhatsNewModal() {
-    const closeBtn = this.page.getByTestId('whats-new-slider-modal-close-btn-icon-container');
+    // The whats-new announcement renders as one of two variants once the app has fetched
+    // announcements: the multi-slide "slider" modal, or a single-card GenericModal (e.g. an
+    // "Announcement" broadcast). ModalManager shows at most one, never both. Dismiss whichever
+    // appears - either blocks the whole app behind a backdrop that intercepts pointer events, so
+    // a live announcement on the target env would otherwise fail every click/hover after it mounts.
+    const closeBtn = this.page
+      .getByTestId('whats-new-slider-modal-close-btn-icon-container')
+      .or(this.page.getByTestId('generic-modal-close-button-icon-container'))
+      .first();
     // The modal renders asynchronously after fetching announcements -
     // give it a brief window to appear before deciding it won't show.
     const appeared = await closeBtn

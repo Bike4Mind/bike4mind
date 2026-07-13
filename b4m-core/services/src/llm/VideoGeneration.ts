@@ -29,7 +29,6 @@ import {
   NotFoundError,
   TiktokenTokenizer,
   usdToCredits,
-  UnprocessableEntityError,
   BaseStorage,
   getSettingsByNames,
 } from '@bike4mind/utils';
@@ -44,6 +43,7 @@ import { fromZodError } from 'zod-validation-error';
 import { SoraVideoCostCalculator, SoraCostInput } from './videoCostCalculator/SoraVideoCostCalculator';
 import { deductCreditsWithOrgSupport } from '../creditService';
 import { startQuestHeartbeat } from './questHeartbeat';
+import { insufficientCreditsError, getQuestErrorCode } from '@bike4mind/common';
 
 /**
  * Schema for video generation queue handler body
@@ -277,7 +277,7 @@ export class VideoGenerationService {
 
     if (credits < requiredCredits) {
       const sourceLabel = creditsSource === 'organization' ? 'Your organization does' : 'You do';
-      throw new UnprocessableEntityError(
+      throw insufficientCreditsError(
         `${sourceLabel} not have enough credits to complete this video generation. Current credits: ${credits}, required: approximately ${requiredCredits}.`
       );
     }
@@ -334,6 +334,7 @@ export class VideoGenerationService {
         type: quest.type,
         status: quest.status,
         videos: quest.videos,
+        errorCode: quest.errorCode,
       };
     };
 
@@ -559,7 +560,20 @@ export class VideoGenerationService {
       quest.reply = (error as Error).message;
       quest.type = 'error';
       quest.status = 'done';
-      await this.db.quests.update(quest);
+      // Tag genuine out-of-credits failures so the client renders the "Add Credits" CTA.
+      quest.errorCode = getQuestErrorCode(error);
+      // Targeted partial update (mirrors ImageGeneration/ImageEdit): a full-object update would
+      // re-send a poisoned numeric field (e.g. a non-finite creditsUsed) and throw a CastError,
+      // swallowing the error and leaving the quest stuck forever. This guarantees the error surfaces.
+      await this.db.quests.update({
+        id: quest.id,
+        prompt: quest.prompt,
+        reply: quest.reply,
+        type: quest.type,
+        status: quest.status,
+        errorCode: quest.errorCode,
+        promptMeta: quest.promptMeta,
+      });
       await clientMessageSender.sendToClient(userId, wsEndpoint, {
         action: 'streamed_chat_completion',
         quest: parseQuestToStreamPayload(quest),

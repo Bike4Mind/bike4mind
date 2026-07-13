@@ -12,10 +12,27 @@ import BaseRepository from '@bike4mind/db-core';
  * custom `id` field is needed. Indexes are declared via schema.index() per the
  * repo's MongoDB Index Guidelines (no `index: true` on fields).
  */
+/**
+ * Optional access gate layered ON TOP of `visibility: 'public'` (issue #383).
+ * Orthogonal to the visibility ladder so the shared `PublishVisibility` type
+ * (in @bike4mind/common) stays untouched:
+ *  - passphrase -> anyone with the link who presents the passphrase
+ *  - domain     -> logged-in viewers whose VERIFIED email domain is allowlisted
+ * Declared host-side only for now; lift into the common contract in a follow-up.
+ */
+export interface PublishedArtifactAccessGate {
+  kind: 'passphrase' | 'domain';
+  /** bcrypt hash; `select: false` in the schema so reads never leak it by default. */
+  passphraseHash?: string | null;
+  /** Lowercased registrable domains, exact-match only (no substrings). */
+  allowedDomains?: string[];
+}
+
 export interface IPublishedArtifactDocument extends Omit<PublishedArtifactData, 'createdAt' | 'updatedAt'>, Document {
   id: string; // required by IMongoDocument (Mongoose's Document.id is optional)
   createdAt: Date;
   updatedAt: Date;
+  accessGate?: PublishedArtifactAccessGate | null;
   softDelete(deletedBy?: string): Promise<IPublishedArtifactDocument>;
   restore(): Promise<IPublishedArtifactDocument>;
 }
@@ -44,6 +61,18 @@ const VersionMetaSubSchema = new Schema(
     publishedBy: { type: String, required: true },
     size: { type: SizeSubSchema, required: true },
     sha256Index: { type: String, required: true },
+  },
+  { _id: false }
+);
+
+const AccessGateSubSchema = new Schema(
+  {
+    kind: { type: String, required: true, enum: ['passphrase', 'domain'] },
+    // Never selected by default: management GET/PATCH responses and the serve
+    // route's lean reads must not carry the hash. The passphrase-verify route
+    // opts in explicitly with .select('+accessGate.passphraseHash').
+    passphraseHash: { type: String, default: null, select: false },
+    allowedDomains: { type: [String], default: undefined },
   },
   { _id: false }
 );
@@ -85,6 +114,17 @@ const PublishedArtifactSchema = new Schema(
     shareToken: { type: String },
     shareTokenUpdatedAt: { type: Date, default: null },
 
+    /** Optional gate on top of open sharing - see PublishedArtifactAccessGate.
+     *  Applies to BOTH share surfaces: `visibility: 'public'` (/p/*) and
+     *  share-token links (/a/<token>). */
+    accessGate: { type: AccessGateSubSchema, default: null },
+
+    /** Embed allowlist: external https origins permitted to frame this artifact.
+     *  Appended to the served `frame-ancestors` CSP. Meaningful ONLY for an open
+     *  public artifact (a gated page is no-store and never framed). `undefined`
+     *  (not `[]`) when unset so the field is absent rather than an empty array. */
+    embedOrigins: { type: [String], default: undefined },
+
     /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
      *  `visibility` (who may view). Defaults to `none` so existing artifacts
      *  stay read-only until the owner opts in. */
@@ -115,6 +155,9 @@ const PublishedArtifactSchema = new Schema(
      *  {sha256Index}.html`. Enables walking across versions + restore-to-any. */
     versions: { type: [VersionMetaSubSchema], default: [] },
     viewCount: { type: Number, default: 0, min: 0 },
+    /** Views by anyone OTHER than the signed-in owner (anonymous counts as
+     *  external). Feeds the Published gear and social proof; best-effort. */
+    externalViewCount: { type: Number, default: 0, min: 0 },
 
     /** Concurrency lock for AI revise - set while a revision is in flight,
      *  cleared when it finishes (or expires). Prevents two concurrent revisions

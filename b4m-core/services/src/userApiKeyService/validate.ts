@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { ApiKeyScope, ApiKeyStatus, IUserApiKeyRepository } from '@bike4mind/common';
+import { ApiKeyBillingOwnerType, ApiKeyScope, ApiKeyStatus, IUserApiKeyRepository } from '@bike4mind/common';
 import bcrypt from 'bcryptjs';
 import { KEY_PREFIX_LENGTH, LEGACY_KEY_PREFIX_LENGTH } from './constants';
 
@@ -19,6 +19,10 @@ export interface ValidationResult {
     requestsPerDay: number;
   };
   productId?: string;
+  /** Billing target of the key. Organization -> usage bills `organizationId`'s pool. */
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  /** Organization the key bills, present iff billingOwnerType is Organization. */
+  organizationId?: string;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -85,5 +89,7 @@ export const validateUserApiKey = async (
     scopes: apiKey.scopes,
     rateLimit: apiKey.rateLimit,
     productId: apiKey.productId,
+    billingOwnerType: apiKey.billingOwnerType,
+    organizationId: apiKey.organizationId,
   };
 };

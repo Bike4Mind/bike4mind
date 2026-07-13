@@ -84,6 +84,9 @@ export default $config({
       lambdaVpc,
       DEFAULT_LAMBDA_ENVIRONMENT,
       tavernHeartbeatQueue,
+      cluster,
+      resolvedVpcId,
+      PRODUCTION_STAGES,
     } = await import('./infra');
 
     // Contribute premium package infra (crons, alarms, Slack fan-out, EventBridge
@@ -149,11 +152,28 @@ export default $config({
     // the Lambda URN is stable even as the source moves between core and the package.
     const { contributeInfra: contributeOptiInfra } =
       await import('./infra/premium-generated/optihashi-infra.generated');
+    // Stand the external instance-service up ONLY when its image has been published (ops
+    // sets the OLIST_INSTANCE_SERVICE_IMAGE repo var). Until then, thread none of the
+    // optional wiring so contributeOptiInfra skips the service and the Deploy graph stays
+    // valid on every stage. Activation is pure config (set the image var + token secrets) —
+    // no code change. Same external-image model as SUBSCRIBER_FANOUT_IMAGE.
+    const instanceServiceWired = !!process.env.OLIST_INSTANCE_SERVICE_IMAGE;
     contributeOptiInfra({
       lambdaVpc,
       allSecrets,
       defaultLambdaEnvironment: DEFAULT_LAMBDA_ENVIRONMENT,
       websocketApi,
+      ...(instanceServiceWired
+        ? {
+            cluster,
+            resolvedVpcId,
+            isProductionScaleStage: PRODUCTION_STAGES.includes($app.stage),
+            olistInstanceServiceSecrets: {
+              token: secrets.OLIST_INSTANCE_SERVICE_TOKEN,
+              tokenPrevious: secrets.OLIST_INSTANCE_SERVICE_TOKEN_PREVIOUS,
+            },
+          }
+        : {}),
     });
 
     return {

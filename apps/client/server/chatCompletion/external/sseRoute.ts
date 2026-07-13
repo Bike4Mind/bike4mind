@@ -25,6 +25,7 @@ import {
   userRepository,
   userApiKeyRepository,
   usageEventRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import {
   verifyJwtToken,
@@ -216,8 +217,13 @@ export function registerExternalRoutes(app: Express, track: (p: Promise<void>) =
           // `db.usageEvents?.record(...)` - optional-chained, so omitting this silently drops
           // billing/usage analytics for the public completions path, as the old Lambda did NOT).
           usageEvents: usageEventRepository,
+          // Required to reserve/settle against an org pool for org-billed API keys.
+          organizations: organizationRepository,
         },
         apiKeyInfo: apiKeyInfoForCompletion,
+        // Org-billed API keys route spend to the org's shared pool (invariant:
+        // organizationId is set iff the key's billingOwnerType is Organization).
+        billingOrganizationId: apiKeyInfo?.organizationId,
         // Correlation id for the usage-event dual write (synthesized downstream if absent).
         requestId,
         source,

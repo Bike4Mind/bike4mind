@@ -1,8 +1,10 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
-import { UserApiKeyEvents } from '@bike4mind/common';
+import { CreditHolderType, IUserApiKeyDocument, UserApiKeyEvents } from '@bike4mind/common';
+import { ForbiddenError } from '@server/utils/errors';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -13,23 +15,52 @@ interface CreateApiKeyRequest {
     requestsPerMinute: number;
     requestsPerDay: number;
   };
+  /**
+   * When set, mint an org-billed key: its AI usage debits this organization's
+   * credit pool instead of the minter. Only allowed for org owners/managers
+   * (and platform admins) - enforced below.
+   */
+  organizationId?: string;
+}
+
+/** Deduplicate keys by id, preserving first occurrence (newest-first order). */
+function dedupeById(keys: IUserApiKeyDocument[]): IUserApiKeyDocument[] {
+  const seen = new Set<string>();
+  return keys.filter(key => (seen.has(key.id) ? false : (seen.add(key.id), true)));
 }
 
 const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
 
-    const apiKeys = await userApiKeyService.listUserApiKeys(userId, {
-      db: {
-        userApiKeys: userApiKeyRepository,
-      },
-    });
+    // Personal keys (minted by this user) plus every key billed to an org this
+    // user administers - so any org admin sees the org's keys, not just the minter.
+    const [personalKeys, administeredOrgIds] = await Promise.all([
+      userApiKeyService.listUserApiKeys(userId, { db: { userApiKeys: userApiKeyRepository } }),
+      organizationRepository.findIdsAdministeredBy(userId),
+    ]);
 
-    return res.json(apiKeys);
+    const orgKeyLists = await Promise.all(
+      administeredOrgIds.map(orgId =>
+        userApiKeyService.listOrganizationApiKeys(orgId, { db: { userApiKeys: userApiKeyRepository } })
+      )
+    );
+
+    return res.json(dedupeById([...personalKeys, ...orgKeyLists.flat()]));
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
-    const { name, scopes, expiresAt, rateLimit } = req.body;
+    const { name, scopes, expiresAt, rateLimit, organizationId } = req.body;
+
+    // Authorize org-billed minting: caller must administer the org (owner or
+    // manager) or be a platform admin. Fail closed on anything else.
+    if (organizationId) {
+      const administeredOrgIds = await organizationRepository.findIdsAdministeredBy(userId);
+      const mayBillOrg = req.user?.isAdmin || administeredOrgIds.includes(organizationId);
+      if (!mayBillOrg) {
+        throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
+      }
+    }
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,
@@ -43,6 +74,9 @@ const handler = baseApi()
           userAgent: req.headers['user-agent'],
           createdFrom: 'dashboard' as const,
         },
+        ...(organizationId
+          ? { organizationId, billingOwnerType: CreditHolderType.Organization }
+          : { billingOwnerType: CreditHolderType.User }),
       },
       {
         db: {
@@ -61,6 +95,8 @@ const handler = baseApi()
           scopes: newApiKey.scopes,
           expiresAt: newApiKey.expiresAt?.toISOString(),
           createdFrom: 'dashboard',
+          billingOwnerType: newApiKey.billingOwnerType,
+          organizationId: newApiKey.organizationId,
         },
       },
       { ability: req.ability }

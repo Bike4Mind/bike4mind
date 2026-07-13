@@ -12,9 +12,10 @@ export class ProjectsPage extends BasePage {
   }
 
   async navigateToProjects() {
-    await this.page.getByTestId('sidenav-nav-projects').click();
-    await this.page.waitForURL(/\/projects/);
-    await this.waitForProjectsReady();
+    // Projects is an earned-nav destination (Gears): the sidenav row is hidden until
+    // the account has a project. Navigate directly (like gotoProjects), robust to
+    // earned state - matches how a first-time user reaches it via the Gears CTA.
+    await this.gotoProjects();
   }
 
   /** Wait for project list to be fully loaded */

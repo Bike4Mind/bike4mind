@@ -5,7 +5,9 @@
  * The generated notebook can then be executed via Keep commands on the user's local machine.
  */
 
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { ToolDefinition } from '../../base/types';
+import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import {
   NotebookDocument,
   createEmptyNotebook,
@@ -138,17 +140,23 @@ Please generate a complete, well-structured notebook that performs this analysis
 
       // Collect the response from the LLM using the streaming callback pattern
       let responseText = '';
+      let completionInfo: CompletionInfo | undefined;
+      const modelToUse = context.model ?? 'gpt-4';
+      const startTime = Date.now();
       await context.llm.complete(
-        context.model ?? 'gpt-4',
+        modelToUse,
         [
           { role: 'system', content: NOTEBOOK_GENERATION_PROMPT },
           { role: 'user', content: userPrompt },
         ],
         { maxTokens: 4000, temperature: 0.7 },
-        async texts => {
+        async (texts, info) => {
           responseText = texts.filter(t => t !== null && t !== undefined).join('');
+          if (info) completionInfo = info;
         }
       );
+
+      await recordToolOperationalUsage(context, { model: modelToUse, completionInfo, startTime });
 
       if (!responseText) {
         throw new Error('LLM returned empty response');

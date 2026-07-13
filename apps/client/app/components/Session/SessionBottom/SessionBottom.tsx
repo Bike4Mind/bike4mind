@@ -29,7 +29,7 @@ import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeVi
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import { useChatInput } from '@client/app/hooks/useChatInput';
+import { useChatInput, NEW_NOTEBOOK_DRAFT_KEY } from '@client/app/hooks/useChatInput';
 import { useShallow } from 'zustand/react/shallow';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useIsPWA } from '@client/app/hooks/useIsPWA';
@@ -106,8 +106,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [, setAgentBenchCollapsed] = useState<boolean>(false);
   const [filesDropdownOpen, setFilesDropdownOpen] = useState<boolean>(false);
 
-  const [chatInputValue, setChatInputValue, setDraft, getDraft] = useChatInput(
-    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft])
+  const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft] = useChatInput(
+    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft])
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
@@ -262,7 +262,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   useAutoFocus(lexicalInputRef as any, { enabled: true });
 
   // Persists draft per session and restores it on session switch
-  useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft);
+  useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft, clearDraft);
 
   const canAttachFiles = enableFileAttachments;
 
@@ -461,10 +461,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       onChange={newValue => {
                         setChatInputValue(newValue);
 
-                        // Save draft as user types
-                        if (currentSessionId) {
-                          setDraft(currentSessionId, newValue);
-                        }
+                        // Save draft as user types. A new notebook has no id yet, so
+                        // draft under the stable new-notebook key - it survives a
+                        // full-page reload and is restored by useMessageDraft.
+                        setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
 
                         const shouldShowSlashSuggestions =
                           typeof newValue === 'string' &&

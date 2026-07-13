@@ -1,4 +1,4 @@
-import { PermissionDeniedError } from '@bike4mind/common';
+import { PermissionDeniedError, getQuestErrorCode } from '@bike4mind/common';
 
 /** Default concurrency cap to prevent resource exhaustion (DB pools, rate limits, memory) */
 export const DEFAULT_MAX_PARALLEL_TOOLS = 8;
@@ -6,14 +6,22 @@ export const DEFAULT_MAX_PARALLEL_TOOLS = 8;
 export type TaskOutcome<T> = { ok: true; result: T } | { ok: false; error: unknown };
 
 /**
+ * A tool failure that must end the turn rather than be fed back to the model as a
+ * recoverable observation: a declined tool (PermissionDeniedError) or an out-of-credits
+ * error (tagged via `getQuestErrorCode`), neither of which any retry can satisfy.
+ */
+function isTerminalToolError(error: unknown): boolean {
+  return error instanceof PermissionDeniedError || getQuestErrorCode(error) !== undefined;
+}
+
+/**
  * Execute an array of async tasks either in parallel (with concurrency limiting)
  * or sequentially, returning outcomes in the original order.
  *
- * Security: PermissionDeniedError is always re-thrown immediately.
- * - Sequential: breaks the loop on first PermissionDeniedError.
- * - Parallel: all tasks in the batch run to completion (inherent to Promise.allSettled),
- *   but outcomes are pre-scanned for PermissionDeniedError before returning.
- *   This is accepted because PermissionDeniedError is rare in multi-tool batches.
+ * Terminal errors (see isTerminalToolError) are always re-thrown immediately: sequential
+ * breaks the loop on the first one; parallel runs every task to completion (inherent to
+ * Promise.allSettled) then pre-scans outcomes before returning - accepted because these
+ * errors are rare in multi-tool batches.
  *
  * Fault isolation: uses Promise.allSettled so a single failure doesn't abort the batch.
  * Order preservation: results are indexed back to the original task array.
@@ -34,11 +42,9 @@ export async function executeToolsBatch<T>(
       s.status === 'fulfilled' ? { ok: true as const, result: s.value } : { ok: false as const, error: s.reason }
     );
 
-    // Fail-fast: check for permission errors before returning any results.
-    // With Promise.allSettled, sibling tasks have already executed - this is
-    // accepted because PermissionDeniedError is rare in multi-tool batches.
+    // Fail-fast: re-throw any terminal error before returning results.
     for (const outcome of outcomes) {
-      if (!outcome.ok && outcome.error instanceof PermissionDeniedError) {
+      if (!outcome.ok && isTerminalToolError(outcome.error)) {
         throw outcome.error;
       }
     }
@@ -53,7 +59,7 @@ export async function executeToolsBatch<T>(
       const result = await task();
       outcomes.push({ ok: true, result });
     } catch (error) {
-      if (error instanceof PermissionDeniedError) throw error;
+      if (isTerminalToolError(error)) throw error;
       outcomes.push({ ok: false, error });
     }
   }

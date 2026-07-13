@@ -275,6 +275,7 @@ export {
 };
 
 export * from './PipelineTimer';
+export * from './realtimeVoicePricing';
 export * from './resolveDeprecatedModel';
 export * from './deprecationHorizon';
 export * from './toolPairingUtils';

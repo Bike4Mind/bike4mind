@@ -6,6 +6,7 @@ import AccountCircleIcon from '@mui/icons-material/AccountCircle';
 import SettingsIcon from '@mui/icons-material/Settings';
 import InsightsIcon from '@mui/icons-material/Insights';
 import SecurityIcon from '@mui/icons-material/Security';
+import KeyOutlinedIcon from '@mui/icons-material/KeyOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 import { Badge, Box, LinearProgress, Tab, TabList, TabPanel, Tabs, Tooltip, Typography, IconButton } from '@mui/joy';
 import { styled } from '@mui/system';
@@ -38,6 +39,10 @@ const IntegrationsTabContent = dynamic(() => import('@client/app/components/Prof
   ssr: false,
   loading: () => <LinearProgress />,
 });
+const ApiTabContent = dynamic(() => import('@client/app/components/ProfileModal/ApiTabContent'), {
+  ssr: false,
+  loading: () => <LinearProgress />,
+});
 const SecurityTabContent = dynamic(() => import('@client/app/components/ProfileModal/SecurityTab'), {
   ssr: false,
   loading: () => <LinearProgress />,
@@ -54,6 +59,7 @@ export enum ProfileTab {
   Profile = '',
   Community = 'community',
   Settings = 'settings',
+  ApiKeys = 'api-keys',
   Usage = 'usage',
   Integrations = 'integrations',
   Security = 'security',
@@ -218,6 +224,15 @@ const ProfilePage = () => {
             </Tooltip>
           </StyledTab>
 
+          <StyledTab data-testid="api-keys-tab" value={ProfileTab.ApiKeys}>
+            <Tooltip title="Manage your API keys">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <KeyOutlinedIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
+                <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>API Keys</Typography>
+              </Box>
+            </Tooltip>
+          </StyledTab>
+
           <StyledTab data-testid="usage-tab" value={ProfileTab.Usage}>
             <Tooltip title="View your credit usage and model pricing">
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -251,11 +266,11 @@ const ProfilePage = () => {
 
           {hasPublishedArtifacts && (
             <StyledTab data-testid="published-tab" value={ProfileTab.Published}>
-              <Tooltip title="Manage your published & shared artifacts">
+              <Tooltip title="Manage your Live Artifacts (published & shared)">
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                   <ShareIcon sx={{ color: 'text.primary', fontSize: '16px' }} />
                   <Typography sx={{ display: { xs: 'none', sm: 'block' }, color: 'text.primary' }}>
-                    Published
+                    Live Artifacts
                   </Typography>
                 </Box>
               </Tooltip>
@@ -275,6 +290,10 @@ const ProfilePage = () => {
 
         <StyledTabPanel value={ProfileTab.Settings}>
           {activeTab === ProfileTab.Settings && <SettingsTabContent />}
+        </StyledTabPanel>
+
+        <StyledTabPanel value={ProfileTab.ApiKeys}>
+          {activeTab === ProfileTab.ApiKeys && <ApiTabContent />}
         </StyledTabPanel>
 
         <StyledTabPanel value={ProfileTab.Usage}>

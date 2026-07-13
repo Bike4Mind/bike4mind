@@ -185,6 +185,62 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
   await api.patch(`/api/publish/artifacts/${publicId}`, { commentPolicy });
 }
 
+/** Access gate on top of `visibility: 'public'` - see issue #383. */
+export type PublishAccessGateInput =
+  { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/**
+ * Set, rotate, or clear (null) a public item's access gate (owner/admin).
+ * The passphrase is sent once and stored only as a hash server-side; there is
+ * no API to read it back - rotating means setting a new one.
+ */
+export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
+/**
+ * Set or clear the embed allowlist - the external https origins allowed to frame
+ * this artifact (owner/admin). Only honored while the item is open-public (no
+ * gate); `[]` clears it. The server normalizes and re-validates each origin.
+ */
+export async function updatePublishedEmbedOrigins(publicId: string, embedOrigins: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { embedOrigins });
+}
+
+/**
+ * Current embed-allowlist state for seeding the editor: the allowlisted origins
+ * plus whether a gate is live (embedding is open-public only, so the editor hides
+ * when `gated`).
+ */
+export async function getPublishedEmbedState(publicId: string): Promise<{ embedOrigins: string[]; gated: boolean }> {
+  const { data } = await api.get<{ artifact?: { embedOrigins?: string[]; accessGate?: unknown } }>(
+    `/api/publish/artifacts/${publicId}`
+  );
+  return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
+}
+
+/** Read shape of a live access gate (the passphrase hash is stripped server-side). */
+export type PublishAccessGateRead = { kind: 'passphrase' } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/** Everything the per-artifact manage panel needs to seed its editors (owner/admin). */
+export interface PublishedManageState {
+  visibility: PublishVisibility;
+  accessGate: PublishAccessGateRead;
+  embedOrigins: string[];
+  commentPolicy: CommentPolicy;
+}
+
+export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
+  const { data } = await api.get<{ artifact?: Partial<PublishedManageState> }>(`/api/publish/artifacts/${publicId}`);
+  const a = data.artifact ?? {};
+  return {
+    visibility: a.visibility ?? 'private',
+    accessGate: a.accessGate ?? null,
+    embedOrigins: a.embedOrigins ?? [],
+    commentPolicy: a.commentPolicy ?? 'none',
+  };
+}
+
 /**
  * Restore a published bundle to its immediately-previous version (owner/admin).
  * Returns the new version's sha. Only works when a previous version was archived
@@ -300,7 +356,7 @@ export interface ArtifactPublishOpts {
  *
  * When the caller is in an org ("Team") account context, `orgId` enables the dialog's
  * Team option: picking `'organization'` visibility publishes an org-tier page
- * (`tier:'organization'`, `scopeId=orgId` → `/p/o/{orgId}/{slug}`). This is the ONLY
+ * (`tier:'organization'`, `scopeId=orgId` -> `/p/o/{orgId}/{slug}`). This is the ONLY
  * combination the serve gate authorizes to org members - a user-tier page with org
  * visibility would 403 for everyone but the owner (its scopeId is the user id, never the
  * viewer's org id). The server re-validates org membership before trusting the scope.

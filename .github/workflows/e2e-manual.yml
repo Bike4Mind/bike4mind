@@ -296,6 +296,8 @@ jobs:
             echo "failed=0" >> $GITHUB_OUTPUT
             echo "skipped=0" >> $GITHUB_OUTPUT
             echo "not_started=0" >> $GITHUB_OUTPUT
+            echo "real_failed=0" >> $GITHUB_OUTPUT
+            echo "setup_failed=0" >> $GITHUB_OUTPUT
             echo "total=0" >> $GITHUB_OUTPUT
             echo "spec_summary=_No results available_" >> $GITHUB_OUTPUT
             exit 0
@@ -353,16 +355,39 @@ jobs:
             [.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
               select(all(.tests[]?; (.results? // []) | length == 0))] | length
           ] | add // 0' "$JSON_FILE")
+          # Split failures into real-test vs setup: a spec that ran (non-empty results) and
+          # did NOT pass (.ok != true), scoped to non-setup files vs setup files. Lets the
+          # commit-status step leave e2e/smoke *missing* (not a sticky red) when the only
+          # failure is a global-setup infra flake (e.g. create-test-user 401), while a genuine
+          # test failure still posts `failure`. Mirrors the PASSED computation, inverted.
+          REAL_FAILED=$(jq '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$") | not) |
+            [.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0)) |
+              select(.ok != true)] | length
+          ] | add // 0' "$JSON_FILE")
+          SETUP_FAILED=$(jq '[
+            .suites[] |
+            select(.title | test("\\.setup\\.ts$")) |
+            [.. | objects | select(has("ok") and has("tests")) |
+              select(any(.tests[]?; (.results? // []) | length > 0)) |
+              select(.ok != true)] | length
+          ] | add // 0' "$JSON_FILE")
           TOTAL=$((PASSED + SKIPPED + FAILED))
           echo "passed=$PASSED" >> $GITHUB_OUTPUT
           echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
           echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
+          echo "real_failed=$REAL_FAILED" >> $GITHUB_OUTPUT
+          echo "setup_failed=$SETUP_FAILED" >> $GITHUB_OUTPUT
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
 
       - name: Post e2e/smoke commit status (P0-2 console gate)
         # Stamp the tested staging SHA with the full-suite result so the prod-
         # promotion console can read a per-commit e2e signal. `success` only when
         # nothing failed, nothing was left unstarted, and tests actually ran.
+        # A setup-only infra flake leaves the status MISSING (not `failure`) so a
+        # transient blip doesn't stick a red on the SHA - see the guard below.
         # Best-effort: never fails the e2e run.
         if: always() && steps.tested_sha.outputs.sha != ''
         continue-on-error: true
@@ -371,6 +396,8 @@ jobs:
           TESTED_SHA: ${{ steps.tested_sha.outputs.sha }}
           FAILED: ${{ steps.results.outputs.failed }}
           NOT_STARTED: ${{ steps.results.outputs.not_started }}
+          REAL_FAILED: ${{ steps.results.outputs.real_failed }}
+          SETUP_FAILED: ${{ steps.results.outputs.setup_failed }}
           PASSED: ${{ steps.results.outputs.passed }}
           TOTAL: ${{ steps.results.outputs.total }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -381,6 +408,15 @@ jobs:
             const total = Number(process.env.TOTAL || '0');
             if (total === 0) {
               core.warning('No e2e results parsed; skipping e2e/smoke status (leaves it missing = not promotable).');
+              return;
+            }
+            // Setup/infra flake (e.g. create-test-user 401): the only failures are in global
+            // setup and no actual test failed. Leave e2e/smoke MISSING (still not promotable,
+            // but re-seedable by a later run) rather than a sticky `failure` red on the SHA.
+            const realFailed = Number(process.env.REAL_FAILED || '0');
+            const setupFailed = Number(process.env.SETUP_FAILED || '0');
+            if (realFailed === 0 && setupFailed > 0) {
+              core.warning(`Setup failed (${setupFailed}) with no test failures; skipping e2e/smoke status (leaves it missing = re-seedable).`);
               return;
             }
             const ok = process.env.FAILED === '0' && process.env.NOT_STARTED === '0';

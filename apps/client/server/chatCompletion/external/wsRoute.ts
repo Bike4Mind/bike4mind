@@ -17,6 +17,7 @@ import {
   usageEventRepository,
   userRepository,
   userApiKeyRepository,
+  organizationRepository,
 } from '@bike4mind/database';
 import { Connection } from '@bike4mind/database/social';
 import {
@@ -199,8 +200,11 @@ export function registerWsCompletionRoutes(app: Express, track: (p: Promise<void
               creditTransactions: creditTransactionRepository,
               users: userRepository,
               usageEvents: usageEventRepository,
+              organizations: organizationRepository,
             },
             apiKeyInfo: apiKeyInfoForCompletion,
+            // Org-billed API keys settle to the org's shared pool.
+            billingOrganizationId: apiKeyInfo?.organizationId,
             requestId,
             source,
             logger,

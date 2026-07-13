@@ -23,40 +23,48 @@ const fabFileVectorizeQueue = new sst.aws.Queue('fabFileVectorizeQueue', {
     retry: 3,
   },
 });
-const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/fabFileVectorize.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '5 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel'],
-      resources: ['*'],
+const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/fabFileVectorize.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    logging: {
+      retention: '3 days',
     },
-  ],
-  // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        // Limit concurrency to prevent rate limit spikes
-        // Max 10 concurrent Lambda executions = max ~10-20 parallel embedding API calls
-        // Queue will buffer excess load automatically
-        reserved: 10,
-      }
-    : undefined,
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-  ],
-});
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+    ],
+    // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          // Limit concurrency to prevent rate limit spikes
+          // Max 10 concurrent Lambda executions = max ~10-20 parallel embedding API calls
+          // Queue will buffer excess load automatically
+          reserved: 10,
+        }
+      : undefined,
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
+  },
+  {
+    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
+    // multi-record deliveries can't silently drop the un-read records. Matches
+    // sreJobQueue / overwatchAnalyticsQueue below.
+    batch: { size: 1 },
+  }
+);
 
 // FabFile Chunk Queue
 const fabFileChunkQueueDLQ = new sst.aws.Queue('fabFileChunkQueueDLQ', {});
@@ -67,25 +75,33 @@ const fabFileChunkQueue = new sst.aws.Queue('fabFileChunkQueue', {
     retry: 3,
   },
 });
-const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/fabFileChunk.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '13 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileVectorizeQueue, fabFileBucket, generatedImagesBucket, appFilesBucket],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
+const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/fabFileChunk.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '13 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileVectorizeQueue, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    logging: {
+      retention: '3 days',
     },
-  ],
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
+  },
+  {
+    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
+    // multi-record deliveries can't silently drop the un-read records. Matches
+    // sreJobQueue / overwatchAnalyticsQueue below.
+    batch: { size: 1 },
+  }
+);
 
 // FabFile Moderation DLQ — this Lambda is invoked directly and asynchronously by S3
 // (bucket.notify(), not an sst.aws.Queue subscription), so failure visibility can't use

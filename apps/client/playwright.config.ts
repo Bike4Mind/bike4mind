@@ -155,7 +155,7 @@ export default defineConfig({
     {
       name: 'unauthenticated',
       use: { ...devices['Desktop Chrome'] },
-      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/],
+      testMatch: [/(?:^|\/)auth\.spec\.ts$/, /(?:^|\/)signup\.spec\.ts$/, /(?:^|\/)mfa\.spec\.ts$/],
       dependencies: ['setup-core', 'setup-projects'],
     },
     // Admin specs

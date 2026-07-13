@@ -1,5 +1,10 @@
 import type { PublishUser } from './checkScopePermission';
-import type { VisibilityResult } from './checkVisibility';
+import {
+  checkAccessGate,
+  type AccessGateShape,
+  type VisibilityContext,
+  type VisibilityResult,
+} from './checkVisibility';
 
 /**
  * Publish - access gate for no-sign-in `/a/<shareToken>` links, sibling to
@@ -8,24 +13,24 @@ import type { VisibilityResult } from './checkVisibility';
  * Tier-1 link-public sharing possession of the token IS the read grant: this
  * returns ok even when `visibility !== 'public'`.
  *
- * This is the seam where later tiers gate a token WITHOUT touching checkVisibility:
- *  - Tier 2 passphrase: compare `ctx.passphrase` against the record's stored hash.
- *  - Tier 3 domain-restricted: require `ctx.user` with a verified email whose
- *    registrable domain matches the record's allowlist.
- * Kept async so those checks (hash compare / domain lookup) need no signature change.
+ * Tiers 2+3 (issue #383) layer the artifact's optional `accessGate` ON TOP of
+ * token possession, through the same checkAccessGate the /p/* path uses:
+ *  - passphrase: the caller verifies the per-artifact proof cookie (minted by
+ *    POST /api/publish/gate/passphrase) and passes `ctx.passphraseVerified`;
+ *    the raw passphrase never rides ordinary requests.
+ *  - domain: requires `ctx.user` with a VERIFIED email whose domain exact-matches
+ *    the record's allowlist.
+ * Owner/admin always pass their own gate.
  */
 export interface ShareGrantArtifact {
   ownerId: string;
+  accessGate?: AccessGateShape | null;
 }
 
-export interface ShareGrantContext {
+export type ShareGrantContext = VisibilityContext & {
   user?: PublishUser;
-  passphrase?: string;
-}
+};
 
-export async function checkShareGrant(
-  _artifact: ShareGrantArtifact,
-  _ctx: ShareGrantContext
-): Promise<VisibilityResult> {
-  return { ok: true };
+export async function checkShareGrant(artifact: ShareGrantArtifact, ctx: ShareGrantContext): Promise<VisibilityResult> {
+  return checkAccessGate(artifact.accessGate, artifact.ownerId, ctx.user, ctx);
 }

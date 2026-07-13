@@ -9,6 +9,8 @@ import {
   apiKeyRepository,
   adminSettingsRepository,
   imageModerationIncidentRepository,
+  usageEventRepository,
+  organizationRepository,
   Connection,
 } from '@bike4mind/database';
 import { ClientMessageSender, getSettingsByNames } from '@bike4mind/utils';
@@ -98,6 +100,10 @@ async function processAgentProactiveMessage(payload: { sessionAgentConfigId: str
         // moderation gate. The gate itself is unconditional (constructed
         // inline in the tool) - this only wires the incident record, not the block.
         imageModerationIncidents: imageModerationIncidentRepository,
+        // Record tool-internal operational llm.complete spend (blog draft, deep research,
+        // file edit, notebook gen) that runs inside a proactive message.
+        usageEvents: usageEventRepository,
+        organizations: organizationRepository,
       },
       apiKeyTable,
       storage: getFilesStorage(),

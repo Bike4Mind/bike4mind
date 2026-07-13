@@ -3,15 +3,16 @@ import {
   AWSBackend,
   GeminiBackend,
   OpenAIBackend,
+  REALTIME_VOICE_PRICING,
   UndifferentiatedBedrockBackend,
   XAIBackend,
 } from '@bike4mind/llm-adapters';
-import type { ModelInfo, ModelPriceUnit } from '@bike4mind/common';
+import type { IModelPriceTier, ModelInfo, ModelPriceUnit } from '@bike4mind/common';
 
 export interface ModelPriceSeedEntry {
   modelId: string;
   unit: ModelPriceUnit;
-  pricing: Record<string, { input: number; output: number; cache_read?: number; cache_write?: number }>;
+  pricing: Record<string, IModelPriceTier>;
 }
 
 /**
@@ -40,7 +41,7 @@ export async function collectStaticTextModels(): Promise<ModelInfo[]> {
  */
 export async function generateModelPriceSeed(): Promise<ModelPriceSeedEntry[]> {
   const models = await collectStaticTextModels();
-  return models
+  const textEntries = models
     .filter(m => !m.freeToRun)
     .map(m => {
       const pricing: ModelPriceSeedEntry['pricing'] = {};
@@ -53,6 +54,13 @@ export async function generateModelPriceSeed(): Promise<ModelPriceSeedEntry[]> {
         };
       }
       return { modelId: m.id as string, unit: 'per_token' as const, pricing };
-    })
-    .sort((a, b) => a.modelId.localeCompare(b.modelId));
+    });
+  // Realtime voice models are not in any getModelInfo table; their literal
+  // lives in REALTIME_VOICE_PRICING and rides the same seed pipeline.
+  const voiceEntries = Object.entries(REALTIME_VOICE_PRICING).map(([modelId, tier]) => ({
+    modelId,
+    unit: 'per_token' as const,
+    pricing: { '0': { ...tier } },
+  }));
+  return [...textEntries, ...voiceEntries].sort((a, b) => a.modelId.localeCompare(b.modelId));
 }

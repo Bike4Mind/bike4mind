@@ -15,11 +15,16 @@ import type { IChatHistoryItem } from '@bike4mind/common';
  * mocked to a stub so the test exercises only the real menu markup.
  */
 
+const mocks = vi.hoisted(() => ({
+  showCreditsUsed: true,
+  serverSettings: [] as Array<{ settingName: string; settingValue: unknown }>,
+}));
+
 // --- context / data hooks -------------------------------------------------
 vi.mock('@client/app/contexts/UserContext', () => ({
   // organizationId is the org the server (checkScopePermission) will accept a Team publish for;
   // the Team option is gated on the selected org matching it.
-  useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42' } }),
+  useUser: () => ({ currentUser: { id: 'user-1', organizationId: 'org_42', showCreditsUsed: mocks.showCreditsUsed } }),
 }));
 vi.mock('@client/app/contexts/SessionsContext', () => ({
   useSessions: () => ({ currentSession: null, setCurrentSession: vi.fn() }),
@@ -48,7 +53,7 @@ vi.mock('@client/app/hooks/data/useModelInfo', () => ({
   useModelInfo: () => ({ data: [] }),
 }));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  useSettingsFromServer: () => ({ data: [] }),
+  useSettingsFromServer: () => ({ data: mocks.serverSettings }),
 }));
 // Capturable across renders so the share-wiring tests can assert the exact options
 // handleShareReply passes (esp. whether orgOption is supplied).
@@ -128,12 +133,12 @@ const messageData = {
   status: 'done',
 } as unknown as IChatHistoryItem;
 
-function renderAndOpenActionsMenu() {
+function renderMessageContent(data: IChatHistoryItem = messageData) {
   render(
     <TestWrapper>
       <MessageContent
         sessionId="session-1"
-        messageData={messageData}
+        messageData={data}
         index={0}
         onDelete={vi.fn()}
         onPinToggle={vi.fn()}
@@ -145,8 +150,17 @@ function renderAndOpenActionsMenu() {
       />
     </TestWrapper>
   );
+}
+
+function renderAndOpenActionsMenu() {
+  renderMessageContent();
   fireEvent.click(screen.getByTestId('message-actions-menu-btn'));
 }
+
+beforeEach(() => {
+  mocks.showCreditsUsed = true;
+  mocks.serverSettings = [];
+});
 
 describe('MessageContent actions menu - EnableDataLakes gating', () => {
   beforeEach(() => {
@@ -237,5 +251,38 @@ describe('MessageContent share reply - org (Team) visibility wiring', () => {
     await waitFor(() => expect(publishAndShareSpy).toHaveBeenCalledTimes(1));
     expect(publishAndShareSpy.mock.calls[0][0].orgOption).toBeUndefined();
     expect(replyPublisherMock).toHaveBeenCalledWith(expect.objectContaining({ orgId: undefined }));
+  });
+});
+
+describe('MessageContent per-message credits-used chip - enforceCredits gating', () => {
+  // Regression coverage: nothing decrements while enforceCredits is off, so the chip
+  // must stay hidden even when the user has opted in and the message carries a value.
+  const creditsMessageData = { ...messageData, creditsUsed: 42 } as unknown as IChatHistoryItem;
+
+  it('shows the chip when enforcement is on and the user opted in', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: true }];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.getByTestId('credits-used')).toBeInTheDocument();
+  });
+
+  it('hides the chip when enforceCredits is off, even with a credits value present', () => {
+    mocks.serverSettings = [{ settingName: 'enforceCredits', settingValue: false }];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
+  });
+
+  it('hides the chip when the enforceCredits setting is unset (self-host default)', () => {
+    mocks.serverSettings = [];
+    mocks.showCreditsUsed = true;
+
+    renderMessageContent(creditsMessageData);
+
+    expect(screen.queryByTestId('credits-used')).not.toBeInTheDocument();
   });
 });
