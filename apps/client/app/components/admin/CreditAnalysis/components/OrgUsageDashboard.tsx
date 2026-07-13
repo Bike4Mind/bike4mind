@@ -17,17 +17,30 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
+import { formatCredits, formatUsd, numberCell } from '../utils/format';
 import { useOrgUsage } from '../hooks/useOrgUsage';
 
 const DAY_RANGES = [30, 60, 90] as const;
 type DayRange = (typeof DAY_RANGES)[number];
 
-const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
-
-const formatCredits = (n: number) => Math.round(n).toLocaleString();
-const formatUsd = (n: number) => `$${n.toFixed(n < 1 ? 4 : 2)}`;
-
 type OrgOption = { id: string; name: string };
+
+/**
+ * Zero-fill every day in the window so the burn chart draws gaps as flat rather
+ * than connecting non-adjacent active days into a misleading straight line.
+ * Days are UTC to match the aggregation's $dateToString bucketing.
+ */
+const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], days: number) => {
+  const byDay = new Map(overTime.map(d => [d.day, d.creditsCharged]));
+  const today = new Date();
+  return Array.from({ length: days }, (_, i) => {
+    const d = new Date(today);
+    d.setUTCDate(d.getUTCDate() - (days - 1 - i));
+    const day = d.toISOString().slice(0, 10);
+    return { day, credits: byDay.get(day) ?? 0 };
+  });
+};
 
 /**
  * Per-organization AI spend: a credits burn chart over the selected window plus
@@ -37,8 +50,10 @@ type OrgOption = { id: string; name: string };
 export const OrgUsageDashboard: React.FC = () => {
   const theme = useTheme();
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
-  const [orgSearch, setOrgSearch] = useState('');
   const [days, setDays] = useState<DayRange>(30);
+
+  // Debounce so typing a name fires one request per pause, not one per keystroke.
+  const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
 
   // Team orgs only: personal orgs are single-user and not the point of an org dashboard.
   const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations({
@@ -56,10 +71,8 @@ export const OrgUsageDashboard: React.FC = () => {
 
   const { data, isLoading, isFetching, error, refetch } = useOrgUsage(selectedOrg?.id ?? null, days);
 
-  const chartData = useMemo(
-    () => (data?.overTime ?? []).map(d => ({ day: d.day, credits: d.creditsCharged, cogsUsd: d.cogsUsd })),
-    [data]
-  );
+  const hasUsage = (data?.totals.requests ?? 0) > 0;
+  const chartData = useMemo(() => buildBurnSeries(data?.overTime ?? [], days), [data, days]);
 
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="org-usage-dashboard">
@@ -146,7 +159,7 @@ export const OrgUsageDashboard: React.FC = () => {
             <Typography level="title-sm" sx={{ mb: 1 }}>
               Credits over time
             </Typography>
-            {chartData.length === 0 ? (
+            {!hasUsage ? (
               <Typography level="body-sm" color="neutral">
                 No usage in this window.
               </Typography>
@@ -154,7 +167,7 @@ export const OrgUsageDashboard: React.FC = () => {
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={chartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
-                  <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                  <XAxis dataKey="day" tick={{ fontSize: 11 }} minTickGap={24} />
                   <YAxis tick={{ fontSize: 11 }} width={56} />
                   <Tooltip
                     formatter={value => [formatCredits(Number(value) || 0), 'Credits']}
@@ -183,7 +196,7 @@ export const OrgUsageDashboard: React.FC = () => {
             keyLabel="Member"
             rows={(data?.byMember ?? []).map(r => ({
               key: r.userId,
-              label: r.userName ?? r.userId,
+              label: r.userName ?? 'Unknown user',
               title: r.userId,
               requests: r.requests,
               cogsUsd: r.cogsUsd,

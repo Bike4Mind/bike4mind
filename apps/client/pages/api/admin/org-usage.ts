@@ -1,7 +1,8 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { usageEventRepository, userRepository } from '@bike4mind/database';
+import { usageEventRepository } from '@bike4mind/database';
 import { CreditHolderType, type IOrgUsageDashboardResponse } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
@@ -30,18 +31,15 @@ const handler = baseApi().get(async (req, res) => {
 
   const summary = await usageEventRepository.ownerUsageSummary(organizationId, CreditHolderType.Organization, days);
 
-  // Resolve member ids to display names for the operator-facing table.
-  const users = await userRepository.findByIds(summary.byMember.map(m => m.userId));
-  const nameById = new Map(users.map(u => [String(u.id), u.name || u.username || u.email]));
+  // Resolve member ids to display names; unresolved ids (deleted/cross-org users)
+  // stay undefined so the client can label them rather than show a raw ObjectId.
+  const nameById = await resolveUserNames(summary.byMember.map(m => m.userId));
 
   const response: IOrgUsageDashboardResponse = {
+    ...summary,
     organizationId,
     days,
-    overTime: summary.overTime,
-    byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) ?? m.userId })),
-    byModel: summary.byModel,
-    byFeature: summary.byFeature,
-    totals: summary.totals,
+    byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) })),
   };
 
   return res.json(response);
