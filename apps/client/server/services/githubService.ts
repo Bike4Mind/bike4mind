@@ -188,11 +188,12 @@ export class GitHubRateLimitError extends Error {
 }
 
 /**
- * Coarse, non-sensitive classification of an auth-init failure. Logged so operators
- * can tell a misconfigured connection record ('missing-fields') apart from a
- * decryption / key-rotation failure ('decrypt-failed') WITHOUT ever exposing key
- * material or ciphertext structure. Both the reason codes and the messages carried
- * here are safe to log - decryption internals are stripped before this is thrown.
+ * Coarse, non-sensitive classification of an auth-init failure, logged alongside a
+ * human-readable detail so operators can tell a misconfigured connection record
+ * ('missing-fields') apart from a decryption / key-rotation failure ('decrypt-failed').
+ * The message strings carried here are a bounded, sanitized set - safe to log because
+ * decryption internals are stripped in createOctokitFor{App,PAT} before this is thrown -
+ * so the catch surfaces them.
  */
 export type GitHubAuthInitReason = 'missing-fields' | 'decrypt-failed';
 
@@ -336,17 +337,18 @@ export class GitHubService {
         octokit = GitHubService.createOctokitForPAT(connection, encryptionKey, logger);
       }
     } catch (error) {
-      // Log a coarse, non-sensitive reason so operators can distinguish a misconfigured
-      // connection record from a decryption/key-rotation failure. The reason codes and the
-      // sanitized messages upstream never contain key material or ciphertext structure -
-      // that is stripped in createOctokitFor{App,PAT} before the error reaches here.
+      // Log a coarse reason plus a safe detail so operators can distinguish a misconfigured
+      // connection record from a decryption/key-rotation failure. For our typed error the
+      // message is one of a bounded set of sanitized strings (crypto internals are stripped
+      // in createOctokitFor{App,PAT} before it is thrown); for any other error we log only
+      // the class name, never its message, which could carry decryption internals.
       // Throw rather than return null: init failures are transient (network) or config
       // errors that callers should retry/escalate, not silently discard.
       logger.error('[GitHubService] Failed to initialize authentication', {
         connectionId: connection.id,
         connectionType: connection.connectionType,
         reason: error instanceof GitHubAuthInitError ? error.reason : 'unknown',
-        errorName: error instanceof Error ? error.name : 'unknown',
+        detail: error instanceof GitHubAuthInitError ? error.message : error instanceof Error ? error.name : 'unknown',
       });
       throw new Error('[GitHubService] Failed to initialize GitHub authentication');
     }

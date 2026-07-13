@@ -312,7 +312,10 @@ describe('GitHubService', () => {
         );
         expect(mockLogger.error).toHaveBeenCalledWith(
           '[GitHubService] Failed to initialize authentication',
-          expect.objectContaining({ reason: 'decrypt-failed', errorName: 'GitHubAuthInitError' })
+          expect.objectContaining({
+            reason: 'decrypt-failed',
+            detail: 'Failed to decrypt credentials. Token may need rotation.',
+          })
         );
       });
 
@@ -328,7 +331,10 @@ describe('GitHubService', () => {
         );
         expect(mockLogger.error).toHaveBeenCalledWith(
           '[GitHubService] Failed to initialize authentication',
-          expect.objectContaining({ reason: 'missing-fields', errorName: 'GitHubAuthInitError' })
+          expect.objectContaining({
+            reason: 'missing-fields',
+            detail: 'GitHub App connection missing required fields',
+          })
         );
       });
 
