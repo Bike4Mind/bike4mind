@@ -1,7 +1,9 @@
 import { userRepository, mcpServerRepository } from '@bike4mind/database';
 import { McpServerName } from '@bike4mind/common';
 import { decryptToken, encryptEnvVariables } from '@server/security/tokenEncryption';
-import { NOTION_API_BASE_URL } from './notionConfig';
+import { NOTION_API_BASE_URL, NOTION_VERSION } from './notionConfig';
+
+const TOKEN_VALIDATION_TIMEOUT = 10000;
 
 /**
  * Signals expected token revocation, distinct from unexpected errors.
@@ -24,19 +26,23 @@ export class NotionTokenManager {
    * Notion tokens don't expire, so validity only means "not revoked" - checked via a test API call.
    */
   private static async validateToken(accessToken: string): Promise<boolean> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), TOKEN_VALIDATION_TIMEOUT);
     try {
       const response = await fetch(`${NOTION_API_BASE_URL}/users/me`, {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${accessToken}`,
-          'Notion-Version': '2022-06-28',
+          'Notion-Version': NOTION_VERSION,
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
       });
-
       return response.ok;
     } catch {
       return false;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 

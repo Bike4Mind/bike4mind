@@ -39,8 +39,9 @@ export const getNotionOAuthConfig = async (): Promise<NotionOAuthConfig> => {
 };
 
 /**
- * Notion API endpoints
+ * Notion API endpoints and version
  */
 export const NOTION_OAUTH_AUTHORIZE_URL = 'https://api.notion.com/v1/oauth/authorize';
 export const NOTION_OAUTH_TOKEN_URL = 'https://api.notion.com/v1/oauth/token';
 export const NOTION_API_BASE_URL = 'https://api.notion.com/v1';
+export const NOTION_VERSION = '2022-06-28';

@@ -186,6 +186,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
             <>
               <Input
                 className="mfa-modal-code-input"
+                data-testid="mfa-modal-code-input"
                 value={code}
                 onChange={handleCodeChange}
                 placeholder={
@@ -221,6 +222,7 @@ const MFAModal: React.FC<MFAModalProps> = ({
               )}
               <Button
                 className="mfa-modal-verify-button"
+                data-testid="mfa-modal-verify-btn"
                 onClick={handleVerify}
                 color="primary"
                 variant="solid"

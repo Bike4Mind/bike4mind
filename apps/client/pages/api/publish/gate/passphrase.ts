@@ -5,6 +5,7 @@ import bcrypt from 'bcryptjs';
 import { PublishedArtifact } from '@bike4mind/database';
 import { parsePublishPath, segmentsFromViewerPathname } from '@server/services/publish/parsePublishPath';
 import { setGateProofCookie } from '@server/services/publish/publishGateToken';
+import { checkLock, recordFailure, clear } from '@server/services/publish/passphraseLockout';
 
 /**
  * POST /api/publish/gate/passphrase - verify a passphrase for a gated published
@@ -13,9 +14,11 @@ import { setGateProofCookie } from '@server/services/publish/publishGateToken';
  * (renderPassphraseShell) with the viewer pathname + entered passphrase.
  *
  * Anonymous by design (the whole point is viewers without accounts). Brute force
- * is bounded by the per-IP rate limit below; responses are deliberately terse
- * (404 unknown/ungated, 403 wrong passphrase) so the endpoint confirms nothing
- * an anonymous caller couldn't learn from the viewer URL itself.
+ * is bounded on two axes: the per-IP rate limit below throttles one client
+ * across ALL gated artifacts (429), and the per-artifact lockout (passphraseLockout)
+ * locks a single artifact after too many wrong attempts (423). Responses are
+ * deliberately terse (404 unknown/ungated, 403 wrong passphrase, 423 locked) so
+ * the endpoint confirms nothing an anonymous caller couldn't learn from the URL.
  */
 
 const BodySchema = z.object({
@@ -64,10 +67,24 @@ const handler = baseApi({ auth: false })
       return res.status(404).json({ error: 'Not found' });
     }
 
+    // Locked gates reject BEFORE bcrypt so a locked artifact stays locked even
+    // for a correct passphrase until the window closes.
+    const lock = await checkLock(artifact.publicId);
+    if (lock.locked) {
+      res.setHeader('Retry-After', Math.ceil(lock.retryAfterMs / 1000));
+      return res.status(423).json({ error: 'Too many attempts' });
+    }
+
     const ok = await bcrypt.compare(parsed.data.passphrase, artifact.accessGate.passphraseHash);
     if (!ok) {
+      const failed = await recordFailure(artifact.publicId);
+      if (failed.locked) {
+        res.setHeader('Retry-After', Math.ceil(failed.retryAfterMs / 1000));
+        return res.status(423).json({ error: 'Too many attempts' });
+      }
       return res.status(403).json({ error: 'Incorrect passphrase' });
     }
+    await clear(artifact.publicId);
     if (!setGateProofCookie(res, artifact.publicId)) {
       // publicId failed the cookie-name safety check - treat as unservable.
       return res.status(500).json({ error: 'Unable to grant access' });

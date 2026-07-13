@@ -5,7 +5,7 @@ import { router } from './router';
 import { secrets } from './secrets';
 
 // Calculate content hash from git tree - changes immediately when MCP/Common code changes
-// Matches the content hash pattern used in deploy.yml for caching
+// Matches the content hash pattern used in ci.yml for caching
 // This is a workaround for SST not detecting copyFiles content changes
 const MCP_CONTENT_HASH = execSync(
   "git ls-tree -r HEAD b4m-core/mcp b4m-core/common | awk '{print $3}' | sort | md5sum | awk '{print $1}'"
@@ -30,8 +30,14 @@ export const mcpHandler = new sst.aws.Function('mcpHandler', {
     retention: '3 days',
   },
   nodejs: {
-    // Core MCP dependencies + transitive deps from @bike4mind/common
-    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'unzipper'],
+    // This list must cover the RUNTIME dependency closure of the MCP server
+    // children spawned by this handler (they import @bike4mind/common + the
+    // relevant @bike4mind/mcp tool modules). copyFiles brings the workspace
+    // *code*; `install` brings those packages' npm *deps* (SST installs them into
+    // node_modules with their transitive deps). Keep in sync when a child gains a
+    // new runtime dependency. NOTE: @anthropic-ai/sdk is intentionally NOT here -
+    // it is a type-only import in the MCP client, erased at build.
+    install: ['@modelcontextprotocol/sdk', '@octokit/rest', 'zod', 'dayjs', 'unzipper', 'axios'],
     esbuild: {
       // Mark workspace packages as external to prevent bundling, allowing runtime resolution
       external: ['@bike4mind/mcp', '@bike4mind/common'],

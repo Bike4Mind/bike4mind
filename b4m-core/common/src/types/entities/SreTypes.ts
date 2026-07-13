@@ -67,6 +67,52 @@ export function isSreTestFile(filePath: string): boolean {
 }
 
 // ============================================
+// Activity Metrics (admin dashboard - #270)
+// ============================================
+
+/** Selectable time windows for the SRE activity dashboard. */
+export const SRE_METRICS_WINDOWS = ['24h', '7d', '30d'] as const;
+export type SreMetricsWindow = (typeof SRE_METRICS_WINDOWS)[number];
+
+/** Window used when a request omits or sends an unrecognized `window` value. */
+export const DEFAULT_SRE_METRICS_WINDOW: SreMetricsWindow = '7d';
+
+/** Window label -> length in milliseconds. */
+export const SRE_METRICS_WINDOW_MS: Record<SreMetricsWindow, number> = {
+  '24h': 24 * 60 * 60 * 1000,
+  '7d': 7 * 24 * 60 * 60 * 1000,
+  '30d': 30 * 24 * 60 * 60 * 1000,
+};
+
+/**
+ * Aggregate pipeline metrics for the admin activity dashboard, derived from
+ * SreErrorTrackingModel via a single server-side aggregation (no client-side
+ * collection scan). Every count is scoped to tracking docs CREATED within the
+ * window, so the numbers reconcile directly with the underlying records for
+ * that window. Success rate is derived on the client from `byStatus`.
+ */
+export interface SreMetrics {
+  /** Window length in ms that produced these counts (echoes the resolved request window). */
+  windowMs: number;
+  /** Total tracking docs created in the window (errors ingested). */
+  total: number;
+  /** Errors ingested by source; both keys always present (zero-filled). */
+  bySource: { CLOUDWATCH: number; GITHUB_ISSUE: number };
+  /** Count per pipeline status; only statuses present in the window appear. */
+  byStatus: Record<string, number>;
+  /** Docs that produced an LLM diagnosis. */
+  analysesRun: number;
+  /** Docs dispatched to GitHub Actions for a fix. */
+  fixesDispatched: number;
+  /** Docs that opened a fix PR. */
+  prsCreated: number;
+  /** Docs whose fix PR merged. */
+  prsMerged: number;
+  /** Aggregate LLM token usage across the window. */
+  tokens: { input: number; output: number };
+}
+
+// ============================================
 // Event Payload (normalized from either source)
 // ============================================
 

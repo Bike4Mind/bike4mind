@@ -32,7 +32,7 @@ import { validateAppUrl } from '@server/utils/validators';
 import { encryptSecret } from '@server/security/secretEncryption';
 import { Config } from '@server/utils/config';
 import { Logger } from '@bike4mind/observability';
-import { decideAutoLink } from '@server/utils/auth/oauthAccountLink';
+import { decideAutoLink, applyAccountLink } from '@server/utils/auth/oauthAccountLink';
 
 /**
  * Type guard to validate query parameter is a non-empty string.
@@ -298,37 +298,19 @@ const handleOktaCallback = async (req: Request, res: Response) => {
         promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
-      if (existingProviderIndex !== -1) {
-        authProviders[existingProviderIndex] = oauthCredentials;
-      } else {
-        authProviders.push(oauthCredentials);
-      }
-
-      // Promotion write rides the SAME updateOne as the provider link - no second
-      // round-trip, and it can never persist without the link (or vice versa).
-      // Promotion only fires on a real email match (see above), so the local email
-      // is always present here - no backfill needed.
-      const emailVerifiedAt = new Date();
-      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
-        ? { emailVerified: true, emailVerifiedAt }
-        : {};
-      if (isNewProviderLink) {
-        // Linking a NEW auth provider to an existing account is a security-relevant
-        // change: bump tokenVersion to invalidate any other active sessions. The
-        // session being established here is kept valid by reflecting the bumped
-        // version on the in-memory user, so the token minted below matches.
-        await User.updateOne(
-          { _id: user._id },
-          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
-        );
-        user.tokenVersion = (user.tokenVersion ?? 0) + 1;
-      } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
-      }
-      if (promoteEmailVerified) {
-        user.emailVerified = true;
-        user.emailVerifiedAt = emailVerifiedAt;
-      }
+      // Shared account-link write (see applyAccountLink): the tokenVersion bump on
+      // a new link and the emailVerified promotion stay in lockstep with the
+      // passport paths in verifyCallback.ts. Reflect the persisted fields back onto
+      // the in-memory user so the token minted below matches what was written.
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: isNewProviderLink,
+        promoteEmailVerified,
+        currentTokenVersion: user.tokenVersion,
+      });
+      await User.updateOne({ _id: user._id }, update);
+      Object.assign(user, reflect);
       Logger.debug('[Okta Callback] Updated existing user:', user.id);
     } else {
       // Create new user (no password needed for OAuth users)
