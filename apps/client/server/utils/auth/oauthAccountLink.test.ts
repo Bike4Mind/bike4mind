@@ -4,10 +4,12 @@ import {
   selectProviderEmail,
   isVerifiedFlag,
   decideAutoLink,
+  applyAccountLink,
   ACCOUNT_LINK_VERIFICATION_REQUIRED,
   ACCOUNT_LINK_EMAIL_MISMATCH,
   type AutoLinkInput,
 } from './oauthAccountLink';
+import { AuthStrategy, type IAuthProviders } from '@bike4mind/common';
 
 describe('isVerifiedFlag', () => {
   it('returns true for boolean true', () => expect(isVerifiedFlag(true)).toBe(true));
@@ -238,6 +240,97 @@ describe('decideAutoLink', () => {
 
     it('links when the provider email is null but local is verified', () => {
       expect(decideAutoLink({ ...base, providerEmail: null })).toEqual({ action: 'link' });
+    });
+  });
+});
+
+describe('applyAccountLink', () => {
+  const cred = (strategy: AuthStrategy, id: string): IAuthProviders => ({ id, strategy }) as unknown as IAuthProviders;
+
+  describe('new provider link', () => {
+    it('pushes the provider, sets fields under $set and bumps tokenVersion', () => {
+      const authProviders: IAuthProviders[] = [];
+      const oauthCredentials = cred(AuthStrategy.Google, 'sub-1');
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: true,
+        promoteEmailVerified: false,
+        currentTokenVersion: 3,
+      });
+
+      expect(authProviders).toEqual([oauthCredentials]);
+      expect(update.$set).toMatchObject({ oauthCredentials, authProviders });
+      expect((update.$set as Record<string, unknown>).emailVerified).toBeUndefined();
+      expect(update.$inc).toEqual({ tokenVersion: 1 });
+      expect(reflect).toEqual({ tokenVersion: 4 });
+    });
+
+    it('treats a missing tokenVersion as 0 when bumping', () => {
+      const { reflect } = applyAccountLink({
+        authProviders: [],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: true,
+        promoteEmailVerified: false,
+        currentTokenVersion: undefined,
+      });
+      expect(reflect.tokenVersion).toBe(1);
+    });
+
+    it('rides the emailVerified promotion on the same $set and reflects it', () => {
+      const { update, reflect } = applyAccountLink({
+        authProviders: [],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: true,
+        promoteEmailVerified: true,
+        currentTokenVersion: 0,
+      });
+
+      const set = update.$set as Record<string, unknown>;
+      expect(set.emailVerified).toBe(true);
+      expect(set.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(update.$inc).toEqual({ tokenVersion: 1 });
+      expect(reflect.tokenVersion).toBe(1);
+      expect(reflect.emailVerified).toBe(true);
+      expect(reflect.emailVerifiedAt).toBe(set.emailVerifiedAt);
+    });
+  });
+
+  describe('refresh of an already-linked provider', () => {
+    it('replaces the existing entry in place with no $set/$inc and no tokenVersion bump', () => {
+      const existing = cred(AuthStrategy.Google, 'old-sub');
+      const authProviders: IAuthProviders[] = [existing];
+      const oauthCredentials = cred(AuthStrategy.Google, 'new-sub');
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: false,
+        promoteEmailVerified: false,
+        currentTokenVersion: 7,
+      });
+
+      expect(authProviders).toEqual([oauthCredentials]);
+      expect(update.$set).toBeUndefined();
+      expect(update.$inc).toBeUndefined();
+      expect(update).toMatchObject({ oauthCredentials, authProviders });
+      expect(reflect).toEqual({});
+    });
+
+    it('promotes emailVerified on a refresh without bumping tokenVersion', () => {
+      const { update, reflect } = applyAccountLink({
+        authProviders: [cred(AuthStrategy.Google, 'sub-1')],
+        oauthCredentials: cred(AuthStrategy.Google, 'sub-1'),
+        isNewProvider: false,
+        promoteEmailVerified: true,
+        currentTokenVersion: 7,
+      });
+
+      expect(update.emailVerified).toBe(true);
+      expect(update.emailVerifiedAt).toBeInstanceOf(Date);
+      expect(update.$inc).toBeUndefined();
+      expect(reflect.tokenVersion).toBeUndefined();
+      expect(reflect.emailVerified).toBe(true);
+      expect(reflect.emailVerifiedAt).toBe(update.emailVerifiedAt);
     });
   });
 });
