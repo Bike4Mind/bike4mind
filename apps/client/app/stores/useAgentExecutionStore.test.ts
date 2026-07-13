@@ -873,3 +873,127 @@ describe('findChildAnyDepth', () => {
     expect(result).toBeUndefined();
   });
 });
+
+// Regression coverage for issue #35: a pre-deferral server (or a replayed
+// event stream) can emit multiple final_answer steps for the SAME iteration,
+// each holding the accumulated text so far. The renderer maps one StepRow per
+// iterations[] entry, so appending them all stacked dozens of progressively
+// longer "Final Answer" rows. The store must collapse them: a final_answer
+// for an iteration that already has one REPLACES it (last one wins - its
+// content is a superset, matching extractFinalAnswer's findLast semantics).
+describe('useAgentExecutionStore - final_answer collapse (issue #35)', () => {
+  beforeEach(resetStore);
+
+  const finalAnswerAt = (iteration: number, content: string, receivedAt: number) => ({
+    iteration,
+    step: { type: 'final_answer' as const, content },
+    isComplete: false,
+    receivedAt,
+  });
+
+  it('appendIteration replaces a partial final_answer of the same iteration', () => {
+    const { startExecution, appendIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    appendIteration('exec-1', finalAnswerAt(0, '### Summary', 1));
+    appendIteration('exec-1', finalAnswerAt(0, '### Summary Three', 2));
+    appendIteration('exec-1', finalAnswerAt(0, '### Summary Three well-documented findings', 3));
+
+    const exec = useAgentExecutionStore.getState().executions['exec-1'];
+    expect(exec.iterations).toHaveLength(1);
+    expect(exec.iterations[0].step.content).toBe('### Summary Three well-documented findings');
+  });
+
+  it('appendIteration keeps final_answer steps from different iterations', () => {
+    const { startExecution, appendIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    appendIteration('exec-1', finalAnswerAt(0, 'gate pause answer', 1));
+    appendIteration('exec-1', finalAnswerAt(1, 'resumed final answer', 2));
+
+    const exec = useAgentExecutionStore.getState().executions['exec-1'];
+    expect(exec.iterations).toHaveLength(2);
+    expect(exec.iterations.map(i => i.step.content)).toEqual(['gate pause answer', 'resumed final answer']);
+  });
+
+  it('appendIteration preserves position and surrounding steps when collapsing', () => {
+    const { startExecution, appendIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    appendIteration('exec-1', {
+      iteration: 0,
+      step: { type: 'thought', content: 'thinking...' },
+      isComplete: false,
+      receivedAt: 1,
+    });
+    appendIteration('exec-1', finalAnswerAt(0, 'partial', 2));
+    appendIteration('exec-1', finalAnswerAt(0, 'partial plus more', 3));
+
+    const exec = useAgentExecutionStore.getState().executions['exec-1'];
+    expect(exec.iterations.map(i => i.step.type)).toEqual(['thought', 'final_answer']);
+    expect(exec.iterations[1].step.content).toBe('partial plus more');
+  });
+
+  it('appendIteration still tracks lastKnownIteration on a collapsed append', () => {
+    const { startExecution, appendIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    appendIteration('exec-1', finalAnswerAt(2, 'partial', 1));
+    appendIteration('exec-1', finalAnswerAt(2, 'partial plus more', 2));
+
+    expect(useAgentExecutionStore.getState().executions['exec-1'].lastKnownIteration).toBe(2);
+  });
+
+  it('appendChildIteration collapses stacked partial final_answers for a child', () => {
+    const { startExecution, startChild, appendChildIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    startChild('exec-1', { childExecutionId: 'child-1', agentName: 'Writer', isBackground: false });
+
+    // Simulate the issue's observation: ~dozens of progressively longer
+    // final_answer steps streamed for one iteration.
+    for (let i = 1; i <= 50; i++) {
+      appendChildIteration('exec-1', 'child-1', finalAnswerAt(0, '### Summary '.repeat(i).trim(), i));
+    }
+
+    const child = useAgentExecutionStore.getState().executions['exec-1'].childExecutions['child-1'];
+    expect(child.iterations).toHaveLength(1);
+    expect(child.iterations[0].step.content).toBe('### Summary '.repeat(50).trim());
+  });
+
+  it('appendChildIteration keeps non-final steps and collapses only final_answer', () => {
+    const { startExecution, startChild, appendChildIteration } = useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    startChild('exec-1', { childExecutionId: 'child-1', agentName: 'Writer', isBackground: false });
+
+    appendChildIteration('exec-1', 'child-1', {
+      iteration: 0,
+      step: { type: 'action', content: 'call tool', metadata: { toolName: 'search' } },
+      isComplete: false,
+      receivedAt: 1,
+    });
+    appendChildIteration('exec-1', 'child-1', {
+      iteration: 0,
+      step: { type: 'observation', content: 'tool result' },
+      isComplete: false,
+      receivedAt: 2,
+    });
+    appendChildIteration('exec-1', 'child-1', finalAnswerAt(1, 'partial', 3));
+    appendChildIteration('exec-1', 'child-1', finalAnswerAt(1, 'partial complete', 4));
+
+    const child = useAgentExecutionStore.getState().executions['exec-1'].childExecutions['child-1'];
+    expect(child.iterations.map(i => i.step.type)).toEqual(['action', 'observation', 'final_answer']);
+    expect(child.iterations[2].step.content).toBe('partial complete');
+  });
+
+  it('appendChildIteration still clears the streaming buffer when collapsing', () => {
+    const { startExecution, startChild, appendChildTextDelta, appendChildIteration } =
+      useAgentExecutionStore.getState();
+    startExecution('exec-1', 'session-A');
+    startChild('exec-1', { childExecutionId: 'child-1', agentName: 'Writer', isBackground: false });
+
+    appendChildTextDelta('exec-1', 'child-1', 0, 'partial ');
+    appendChildIteration('exec-1', 'child-1', finalAnswerAt(0, 'partial', 1));
+    appendChildTextDelta('exec-1', 'child-1', 0, 'plus more');
+    appendChildIteration('exec-1', 'child-1', finalAnswerAt(0, 'partial plus more', 2));
+
+    const child = useAgentExecutionStore.getState().executions['exec-1'].childExecutions['child-1'];
+    expect(child.iterations).toHaveLength(1);
+    expect(child.pendingTextByIteration).toBeUndefined();
+  });
+});

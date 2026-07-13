@@ -1321,10 +1321,11 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       }
 
       // Determine the primary step for this iteration. Use findLast (not
-      // find) for the same reason agentExecutor's persistence sites do:
-      // the streaming LLM callback can push multiple `final_answer` steps
-      // per iteration (one per delta, each holding the accumulated text so
-      // far), and only the last entry contains the complete reply.
+      // find) as defense-in-depth: historical builds pushed a `final_answer`
+      // step per streamed delta (each holding the accumulated text so far).
+      // The decision is now deferred until after `complete()` resolves, so
+      // at most one is expected - but if partials ever reappear, only the
+      // last entry contains the complete reply.
       const primaryStep = iterationSteps.findLast(s => s.type === 'final_answer') ||
         iterationSteps[iterationSteps.length - 1] || {
           type: 'thought' as const,
