@@ -754,6 +754,11 @@ jobs:
           # SUBSCRIBER_FANOUT_IMAGE repo/org variable to your published image; no brand
           # fallback. Bump the variable to roll forward (no in-tree Dockerfile to maintain).
           SUBSCRIBER_FANOUT_IMAGE: ${{ vars.SUBSCRIBER_FANOUT_IMAGE }}
+          # External instance-service image reference (registry + tag), same account-tied
+          # model as SUBSCRIBER_FANOUT_IMAGE. Unset ⇒ the service is skipped at deploy;
+          # set the OLIST_INSTANCE_SERVICE_IMAGE repo/org variable to your published image
+          # to stand it up. Bump the variable to roll forward.
+          OLIST_INSTANCE_SERVICE_IMAGE: ${{ vars.OLIST_INSTANCE_SERVICE_IMAGE }}
           # Quest-processor image built & pushed to ECR in the previous step (build-free
           # sst deploy). See infra/chatCompletion.ts.
           CHAT_COMPLETION_IMAGE: ${{ env.CHAT_COMPLETION_IMAGE }}

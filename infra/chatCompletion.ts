@@ -4,7 +4,7 @@ import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
 import { cdnUrlForLambdaEnv, router, routePrefix } from './router';
-import { allSecrets } from './secrets';
+import { allSecrets, secrets } from './secrets';
 import { cluster, resolvedVpcId, vpc, vpcId } from './vpc';
 import { websocketApi } from './websocket';
 
@@ -122,6 +122,13 @@ export const chatCompletion = new sst.aws.Service('ChatCompletion', {
   environment: {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    // External instance-service, consumed by a premium overlay tool that reads these as
+    // plain env (linking alone only exposes SST_RESOURCE_*). URL + bearer resolve from
+    // secrets; both default 'not-configured', so the consumer degrades to its fallback
+    // until ops sets them. No dependency on the service resource (which is created later)
+    // — the URL is a secret, sidestepping any creation-order coupling.
+    OLIST_INSTANCE_SERVICE_URL: secrets.OLIST_INSTANCE_SERVICE_URL.value,
+    OLIST_INSTANCE_SERVICE_TOKEN: secrets.OLIST_INSTANCE_SERVICE_TOKEN.value,
   },
   logging: {
     retention: '3 days',
