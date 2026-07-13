@@ -97,10 +97,18 @@ export const agentExecutor = new sst.aws.Function('AgentExecutor', {
 });
 
 // Subscribe to the continuation queue for Lambda self-dispatch resume
-export const agentContinuationQueueSubscription = agentContinuationQueue.subscribe({
-  ...SHARED_AGENT_EXECUTOR_CONFIG,
-  concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 5 } : undefined,
-});
+export const agentContinuationQueueSubscription = agentContinuationQueue.subscribe(
+  {
+    ...SHARED_AGENT_EXECUTOR_CONFIG,
+    concurrency: ['production', 'dev'].includes($app.stage) ? { reserved: 5 } : undefined,
+  },
+  {
+    // The SQS branch of the handler already loops event.Records and reports per-record
+    // failures (see queueHandlers/agentExecutor.ts) instead of throwing for the whole
+    // batch, so a transient failure is retried/DLQ'd without reprocessing successes.
+    batch: { partialResponses: true },
+  }
+);
 
 // WebSocket route: agent_execute
 // Dispatches commands (start/abort/permission_response/reconnect) to the Agent Executor.

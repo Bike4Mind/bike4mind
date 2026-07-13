@@ -26,21 +26,28 @@ export const emailBatchQueue = new sst.aws.Queue('emailBatchQueue', {
 });
 
 // Subscribe Lambda to process email batches
-export const emailBatchQueueSubscription = emailBatchQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/emailBatch.dispatch',
-  timeout: '2 minutes',
-  memory: '512 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, eventBus],
-  logging: {
-    retention: '1 week',
+export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/emailBatch.dispatch',
+    timeout: '2 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, eventBus],
+    logging: {
+      retention: '1 week',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // APP_URL is needed for tracking links in emails
+      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-    // APP_URL is needed for tracking links in emails
-    APP_URL: $dev ? 'http://localhost:3000' : router.url,
-  },
-});
+  {
+    // Handler already loops event.Records; report per-record failures instead of
+    // swallowing them so a transient failure is retried/DLQ'd instead of silently acked.
+    batch: { partialResponses: true },
+  }
+);
 
 // Dead Letter Queue for failed job orchestration
 const emailJobQueueDLQ = new sst.aws.Queue('emailJobQueueDLQ', {});
@@ -54,17 +61,25 @@ export const emailJobQueue = new sst.aws.Queue('emailJobQueue', {
   },
 });
 
-export const emailJobQueueSubscription = emailJobQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/emailJobOrchestrator.dispatch',
-  timeout: '5 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
-  logging: {
-    retention: '1 week',
+export const emailJobQueueSubscription = emailJobQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/emailJobOrchestrator.dispatch',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
+    logging: {
+      retention: '1 week',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-});
+  {
+    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
+    // multi-record deliveries can't silently drop the un-read records. Matches
+    // sreJobQueue / overwatchAnalyticsQueue in queues.ts.
+    batch: { size: 1 },
+  }
+);
 
 export { emailBatchQueueDLQ, emailJobQueueDLQ };
