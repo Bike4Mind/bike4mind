@@ -2,23 +2,25 @@
 
 Composite action that decides whether a workflow run touched **deployable** paths,
 and (independently) whether it touched the **docs site**. Use it to skip the
-expensive test + deploy pipeline on docs-only / config-only changes, while still
-running the Docusaurus build-verification job when `docs-site/` changes.
+expensive test + deploy pipeline on docs-only / config-only changes. The
+`docs-changed` output originally gated a Docusaurus build-verification job;
+that job is removed for now (this repo tracks only docs-site markdown, not
+the site scaffolding), so `docs-changed` is currently unconsumed.
 
 Ported from `MillionOnMars/polaris` (PRs #4204 + #4540), adapted for lumina5:
 docs live in `docs-site/` (not `docs/`), `.changeset/` is excluded, and a second
-`docs-changed` output gates `verify-docs-build`.
+`docs-changed` output was added for the docs build gate.
 
 ## Outputs
 
 | Output | Meaning |
 |---|---|
 | `deployable` | `'true'` to run test + deploy, `'false'` to skip. Fails **open** (`true`) when the diff range can't be resolved. |
-| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Gates the docs build. |
+| `docs-changed` | `'true'` when the changeset touches `docs-site/`. Fails **open** (`true`) on an unresolved range. Currently unconsumed. |
 
-The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`
-(build docs, skip deploy); a code+docs PR is `true, true` (both); a `.changeset`
-or root-`README` change is `false, false` (skip both).
+The two are orthogonal: a docs-only PR is `deployable=false, docs-changed=true`;
+a code+docs PR is `true, true`; a `.changeset` or root-`README` change is
+`false, false`.
 
 ## Why this and not `paths-ignore` / a marketplace action
 
@@ -60,10 +62,6 @@ jobs:
     if: needs.changes.outputs.deployable == 'true'
     ...
 
-  verify-docs-build:
-    needs: changes
-    if: needs.changes.outputs.docs-changed == 'true'
-    ...
 ```
 
 ## Inputs
