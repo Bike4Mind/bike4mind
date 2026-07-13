@@ -4,8 +4,17 @@
 # 1. When changeset files are pending: creates/updates a "Version Packages" PR
 # 2. When the "Version Packages" PR is merged: publishes to npm and creates GitHub releases
 # 3. Manual version bump via workflow_dispatch
+# 4. Snapshot (prerelease) publish when "Branch Tests" succeeds on a feature branch
 #
 # Replaces: release-please.yaml + post-release.yaml
+#
+# npm auth: Trusted Publishing (OIDC). Each @bike4mind/* package on npmjs.com is
+# configured to trust THIS workflow file (.github/workflows/release.yaml) in this
+# repo. npm allows only ONE trusted publisher per package and validates the
+# TOP-LEVEL workflow file (not a called reusable workflow), so every npm publish
+# must enter through this file - that's why the snapshot publish is triggered
+# here via workflow_run instead of from test.yaml. Publishing jobs need the
+# `id-token: write` permission; no npm token secret is involved.
 
 name: Release
 
@@ -18,6 +27,10 @@ on:
       - 'packages/cli/**'
       - '.changeset/**'
       - '.github/workflows/release.yaml'
+  # Snapshot publishes ride on Branch Tests completing (see snapshot job below).
+  workflow_run:
+    workflows: ["Branch Tests"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       package:
@@ -53,7 +66,9 @@ permissions:
   pull-requests: write
 
 concurrency:
-  group: changesets-release-${{ github.event_name }}
+  # workflow_run (snapshot) runs group per feature branch so branches don't
+  # queue behind each other; push/dispatch runs keep their event-wide group.
+  group: changesets-release-${{ github.event_name }}-${{ github.event.workflow_run.head_branch || '' }}
   cancel-in-progress: false
 
 # Disable Husky git hooks in CI. The changesets action does git push
@@ -189,6 +204,11 @@ jobs:
     if: github.event_name == 'push' && github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+      # Mint the OIDC token npm exchanges for a short-lived publish credential.
+      id-token: write
     steps:
       # Use b4m-release-bot App token (not GITHUB_TOKEN) so the Version Packages PR
       # triggers CI workflows. PRs from github-actions[bot] (GITHUB_TOKEN)
@@ -242,6 +262,13 @@ jobs:
           pnpm core:build
           pnpm --filter "@bike4mind/cli" build
 
+      # changeset publish shells out to `npm publish`; OIDC trusted publishing
+      # needs npm >= 11.5.1, newer than what some Node 24 images bundle.
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+
+      # No NPM_TOKEN: changesets/action skips the .npmrc auth line when the env
+      # var is absent, and npm authenticates via OIDC trusted publishing.
       - name: Create Release PR or Publish
         id: changesets
         uses: changesets/action@v1
@@ -253,4 +280,29 @@ jobs:
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          NPM_TOKEN: ${{ secrets.NPM_TOKEN_PUBLISH }}
+
+  # Snapshot (prerelease) publish for feature branches, triggered when the
+  # "Branch Tests" workflow completes successfully. It lives in this file so
+  # npm's single trusted publisher (this workflow) covers snapshot publishes
+  # too - see the header comment.
+  snapshot:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch != 'main' &&
+      github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    concurrency:
+      group: snapshot-${{ github.event.workflow_run.head_branch }}
+      cancel-in-progress: true
+    # Reusable-workflow permissions flow from the CALLER: the called jobs can
+    # only use what is granted here (comment-published-versions needs
+    # pull-requests/issues write; the publish job needs id-token: write).
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+    uses: ./.github/workflows/snapshot-publish.yaml
+    with:
+      head-branch: ${{ github.event.workflow_run.head_branch }}
+      head-sha: ${{ github.event.workflow_run.head_sha }}

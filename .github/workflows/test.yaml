@@ -94,17 +94,7 @@ jobs:
       - name: Run CLI Typecheck (tsgo, tsc fallback)
         run: pnpm --filter "@bike4mind/cli" typecheck:fast
 
-  publish:
-    needs: [check-repository, test]
-    if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    # Reusable-workflow permissions flow from the CALLER: a nested job can only
-    # use what is granted here. snapshot-publish's comment-published-versions job
-    # requests pull-requests: write, so the caller must grant at least that or the
-    # whole run fails at startup with a permissions-mismatch error.
-    permissions:
-      contents: read
-      pull-requests: write
-      issues: write
-    uses: ./.github/workflows/snapshot-publish.yaml
-    secrets:
-      NPM_TOKEN_PUBLISH: ${{ secrets.NPM_TOKEN_PUBLISH }}
+  # Snapshot publishing moved to release.yaml (triggered by workflow_run on this
+  # workflow completing): npm Trusted Publishing allows one trusted publisher
+  # per package and validates the top-level workflow file, so all npm publishes
+  # must enter through release.yaml.

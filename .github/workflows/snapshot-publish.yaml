@@ -1,7 +1,12 @@
 # Snapshot Publish Workflow
 #
 # Publishes snapshot (prerelease) versions of changed packages on feature branches.
-# Triggered by test.yaml after tests pass, or manually.
+# Called ONLY by release.yaml (via its workflow_run-on-"Branch Tests" snapshot job):
+# npm Trusted Publishing validates the top-level workflow file and allows a single
+# trusted publisher per package, so every npm publish must enter through
+# release.yaml. That is also why there is no workflow_dispatch trigger here: a
+# direct dispatch would make this file the top-level workflow and OIDC auth
+# would be rejected. To re-run a snapshot, re-run the release.yaml snapshot run.
 #
 # Replaces: the canary publishing logic in publish-tagged-packages.yaml
 
@@ -9,20 +14,28 @@ name: Snapshot Publish
 
 on:
   workflow_call:
-    secrets:
-      NPM_TOKEN_PUBLISH:
+    inputs:
+      head-branch:
+        description: 'Feature branch being published (drives the npm dist-tag)'
         required: true
-  workflow_dispatch:
+        type: string
+      head-sha:
+        description: 'Commit to check out and publish'
+        required: true
+        type: string
 
-concurrency:
-  group: snapshot-${{ github.ref }}
-  cancel-in-progress: true
+# Concurrency is handled by the calling job in release.yaml (per head branch);
+# github.ref here would be main under a workflow_run trigger.
 
 jobs:
   snapshot-publish:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 20
-    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && github.ref_name != 'main'
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5') && inputs.head-branch != 'main'
+    permissions:
+      contents: read
+      # Mint the OIDC token npm exchanges for a short-lived publish credential.
+      id-token: write
     outputs:
       published-packages: ${{ steps.publish.outputs.published-packages }}
       sanitized-tag: ${{ steps.branch.outputs.tag }}
@@ -30,6 +43,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+          ref: ${{ inputs.head-sha }}
 
       - name: Fetch main branch
         run: git fetch origin main:main 2>/dev/null || git fetch origin main
@@ -45,9 +59,11 @@ jobs:
           node-version: 24
           cache: 'pnpm'
           cache-dependency-path: '**/pnpm-lock.yaml'
-          registry-url: 'https://registry.npmjs.org'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN_PUBLISH }}
+
+      # changeset publish shells out to `npm publish`; OIDC trusted publishing
+      # needs npm >= 11.5.1, newer than what some Node 24 images bundle.
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
@@ -86,9 +102,9 @@ jobs:
         if: steps.changes.outputs.has-changes == 'true'
         id: branch
         env:
-          BRANCH: ${{ github.ref_name }}
+          BRANCH: ${{ inputs.head-branch }}
         run: |
-          # Pass github.ref_name via env to prevent shell injection (backticks/$() in branch names)
+          # Pass the branch name via env to prevent shell injection (backticks/$() in branch names)
           # See: https://docs.github.com/en/actions/security-for-github-actions/security-guides/security-hardening-for-github-actions#understanding-the-risk-of-script-injections
           SANITIZED=$(echo "$BRANCH" | sed 's/[^a-zA-Z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-\|-$//g' | cut -c1-50)
           echo "tag=$SANITIZED" >> $GITHUB_OUTPUT
@@ -270,6 +286,9 @@ jobs:
         uses: jwalton/gh-find-current-pr@v1
         with:
           state: open
+          # Under a workflow_run trigger the default context sha is main's;
+          # look up the PR by the feature branch head instead.
+          sha: ${{ inputs.head-sha }}
 
       - name: Comment published versions
         if: steps.pr.outputs.number
