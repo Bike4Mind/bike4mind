@@ -47,7 +47,7 @@ EXCLUDE_DIRS=(--exclude-dir=node_modules --exclude-dir=dist --exclude-dir=build
 # own scripts/ dir from the scan). They come from CI config instead:
 #   DENY_ACCOUNT_IDS   — pipe-joined account IDs,   e.g. "111111111111|222222222222"
 #   DENY_BRAND_DOMAINS — pipe-joined ERE domains,   e.g. "example\.com"
-# Set both as repo/org variables on the private source repo (wired into deploy.yml).
+# Set both as repo/org variables on the private source repo (wired into ci.yml).
 # Unset (e.g. on a public fork) simply skips those two checks — a fork has no B4M
 # account IDs to catch, so there is nothing to protect there.
 _alts=('price_[A-Za-z0-9]{10,}' 'prod_[A-Za-z0-9]{10,}' '\bG-[A-Z0-9]{8,}\b' '\bUA-[0-9]{4,}-[0-9]+\b' '[0-9]{12}\.dkr\.ecr\.')
