@@ -141,6 +141,9 @@ export const auth = handler
       req.logger?.info(`[AUTH] Blocked ${req.url} for user ${req.user!.id} — AUP/ToS acceptance required.`);
       return res.status(403).json({
         error: 'Policy acceptance required.',
+        // Included so any client that surfaces error_description (e.g. the device-activation page)
+        // shows an accurate message instead of a misleading fallback. See issue #369.
+        error_description: 'Accept the Terms of Service and Acceptable Use Policy to continue.',
         policyAcceptanceRequired: true,
       });
     }
@@ -411,8 +414,6 @@ passport.deserializeUser(async (id: string, done) => {
     .catch(err => done(err));
 });
 
-export const authMiddleware: RequestHandler[] = [
-  passport.initialize(),
-];
+export const authMiddleware: RequestHandler[] = [passport.initialize()];
 
 export default passport;
