@@ -23,7 +23,7 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
   const lineCount = artifact.content.split('\n').length;
 
   return (
-    <Box key={index} data-testid={`artifact-preview-mermaid-${artifactId}`} sx={{ my: 2 }}>
+    <Box key={index} data-testid={`artifact-preview-mermaid-${artifactId}`}>
       <ArtifactPreviewCard
         artifactId={mermaidArtifact.id}
         artifactType="mermaid"

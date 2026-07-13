@@ -54,7 +54,6 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
     <Box
       data-testid={`artifact-preview-svg-${artifactId}`}
       sx={{
-        my: 2,
         display: 'flex',
         justifyContent: 'center',
         '& svg': {

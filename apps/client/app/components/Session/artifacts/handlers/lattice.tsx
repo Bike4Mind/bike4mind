@@ -48,7 +48,7 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
       <Box
         key={index}
         data-testid="artifact-preview-lattice-error"
-        sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
+        sx={{ p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
       >
         <Typography level="body-sm" color="danger">
           Error rendering financial model: Invalid artifact data
@@ -61,7 +61,7 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
   const { entityCount, ruleCount, currency, modelType } = model.metadata;
 
   return (
-    <Box key={index} data-testid={`artifact-preview-lattice-${model.id}`} sx={{ my: 2 }}>
+    <Box key={index} data-testid={`artifact-preview-lattice-${model.id}`}>
       <ArtifactPreviewCard
         artifactId={model.id}
         artifactType="lattice"

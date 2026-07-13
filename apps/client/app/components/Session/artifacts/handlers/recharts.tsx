@@ -50,7 +50,7 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
       <Box
         key={index}
         data-testid="artifact-preview-recharts-error"
-        sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
+        sx={{ p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
       >
         <Typography level="body-sm" color="danger">
           Error rendering chart: {errorMessage}
@@ -63,7 +63,7 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
   const { description, dataPoints, chartType } = chart.metadata;
 
   return (
-    <Box data-testid={`artifact-preview-recharts-${artifactId}`} sx={{ my: 2 }}>
+    <Box data-testid={`artifact-preview-recharts-${artifactId}`}>
       <ArtifactPreviewCard
         artifactId={chart.id}
         artifactType="recharts"

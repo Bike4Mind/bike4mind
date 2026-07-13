@@ -39,7 +39,7 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
   const lineCount = artifact.content.split('\n').length;
 
   return (
-    <Box key={index} data-testid={`artifact-preview-python-${artifactId}`} sx={{ my: 2 }}>
+    <Box key={index} data-testid={`artifact-preview-python-${artifactId}`}>
       <ArtifactPreviewCard
         artifactId={pythonArtifact.id}
         artifactType="python"
