@@ -6,6 +6,10 @@ import type { IResolvedPromptDispatch } from '@bike4mind/common';
 // Lets the in-progress text ride the persisted `drafts` map (session-scoped) so a
 // full-page reload before the first send doesn't lose it. Cleared once the notebook
 // resolves to a real session id. See useMessageDraft.
+// Single-slot by design: because it persists to localStorage, two tabs both composing
+// a new notebook share this key and will clobber each other's draft. Acceptable (rare,
+// and no worse than before, when nothing was persisted); per-tab isolation would need
+// sessionStorage or a tab-scoped suffix.
 export const NEW_NOTEBOOK_DRAFT_KEY = '__new_notebook__';
 
 interface ChatInputStore {
