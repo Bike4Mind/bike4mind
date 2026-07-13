@@ -1,5 +1,5 @@
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
-import { SQSEvent, SQSHandler, S3Event } from 'aws-lambda';
+import { SQSEvent, SQSHandler, SQSBatchItemFailure, S3Event } from 'aws-lambda';
 import { simpleParser, ParsedMail } from 'mailparser';
 import {
   userRepository,
@@ -168,6 +168,11 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
 
   Logger.info('📨 SQS Event Records Count:', event.Records.length);
 
+  // Queue is subscribed with batch.partialResponses: true, so a per-record failure is
+  // reported here instead of thrown, letting SQS retry/DLQ just that record instead of
+  // the whole batch (which would also redeliver already-succeeded records).
+  const batchItemFailures: SQSBatchItemFailure[] = [];
+
   for (const record of event.Records) {
     Logger.info('🔄 Processing SQS Record:', record.messageId);
     try {
@@ -253,16 +258,20 @@ export const dispatch: SQSHandler = async (event: SQSEvent) => {
       if (error instanceof UnauthorizedError) {
         Logger.warn('Unauthorized email - consider sending bounce notification');
         // TODO: Implement bounce notification via SES SendEmail
-        // Don't throw - we want to remove this from the queue
+        // Don't report as failed - we want to remove this from the queue
         continue;
       }
 
-      // Throw error to send message to DLQ after retries
-      throw error;
+      // Report this record as failed so SQS retries/DLQs it; keep processing the rest.
+      batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }
 
-  Logger.info('🎉 Lambda execution complete - all records processed');
+  Logger.info('🎉 Lambda execution complete - all records processed', {
+    failedCount: batchItemFailures.length,
+  });
+
+  return { batchItemFailures };
 };
 
 // Export handler with both names for compatibility
