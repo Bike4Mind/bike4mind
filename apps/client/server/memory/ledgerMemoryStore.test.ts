@@ -35,10 +35,26 @@ function makeFake(opts: { failFirst?: number } = {}) {
       store.push(doc);
       return doc;
     },
-    async listChain(pk, pid, owner) {
-      return store
+    async listChain(pk, pid, owner, options) {
+      const chain = store
         .filter(e => e.principalKind === pk && e.principalId === pid && e.ownerUserId === owner)
         .sort((a, b) => a.seq - b.seq);
+      // Mirror the real projection: with embeddings excluded, the ciphertext genuinely is not there.
+      // A fake that quietly returned it anyway would let a two-pass bug pass as a green test.
+      if (options?.withEmbeddings === false) {
+        return chain.map(({ embeddingCipher: _c, embeddingIv: _i, embeddingTag: _t, ...rest }) => rest as IMemoryLedgerEvent);
+      }
+      return chain;
+    },
+    async listEmbeddings(pk, pid, owner, hashes) {
+      return store.filter(
+        e =>
+          e.principalKind === pk &&
+          e.principalId === pid &&
+          e.ownerUserId === owner &&
+          hashes.includes(e.hash) &&
+          Boolean(e.embeddingCipher)
+      );
     },
     async markShredded(pk, pid, owner) {
       let n = 0;

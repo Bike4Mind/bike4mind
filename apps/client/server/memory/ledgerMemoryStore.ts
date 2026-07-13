@@ -3,6 +3,7 @@ import { MEMENTO_EMBEDDING_MODEL } from '@bike4mind/common';
 import {
   foldEvents,
   sealEvent,
+  type Belief,
   type EvidenceTier,
   type MemoryEvent,
   type MemoryEventInput,
@@ -37,7 +38,14 @@ export interface LedgerRepo {
   listChain(
     principalKind: MemoryPrincipalKind,
     principalId: string,
-    ownerUserId: string
+    ownerUserId: string,
+    options?: { withEmbeddings?: boolean }
+  ): Promise<IMemoryLedgerEvent[]>;
+  listEmbeddings(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    hashes: string[]
   ): Promise<IMemoryLedgerEvent[]>;
   markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number>;
 }
@@ -176,23 +184,79 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
  * fact with the principal's key (fetched once), and folds to a live profile with ACT-R salience as
  * of `now`. Composed ahead of the snapshot adapters, so a principal with no ledger falls through.
  */
+/**
+ * Pass two of the fold: decrypt and attach the vector for each surviving belief.
+ *
+ * A belief's `derivedFrom` is the events it was folded from, assert FIRST (an assert resets it; affirms
+ * append). The fold's own rule is that the assert's embedding wins and an affirm only backfills a
+ * missing one - so taking the first event in `derivedFrom` that carries a usable vector reproduces it
+ * exactly. Because our write path asserts, `derivedFrom` is normally a single hash, which is what keeps
+ * this fetch small.
+ *
+ * A vector from another embedding model is skipped for the same reason the memento read path skips one:
+ * cosine across two models' spaces is noise, and the ledger cannot be re-embedded in place.
+ */
+async function attachEmbeddings(
+  deps: { ledger: Pick<LedgerRepo, 'listEmbeddings'>; ownerUserId: string },
+  principal: Principal,
+  beliefs: Belief[],
+  dek: Buffer | null
+): Promise<void> {
+  if (!dek) return; // shredded principal: there is nothing readable to attach
+
+  const live = beliefs.filter(b => !b.shredded);
+  const hashes = live.flatMap(b => b.derivedFrom);
+  if (hashes.length === 0) return;
+
+  const rows = await deps.ledger.listEmbeddings(principal.kind, principal.id, deps.ownerUserId, hashes);
+  const byHash = new Map(rows.map(r => [r.hash, r]));
+
+  for (const belief of live) {
+    for (const hash of belief.derivedFrom) {
+      const row = byHash.get(hash);
+      if (!row?.embeddingCipher || !row.embeddingIv || !row.embeddingTag) continue;
+      if (row.embeddingModel !== MEMENTO_EMBEDDING_MODEL) continue;
+
+      const vector = decryptVector(dek, {
+        cipher: row.embeddingCipher,
+        iv: row.embeddingIv,
+        tag: row.embeddingTag,
+      });
+      if (vector?.length) {
+        belief.embedding = vector;
+        break;
+      }
+    }
+  }
+}
+
 export function createLedgerMemoryStore(deps: {
-  ledger: Pick<LedgerRepo, 'listChain'>;
+  ledger: Pick<LedgerRepo, 'listChain' | 'listEmbeddings'>;
   keys: Pick<KeyProvider, 'getDek'>;
   ownerUserId: string;
   now?: string;
 }): MemoryStore {
   return {
     async readProfile(principal: Principal): Promise<MemoryProfile | null> {
-      // The chain and the principal's key are independent reads - fetch them together instead of
-      // paying two serial round trips to a remote Mongo on the chat's critical path.
+      // TWO-PASS, and the reason is the append-only chain: an embedding is ~8KB of ciphertext per
+      // event and the chain only ever grows, so pulling every vector means dragging the user's ENTIRE
+      // vector history over the wire on every chat turn - most of it belonging to beliefs that were
+      // long since superseded and whose vectors the fold decrypts only to discard. Measured against a
+      // remote Mongo: 400 events fold in 6.1s with the vectors inline and 0.5s without.
+      //
+      // So: fold on the cheap metadata first to find out which beliefs actually SURVIVE, then fetch
+      // vectors for only those. Cost becomes O(live beliefs) instead of O(events-ever-written).
       const [docs, dek] = await Promise.all([
-        deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId),
+        deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId, { withEmbeddings: false }),
         deps.keys.getDek(principal),
       ]);
       if (docs.length === 0) return null;
+
       const chain = docs.map(d => toMemoryEvent(d, dek));
       const beliefs = foldEvents(chain, { now: deps.now ?? new Date().toISOString() });
+
+      await attachEmbeddings(deps, principal, beliefs, dek);
+
       return { principal, beliefs };
     },
   };
