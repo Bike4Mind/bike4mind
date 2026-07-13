@@ -173,7 +173,8 @@ export const generateTools = (
   allowedDirectories?: string[],
   entitlementKeys: string[] = [],
   sessionId?: string,
-  codeMinifier?: ToolContext['codeMinifier']
+  codeMinifier?: ToolContext['codeMinifier'],
+  availableModels?: import('@bike4mind/common').ModelInfo[]
 ): Record<string, ICompletionOptionTools> => {
   const context: ToolContext = {
     userId,
@@ -192,6 +193,7 @@ export const generateTools = (
     allowedDirectories,
     entitlementKeys,
     codeMinifier,
+    availableModels,
   };
 
   return Object.entries(tools).reduce(

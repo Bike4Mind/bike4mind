@@ -113,4 +113,32 @@ export class LoginPage extends BasePage {
     const toast = this.page.locator('[data-sonner-toast]').filter({ hasText: message });
     await expect(toast).toBeVisible({ timeout: TIMEOUTS.VISIBLE });
   }
+
+  /**
+   * Submit the OTC code for an MFA-enrolled user. Unlike submit(), this does NOT wait for a
+   * redirect - a correct code opens the MFA challenge modal instead of completing login.
+   */
+  async submitOtcExpectingMfa() {
+    const verifyBtn = this.page.getByTestId('login-verify-btn');
+    await expect(verifyBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await verifyBtn.click();
+  }
+
+  /** Wait for the MFA challenge modal (MFAModal) to appear after submitOtcExpectingMfa(). */
+  async expectMfaChallenge() {
+    await expect(this.page.getByTestId('mfa-modal-code-input')).toBeVisible({ timeout: TIMEOUTS.ACTION });
+  }
+
+  /** Fill the MFA challenge's single code input - accepts both a 6-digit TOTP and a 10-char backup code. */
+  async fillMfaCode(code: string) {
+    await this.fillMuiInput(this.page.getByTestId('mfa-modal-code-input').locator('input'), code);
+  }
+
+  /** Submit the MFA challenge and wait for login to complete (redirect off /login). */
+  async submitMfa() {
+    const verifyBtn = this.page.getByTestId('mfa-modal-verify-btn');
+    await expect(verifyBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await verifyBtn.click();
+    await this.page.waitForURL(url => !url.toString().includes('/login'), { timeout: TIMEOUTS.ACTION });
+  }
 }

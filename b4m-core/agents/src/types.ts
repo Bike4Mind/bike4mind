@@ -252,6 +252,19 @@ export interface AgentRunOptions {
    * 0 = no delay (default).
    */
   iterationDelayMs?: number;
+  /**
+   * Called at most once per `run()` when a per-iteration completion throws a
+   * provider context-window error (see `isContextLimitError`). Receives the
+   * current working history and should return a compacted replacement - e.g.
+   * a summary of older messages plus the most recent exchanges - or `null` if
+   * it cannot shrink the history further. When it returns a history strictly
+   * smaller than the original, `run()` replaces the working history in place
+   * and retries the same iteration once; otherwise the original error
+   * propagates as before. Not provided: behavior is unchanged (the error
+   * always propagates). Kept as an injected callback so the agent stays
+   * infra-free - hosts (e.g. the CLI) own the actual compaction strategy.
+   */
+  onContextLimit?: (messages: IMessage[]) => Promise<IMessage[] | null>;
 }
 
 /**

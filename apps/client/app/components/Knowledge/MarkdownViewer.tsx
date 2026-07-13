@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { Box, Typography, IconButton, Tooltip } from '@mui/joy';
@@ -174,7 +174,7 @@ const MarkdownViewer: React.FC<Props> = ({ content }) => {
           ),
         }}
       >
-        {content}
+        {promoteInlineLatexDollars(content)}
       </ReactMarkdown>
     </Box>
   );

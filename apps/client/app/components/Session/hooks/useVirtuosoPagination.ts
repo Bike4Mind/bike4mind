@@ -3,6 +3,17 @@ import { type VirtuosoHandle } from 'react-virtuoso';
 
 const FIRST_ITEM_START = 100_000;
 
+// Re-arm auto-follow only at the TRUE bottom (small epsilon absorbs sub-pixel
+// rounding). A wide band is what trapped the user: a scroll-up during streaming
+// necessarily starts at the bottom, so a wide re-arm threshold snaps the view
+// back before the user can escape it.
+const AT_BOTTOM_EPSILON_PX = 2;
+// After a touch ends, keep auto-follow suppressed briefly. Inertial/momentum
+// scrolling emits `scroll` events but no `touchmove`, so without this settle a
+// flick that begins near the bottom would re-arm following mid-momentum and the
+// per-frame pin would kill the inertia and snap back.
+const TOUCH_SETTLE_MS = 400;
+
 type ChatHistoryItem = { id?: string };
 
 type UseVirtuosoPaginationParams = {
@@ -101,6 +112,11 @@ export function useVirtuosoPagination({
 
     let following = true;
     let rafId: number;
+    // True from touchstart until a short settle after touchend, spanning the
+    // momentum phase. While set, `scroll` events cannot re-arm following, so the
+    // user's inertial scroll-up is never grabbed back by the per-frame pin.
+    let userInteracting = false;
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
 
     // Wheel/touch are unambiguous user intent (unlike scrollTop, they're immune to the
     // layout jitter the per-frame pin causes), so ANY upward gesture detaches immediately
@@ -112,6 +128,8 @@ export function useVirtuosoPagination({
 
     let lastTouchY: number | null = null;
     const handleTouchStart = (e: TouchEvent) => {
+      userInteracting = true;
+      clearTimeout(settleTimer);
       lastTouchY = e.touches[0]?.clientY ?? null;
     };
     const handleTouchMove = (e: TouchEvent) => {
@@ -120,18 +138,34 @@ export function useVirtuosoPagination({
       if (lastTouchY != null && y != null && y > lastTouchY) following = false;
       lastTouchY = y;
     };
+    const handleTouchEnd = () => {
+      lastTouchY = null;
+      // Delay clearing so momentum scrolling stays covered. On expiry, re-arm
+      // only if inertia actually settled at the true bottom.
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => {
+        userInteracting = false;
+        const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        if (distanceFromBottom <= AT_BOTTOM_EPSILON_PX) following = true;
+      }, TOUCH_SETTLE_MS);
+    };
 
-    // Resume following once the viewport is back at the bottom (covers the scroll-to-bottom
-    // button, scrollbar drag back down, and end-of-momentum). Layout jitter never sets this
-    // to false, so it can only ever re-enable following - safe to drive off scrollTop here.
+    // Resume following once the viewport is back at the TRUE bottom (covers the
+    // scroll-to-bottom button, scrollbar drag back down, and end-of-momentum).
+    // Gated on !userInteracting so an in-progress touch/momentum scroll-up can't
+    // re-arm it. Layout jitter never sets this to false, so it can only ever
+    // re-enable following - safe to drive off scrollTop here.
     const handleScroll = () => {
+      if (userInteracting) return;
       const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-      if (distanceFromBottom < 50) following = true;
+      if (distanceFromBottom <= AT_BOTTOM_EPSILON_PX) following = true;
     };
 
     scroller.addEventListener('wheel', handleWheel, { passive: true });
     scroller.addEventListener('touchstart', handleTouchStart, { passive: true });
     scroller.addEventListener('touchmove', handleTouchMove, { passive: true });
+    scroller.addEventListener('touchend', handleTouchEnd, { passive: true });
+    scroller.addEventListener('touchcancel', handleTouchEnd, { passive: true });
     scroller.addEventListener('scroll', handleScroll, { passive: true });
 
     const loop = () => {
@@ -148,9 +182,12 @@ export function useVirtuosoPagination({
     rafId = requestAnimationFrame(loop);
     return () => {
       cancelAnimationFrame(rafId);
+      clearTimeout(settleTimer);
       scroller.removeEventListener('wheel', handleWheel);
       scroller.removeEventListener('touchstart', handleTouchStart);
       scroller.removeEventListener('touchmove', handleTouchMove);
+      scroller.removeEventListener('touchend', handleTouchEnd);
+      scroller.removeEventListener('touchcancel', handleTouchEnd);
       scroller.removeEventListener('scroll', handleScroll);
     };
   }, [isActive]);
