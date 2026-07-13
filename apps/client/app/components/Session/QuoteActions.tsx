@@ -19,6 +19,20 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
   const floatingButtonsRef = useRef<HTMLDivElement>(null);
 
+  // This feature is driven entirely by desktop mouse events (mouseup/mousedown).
+  // On touch devices those events are emulated mid long-press / handle-drag, so
+  // clearing and re-reading the selection actively fights the native touch
+  // selection and makes partial copy glitchy. Gate it to fine (mouse) pointers.
+  const [isFinePointer, setIsFinePointer] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(pointer: fine)');
+    setIsFinePointer(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setIsFinePointer(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+
   const handleTextSelection = useCallback(() => {
     // short delay to allow the selection to be made
     setTimeout(() => {
@@ -59,6 +73,8 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
   }, []);
 
   useEffect(() => {
+    if (!isFinePointer) return;
+
     const handleClickOutside = (event: MouseEvent) => {
       const target = event.target as Node;
       const isInsideContainer = containerRef.current?.contains(target);
@@ -74,9 +90,11 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [containerRef, showFloatingButtons, clearSelection]);
+  }, [isFinePointer, containerRef, showFloatingButtons, clearSelection]);
 
   useEffect(() => {
+    if (!isFinePointer) return;
+
     const element = containerRef.current;
     if (element) {
       element.addEventListener('mouseup', handleTextSelection);
@@ -84,9 +102,9 @@ export const QuoteActions: FC<QuoteActionsProps> = ({ containerRef }) => {
         element.removeEventListener('mouseup', handleTextSelection);
       };
     }
-  }, [containerRef, handleTextSelection]);
+  }, [isFinePointer, containerRef, handleTextSelection]);
 
-  if (!showFloatingButtons) return null;
+  if (!isFinePointer || !showFloatingButtons) return null;
 
   return (
     <FloatingButtons
