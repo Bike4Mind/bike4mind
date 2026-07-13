@@ -61,6 +61,21 @@ describe('redactSecrets', () => {
     expect(out).toContain('[REDACTED]');
   });
 
+  it('leaves numeric-valued token-accounting fields untouched', () => {
+    expect(redactSecrets('totalTokens: 1523')).toBe('totalTokens: 1523');
+    expect(redactSecrets('tokenCount: 42')).toBe('tokenCount: 42');
+    expect(redactSecrets('promptTokens=900')).toBe('promptTokens=900');
+    expect(redactSecrets('{"completionTokens": 623, "totalTokens": 1523}')).toBe(
+      '{"completionTokens": 623, "totalTokens": 1523}'
+    );
+  });
+
+  it('still redacts a secret-named assignment whose value merely starts with digits', () => {
+    const out = redactSecrets('API_TOKEN=1523abcXYZ');
+    expect(out).not.toContain('1523abcXYZ');
+    expect(out).toContain('[REDACTED]');
+  });
+
   it('leaves ordinary tool output untouched', () => {
     const content = 'export function add(a: number, b: number) { return a + b; }\n/Users/dev/project/src/add.ts:1';
     expect(redactSecrets(content)).toBe(content);
