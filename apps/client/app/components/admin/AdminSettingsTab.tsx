@@ -375,6 +375,12 @@ export const IconMap: IconMapType = {
   Speed: JoyIcon(SpeedIcon),
 };
 
+// Resolve a settings icon name to a component, falling back to the Settings gear
+// for a missing OR unmapped name so an unknown key never renders <undefined /> and
+// crashes the tree. Exported for direct unit tests of the fallback behavior.
+export const resolveSettingsIcon = (icon: string | undefined): React.FC<{ sx?: SvgIconProps['sx'] }> =>
+  (icon && IconMap[icon]) || IconMap.Settings;
+
 const settingConfigs = Object.values(settingsMap);
 
 interface EnvVariable {
@@ -697,9 +703,7 @@ const AdminSettingsTab: React.FC = () => {
 
   const renderSettingGroup = (settings: typeof settingConfigs, groupName?: string, groupId?: string) => {
     const groupInfo = groupId ? Object.values(API_SERVICE_GROUPS).find(g => g.id === groupId) : null;
-    // Fall back to the Settings gear for a missing OR unmapped icon name so an
-    // unknown key never renders <undefined /> and crashes the tree.
-    const IconComponent = (groupInfo?.icon && IconMap[groupInfo.icon]) || IconMap.Settings;
+    const IconComponent = resolveSettingsIcon(groupInfo?.icon);
 
     // Split settings into top-level entries and inline children.
     // A setting is an inline child when:
@@ -870,7 +874,7 @@ const AdminSettingsTab: React.FC = () => {
     data: { ungrouped: typeof settingConfigs; groups: Record<string, typeof settingConfigs> }
   ) => {
     const { ungrouped, groups } = data;
-    const CategoryIconComponent = IconMap[CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]] || IconMap.Settings;
+    const CategoryIconComponent = resolveSettingsIcon(CATEGORY_ICONS[category as keyof typeof CATEGORY_ICONS]);
     return (
       <Stack key={`category-${category}`} spacing={2}>
         <Stack direction="row" alignItems="center" spacing={1}>
@@ -998,7 +1002,7 @@ const AdminSettingsTab: React.FC = () => {
                 }}
               >
                 {Object.entries(SETTING_TABS).map(([tabId, tabInfo]) => {
-                  const TabIcon = IconMap[tabInfo.icon] || IconMap.Settings;
+                  const TabIcon = resolveSettingsIcon(tabInfo.icon);
                   return (
                     <Tab
                       key={tabId}

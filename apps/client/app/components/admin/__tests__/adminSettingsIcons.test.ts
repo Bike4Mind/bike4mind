@@ -11,7 +11,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { API_SERVICE_GROUPS, CATEGORY_ICONS, SETTING_TABS } from '@bike4mind/common';
-import { IconMap } from '../AdminSettingsTab';
+import { IconMap, resolveSettingsIcon } from '../AdminSettingsTab';
 
 const referencedIcons: { icon: string; source: string }[] = [
   ...Object.values(API_SERVICE_GROUPS).map(g => ({ icon: g.icon, source: `API_SERVICE_GROUPS.${g.id}` })),
@@ -31,5 +31,21 @@ describe('AdminSettingsTab IconMap completeness', () => {
   it('maps "Speed" to a dedicated icon, not the Settings fallback (regression: All-Tabs white-screen crash)', () => {
     expect(IconMap.Speed).toBeDefined();
     expect(IconMap.Speed).not.toBe(IconMap.Settings);
+  });
+});
+
+describe('resolveSettingsIcon fallback', () => {
+  it('returns the mapped component for a known icon name', () => {
+    expect(resolveSettingsIcon('Speed')).toBe(IconMap.Speed);
+  });
+
+  it('falls back to the Settings gear for an unmapped name instead of undefined', () => {
+    // 'Speed' before it was added to IconMap is exactly this case -- the crash guard.
+    expect(resolveSettingsIcon('NotARealIcon')).toBe(IconMap.Settings);
+  });
+
+  it('falls back to the Settings gear for undefined and empty names', () => {
+    expect(resolveSettingsIcon(undefined)).toBe(IconMap.Settings);
+    expect(resolveSettingsIcon('')).toBe(IconMap.Settings);
   });
 });
