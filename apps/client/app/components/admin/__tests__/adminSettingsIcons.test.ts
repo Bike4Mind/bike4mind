@@ -24,7 +24,12 @@ describe('AdminSettingsTab IconMap completeness', () => {
     expect(IconMap[icon]).toBeDefined();
   });
 
-  it('maps the API Rate Limiting "Speed" icon (regression: All-Tabs white-screen crash)', () => {
+  // The it.each above already asserts 'Speed' is present (it's RATE_LIMITING's icon).
+  // This anchor adds the part that check can't: 'Speed' must be its OWN entry, not
+  // aliased to the Settings fallback -- otherwise the group would silently show the
+  // generic gear instead of the speedometer that regressed in production.
+  it('maps "Speed" to a dedicated icon, not the Settings fallback (regression: All-Tabs white-screen crash)', () => {
     expect(IconMap.Speed).toBeDefined();
+    expect(IconMap.Speed).not.toBe(IconMap.Settings);
   });
 });
