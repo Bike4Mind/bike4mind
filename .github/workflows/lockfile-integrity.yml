@@ -1,0 +1,35 @@
+name: Lockfile Integrity
+
+# Blocks any pnpm-lock.yaml entry that resolves a dependency from a bare
+# tarball URL with no integrity hash and no git commit pin. pnpm serializes
+# three resolution shapes in the lockfile:
+#   1. registry/CDN tarball WITH integrity: {integrity: sha512-..., tarball: ...}
+#   2. git-hosted tarball, no integrity by design: {gitHosted: true, tarball: ...}
+#      (the commit SHA in the URL is the content pin; safe)
+#   3. bare tarball, no integrity, no commit pin: {tarball: ...} <- the hole
+# The grep below matches only shape 3, where `tarball` is the first (and
+# only) key in the resolution flow-map.
+
+on:
+  pull_request:
+    branches: [main]
+  # Also run on the merge queue so the check reports there if it later
+  # becomes a required branch-protection check (see semantic-pr-title.yml
+  # for why a required check must run on merge_group).
+  merge_group:
+    branches: [main]
+
+jobs:
+  check:
+    if: github.repository == (vars.CANONICAL_REPO || 'MillionOnMars/lumina5')
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for integrity-less tarball entries in pnpm-lock.yaml
+        run: |
+          if grep -nE "resolution: \{tarball:" pnpm-lock.yaml; then
+            echo "ERROR: pnpm-lock.yaml contains tarball entries without integrity"
+            echo "Regenerate the lockfile under pnpm >=10.34.1 so a sha512 integrity hash is written."
+            exit 1
+          fi
