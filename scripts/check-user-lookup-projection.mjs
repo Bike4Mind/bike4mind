@@ -11,6 +11,13 @@
 // To add a legitimate exception (e.g. the full doc is provably dropped downstream and
 // the endpoint is tightly scoped): add the file path to
 // scripts/user-lookup-projection-allowlist.txt with a comment explaining why.
+//
+// Known limits (this is a heuristic net for the common shape, not a parser):
+//  - $project detection is substring-level over the whole $lookup block, so a $project
+//    in a comment, or a nested $lookup on another collection with its own $project, will
+//    satisfy the check for the outer users lookup.
+//  - the `password: 0` check runs over the whole file, not just projection blocks.
+// Tighten to an AST scope if these edge cases start hiding real regressions.
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';

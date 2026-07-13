@@ -13,12 +13,6 @@ import type { IUser } from '../types/entities/UserTypes';
  * see `InboxModel.findByReceiverId`).
  */
 
-/** Fields safe to expose about ANY user to another authenticated caller. */
-export const SAFE_USER_PUBLIC_FIELDS = ['id', 'name', 'username', 'photoUrl', 'isOnline', 'lastActiveAt'] as const;
-
-/** Additionally safe within the same org, or when the caller is the user themselves. */
-export const SAFE_USER_EMAIL_FIELDS = ['email'] as const;
-
 /**
  * Fields that must NEVER be serialized to any client, including the user viewing
  * themselves. Some of these are whole objects that ALSO carry non-secret status
