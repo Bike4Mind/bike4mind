@@ -199,7 +199,8 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       </Box>
 
       {/* Main Content */}
-      <Box className="code-artifact-content" sx={{ p: 1.5, pt: 2 }}>
+      {/* No padding here: the Card already provides it. */}
+      <Box className="code-artifact-content">
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
           <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
             <IconButton

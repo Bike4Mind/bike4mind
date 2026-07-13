@@ -231,7 +231,8 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
         {icon}
       </Box>
 
-      <Box sx={{ p: 1.5, pt: 2 }}>
+      {/* No padding here: the Card already provides it. */}
+      <Box>
         <Stack direction="row" spacing={1} alignItems="center" mb={1}>
           <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
             <IconButton
