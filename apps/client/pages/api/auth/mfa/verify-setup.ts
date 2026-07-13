@@ -4,6 +4,7 @@ import { mfaService } from '@bike4mind/services';
 import { User, userRepository } from '@bike4mind/database';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logAuthAudit } from '@server/utils/authAudit';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 const handler = baseApi()
   // No rate limiting - using server-side lockout for stronger security
@@ -60,7 +61,7 @@ const handler = baseApi()
         res.json({
           ...result,
           ...tokens,
-          user: result.user,
+          user: redactUserSecretsForSelf(result.user),
         });
       } catch (error: unknown) {
         // Atomically increment the failed-attempt counter (mirrors mfa/verify.ts) - a

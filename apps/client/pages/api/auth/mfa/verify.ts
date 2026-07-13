@@ -3,6 +3,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 const handler = baseApi() // Now requires authentication
   // No rate limiting - using 3-strike abort for stronger security
@@ -59,7 +60,7 @@ const handler = baseApi() // Now requires authentication
           verified: true,
           usedBackupCode: result.usedBackupCode,
           ...tokens,
-          user: result.user,
+          user: redactUserSecretsForSelf(result.user),
         });
       } catch (error: unknown) {
         // Atomically increment the failed-attempt counter - concurrent requests each reading

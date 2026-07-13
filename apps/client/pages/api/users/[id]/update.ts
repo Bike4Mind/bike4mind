@@ -9,6 +9,7 @@ import {
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 
@@ -153,7 +154,7 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      return res.json(redactUserSecretsForSelf(finalUser?.toJSON()));
     } else {
       await userService.updateUser(userId, req.body as any, {
         db: {
@@ -168,7 +169,7 @@ const handler = baseApi().put(
 
       // Same for non-admin updates
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      return res.json(redactUserSecretsForSelf(finalUser?.toJSON()));
     }
   })
 );
