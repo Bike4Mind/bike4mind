@@ -67,7 +67,7 @@ type FirecrawlFetchOptions = {
  * @param adapters - Database adapters for fetching Firecrawl API key
  * @param url - URL to fetch
  * @param options - Optional configuration (e.g. maxTimeoutMs for Lambda-constrained callers)
- * @returns Markdown content and title
+ * @returns Capped markdown, title, and size/truncation metrics (see WebFetchResult)
  */
 export async function firecrawlFetch(
   adapters: GetEffectiveApiKeyAdapters,
