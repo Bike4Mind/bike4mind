@@ -1242,39 +1242,44 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   );
 
   const tableComponents = {
+    // Wide tables scroll horizontally inside their own wrapper. The reply body is
+    // no longer a scroll container (that caused Android to snap text selection to
+    // whole-block boundaries), so each element that can exceed the width owns its
+    // own overflow.
     table: ({ node, children, ref, ...props }: ComponentProps<'table'> & ExtraProps) => (
-      <Box
-        component="table"
-        sx={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          margin: '1rem 0',
-          border: '1px solid',
-          borderColor: 'neutral.300',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          color: 'text.primary',
-          '& th, & td': {
-            padding: '0.75rem',
+      <Box sx={{ overflowX: 'auto', maxWidth: '100%', margin: '1rem 0' }}>
+        <Box
+          component="table"
+          sx={{
+            width: '100%',
+            borderCollapse: 'collapse',
             border: '1px solid',
-            borderColor: 'divider',
+            borderColor: 'neutral.300',
+            borderRadius: '8px',
+            overflow: 'hidden',
             color: 'text.primary',
-          },
-          '& th': {
-            backgroundColor: 'background.level1',
-            fontWeight: 'bold',
-            borderBottom: '2px solid',
-            borderBottomColor: 'divider',
-            color: 'text.primary',
-          },
-          '& tr:nth-of-type(even)': {
-            backgroundColor: 'background.level1',
-            color: 'text.primary',
-          },
-        }}
-        {...props}
-      >
-        {children}
+            '& th, & td': {
+              padding: '0.75rem',
+              border: '1px solid',
+              borderColor: 'divider',
+              color: 'text.primary',
+            },
+            '& th': {
+              backgroundColor: 'background.level1',
+              fontWeight: 'bold',
+              borderBottom: '2px solid',
+              borderBottomColor: 'divider',
+              color: 'text.primary',
+            },
+            '& tr:nth-of-type(even)': {
+              backgroundColor: 'background.level1',
+              color: 'text.primary',
+            },
+          }}
+          {...props}
+        >
+          {children}
+        </Box>
       </Box>
     ),
     thead: ({ node, children, ref, ...props }: ComponentProps<'thead'> & ExtraProps) => (
@@ -1576,7 +1581,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       backgroundColor: 'chatbox.replyBg',
                       borderRadius: '8px',
                       color: 'text.primary',
-                      overflowX: 'auto',
+                      // Not a horizontal scroll container: wide children (tables,
+                      // code blocks) own their own overflow. Making the whole reply
+                      // scrollable made Android snap partial-copy selections to whole
+                      // block boundaries. Long unbroken tokens wrap instead.
+                      overflowWrap: 'anywhere',
                       position: 'relative',
                       scrollBehavior: 'smooth',
                       '& p:last-child': { mb: '0 !important' },

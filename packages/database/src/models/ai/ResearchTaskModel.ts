@@ -107,7 +107,9 @@ class ResearchTaskRepository extends BaseRepository<IResearchTask> implements IR
       by: string;
       direction: string;
     }
-  ) {
+    // Explicit return type: declaration emit otherwise expands IResearchTask into
+    // union members that are not exported from @bike4mind/common's entry (TS4053).
+  ): Promise<{ data: IResearchTask[]; hasMore: boolean; total: number }> {
     const queryConditions: Record<string, unknown> = {};
 
     if (filters.userId) {

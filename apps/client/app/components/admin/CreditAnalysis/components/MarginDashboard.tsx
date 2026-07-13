@@ -1,8 +1,31 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Box, Chip, CircularProgress, IconButton, Sheet, Stack, Table, Typography } from '@mui/joy';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  FormControl,
+  FormLabel,
+  IconButton,
+  Input,
+  Modal,
+  ModalDialog,
+  Sheet,
+  Stack,
+  Table,
+  Textarea,
+  Typography,
+} from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
-import { IModelDayMargin, IProviderMonthCogs, IUserMargin } from '@bike4mind/common';
+import {
+  IModelDayMargin,
+  IProviderInvoice,
+  IProviderMonthCogs,
+  ISettlementBreakdown,
+  IUserMargin,
+} from '@bike4mind/common';
 
 interface MarginResponse<T> {
   targetCreditsPerUsd: number;
@@ -34,25 +57,58 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 
+// Axios errors carry the server's validation reason in response.data;
+// err.message is only the generic status-code string.
+const apiErrorMessage = (err: unknown, fallback: string) => {
+  const e = err as { response?: { data?: { message?: string } }; message?: string };
+  return e.response?.data?.message || e.message || fallback;
+};
+
+/** Reconciliation status vs the entered invoice, as % of invoice. */
+const invoiceStatus = (
+  invoiceUsd: number,
+  cogsUsd: number
+): { label: string; color: 'success' | 'warning' | 'danger' } => {
+  const pct = invoiceUsd > 0 ? (Math.abs(invoiceUsd - cogsUsd) / invoiceUsd) * 100 : 100;
+  if (pct < 2) return { label: 'match', color: 'success' };
+  if (pct <= 10) return { label: 'review', color: 'warning' };
+  return { label: 'gap', color: 'danger' };
+};
+
+const signedUsd = (value: number) => `${value < 0 ? '-' : '+'}$${Math.abs(value).toFixed(2)}`;
+
 export const MarginDashboard: React.FC = () => {
   const [modelDay, setModelDay] = useState<MarginResponse<IModelDayMargin> | null>(null);
   const [byUser, setByUser] = useState<MarginResponse<NamedUserMargin> | null>(null);
   const [byProvider, setByProvider] = useState<MarginResponse<IProviderMonthCogs> | null>(null);
+  const [settlement, setSettlement] = useState<MarginResponse<ISettlementBreakdown> | null>(null);
+  const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Entry modal state; target null = closed.
+  const [entryTarget, setEntryTarget] = useState<{ month: string; provider: string } | null>(null);
+  const [entryUsd, setEntryUsd] = useState('');
+  const [entryNote, setEntryNote] = useState('');
+  const [entryError, setEntryError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const fetchAll = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const [modelDayRes, userRes, providerRes] = await Promise.all([
+      const [modelDayRes, userRes, providerRes, settlementRes, invoicesRes] = await Promise.all([
         api.get<MarginResponse<IModelDayMargin>>('/api/admin/usage-margin?view=model-day&days=30'),
         api.get<MarginResponse<NamedUserMargin>>('/api/admin/usage-margin?view=user&days=30'),
         api.get<MarginResponse<IProviderMonthCogs>>('/api/admin/usage-margin?view=provider-month'),
+        api.get<MarginResponse<ISettlementBreakdown>>('/api/admin/usage-margin?view=settlement&days=30'),
+        api.get<{ invoices: IProviderInvoice[] }>('/api/admin/provider-invoices'),
       ]);
       setModelDay(modelDayRes.data);
       setByUser(userRes.data);
       setByProvider(providerRes.data);
+      setSettlement(settlementRes.data);
+      setInvoices(invoicesRes.data.invoices);
     } catch (err) {
       setError((err as Error)?.message || 'Failed to load margin data');
     } finally {
@@ -65,6 +121,39 @@ export const MarginDashboard: React.FC = () => {
   }, [fetchAll]);
 
   const target = modelDay?.targetCreditsPerUsd ?? 0;
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const invoiceFor = (month: string, provider: string) =>
+    invoices.find(i => i.month === month && i.provider === provider);
+
+  const openEntry = (month: string, provider: string, existing?: IProviderInvoice) => {
+    setEntryTarget({ month, provider });
+    setEntryUsd(existing ? String(existing.invoiceUsd) : '');
+    setEntryNote('');
+    setEntryError(null);
+  };
+
+  const entryAmount = Number.parseFloat(entryUsd);
+  const entryValid = Number.isFinite(entryAmount) && entryAmount >= 0 && entryNote.trim().length > 0;
+
+  const saveEntry = async () => {
+    if (!entryTarget || !entryValid) return;
+    setIsSaving(true);
+    setEntryError(null);
+    try {
+      await api.post('/api/admin/provider-invoices', {
+        month: entryTarget.month,
+        provider: entryTarget.provider,
+        invoiceUsd: entryAmount,
+        note: entryNote.trim(),
+      });
+      setEntryTarget(null);
+      await fetchAll();
+    } catch (err) {
+      setEntryError(apiErrorMessage(err, 'Failed to save invoice'));
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <Box sx={{ p: { xs: 1, sm: 2 } }} data-testid="margin-dashboard">
@@ -200,23 +289,73 @@ export const MarginDashboard: React.FC = () => {
                     <th style={{ textAlign: 'right' }}>Input tokens</th>
                     <th style={{ textAlign: 'right' }}>Output tokens</th>
                     <th style={{ textAlign: 'right' }}>Cached tokens</th>
+                    <th style={{ textAlign: 'right' }}>Cache writes</th>
+                    <th style={{ textAlign: 'right' }}>Invoice</th>
+                    <th style={{ textAlign: 'right' }}>Delta</th>
+                    <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(byProvider?.rows ?? []).map(row => (
-                    <tr key={`${row.month}-${row.provider}`}>
-                      <td>{row.month}</td>
-                      <td>{row.provider}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(2)}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.inputTokens.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.outputTokens.toLocaleString()}</td>
-                      <td style={{ textAlign: 'right', ...numberCell }}>{row.cachedInputTokens.toLocaleString()}</td>
-                    </tr>
-                  ))}
+                  {(byProvider?.rows ?? []).map(row => {
+                    const key = `${row.month}-${row.provider}`;
+                    const invoice = invoiceFor(row.month, row.provider);
+                    const isCurrent = row.month === currentMonth;
+                    return (
+                      <tr key={key}>
+                        <td>{row.month}</td>
+                        <td>{row.provider}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>${row.cogsUsd.toFixed(2)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.inputTokens.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.outputTokens.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.cachedInputTokens.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.cacheWriteTokens.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }} data-testid={`margin-invoice-cell-${key}`}>
+                          {invoice ? (
+                            `$${invoice.invoiceUsd.toFixed(2)}`
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="plain"
+                              disabled={isCurrent}
+                              title={isCurrent ? 'Month still accruing; reconcile closed months only' : undefined}
+                              onClick={() => openEntry(row.month, row.provider)}
+                              data-testid={`margin-invoice-enter-${key}`}
+                            >
+                              Enter
+                            </Button>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', ...numberCell }} data-testid={`margin-invoice-delta-${key}`}>
+                          {invoice ? signedUsd(invoice.invoiceUsd - row.cogsUsd) : '-'}
+                        </td>
+                        <td>
+                          {invoice ? (
+                            (() => {
+                              const status = invoiceStatus(invoice.invoiceUsd, row.cogsUsd);
+                              return (
+                                <Chip
+                                  size="sm"
+                                  color={status.color}
+                                  onClick={() => openEntry(row.month, row.provider, invoice)}
+                                  data-testid={`margin-invoice-chip-${key}`}
+                                >
+                                  {status.label}
+                                </Chip>
+                              );
+                            })()
+                          ) : (
+                            <Chip size="sm" color="neutral" data-testid={`margin-invoice-chip-${key}`}>
+                              no invoice
+                            </Chip>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {(byProvider?.rows ?? []).length === 0 && (
                     <tr>
-                      <td colSpan={7}>
+                      <td colSpan={11}>
                         <Typography level="body-sm" color="neutral">
                           No usage events yet.
                         </Typography>
@@ -227,8 +366,99 @@ export const MarginDashboard: React.FC = () => {
               </Table>
             </Sheet>
           </Box>
+
+          <Box>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              Settlement basis (last 30 days)
+            </Typography>
+            <Typography level="body-xs" sx={{ mb: 1 }} color="neutral">
+              How usage was priced: provider-reported token counts vs the local estimate fallback. Token deltas are
+              provider minus local, averaged over rows reporting both.
+            </Typography>
+            <Sheet sx={{ overflow: 'auto' }}>
+              <Table size="sm" data-testid="margin-settlement-table">
+                <thead>
+                  <tr>
+                    <th>Basis</th>
+                    <th style={{ textAlign: 'right' }}>Requests</th>
+                    <th style={{ textAlign: 'right' }}>Credits</th>
+                    <th style={{ textAlign: 'right' }}>Written off</th>
+                    <th style={{ textAlign: 'right' }}>Avg input token delta</th>
+                    <th style={{ textAlign: 'right' }}>Avg output token delta</th>
+                    <th style={{ textAlign: 'right' }}>Delta sample</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(settlement?.rows ?? []).map(row => {
+                    const avg = (delta: number) =>
+                      row.deltaSampleSize > 0 ? Math.round(delta / row.deltaSampleSize).toLocaleString() : 'n/a';
+                    return (
+                      <tr key={row.settledBasis} data-testid={`margin-settlement-row-${row.settledBasis}`}>
+                        <td>{row.settledBasis}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.creditsCharged.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.writtenOffCredits.toLocaleString()}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{avg(row.inputTokenDelta)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{avg(row.outputTokenDelta)}</td>
+                        <td style={{ textAlign: 'right', ...numberCell }}>{row.deltaSampleSize.toLocaleString()}</td>
+                      </tr>
+                    );
+                  })}
+                  {(settlement?.rows ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={7}>
+                        <Typography level="body-sm" color="neutral">
+                          No settled usage events in the window.
+                        </Typography>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </Sheet>
+          </Box>
         </Stack>
       )}
+
+      <Modal open={entryTarget !== null} onClose={() => !isSaving && setEntryTarget(null)}>
+        <ModalDialog data-testid="margin-invoice-modal" sx={{ minWidth: 360 }}>
+          <Typography level="title-md">
+            Invoice: {entryTarget?.provider} {entryTarget?.month}
+          </Typography>
+          {entryError && (
+            <Alert color="danger" size="sm" data-testid="margin-invoice-modal-error">
+              {entryError}
+            </Alert>
+          )}
+          <FormControl>
+            <FormLabel>Invoice total (USD)</FormLabel>
+            <Input
+              type="number"
+              value={entryUsd}
+              onChange={e => setEntryUsd(e.target.value)}
+              slotProps={{ input: { min: 0, step: 'any' } }}
+              data-testid="margin-invoice-usd-input"
+            />
+          </FormControl>
+          <FormControl>
+            <FormLabel>Note (invoice id and billing period)</FormLabel>
+            <Textarea
+              minRows={2}
+              value={entryNote}
+              onChange={e => setEntryNote(e.target.value)}
+              data-testid="margin-invoice-note-input"
+            />
+          </FormControl>
+          <Stack direction="row" spacing={1} justifyContent="flex-end">
+            <Button variant="plain" color="neutral" disabled={isSaving} onClick={() => setEntryTarget(null)}>
+              Cancel
+            </Button>
+            <Button loading={isSaving} disabled={!entryValid} onClick={saveEntry} data-testid="margin-invoice-save-btn">
+              Save
+            </Button>
+          </Stack>
+        </ModalDialog>
+      </Modal>
     </Box>
   );
 };

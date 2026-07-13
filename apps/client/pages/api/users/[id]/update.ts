@@ -9,6 +9,7 @@ import {
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 import { triggerTelemetryDeletion } from '@server/utils/telemetryDeletion';
 import { getClientIp, truncateIp } from '@server/utils/ip';
 
@@ -153,7 +154,10 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      // Keep securityQuestions + userNotes so the response stays symmetric with GET
+      // /users/[id] (ProfileDataForm round-trips them); dropping them here would blank
+      // the fields in the query cache the client seeds from this response.
+      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
     } else {
       await userService.updateUser(userId, req.body as any, {
         db: {
@@ -166,9 +170,9 @@ const handler = baseApi().put(
         await handleTelemetryConsentChange(userId, previousTelemetryLevel, incomingTelemetryLevel, req);
       }
 
-      // Same for non-admin updates
+      // Same for non-admin updates (keep GET/PUT symmetric - see the admin branch above)
       const finalUser = await User.findById(userId);
-      return res.json(finalUser);
+      return res.json(redactUserSecretsForSelf(finalUser, { keep: ['securityQuestions', 'userNotes'] }));
     }
   })
 );

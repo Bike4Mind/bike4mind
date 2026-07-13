@@ -28,6 +28,7 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         artifactType="mermaid"
         mimeType="text/plain"
         artifactContent={mermaidArtifact}
+        contentKey={artifact.content}
         title={mermaidArtifact.title}
         chipLabel="Mermaid"
         testIdPrefix="mermaid"

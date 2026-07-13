@@ -125,6 +125,15 @@ export const secrets = {
   OPTIHASHI_WEBHOOK_SECRET: new sst.Secret('OPTIHASHI_WEBHOOK_SECRET', 'not-configured'),
   // Previous webhook secret for zero-downtime key rotation; set to old value when rotating
   OPTIHASHI_WEBHOOK_SECRET_PREVIOUS: new sst.Secret('OPTIHASHI_WEBHOOK_SECRET_PREVIOUS', 'not-configured'),
+  // External instance-service (internal Fargate) — URL + bearer token, subscriber-fanout
+  // pattern. 'not-configured' disables consumption (the consumer degrades gracefully).
+  OPTIHASHI_INSTANCE_SERVICE_URL: new sst.Secret('OPTIHASHI_INSTANCE_SERVICE_URL', 'not-configured'),
+  OPTIHASHI_INSTANCE_SERVICE_TOKEN: new sst.Secret('OPTIHASHI_INSTANCE_SERVICE_TOKEN', 'not-configured'),
+  // Previous token for zero-downtime rotation; set to old value when rotating.
+  OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS: new sst.Secret(
+    'OPTIHASHI_INSTANCE_SERVICE_TOKEN_PREVIOUS',
+    'not-configured'
+  ),
   // Overwatch HTTP ingest kill switch. Default 'true' (enabled).
   // Set to 'false' to disable the POST /api/overwatch/v1/events endpoint.
   // Per-stage. Flipping takes effect on next Lambda cold-start (~10-30min under traffic).

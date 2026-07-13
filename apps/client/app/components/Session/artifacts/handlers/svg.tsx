@@ -75,6 +75,7 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         artifactType="svg"
         mimeType="image/svg+xml"
         artifactContent={svgArtifact}
+        contentKey={artifact.content}
         title={svgTitle}
         chipLabel="SVG"
         testIdPrefix="svg"

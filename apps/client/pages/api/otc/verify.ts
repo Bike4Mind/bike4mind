@@ -4,6 +4,7 @@ import {
   HTTPError,
   InternalServerError,
   UnprocessableEntityError,
+  redactUserSecretsForSelf,
 } from '@bike4mind/common';
 import {
   adminSettingsRepository,
@@ -207,9 +208,10 @@ const handler = baseApi({ auth: false })
         }
       }
 
-      // Serialize via toJSON() (not a raw spread of the Mongoose doc) so the schema's
-      // transforms apply and no internal/`select:false` field can slip into the response.
-      const safeUser = typeof existingUser.toJSON === 'function' ? existingUser.toJSON() : existingUser;
+      // Route through the shared self-view serializer (same as mfa/verify) so the login
+      // response carries the same redacted shape as GET /users/[id]. `select:false` alone
+      // does not cover every secret field, so serialize at the boundary here too.
+      const safeUser = redactUserSecretsForSelf(existingUser);
       return res.status(200).json({ ...safeUser, ...tokens });
     }
 
@@ -369,7 +371,7 @@ const handler = baseApi({ auth: false })
     }).catch(err => req.logger.error('OTC registration analytics log failed', err));
 
     return res.status(200).json({
-      user: newUser,
+      user: redactUserSecretsForSelf(newUser),
       ...authTokenGenerator.createAccessToken(newUser.id, newUser.tokenVersion ?? 0),
     });
   });

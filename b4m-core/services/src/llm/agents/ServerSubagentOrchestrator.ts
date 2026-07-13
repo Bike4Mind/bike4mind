@@ -401,7 +401,12 @@ export class ServerSubagentOrchestrator {
     this.deps.logger.info(
       `🤖🚀 [SubagentOrchestrator] Spawning "${agentDef.name}" with ${filteredTools.length} tools, ` +
         `model: ${effectiveModel}, ` +
-        `thoroughness: ${effectiveThoroughness}, max iterations: ${maxIterations}`
+        `thoroughness: ${effectiveThoroughness}, max iterations: ${maxIterations}`,
+      // Surface the namespaced MCP tool names (e.g. atlassian__*) so both spawn
+      // paths (in-process delegate + Lambda re-dispatch) show WHICH MCP tools
+      // the subagent got, not just a count. This is the log that read "0 tools"
+      // when MCP wiring was missing.
+      { mcpToolNames: filteredTools.map(t => t.toolSchema?.name).filter((n): n is string => !!n && n.includes('__')) }
     );
 
     // Notify tracker (if any) BEFORE constructing the agent so the child execution

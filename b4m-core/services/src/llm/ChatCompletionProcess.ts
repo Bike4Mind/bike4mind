@@ -101,7 +101,13 @@ import { buildContextOverflowMessage } from './contextOverflowMessage';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
-import { TelemetryBuilder, mapBackendToProvider, categorizeToolError, AnomalyAlertService } from '../telemetry';
+import {
+  TelemetryBuilder,
+  mapBackendToProvider,
+  categorizeToolError,
+  AnomalyAlertService,
+  aggregateWebFetchContentTelemetry,
+} from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory } from '@bike4mind/common';
 import {
   ContextTelemetryAlertsSchema,
@@ -3482,6 +3488,16 @@ export class ChatCompletionProcess {
                     errorCategories: errorCategories.length > 0 ? errorCategories : undefined,
                   });
                 }
+              }
+
+              // Enrich web_fetch with content-size + truncation metrics aggregated from the
+              // citables it emitted. Silent truncation is invisible in invocation/success counts alone.
+              const webFetchEntry = toolTelemetryMap.get('web_fetch');
+              if (webFetchEntry) {
+                const sizes = aggregateWebFetchContentTelemetry(quest.promptMeta?.citables);
+                webFetchEntry.truncatedInvocationCount = sizes.truncatedInvocationCount;
+                webFetchEntry.totalExtractedChars = sizes.totalExtractedChars;
+                webFetchEntry.maxExtractedChars = sizes.maxExtractedChars;
               }
 
               // Set tools on telemetry builder

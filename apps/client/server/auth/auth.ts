@@ -141,6 +141,9 @@ export const auth = handler
       req.logger?.info(`[AUTH] Blocked ${req.url} for user ${req.user!.id} — AUP/ToS acceptance required.`);
       return res.status(403).json({
         error: 'Policy acceptance required.',
+        // Included so any client that surfaces error_description (e.g. the device-activation page)
+        // shows an accurate message instead of a misleading fallback. See issue #369.
+        error_description: 'Accept the Terms of Service and Acceptable Use Policy to continue.',
         policyAcceptanceRequired: true,
       });
     }
@@ -201,10 +204,12 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
     // the overloads correctly. Cast around the RC's faulty overload resolution;
     // runtime is unchanged (passReqToCallback defaults to false, so verify receives
     // (accessToken, refreshToken, profile, done)). See typecheck-report.md.
-    new (GitHubStrategy as unknown as new (
-      options: Record<string, unknown>,
-      verify: (...args: any[]) => void
-    ) => GitHubStrategy)(
+    new (
+      GitHubStrategy as unknown as new (
+        options: Record<string, unknown>,
+        verify: (...args: any[]) => void
+      ) => GitHubStrategy
+    )(
       {
         clientID: Config.GITHUB_CLIENT_ID,
         clientSecret: Config.GITHUB_CLIENT_SECRET,
@@ -411,8 +416,6 @@ passport.deserializeUser(async (id: string, done) => {
     .catch(err => done(err));
 });
 
-export const authMiddleware: RequestHandler[] = [
-  passport.initialize(),
-];
+export const authMiddleware: RequestHandler[] = [passport.initialize()];
 
 export default passport;

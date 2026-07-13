@@ -1,5 +1,10 @@
 import type { PublishUser } from './checkScopePermission';
-import { checkAccessGate, type AccessGateShape, type VisibilityContext, type VisibilityResult } from './checkVisibility';
+import {
+  checkAccessGate,
+  type AccessGateShape,
+  type VisibilityContext,
+  type VisibilityResult,
+} from './checkVisibility';
 
 /**
  * Publish - access gate for no-sign-in `/a/<shareToken>` links, sibling to
@@ -13,8 +18,8 @@ import { checkAccessGate, type AccessGateShape, type VisibilityContext, type Vis
  *  - passphrase: the caller verifies the per-artifact proof cookie (minted by
  *    POST /api/publish/gate/passphrase) and passes `ctx.passphraseVerified`;
  *    the raw passphrase never rides ordinary requests.
- *  - domain: requires `ctx.user` with a VERIFIED email whose domain exact-matches
- *    the record's allowlist.
+ *  - domain: requires `ctx.user` with a VERIFIED email whose host equals an
+ *    allowlist entry or is a subdomain of it (entries are matched as stored).
  * Owner/admin always pass their own gate.
  */
 export interface ShareGrantArtifact {

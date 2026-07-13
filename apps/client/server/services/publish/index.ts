@@ -37,6 +37,7 @@ export { renderBundleLoaderShell } from './renderBundleLoaderShell';
 export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
 export { generateShareToken } from './shareToken';
 export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
+export { recordGatedView, type RecordGatedViewInput } from './recordGatedView';
 export { renderPassphraseShell } from './renderPassphraseShell';
 export {
   checkVisibility,

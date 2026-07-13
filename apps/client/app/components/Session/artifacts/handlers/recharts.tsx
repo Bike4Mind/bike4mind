@@ -68,6 +68,7 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
         artifactType="recharts"
         mimeType="application/vnd.ant.recharts"
         artifactContent={chart}
+        contentKey={chart.content}
         title={chart.title}
         chipLabel={chartType || 'Chart'}
         testIdPrefix="recharts"

@@ -4,6 +4,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { BadRequestError } from '@bike4mind/utils';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id: string }>(async (req, res) => {
@@ -42,7 +43,7 @@ const handler = baseApi().post(
       targetUser.tokenVersion ?? 0
     );
 
-    return res.json({ user: targetUser, accessToken, refreshToken });
+    return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, refreshToken });
   })
 );
 

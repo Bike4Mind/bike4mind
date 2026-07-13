@@ -37,6 +37,15 @@ export function renderPassphraseShell(): string {
         if (res.status === 204) { note('Unlocked - loading...'); location.reload(); return; }
         btn.disabled = false;
         if (res.status === 403) { note('That passphrase is not correct.'); return; }
+        if (res.status === 423) {
+          // Locked after too many wrong attempts. Keep the button disabled and
+          // surface the wait from Retry-After (seconds) rather than let them hammer on.
+          btn.disabled = true;
+          var secs = parseInt(res.headers.get('Retry-After'), 10);
+          var wait = (secs && secs > 60) ? (Math.ceil(secs / 60) + ' minutes') : 'a minute';
+          note('Too many incorrect attempts. Try again in ' + wait + '.');
+          return;
+        }
         if (res.status === 429) { note('Too many attempts - wait a minute and try again.'); return; }
         note('Something went wrong - try again.');
       })

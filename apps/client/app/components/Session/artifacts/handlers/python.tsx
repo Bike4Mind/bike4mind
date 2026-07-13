@@ -44,6 +44,7 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
         artifactType="python"
         mimeType="application/vnd.ant.python"
         artifactContent={pythonArtifact}
+        contentKey={artifact.content}
         title={title}
         chipLabel="Python"
         testIdPrefix="python"

@@ -25,6 +25,7 @@ import ChatBubbleOutlineIcon from '@mui/icons-material/ChatBubbleOutline';
 import { isAxiosError } from 'axios';
 import { toast } from 'sonner';
 import type { CommentPolicy, PublishResult, PublishVisibility } from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import { ShareActions } from './ShareActions';
 import { EmbedAllowlistEditor } from './EmbedAllowlistEditor';
 import {
@@ -121,7 +122,10 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: 
   },
 ];
 
-/** Parse the domains textarea into normalized domains; null when any entry is invalid. */
+/** Parse the domains textarea; null when any entry is invalid. Mirrors the server:
+ *  entries are validated as real registrable domains (rejecting bare suffixes like
+ *  co.uk / github.io) but kept AS ENTERED - matching is exact-or-subdomain, so a
+ *  subdomain entry is never widened to its parent. */
 function parseDomains(text: string): string[] | null {
   const items = [
     ...new Set(
@@ -132,7 +136,9 @@ function parseDomains(text: string): string[] | null {
     ),
   ];
   if (items.length === 0 || items.length > 20) return null;
-  return items.every(d => DOMAIN_RE.test(d)) ? items : null;
+  if (!items.every(d => DOMAIN_RE.test(d))) return null;
+  if (items.some(d => registrableDomain(d, { allowPrivateDomains: true }) === null)) return null;
+  return items;
 }
 
 function errorMessage(err: unknown): string {

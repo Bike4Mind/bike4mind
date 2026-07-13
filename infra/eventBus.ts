@@ -288,22 +288,20 @@ const telemetryAlertSubscription = eventBus.subscribe(
 // so the queue needs a resource policy granting SendMessage, scoped to this rule's ARN.
 new aws.sqs.QueuePolicy('telemetryAlertRuleDLQPolicy', {
   queueUrl: telemetryAlertRuleDLQ.url,
-  policy: $util
-    .all([telemetryAlertRuleDLQ.arn, telemetryAlertSubscription.nodes.rule.arn])
-    .apply(([dlqArn, ruleArn]) =>
-      JSON.stringify({
-        Version: '2012-10-17',
-        Statement: [
-          {
-            Effect: 'Allow',
-            Principal: { Service: 'events.amazonaws.com' },
-            Action: 'sqs:SendMessage',
-            Resource: dlqArn,
-            Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
-          },
-        ],
-      })
-    ),
+  policy: $util.all([telemetryAlertRuleDLQ.arn, telemetryAlertSubscription.nodes.rule.arn]).apply(([dlqArn, ruleArn]) =>
+    JSON.stringify({
+      Version: '2012-10-17',
+      Statement: [
+        {
+          Effect: 'Allow',
+          Principal: { Service: 'events.amazonaws.com' },
+          Action: 'sqs:SendMessage',
+          Resource: dlqArn,
+          Condition: { ArnEquals: { 'aws:SourceArn': ruleArn } },
+        },
+      ],
+    })
+  ),
 });
 
 // Spider events - comprehensive notebook grooming

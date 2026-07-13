@@ -40,7 +40,7 @@ import useSessionLayout, {
   recordModerationStatus,
   hasBlockingPendingFiles,
 } from '@client/app/hooks/useSessionLayout';
-import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
@@ -97,7 +97,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // frozen display value - a genuine mid-turn exhaustion must still surface.
   const effectiveCredits = useEffectiveCredits({ live: true });
 
-  const { chatCompletion, setChatCompletion } = useSubscribeChatCompletion(currentSessionId);
+  const { chatCompletion, setChatCompletion } = useChatCompletionContext();
 
   const { readyState, subscribeToAction } = useWebsocket();
 

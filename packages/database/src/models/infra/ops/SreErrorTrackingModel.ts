@@ -10,6 +10,7 @@
 
 import mongoose from 'mongoose';
 import BaseRepository from '@bike4mind/db-core';
+import type { SreMetrics } from '@bike4mind/common';
 
 /**
  * Build a repoSlug filter for queries.
@@ -336,6 +337,18 @@ export const DISMISSABLE_STATUSES: ISreErrorTracking['status'][] = [
   'low_confidence',
   'rate_limited',
 ];
+
+/** Raw shape returned by the getMetrics $facet aggregation (one row per branch). */
+interface SreMetricsFacet {
+  total: Array<{ count: number }>;
+  bySource: Array<{ _id: ISreErrorTracking['source'] | null; count: number }>;
+  byStatus: Array<{ _id: ISreErrorTracking['status'] | null; count: number }>;
+  analysesRun: Array<{ count: number }>;
+  fixesDispatched: Array<{ count: number }>;
+  prsCreated: Array<{ count: number }>;
+  prsMerged: Array<{ count: number }>;
+  tokens: Array<{ _id: null; input: number; output: number }>;
+}
 
 class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   constructor(private sreErrorTrackingModel: mongoose.Model<ISreErrorTracking>) {
@@ -825,6 +838,70 @@ class SreErrorTrackingRepository extends BaseRepository<ISreErrorTracking> {
   async findFullById(id: string): Promise<ISreErrorTracking | null> {
     const doc = await this.model.findById(id).lean<ISreErrorTracking>({ virtuals: true });
     return doc ?? null;
+  }
+
+  /**
+   * Aggregate pipeline metrics for the admin activity dashboard (#270).
+   * A single-pass $facet over docs CREATED within `windowMs` computes every
+   * headline count, so all numbers reconcile with the underlying records for
+   * the window. Optionally scoped to a repoSlug. Runs entirely server-side -
+   * no client-side collection scan. Field-existence branches use `$ne: null`,
+   * which excludes both missing and explicitly-null values.
+   */
+  async getMetrics(windowMs: number, repoSlug?: string): Promise<SreMetrics> {
+    const since = new Date(Date.now() - windowMs);
+    const match: Record<string, unknown> = { createdAt: { $gte: since } };
+    if (repoSlug) Object.assign(match, repoSlugFilter(repoSlug));
+
+    const [facet] = await this.model.aggregate<SreMetricsFacet>([
+      { $match: match },
+      {
+        $facet: {
+          total: [{ $count: 'count' }],
+          bySource: [{ $group: { _id: '$source', count: { $sum: 1 } } }],
+          byStatus: [{ $group: { _id: '$status', count: { $sum: 1 } } }],
+          analysesRun: [{ $match: { diagnosisResult: { $ne: null } } }, { $count: 'count' }],
+          fixesDispatched: [{ $match: { dispatchedAt: { $ne: null } } }, { $count: 'count' }],
+          prsCreated: [{ $match: { fixPrNumber: { $ne: null } } }, { $count: 'count' }],
+          prsMerged: [{ $match: { fixMergedAt: { $ne: null } } }, { $count: 'count' }],
+          tokens: [
+            {
+              $group: {
+                _id: null,
+                input: { $sum: '$llmTokensUsed.input' },
+                output: { $sum: '$llmTokensUsed.output' },
+              },
+            },
+          ],
+        },
+      },
+    ]);
+
+    const countOf = (branch?: Array<{ count: number }>): number => branch?.[0]?.count ?? 0;
+
+    const bySource = { CLOUDWATCH: 0, GITHUB_ISSUE: 0 };
+    for (const row of facet?.bySource ?? []) {
+      if (row._id) bySource[row._id] = row.count;
+    }
+
+    const byStatus: Record<string, number> = {};
+    for (const row of facet?.byStatus ?? []) {
+      if (row._id) byStatus[row._id] = row.count;
+    }
+
+    const tokensRow = facet?.tokens?.[0];
+
+    return {
+      windowMs,
+      total: countOf(facet?.total),
+      bySource,
+      byStatus,
+      analysesRun: countOf(facet?.analysesRun),
+      fixesDispatched: countOf(facet?.fixesDispatched),
+      prsCreated: countOf(facet?.prsCreated),
+      prsMerged: countOf(facet?.prsMerged),
+      tokens: { input: tokensRow?.input ?? 0, output: tokensRow?.output ?? 0 },
+    };
   }
 }
 

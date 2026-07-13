@@ -1,4 +1,4 @@
-import React, { useEffect, useState, type ReactNode } from 'react';
+import React, { useState, type ReactNode } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import type { Theme } from '@mui/joy';
 import {
@@ -10,7 +10,12 @@ import {
   ExpandLessOutlined as ExpandLessIcon,
   CodeOutlined as CodeViewIcon,
 } from '@mui/icons-material';
-import useSessionLayout, { setSessionLayout, setSelectedArtifactVersion } from '@client/app/hooks/useSessionLayout';
+import useSessionLayout, {
+  setSessionLayout,
+  setSelectedArtifactVersion,
+  type ArtifactData,
+} from '@client/app/hooks/useSessionLayout';
+import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -41,10 +46,16 @@ export interface ArtifactSaveFile {
 export interface ArtifactPreviewCardProps {
   artifactId: string;
   /** Discriminant on sessionLayout.artifactData; selects the side-panel viewer. */
-  artifactType: string;
+  artifactType: ArtifactData['type'];
   mimeType: string;
   /** Payload handed to the side-panel viewer. */
-  artifactContent: unknown;
+  artifactContent: ArtifactData['content'];
+  /**
+   * The string that changes on a live content edit (usually the artifact's raw content).
+   * Drives useSelectedArtifactContentSync's change detection -- see that hook for why it
+   * keys on this rather than the whole content object.
+   */
+  contentKey: string;
   title: string;
   chipLabel: ReactNode;
   /** Row under the header: line counts, data points, dependencies. */
@@ -89,6 +100,7 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   artifactType,
   mimeType,
   artifactContent,
+  contentKey,
   title,
   chipLabel,
   stats,
@@ -146,9 +158,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
     setSessionLayout({
       layout: 'vertical',
-      artifactData: { type: artifactType, content: artifactContent, mimeType, id: artifactId },
+      artifactData: { type: artifactType, content: artifactContent, mimeType, id: artifactId } as ArtifactData,
       selectedArtifactId: artifactId,
-    } as Parameters<typeof setSessionLayout>[0]);
+    });
     // Open at the artifact's own latest version: clear any per-artifact selection so a
     // version chosen earlier for this artifact doesn't override the fresh open.
     setSelectedArtifactVersion(artifactId, undefined);
@@ -188,16 +200,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
     }
   };
 
-  // Keep the open side panel in step with this card's content while a reply streams in.
-  useEffect(() => {
-    const currentState = useSessionLayout.getState();
-    if (currentState.selectedArtifactId !== artifactId || currentState.artifactData?.type !== artifactType) return;
-    if (JSON.stringify(currentState.artifactData.content) === JSON.stringify(artifactContent)) return;
-
-    setSessionLayout({
-      artifactData: { ...currentState.artifactData, content: artifactContent },
-    } as Parameters<typeof setSessionLayout>[0]);
-  }, [artifactId, artifactType, artifactContent]);
+  // Push live content changes to the Knowledge Base store. Guarded: a card that merely
+  // mounts (scrolled back into view) must not overwrite the store with older content (#457).
+  useSelectedArtifactContentSync(artifactId, artifactType, contentKey, artifactContent);
 
   return (
     <Card

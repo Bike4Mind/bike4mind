@@ -49,6 +49,7 @@ import {
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
+import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
   buildHandoffPrompt,
@@ -801,6 +802,9 @@ function CliApp() {
           // Always set the trigger - the useEffect will wait for isThinking to be false
           useCliStore.getState().setPendingBackgroundTrigger(true);
         },
+        onSubagentUsage: usage => {
+          useCliStore.getState().recordSubagentUsage({ tokens: usage.totalTokens, credits: usage.totalCredits });
+        },
       });
 
       // Create agent_delegate tool (with background support)
@@ -1275,6 +1279,10 @@ function CliApp() {
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
           isReadOnlyTool,
+          // Mid-loop recovery if a provider context-window error interrupts this
+          // turn: compact the in-flight history once and retry, instead of
+          // failing the turn and losing the user's work.
+          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
@@ -2604,7 +2612,13 @@ function CliApp() {
             ...activeSession,
             messages: rewindedMessages,
             updatedAt: new Date().toISOString(),
-            metadata: newMetadata,
+            metadata: {
+              ...newMetadata,
+              // Not derivable from message data - carry forward rather than zeroing
+              subagentCalls: activeSession.metadata.subagentCalls,
+              subagentTokens: activeSession.metadata.subagentTokens,
+              subagentCost: activeSession.metadata.subagentCost,
+            },
           };
 
           // Prefill the input with the selected message

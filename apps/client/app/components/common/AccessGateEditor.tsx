@@ -11,6 +11,7 @@ import {
   type PublishAccessGateInput,
   type PublishAccessGateRead,
 } from '@client/app/utils/publishApi';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 
 export interface AccessGateEditorProps {
   publicId: string;
@@ -29,7 +30,8 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNod
   { value: 'passphrase', label: 'Passphrase', icon: <KeyIcon sx={{ fontSize: 16 }} /> },
   { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
 ];
-/** Registrable domain, exact form (mirrors the server DOMAIN_RE). */
+/** Syntactic domain pre-filter (mirrors the server DOMAIN_RE); entries are then
+ *  validated as real registrable domains and sent/stored AS ENTERED (never reduced). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 function errMessage(err: unknown): string {
@@ -83,6 +85,14 @@ export function AccessGateEditor({
     const bad = domains.find(d => !DOMAIN_RE.test(d));
     if (bad) {
       toast.error(`Invalid domain: ${bad}`);
+      return 'invalid';
+    }
+    // Validate each entry is a real registrable domain (rejects a bare suffix like
+    // co.uk / github.io) but keep it AS ENTERED - matching is exact-or-subdomain, so
+    // a subdomain entry is never widened to its parent org.
+    const noReg = domains.find(d => registrableDomain(d, { allowPrivateDomains: true }) === null);
+    if (noReg) {
+      toast.error(`Enter a registrable domain (e.g. acme.com), not: ${noReg}`);
       return 'invalid';
     }
     return { kind: 'domain', allowedDomains: domains };

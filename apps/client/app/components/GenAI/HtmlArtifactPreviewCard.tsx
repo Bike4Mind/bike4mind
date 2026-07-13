@@ -20,6 +20,7 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
       artifactType="html"
       mimeType="text/html"
       artifactContent={artifact}
+      contentKey={artifact.content}
       title={artifact.title}
       chipLabel="HTML"
       testIdPrefix="html"

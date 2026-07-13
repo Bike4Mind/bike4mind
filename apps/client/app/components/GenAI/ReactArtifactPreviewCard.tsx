@@ -19,6 +19,7 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
       artifactType="react"
       mimeType="application/vnd.ant.react"
       artifactContent={artifact}
+      contentKey={artifact.content}
       title={artifact.title}
       chipLabel="React"
       testIdPrefix="react"

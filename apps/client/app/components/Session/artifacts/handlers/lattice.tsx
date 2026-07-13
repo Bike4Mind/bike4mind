@@ -66,6 +66,7 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         artifactType="lattice"
         mimeType="application/vnd.b4m.lattice"
         artifactContent={model}
+        contentKey={model.content}
         title={model.title}
         chipLabel={modelType || 'Financial Model'}
         testIdPrefix="lattice"
