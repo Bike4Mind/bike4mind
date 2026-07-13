@@ -113,19 +113,22 @@ const handler = baseApi()
           passphraseHash: await bcrypt.hash(parsed.data.accessGate.passphrase, 10),
         };
       } else {
-        // Store canonical registrable domains (eTLD+1) so matching is subdomain-aware.
-        // A bare public suffix (e.g. co.uk) has no registrable domain and is rejected -
-        // a co.uk gate would otherwise admit the entire UK.
-        const canonical = parsed.data.accessGate.allowedDomains.map(registrableDomain);
-        if (canonical.some(d => d === null)) {
+        // Validate each entry is a real registrable domain (rejects a bare public/
+        // private suffix like co.uk or github.io that would admit an entire suffix),
+        // but STORE IT AS ENTERED - never reduce to the registrable domain. Reducing
+        // e.g. `acme.onmicrosoft.com` to the shared `onmicrosoft.com` would let every
+        // other tenant in; matching is exact-or-subdomain against the stored entry.
+        const entries = parsed.data.accessGate.allowedDomains.map(d => d.trim().toLowerCase());
+        if (entries.some(d => registrableDomain(d, { allowPrivateDomains: true }) === null)) {
           return res.status(400).json({
-            error: 'Each allowed domain must be a registrable domain (e.g. acme.com), not a public suffix like co.uk',
+            error:
+              'Each allowed domain must be a registrable domain (e.g. acme.com or a specific subdomain), not a public suffix like co.uk',
             code: 'INVALID_DOMAIN',
           });
         }
         artifact.accessGate = {
           kind: 'domain',
-          allowedDomains: [...new Set(canonical as string[])],
+          allowedDomains: [...new Set(entries)],
         };
       }
     }

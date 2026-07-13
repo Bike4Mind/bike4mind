@@ -122,8 +122,10 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; hint: string; icon: 
   },
 ];
 
-/** Parse the domains textarea into canonical registrable domains (eTLD+1); null when
- *  any entry is invalid. Mirrors the server: chips shown = what gets stored/matched. */
+/** Parse the domains textarea; null when any entry is invalid. Mirrors the server:
+ *  entries are validated as real registrable domains (rejecting bare suffixes like
+ *  co.uk / github.io) but kept AS ENTERED - matching is exact-or-subdomain, so a
+ *  subdomain entry is never widened to its parent. */
 function parseDomains(text: string): string[] | null {
   const items = [
     ...new Set(
@@ -135,9 +137,8 @@ function parseDomains(text: string): string[] | null {
   ];
   if (items.length === 0 || items.length > 20) return null;
   if (!items.every(d => DOMAIN_RE.test(d))) return null;
-  const canonical = items.map(registrableDomain);
-  if (canonical.some(d => d === null)) return null;
-  return [...new Set(canonical as string[])];
+  if (items.some(d => registrableDomain(d, { allowPrivateDomains: true }) === null)) return null;
+  return items;
 }
 
 function errorMessage(err: unknown): string {

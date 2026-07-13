@@ -293,7 +293,7 @@ describe('PublishShareModal - domain access gate', () => {
     publishedAt: '2026-01-01T00:00:00.000Z',
   };
 
-  it('canonicalizes the domain gate to registrable domains (eTLD+1) on publish', async () => {
+  it('sends the domain gate entries AS ENTERED on publish (subdomain not reduced)', async () => {
     apiPatch.mockClear().mockResolvedValue({ data: {} });
     const publish = vi.fn().mockResolvedValue(publishResult);
     render(
@@ -306,7 +306,7 @@ describe('PublishShareModal - domain access gate', () => {
     fireEvent.click(screen.getByTestId('publish-share-create'));
     await waitFor(() =>
       expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
-        accessGate: { kind: 'domain', allowedDomains: ['acme.com'] },
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
       })
     );
   });

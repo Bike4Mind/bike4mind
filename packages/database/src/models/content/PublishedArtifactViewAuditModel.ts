@@ -20,7 +20,9 @@ export interface IPublishedArtifactViewAuditDocument extends Document {
   /** The viewing account's user id. */
   viewerId: string;
   gateKind: PublishedArtifactViewGateKind;
-  /** Registrable domain (eTLD+1) of the viewer's verified email, when known. */
+  /** Registrable domain (eTLD+1) of the viewer's email at view time, when resolvable.
+   *  For a domain-gated row the email is verified (the gate requires it); for an
+   *  admin/non-owner bypass row it is best-effort and NOT re-verified. */
   viewerEmailDomain?: string;
   sourceIp?: string;
   userAgent?: string;

@@ -38,4 +38,18 @@ describe('registrableDomain', () => {
     expect(registrableDomain('evilacme.com')).not.toBe('acme.com');
     expect(registrableDomain('acme.com.evil.io')).not.toBe('acme.com');
   });
+
+  describe('allowPrivateDomains (entry validation)', () => {
+    it('rejects a bare private/platform suffix so it cannot be entered as an owned domain', () => {
+      expect(registrableDomain('github.io', { allowPrivateDomains: true })).toBeNull();
+      expect(registrableDomain('web.app', { allowPrivateDomains: true })).toBeNull();
+    });
+    it('accepts a specific host under a private suffix', () => {
+      expect(registrableDomain('team.github.io', { allowPrivateDomains: true })).toBe('team.github.io');
+    });
+    it('still rejects bare public suffixes and accepts normal domains', () => {
+      expect(registrableDomain('co.uk', { allowPrivateDomains: true })).toBeNull();
+      expect(registrableDomain('acme.com', { allowPrivateDomains: true })).toBe('acme.com');
+    });
+  });
 });

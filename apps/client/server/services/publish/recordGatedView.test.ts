@@ -46,6 +46,17 @@ describe('recordGatedView', () => {
     );
   });
 
+  it('uses a provided viewerEmailDomain and skips the redundant User lookup', async () => {
+    await recordGatedView({
+      publicId: 'pub-1',
+      viewerId: 'user-1',
+      gateKind: 'domain',
+      viewerEmailDomain: 'acme.com',
+    });
+    expect(mockFindById).not.toHaveBeenCalled();
+    expect(mockCreateLog).toHaveBeenCalledWith(expect.objectContaining({ viewerEmailDomain: 'acme.com' }));
+  });
+
   it("stores nothing for the 'unknown' sourceIp sentinel", async () => {
     await recordGatedView({ publicId: 'pub-1', viewerId: 'user-1', gateKind: 'domain', sourceIp: 'unknown' });
     expect(mockCreateLog).toHaveBeenCalledWith(expect.objectContaining({ sourceIp: undefined }));

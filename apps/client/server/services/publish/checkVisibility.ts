@@ -45,7 +45,13 @@ export interface VisibilityContext {
 }
 
 export type VisibilityResult =
-  | { ok: true }
+  | {
+      ok: true;
+      /** On a DOMAIN-gate pass, the viewer's registrable email domain, so the
+       *  caller can audit the view without a second User lookup. Absent for
+       *  ungated / owner-admin / non-domain passes. */
+      viewerEmailDomain?: string;
+    }
   | {
       ok: false;
       status: 401 | 403;
@@ -117,12 +123,18 @@ export async function checkAccessGate(
   if (!user?.id) {
     return { ok: false, status: 401, error: 'Authentication required', reason: 'domain' };
   }
-  // Match on the registrable domain (eTLD+1): a viewer at any subdomain of an
-  // allowlisted org domain passes (mail.acme.com -> acme.com), while a lookalike
-  // (evilacme.com) does not. Entries with no registrable domain (a bare public
-  // suffix like co.uk) are dropped; an all-invalid or empty allowlist fails closed.
-  const allowed = new Set((gate.allowedDomains ?? []).map(registrableDomain).filter((d): d is string => d !== null));
-  if (allowed.size === 0) {
+  // Match an allowlist ENTRY as stored (exact host, or a subdomain of it) - NEVER
+  // by reducing the entry to its registrable domain. Reducing the entry side would
+  // collapse `acme.onmicrosoft.com` to the shared `onmicrosoft.com` and admit every
+  // other tenant under it. The viewer side needs no reduction either: the subdomain
+  // suffix already lets `mail.acme.com` in through an `acme.com` gate, while
+  // `evilacme.com` / `acme.com.evil.io` still fail. Drop any entry that is not a
+  // real registrable domain (a bare public/private suffix like co.uk / github.io)
+  // so a legacy or misconfigured entry can't widen the gate; empty -> fail closed.
+  const allowed = (gate.allowedDomains ?? [])
+    .map(d => d.trim().toLowerCase())
+    .filter(d => registrableDomain(d, { allowPrivateDomains: true }) !== null);
+  if (allowed.length === 0) {
     return { ok: false, status: 403, error: 'Not authorized', reason: 'domain' };
   }
   const { User } = await import('@bike4mind/database');
@@ -130,10 +142,12 @@ export async function checkAccessGate(
     .select('email emailVerified')
     .lean<{ email?: string; emailVerified?: boolean } | null>();
   const email = viewer?.email?.toLowerCase() ?? '';
-  const emailDomain = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
-  const viewerDomain = registrableDomain(emailDomain);
+  const viewerHost = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
+  const hostMatches = !!viewerHost && allowed.some(e => viewerHost === e || viewerHost.endsWith(`.${e}`));
   // Only VERIFIED emails match (same rule as the entitlement domain grants).
-  if (viewer?.emailVerified === true && viewerDomain && allowed.has(viewerDomain)) return { ok: true };
+  if (viewer?.emailVerified === true && hostMatches) {
+    return { ok: true, viewerEmailDomain: registrableDomain(viewerHost) ?? viewerHost };
+  }
   return {
     ok: false,
     status: 403,

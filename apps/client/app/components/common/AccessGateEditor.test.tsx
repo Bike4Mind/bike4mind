@@ -50,7 +50,7 @@ describe('AccessGateEditor', () => {
     );
   });
 
-  it('reduces a subdomain entry to its registrable domain (eTLD+1) before PATCH', async () => {
+  it('sends a subdomain entry AS ENTERED (not reduced to its parent)', async () => {
     renderEditor('public');
     pickGate('domain');
     fireEvent.change(screen.getByTestId('manage-gate-domains-input'), {
@@ -59,7 +59,7 @@ describe('AccessGateEditor', () => {
     fireEvent.click(screen.getByTestId('manage-gate-apply'));
     await waitFor(() =>
       expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
-        accessGate: { kind: 'domain', allowedDomains: ['acme.com'] },
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
       })
     );
   });

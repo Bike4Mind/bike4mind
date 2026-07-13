@@ -87,15 +87,15 @@ export function AccessGateEditor({
       toast.error(`Invalid domain: ${bad}`);
       return 'invalid';
     }
-    // Canonicalize to registrable domains (eTLD+1) so chips match what the server
-    // stores; a bare public suffix (co.uk) has no registrable domain and is rejected.
-    const canonical = domains.map(d => ({ input: d, reg: registrableDomain(d) }));
-    const noReg = canonical.find(c => c.reg === null);
+    // Validate each entry is a real registrable domain (rejects a bare suffix like
+    // co.uk / github.io) but keep it AS ENTERED - matching is exact-or-subdomain, so
+    // a subdomain entry is never widened to its parent org.
+    const noReg = domains.find(d => registrableDomain(d, { allowPrivateDomains: true }) === null);
     if (noReg) {
-      toast.error(`Enter a registrable domain (e.g. acme.com), not: ${noReg.input}`);
+      toast.error(`Enter a registrable domain (e.g. acme.com), not: ${noReg}`);
       return 'invalid';
     }
-    return { kind: 'domain', allowedDomains: [...new Set(canonical.map(c => c.reg as string))] };
+    return { kind: 'domain', allowedDomains: domains };
   };
 
   const apply = async () => {

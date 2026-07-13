@@ -72,11 +72,15 @@ beforeEach(() => {
   findOne.mockReset();
 });
 
-describe('PATCH domain access gate - registrable-domain canonicalization', () => {
-  it('reduces subdomain entries to their registrable domain and de-dupes', async () => {
-    const { res, artifact } = await patchGate(['mail.acme.com', 'acme.com', 'PARTNER.CO']);
+describe('PATCH domain access gate - stored as entered, validated', () => {
+  it('stores entries AS ENTERED (lowercased, de-duped) - never reduced to eTLD+1', async () => {
+    const { res, artifact } = await patchGate(['mail.acme.com', 'acme.com', 'PARTNER.CO', 'acme.com']);
     expect(res._getStatusCode()).toBe(200);
-    expect(artifact.accessGate).toEqual({ kind: 'domain', allowedDomains: ['acme.com', 'partner.co'] });
+    // mail.acme.com is kept distinct from acme.com; matching is exact-or-subdomain.
+    expect(artifact.accessGate).toEqual({
+      kind: 'domain',
+      allowedDomains: ['mail.acme.com', 'acme.com', 'partner.co'],
+    });
   });
 
   it('rejects a bare public suffix with a 400 (INVALID_DOMAIN)', async () => {
@@ -86,9 +90,16 @@ describe('PATCH domain access gate - registrable-domain canonicalization', () =>
     expect(artifact.save).not.toHaveBeenCalled();
   });
 
-  it('preserves a valid multi-level registrable domain (acme.co.uk)', async () => {
-    const { res, artifact } = await patchGate(['sub.acme.co.uk']);
+  it('rejects a bare private/platform suffix (github.io) with a 400', async () => {
+    const { res, artifact } = await patchGate(['github.io']);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData()).toMatchObject({ code: 'INVALID_DOMAIN' });
+    expect(artifact.save).not.toHaveBeenCalled();
+  });
+
+  it('keeps a specific subdomain entry as-is (acme.onmicrosoft.com), not the shared parent', async () => {
+    const { res, artifact } = await patchGate(['acme.onmicrosoft.com']);
     expect(res._getStatusCode()).toBe(200);
-    expect(artifact.accessGate).toEqual({ kind: 'domain', allowedDomains: ['acme.co.uk'] });
+    expect(artifact.accessGate).toEqual({ kind: 'domain', allowedDomains: ['acme.onmicrosoft.com'] });
   });
 });

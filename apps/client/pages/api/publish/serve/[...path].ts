@@ -337,7 +337,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // sub-request double-counts). Fire-and-forget inside bumpViewCount.
   const gateViewAudit =
     gateArtifact.accessGate?.kind === 'domain'
-      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req) }
+      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
       : undefined;
 
   if (isShare) {
@@ -1003,7 +1003,7 @@ function bumpViewCount(
   userAgent?: string,
   // #408: when the served view passed a gate, record per-account attribution
   // alongside the aggregate counter. Only set for authenticated gate views.
-  gateView?: { gateKind: 'domain'; sourceIp?: string }
+  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
 ): void {
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
@@ -1018,6 +1018,7 @@ function bumpViewCount(
       publicId: artifact.publicId,
       viewerId: String(viewer.id),
       gateKind: gateView.gateKind,
+      viewerEmailDomain: gateView.viewerEmailDomain,
       sourceIp: gateView.sourceIp,
       userAgent,
     });
