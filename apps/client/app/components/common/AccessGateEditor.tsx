@@ -31,7 +31,7 @@ const GATE_OPTIONS: Array<{ value: GateKind; label: string; icon: React.ReactNod
   { value: 'domain', label: 'Email domain', icon: <DomainIcon sx={{ fontSize: 16 }} /> },
 ];
 /** Syntactic domain pre-filter (mirrors the server DOMAIN_RE); entries are then
- *  reduced to their registrable domain (eTLD+1) before being sent/stored. */
+ *  validated as real registrable domains and sent/stored AS ENTERED (never reduced). */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 function errMessage(err: unknown): string {

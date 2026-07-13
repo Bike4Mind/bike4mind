@@ -14,8 +14,8 @@ import { registrableDomain } from '@bike4mind/utils/registrableDomain';
  */
 
 /** Syntactic domain check: labels + a real TLD, lowercase-normalized before test.
- *  A pre-filter only - entries are then reduced to their registrable domain (eTLD+1)
- *  below, which is what actually gets stored and matched. */
+ *  A pre-filter only - entries are then validated as real registrable domains below
+ *  and stored AS ENTERED (never reduced); matching is exact-or-subdomain. */
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 
 /**
