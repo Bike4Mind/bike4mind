@@ -404,9 +404,6 @@ export class SubagentOrchestrator {
     } catch (error) {
       if (error instanceof HookBlockedError) {
         // Agent blocked by hook - return gracefully
-        if (this.afterRunCallback) {
-          this.afterRunCallback(agent, agentName);
-        }
         return {
           agentName,
           thoroughness: effectiveThoroughness,
@@ -426,6 +423,13 @@ export class SubagentOrchestrator {
         };
       }
       throw error;
+    } finally {
+      // Runs on every exit path (success, hook block, failure, cancel) so
+      // callers can always unsubscribe and fold in whatever usage the agent
+      // accumulated before dying - otherwise live-usage entries leak.
+      if (this.afterRunCallback) {
+        this.afterRunCallback(agent, agentName);
+      }
     }
     const duration = Date.now() - startTime;
 
@@ -443,11 +447,6 @@ export class SubagentOrchestrator {
         this.deps.logger.debug(`Stop hook blocked: ${stopResult.reason}`);
         // Could implement continuation logic here
       }
-    }
-
-    // Invoke afterRunCallback to allow caller to unsubscribe from events
-    if (this.afterRunCallback) {
-      this.afterRunCallback(agent, agentName);
     }
 
     this.deps.logger.debug(
