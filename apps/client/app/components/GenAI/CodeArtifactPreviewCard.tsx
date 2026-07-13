@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
-  Code as CodeIcon,
   OpenInFull as ExpandIcon,
   ContentCopy as CopyIcon,
   Save as SaveIcon,
@@ -165,13 +164,12 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       }}
       onClick={handleToggleExpand}
     >
-      {/* Type badge: icon + language in one pill overhanging the card corner. Matches
+      {/* Type badge: the language in a pill overhanging the card corner. Matches
           ArtifactPreviewCard's badge - keep the two in sync. */}
       <Chip
         className="code-artifact-icon-badge"
         size="sm"
         variant="solid"
-        startDecorator={<CodeIcon className="code-artifact-icon" sx={{ fontSize: '14px' }} />}
         sx={theme => ({
           position: 'absolute',
           top: '-8px',
@@ -181,25 +179,9 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           color: 'text.primary',
           border: 'none',
           paddingInline: '8px',
-          // Joy SvgIcons size from --Icon-fontSize, not a `fontSize` in sx (the theme's
-          // own size class outranks it), so drive the badge glyph through the variable.
-          '--Icon-fontSize': '14px',
-          '--Chip-decoratorChildHeight': '14px',
-          '--Chip-gap': '4px',
-          // Joy gives the glyph its own --Icon-margin, which would stack on top of the
-          // decorator's 4px gap; zero it so the gap is exactly 4px.
-          '--Icon-margin': '0px',
-          '& .MuiChip-startDecorator': {
-            color: 'text.tertiary',
-            margin: 0,
-            '& > svg': { width: '14px', height: '14px', margin: 0 },
-          },
           '&:hover': { backgroundColor: brand[800] },
           // Light mode's text.primary is near-black and unreadable on the blue pill.
-          [theme.getColorSchemeSelector('light')]: {
-            color: '#fff',
-            '& .MuiChip-startDecorator': { color: 'rgba(255, 255, 255, 0.5)' },
-          },
+          [theme.getColorSchemeSelector('light')]: { color: '#fff' },
         })}
       >
         {data.language}
@@ -208,32 +190,48 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       {/* Main Content */}
       {/* No padding here: the Card already provides it. */}
       <Box className="code-artifact-content">
+        {/* Title leads the row so the stats line below aligns flush with it; the chevron
+            follows immediately. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
-          <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-            <IconButton
-              size="sm"
-              variant="plain"
-              color="neutral"
-              onClick={handleToggleExpand}
-              data-testid="code-artifact-toggle-btn"
+          <Stack direction="row" alignItems="center" sx={{ minWidth: 0 }}>
+            <Typography
+              className="code-artifact-title"
+              level="title-sm"
+              sx={{
+                color: 'text.primary',
+                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
+                flex: '0 1 auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
             >
-              {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </IconButton>
-          </Tooltip>
+              {data.title}
+            </Typography>
 
-          <Typography
-            className="code-artifact-title"
-            level="title-sm"
-            sx={{
-              color: 'primary.plainColor',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {data.title}
-          </Typography>
+            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
+                // on the button is outranked by the theme's own icon styles.
+                sx={theme => ({
+                  flexShrink: 0,
+                  marginLeft: 0,
+                  '--Icon-fontSize': '16px',
+                  '--Icon-color': theme.vars.palette.text.tertiary,
+                })}
+                onClick={handleToggleExpand}
+                data-testid="code-artifact-toggle-btn"
+              >
+                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+            </Tooltip>
+          </Stack>
+
+          <Box sx={{ flex: 1 }} />
 
           <Tooltip title="Copy code to clipboard" placement="top">
             <IconButton size="sm" variant="plain" color="neutral" onClick={handleCopy}>
@@ -287,7 +285,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
               className="code-artifact-stats"
               level="body-xs"
               sx={{
-                mt: 1,
                 color: 'text.tertiary',
               }}
             >

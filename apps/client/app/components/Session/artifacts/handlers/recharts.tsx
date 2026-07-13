@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
-import { BarChart as RechartsIcon } from '@mui/icons-material';
 import type { RechartsArtifact } from '@bike4mind/common';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
 import RechartsRenderer from '@client/app/components/Charts/RechartsRenderer';
@@ -70,7 +69,6 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
         mimeType="application/vnd.ant.recharts"
         artifactContent={chart}
         title={chart.title}
-        icon={<RechartsIcon sx={{ fontSize: '14px' }} />}
         chipLabel={chartType || 'Chart'}
         testIdPrefix="recharts"
         // No `source`: a chart's source is the tool's JSON config, not something the

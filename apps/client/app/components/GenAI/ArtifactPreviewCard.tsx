@@ -32,8 +32,6 @@ export interface ArtifactPreviewCardProps {
   /** Payload handed to the side-panel viewer. */
   artifactContent: unknown;
   title: string;
-  /** Badge glyph pinned to the card corner. Size it at 14px to match its siblings. */
-  icon: ReactNode;
   chipLabel: ReactNode;
   /** Row under the header: line counts, data points, dependencies. */
   stats?: ReactNode;
@@ -78,7 +76,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   mimeType,
   artifactContent,
   title,
-  icon,
   chipLabel,
   stats,
   extra,
@@ -215,12 +212,10 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       onClick={handleToggleInlinePreview}
     >
       {/* Type badge: the icon and the type label are one pill overhanging the card
-          corner, so the header row carries only the title and the actions. Colors are
-          fixed to the brand blue rather than per-type: the icon already conveys type. */}
+          corner, so the header row carries only the title and the actions. */}
       <Chip
         size="sm"
         variant="solid"
-        startDecorator={icon}
         data-testid={`${testIdPrefix}-artifact-badge`}
         sx={theme => ({
           position: 'absolute',
@@ -231,25 +226,9 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           color: 'text.primary',
           border: 'none',
           paddingInline: '8px',
-          // Joy SvgIcons size from --Icon-fontSize, not a `fontSize` in sx (the theme's
-          // own size class outranks it), so drive the badge glyph through the variable.
-          '--Icon-fontSize': '14px',
-          '--Chip-decoratorChildHeight': '14px',
-          '--Chip-gap': '4px',
-          // Joy gives the glyph its own --Icon-margin, which would stack on top of the
-          // decorator's 4px gap; zero it so the gap is exactly 4px.
-          '--Icon-margin': '0px',
-          '& .MuiChip-startDecorator': {
-            color: 'text.tertiary',
-            margin: 0,
-            '& > svg': { width: '14px', height: '14px', margin: 0 },
-          },
           '&:hover': { backgroundColor: brand[800] },
           // Light mode's text.primary is near-black and unreadable on the blue pill.
-          [theme.getColorSchemeSelector('light')]: {
-            color: '#fff',
-            '& .MuiChip-startDecorator': { color: 'rgba(255, 255, 255, 0.5)' },
-          },
+          [theme.getColorSchemeSelector('light')]: { color: '#fff' },
         })}
       >
         {chipLabel}
@@ -257,36 +236,52 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
 
       {/* No padding here: the Card already provides it. */}
       <Box>
-        <Stack direction="row" spacing={1} alignItems="center" mb={1}>
-          {collapsible && (
-            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={e => {
-                  e.stopPropagation();
-                  setIsExpanded(!isExpanded);
-                }}
-                data-testid={`${testIdPrefix}-artifact-toggle-btn`}
-              >
-                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-              </IconButton>
-            </Tooltip>
-          )}
+        {/* Title leads the row so the stats line below aligns flush with it. Title and
+            chevron are their own 4px group; the outer 8px spacing stays for the actions. */}
+        <Stack direction="row" spacing={1} alignItems="center">
+          <Stack direction="row" alignItems="center" sx={{ minWidth: 0 }}>
+            <Typography
+              level="title-sm"
+              sx={{
+                color: 'text.primary',
+                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
+                flex: '0 1 auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {title}
+            </Typography>
 
-          <Typography
-            level="title-sm"
-            sx={{
-              color: 'primary.plainColor',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {title}
-          </Typography>
+            {collapsible && (
+              <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+                <IconButton
+                  size="sm"
+                  variant="plain"
+                  color="neutral"
+                  // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
+                  // on the button is outranked by the theme's own icon styles.
+                  sx={theme => ({
+                    flexShrink: 0,
+                    marginLeft: 0,
+                    '--Icon-fontSize': '16px',
+                    '--Icon-color': theme.vars.palette.text.tertiary,
+                  })}
+                  onClick={e => {
+                    e.stopPropagation();
+                    setIsExpanded(!isExpanded);
+                  }}
+                  data-testid={`${testIdPrefix}-artifact-toggle-btn`}
+                >
+                  {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+                </IconButton>
+              </Tooltip>
+            )}
+          </Stack>
+
+          <Box sx={{ flex: 1 }} />
 
           {actions.copy && source && (
             <Tooltip title={copyTooltip} placement="top">

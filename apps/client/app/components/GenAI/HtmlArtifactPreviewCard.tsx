@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box, Typography } from '@mui/joy';
+import { Typography } from '@mui/joy';
 import { type HtmlArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
@@ -21,7 +21,6 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
       mimeType="text/html"
       artifactContent={artifact}
       title={artifact.title}
-      icon={<Box sx={{ fontSize: '14px' }}>🌐</Box>}
       chipLabel="HTML"
       testIdPrefix="html"
       source={artifact.content}

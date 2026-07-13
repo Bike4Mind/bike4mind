@@ -1,6 +1,5 @@
 import React from 'react';
 import { Chip, Stack, Typography } from '@mui/joy';
-import { Code as ReactIcon } from '@mui/icons-material';
 import { type ReactArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
 import ArtifactPreviewCard from './ArtifactPreviewCard';
@@ -21,7 +20,6 @@ const ReactArtifactPreviewCard: React.FC<ReactArtifactPreviewCardProps> = ({ art
       mimeType="application/vnd.ant.react"
       artifactContent={artifact}
       title={artifact.title}
-      icon={<ReactIcon sx={{ fontSize: '14px' }} />}
       chipLabel="React"
       testIdPrefix="react"
       source={artifact.content}

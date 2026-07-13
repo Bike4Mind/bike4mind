@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
-import { GridView as LatticeIcon } from '@mui/icons-material';
 import type { LatticeArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
@@ -68,7 +67,6 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         mimeType="application/vnd.b4m.lattice"
         artifactContent={model}
         title={model.title}
-        icon={<LatticeIcon sx={{ fontSize: '14px' }} />}
         chipLabel={modelType || 'Financial Model'}
         testIdPrefix="lattice"
         source={model.content}

@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
-import { AccountTree as MermaidIcon } from '@mui/icons-material';
 import type { MermaidArtifact } from '@bike4mind/common';
 import MermaidChart from '@client/app/components/Charts/MermaidChart';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
@@ -30,7 +29,6 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         mimeType="text/plain"
         artifactContent={mermaidArtifact}
         title={mermaidArtifact.title}
-        icon={<MermaidIcon sx={{ fontSize: '14px' }} />}
         chipLabel="Mermaid"
         testIdPrefix="mermaid"
         source={artifact.content}

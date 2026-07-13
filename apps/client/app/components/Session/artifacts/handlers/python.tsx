@@ -1,6 +1,5 @@
 import React from 'react';
 import { Box, Typography } from '@mui/joy';
-import { Terminal as PythonIcon } from '@mui/icons-material';
 import type { PythonArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
@@ -46,7 +45,6 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
         mimeType="application/vnd.ant.python"
         artifactContent={pythonArtifact}
         title={title}
-        icon={<PythonIcon sx={{ fontSize: '14px' }} />}
         chipLabel="Python"
         testIdPrefix="python"
         source={artifact.content}

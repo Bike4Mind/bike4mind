@@ -1,6 +1,5 @@
 import React, { useMemo } from 'react';
 import { Box, Typography } from '@mui/joy';
-import { Image as SvgIcon } from '@mui/icons-material';
 import DOMPurify from 'dompurify';
 import type { SvgArtifact } from '@bike4mind/common';
 import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
@@ -77,7 +76,6 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         mimeType="image/svg+xml"
         artifactContent={svgArtifact}
         title={svgTitle}
-        icon={<SvgIcon sx={{ fontSize: '14px' }} />}
         chipLabel="SVG"
         testIdPrefix="svg"
         // The graphic IS the artifact: always shown, never collapsed, and no source view
