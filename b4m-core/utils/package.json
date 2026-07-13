@@ -48,6 +48,16 @@
         "types": "./dist/escapeRegex.d.cts",
         "default": "./dist/escapeRegex.cjs"
       }
+    },
+    "./registrableDomain": {
+      "import": {
+        "types": "./dist/registrableDomain.d.mts",
+        "default": "./dist/registrableDomain.mjs"
+      },
+      "require": {
+        "types": "./dist/registrableDomain.d.cts",
+        "default": "./dist/registrableDomain.cjs"
+      }
     }
   },
   "files": [
@@ -89,6 +99,7 @@
     "mime-types": "^3.0.2",
     "openai": "^6.38.0",
     "tiktoken": "^1.0.22",
+    "tldts": "^7.0.28",
     "unpdf": "^1.6.2",
     "uuid": "^13.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",

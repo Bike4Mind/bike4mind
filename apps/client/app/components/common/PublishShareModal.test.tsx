@@ -282,6 +282,36 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
   });
 });
 
+describe('PublishShareModal - domain access gate', () => {
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('sends the domain gate entries AS ENTERED on publish (subdomain not reduced)', async () => {
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(radio('domain')!);
+    fireEvent.change(screen.getByTestId('publish-share-gate-domains'), { target: { value: 'mail.acme.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
+      })
+    );
+  });
+});
+
 describe('PublishShareModal - no-sign-in (/a) share link', () => {
   const publishResult: PublishResult = {
     publicId: 'pub-1',

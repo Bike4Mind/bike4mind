@@ -50,6 +50,30 @@ describe('AccessGateEditor', () => {
     );
   });
 
+  it('sends a subdomain entry AS ENTERED (not reduced to its parent)', async () => {
+    renderEditor('public');
+    pickGate('domain');
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), {
+      target: { value: 'mail.acme.com' },
+    });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
+      })
+    );
+  });
+
+  it('rejects a bare public suffix (co.uk) without a PATCH', () => {
+    renderEditor('public');
+    pickGate('domain');
+    fireEvent.change(screen.getByTestId('manage-gate-domains-input'), {
+      target: { value: 'co.uk' },
+    });
+    fireEvent.click(screen.getByTestId('manage-gate-apply'));
+    expect(apiPatch).not.toHaveBeenCalled();
+  });
+
   it('rejects a too-short passphrase without a PATCH', () => {
     renderEditor('public');
     pickGate('passphrase');
