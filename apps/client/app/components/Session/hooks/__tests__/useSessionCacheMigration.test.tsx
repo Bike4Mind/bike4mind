@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import type { ISessionDocument } from '@bike4mind/common';
 import { useSessionCacheMigration } from '../useSessionCacheMigration';
+import { useChatInput } from '@client/app/hooks/useChatInput';
 
 const TMP_ID = 'optimistic-session-123';
 const REAL_ID = 'real-session-456';
@@ -29,6 +30,7 @@ describe('useSessionCacheMigration', () => {
 
   beforeEach(() => {
     queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    useChatInput.setState({ drafts: {} });
   });
 
   describe('migrateQuests', () => {
@@ -72,6 +74,25 @@ describe('useSessionCacheMigration', () => {
       result.current.migrateSession(TMP_ID, REAL_ID, realSession);
 
       expect(queryClient.getQueryData(['sessions', REAL_ID])).toEqual(realSession);
+    });
+
+    it('clears the leftover empty tmpId draft left behind by the composer', () => {
+      useChatInput.getState().setDraft(TMP_ID, '');
+      expect(useChatInput.getState().drafts).toHaveProperty(TMP_ID);
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().drafts).not.toHaveProperty(TMP_ID);
+    });
+
+    it('leaves an unrelated real-session draft untouched', () => {
+      useChatInput.getState().setDraft(REAL_ID, 'work in progress');
+
+      const result = renderMigration();
+      result.current.migrateSession(TMP_ID, REAL_ID, makeSession(REAL_ID));
+
+      expect(useChatInput.getState().getDraft(REAL_ID)).toBe('work in progress');
     });
   });
 
