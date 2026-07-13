@@ -403,6 +403,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
     if (latestArtifact?.artifact.id && artifactData?.id && artifactData.id === latestArtifact.artifact.id) {
       // On switching to a different artifact, pin the baseline to the DB version present now
       // (the version the just-opened content sits at or ahead of) and reset loop tracking.
+      // Re-baseline keys on the artifact id only, NOT on close/reopen of the same id. That is
+      // safe because handleOpenInViewer invalidates the ['artifact', id] query on open and the
+      // "content matches" short-circuit in shouldSyncArtifactFromDb covers a same-id reopen; a
+      // refactor that removes either precondition must also re-pin the baseline on reopen.
       if (syncArtifactIdRef.current !== artifactData.id) {
         syncArtifactIdRef.current = artifactData.id;
         syncBaselineVersionRef.current = latestArtifact.artifact.version;
