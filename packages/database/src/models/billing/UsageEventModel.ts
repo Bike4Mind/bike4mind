@@ -156,6 +156,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           inputTokens: { $sum: '$inputTokens' },
           outputTokens: { $sum: '$outputTokens' },
           cachedInputTokens: { $sum: '$cachedInputTokens' },
+          cacheWriteTokens: { $sum: '$cacheWriteTokens' },
         },
       },
       {
@@ -168,6 +169,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
           inputTokens: 1,
           outputTokens: 1,
           cachedInputTokens: 1,
+          cacheWriteTokens: 1,
         },
       },
       { $sort: { month: -1, provider: 1 } },
