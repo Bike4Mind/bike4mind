@@ -22,25 +22,14 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import EditIcon from '@mui/icons-material/Edit';
 import HistoryIcon from '@mui/icons-material/History';
 import ReplayIcon from '@mui/icons-material/Replay';
+import type { IModelPriceTier } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-
-/** Wire shape of one pricing tier (mirrors ModelPriceTier in common, which
- * gains optional audio fields in the realtime-voice catalog PR). */
-interface PriceTier {
-  input: number;
-  output: number;
-  cache_read?: number;
-  cache_write?: number;
-  audio_input?: number;
-  audio_cache_read?: number;
-  audio_output?: number;
-}
 
 /** Wire shape of a catalog row (dates arrive as ISO strings). */
 interface PriceRow {
   modelId: string;
   unit: string;
-  pricing: Record<string, PriceTier>;
+  pricing: Record<string, IModelPriceTier>;
   effectiveFrom: string;
   note?: string;
 }
@@ -85,7 +74,7 @@ const formatRate = (unit: string, value: number | undefined) => {
   return `$${scaled.toLocaleString(undefined, { maximumFractionDigits: 4 })}`;
 };
 
-const firstTier = (row: PriceRow): PriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
+const firstTier = (row: PriceRow): IModelPriceTier => Object.values(row.pricing)[0] ?? { input: 0, output: 0 };
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 
