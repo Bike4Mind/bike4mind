@@ -45,6 +45,28 @@ describe('loadAgentMcpTools', () => {
     expect(mcpToolsByServer).toEqual({});
   });
 
+  it('isolates a failing server so the others still load', async () => {
+    // A malformed schema entry (null) makes generateMcpToolsFromCache throw for that
+    // server; the per-server try/catch must skip it and still load the healthy one.
+    const bad = { id: 'x1', name: 'bad', userId: 'u1', enabled: true, toolSchemas: [null] } as any;
+    const mcpServers = { find: vi.fn(async () => [bad, atlassian]) };
+    const warn = vi.fn();
+    const isoLogger = { info: vi.fn(), warn, debug: vi.fn(), error: vi.fn() } as any;
+
+    const { mcpToolsByServer } = await loadAgentMcpTools(
+      { mcpServers: mcpServers as any, getMcpClient, logger: isoLogger },
+      { userId: 'u1', enableMCPServer: true }
+    );
+
+    // 'bad' dropped, 'atlassian' (ordered after it) still loaded - the loop did not abort.
+    expect(Object.keys(mcpToolsByServer)).toEqual(['atlassian']);
+    expect(mcpToolsByServer.atlassian).toHaveLength(1);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to build tools for bad'),
+      expect.objectContaining({ error: expect.any(String) })
+    );
+  });
+
   it('derives serverAgentConfig from github metadata', async () => {
     const github = {
       id: 'g1',
