@@ -187,6 +187,25 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/**
+ * Coarse, non-sensitive classification of an auth-init failure. Logged so operators
+ * can tell a misconfigured connection record ('missing-fields') apart from a
+ * decryption / key-rotation failure ('decrypt-failed') WITHOUT ever exposing key
+ * material or ciphertext structure. Both the reason codes and the messages carried
+ * here are safe to log - decryption internals are stripped before this is thrown.
+ */
+export type GitHubAuthInitReason = 'missing-fields' | 'decrypt-failed';
+
+export class GitHubAuthInitError extends Error {
+  constructor(
+    message: string,
+    readonly reason: GitHubAuthInitReason
+  ) {
+    super(message);
+    this.name = 'GitHubAuthInitError';
+  }
+}
+
 export class GitHubService {
   private octokit: Octokit;
   private logger: Logger;
@@ -317,12 +336,17 @@ export class GitHubService {
         octokit = GitHubService.createOctokitForPAT(connection, encryptionKey, logger);
       }
     } catch (error) {
-      // Never expose decryption details in logs or error messages.
+      // Log a coarse, non-sensitive reason so operators can distinguish a misconfigured
+      // connection record from a decryption/key-rotation failure. The reason codes and the
+      // sanitized messages upstream never contain key material or ciphertext structure -
+      // that is stripped in createOctokitFor{App,PAT} before the error reaches here.
       // Throw rather than return null: init failures are transient (network) or config
       // errors that callers should retry/escalate, not silently discard.
       logger.error('[GitHubService] Failed to initialize authentication', {
         connectionId: connection.id,
         connectionType: connection.connectionType,
+        reason: error instanceof GitHubAuthInitError ? error.reason : 'unknown',
+        errorName: error instanceof Error ? error.name : 'unknown',
       });
       throw new Error('[GitHubService] Failed to initialize GitHub authentication');
     }
@@ -349,7 +373,7 @@ export class GitHubService {
     logger: Logger
   ): Promise<Octokit> {
     if (!connection.appId || !connection.installationId || !connection.privateKey) {
-      throw new Error('GitHub App connection missing required fields');
+      throw new GitHubAuthInitError('GitHub App connection missing required fields', 'missing-fields');
     }
 
     // Decrypt the private key with sanitized error handling
@@ -359,7 +383,7 @@ export class GitHubService {
         privateKey = decryptSecret(privateKey, encryptionKey);
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
-        throw new Error('Failed to decrypt credentials. Key may need rotation.');
+        throw new GitHubAuthInitError('Failed to decrypt credentials. Key may need rotation.', 'decrypt-failed');
       }
     }
 
@@ -394,7 +418,7 @@ export class GitHubService {
     _logger: Logger
   ): Octokit {
     if (!connection.accessToken) {
-      throw new Error('Service account connection missing credentials');
+      throw new GitHubAuthInitError('Service account connection missing credentials', 'missing-fields');
     }
 
     // Decrypt the token with sanitized error handling
@@ -404,7 +428,7 @@ export class GitHubService {
         token = decryptSecret(token, encryptionKey);
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
-        throw new Error('Failed to decrypt credentials. Token may need rotation.');
+        throw new GitHubAuthInitError('Failed to decrypt credentials. Token may need rotation.', 'decrypt-failed');
       }
     }
 

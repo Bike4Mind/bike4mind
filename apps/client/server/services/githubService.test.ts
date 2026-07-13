@@ -292,6 +292,63 @@ describe('GitHubService', () => {
           '[GitHubService] Failed to initialize GitHub authentication'
         );
       });
+
+      // Regression: the auth-init catch used to discard the underlying error, making
+      // github_app failures undebuggable. It must now log a coarse, non-sensitive reason
+      // that distinguishes a misconfigured record from a decryption/key-rotation failure -
+      // without leaking key material or ciphertext structure.
+      it('should log reason "decrypt-failed" when decryption throws', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockConnection,
+          isSystemDefault: true,
+        });
+        mockIsEncrypted.mockReturnValueOnce(true);
+        mockDecryptSecret.mockImplementationOnce(() => {
+          throw new Error('decryption failed');
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow(
+          '[GitHubService] Failed to initialize GitHub authentication'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          '[GitHubService] Failed to initialize authentication',
+          expect.objectContaining({ reason: 'decrypt-failed', errorName: 'GitHubAuthInitError' })
+        );
+      });
+
+      it('should log reason "missing-fields" when a github_app connection is missing required fields', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockAppConnection,
+          isSystemDefault: true,
+          privateKey: undefined,
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow(
+          '[GitHubService] Failed to initialize GitHub authentication'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          '[GitHubService] Failed to initialize authentication',
+          expect.objectContaining({ reason: 'missing-fields', errorName: 'GitHubAuthInitError' })
+        );
+      });
+
+      it('should not leak the decrypted key material or ciphertext into the auth-init log', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockConnection,
+          isSystemDefault: true,
+        });
+        mockIsEncrypted.mockReturnValueOnce(true);
+        mockDecryptSecret.mockImplementationOnce(() => {
+          throw new Error('cipher gcm tag mismatch: 0xDEADBEEF iv=abcdef');
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow();
+        const authInitCall = mockLogger.error.mock.calls.find(
+          ([msg]) => msg === '[GitHubService] Failed to initialize authentication'
+        );
+        expect(authInitCall).toBeDefined();
+        expect(JSON.stringify(authInitCall![1])).not.toContain('DEADBEEF');
+      });
     });
   });
 
