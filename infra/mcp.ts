@@ -5,7 +5,7 @@ import { router } from './router';
 import { secrets } from './secrets';
 
 // Calculate content hash from git tree - changes immediately when MCP/Common code changes
-// Matches the content hash pattern used in deploy.yml for caching
+// Matches the content hash pattern used in ci.yml for caching
 // This is a workaround for SST not detecting copyFiles content changes
 const MCP_CONTENT_HASH = execSync(
   "git ls-tree -r HEAD b4m-core/mcp b4m-core/common | awk '{print $3}' | sort | md5sum | awk '{print $1}'"

@@ -3,7 +3,7 @@
 //
 // The lock file already supports pinning an overlay to a branch instead of a
 // SHA (bootstrap-premium.sh and _deploy-env.yml both accept either), and
-// deploy.yml's merge-queue gate + _deploy-env.yml's post-merge backstop
+// ci.yml's merge-queue gate + _deploy-env.yml's post-merge backstop
 // already refuse to let a branch pin reach main. This CLI is a thin,
 // deterministic wrapper over that existing mechanism, not a replacement for
 // it - it never touches CI, only this file.
@@ -27,7 +27,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCK_FILE = path.join(REPO_ROOT, 'premium-overlay.lock.json');
-// Mirrors deploy.yml's merge-queue gate regex exactly (re.fullmatch(r'[0-9a-f]{40}', ...)).
+// Mirrors ci.yml's merge-queue gate regex exactly (re.fullmatch(r'[0-9a-f]{40}', ...)).
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Mirrors bootstrap-premium.sh's ref guard: alphanumeric/underscore start, repo-safe chars, no '..'.
 const REF_RE = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
