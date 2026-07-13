@@ -190,7 +190,7 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -237,7 +237,7 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -280,7 +280,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -356,7 +356,7 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -393,7 +393,7 @@ const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -442,7 +442,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -603,7 +603,7 @@ const slackExportQueueSubscription = slackExportQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -642,7 +642,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -707,7 +707,7 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -746,7 +746,7 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -793,7 +793,7 @@ const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -853,7 +853,7 @@ const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -918,7 +918,7 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
@@ -954,7 +954,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
   {
     // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
     // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue above.
+    // sreJobQueue / overwatchAnalyticsQueue below.
     batch: { size: 1 },
   }
 );
