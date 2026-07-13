@@ -1,4 +1,4 @@
-import { IInboxDocument, InboxType, IInboxRepository } from '@bike4mind/common';
+import { IInboxDocument, InboxType, IInboxRepository, SAFE_USER_LOOKUP_PROJECT } from '@bike4mind/common';
 import mongoose, { PipelineStage } from 'mongoose';
 import { softDeletePlugin } from '../../utils/mongo';
 import BaseRepository from '@bike4mind/db-core';
@@ -51,12 +51,29 @@ class InboxRepository extends BaseRepository<IInboxDocument> implements IInboxRe
         },
       },
 
-      // Simple lookup (no pipeline needed)
+      // Aggregation $lookup bypasses Mongoose `select:false`, so a bare lookup
+      // would attach the full sender user doc. Project off the shared secret-free
+      // baseline (SAFE_USER_LOOKUP_PROJECT) plus the extra non-secret fields the
+      // inbox SenderInfoModal reads (email/phone/createdAt). Never add credential/
+      // secret fields here. Keep in sync with the SenderInfoModal consumer.
       {
         $lookup: {
           from: 'users',
-          localField: 'userIdAsObjectId',
-          foreignField: '_id',
+          let: { senderId: '$userIdAsObjectId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$_id', '$$senderId'] } } },
+            {
+              $project: {
+                ...SAFE_USER_LOOKUP_PROJECT,
+                // Expose the string id the SenderInfoModal reads (sender.id); an
+                // aggregation result has no Mongoose `id` virtual, only `_id`.
+                id: { $toString: '$_id' },
+                email: 1,
+                phone: 1,
+                createdAt: 1,
+              },
+            },
+          ],
           as: 'sender',
         },
       },

@@ -3,7 +3,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
-import { OrganizationEvents } from '@bike4mind/common';
+import { OrganizationEvents, toSafeUser, toSafeUsers } from '@bike4mind/common';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
@@ -18,7 +18,7 @@ const handler = baseApi()
       { db: { organizations: organizationRepository, users: userRepository } }
     );
 
-    return res.json(users);
+    return res.json(toSafeUsers(users, 'same-org'));
   })
   .post(async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
     const { id: userId } = req.user;
@@ -55,7 +55,7 @@ const handler = baseApi()
       { ability: req.ability }
     );
 
-    return res.json(newMember);
+    return res.json(toSafeUser(newMember, 'same-org'));
   })
   .delete(async (req, res) => {
     // Transaction: org-membership removal and clearing the user's organizationId must

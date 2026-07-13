@@ -25,6 +25,7 @@ export * from './typescript';
 export * from './llm';
 export * from './queryComplexityClassifier';
 export * from './utils';
+export * from './serializers/toSafeUser';
 export * from './search';
 export * from './linkedin';
 export * from './confluence';

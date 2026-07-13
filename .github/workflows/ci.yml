@@ -116,6 +116,9 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
+      - name: Check user $lookup field projections
+        run: node scripts/check-user-lookup-projection.mjs
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 

@@ -1,5 +1,5 @@
 import { userRepository } from '@bike4mind/database';
-import { AuthEvents } from '@bike4mind/common';
+import { AuthEvents, redactUserSecretsForSelf } from '@bike4mind/common';
 import { userService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -134,7 +134,7 @@ const handler = baseApi().post(
             success: true,
             email: newUser.email,
             // Passwordless account (no password login); users sign in via OTC.
-            user: newUser,
+            user: redactUserSecretsForSelf(newUser),
           };
         } catch (error: any) {
           if (error instanceof z.ZodError) {

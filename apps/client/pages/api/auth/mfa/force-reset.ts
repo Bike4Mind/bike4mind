@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
 import { userRepository } from '@bike4mind/database';
+import { redactUserSecretsForSelf } from '@bike4mind/common';
 
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
@@ -18,7 +19,7 @@ const handler = baseApi().post(
 
     try {
       const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
-      res.json(result);
+      res.json({ ...result, user: redactUserSecretsForSelf(result.user) });
     } catch (error: any) {
       console.error('Error force resetting MFA:', error);
       res.status(400).json({ error: error.message || 'Failed to reset MFA' });
