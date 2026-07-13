@@ -15,7 +15,8 @@ import { z } from 'zod';
  */
 
 // Schema version for future migrations
-export const CONTEXT_TELEMETRY_SCHEMA_VERSION = '1.1' as const;
+// 1.2: added per-tool extracted-size + truncation fields (web_fetch, issue #452)
+export const CONTEXT_TELEMETRY_SCHEMA_VERSION = '1.2' as const;
 
 // Capture level type
 export type ContextTelemetryCaptureLevel = 'basic' | 'enhanced';
@@ -171,6 +172,16 @@ export const ToolTelemetrySchema = z.object({
   /** Max 200 chars */
   lastError: z.string().max(200).optional(),
   errorCategories: z.array(ToolErrorCategorySchema).optional(),
+  /**
+   * Content-size metrics for tools that extract text (currently web_fetch, issue #452).
+   * Zero-PII integer counts, so kept at both basic and enhanced capture levels.
+   */
+  /** Invocations whose extracted content was truncated at the tool's size cap. */
+  truncatedInvocationCount: z.number().optional(),
+  /** Largest single extracted (post-cap) content length across invocations. */
+  maxExtractedChars: z.number().optional(),
+  /** Sum of extracted (post-cap) content length across invocations. */
+  totalExtractedChars: z.number().optional(),
 });
 
 // Sub-agent telemetry
@@ -273,7 +284,7 @@ export const ContextWindowTelemetryWithOptionalSourceSchema = z.object({
 
 // Main Context Telemetry Schema
 export const ContextTelemetrySchema = z.object({
-  schemaVersion: z.enum(['1.0', '1.1']),
+  schemaVersion: z.enum(['1.0', '1.1', '1.2']),
   /** ISO 8601 */
   timestamp: z.string(),
   /** Self-monitoring: time to capture telemetry */

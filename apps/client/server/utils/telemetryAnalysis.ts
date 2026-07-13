@@ -387,7 +387,13 @@ ${tools
       !safeError && t.errorCategories?.length
         ? ` (error types: ${t.errorCategories.map(c => c.slice(0, 50)).join(', ')})`
         : '';
-    return `- ${t.toolName.slice(0, 100)}: ${t.invocationCount} calls, ${t.failureCount} failures, max ${(t.maxDurationMs / 1000).toFixed(1)}s${safeError}${errorCats}`;
+    // Surface content truncation (web_fetch, issue #452) so a silent partial-read
+    // regression is visible in the ops rollup, not just the raw call counts.
+    const truncInfo =
+      t.truncatedInvocationCount && t.truncatedInvocationCount > 0
+        ? ` (truncated ${t.truncatedInvocationCount}/${t.invocationCount}, max ${(t.maxExtractedChars ?? 0).toLocaleString()} chars)`
+        : '';
+    return `- ${t.toolName.slice(0, 100)}: ${t.invocationCount} calls, ${t.failureCount} failures, max ${(t.maxDurationMs / 1000).toFixed(1)}s${safeError}${errorCats}${truncInfo}`;
   })
   .join('\n')}
 [/TOOL_DATA]`
