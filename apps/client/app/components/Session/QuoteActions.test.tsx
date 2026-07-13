@@ -34,12 +34,16 @@ function mockPointer(fine: boolean) {
   }));
 }
 
-// Make window.getSelection report a non-empty selection so a mouseup would
-// surface the toolbar - if (and only if) the listener is attached.
-function stubSelection(text = 'partial selection') {
+// Make window.getSelection report a non-empty selection anchored inside the
+// container, so a mouseup would surface the toolbar - if (and only if) the
+// listener is attached and the containment check passes.
+function stubSelection(container: HTMLElement, text = 'partial selection') {
+  const anchorNode = document.createTextNode(text);
+  container.appendChild(anchorNode);
   const range = { getBoundingClientRect: () => ({ left: 100, top: 50, width: 40, height: 16 }) };
   window.getSelection = vi.fn().mockReturnValue({
     toString: () => text,
+    anchorNode,
     getRangeAt: () => range,
     removeAllRanges: vi.fn(),
   }) as unknown as typeof window.getSelection;
@@ -52,7 +56,7 @@ describe('QuoteActions pointer gating', () => {
     vi.useFakeTimers();
     container = document.createElement('div');
     document.body.appendChild(container);
-    stubSelection();
+    stubSelection(container);
   });
 
   afterEach(() => {
@@ -92,5 +96,34 @@ describe('QuoteActions pointer gating', () => {
     });
 
     expect(screen.queryByText('Explain')).toBeNull();
+  });
+
+  it('ignores selections that start outside the reply container', () => {
+    mockPointer(true);
+    // The document-level listener must not fire the toolbar for a selection made
+    // elsewhere on the page (sidebar, another reply, etc.).
+    const outside = document.createElement('div');
+    outside.textContent = 'elsewhere';
+    document.body.appendChild(outside);
+    window.getSelection = vi.fn().mockReturnValue({
+      toString: () => 'elsewhere',
+      anchorNode: outside.firstChild,
+      getRangeAt: () => ({ getBoundingClientRect: () => ({ left: 0, top: 0, width: 10, height: 10 }) }),
+      removeAllRanges: vi.fn(),
+    }) as unknown as typeof window.getSelection;
+
+    render(
+      <Wrapper>
+        <QuoteActions containerRef={{ current: container }} />
+      </Wrapper>
+    );
+
+    act(() => {
+      fireEvent.mouseUp(document);
+      vi.advanceTimersByTime(100);
+    });
+
+    expect(screen.queryByText('Explain')).toBeNull();
+    outside.remove();
   });
 });
