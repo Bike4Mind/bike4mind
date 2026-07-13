@@ -1,9 +1,13 @@
 name: Production Release
 
-# Trigger only after successful deployment to prod branch
+# Legacy auto-trigger: fired after the app workflow (renamed "Deploy" -> "CI")
+# completed on the `prod` branch. The `prod` branch is being retired (production
+# is promoted from the deploy console via workflow_dispatch below), so this path
+# is effectively inert; CI no longer runs on `prod`. Kept in sync with the
+# workflow name until the prod-branch retirement removes it.
 on:
   workflow_run:
-    workflows: ["Deploy"]
+    workflows: ["CI"]
     types: [completed]
     branches:
       - prod

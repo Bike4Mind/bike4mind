@@ -852,10 +852,30 @@ const atlassianSelectSiteRoute = createRoute({
   ),
 });
 
-// Device activation route (OAuth device flow)
+// Device activation route (OAuth device flow). A rootRoute child (own chrome, not the notebook
+// layout), so it does NOT inherit the layoutRoute consent guard. Re-run just the consent check here
+// so an authenticated-but-not-yet-consented user is routed to /accept-policies (preserving a return
+// path back to /activate?code=...) instead of being shown the form only to have Approve Device fail
+// the server consent gate with a misleading 403. The unauthenticated -> /login redirect stays in the
+// component (shouldRedirectToConsent is a no-op without a currentUser). See issue #369.
 const activateRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activate',
+  beforeLoad: ({ location }) => {
+    const { currentUser, isHydrated } = useUser.getState();
+    const { accessToken } = useAccessToken.getState();
+    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
+      const redirectTo = buildRedirectTo(
+        location.pathname,
+        location.searchStr,
+        location.hash ? `#${location.hash}` : ''
+      );
+      throw redirect({
+        to: '/accept-policies',
+        search: redirectTo ? { redirectTo } : undefined,
+      });
+    }
+  },
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <ActivatePage />
