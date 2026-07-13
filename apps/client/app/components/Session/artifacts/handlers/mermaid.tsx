@@ -30,9 +30,8 @@ const MermaidPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         mimeType="text/plain"
         artifactContent={mermaidArtifact}
         title={mermaidArtifact.title}
-        icon={<MermaidIcon color="primary" sx={{ fontSize: '16px' }} />}
+        icon={<MermaidIcon sx={{ fontSize: '14px' }} />}
         chipLabel="Mermaid"
-        chipColor="primary"
         testIdPrefix="mermaid"
         source={artifact.content}
         copyTooltip="Copy diagram source to clipboard"

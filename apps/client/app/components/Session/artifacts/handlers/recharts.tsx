@@ -70,9 +70,8 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
         mimeType="application/vnd.ant.recharts"
         artifactContent={chart}
         title={chart.title}
-        icon={<RechartsIcon color="primary" sx={{ fontSize: '16px' }} />}
+        icon={<RechartsIcon sx={{ fontSize: '14px' }} />}
         chipLabel={chartType || 'Chart'}
-        chipColor="primary"
         testIdPrefix="recharts"
         // No `source`: a chart's source is the tool's JSON config, not something the
         // user asked for -- so no copy/save/code-view, and the body is the chart alone.

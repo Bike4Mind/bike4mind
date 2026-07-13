@@ -2,7 +2,7 @@ import React from 'react';
 import { Box, Typography } from '@mui/joy';
 import { type HtmlArtifact } from '@bike4mind/common';
 import InlineArtifactPreview from './InlineArtifactPreview';
-import ArtifactPreviewCard, { getComplexityColor } from './ArtifactPreviewCard';
+import ArtifactPreviewCard from './ArtifactPreviewCard';
 
 interface HtmlArtifactPreviewCardProps {
   artifact: HtmlArtifact;
@@ -21,9 +21,8 @@ const HtmlArtifactPreviewCard: React.FC<HtmlArtifactPreviewCardProps> = ({ artif
       mimeType="text/html"
       artifactContent={artifact}
       title={artifact.title}
-      icon={<Box sx={{ fontSize: '16px' }}>🌐</Box>}
+      icon={<Box sx={{ fontSize: '14px' }}>🌐</Box>}
       chipLabel="HTML"
-      chipColor={getComplexityColor(artifact.content)}
       testIdPrefix="html"
       source={artifact.content}
       copyTooltip="Copy HTML to clipboard"

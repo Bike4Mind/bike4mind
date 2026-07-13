@@ -1,5 +1,5 @@
 import React, { useEffect, useState, type ReactNode } from 'react';
-import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip, type ColorPaletteProp } from '@mui/joy';
+import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
   OpenInFull as ExpandIcon,
   ContentCopy as CopyIcon,
@@ -16,15 +16,7 @@ import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-
-/** Chip color by source size. Shared so every type grades complexity on the same scale. */
-export const getComplexityColor = (content: string): ColorPaletteProp => {
-  const lineCount = content.split('\n').length;
-  if (lineCount < 50) return 'success';
-  if (lineCount < 100) return 'primary';
-  if (lineCount < 200) return 'warning';
-  return 'danger';
-};
+import { brand } from '@client/app/utils/themes/colors';
 
 export interface ArtifactSaveFile {
   fileName: string;
@@ -40,10 +32,9 @@ export interface ArtifactPreviewCardProps {
   /** Payload handed to the side-panel viewer. */
   artifactContent: unknown;
   title: string;
-  /** Badge glyph pinned to the card corner. Size it at 16px to match its siblings. */
+  /** Badge glyph pinned to the card corner. Size it at 14px to match its siblings. */
   icon: ReactNode;
   chipLabel: ReactNode;
-  chipColor?: ColorPaletteProp;
   /** Row under the header: line counts, data points, dependencies. */
   stats?: ReactNode;
   /** Block between stats and body, e.g. React's dependency chips. */
@@ -89,7 +80,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
   title,
   icon,
   chipLabel,
-  chipColor = 'primary',
   stats,
   extra,
   testIdPrefix,
@@ -224,20 +214,46 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
       }}
       onClick={handleToggleInlinePreview}
     >
-      <Box
-        sx={{
+      {/* Type badge: the icon and the type label are one pill overhanging the card
+          corner, so the header row carries only the title and the actions. Colors are
+          fixed to the brand blue rather than per-type: the icon already conveys type. */}
+      <Chip
+        size="sm"
+        variant="solid"
+        startDecorator={icon}
+        data-testid={`${testIdPrefix}-artifact-badge`}
+        sx={theme => ({
           position: 'absolute',
           top: '-8px',
           left: '-8px',
-          backgroundColor: 'background.surface',
-          borderRadius: '50%',
-          padding: '4px',
-          boxShadow: 'sm',
           zIndex: 1,
-        }}
+          backgroundColor: brand[800],
+          color: 'text.primary',
+          border: 'none',
+          paddingInline: '8px',
+          // Joy SvgIcons size from --Icon-fontSize, not a `fontSize` in sx (the theme's
+          // own size class outranks it), so drive the badge glyph through the variable.
+          '--Icon-fontSize': '14px',
+          '--Chip-decoratorChildHeight': '14px',
+          '--Chip-gap': '4px',
+          // Joy gives the glyph its own --Icon-margin, which would stack on top of the
+          // decorator's 4px gap; zero it so the gap is exactly 4px.
+          '--Icon-margin': '0px',
+          '& .MuiChip-startDecorator': {
+            color: 'text.tertiary',
+            margin: 0,
+            '& > svg': { width: '14px', height: '14px', margin: 0 },
+          },
+          '&:hover': { backgroundColor: brand[800] },
+          // Light mode's text.primary is near-black and unreadable on the blue pill.
+          [theme.getColorSchemeSelector('light')]: {
+            color: '#fff',
+            '& .MuiChip-startDecorator': { color: 'rgba(255, 255, 255, 0.5)' },
+          },
+        })}
       >
-        {icon}
-      </Box>
+        {chipLabel}
+      </Chip>
 
       {/* No padding here: the Card already provides it. */}
       <Box>
@@ -271,10 +287,6 @@ const ArtifactPreviewCard: React.FC<ArtifactPreviewCardProps> = ({
           >
             {title}
           </Typography>
-
-          <Chip size="sm" variant="soft" color={chipColor}>
-            {chipLabel}
-          </Chip>
 
           {actions.copy && source && (
             <Tooltip title={copyTooltip} placement="top">

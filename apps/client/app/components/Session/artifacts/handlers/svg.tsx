@@ -77,9 +77,8 @@ const SvgPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId }
         mimeType="image/svg+xml"
         artifactContent={svgArtifact}
         title={svgTitle}
-        icon={<SvgIcon color="primary" sx={{ fontSize: '16px' }} />}
+        icon={<SvgIcon sx={{ fontSize: '14px' }} />}
         chipLabel="SVG"
-        chipColor="primary"
         testIdPrefix="svg"
         // The graphic IS the artifact: always shown, never collapsed, and no source view
         // (so no code toggle) -- but the markup is still worth saving as a file.

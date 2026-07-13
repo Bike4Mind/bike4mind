@@ -46,9 +46,8 @@ const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactI
         mimeType="application/vnd.ant.python"
         artifactContent={pythonArtifact}
         title={title}
-        icon={<PythonIcon sx={{ color: 'danger.500', fontSize: '16px' }} />}
+        icon={<PythonIcon sx={{ fontSize: '14px' }} />}
         chipLabel="Python"
-        chipColor="danger"
         testIdPrefix="python"
         source={artifact.content}
         copyTooltip="Copy code to clipboard"

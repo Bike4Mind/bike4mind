@@ -68,9 +68,8 @@ const LatticePreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifact
         mimeType="application/vnd.b4m.lattice"
         artifactContent={model}
         title={model.title}
-        icon={<LatticeIcon color="success" sx={{ fontSize: '16px' }} />}
+        icon={<LatticeIcon sx={{ fontSize: '14px' }} />}
         chipLabel={modelType || 'Financial Model'}
-        chipColor="success"
         testIdPrefix="lattice"
         source={model.content}
         copyTooltip="Copy model to clipboard"

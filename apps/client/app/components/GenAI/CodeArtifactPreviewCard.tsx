@@ -15,6 +15,7 @@ import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
+import { brand } from '@client/app/utils/themes/colors';
 
 interface CodeArtifactData {
   title: string;
@@ -29,23 +30,6 @@ interface CodeArtifactPreviewCardProps {
   artifactId: string;
   onExpand?: () => void;
 }
-
-const getLanguageColor = (language: string) => {
-  switch (language.toLowerCase()) {
-    case 'typescript':
-    case 'tsx':
-      return 'primary';
-    case 'javascript':
-    case 'jsx':
-      return 'warning';
-    case 'python':
-      return 'success';
-    case 'rust':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-};
 
 const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data, artifactId, onExpand }) => {
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
@@ -181,22 +165,45 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       }}
       onClick={handleToggleExpand}
     >
-      {/* Code Icon Badge */}
-      <Box
+      {/* Type badge: icon + language in one pill overhanging the card corner. Matches
+          ArtifactPreviewCard's badge - keep the two in sync. */}
+      <Chip
         className="code-artifact-icon-badge"
-        sx={{
+        size="sm"
+        variant="solid"
+        startDecorator={<CodeIcon className="code-artifact-icon" sx={{ fontSize: '14px' }} />}
+        sx={theme => ({
           position: 'absolute',
           top: '-8px',
           left: '-8px',
-          backgroundColor: 'background.surface',
-          borderRadius: '50%',
-          padding: '4px',
-          boxShadow: 'sm',
           zIndex: 1,
-        }}
+          backgroundColor: brand[800],
+          color: 'text.primary',
+          border: 'none',
+          paddingInline: '8px',
+          // Joy SvgIcons size from --Icon-fontSize, not a `fontSize` in sx (the theme's
+          // own size class outranks it), so drive the badge glyph through the variable.
+          '--Icon-fontSize': '14px',
+          '--Chip-decoratorChildHeight': '14px',
+          '--Chip-gap': '4px',
+          // Joy gives the glyph its own --Icon-margin, which would stack on top of the
+          // decorator's 4px gap; zero it so the gap is exactly 4px.
+          '--Icon-margin': '0px',
+          '& .MuiChip-startDecorator': {
+            color: 'text.tertiary',
+            margin: 0,
+            '& > svg': { width: '14px', height: '14px', margin: 0 },
+          },
+          '&:hover': { backgroundColor: brand[800] },
+          // Light mode's text.primary is near-black and unreadable on the blue pill.
+          [theme.getColorSchemeSelector('light')]: {
+            color: '#fff',
+            '& .MuiChip-startDecorator': { color: 'rgba(255, 255, 255, 0.5)' },
+          },
+        })}
       >
-        <CodeIcon className="code-artifact-icon" color="primary" sx={{ fontSize: '16px' }} />
-      </Box>
+        {data.language}
+      </Chip>
 
       {/* Main Content */}
       {/* No padding here: the Card already provides it. */}
@@ -227,15 +234,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
           >
             {data.title}
           </Typography>
-
-          <Chip
-            className="code-artifact-language-chip"
-            size="sm"
-            variant="soft"
-            color={getLanguageColor(data.language)}
-          >
-            {data.language}
-          </Chip>
 
           <Tooltip title="Copy code to clipboard" placement="top">
             <IconButton size="sm" variant="plain" color="neutral" onClick={handleCopy}>
