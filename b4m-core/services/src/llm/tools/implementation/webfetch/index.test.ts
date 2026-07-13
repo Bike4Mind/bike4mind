@@ -17,6 +17,7 @@ vi.mock('./firecrawlApp', () => ({
 import { firecrawlFetch, truncationMarker, webFetchTool } from './index';
 import type { ToolContext } from '../../base/types';
 import type { CitableSource } from '@bike4mind/common';
+import { aggregateWebFetchContentTelemetry } from '../../../../telemetry';
 
 const CAP = 50_000;
 
@@ -100,5 +101,32 @@ describe('webFetchTool result + citable', () => {
     expect(citable.metadata.truncated).toBe(false);
     expect(citable.metadata.originalContentLength).toBe(10_000);
     expect(citable.metadata.contentLength).toBe(10_000);
+  });
+});
+
+// End-to-end boundary corpus: tool result marker <-> citable metadata <-> telemetry rollup
+// stay consistent across the cap boundary (issue #452).
+describe('web_fetch truncation boundary corpus (marker + citable + telemetry)', () => {
+  it.each([
+    { size: 10_000, truncated: false },
+    { size: 49_999, truncated: false },
+    { size: 50_000, truncated: false },
+    { size: 51_000, truncated: true },
+    { size: 200_000, truncated: true },
+  ])('$size chars -> truncated=$truncated everywhere', async ({ size, truncated }) => {
+    scrapeMarkdown = 'x'.repeat(size);
+    const { result, citable } = await runTool(`https://example.com/${size}`);
+
+    // Model-facing result carries the marker only when truncated.
+    expect(result.includes('[TRUNCATED')).toBe(truncated);
+    // Citable metadata reflects the same truncation state and post-cap length.
+    expect(citable.metadata.truncated).toBe(truncated);
+    expect(citable.metadata.contentLength).toBe(Math.min(size, CAP));
+
+    // Telemetry rollup derived from that citable agrees.
+    const telemetry = aggregateWebFetchContentTelemetry([citable]);
+    expect(telemetry.truncatedInvocationCount).toBe(truncated ? 1 : 0);
+    expect(telemetry.maxExtractedChars).toBe(Math.min(size, CAP));
+    expect(telemetry.totalExtractedChars).toBe(Math.min(size, CAP));
   });
 });
