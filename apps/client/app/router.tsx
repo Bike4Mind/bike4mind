@@ -863,7 +863,8 @@ const activateRoute = createRoute({
   path: '/activate',
   beforeLoad: ({ location }) => {
     const { currentUser, isHydrated } = useUser.getState();
-    if (shouldRedirectToConsent({ currentUser, isHydrated })) {
+    const { accessToken } = useAccessToken.getState();
+    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
       const redirectTo = buildRedirectTo(
         location.pathname,
         location.searchStr,
