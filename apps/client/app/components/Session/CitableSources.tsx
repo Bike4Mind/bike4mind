@@ -1,10 +1,11 @@
 import { FC, useMemo, useState } from 'react';
-import { Box, Stack, Typography } from '@mui/joy';
+import { Box, Stack, Tooltip, Typography } from '@mui/joy';
 import {
   Language as WebIcon,
   Description as DocumentIcon,
   Storage as DatasetIcon,
   Extension as McpIcon,
+  WarningAmberRounded as TruncatedIcon,
 } from '@mui/icons-material';
 import { CitableSource, CitableSourceType } from '@bike4mind/common';
 import { useNavigate } from '@tanstack/react-router';
@@ -99,6 +100,11 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
   const showFavicon = source.type === 'web_url' && !isInternal && faviconUrl && !faviconError;
   const fallbackIcon = getIconForType(source.type);
 
+  // web_fetch flags content it dropped at its size cap (see webfetch tool / issue #452).
+  // Surface it so the user knows the model only saw a partial read.
+  const isTruncated = source.metadata?.truncated === true;
+  const truncationCap = typeof source.metadata?.cap === 'number' ? source.metadata.cap : undefined;
+
   return (
     <Box
       component={renderAsButton ? 'button' : source.url ? 'a' : 'div'}
@@ -180,6 +186,19 @@ const CitableSourceItem: FC<{ source: CitableSource }> = ({ source }) => {
             >
               {hostname}
             </Typography>
+          )}
+          {isTruncated && (
+            <Tooltip
+              size="sm"
+              title={`Content truncated${
+                truncationCap ? ` at ${truncationCap.toLocaleString()} chars` : ''
+              } - the model saw a partial read of this source`}
+            >
+              <TruncatedIcon
+                data-testid="citable-truncated-badge"
+                sx={{ fontSize: '0.9rem', color: 'warning.500', ml: 0.5, verticalAlign: 'text-bottom' }}
+              />
+            </Tooltip>
           )}
         </Typography>
 
