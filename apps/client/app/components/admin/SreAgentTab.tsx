@@ -1065,7 +1065,10 @@ function SreConfigPanel() {
   if (!config) return <Typography>Loading configuration...</Typography>;
 
   return (
-    <Box>
+    // pb clears the fixed "AI Chat" pill (bottom:20 + ~40px tall, zIndex 1300) the admin page
+    // floats at the viewport's bottom-right, so the Save/Reset bar below isn't obscured by it.
+    // See FloatingChatWindow.tsx.
+    <Box sx={{ pb: 10 }}>
       {/* Multi-Repo Configuration */}
       <ConfigSection title="Repositories">
         <Typography level="body-sm" sx={{ mb: 2, color: 'text.secondary' }}>
