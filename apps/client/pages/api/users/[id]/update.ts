@@ -154,7 +154,7 @@ const handler = baseApi().put(
 
       // Double-check we have the latest state
       const finalUser = await User.findById(userId);
-      return res.json(redactUserSecretsForSelf(finalUser?.toJSON()));
+      return res.json(redactUserSecretsForSelf(finalUser));
     } else {
       await userService.updateUser(userId, req.body as any, {
         db: {
@@ -169,7 +169,7 @@ const handler = baseApi().put(
 
       // Same for non-admin updates
       const finalUser = await User.findById(userId);
-      return res.json(redactUserSecretsForSelf(finalUser?.toJSON()));
+      return res.json(redactUserSecretsForSelf(finalUser));
     }
   })
 );
