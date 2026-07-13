@@ -3,8 +3,10 @@ import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PriceChangeIcon from '@mui/icons-material/PriceChange';
+import BusinessIcon from '@mui/icons-material/Business';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
+import { OrgUsageDashboard } from './components/OrgUsageDashboard';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -34,6 +36,12 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Margins</Box>
             </Box>
           </Tab>
+          <Tab value="org-usage" data-testid="credit-analysis-org-usage-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <BusinessIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Org Usage</Box>
+            </Box>
+          </Tab>
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
@@ -47,6 +55,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="margins" sx={{ p: 0 }}>
           <MarginDashboard />
+        </TabPanel>
+
+        <TabPanel value="org-usage" sx={{ p: 0 }}>
+          <OrgUsageDashboard />
         </TabPanel>
       </Tabs>
 
