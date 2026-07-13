@@ -235,7 +235,7 @@ This ensures preview environments are isolated from production but share staging
 
 ### Preview deploys (internal)
 
-Preview deploys do not run from this repository. Maintainers create previews on demand through an internal deployer that pins the PR's head SHA and deploys `pr<N>` stages into the dedicated previews AWS account; a bot comment on the PR carries the preview URL, and stale previews are swept nightly. This repo's `deploy.yml` emits deploy-matrix entries only for `push` to `main` (staging) and `prod` (production).
+Preview deploys do not run from this repository. Maintainers create previews on demand through an internal deployer that pins the PR's head SHA and deploys `pr<N>` stages into the dedicated previews AWS account; a bot comment on the PR carries the preview URL, and stale previews are swept nightly. No tier deploys from this repository anymore (staging and production are both handled by the internal deployer); this repo's `ci.yml` runs build/typecheck/lint/test only and gates merges.
 
 ## Preview Domain Calculation
 
