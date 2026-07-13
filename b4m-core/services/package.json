@@ -220,7 +220,7 @@
     "mathjs": "^15.2.0",
     "mime-types": "^3.0.2",
     "mongoose": "^8.24.1",
-    "openai": "^6.38.0",
+    "openai": "^6.46.0",
     "p-limit": "^7.3.0",
     "sharp": "^0.35.3",
     "tiktoken": "^1.0.22",

@@ -97,7 +97,7 @@
     "lodash": "^4.18.1",
     "mammoth": "^1.12.0",
     "mime-types": "^3.0.2",
-    "openai": "^6.38.0",
+    "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
     "tldts": "^7.0.28",
     "unpdf": "^1.6.2",
