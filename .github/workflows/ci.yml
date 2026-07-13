@@ -145,7 +145,7 @@ jobs:
       - name: Calculate core packages content hash
         id: core-hash
         run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
           echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
@@ -182,6 +182,7 @@ jobs:
           name: core-build-${{ steps.core-hash.outputs.content_hash }}
           path: |
             b4m-core/*/dist
+            packages/database/dist
           retention-days: 7
           if-no-files-found: error
 
@@ -231,7 +232,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -305,7 +308,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -394,7 +399,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -500,7 +507,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)

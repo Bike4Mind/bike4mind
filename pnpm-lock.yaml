@@ -1930,6 +1930,9 @@ importers:
       mongodb-memory-server:
         specifier: ^11.2.0
         version: 11.2.0(@aws-sdk/credential-providers@3.1050.0)(socks@2.8.6)
+      tsdown:
+        specifier: ^0.22.3
+        version: 0.22.3(@typescript/native-preview@7.0.0-dev.20260707.2)(tsx@4.23.0)(typescript@5.9.3)(unrun@0.2.37)
       tsx:
         specifier: ^4.23.0
         version: 4.23.0

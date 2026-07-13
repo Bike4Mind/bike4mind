@@ -3,21 +3,47 @@
   "version": "0.1.56",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "dist/index.mjs",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.mts",
   "files": [
-    "src"
+    "dist"
   ],
   "exports": {
-    ".": "./src/index.ts",
-    "./auth": "./src/models/auth/index.ts",
-    "./content": "./src/models/content/index.ts",
-    "./social": "./src/models/social/index.ts",
-    "./billing": "./src/models/billing/index.ts",
-    "./ai": "./src/models/ai/index.ts",
-    "./infra": "./src/models/infra/index.ts"
+    ".": {
+      "types": "./dist/index.d.mts",
+      "default": "./dist/index.mjs"
+    },
+    "./auth": {
+      "types": "./dist/models/auth/index.d.mts",
+      "default": "./dist/models/auth/index.mjs"
+    },
+    "./content": {
+      "types": "./dist/models/content/index.d.mts",
+      "default": "./dist/models/content/index.mjs"
+    },
+    "./social": {
+      "types": "./dist/models/social/index.d.mts",
+      "default": "./dist/models/social/index.mjs"
+    },
+    "./billing": {
+      "types": "./dist/models/billing/index.d.mts",
+      "default": "./dist/models/billing/index.mjs"
+    },
+    "./ai": {
+      "types": "./dist/models/ai/index.d.mts",
+      "default": "./dist/models/ai/index.mjs"
+    },
+    "./infra": {
+      "types": "./dist/models/infra/index.d.mts",
+      "default": "./dist/models/infra/index.mjs"
+    }
   },
   "scripts": {
+    "clean": "rm -rf dist",
+    "build": "pnpm clean && tsdown",
+    "incremental": "tsdown",
+    "dev": "tsdown --watch",
     "typecheck": "tsc --noEmit",
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
@@ -43,6 +69,7 @@
     "@vitest/coverage-v8": "^4.1.10",
     "@vitest/ui": "^4.1.10",
     "mongodb-memory-server": "^11.2.0",
+    "tsdown": "^0.22.3",
     "tsx": "^4.23.0",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.10"
