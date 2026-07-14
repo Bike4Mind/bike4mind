@@ -18,7 +18,6 @@ import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
   Response as OpenAIResponse,
-  ResponseCreateParamsNonStreaming,
   ResponseCreateParamsStreaming,
   ResponseInputItem,
   ResponseOutputItem,
@@ -1983,6 +1982,11 @@ export class OpenAIBackend implements ICompletionBackend {
       } else if (event.type === 'error') {
         throw new Error(`OpenAI Responses stream error for ${model}: ${event.message}`);
       }
+      // Every other event (response.output_item.added, response.function_call_arguments.delta,
+      // reasoning summary events, etc.) is intentionally ignored: the terminal Response captured
+      // above carries fully-assembled output items, so function_call arguments and reasoning are
+      // read from finalResponse below. Do NOT also accumulate tool arguments from the *.delta
+      // events here - that would double-append against the terminal item's complete arguments.
     }
 
     if (!finalResponse) {
@@ -2149,9 +2153,9 @@ function chatContentToString(content: unknown): string {
  */
 function mapToolChoiceForResponses(
   toolChoice: ICompletionOptions['tool_choice']
-): ResponseCreateParamsNonStreaming['tool_choice'] | undefined {
+): ResponseCreateParamsStreaming['tool_choice'] | undefined {
   if (!toolChoice) return undefined;
-  if (typeof toolChoice === 'string') return toolChoice as ResponseCreateParamsNonStreaming['tool_choice'];
+  if (typeof toolChoice === 'string') return toolChoice as ResponseCreateParamsStreaming['tool_choice'];
   if (typeof toolChoice === 'object' && (toolChoice as { type?: string }).type === 'function') {
     const fn = toolChoice as { function?: { name?: string }; name?: string };
     const name = fn.function?.name ?? fn.name;
