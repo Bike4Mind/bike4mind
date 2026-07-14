@@ -303,4 +303,81 @@ describe('UsageEventRepository', () => {
       });
     });
   });
+
+  describe('sessionUsageSummary', () => {
+    it('rolls up a session by quest and by model with token totals', async () => {
+      await record({
+        sessionId: 's-1',
+        requestId: 'quest-a',
+        model: 'claude-sonnet-4-5',
+        provider: 'bedrock',
+        inputTokens: 1000,
+        outputTokens: 400,
+        cachedInputTokens: 100,
+        costUsd: 0.01,
+        creditsCharged: 50,
+      });
+      await record({
+        sessionId: 's-1',
+        requestId: 'quest-a',
+        model: 'claude-sonnet-4-5',
+        provider: 'bedrock',
+        inputTokens: 500,
+        outputTokens: 200,
+        cachedInputTokens: 0,
+        costUsd: 0.02,
+        creditsCharged: 100,
+      });
+      await record({
+        sessionId: 's-1',
+        requestId: 'quest-b',
+        model: 'gpt-4o',
+        provider: 'openai',
+        inputTokens: 2000,
+        outputTokens: 800,
+        cachedInputTokens: 0,
+        costUsd: 0.05,
+        creditsCharged: 250,
+      });
+
+      const summary = await usageEventRepository.sessionUsageSummary('s-1');
+
+      expect(summary.totals).toMatchObject({
+        requests: 3,
+        creditsCharged: 400,
+        inputTokens: 3500,
+        outputTokens: 1400,
+        cachedInputTokens: 100,
+      });
+      expect(summary.totals.cogsUsd).toBeCloseTo(0.08, 10);
+
+      // Biggest spender first: quest-b (250) before quest-a (150).
+      expect(summary.byQuest).toMatchObject([
+        { requestId: 'quest-b', creditsCharged: 250, inputTokens: 2000 },
+        { requestId: 'quest-a', creditsCharged: 150, inputTokens: 1500 },
+      ]);
+      expect(summary.byModel).toMatchObject([
+        { provider: 'openai', model: 'gpt-4o', creditsCharged: 250 },
+        { provider: 'bedrock', model: 'claude-sonnet-4-5', creditsCharged: 150 },
+      ]);
+    });
+
+    it('scopes strictly to the session id', async () => {
+      await record({ sessionId: 's-1', creditsCharged: 100 });
+      await record({ sessionId: 's-2', creditsCharged: 999 });
+
+      const summary = await usageEventRepository.sessionUsageSummary('s-1');
+      expect(summary.totals).toMatchObject({ requests: 1, creditsCharged: 100 });
+      expect(summary.byQuest).toHaveLength(1);
+    });
+
+    it('returns zeroed totals for a session with no events', async () => {
+      const summary = await usageEventRepository.sessionUsageSummary('s-empty');
+      expect(summary).toEqual({
+        byQuest: [],
+        byModel: [],
+        totals: { requests: 0, cogsUsd: 0, creditsCharged: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
+      });
+    });
+  });
 });

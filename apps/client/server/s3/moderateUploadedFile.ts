@@ -2,6 +2,7 @@ import type { Logger } from '@bike4mind/observability';
 import type { ImageModerationService } from '@bike4mind/utils';
 import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils';
 import type { ImageModerationIncident } from '@bike4mind/common';
+import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';
 
 /**
@@ -9,6 +10,20 @@ import { fileTypeFromBuffer } from 'file-type';
  * numbers (its own guidance: some formats need up to ~4100 bytes of header).
  */
 const SNIFF_BYTES = 4100;
+
+/**
+ * OOXML documents (docx/xlsx/pptx) are ZIP containers. A partial-buffer sniff frequently only
+ * sees the generic ZIP local-file header - the OOXML marker entries can sit past SNIFF_BYTES -
+ * so `file-type` reports `application/zip`. That generic type is a strictly-less-specific
+ * refinement of the declared OOXML subtype, so treating it as a "correction" would clobber the
+ * real type and break type-specific handling (viewers, AI editing). Keep the declared OOXML
+ * subtype in that case (a confirmed zip container IS the OOXML file's container - no spoof risk).
+ */
+const OOXML_ZIP_MIMES = new Set<string>([
+  SupportedFabFileMimeTypes.DOCX,
+  SupportedFabFileMimeTypes.XLSX,
+  SupportedFabFileMimeTypes.PPTX,
+]);
 
 /** Moderation status as stored on FabFile - see `IFabFileDocument.moderationStatus`. */
 export type ModerationStatus = 'pending' | 'scanning' | 'clean' | 'blocked' | undefined;
@@ -117,8 +132,11 @@ export async function moderateUploadedFile(args: ModerateUploadedFileArgs): Prom
   // that case since we have no independent signal to correct it with.
   const sniffSource = await downloadPartialBytes(SNIFF_BYTES);
   const sniffed = await fileTypeFromBuffer(sniffSource);
-  const effectiveMimeType = sniffed?.mime ?? mimeType;
-  const correctedMimeType = sniffed?.mime && sniffed.mime !== mimeType ? sniffed.mime : undefined;
+  // Don't let a partial-buffer `application/zip` sniff clobber a declared OOXML subtype.
+  const sniffedMime =
+    sniffed?.mime === 'application/zip' && OOXML_ZIP_MIMES.has(mimeType ?? '') ? mimeType : sniffed?.mime;
+  const effectiveMimeType = sniffedMime ?? mimeType;
+  const correctedMimeType = sniffedMime && sniffedMime !== mimeType ? sniffedMime : undefined;
 
   if (!effectiveMimeType || !effectiveMimeType.startsWith('image/')) {
     return { moderationStatus: 'clean', correctedMimeType };

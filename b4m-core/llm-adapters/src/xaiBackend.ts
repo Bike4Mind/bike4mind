@@ -42,6 +42,32 @@ export class XAIBackend implements ICompletionBackend {
   async getModelInfo(): Promise<ModelInfo[]> {
     return [
       {
+        id: ChatModels.GROK_4_5,
+        type: 'text' as const,
+        name: 'Grok 4.5',
+        backend: ModelBackend.XAI,
+        contextWindow: 500000,
+        max_tokens: 128000,
+        can_stream: true,
+        pricing: {
+          // Tiered on prompt size. <= 200K: $2 / 1M in, $6 / 1M out, $0.50 / 1M cache read.
+          // > 200K: $4 / 1M in, $12 / 1M out, $1 / 1M cache read.
+          // The docs page publishes only the base rates; the 200K threshold and the
+          // long-context and cache-read rates come from GET /v1/language-models
+          // (long_context_threshold, *_long_context, cached_prompt_text_token_price).
+          // @see https://docs.x.ai/developers/models
+          200000: { input: 2 / 1000000, output: 6 / 1000000, cache_read: 0.5 / 1000000 },
+          500000: { input: 4 / 1000000, output: 12 / 1000000, cache_read: 1 / 1000000 },
+        },
+        can_think: true,
+        supportsVision: true,
+        supportsTools: true,
+        supportsImageVariation: false,
+        releaseDate: '2026-07-08',
+        description:
+          "xAI's Grok 4.5 reasoning model. 500K context window with vision, tool use, and extended reasoning.",
+      },
+      {
         id: ChatModels.GROK_4,
         type: 'text' as const,
         name: 'Grok 4',

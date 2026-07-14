@@ -6,6 +6,8 @@ import {
   ICreditTransaction,
   IMongoDocument,
   ICreditTransactionRepository,
+  ILedgerPage,
+  ILedgerQueryOptions,
   COMPLETION_SOURCES,
 } from '@bike4mind/common';
 
@@ -185,6 +187,40 @@ export class CreditTransactionRepository
     }
 
     return this.model.find(query).sort({ createdAt: -1 }).exec();
+  }
+
+  async queryLedgerPage(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    options: ILedgerQueryOptions
+  ): Promise<ILedgerPage> {
+    const query: Record<string, unknown> = { ownerId, ownerType };
+
+    if (options.days !== undefined) {
+      const from = new Date();
+      from.setDate(from.getDate() - options.days);
+      query.createdAt = { $gte: from };
+    }
+    if (options.transactionTypes && options.transactionTypes.length > 0) {
+      query.type = { $in: options.transactionTypes };
+    }
+    if (options.source) {
+      query.source = options.source;
+    }
+    if (options.model) {
+      query.model = options.model;
+    }
+
+    // count + page share the {ownerId, ownerType, createdAt} index; run them
+    // together since a busy org can have tens of thousands of rows. Not a single
+    // transaction: a concurrent write between the two can make total differ from
+    // the page by one - acceptable for a read-only admin view.
+    const [data, total] = await Promise.all([
+      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
+      this.model.countDocuments(query),
+    ]);
+
+    return { data, total };
   }
 }
 

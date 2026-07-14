@@ -1,8 +1,9 @@
 import React from 'react';
-import { Box, Stack, Chip, Typography } from '@mui/joy';
+import { Box, Typography } from '@mui/joy';
 import type { RechartsArtifact } from '@bike4mind/common';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { parseChartJSON, ChartParseError, getChartErrorMessage } from '@client/app/utils/chartJsonParser';
+import RechartsRenderer from '@client/app/components/Charts/RechartsRenderer';
+import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
 type ParseResult = { ok: true; artifact: RechartsArtifact } | { ok: false; error: unknown };
@@ -48,7 +49,7 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
       <Box
         key={index}
         data-testid="artifact-preview-recharts-error"
-        sx={{ my: 2, p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
+        sx={{ p: 2, border: '1px solid', borderColor: 'danger.300', borderRadius: 'sm' }}
       >
         <Typography level="body-sm" color="danger">
           Error rendering chart: {errorMessage}
@@ -57,46 +58,31 @@ const RechartsPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifac
     );
   }
 
-  const { artifact: rechartsArtifact } = result;
+  const { artifact: chart } = result;
+  const { description, dataPoints, chartType } = chart.metadata;
 
   return (
-    <Box
-      key={index}
-      data-testid={`artifact-preview-recharts-${artifactId}`}
-      sx={{
-        my: 2,
-        cursor: 'pointer',
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 'sm',
-        p: 2,
-        '&:hover': {
-          bgcolor: 'background.level1',
-        },
-      }}
-      onClick={() => {
-        setSessionLayout({
-          layout: 'vertical',
-          artifactData: {
-            type: 'recharts',
-            content: rechartsArtifact,
-            mimeType: 'application/vnd.ant.recharts',
-            id: rechartsArtifact.id,
-          },
-        });
-      }}
-    >
-      <Stack direction="row" spacing={1} alignItems="center" mb={1}>
-        <Box sx={{ color: 'primary.500', fontSize: '1.25rem' }}>📊</Box>
-        <Typography level="body-sm">{rechartsArtifact.title}</Typography>
-        <Chip size="sm" variant="soft" color="primary">
-          {rechartsArtifact.metadata.chartType || 'Chart'}
-        </Chip>
-      </Stack>
-      <Typography level="body-xs" color="neutral">
-        {rechartsArtifact.metadata.description ||
-          `Interactive chart with ${rechartsArtifact.metadata.dataPoints} data points`}
-      </Typography>
+    <Box data-testid={`artifact-preview-recharts-${artifactId}`}>
+      <ArtifactPreviewCard
+        artifactId={chart.id}
+        artifactType="recharts"
+        mimeType="application/vnd.ant.recharts"
+        artifactContent={chart}
+        contentKey={chart.content}
+        title={chart.title}
+        chipLabel={chartType || 'Chart'}
+        testIdPrefix="recharts"
+        // No `source`: a chart's source is the tool's JSON config, not something the
+        // user asked for -- so no copy/save/code-view, and the body is the chart alone.
+        stats={
+          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+            {description || `Interactive chart with ${dataPoints} data points`}
+          </Typography>
+        }
+        renderPreview={() => (
+          <RechartsRenderer config={chart.content} title={chart.title} description={description} forceMode="artifact" />
+        )}
+      />
     </Box>
   );
 };

@@ -346,11 +346,24 @@ export class BackgroundAgentManager {
       .map(([status, count]) => `${count} ${status}`)
       .join(', ');
 
+    // Aggregate usage across the group's jobs (only completed jobs carry usage)
+    let groupTokens = 0;
+    let groupCredits = 0;
+    for (const notification of group.notifications) {
+      const job = this.jobs.get(notification.jobId)?.job;
+      groupTokens += job?.totalTokens ?? 0;
+      groupCredits += job?.totalCredits ?? 0;
+    }
+    const usageSummary =
+      groupTokens > 0
+        ? `, ${groupTokens.toLocaleString()} tokens${groupCredits > 0 ? ` / ${groupCredits.toLocaleString()} credits` : ''}`
+        : '';
+
     // Header with optional group description
     const agentCount = `${total} agent${pluralize(total)} finished`;
     const header = group.description
-      ? `[Background Agents Completed] "${group.description}" - ${agentCount} (${statsSummary})`
-      : `[Background Agents Completed] ${agentCount} (${statsSummary})`;
+      ? `[Background Agents Completed] "${group.description}" - ${agentCount} (${statsSummary}${usageSummary})`
+      : `[Background Agents Completed] ${agentCount} (${statsSummary}${usageSummary})`;
 
     // Individual agent results
     const details = group.notifications
@@ -379,6 +392,8 @@ export class BackgroundAgentManager {
           status: 'completed',
           endTime: Date.now(),
           resultSummary: result.summary,
+          totalTokens: result.completionInfo.totalTokens,
+          totalCredits: result.completionInfo.totalCredits,
         });
         internal.result = result;
         internal.futureResolve?.(result);

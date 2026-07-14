@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 
@@ -325,12 +325,7 @@ const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue in queues.ts.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 /**

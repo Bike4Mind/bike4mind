@@ -25,6 +25,10 @@ const UpdateConfigSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   enabled: z.boolean().optional(),
 
+  // Org scoping: set to bind connection resolution to an organization,
+  // null to revert to legacy system-level resolution
+  organizationId: z.string().min(1).max(100).nullable().optional(),
+
   // Slack settings
   slackWorkspaceId: z.string().nullable().optional(),
   slackChannelId: z

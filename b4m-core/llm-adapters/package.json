@@ -50,7 +50,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.97.1",
+    "@anthropic-ai/sdk": "^0.111.0",
     "@aws-sdk/client-bedrock-runtime": "^3.1080.0",
     "@aws-sdk/client-cloudwatch": "^3.1080.0",
     "@bike4mind/common": "workspace:*",
@@ -59,7 +59,7 @@
     "axios": "1.16.1",
     "lodash": "^4.18.1",
     "ollama": "^0.6.3",
-    "openai": "^6.38.0",
+    "openai": "^6.46.0",
     "undici": "^7.28.0",
     "uuid": "^13.0.2"
   },

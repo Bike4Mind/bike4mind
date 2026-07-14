@@ -14,13 +14,17 @@ export interface ChannelModelConfigModalParams extends IModelConfig {
   slackTeamId: string;
   /** When provided, modal operates in edit mode for this channel */
   channelId?: string;
+  /** Default GitHub owner for issue creation without an explicit repo */
+  githubOwner?: string;
+  /** Default GitHub repo for issue creation without an explicit repo */
+  githubRepo?: string;
 }
 
 /**
  * Build the Channel Model Config modal view
  */
 export async function buildChannelModelConfigModal(params: ChannelModelConfigModalParams): Promise<View> {
-  const { slackTeamId, channelId, preferredModel, temperature, maxTokens } = params;
+  const { slackTeamId, channelId, preferredModel, temperature, maxTokens, githubOwner, githubRepo } = params;
   const isEdit = !!channelId;
   const { option_groups, flat } = await buildSlackModelOptionsFromDashboard();
 
@@ -126,6 +130,53 @@ export async function buildChannelModelConfigModal(params: ChannelModelConfigMod
     optional: true,
   });
 
+  // Default GitHub repository (owner + repo) for issue creation from this channel
+  blocks.push({
+    type: 'input',
+    block_id: 'github_owner_block',
+    label: {
+      type: 'plain_text',
+      text: 'Default GitHub Owner',
+    },
+    element: {
+      type: 'plain_text_input',
+      action_id: 'github_owner_input',
+      placeholder: {
+        type: 'plain_text',
+        text: 'e.g. my-org',
+      },
+      ...(githubOwner && {
+        initial_value: githubOwner,
+      }),
+    },
+    hint: {
+      type: 'plain_text',
+      text: 'Used when someone creates a GitHub issue without naming a repo.',
+    },
+    optional: true,
+  });
+
+  blocks.push({
+    type: 'input',
+    block_id: 'github_repo_block',
+    label: {
+      type: 'plain_text',
+      text: 'Default GitHub Repository',
+    },
+    element: {
+      type: 'plain_text_input',
+      action_id: 'github_repo_input',
+      placeholder: {
+        type: 'plain_text',
+        text: 'e.g. my-repo',
+      },
+      ...(githubRepo && {
+        initial_value: githubRepo,
+      }),
+    },
+    optional: true,
+  });
+
   return {
     type: 'modal',
     callback_id: CHANNEL_MODEL_CONFIG_CALLBACK_ID,
@@ -149,7 +200,14 @@ export async function buildChannelModelConfigModal(params: ChannelModelConfigMod
 export interface ChannelModelConfigSubmission extends IModelConfig {
   channelId: string;
   slackTeamId: string;
+  githubOwner?: string;
+  githubRepo?: string;
 }
+
+// GitHub owner (user/org): alphanumeric + hyphens, no leading/trailing hyphen, max 39 chars
+const GITHUB_OWNER_REGEX = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+// GitHub repo name: alphanumeric, hyphens, underscores, dots, max 100 chars
+const GITHUB_REPO_REGEX = /^[a-zA-Z0-9._-]{1,100}$/;
 
 /**
  * Parse and validate a channel model config modal submission
@@ -160,7 +218,7 @@ export function parseChannelModelConfigSubmission(
     Record<string, { value?: string; selected_option?: { value: string }; selected_channel?: string }>
   >,
   privateMetadata: string
-): ChannelModelConfigSubmission | { error: string } {
+): ChannelModelConfigSubmission | { error: string; errorBlock?: string } {
   let metadata: Record<string, unknown>;
   try {
     metadata = JSON.parse(privateMetadata);
@@ -208,5 +266,28 @@ export function parseChannelModelConfigSubmission(
     }
   }
 
-  return { channelId, slackTeamId, preferredModel, temperature, maxTokens };
+  // Default GitHub repository (normalize empty strings to undefined)
+  const githubOwner = values.github_owner_block?.github_owner_input?.value?.trim() || undefined;
+  const githubRepo = values.github_repo_block?.github_repo_input?.value?.trim() || undefined;
+
+  if (githubOwner && !GITHUB_OWNER_REGEX.test(githubOwner)) {
+    return {
+      error: 'GitHub owner must be a valid GitHub username or organization (e.g. "my-org").',
+      errorBlock: 'github_owner_block',
+    };
+  }
+  if (githubRepo && !GITHUB_REPO_REGEX.test(githubRepo)) {
+    return {
+      error: 'GitHub repository must be a valid repo name (e.g. "my-repo"), without the owner prefix.',
+      errorBlock: 'github_repo_block',
+    };
+  }
+  if (!!githubOwner !== !!githubRepo) {
+    return {
+      error: 'Please provide both a GitHub owner and repository, or leave both empty.',
+      errorBlock: githubOwner ? 'github_repo_block' : 'github_owner_block',
+    };
+  }
+
+  return { channelId, slackTeamId, preferredModel, temperature, maxTokens, githubOwner, githubRepo };
 }

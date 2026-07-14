@@ -64,6 +64,7 @@ export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './office/officeEdit';
 export * from './artifactParser';
 export * from './adminSettings';
 export * from './notificationDeduplicator';

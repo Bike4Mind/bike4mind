@@ -5,7 +5,7 @@ import {
   slackExportBucket,
   whatsNewDistributionBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, SINGLE_RECORD_BATCH } from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
@@ -187,12 +187,7 @@ const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Image Edit Queue
@@ -234,12 +229,7 @@ const imageEditQueueSubscription = imageEditQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 const researchEngineQueueDLQ = new sst.aws.Queue('researchEngineQueueDLQ', {});
@@ -277,12 +267,7 @@ const researchEngineQueueSubscription = researchEngineQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // What's New Modal Generation Queue
@@ -353,12 +338,7 @@ const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Notebook Curation Queue
@@ -390,12 +370,7 @@ const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Agent Proactive Message Queue
@@ -439,12 +414,7 @@ const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscr
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // GitHub Webhook Processing Queue
@@ -497,12 +467,7 @@ const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
         }
       : undefined,
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Storm
-    // throughput is bounded by the reserved concurrency above, not batch size.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Webhook Delivery Queue
@@ -553,12 +518,7 @@ const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe(
         }
       : undefined,
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Storm
-    // throughput is bounded by the reserved concurrency above, not batch size.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Slack Export Queue
@@ -600,12 +560,7 @@ const slackExportQueueSubscription = slackExportQueue.subscribe(
         }
       : undefined,
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Quest Export Queue
@@ -639,12 +594,7 @@ const questExportQueueSubscription = questExportQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // What's New Highlights Queue
@@ -704,12 +654,7 @@ const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Video Generation Queue
@@ -743,12 +688,7 @@ const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
       reserved: 5,
     },
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // LiveOps Triage Queue (Multi-Config)
@@ -790,12 +730,7 @@ const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // SecOps Triage Queue
@@ -850,12 +785,7 @@ const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
         }
       : undefined,
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // Tavern Heartbeat Queue + DLQ
@@ -915,12 +845,7 @@ const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
       },
     ],
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // SRE Fix Queue (defined before the SRE Job Queue because the Diagnostician dispatches to it)
@@ -951,12 +876,7 @@ const sreFixQueueSubscription = sreFixQueue.subscribe(
       APP_URL: $dev ? 'http://localhost:3000' : router.url,
     },
   },
-  {
-    // Handler is single-record (reads event.Records[0]); pin batch size to 1 so
-    // multi-record deliveries can't silently drop the un-read records. Matches
-    // sreJobQueue / overwatchAnalyticsQueue below.
-    batch: { size: 1 },
-  }
+  SINGLE_RECORD_BATCH
 );
 
 // SRE Job Queue (merged Analysis + Revision — #8657)
@@ -1194,31 +1114,23 @@ const optihashiRunCompletionQueue = new sst.aws.Queue('optihashiRunCompletionQue
     },
   },
 });
-const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subscribe(
-  {
-    handler: 'apps/client/server/premium-generated/optihashiRunCompletion.dispatch',
-    runtime: 'nodejs24.x',
-    timeout: '4 minutes',
-    vpc: lambdaVpc,
-    link: [...allSecrets, websocketApi],
-    logging: {
-      retention: '3 days',
-    },
-    environment: {
-      ...DEFAULT_LAMBDA_ENVIRONMENT,
-    },
-    permissions: [
-      { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
-      { actions: ['execute-api:ManageConnections'], resources: ['*'] },
-    ],
+const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subscribe({
+  handler: 'apps/client/server/premium-generated/optihashiRunCompletion.dispatch',
+  runtime: 'nodejs24.x',
+  timeout: '4 minutes',
+  vpc: lambdaVpc,
+  link: [...allSecrets, websocketApi],
+  logging: {
+    retention: '3 days',
   },
-  {
-    // Handler is overlay-generated (not in this repo); one settlement per message is the
-    // documented contract, so pin batch size to 1 so multi-record deliveries can't
-    // silently drop the un-read records. Matches sreJobQueue / overwatchAnalyticsQueue above.
-    batch: { size: 1 },
-  }
-);
+  environment: {
+    ...DEFAULT_LAMBDA_ENVIRONMENT,
+  },
+  permissions: [
+    { actions: ['cloudwatch:PutMetricData'], resources: ['*'] },
+    { actions: ['execute-api:ManageConnections'], resources: ['*'] },
+  ],
+});
 
 export {
   // Queues

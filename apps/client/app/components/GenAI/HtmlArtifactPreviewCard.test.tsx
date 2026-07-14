@@ -64,14 +64,26 @@ describe('HtmlArtifactPreviewCard', () => {
     expect(screen.queryByText(new RegExp(SENTINEL))).not.toBeInTheDocument();
   });
 
-  it('toggles to source view when the preview button is clicked', () => {
+  it('shows source when the code segment of the preview toggle is selected', () => {
     render(
       <TestWrapper>
         <HtmlArtifactPreviewCard artifact={artifact} />
       </TestWrapper>
     );
-    fireEvent.click(screen.getByTestId('html-artifact-preview-btn'));
+    fireEvent.click(screen.getByTestId('view-mode-code'));
     expect(screen.queryByTestId('inline-artifact-preview')).not.toBeInTheDocument();
     expect(screen.getByText(new RegExp(SENTINEL))).toBeInTheDocument();
+  });
+
+  it('returns to the rendered preview when the preview segment is selected', () => {
+    render(
+      <TestWrapper>
+        <HtmlArtifactPreviewCard artifact={artifact} />
+      </TestWrapper>
+    );
+    fireEvent.click(screen.getByTestId('view-mode-code'));
+    fireEvent.click(screen.getByTestId('view-mode-preview'));
+    expect(screen.getByTestId('inline-artifact-preview')).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(SENTINEL))).not.toBeInTheDocument();
   });
 });

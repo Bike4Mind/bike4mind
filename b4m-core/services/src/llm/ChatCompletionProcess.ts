@@ -280,6 +280,13 @@ export class InsufficientCreditsError extends Error {
   }
 }
 
+/**
+ * Prompt marker that, on preview/E2E deploys only (never production), forces the primary
+ * model to simulate a sustained outage so the provider/model fallback path can be exercised
+ * end-to-end by QA. See the gated check in the completion loop and the Guide for Testers.
+ */
+export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
+
 function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -2421,6 +2428,30 @@ export class ChatCompletionProcess {
               cacheTTL: cacheStrategy.cacheTTL,
             });
 
+            // Preview/E2E-only test affordance: provider/model fallback is a sustained-
+            // outage safety net that can't be exercised without a real 5xx/throttle, so
+            // there is no way for QA to verify it on a preview otherwise. When E2E
+            // endpoints are enabled (production forces E2E off - see isE2EEnabled) AND the
+            // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a sustained outage on the
+            // primary backend so the real loop degrades to the equivalent model on another
+            // path and renders the "Fallback Model Used" badge. Double-gated and
+            // primary-attempt-only: a normal request can never trigger it, and the fallback
+            // attempt still runs for real. The error mimics a Bedrock capacity outage
+            // (ServiceUnavailableException) so it takes the real overloaded-error path:
+            // same-model overload retries, then forceSwitch to the fallback model - matching
+            // how a genuine sustained outage degrades. See the Guide for Testers.
+            if (
+              isInitialAttempt &&
+              process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
+              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+            ) {
+              const forced = new Error(
+                `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
+              );
+              forced.name = 'ServiceUnavailableException';
+              throw forced;
+            }
+
             await currentLlm.complete(
               currentModel.id,
               messages,
@@ -3015,9 +3046,11 @@ export class ChatCompletionProcess {
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
         // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters, whose input_tokens EXCLUDE cached tokens.
-        // OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache and must not
-        // forward cache counts here without also subtracting them from input.
+        // Anthropic-family adapters - the direct Anthropic adapter and
+        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
+        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
+        // and must not forward cache counts here without also subtracting them
+        // from input.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so

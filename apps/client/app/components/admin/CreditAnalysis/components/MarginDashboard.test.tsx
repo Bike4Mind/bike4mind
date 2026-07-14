@@ -157,7 +157,7 @@ describe('MarginDashboard invoice reconciliation', () => {
   });
 
   it('surfaces a failed save inside the modal', async () => {
-    mockPost.mockRejectedValue({ response: { data: { message: 'note is required' } } });
+    mockPost.mockRejectedValue({ response: { data: { error: 'note is required' } } });
     renderDashboard();
     fireEvent.click(await screen.findByTestId('margin-invoice-enter-2026-06-openai'));
     const modal = await screen.findByTestId('margin-invoice-modal');

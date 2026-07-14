@@ -19,6 +19,7 @@ const handler = baseApi()
     const ctx = await toAccessContext(req);
 
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    dataLakeService.assertLakeWritable(lake);
 
     const result = await dataLakeService.removeFileFromDataLake(
       { userId: ctx.userId, isAdmin: ctx.isAdmin },

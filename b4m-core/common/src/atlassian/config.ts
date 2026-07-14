@@ -52,8 +52,17 @@ export function getAtlassianConfig(): AtlassianConfig {
     throw new Error(`Missing required environment variables: ${missing.join(', ')}`);
   }
 
+  return buildAtlassianConfig({ accessToken: accessToken!, cloudId: cloudId!, siteUrl: siteUrl! });
+}
+
+/**
+ * Build the unified Atlassian configuration from explicit credentials.
+ * Used by getAtlassianConfig (env-based system credentials) and by org-scoped
+ * connections (OrgJiraConnection) that store credentials in the database.
+ */
+export function buildAtlassianConfig({ accessToken, cloudId, siteUrl }: AtlassianEnvKeys): AtlassianConfig {
   // Ensure siteUrl doesn't end with slash
-  const normalizedSiteUrl = siteUrl!.replace(/\/$/, '');
+  const normalizedSiteUrl = siteUrl.replace(/\/$/, '');
 
   // Confluence configuration - use Atlassian Cloud API gateway
   const confluenceWebBaseUrl = normalizedSiteUrl.endsWith('/wiki') ? normalizedSiteUrl : `${normalizedSiteUrl}/wiki`;
@@ -71,8 +80,8 @@ export function getAtlassianConfig(): AtlassianConfig {
 
   return {
     jira: {
-      accessToken: accessToken!,
-      cloudId: cloudId!,
+      accessToken,
+      cloudId,
       siteUrl: jiraWebBaseUrl,
       webBaseUrl: jiraWebBaseUrl,
       apiBaseUrl: jiraApiBaseUrl,
@@ -80,8 +89,8 @@ export function getAtlassianConfig(): AtlassianConfig {
       authHeader,
     },
     confluence: {
-      accessToken: accessToken!,
-      cloudId: cloudId!,
+      accessToken,
+      cloudId,
       siteUrl: confluenceWebBaseUrl,
       webBaseUrl: confluenceWebBaseUrl,
       apiBaseUrlV1: confluenceApiBaseUrlV1,

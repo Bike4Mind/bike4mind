@@ -1,6 +1,6 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
-import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { NotFoundError } from '@bike4mind/utils';
+import { DATA_LAKES, lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 interface AssertLakeAccessAdapters {
   db: {
@@ -44,10 +44,60 @@ export function canAccessLake(
 }
 
 /**
- * The single access gate. Resolves a lake by id (then slug) and asserts access.
- * Denies with a NOT-FOUND-style error so a user who can't see a lake can't confirm
- * it exists. Every single-lake read and every batch/file operation calls this first.
- * Returns the lake on grant.
+ * True when the lake is one of the hardcoded DATA_LAKES fallbacks (no Mongo document
+ * backs it). Membership is by config id: config ids are human slugs, never ObjectId
+ * hex strings, so a persisted lake can never collide.
+ */
+export function isFallbackLake(lake: Pick<IDataLakeDocument, 'id'>): boolean {
+  return DATA_LAKES.some(dl => dl.id === lake.id);
+}
+
+/**
+ * Refuse write/manage operations against a fallback lake. There is no document to
+ * mutate, so every mutating endpoint must call this after the access gate - otherwise
+ * the write path would die deeper in the service with a misleading not-found/500.
+ */
+export function assertLakeWritable(lake: Pick<IDataLakeDocument, 'id'>): void {
+  if (isFallbackLake(lake)) {
+    throw new BadRequestError('This data lake is built into the platform and is read-only');
+  }
+}
+
+/**
+ * Resolve a hardcoded DATA_LAKES fallback as a synthetic read-only document, applying
+ * the same access rule the list path uses for fallbacks (admin, or tag/entitlement
+ * any-of via lakeMatchesAccess) plus the hard org prerequisite from canAccessLake.
+ * Unlike DB lakes, a gateless fallback is deliberately public: fallbacks are curated
+ * config, not user-created, and the list path already shows them to everyone.
+ */
+function resolveFallbackLake(lakeIdOrSlug: string, ctx: AccessContext): IDataLakeDocument | null {
+  const config = DATA_LAKES.find(dl => dl.id === lakeIdOrSlug || dl.slug === lakeIdOrSlug);
+  if (!config) return null;
+  if (config.organizationId && config.organizationId !== ctx.organizationId) return null;
+  if (!ctx.isAdmin) {
+    const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
+    const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
+    if (!lakeMatchesAccess(config, normalizedTags, normalizedKeys)) return null;
+  }
+  // Owner-less on purpose: reads key off datalakeTag/fileTagPrefix, and writes are
+  // refused wholesale by assertLakeWritable, so no one is the creator.
+  return {
+    ...config,
+    createdByUserId: '',
+    status: 'active',
+    createdAt: new Date(0),
+    updatedAt: new Date(0),
+  };
+}
+
+/**
+ * The single access gate. Resolves a lake by id (then slug) from the DB, falling back
+ * to the hardcoded DATA_LAKES configs (which have no backing document but are listed
+ * by listDataLakes, so they must be openable). A DB lake always takes precedence - a
+ * real lake that shadows a fallback slug resolves to the DB lake, and its denial is
+ * final (no fallback retry). Denies with a NOT-FOUND-style error so a user who can't
+ * see a lake can't confirm it exists. Every single-lake read and every batch/file
+ * operation calls this first. Returns the lake on grant.
  */
 export const assertLakeAccess = async (
   lakeIdOrSlug: string,
@@ -57,8 +107,11 @@ export const assertLakeAccess = async (
   const lake =
     (await db.dataLakes.findById(lakeIdOrSlug).catch(() => null)) ??
     (await db.dataLakes.findBySlug(lakeIdOrSlug, ctx.organizationId));
-  if (!lake || !canAccessLake(lake, ctx)) {
-    throw new NotFoundError('Data lake not found');
+  if (lake) {
+    if (!canAccessLake(lake, ctx)) throw new NotFoundError('Data lake not found');
+    return lake;
   }
-  return lake;
+  const fallback = resolveFallbackLake(lakeIdOrSlug, ctx);
+  if (!fallback) throw new NotFoundError('Data lake not found');
+  return fallback;
 };

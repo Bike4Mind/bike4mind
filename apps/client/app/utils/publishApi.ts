@@ -294,7 +294,11 @@ export async function publishArtifactBundle(input: {
   const content = (input.content ?? '').trim();
   if (!content) throw new Error('This artifact has no content to publish');
 
-  const indexHtml = buildArtifactIndexHtml(input.type, input.content, input.title);
+  // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
+  // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
+  // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
+  const isReact = input.type === 'react';
+  const indexHtml = isReact ? input.content : buildArtifactIndexHtml(input.type, input.content, input.title);
   const size = new TextEncoder().encode(indexHtml).length;
   let slug = input.slug ?? `${slugify(input.title) || 'artifact'}-${input.artifactId.slice(0, 6)}`;
   // "Publish as new" must land a SEPARATE page. finalize upserts on tier+scopeId+slug, so a
@@ -315,7 +319,7 @@ export async function publishArtifactBundle(input: {
     title: input.title || 'Shared artifact',
     visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
     ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
-    source: { kind: 'bundle', artifactId: input.artifactId },
+    source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
     files: [{ path: 'index.html', size, mimeType: 'text/html' }],
   });
 

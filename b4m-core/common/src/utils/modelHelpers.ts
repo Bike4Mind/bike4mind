@@ -1,6 +1,7 @@
 import { IMAGE_MODELS, ImageModels, VIDEO_MODELS, VideoModels } from '../models';
 import { OPENAI_IMAGE_MODELS } from '../schemas/openai';
 import { GEMINI_IMAGE_MODELS, type GeminiImageModel } from '../schemas/gemini';
+import { BFL_IMAGE_MODELS, type BFLImageModel } from '../schemas/bfl';
 import { normalizeEntitlementKey } from '../constants/dataLakes';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
 
@@ -13,10 +14,7 @@ export const isVideoModel = (model: string): model is VideoModels => {
 };
 
 type GptImageModelId =
-  | ImageModels.GPT_IMAGE_1
-  | ImageModels.GPT_IMAGE_1_5
-  | ImageModels.GPT_IMAGE_1_MINI
-  | ImageModels.GPT_IMAGE_2;
+  ImageModels.GPT_IMAGE_1 | ImageModels.GPT_IMAGE_1_5 | ImageModels.GPT_IMAGE_1_MINI | ImageModels.GPT_IMAGE_2;
 
 /** Returns true for GPT Image models, including versioned IDs (e.g. gpt-image-1.5-2025-12-16, gpt-image-2-2026-04-21). */
 export function isGPTImageModel(model: string): model is GptImageModelId;
@@ -32,6 +30,14 @@ export function isGeminiImageModel(model?: string | null): boolean;
 export function isGeminiImageModel(model?: string | null): boolean {
   if (!model) return false;
   return (GEMINI_IMAGE_MODELS as readonly string[]).includes(model);
+}
+
+/** Returns true for BlackForest Labs image models; derives from BFL_IMAGE_MODELS so it never drifts. */
+export function isBflImageModel(model: string): model is BFLImageModel;
+export function isBflImageModel(model?: string | null): boolean;
+export function isBflImageModel(model?: string | null): boolean {
+  if (!model) return false;
+  return (BFL_IMAGE_MODELS as readonly string[]).includes(model);
 }
 
 /** Returns true specifically for gpt-image-2 (including versioned snapshots like gpt-image-2-2026-04-21). */

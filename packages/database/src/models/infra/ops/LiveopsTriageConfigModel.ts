@@ -37,6 +37,11 @@ export interface ILiveopsTriageConfigDocument extends IMongoDocument {
   name: string;
   enabled: boolean;
 
+  // Org scoping: when set, the worker resolves GitHub/Jira/Slack from this org's
+  // connections (OrgGitHubConnection, OrgJiraConnection, OrgSlackWorkspace) with no
+  // system-level fallback. Absent = legacy system-level config.
+  organizationId?: string;
+
   // Slack settings
   slackWorkspaceId?: Types.ObjectId;
   slackChannelId: string;
@@ -85,6 +90,7 @@ export interface ILiveopsTriageConfigDocument extends IMongoDocument {
 export interface CreateLiveopsTriageConfigInput {
   name: string;
   enabled?: boolean;
+  organizationId?: string;
 
   // Slack settings
   slackWorkspaceId?: Types.ObjectId | string;
@@ -126,6 +132,7 @@ export interface CreateLiveopsTriageConfigInput {
 export interface UpdateLiveopsTriageConfigInput {
   name?: string;
   enabled?: boolean;
+  organizationId?: string | null;
 
   // Slack settings
   slackWorkspaceId?: Types.ObjectId | string | null;
@@ -168,6 +175,7 @@ export interface ILiveopsTriageConfigRepository {
   findById(id: string): Promise<ILiveopsTriageConfigDocument | null>;
   findByName(name: string): Promise<ILiveopsTriageConfigDocument | null>;
   findAll(): Promise<ILiveopsTriageConfigDocument[]>;
+  findByOrganizationId(organizationId: string): Promise<ILiveopsTriageConfigDocument[]>;
   findEnabled(): Promise<ILiveopsTriageConfigDocument[]>;
   findEnabledByInterval(intervalHours: LiveopsRunIntervalHours): Promise<ILiveopsTriageConfigDocument[]>;
   createConfig(data: CreateLiveopsTriageConfigInput): Promise<ILiveopsTriageConfigDocument>;
@@ -192,6 +200,7 @@ const LiveopsTriageConfigSchema = new Schema<ILiveopsTriageConfigDocument>(
   {
     name: { type: String, required: true },
     enabled: { type: Boolean, required: true, default: false },
+    organizationId: { type: String },
 
     // Slack settings
     slackWorkspaceId: { type: Schema.Types.ObjectId, ref: 'SlackDevWorkspace' },
@@ -263,6 +272,7 @@ const LiveopsTriageConfigSchema = new Schema<ILiveopsTriageConfigDocument>(
 LiveopsTriageConfigSchema.index({ name: 1 }, { unique: true });
 // Compound index serves both (enabled) and (enabled, runIntervalHours) queries
 LiveopsTriageConfigSchema.index({ enabled: 1, runIntervalHours: 1 });
+LiveopsTriageConfigSchema.index({ organizationId: 1 }, { sparse: true });
 
 class LiveopsTriageConfigRepository
   extends BaseRepository<ILiveopsTriageConfigDocument>
@@ -284,6 +294,11 @@ class LiveopsTriageConfigRepository
 
   async findAll(): Promise<ILiveopsTriageConfigDocument[]> {
     const results = await this.model.find().sort({ name: 1 });
+    return results.map(doc => doc.toObject());
+  }
+
+  async findByOrganizationId(organizationId: string): Promise<ILiveopsTriageConfigDocument[]> {
+    const results = await this.model.find({ organizationId }).sort({ name: 1 });
     return results.map(doc => doc.toObject());
   }
 

@@ -1,4 +1,4 @@
-import { IFabFile, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { IFabFile, IFabFileVersion, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import axios from 'axios';
 import { BadRequestError, CorruptedFileError } from './errors';
 import { Logger } from '@bike4mind/observability';
@@ -162,4 +162,76 @@ export const getFileContent = async (
   }
 
   return content;
+};
+
+/** The next 1-based version number given the existing (possibly absent) version history. */
+export const nextVersionNumber = (versions?: Pick<IFabFileVersion, 'version'>[]): number => {
+  if (!versions || versions.length === 0) return 1;
+  return Math.max(...versions.map(v => v.version)) + 1;
+};
+
+/**
+ * A new, non-colliding S3 key for a file version's bytes. Versioned keys live under a
+ * per-file prefix so a prior version is never overwritten, keep the original file name
+ * (extension included) so downloads stay valid, and include a per-attempt `nonce` so two
+ * concurrent edits that compute the same version number still write to distinct keys (the
+ * losing edit is rejected by the conditional DB write and its object is simply orphaned,
+ * never overwriting the winner's bytes).
+ */
+export const versionedFileKey = (params: {
+  userId: string;
+  fabFileId: string;
+  fileName: string;
+  version: number;
+  nonce: string;
+}): string => {
+  const { userId, fabFileId, fileName, version, nonce } = params;
+  return `files/${userId}/${fabFileId}/v${version}_${nonce}_${fileName}`;
+};
+
+/**
+ * Build the version history for a non-destructive AI edit. On the first edit the current
+ * (pre-edit) bytes are seeded as v1 so history is complete, then the edited version is
+ * appended. Returns the S3 key the edited bytes should be written to and the full versions
+ * array to persist; the caller uploads the bytes and repoints `filePath` at `newFilePath`.
+ */
+export const appendEditedVersion = (params: {
+  userId: string;
+  fabFileId: string;
+  fileName: string;
+  currentFilePath: string;
+  currentFileSize: number;
+  mimeType: string;
+  existingVersions?: IFabFileVersion[];
+  newFileSize: number;
+  now: Date;
+  nonce: string;
+}): { newFilePath: string; versions: IFabFileVersion[] } => {
+  const history: IFabFileVersion[] = params.existingVersions?.length
+    ? [...params.existingVersions]
+    : [
+        {
+          version: 1,
+          filePath: params.currentFilePath,
+          fileSize: params.currentFileSize,
+          mimeType: params.mimeType,
+          createdAt: params.now,
+        },
+      ];
+  const newVersion = nextVersionNumber(history);
+  const newFilePath = versionedFileKey({
+    userId: params.userId,
+    fabFileId: params.fabFileId,
+    fileName: params.fileName,
+    version: newVersion,
+    nonce: params.nonce,
+  });
+  history.push({
+    version: newVersion,
+    filePath: newFilePath,
+    fileSize: params.newFileSize,
+    mimeType: params.mimeType,
+    createdAt: params.now,
+  });
+  return { newFilePath, versions: history };
 };

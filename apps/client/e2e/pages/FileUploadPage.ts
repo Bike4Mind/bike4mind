@@ -48,15 +48,16 @@ export class FileUploadPage extends BasePage {
   }
 
   async openFileBrowser() {
-    // Close any existing dialog first to ensure the sidebar is accessible.
+    // Close any existing dialog first so the composer is accessible.
     await this.closeFileBrowser();
-    // NOTE: `files` is an earned-nav destination (Gears) - the sidenav row is hidden
-    // until the account has a file. That is NOT a problem here: every caller uploads
-    // or relies on a seeded file BEFORE opening the browser, so `files` is already
-    // earned and the row is present. The browser is also a global drawer opened OVER
-    // the current page (e.g. the notebook the file is being added to), so it must NOT
-    // be reached by navigating away.
-    await this.page.getByTestId('sidenav-nav-files').click();
+    // Files Manager is deliberately NOT a sidenav destination (Gears-page-only), so
+    // open the browser via the composer's attach menu. The browser is a global drawer
+    // opened OVER the current page (e.g. the notebook the file is being added to), so
+    // it must NOT be reached by navigating away.
+    await this.page.getByTestId('attach-files-btn').click();
+    const browserItem = this.page.getByTestId('add-from-file-browser-btn');
+    await expect(browserItem).toBeVisible({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await browserItem.click();
   }
 
   async switchToListView() {

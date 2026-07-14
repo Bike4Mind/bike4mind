@@ -1,5 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useCliStore, selectActiveBackgroundShells, selectCompletedBackgroundShells } from './index.js';
+import {
+  useCliStore,
+  selectActiveBackgroundShells,
+  selectCompletedBackgroundShells,
+  selectLiveSubagentTokens,
+  selectLiveSubagentCredits,
+} from './index.js';
 import type { PermissionResponse } from '../components';
 import type { Session } from '../storage';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
@@ -290,5 +296,70 @@ describe('background shell sessions', () => {
     expect(active).toEqual([]);
     // Same reference across calls so useShallow does not re-render.
     expect(selectActiveBackgroundShells(useCliStore.getState())).toBe(active);
+  });
+});
+
+describe('subagent usage tracking', () => {
+  const makeSession = () => ({
+    id: 's1',
+    name: 'test',
+    createdAt: '2020-01-01T00:00:00.000Z',
+    updatedAt: '2020-01-01T00:00:00.000Z',
+    model: 'test-model',
+    messages: [],
+    metadata: { totalTokens: 0, totalCost: 0, toolCallCount: 0 },
+  });
+
+  beforeEach(() => {
+    useCliStore.setState({ session: makeSession(), liveSubagentUsage: {} });
+  });
+
+  it('tracks live usage per run id and removes entries on completion', () => {
+    const { updateLiveSubagentUsage } = useCliStore.getState();
+    updateLiveSubagentUsage('run-1', 'explore', 100, 1);
+    updateLiveSubagentUsage('run-2', 'explore', 200, 2);
+    updateLiveSubagentUsage('run-1', 'explore', 150, 1);
+
+    expect(useCliStore.getState().liveSubagentUsage).toEqual({
+      'run-1': { agentName: 'explore', tokens: 150, credits: 1 },
+      'run-2': { agentName: 'explore', tokens: 200, credits: 2 },
+    });
+
+    useCliStore.getState().removeLiveSubagentUsage('run-1');
+    expect(useCliStore.getState().liveSubagentUsage).toEqual({
+      'run-2': { agentName: 'explore', tokens: 200, credits: 2 },
+    });
+  });
+
+  it('sums live usage across running agents via selectors', () => {
+    const { updateLiveSubagentUsage } = useCliStore.getState();
+    updateLiveSubagentUsage('run-1', 'explore', 100, 1);
+    updateLiveSubagentUsage('run-2', 'plan', 250, 3);
+
+    expect(selectLiveSubagentTokens(useCliStore.getState())).toBe(350);
+    expect(selectLiveSubagentCredits(useCliStore.getState())).toBe(4);
+  });
+
+  it('recordSubagentUsage with an agentName also maintains the per-agent breakdown', () => {
+    const { recordSubagentUsage } = useCliStore.getState();
+    recordSubagentUsage({ agentName: 'explore', tokens: 1000, credits: 5 });
+    recordSubagentUsage({ agentName: 'explore', tokens: 500, credits: 2 });
+    recordSubagentUsage({ agentName: 'plan', tokens: 300, credits: 1 });
+
+    const metadata = useCliStore.getState().session!.metadata;
+    expect(metadata.subagentCalls).toBe(3);
+    expect(metadata.subagentTokens).toBe(1800);
+    expect(metadata.subagentCost).toBe(8);
+    expect(metadata.subagentUsage).toEqual({
+      explore: { calls: 2, tokens: 1500, credits: 7 },
+      plan: { calls: 1, tokens: 300, credits: 1 },
+    });
+  });
+
+  it('recordSubagentUsage without an agentName updates rollups but not the breakdown', () => {
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 1 });
+    const metadata = useCliStore.getState().session!.metadata;
+    expect(metadata.subagentTokens).toBe(100);
+    expect(metadata.subagentUsage).toBeUndefined();
   });
 });

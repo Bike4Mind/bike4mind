@@ -217,7 +217,13 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           }
         }
 
-        var codeWithoutExports = processedCode.replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ');
+        // Unwrap the default export into the local the render reads. Handle BOTH forms that
+        // checkHasDefaultExport accepts - \`export default X\` and \`export { X as default }\` - so the
+        // preview stays in parity with publish (transpileReactArtifact.ts does the same); otherwise
+        // the \`export { ... }\` survives into this classic script as a parse error and blanks #root.
+        var codeWithoutExports = processedCode
+          .replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ')
+          .replace(/export\\s*\\{\\s*([A-Za-z_$][\\w$]*)\\s+as\\s+default\\s*\\}/g, 'const __DEFAULT_EXPORT__ = $1');
 
         if (mode === 'inert') {
           // Eval-free execution (#9403 M3): Babel.transform above only PARSES + GENERATES code
