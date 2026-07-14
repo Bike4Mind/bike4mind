@@ -1,6 +1,3 @@
-// @vitest-environment node
-// esbuild-wasm's load-time invariant (TextEncoder must yield a real Uint8Array) fails under the
-// default jsdom test env; run this suite in Node where the transpiler works as it does in Lambda.
 import { describe, it, expect } from 'vitest';
 import {
   buildReactArtifactBundle,
@@ -51,6 +48,26 @@ describe('buildReactArtifactBundle', () => {
     const result = validateBundle({ indexHtml, manifest: INDEX_MANIFEST });
     expect(result.violations).toEqual([]);
     expect(result.valid).toBe(true);
+  });
+
+  it('handles a mixed default+named React import (import React, { useState })', async () => {
+    // The exact shape that failed on the preview: default + named import on one line.
+    const src = `import React, { useState } from 'react';
+function Counter() {
+  const [count, setCount] = useState(0);
+  return (
+    <div className="p-4">
+      <button onClick={() => setCount(c => c - 1)}>-</button>
+      <span>{count}</span>
+      <button onClick={() => setCount(c => c + 1)}>+</button>
+    </div>
+  );
+}
+export default Counter;`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'Counter' });
+    expect(indexHtml).toContain('React.createElement');
+    expect(indexHtml).not.toMatch(/\bimport\b/); // import line fully rewritten away
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
   it('escapes a closing script tag in the source so it cannot break out of the inline script', async () => {
