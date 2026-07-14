@@ -65,6 +65,11 @@ const handler = baseApi()
         if (isAiEditableOfficeMime(file.mimeType)) {
           const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', { expiresIn: 60 });
           const contentResponse = await fetch(signedUrl);
+          // Surface an S3 fetch failure as such, rather than letting a 4xx/5xx body flow into
+          // applyEditedText and misreport as "not a valid .docx/.xlsx" (mirrors edit.ts).
+          if (!contentResponse.ok) {
+            throw new BadRequestError('Failed to fetch file content from storage');
+          }
           const originalBuffer = Buffer.from(await contentResponse.arrayBuffer());
           if (originalBuffer.length > MAX_OFFICE_EDIT_BYTES) {
             throw new BadRequestError(
