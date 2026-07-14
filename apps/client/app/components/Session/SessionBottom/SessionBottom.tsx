@@ -198,6 +198,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // Docked panels (dockRight/dockBottom) own their bottom edge; the outer pb
   // would just add dead space under the input.
   const isDockedLayout = useSessionLayout(s => s.layout === 'dockRight' || s.layout === 'dockBottom');
+  // The floating chat window frames the input itself, so like docked it drops the
+  // outer spacing and rounded card look; unlike docked it keeps a top separator.
+  const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -351,8 +354,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       ref={ref}
       className="session-bottom"
       sx={{
-        pb: isCompactLayout || isMobile || isDockedLayout ? '0' : '1.25rem',
-        paddingTop: isDockedLayout ? 0 : '20px',
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
         position: 'relative',
       }}
       display={'flex'}
@@ -369,7 +372,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           marginRight: isCompactLayout ? '0px' : 'auto',
           ...(isDockedLayout
             ? { border: 'none' }
-            : isCompactLayout || isMobile
+            : isCompactLayout || isMobile || isFloatingLayout
               ? {
                   borderTop: '1px solid',
                   borderTopColor: 'border.solid',
@@ -385,7 +388,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile || isDockedLayout ? 0 : '.625rem',
+          borderRadius: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem',
         })}
       >
         <Box>
