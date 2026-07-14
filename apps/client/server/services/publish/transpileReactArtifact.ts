@@ -210,13 +210,22 @@ export async function transpileReactSource(source: string): Promise<string> {
   // checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because
   // Babel (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }`
   // would survive into the classic inline <script> and fail to parse (silently blanking the page).
-  return (
-    transformed
-      // Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
-      // real statement but NOT a literal "export default ..." embedded in a string / JSX text.
-      .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
-      .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;')
-  );
+  const unwrapped = transformed
+    // Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
+    // real statement but NOT a literal "export default ..." embedded in a string / JSX text.
+    .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+    .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;');
+
+  // Authoritative default-export check: checkHasDefaultExport (the pre-check) is intentionally
+  // lenient (unanchored) and matches "export default" even inside a string, so a source whose only
+  // "export default" is string-embedded would otherwise transpile fine and then throw at RENDER.
+  // Assert a REAL top-level export was unwrapped, keeping the "reject at publish, not render" contract.
+  if (!unwrapped.includes('__DEFAULT_EXPORT__')) {
+    throw new ReactArtifactTranspileError(
+      'React artifact must export a component as its default export (e.g. `export default MyComponent`).'
+    );
+  }
+  return unwrapped;
 }
 
 const HOOK_GLOBALS = `var ${HOOK_GLOBAL_NAMES.map(h => `${h}=React.${h}`).join(',')};`;
