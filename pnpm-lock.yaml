@@ -1520,6 +1520,9 @@ importers:
       jimp:
         specifier: ^1.6.1
         version: 1.6.1
+      jszip:
+        specifier: ^3.10.1
+        version: 3.10.1
       lodash:
         specifier: ^4.18.1
         version: 4.18.1
