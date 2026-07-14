@@ -13,10 +13,13 @@ import { BadRequestError } from '../errors';
  *   collapses onto its first run (documented limitation).
  * - xlsx: SheetJS reads the workbook, and only cells whose text representation actually
  *   changed are written back into the loaded worksheet objects, so untouched formulas,
- *   number formats, and structure survive.
+ *   number formats, and structure survive. A changed cell keeps the original cell's number
+ *   format (`.z`) where present.
  *
- * .xls (legacy BIFF) is intentionally NOT editable here: SheetJS write fidelity for BIFF is
- * weak and the ticket targets .docx/.xlsx only.
+ * Known limitation: the pinned `xlsx` build is the SheetJS Community Edition, which does not
+ * WRITE cell styling (fonts/fills/borders). Editing an .xlsx therefore drops sheet styling on
+ * save; cell values, formulas, and structure are preserved. .xls (legacy BIFF) is intentionally
+ * NOT editable here (SheetJS BIFF write fidelity is weak; the ticket targets .docx/.xlsx only).
  */
 
 /** Per-paragraph marker used in the docx text representation, e.g. `[1] Heading text`. */
@@ -191,7 +194,7 @@ async function extractXlsxText(buffer: Buffer): Promise<string> {
   const XLSX = await import('xlsx');
   let workbook: import('xlsx').WorkBook;
   try {
-    workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: true, cellStyles: true });
+    workbook = XLSX.read(buffer, { type: 'buffer', cellFormula: true });
   } catch {
     throw new BadRequestError('File is not a valid .xlsx spreadsheet');
   }
@@ -248,7 +251,7 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
 
   let workbook: import('xlsx').WorkBook;
   try {
-    workbook = XLSX.read(originalBuffer, { type: 'buffer', cellFormula: true, cellStyles: true });
+    workbook = XLSX.read(originalBuffer, { type: 'buffer', cellFormula: true });
   } catch {
     throw new BadRequestError('File is not a valid .xlsx spreadsheet');
   }
@@ -256,11 +259,24 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
   for (const { name, csv } of splitXlsxSheets(editedText)) {
     const rows = parse(csv.replace(/\s+$/, ''), { relax_column_count: true, skip_empty_lines: false }) as string[][];
 
-    let sheet = workbook.Sheets[name];
+    const sheet = workbook.Sheets[name];
     if (!sheet) {
-      // New sheet introduced by the edit: build it wholesale from the grid.
-      sheet = XLSX.utils.aoa_to_sheet(rows.map(row => row.map(cell => cellFromText(cell)?.v ?? '')));
-      XLSX.utils.book_append_sheet(workbook, sheet, name);
+      // New sheet introduced by the edit: build it cell-by-cell via cellFromText so a formula
+      // cell keeps its `.f` (aoa_to_sheet on `.v` alone would drop the formula).
+      const created: import('xlsx').WorkSheet = {};
+      let nr = 0;
+      let nc = 0;
+      for (let r = 0; r < rows.length; r++) {
+        for (let c = 0; c < rows[r].length; c++) {
+          const cell = cellFromText(rows[r][c]);
+          if (!cell) continue;
+          created[XLSX.utils.encode_cell({ r, c })] = cell;
+          nr = Math.max(nr, r);
+          nc = Math.max(nc, c);
+        }
+      }
+      created['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: nr, c: nc } });
+      XLSX.utils.book_append_sheet(workbook, created, name);
       continue;
     }
 
@@ -283,6 +299,9 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
         if (newCell === null) {
           delete sheet[addr];
         } else {
+          // Carry the original cell's number format forward so a changed value keeps its
+          // display (e.g. currency/leading-zero formatting), rather than reverting to raw.
+          if (original?.z) newCell.z = original.z;
           sheet[addr] = newCell;
           maxR = Math.max(maxR, r);
           maxC = Math.max(maxC, c);

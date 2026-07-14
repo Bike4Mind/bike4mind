@@ -135,6 +135,17 @@ describe('xlsx round-trip', () => {
     expect(wb.Sheets['Sheet1']['C2'].f).toBe('B2*0.2');
   });
 
+  it('preserves formulas when the edit introduces a brand-new sheet', async () => {
+    const buffer = makeXlsx();
+    const edited =
+      '### Sheet: Sheet1\nItem,Price,Tax\nWidget,10,=B2*0.1\n\n### Sheet: Totals\nGrand Total,=SUM(Sheet1!B2:B2)';
+    const out = await applyEditedText(buffer, edited, XLSX_MIME);
+    const wb = XLSX.read(out, { type: 'buffer', cellFormula: true });
+    expect(wb.SheetNames).toContain('Totals');
+    // The formula in the new sheet must survive (not be flattened to an empty/blank cell).
+    expect(wb.Sheets['Totals']['B1'].f).toBe('SUM(Sheet1!B2:B2)');
+  });
+
   it('handles quoted cells containing commas', async () => {
     const buffer = makeXlsx();
     const edited = '### Sheet: Sheet1\nItem,Price,Tax\n"Widget, deluxe",10,=B2*0.1';

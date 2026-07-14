@@ -170,11 +170,14 @@ const handler = baseApi()
           }
         }
 
-        // Check file size - limit to 50KB for AI editing
+        // Limit the editable content sent to the LLM to 50KB. For Office files this is the
+        // extracted text representation (not the binary), so word the error accordingly - a
+        // small-looking file can still have too much editable text.
         const contentSize = Buffer.byteLength(originalContent, 'utf8');
         if (contentSize > 50000) {
+          const what = isOffice ? "document's editable text is" : 'file is';
           throw new BadRequestError(
-            `File is too large for AI editing (${Math.round(contentSize / 1024)}KB). Maximum size is 50KB.`
+            `This ${what} too large for AI editing (${Math.round(contentSize / 1024)}KB of text). Maximum is 50KB.`
           );
         }
 
