@@ -33,7 +33,7 @@ function mocks(user: unknown) {
   return { req, res };
 }
 
-describe('/api/analytics/aggregate — admin gate', () => {
+describe('/api/analytics/aggregate - admin gate', () => {
   beforeEach(() => aggregate.mockClear());
 
   it('rejects a non-admin before aggregating', async () => {

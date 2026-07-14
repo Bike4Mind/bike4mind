@@ -45,7 +45,7 @@ function mocks(can: (action: string, subject: unknown) => boolean) {
   return { req, res };
 }
 
-describe('PUT /api/feedback/[id] — instance-level authorization', () => {
+describe('PUT /api/feedback/[id] - instance-level authorization', () => {
   beforeEach(() => {
     model.findById.mockResolvedValue(feedbackDoc);
     model.findOneAndUpdate.mockResolvedValue({ ...feedbackDoc, content: 'edited' });
@@ -63,7 +63,8 @@ describe('PUT /api/feedback/[id] — instance-level authorization', () => {
 
   it('rejects a non-owner (can -> false) without writing', async () => {
     const { req, res } = mocks(() => false);
-    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(/permission denied/i);
+    // A denied caller gets the same "not found" as a missing id (existence-hiding).
+    await expect(mockRefs.putHandler!(req, res)).rejects.toThrow(/not found/i);
     expect(model.findOneAndUpdate).not.toHaveBeenCalled();
   });
 

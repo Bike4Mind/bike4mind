@@ -51,7 +51,7 @@ function mocks(user: unknown, extra: Record<string, unknown> = {}) {
 const ADMIN = { id: 'admin1', isAdmin: true };
 const NON_ADMIN = { id: 'u1', isAdmin: false };
 
-describe('/api/security/blocked-ips — admin gate', () => {
+describe('/api/security/blocked-ips - admin gate', () => {
   beforeEach(() => {
     repo.list.mockClear();
     repo.block.mockClear();

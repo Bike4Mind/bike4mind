@@ -37,7 +37,7 @@ function mocks(user: unknown, id: string) {
   return { req, res };
 }
 
-describe('GET /api/users/[id]/organization — ownership gate', () => {
+describe('GET /api/users/[id]/organization - ownership gate', () => {
   beforeEach(() => findById.mockClear());
 
   it('rejects reading another user\'s org without querying the DB', async () => {

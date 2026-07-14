@@ -38,7 +38,7 @@ function mocks(user: unknown, id: string) {
   return { req, res };
 }
 
-describe('GET /api/users/[id]/friends — ownership gate', () => {
+describe('GET /api/users/[id]/friends - ownership gate', () => {
   beforeEach(() => listFriends.mockClear());
 
   it('rejects reading another user\'s friends without calling the service', async () => {
