@@ -233,6 +233,48 @@ export const OrgUsageDashboard: React.FC = () => {
               creditsCharged: r.creditsCharged,
             }))}
           />
+
+          <Box>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              By API key
+            </Typography>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              API-token spend billed to this org (from the ledger; no COGS on API-key rows).
+            </Typography>
+            <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
+              <Table stickyHeader hoverRow size="sm" data-testid="org-usage-apikey-table">
+                <thead>
+                  <tr>
+                    <th>API key</th>
+                    <th style={{ textAlign: 'right' }}>Requests</th>
+                    <th style={{ textAlign: 'right' }}>Input tokens</th>
+                    <th style={{ textAlign: 'right' }}>Output tokens</th>
+                    <th style={{ textAlign: 'right' }}>Credits</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.byApiKey ?? []).map(k => (
+                    <tr key={k.apiKeyId}>
+                      <td title={k.keyPrefix ?? k.apiKeyId}>{k.keyName ?? 'Unknown key'}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{k.requests.toLocaleString()}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{k.inputTokens.toLocaleString()}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{k.outputTokens.toLocaleString()}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{formatCredits(k.creditsSpent)}</td>
+                    </tr>
+                  ))}
+                  {(data?.byApiKey ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={5}>
+                        <Typography level="body-sm" color="neutral">
+                          No API-token usage in this window.
+                        </Typography>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </Sheet>
+          </Box>
         </Stack>
       )}
     </Box>
