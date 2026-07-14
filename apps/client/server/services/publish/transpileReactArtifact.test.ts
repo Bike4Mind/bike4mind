@@ -70,6 +70,19 @@ export default Counter;`;
     expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
+  it('handles the `export { Name as default }` default-export form (no leftover export statement)', async () => {
+    const src = `import { useState } from 'react';
+function Counter() {
+  const [count] = useState(0);
+  return <div>{count}</div>;
+}
+export { Counter as default };`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain('__DEFAULT_EXPORT__ = Counter');
+    expect(indexHtml).not.toMatch(/\bexport\b/); // no leftover `export {...}` to break the classic script
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
   it('escapes a closing script tag in the source so it cannot break out of the inline script', async () => {
     const src = `function C() { return <div>{"</script><img src=x onerror=alert(1)>"}</div>; }\nexport default C;`;
     const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
