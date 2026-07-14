@@ -8,7 +8,6 @@ import type { DraggableEvent, DraggableData } from 'react-draggable';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import CloseIcon from '@mui/icons-material/Close';
 import MinimizeIcon from '@mui/icons-material/Minimize';
-import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CheckIcon from '@mui/icons-material/Check';
@@ -362,13 +361,14 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
           gap: 1,
           padding: '8px 16px',
           borderRadius: '24px',
-          backgroundColor: theme.palette.background.surface,
-          border: '1px solid',
-          borderColor: theme.palette.divider,
+          backgroundColor: theme.palette.primary.solidBg,
+          color: theme.palette.primary.solidColor,
+          '--Icon-color': theme.palette.primary.solidColor,
           boxShadow: theme.shadow.lg,
           cursor: 'pointer',
           transition: 'all 0.2s ease',
           '&:hover': {
+            backgroundColor: theme.palette.primary.solidHoverBg,
             transform: 'scale(1.05)',
             boxShadow: theme.shadow.xl,
           },
@@ -376,20 +376,10 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
       >
-        <Box
-          sx={theme => ({
-            display: 'flex',
-            '--Icon-color': theme.palette.sidenav?.navItemIcon,
-            color: theme.palette.sidenav?.navItemIcon,
-            opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
-          })}
-        >
-          <SmartToyIcon sx={{ fontSize: 20 }} />
-        </Box>
-        <Typography level="body-sm" fontWeight="md">
+        <SmartToyIcon sx={{ fontSize: 20 }} />
+        <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
           AI Chat
         </Typography>
-        <OpenInFullIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
       </Box>
     );
   }
