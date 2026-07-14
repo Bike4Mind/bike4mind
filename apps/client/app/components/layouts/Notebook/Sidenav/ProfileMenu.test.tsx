@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AccountCard, closeSideNavOnMobile } from './ProfileMenu';
+import { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -34,11 +34,11 @@ describe('ProfileMenu AccountCard - enforceCredits gating', () => {
   });
 });
 
-describe('closeSideNavOnMobile', () => {
-  it('closes the overlay sidenav on mobile navigation', () => {
+describe('closeSideNavOnOverlay', () => {
+  it('closes the overlay sidenav on phone and tablet navigation', () => {
     const setOpenSideNav = vi.fn();
 
-    closeSideNavOnMobile(true, setOpenSideNav);
+    closeSideNavOnOverlay(true, setOpenSideNav);
 
     expect(setOpenSideNav).toHaveBeenCalledWith(false);
   });
@@ -46,7 +46,7 @@ describe('closeSideNavOnMobile', () => {
   it('leaves the desktop sidenav state unchanged', () => {
     const setOpenSideNav = vi.fn();
 
-    closeSideNavOnMobile(false, setOpenSideNav);
+    closeSideNavOnOverlay(false, setOpenSideNav);
 
     expect(setOpenSideNav).not.toHaveBeenCalled();
   });

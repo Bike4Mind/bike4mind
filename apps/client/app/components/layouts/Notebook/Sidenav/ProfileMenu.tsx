@@ -17,7 +17,7 @@ import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/a
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
-import { useIsMobile } from '@client/app/hooks/useIsMobile';
+import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -47,8 +47,8 @@ import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
 import { useNotebookLayout } from '..';
 
-export const closeSideNavOnMobile = (isMobile: boolean, setOpenSideNav: (open: boolean) => void) => {
-  if (isMobile) setOpenSideNav(false);
+export const closeSideNavOnOverlay = (isOverlay: boolean, setOpenSideNav: (open: boolean) => void) => {
+  if (isOverlay) setOpenSideNav(false);
 };
 
 // Strip the trailing " (Personal)" suffix that useAccounts appends to the personal account name.
@@ -207,7 +207,7 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
 const ProfileMenu = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const isMobile = useIsMobile();
+  const isOverlay = useIsTablet();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
   const theme = useTheme();
   const { setMode } = useColorScheme();
@@ -249,7 +249,7 @@ const ProfileMenu = () => {
   };
 
   const closeNavigation = () => {
-    closeSideNavOnMobile(isMobile, setOpenSideNav);
+    closeSideNavOnOverlay(isOverlay, setOpenSideNav);
     closeAll();
   };
 
