@@ -177,6 +177,16 @@ export function applyAccountLink({
   const existingProviderIndex = authProviders.findIndex(p => p.strategy === oauthCredentials.strategy);
   if (existingProviderIndex !== -1) {
     authProviders[existingProviderIndex] = oauthCredentials;
+    // Collapse any LATER entries for the same strategy, not just replace the
+    // first: a doc that already carries duplicate rows for one provider (the
+    // concurrent first-login race - see the UserModel pre-save guard, which
+    // this updateOne path bypasses) self-heals on the next login instead of
+    // the duplicate surviving replace-at-first-index forever.
+    for (let i = authProviders.length - 1; i > existingProviderIndex; i--) {
+      if (authProviders[i].strategy === oauthCredentials.strategy) {
+        authProviders.splice(i, 1);
+      }
+    }
   } else {
     authProviders.push(oauthCredentials);
   }
