@@ -399,7 +399,7 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.settledBasis).toBe('provider');
     });
 
-    // Idempotency guard for a cross-model failover (issue #15): the failed primary
+    // Idempotency guard for a cross-model failover: the failed primary
     // attempt streamed partial output AND provider usage before erroring. The loop must
     // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at
     // the top of the loop discards the failed counts) and stream ONLY the fallback's

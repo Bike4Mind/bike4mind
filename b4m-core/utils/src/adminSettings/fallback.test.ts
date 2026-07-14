@@ -424,62 +424,55 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
   // chains are keyed on the Bedrock-hosted Claude IDs and lead with the direct twin.
   // Bedrock is never a fallback target: it has no apiKeyTable entry (IAM-auth), so the
   // key gate always skips it - a Bedrock model is reachable as the primary only.
-  const bedrockOpus48 = createModelInfo({ id: 'global.anthropic.claude-opus-4-8', backend: ModelBackend.Bedrock });
-  const bedrockSonnet46 = createModelInfo({ id: 'global.anthropic.claude-sonnet-4-6', backend: ModelBackend.Bedrock });
-  const bedrockSonnet5 = createModelInfo({ id: 'global.anthropic.claude-sonnet-5', backend: ModelBackend.Bedrock });
-  const directOpus48 = createModelInfo({ id: 'claude-opus-4-8', backend: ModelBackend.Anthropic });
-  const directOpus47 = createModelInfo({ id: 'claude-opus-4-7', backend: ModelBackend.Anthropic });
-  const directSonnet46 = createModelInfo({ id: 'claude-sonnet-4-6', backend: ModelBackend.Anthropic });
-  const directSonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
-  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
-
-  const allModels = [
-    bedrockOpus48,
-    bedrockSonnet46,
-    bedrockSonnet5,
-    directOpus48,
-    directOpus47,
-    directSonnet46,
-    directSonnet5,
-    gpt5,
+  // Every current-gen Bedrock-hosted Claude ID paired with the Anthropic-direct twin its
+  // chain must lead with. Keep in sync with fallbackPreferences in fallback.ts.
+  const BEDROCK_TO_DIRECT_TWIN: Array<[string, string]> = [
+    ['global.anthropic.claude-opus-4-8', 'claude-opus-4-8'],
+    ['global.anthropic.claude-opus-4-7', 'claude-opus-4-7'],
+    ['global.anthropic.claude-opus-4-6-v1', 'claude-opus-4-6'],
+    ['global.anthropic.claude-opus-4-5-20251101-v1:0', 'claude-opus-4-5-20251101'],
+    ['global.anthropic.claude-sonnet-5', 'claude-sonnet-5'],
+    ['global.anthropic.claude-sonnet-4-6', 'claude-sonnet-4-6'],
+    ['us.anthropic.claude-sonnet-4-5-20250929-v1:0', 'claude-sonnet-4-5-20250929'],
+    ['us.anthropic.claude-haiku-4-5-20251001-v1:0', 'claude-haiku-4-5-20251001'],
   ];
 
-  it('degrades a Bedrock opus-4-8 outage to the Anthropic-direct opus-4-8 twin first', async () => {
-    const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
-    const result = await getLlmWithFallback(bedrockOpus48, undefined, allModels, apiKeyTable, mockLogger, {
-      forceSwitch: true,
-    });
-    expect(result).not.toBeNull();
-    expect(result!.attempt).toBe(1);
-    expect(result!.model.id).toBe('claude-opus-4-8');
-  });
+  const bedrockModels = BEDROCK_TO_DIRECT_TWIN.map(([id]) => createModelInfo({ id, backend: ModelBackend.Bedrock }));
+  const directModels = BEDROCK_TO_DIRECT_TWIN.map(([, id]) => createModelInfo({ id, backend: ModelBackend.Anthropic }));
+  const openaiModels = [
+    createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI }),
+    createModelInfo({ id: 'gpt-4o-mini', backend: ModelBackend.OpenAI }),
+  ];
+  const allModels = [...bedrockModels, ...directModels, ...openaiModels];
+  const findBedrock = (id: string) => bedrockModels.find(m => m.id === id)!;
 
-  it('degrades a Bedrock sonnet-4-6 outage to the Anthropic-direct sonnet-4-6 twin first', async () => {
-    const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
-    const result = await getLlmWithFallback(bedrockSonnet46, undefined, allModels, apiKeyTable, mockLogger, {
-      forceSwitch: true,
-    });
-    expect(result).not.toBeNull();
-    expect(result!.model.id).toBe('claude-sonnet-4-6');
-  });
-
-  it('routes a Bedrock sonnet-5 outage to the reachable direct twin, not a Bedrock target', async () => {
-    const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
-    const result = await getLlmWithFallback(bedrockSonnet5, undefined, allModels, apiKeyTable, mockLogger, {
-      forceSwitch: true,
-    });
-    expect(result).not.toBeNull();
-    expect(result!.model.id).toBe('claude-sonnet-5');
-    expect(result!.model.backend).toBe(ModelBackend.Anthropic);
-  });
+  it.each(BEDROCK_TO_DIRECT_TWIN)(
+    'degrades a Bedrock %s outage to its reachable Anthropic-direct twin %s first',
+    async (bedrockId, directTwinId) => {
+      const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+      const result = await getLlmWithFallback(findBedrock(bedrockId), undefined, allModels, apiKeyTable, mockLogger, {
+        forceSwitch: true,
+      });
+      expect(result).not.toBeNull();
+      expect(result!.attempt).toBe(1);
+      expect(result!.model.id).toBe(directTwinId);
+      // Never a Bedrock target: Bedrock has no apiKeyTable entry, so the key gate skips it.
+      expect(result!.model.backend).toBe(ModelBackend.Anthropic);
+    }
+  );
 
   it('skips key-less Anthropic targets and degrades to the cross-provider tail (gpt-5)', async () => {
     // No Anthropic key: every direct-Anthropic twin in the chain is skipped by the key
     // gate, so the request degrades to the cross-provider tail that does have a key.
     const apiKeyTable = { openai: 'valid-key' } as Record<string, string>;
-    const result = await getLlmWithFallback(bedrockOpus48, undefined, allModels, apiKeyTable, mockLogger, {
-      forceSwitch: true,
-    });
+    const result = await getLlmWithFallback(
+      findBedrock('global.anthropic.claude-opus-4-8'),
+      undefined,
+      allModels,
+      apiKeyTable,
+      mockLogger,
+      { forceSwitch: true }
+    );
     expect(result).not.toBeNull();
     expect(result!.model.id).toBe('gpt-5');
   });

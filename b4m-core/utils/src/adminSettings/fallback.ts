@@ -219,7 +219,21 @@ function findAutomaticFallback(
     ],
     'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
     'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+    'global.anthropic.claude-opus-4-5-20251101-v1:0': [
+      'claude-opus-4-5-20251101',
+      'claude-sonnet-4-6',
+      'claude-sonnet-4-5-20250929',
+      'gpt-5',
+    ],
+    'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
     'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+    'us.anthropic.claude-sonnet-4-5-20250929-v1:0': [
+      'claude-sonnet-4-5-20250929',
+      'claude-sonnet-5',
+      'claude-sonnet-4-6',
+      'gpt-5',
+    ],
+    'us.anthropic.claude-haiku-4-5-20251001-v1:0': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
 
     // Claude 4.5/4.6 models fallback hierarchy
     'claude-opus-4-5-20251101': [
@@ -236,7 +250,6 @@ function findAutomaticFallback(
       'claude-haiku-4-5-20251001',
     ],
     'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
-    'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
     'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
     'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
 
