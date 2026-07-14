@@ -28,6 +28,14 @@ export function isAiEditableOfficeMime(mime?: string | null): boolean {
   return mime === SupportedFabFileMimeTypes.DOCX || mime === SupportedFabFileMimeTypes.XLSX;
 }
 
+/**
+ * Hard server-side cap on the raw Office binary an edit route will read into memory. The
+ * editable-text representation has its own (smaller) size gate, but that only applies AFTER
+ * the full binary is parsed - this bounds the pre-parse buffer so a direct API caller can't
+ * force an unbounded read (the client UI also gates, but that is bypassable). 10 MB.
+ */
+export const MAX_OFFICE_EDIT_BYTES = 10 * 1024 * 1024;
+
 export async function extractEditableText(buffer: Buffer, mime: string): Promise<string> {
   if (mime === SupportedFabFileMimeTypes.DOCX) return extractDocxText(buffer);
   if (mime === SupportedFabFileMimeTypes.XLSX) return extractXlsxText(buffer);
@@ -142,17 +150,19 @@ async function applyDocxText(originalBuffer: Buffer, editedText: string): Promis
     return edits.has(idx) ? setParagraphText(para, edits.get(idx) ?? '') : para;
   });
 
-  // Appended paragraphs (indices beyond the original count): clone the last paragraph's
-  // structure so run/paragraph properties carry over, then set the new text. Insert after
-  // the last `</w:p>` (before a trailing sectPr, which must remain the final body child).
+  // Appended paragraphs (indices beyond the original count). Build minimal fresh body
+  // paragraphs (a cloned template could carry table-cell properties that are invalid at body
+  // level). Insert them at BODY level: immediately before the final `<w:sectPr>` (the
+  // document's section properties, which must remain the last child of `<w:body>`), else before
+  // `</w:body>`. NOT after the last `</w:p>` - that closer may belong to a table-cell paragraph
+  // when the document ends with a table, which would splice the new content inside the cell.
   const appendedIndices = [...edits.keys()].filter(i => i > originalCount).sort((a, b) => a - b);
   if (appendedIndices.length > 0) {
-    const template = originalCount > 0 ? paras[originalCount - 1] : '<w:p></w:p>';
-    const appended = appendedIndices.map(i => setParagraphText(template, edits.get(i) ?? '')).join('');
-    const lastClose = newXml.lastIndexOf('</w:p>');
-    if (lastClose !== -1) {
-      const pos = lastClose + '</w:p>'.length;
-      newXml = newXml.slice(0, pos) + appended + newXml.slice(pos);
+    const freshParagraph = (text: string) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r></w:p>`;
+    const appended = appendedIndices.map(i => freshParagraph(edits.get(i) ?? '')).join('');
+    const sectPrIdx = newXml.lastIndexOf('<w:sectPr');
+    if (sectPrIdx !== -1) {
+      newXml = newXml.slice(0, sectPrIdx) + appended + newXml.slice(sectPrIdx);
     } else {
       newXml = newXml.replace(/<\/w:body>/, `${appended}</w:body>`);
     }
@@ -280,7 +290,7 @@ async function applyXlsxText(originalBuffer: Buffer, editedText: string): Promis
       }
     }
 
-    sheet['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxR, c: maxC } });
+    sheet['!ref'] = XLSX.utils.encode_range({ s: existingRef.s, e: { r: maxR, c: maxC } });
   }
 
   return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;

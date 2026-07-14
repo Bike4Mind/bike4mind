@@ -172,17 +172,21 @@ export const nextVersionNumber = (versions?: Pick<IFabFileVersion, 'version'>[])
 
 /**
  * A new, non-colliding S3 key for a file version's bytes. Versioned keys live under a
- * per-file prefix so a prior version is never overwritten, and keep the original file name
- * (extension included) so downloads stay valid.
+ * per-file prefix so a prior version is never overwritten, keep the original file name
+ * (extension included) so downloads stay valid, and include a per-attempt `nonce` so two
+ * concurrent edits that compute the same version number still write to distinct keys (the
+ * losing edit is rejected by the conditional DB write and its object is simply orphaned,
+ * never overwriting the winner's bytes).
  */
 export const versionedFileKey = (params: {
   userId: string;
   fabFileId: string;
   fileName: string;
   version: number;
+  nonce: string;
 }): string => {
-  const { userId, fabFileId, fileName, version } = params;
-  return `files/${userId}/${fabFileId}/v${version}_${fileName}`;
+  const { userId, fabFileId, fileName, version, nonce } = params;
+  return `files/${userId}/${fabFileId}/v${version}_${nonce}_${fileName}`;
 };
 
 /**
@@ -201,6 +205,7 @@ export const appendEditedVersion = (params: {
   existingVersions?: IFabFileVersion[];
   newFileSize: number;
   now: Date;
+  nonce: string;
 }): { newFilePath: string; versions: IFabFileVersion[] } => {
   const history: IFabFileVersion[] = params.existingVersions?.length
     ? [...params.existingVersions]
@@ -219,6 +224,7 @@ export const appendEditedVersion = (params: {
     fabFileId: params.fabFileId,
     fileName: params.fileName,
     version: newVersion,
+    nonce: params.nonce,
   });
   history.push({
     version: newVersion,

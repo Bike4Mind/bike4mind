@@ -4,7 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
-import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion } from '@bike4mind/utils';
+import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 
 const handler = baseApi()
@@ -66,6 +66,11 @@ const handler = baseApi()
           const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', { expiresIn: 60 });
           const contentResponse = await fetch(signedUrl);
           const originalBuffer = Buffer.from(await contentResponse.arrayBuffer());
+          if (originalBuffer.length > MAX_OFFICE_EDIT_BYTES) {
+            throw new BadRequestError(
+              `File is too large for AI editing (${Math.round(originalBuffer.length / (1024 * 1024))}MB). Maximum is ${Math.round(MAX_OFFICE_EDIT_BYTES / (1024 * 1024))}MB.`
+            );
+          }
           const newBuffer = await applyEditedText(originalBuffer, newContent, file.mimeType || '');
 
           const now = new Date();
@@ -79,16 +84,23 @@ const handler = baseApi()
             existingVersions: file.versions,
             newFileSize: newBuffer.length,
             now,
+            nonce: uuidv4(),
           });
 
+          // The nonce-keyed upload can never collide with a concurrent edit's bytes.
           await getFilesStorage().upload(newBuffer, newFilePath, {
             ContentType: file.mimeType || 'application/octet-stream',
           });
 
-          await FabFile.updateOne(
-            { _id: file._id },
+          // Atomic version claim: only repoint if filePath still matches what we edited, so a
+          // concurrent edit can't silently clobber this one (its bytes are just orphaned).
+          const claimed = await FabFile.findOneAndUpdate(
+            { _id: file._id, filePath: s3Key },
             { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
           );
+          if (!claimed) {
+            throw new BadRequestError('File was modified by another edit. Please reload and try again.');
+          }
 
           return res.json({
             success: true,

@@ -15,10 +15,15 @@ describe('nextVersionNumber', () => {
 });
 
 describe('versionedFileKey', () => {
-  it('namespaces by user and file and preserves the original file name', () => {
-    expect(versionedFileKey({ userId: 'u1', fabFileId: 'f9', fileName: 'report.docx', version: 2 })).toBe(
-      'files/u1/f9/v2_report.docx'
+  it('namespaces by user and file, includes the nonce, and preserves the original file name', () => {
+    expect(versionedFileKey({ userId: 'u1', fabFileId: 'f9', fileName: 'report.docx', version: 2, nonce: 'abc' })).toBe(
+      'files/u1/f9/v2_abc_report.docx'
     );
+  });
+
+  it('gives concurrent same-version edits distinct keys via the nonce', () => {
+    const base = { userId: 'u1', fabFileId: 'f9', fileName: 'report.docx', version: 3 };
+    expect(versionedFileKey({ ...base, nonce: 'n1' })).not.toBe(versionedFileKey({ ...base, nonce: 'n2' }));
   });
 });
 
@@ -33,6 +38,7 @@ describe('appendEditedVersion', () => {
     mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     newFileSize: 120,
     now,
+    nonce: 'abc',
   };
 
   it('seeds v1 from the pre-edit bytes and appends v2 on the first edit', () => {
@@ -40,7 +46,7 @@ describe('appendEditedVersion', () => {
     expect(versions).toHaveLength(2);
     expect(versions[0]).toMatchObject({ version: 1, filePath: 'files/u1/original_report.docx', fileSize: 100 });
     expect(versions[1]).toMatchObject({ version: 2, filePath: newFilePath, fileSize: 120 });
-    expect(newFilePath).toBe('files/u1/f9/v2_report.docx');
+    expect(newFilePath).toBe('files/u1/f9/v2_abc_report.docx');
   });
 
   it('appends onto an existing history without re-seeding', () => {
@@ -50,7 +56,7 @@ describe('appendEditedVersion', () => {
     ];
     const { newFilePath, versions } = appendEditedVersion({ ...base, existingVersions, newFileSize: 130 });
     expect(versions).toHaveLength(3);
-    expect(versions[2]).toMatchObject({ version: 3, filePath: 'files/u1/f9/v3_report.docx', fileSize: 130 });
-    expect(newFilePath).toBe('files/u1/f9/v3_report.docx');
+    expect(versions[2]).toMatchObject({ version: 3, filePath: 'files/u1/f9/v3_abc_report.docx', fileSize: 130 });
+    expect(newFilePath).toBe('files/u1/f9/v3_abc_report.docx');
   });
 });

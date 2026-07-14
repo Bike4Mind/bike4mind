@@ -93,8 +93,10 @@ describe('docx round-trip', () => {
     const reExtracted = await extractEditableText(out, DOCX_MIME);
     expect(reExtracted.split('\n')).toHaveLength(5);
     expect(reExtracted.split('\n')[4]).toBe('[5] Appended line');
-    // sectPr must remain the last body element even after the append.
     const xml = await documentXmlOf(out);
+    // Must land at BODY level: AFTER the closing table tag (not spliced inside the last table
+    // cell) and BEFORE the section properties (which must remain the final body child).
+    expect(xml.indexOf('Appended line')).toBeGreaterThan(xml.lastIndexOf('</w:tbl>'));
     expect(xml.indexOf('Appended line')).toBeLessThan(xml.indexOf('<w:sectPr>'));
   });
 

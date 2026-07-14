@@ -6,7 +6,14 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { getSettingsByNames } from '@bike4mind/utils';
-import { isAiEditableOfficeMime, extractEditableText, applyEditedText, appendEditedVersion } from '@bike4mind/utils';
+import {
+  isAiEditableOfficeMime,
+  extractEditableText,
+  applyEditedText,
+  appendEditedVersion,
+  MAX_OFFICE_EDIT_BYTES,
+} from '@bike4mind/utils';
+import { v4 as uuidv4 } from 'uuid';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -145,6 +152,11 @@ const handler = baseApi()
         let originalBuffer: Buffer | null = null;
         if (isOffice) {
           originalBuffer = Buffer.from(await contentResponse.arrayBuffer());
+          if (originalBuffer.length > MAX_OFFICE_EDIT_BYTES) {
+            throw new BadRequestError(
+              `File is too large for AI editing (${Math.round(originalBuffer.length / (1024 * 1024))}MB). Maximum is ${Math.round(MAX_OFFICE_EDIT_BYTES / (1024 * 1024))}MB.`
+            );
+          }
           originalContent = await extractEditableText(originalBuffer, file.mimeType || '');
         } else {
           originalContent = await contentResponse.text();
@@ -331,14 +343,21 @@ Return only the edited content without any markdown code blocks or explanations.
               existingVersions: file.versions,
               newFileSize: newBuffer.length,
               now,
+              nonce: uuidv4(),
             });
+            // The nonce-keyed upload can never collide with a concurrent edit's bytes.
             await getFilesStorage().upload(newBuffer, newFilePath, {
               ContentType: file.mimeType || 'application/octet-stream',
             });
-            await FabFile.updateOne(
-              { _id: file._id },
+            // Atomic version claim: only repoint if filePath still matches what we edited, so a
+            // concurrent edit can't silently clobber this one (its bytes are just orphaned).
+            const claimed = await FabFile.findOneAndUpdate(
+              { _id: file._id, filePath: s3Key },
               { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
             );
+            if (!claimed) {
+              throw new BadRequestError('File was modified by another edit. Please reload and try again.');
+            }
           } else {
             await getFilesStorage().upload(editedContent, s3Key, {
               ContentType: file.mimeType || 'text/plain',
