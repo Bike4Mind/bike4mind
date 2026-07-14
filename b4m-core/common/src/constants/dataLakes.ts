@@ -30,6 +30,11 @@ export interface DataLakeConfig {
    * from the list endpoint (it seeds the form from the list, not the per-lake detail).
    */
   description?: string;
+  /**
+   * Public opt-in (see IDataLake.isPublic). Surfaced so the Settings form can derive the
+   * tri-state visibility (private | organization | public) from the list endpoint.
+   */
+  isPublic?: boolean;
 }
 
 /**
@@ -118,6 +123,7 @@ export function toDataLakeConfig(dl: {
   datalakeTag: string;
   organizationId?: string;
   description?: string;
+  isPublic?: boolean;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -129,6 +135,7 @@ export function toDataLakeConfig(dl: {
     datalakeTag: dl.datalakeTag,
     organizationId: dl.organizationId,
     description: dl.description,
+    isPublic: dl.isPublic,
   };
 }
 

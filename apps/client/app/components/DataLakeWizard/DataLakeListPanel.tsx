@@ -168,6 +168,7 @@ export default function DataLakeListPanel() {
                           requiredUserTag: lake.requiredUserTag ?? '',
                           requiredEntitlement: lake.requiredEntitlement ?? '',
                           organizationId: lake.organizationId ?? '',
+                          isPublic: lake.isPublic ?? false,
                         });
                       }}
                     >
@@ -330,6 +331,8 @@ interface EditableLake {
   requiredEntitlement: string;
   /** Current org scope ('' = personal/private). Drives the Visibility control. */
   organizationId: string;
+  /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
+  isPublic: boolean;
 }
 
 /**
@@ -348,8 +351,17 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : undefined;
   const belongsToOrg = accounts.some(account => !account.personal);
   const canShareToOrg = !!activeOrg;
-  // Current visibility is derived from the lake's org scope (Public/Common is a later phase).
-  const visibility: 'private' | 'organization' = lake?.organizationId ? 'organization' : 'private';
+  // Tri-state visibility derived from the lake: public wins, else org scope, else private.
+  const visibility: 'private' | 'organization' | 'public' = lake?.isPublic
+    ? 'public'
+    : lake?.organizationId
+      ? 'organization'
+      : 'private';
+  // A gated lake can't be published (the server refuses it) - a PHI/entitlement boundary must
+  // not be exposed app-wide. Keyed off the PERSISTED gate, matching the server guardrail.
+  const hasGate = !!(lake?.requiredUserTag || lake?.requiredEntitlement);
+  // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
+  const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   // The org the lake is CURRENTLY scoped to - which for a multi-org owner may not be the
   // active switcher org. Name it from the account list so the "Shared" copy is unambiguous.
   const lakeOrgName = lake?.organizationId
@@ -414,103 +426,153 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   };
 
   return (
-    <Modal open={!!lake} onClose={onClose}>
-      <ModalDialog data-testid="datalake-settings-modal" sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}>
-        <DialogTitle>Data lake settings</DialogTitle>
-        <DialogContent>
-          <Stack gap={2} sx={{ mt: 1 }}>
-            <FormControl required>
-              <FormLabel>Name</FormLabel>
-              <Input value={name} onChange={e => setName(e.target.value)} data-testid="datalake-settings-name" />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Description</FormLabel>
-              <Textarea
-                minRows={2}
-                maxRows={5}
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                data-testid="datalake-settings-description"
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Visibility</FormLabel>
-              <RadioGroup
-                orientation="horizontal"
-                value={visibility}
-                onChange={e => {
-                  if (!lake) return;
-                  const next = e.target.value as 'private' | 'organization';
-                  if (next === visibility) return;
-                  setVisibility.mutate({ id: lake.id, visibility: next });
-                }}
-                data-testid="datalake-settings-visibility"
-              >
-                <Radio value="private" label="Private" disabled={setVisibility.isPending} />
-                <Radio
-                  value="organization"
-                  label="Organization"
-                  disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
-                  data-testid="datalake-settings-visibility-org"
+    <>
+      <Modal open={!!lake} onClose={onClose}>
+        <ModalDialog
+          data-testid="datalake-settings-modal"
+          sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}
+        >
+          <DialogTitle>Data lake settings</DialogTitle>
+          <DialogContent>
+            <Stack gap={2} sx={{ mt: 1 }}>
+              <FormControl required>
+                <FormLabel>Name</FormLabel>
+                <Input value={name} onChange={e => setName(e.target.value)} data-testid="datalake-settings-name" />
+              </FormControl>
+              <FormControl>
+                <FormLabel>Description</FormLabel>
+                <Textarea
+                  minRows={2}
+                  maxRows={5}
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  data-testid="datalake-settings-description"
                 />
-              </RadioGroup>
-              <FormHelperText>
-                {visibility === 'organization'
-                  ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
-                  : canShareToOrg
-                    ? `Not shared with your organization. Sharing will scope it to “${activeOrg?.name}”.`
-                    : belongsToOrg
-                      ? 'Switch to your team account (top-left account switcher) to share this lake with your organization.'
-                      : 'Not shared with an organization. Join one to share a lake with your team.'}
-              </FormHelperText>
-            </FormControl>
-            <FormControl error={clearingUserTag}>
-              <FormLabel>Access tag</FormLabel>
-              <Input
-                value={requiredUserTag}
-                onChange={e => setRequiredUserTag(e.target.value)}
-                placeholder="e.g. Opti"
-                data-testid="datalake-settings-usertag"
-              />
-              <FormHelperText>
-                {clearingUserTag
-                  ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
-                  : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
-              </FormHelperText>
-            </FormControl>
-            <FormControl error={clearingEntitlement}>
-              <FormLabel>Required entitlement</FormLabel>
-              <Input
-                value={requiredEntitlement}
-                onChange={e => setRequiredEntitlement(e.target.value)}
-                placeholder="e.g. product:pro"
-                data-testid="datalake-settings-entitlement"
-              />
-              <FormHelperText>
-                {clearingEntitlement
-                  ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
-                  : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
-              </FormHelperText>
-            </FormControl>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            variant="solid"
-            color="primary"
-            loading={updateLake.isPending}
-            disabled={!name.trim()}
-            onClick={handleSave}
-            data-testid="datalake-settings-save-btn"
-          >
-            Save
-          </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
-            Cancel
-          </Button>
-        </DialogActions>
-      </ModalDialog>
-    </Modal>
+              </FormControl>
+              <FormControl>
+                <FormLabel>Visibility</FormLabel>
+                <RadioGroup
+                  orientation="horizontal"
+                  value={visibility}
+                  onChange={e => {
+                    if (!lake) return;
+                    const next = e.target.value as 'private' | 'organization' | 'public';
+                    if (next === visibility) return;
+                    // Publishing exposes every file app-wide, so gate it behind an explicit
+                    // confirm instead of firing the mutation straight from the radio.
+                    if (next === 'public') {
+                      setConfirmPublicOpen(true);
+                      return;
+                    }
+                    setVisibility.mutate({ id: lake.id, visibility: next });
+                  }}
+                  data-testid="datalake-settings-visibility"
+                >
+                  <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+                  <Radio
+                    value="organization"
+                    label="Organization"
+                    disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+                    data-testid="datalake-settings-visibility-org"
+                  />
+                  <Radio
+                    value="public"
+                    label="Public"
+                    disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+                    data-testid="datalake-settings-visibility-public"
+                  />
+                </RadioGroup>
+                <FormHelperText>
+                  {visibility === 'public'
+                    ? 'Public — readable by everyone across the app. Only you can manage or add files.'
+                    : hasGate
+                      ? 'This lake has an access gate, so it can’t be made public. Choose Private or Organization.'
+                      : visibility === 'organization'
+                        ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
+                        : canShareToOrg
+                          ? `Private. “Organization” scopes it to “${activeOrg?.name}”; “Public” exposes it to everyone.`
+                          : belongsToOrg
+                            ? 'Private. Switch to your team account (top-left account switcher) to share with your organization, or make it public.'
+                            : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
+                </FormHelperText>
+              </FormControl>
+              <FormControl error={clearingUserTag}>
+                <FormLabel>Access tag</FormLabel>
+                <Input
+                  value={requiredUserTag}
+                  onChange={e => setRequiredUserTag(e.target.value)}
+                  placeholder="e.g. Opti"
+                  data-testid="datalake-settings-usertag"
+                />
+                <FormHelperText>
+                  {clearingUserTag
+                    ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
+                    : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
+                </FormHelperText>
+              </FormControl>
+              <FormControl error={clearingEntitlement}>
+                <FormLabel>Required entitlement</FormLabel>
+                <Input
+                  value={requiredEntitlement}
+                  onChange={e => setRequiredEntitlement(e.target.value)}
+                  placeholder="e.g. product:pro"
+                  data-testid="datalake-settings-entitlement"
+                />
+                <FormHelperText>
+                  {clearingEntitlement
+                    ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
+                    : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
+                </FormHelperText>
+              </FormControl>
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="primary"
+              loading={updateLake.isPending}
+              disabled={!name.trim()}
+              onClick={handleSave}
+              data-testid="datalake-settings-save-btn"
+            >
+              Save
+            </Button>
+            <Button variant="plain" color="neutral" onClick={onClose}>
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
+      <Modal open={confirmPublicOpen} onClose={() => setConfirmPublicOpen(false)}>
+        <ModalDialog role="alertdialog" data-testid="datalake-publish-confirm" sx={{ maxWidth: '28rem' }}>
+          <DialogTitle>Make this data lake public?</DialogTitle>
+          <DialogContent>
+            Every file in <b>{lake?.name}</b> becomes readable by all users across the app, in every organization. You
+            stay the only person who can manage or add files, and you can switch it back to private at any time.
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="danger"
+              loading={setVisibility.isPending}
+              data-testid="datalake-publish-confirm-btn"
+              onClick={() => {
+                if (!lake) return;
+                setVisibility.mutate(
+                  { id: lake.id, visibility: 'public' },
+                  { onSuccess: () => setConfirmPublicOpen(false) }
+                );
+              }}
+            >
+              Make public
+            </Button>
+            <Button variant="plain" color="neutral" onClick={() => setConfirmPublicOpen(false)}>
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
+    </>
   );
 }
 

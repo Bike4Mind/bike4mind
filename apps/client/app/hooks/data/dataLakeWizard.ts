@@ -659,6 +659,7 @@ export function useDataLakes(enabled = true) {
           requiredUserTag?: string;
           requiredEntitlement?: string;
           organizationId?: string;
+          isPublic?: boolean;
           datalakeTag: string;
           fileCount?: number;
           createdAt: string;

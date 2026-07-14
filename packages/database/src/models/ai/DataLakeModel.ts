@@ -50,6 +50,10 @@ const DataLakeSchema = new mongoose.Schema(
     },
     createdByUserId: { type: String, required: true },
     organizationId: { type: String },
+    // Public opt-in (see IDataLake.isPublic): a true value makes the lake readable app-wide,
+    // bypassing the org prerequisite + Private-by-default. No dedicated index (tiny collection,
+    // same rationale as requiredEntitlement); the public arm in the access filters keys off it.
+    isPublic: { type: Boolean, default: false },
     status: { type: String, enum: DATA_LAKE_STATUSES, default: 'draft' },
     fileCount: { type: Number, default: 0 },
     totalSizeBytes: { type: Number, default: 0 },
@@ -161,6 +165,23 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       : { $or: [{ organizationId: null }, { organizationId: '' }] };
 
     const accessArms: Record<string, unknown>[] = [{ $and: [orgConstraint, { $or: nonOwnerArms }] }];
+
+    // Public arm (mirrors findAccessible): an isPublic lake is reachable app-wide - it bypasses
+    // the org prerequisite AND Private-by-default. The requirement gate is STILL enforced
+    // (both-blank OR held tag OR held key), so a gate added after publishing keeps holding; a
+    // normal public lake is gate-less and matches the both-blank sub-arm.
+    const publicRequirementOr: Record<string, unknown>[] = [
+      {
+        $and: [
+          { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+          { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+        ],
+      },
+      { requiredUserTag: { $in: allTags } },
+    ];
+    if (keys.length > 0) publicRequirementOr.push({ requiredEntitlement: { $in: keys } });
+    accessArms.push({ $and: [{ isPublic: true }, { $or: publicRequirementOr }] });
+
     // Owner bypass (mirrors findAccessible): the creator always retrieves their own lakes,
     // including private gateless ones. Only when a userId is supplied.
     if (userId) accessArms.unshift({ createdByUserId: userId });
@@ -234,11 +255,22 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
       ],
     };
 
+    // Public arm: an isPublic lake is accessible app-wide - it bypasses the org prerequisite
+    // AND the not-private exclusion (a public gateless lake IS meant to be world-readable). The
+    // requirement constraint is still ANDed as defense in depth, so a gate added after publishing
+    // keeps holding while a normal (gate-less) public lake passes via requirementConstraint's
+    // both-blank arm.
+    const publicArm = { $and: [{ isPublic: true }, requirementConstraint] };
+
     const filter: Record<string, unknown> = ctx.isAdmin
       ? { status: { $in: statuses } }
       : {
           status: { $in: statuses },
-          $or: [{ createdByUserId: ctx.userId }, { $and: [orgConstraint, requirementConstraint, notPrivate] }],
+          $or: [
+            { createdByUserId: ctx.userId },
+            publicArm,
+            { $and: [orgConstraint, requirementConstraint, notPrivate] },
+          ],
         };
 
     const results = await this.dataLakeModel.find(filter);

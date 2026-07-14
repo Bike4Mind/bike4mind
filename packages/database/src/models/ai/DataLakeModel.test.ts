@@ -106,6 +106,28 @@ describe('DataLakeRepository.findActiveByUserTagsAndEntitlements', () => {
     // Wrong org even with the tag -> excluded (org is not a flat OR with the tag).
     expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements(['team'], [], 'orgB')).toEqual([]);
   });
+
+  it('Public: an isPublic lake is retrievable by any user, cross-org, without owner/tag/key', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'pub', isPublic: true, createdByUserId: 'alice' }));
+    await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' })); // private control
+
+    // A stranger in a different org retrieves the public lake but NOT the private one.
+    const stranger = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob');
+    expect(stranger.map(l => l.slug)).toEqual(['pub']);
+    // A tag/key-less stranger with no org still gets it.
+    const orgless = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], undefined, 'bob');
+    expect(orgless.map(l => l.slug)).toEqual(['pub']);
+  });
+
+  it('Public + a (post-publish) gate still enforces the gate in retrieval — defense in depth', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'pubgated', isPublic: true, requiredEntitlement: 'product:pro' }));
+
+    // No key -> excluded even though isPublic is set (the gate holds).
+    expect(await dataLakeRepository.findActiveByUserTagsAndEntitlements([], [], 'orgB', 'bob')).toEqual([]);
+    // Key held -> retrievable cross-org (public bypasses the org prerequisite).
+    const withKey = await dataLakeRepository.findActiveByUserTagsAndEntitlements([], ['product:pro'], 'orgB', 'bob');
+    expect(withKey.map(l => l.slug)).toEqual(['pubgated']);
+  });
 });
 
 describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/management path)', () => {
@@ -146,6 +168,15 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
         l => l.slug
       )
     ).toEqual(['shared']);
+  });
+
+  it('Public: an isPublic lake is listed for a stranger in another org; a private one is not', async () => {
+    await dataLakeRepository.create(baseLake({ slug: 'pub', isPublic: true, createdByUserId: 'alice' }));
+    await dataLakeRepository.create(baseLake({ slug: 'personal', createdByUserId: 'alice' }));
+
+    // A non-owner in a different org gets the public lake but never the org-less private one.
+    const res = await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationId: 'orgB' }));
+    expect(res.map(l => l.slug)).toEqual(['pub']);
   });
 });
 
@@ -229,20 +260,23 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
     expect(res.map(l => l.slug)).toEqual(['tagged']);
   });
 
-  it('DB ↔ in-memory parity: findAccessible agrees with private-by-default layered over lakeMatchesAccess', async () => {
+  it('DB ↔ in-memory parity: findAccessible agrees with private-by-default + public layered over lakeMatchesAccess', async () => {
     // Lock the management DB pre-filter to the same decision the in-memory logic makes for a
-    // non-owner: private-by-default (an org-less no-gate lake is owner-only) applied on top of
-    // the any-of predicate. lakeMatchesAccess alone returns true for a no-requirement lake, so
-    // the private-by-default arm must be composed in to mirror findAccessible's `notPrivate`.
+    // non-owner: (isPublic OR not-private) applied on top of the any-of predicate. lakeMatchesAccess
+    // alone returns true for a no-requirement lake, so the private-by-default arm must be composed
+    // in to mirror findAccessible's `notPrivate`, and the public arm to mirror `publicArm`.
+    // 'gateless' is a gateless, org-less (private-by-default) lake despite the innocuous name.
     const fixtures = [
-      baseLake({ slug: 'public' }),
+      baseLake({ slug: 'gateless' }),
       baseLake({ slug: 'tagonly', requiredUserTag: 'team' }),
       baseLake({ slug: 'entonly', requiredEntitlement: 'product:pro' }),
       baseLake({ slug: 'both', requiredUserTag: 'team', requiredEntitlement: 'product:pro' }),
+      baseLake({ slug: 'publicopen', isPublic: true }),
+      baseLake({ slug: 'publicgated', isPublic: true, requiredUserTag: 'team' }),
     ];
     for (const f of fixtures) await dataLakeRepository.create(f);
 
-    // Org-less + no gate = private -> owner-only, so a non-owner never sees it.
+    // Org-less + no gate = private -> owner-only, so a non-owner never sees it (unless public).
     const isPrivate = (f: (typeof fixtures)[number]) =>
       !f.organizationId && !f.requiredUserTag && !f.requiredEntitlement;
 
@@ -256,8 +290,11 @@ describe('DataLakeRepository.findAccessible — management gate (entitlement-awa
       const fromDb = (await dataLakeRepository.findAccessible(c)).map(l => l.slug).sort();
       const normTags = c.userTags.map(t => t.toLowerCase());
       const normKeys = (c.entitlementKeys ?? []).map(normalizeEntitlementKey);
+      // Non-owner mirror: the gate (lakeMatchesAccess) must pass, AND the lake must be reachable
+      // either because it is public or because it is not private-by-default. (All fixtures are
+      // org-less and ctxs org-less, so the org prerequisite is trivially satisfied here.)
       const fromMemory = fixtures
-        .filter(f => !isPrivate(f) && lakeMatchesAccess(f, normTags, normKeys))
+        .filter(f => lakeMatchesAccess(f, normTags, normKeys) && (!!f.isPublic || !isPrivate(f)))
         .map(f => f.slug)
         .sort();
       expect(fromDb, `ctx=${JSON.stringify(c)}`).toEqual(fromMemory);

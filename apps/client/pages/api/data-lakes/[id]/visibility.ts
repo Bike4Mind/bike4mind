@@ -9,9 +9,10 @@ import { resolveActiveOrg } from '@server/dataLakes/resolveActiveOrg';
 
 // The active account-switcher org (client-supplied) is the org a promotion targets. It is
 // authorization-validated (resolveActiveOrg) before use, so it can't scope a lake into an
-// org the caller doesn't belong to. Omitted -> personal (only valid for demotion to private).
+// org the caller doesn't belong to. Omitted -> personal (valid for private and public, which
+// are both org-less). 'public' exposes the lake app-wide; the service refuses it for a gated lake.
 const VisibilityInput = z.object({
-  visibility: z.enum(['private', 'organization']),
+  visibility: z.enum(['private', 'organization', 'public']),
   organizationId: z.string().optional(),
 });
 
@@ -23,11 +24,12 @@ const toCtx = (req: Request, organizationId: string | undefined): AccessContext 
 });
 
 /**
- * POST /api/data-lakes/:id/visibility  { visibility: 'private' | 'organization', organizationId? }
- * Promote a personal lake to the caller's active org, or demote it back to private. The
- * active org is client-supplied but authorization-validated against the caller's memberships
- * (resolveActiveOrg) before it becomes the promotion target. Access-gated first (not-found-
- * style denial), then the service enforces owner/admin.
+ * POST /api/data-lakes/:id/visibility  { visibility: 'private' | 'organization' | 'public', organizationId? }
+ * Set a lake's visibility: private (owner-only), organization (shared to the caller's active
+ * org), or public (readable app-wide). The active org is client-supplied but authorization-
+ * validated against the caller's memberships (resolveActiveOrg) before it becomes the org
+ * target; it is ignored for private/public (both org-less). Access-gated first (not-found-style
+ * denial), then the service enforces owner-only exposure and the no-gated-public guardrail.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))

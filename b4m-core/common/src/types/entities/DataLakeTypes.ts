@@ -66,6 +66,15 @@ export interface IDataLake {
   createdByUserId: string;
   /** Organization scope (optional - if set, only org members can manage) */
   organizationId?: string;
+  /**
+   * Public opt-in (default false): when true the lake is directory-listed and readable by
+   * ANY authenticated user, across all orgs - it bypasses the org prerequisite and the
+   * Private-by-default rule. The entitlement/tag gate is STILL respected (defense in depth),
+   * but publishing a gated lake is refused at the write path (setLakeVisibility), so a public
+   * lake is normally gate-less/open. Owner/admin management is unchanged. Mirrors the tri-state
+   * `LakeVisibility`: private (no org, not public) | organization (org-scoped) | public.
+   */
+  isPublic?: boolean;
   /** Whether this data lake is active or archived */
   status: DataLakeStatus;
   /** Cached file count (updated on upload/delete) */
@@ -129,13 +138,7 @@ export const BATCH_NON_TERMINAL_STATUSES: BatchStatus[] = ['preparing', 'uploadi
 export const BATCH_TERMINAL_STATUSES: BatchStatus[] = ['completed', 'completed_with_errors', 'failed', 'cancelled'];
 
 export type BatchStatus =
-  | 'preparing'
-  | 'uploading'
-  | 'processing'
-  | 'completed'
-  | 'completed_with_errors'
-  | 'failed'
-  | 'cancelled';
+  'preparing' | 'uploading' | 'processing' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
 
 export interface IDataLakeBatchFile {
   fabFileId: string;
