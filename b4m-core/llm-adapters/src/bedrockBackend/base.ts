@@ -234,7 +234,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // Cache counts here come from Anthropic-native fields (input_tokens EXCLUDES
         // cache), so forwarding them is billing-safe. A Bedrock model reporting cache
         // with cache-INCLUSIVE input must not forward without subtracting (see the
-        // warnings in openaiBackend/geminiBackend).
+        // warnings in openaiBackend/geminiBackend). This is one of the two adapters
+        // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
         ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
         ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
