@@ -26,8 +26,8 @@ importers:
   .:
     dependencies:
       sst:
-        specifier: 4.17.1
-        version: 4.17.1
+        specifier: 4.14.1
+        version: 4.14.1
     devDependencies:
       '@aws-sdk/client-lambda':
         specifier: ^3.1080.0
@@ -639,8 +639,8 @@ importers:
         specifier: ^2.0.7
         version: 2.0.7(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
       sst:
-        specifier: 4.17.1
-        version: 4.17.1
+        specifier: 4.14.1
+        version: 4.14.1
       stackframe:
         specifier: ^1.3.4
         version: 1.3.4
@@ -2027,8 +2027,8 @@ importers:
         specifier: ^7.3.0
         version: 7.3.0
       sst:
-        specifier: 4.17.1
-        version: 4.17.1
+        specifier: 4.14.1
+        version: 4.14.1
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
@@ -9846,8 +9846,8 @@ packages:
     resolution: {integrity: sha512-9miFgM2OFba7hB+pRgvtV84pYTBaoTHohvmIgiRt6dRIzbwEOIaNaP+dIlGs2fNFoB0SeISs0Jz5WFVRid6Xyg==}
     engines: {node: '>=12.20.0'}
 
-  oidc-token-hash@5.2.0:
-    resolution: {integrity: sha512-6gj2m8cJZ+iSW8bm0FXdGF0YhIQbKrfP4yWTNzxc31U6MOjfEmB1rHvlYvxI1B7t7BCi1F2vYTT6YhtQRG4hxw==}
+  oidc-token-hash@5.1.1:
+    resolution: {integrity: sha512-D7EmwxJV6DsEB6vOFLrBM2OzsVgQzgPWyHlV2OOAVj772n+WTXpudC9e9u5BVKQnYwaD30Ivhi9b+4UeBcGu9g==}
     engines: {node: ^10.13.0 || >=12.0.0}
 
   ollama@0.6.3:
@@ -11035,48 +11035,48 @@ packages:
   sprintf-js@1.0.3:
     resolution: {integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==}
 
-  sst-darwin-arm64@4.17.1:
-    resolution: {integrity: sha512-Y9qZTBk4Fcwba+td+Dz3lz0wT9pQIbkJ5JqNfU4UwaVQtA58kz02F/BluhACi0vpI7PJULY7Tp1orHg86iy9+w==}
+  sst-darwin-arm64@4.14.1:
+    resolution: {integrity: sha512-V6yC0cHIwA0BTL/XPi1+Qn/odI3eiTA47Pe2W+8SC7Ou9+wiA+ETwOWLOLI985gulkzliugKmraVvlaJB1KIJQ==}
     cpu: [arm64]
     os: [darwin]
 
-  sst-darwin-x64@4.17.1:
-    resolution: {integrity: sha512-TCU/H51vhQo+5QwsPIsiODlM54OS3Xai8FThcmX9H4git9Z/gPRLdWGKO+KSRB5Mrbm4z1R+pLqWyuuoNA4W6g==}
+  sst-darwin-x64@4.14.1:
+    resolution: {integrity: sha512-93ExaynO7gOB8Qj27dyWkMSezDPdHeJF971c4SKeVcm/WAnbEBMfLGJJ6VWCqZoBQ1MXoR+jhuFOw+I58+BVeg==}
     cpu: [x64]
     os: [darwin]
 
-  sst-linux-arm64@4.17.1:
-    resolution: {integrity: sha512-LwSl1hOEuRx1nODr9QRKZAo8hrTOS/BBhZdGoAIwsVArmZurqbY1VKaVk6DSbP+qUnGPPgdEMpb1PpfdJfX/Xw==}
+  sst-linux-arm64@4.14.1:
+    resolution: {integrity: sha512-6vUyyOycK4N0hdCSMaflABEjZlt7w4DoxDY10BqqCTulH06q4urBSmHdhYuuFbZWRIC7Azd0DJT2AmfhP1vAbg==}
     cpu: [arm64]
     os: [linux]
 
-  sst-linux-x64@4.17.1:
-    resolution: {integrity: sha512-DtIm3XkpzWb9yS4ZSgxg5KuOHRHhBk66y9lzVw6E/GBfUDdVOES2pbQUuFHuAq2tPJpbzuxGH7trdylAGD+TxA==}
+  sst-linux-x64@4.14.1:
+    resolution: {integrity: sha512-nlPqpWwYdpDZGm8HzNgqoUyzsRZ+gnBl7eMKhTUofyguvbx/rVBkr4Muhl21H2glLXVOmjC/t2XvcPQzYSla1Q==}
     cpu: [x64]
     os: [linux]
 
-  sst-linux-x86@4.17.1:
-    resolution: {integrity: sha512-I2dMWy9zU2V1H6NX3TE1ckl8BbXm/1rcPyxRJCe2TBYUgucqhT1q4je3OAOjBfUnBSv7arxm5tSrYZ0Z9I3bYQ==}
+  sst-linux-x86@4.14.1:
+    resolution: {integrity: sha512-KYwWt+Bj2pSzDlkUr6VLWB1j1/LcyBK//1qWV8LvoxE3BJTVsc0XXy1gOv0hxAfZae2HK5GyGJJfX6CyFdzsmQ==}
     cpu: [x86]
     os: [linux]
 
-  sst-win32-arm64@4.17.1:
-    resolution: {integrity: sha512-iGWZC6vCI2verOnjLxRLeXNsZdxvVKJlgXO0zI4vtw3cbd+PbCU2Q7uj6miu0nlNHhsy+v0C3eL/aKu3Sk7V0A==}
+  sst-win32-arm64@4.14.1:
+    resolution: {integrity: sha512-H641ISHj337SBxBjnjnzpu7owDcm9gWYHFJuMnejfNZWxHmcPxDRtknSC1KzUlNk39vSNB/BSzSrfMxw9EiM6Q==}
     cpu: [arm64]
     os: [win32]
 
-  sst-win32-x64@4.17.1:
-    resolution: {integrity: sha512-S9vpQwF24syg2A2+Sb+STejN8pfVv/l2LIZTFHeQOrMeLPIld3Uz9fQPakXCa3FrT1/i+m/UWWORXIJUeNBe+g==}
+  sst-win32-x64@4.14.1:
+    resolution: {integrity: sha512-dPOdJfT2dKOaoI3fAjzd2fNUkwho5heIuFLawA9HirGVDoqGop3Sy/Ban/hc/nHqa1P7yb8TbLDWXnihy92o3w==}
     cpu: [x64]
     os: [win32]
 
-  sst-win32-x86@4.17.1:
-    resolution: {integrity: sha512-CTniRCdMGKVBZ4RB4cJbwJS1YH2d9vmCEzrbETr8a6BtlZ7gD4DDHf3RuG7oZ9MumVerbTuxhi7faz7uJ0UjVw==}
+  sst-win32-x86@4.14.1:
+    resolution: {integrity: sha512-LzZMsHgXDoKDe3tulEVNA5Rt5HoXkU8iurirBwUULPvwSLv1ESJv9T50Ihq51YdxEx8SYRN7ZaOjVI7NQ35D8w==}
     cpu: [x86]
     os: [win32]
 
-  sst@4.17.1:
-    resolution: {integrity: sha512-06z0R8MICyvlsMAnPhQSga0JyijwlxwFXatnPtPA1h38PjSafrVR7bUhVIHFmUAtDLNC8hTlR/KMbKBlKGrRnQ==}
+  sst@4.14.1:
+    resolution: {integrity: sha512-9ETaPFNqzOcP8tWKh2t4oYVMPOg3SQRwcvwRvJRF5KRbW4LmYaS7OjrlewMu2p1Zef1Xls0O54/i6/5BUdwzUg==}
     hasBin: true
 
   stable-hash@0.0.5:
@@ -16961,7 +16961,7 @@ snapshots:
       obug: 2.1.3
       std-env: 4.2.0
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@25.4.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(canvas@3.2.1))(vite@8.1.4(@types/node@25.4.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.8.2))
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(canvas@3.2.1))(vite@8.1.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.8.2))
 
   '@vitest/expect@4.1.10':
     dependencies:
@@ -17015,7 +17015,7 @@ snapshots:
       sirv: 3.0.2
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@25.4.0)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(canvas@3.2.1))(vite@8.1.4(@types/node@25.4.0)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.8.2))
+      vitest: 4.1.10(@opentelemetry/api@1.9.0)(@types/node@24.12.3)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(jsdom@29.1.1(canvas@3.2.1))(vite@8.1.4(@types/node@24.12.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.44.1)(tsx@4.23.0)(yaml@2.8.2))
 
   '@vitest/utils@4.1.10':
     dependencies:
@@ -21575,7 +21575,7 @@ snapshots:
 
   obug@2.1.3: {}
 
-  oidc-token-hash@5.2.0: {}
+  oidc-token-hash@5.1.1: {}
 
   ollama@0.6.3:
     dependencies:
@@ -21627,7 +21627,7 @@ snapshots:
       jose: 4.15.9
       lru-cache: 6.0.0
       object-hash: 2.2.0
-      oidc-token-hash: 5.2.0
+      oidc-token-hash: 5.1.1
 
   openid-client@6.8.4:
     dependencies:
@@ -23074,45 +23074,45 @@ snapshots:
 
   sprintf-js@1.0.3: {}
 
-  sst-darwin-arm64@4.17.1:
+  sst-darwin-arm64@4.14.1:
     optional: true
 
-  sst-darwin-x64@4.17.1:
+  sst-darwin-x64@4.14.1:
     optional: true
 
-  sst-linux-arm64@4.17.1:
+  sst-linux-arm64@4.14.1:
     optional: true
 
-  sst-linux-x64@4.17.1:
+  sst-linux-x64@4.14.1:
     optional: true
 
-  sst-linux-x86@4.17.1:
+  sst-linux-x86@4.14.1:
     optional: true
 
-  sst-win32-arm64@4.17.1:
+  sst-win32-arm64@4.14.1:
     optional: true
 
-  sst-win32-x64@4.17.1:
+  sst-win32-x64@4.14.1:
     optional: true
 
-  sst-win32-x86@4.17.1:
+  sst-win32-x86@4.14.1:
     optional: true
 
-  sst@4.17.1:
+  sst@4.14.1:
     dependencies:
       '@aws/durable-execution-sdk-js': 1.0.2
       aws4fetch: 1.0.18
       jose: 5.2.3
       openid-client: 5.6.4
     optionalDependencies:
-      sst-darwin-arm64: 4.17.1
-      sst-darwin-x64: 4.17.1
-      sst-linux-arm64: 4.17.1
-      sst-linux-x64: 4.17.1
-      sst-linux-x86: 4.17.1
-      sst-win32-arm64: 4.17.1
-      sst-win32-x64: 4.17.1
-      sst-win32-x86: 4.17.1
+      sst-darwin-arm64: 4.14.1
+      sst-darwin-x64: 4.14.1
+      sst-linux-arm64: 4.14.1
+      sst-linux-x64: 4.14.1
+      sst-linux-x86: 4.14.1
+      sst-win32-arm64: 4.14.1
+      sst-win32-x64: 4.14.1
+      sst-win32-x86: 4.14.1
 
   stable-hash@0.0.5: {}
 
