@@ -401,6 +401,9 @@ importers:
       error-stack-parser:
         specifier: ^2.1.4
         version: 2.1.4
+      esbuild-wasm:
+        specifier: 0.28.1
+        version: 0.28.1
       escape-string-regexp:
         specifier: ^5.0.0
         version: 5.0.0
@@ -808,9 +811,6 @@ importers:
         specifier: ^1.4.7
         version: 1.4.7
       esbuild:
-        specifier: 0.28.1
-        version: 0.28.1
-      esbuild-wasm:
         specifier: 0.28.1
         version: 0.28.1
       eslint:
