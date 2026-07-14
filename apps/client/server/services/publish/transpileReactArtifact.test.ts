@@ -160,6 +160,19 @@ export default function C() {
       ReactArtifactTranspileError
     );
   });
+
+  it('rejects when the only "export default" is inside a string (no real top-level export)', async () => {
+    // Passes the lenient checkHasDefaultExport pre-check but has NO real default export - must be
+    // rejected at publish, not shipped as a bundle that throws "No component found" at render.
+    const src = `import { useState } from 'react';
+function C() {
+  const [n] = useState(0);
+  return <pre>{"export default Foo"}</pre>;
+}`;
+    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
+      ReactArtifactTranspileError
+    );
+  });
 });
 
 describe('rewriteImportsToRequire', () => {
