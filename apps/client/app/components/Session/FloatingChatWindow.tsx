@@ -366,11 +366,10 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
           '--Icon-color': theme.palette.primary.solidColor,
           boxShadow: theme.shadow.lg,
           cursor: 'pointer',
-          transition: 'transform 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease',
+          transition: 'transform 0.2s ease, background-color 0.2s ease',
           '&:hover': {
             backgroundColor: theme.palette.primary.solidHoverBg,
-            transform: 'translateY(-3px)',
-            boxShadow: theme.shadow.xl,
+            transform: 'translateY(-2px)',
           },
         })}
         onClick={handleMinimize}
