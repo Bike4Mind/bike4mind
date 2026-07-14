@@ -285,6 +285,15 @@ describe('firecrawlFetch llms.txt probe', () => {
     await firecrawlFetch(adapters, 'https://example.com/docs/page');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  it('does not re-probe on a continuation call (offset > 0)', async () => {
+    bigDoc();
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://example.com/docs/page', { offset: CAP });
+    expect(res.truncated).toBe(true); // still more to read, but we are already paging
+    expect(res.llmsTxtUrl).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });
 
 // End-to-end boundary corpus: tool result marker <-> citable metadata <-> telemetry rollup

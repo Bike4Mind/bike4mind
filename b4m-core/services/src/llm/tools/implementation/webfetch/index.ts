@@ -116,7 +116,11 @@ async function probeLlmsTxt(pageUrl: string): Promise<string | undefined> {
         signal: controller.signal,
       });
       const contentType = res.headers.get('content-type') ?? '';
-      return res.ok && !contentType.includes('text/html') ? candidate : undefined;
+      const found = res.ok && !contentType.includes('text/html');
+      // Only headers are needed; cancel the body so undici releases the connection now
+      // rather than at GC (fire-and-forget - must not affect the probe result).
+      void res.body?.cancel().catch(() => {});
+      return found ? candidate : undefined;
     } catch {
       return undefined;
     } finally {
@@ -230,9 +234,10 @@ export async function firecrawlFetch(
       (truncated ? ` (more remains past ${offset + extractedChars})` : '')
   );
 
-  // Only probe for an llms.txt hint when there is more content to page through - it is the
-  // long-form case where a curated source helps, and it bounds the extra network cost.
-  const llmsTxtUrl = truncated ? await probeLlmsTxt(url) : undefined;
+  // Probe for an llms.txt hint only on the FIRST truncated read (offset 0): that is the
+  // long-form case where a curated source helps, and gating on offset avoids re-probing the
+  // same origin on every continuation call once the model is already paging.
+  const llmsTxtUrl = truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
 
   return {
     markdown,
