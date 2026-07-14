@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   buildReactArtifactBundle,
   transpileReactSource,
+  rewriteImportsToRequire,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
@@ -98,6 +99,31 @@ export { Counter as default };`;
     );
   });
 
+  it('does NOT reject a component that merely names common icon identifiers (no lucide import)', async () => {
+    // Regression: the old extractReactDependencies auto-detects lucide-react from PascalCase icon
+    // names, which 422'd a component simply CALLED `Settings` (Home/Bell/Star/User/...). The
+    // import-only dependency scan fixes it - only actual `import ... from` modules gate the publish.
+    const src = `import { useState } from 'react';
+export default function Settings() {
+  const [open, setOpen] = useState(false);
+  return <button onClick={() => setOpen(!open)}>Home Bell Star User Search</button>;
+}`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'Settings' });
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
+  it('supports a non-hook React named import (useLayoutEffect) without ReferenceError', async () => {
+    const src = `import { useLayoutEffect, useState } from 'react';
+export default function C() {
+  const [n] = useState(0);
+  useLayoutEffect(() => {}, []);
+  return <div>{n}</div>;
+}`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain('React.createElement');
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
   it('rejects a multi-file (relative import) artifact', async () => {
     const src = `import Foo from './foo';\nexport default function C() { return <Foo />; }`;
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
@@ -110,5 +136,33 @@ export { Counter as default };`;
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       ReactArtifactTranspileError
     );
+  });
+});
+
+describe('rewriteImportsToRequire', () => {
+  it('binds a non-hook named React import from React; already-global hooks are not re-declared', () => {
+    const out = rewriteImportsToRequire(`import { useLayoutEffect, useState } from 'react';`);
+    expect(out).toContain('const { useLayoutEffect } = React');
+    expect(out).not.toContain('useState ='); // useState is a bootstrap global; must not be re-bound
+  });
+
+  it('drops a default-only React import (React is a runtime global)', () => {
+    const out = rewriteImportsToRequire(`import React from 'react';`);
+    expect(out).not.toContain("require('react')");
+    expect(out).toContain('react is a runtime global');
+  });
+
+  it('does not conflate adjacent semicolon-less imports', () => {
+    const out = rewriteImportsToRequire(`import Chart from 'chartjs'\nimport Grid from 'gridjs';`);
+    expect(out).toContain(`const Chart = require('chartjs');`);
+    expect(out).toContain(`const Grid = require('gridjs');`);
+    expect(out).not.toMatch(/from '[^']+'\s+import/); // no greedy `... from 'x' import ...` garbage
+  });
+
+  it('splits a mixed default+named non-react import into valid statements', () => {
+    const out = rewriteImportsToRequire(`import LineChart, { BarChart } from 'recharts';`);
+    expect(out).toContain(`const LineChart = require('recharts');`);
+    expect(out).toContain(`const { BarChart } = LineChart;`);
+    expect(out).not.toContain('const LineChart, {'); // the previously-emitted invalid destructuring
   });
 });
