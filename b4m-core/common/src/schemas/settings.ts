@@ -259,6 +259,7 @@ export const SettingKeySchema = z.enum([
   'EnableOptiHashiDefault',
   'EnableComputeSubmission',
   'EnableFamilyCompute',
+  'EnableHybridCompute',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1335,6 +1336,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableFamilyCompute', order: 83 },
       { key: 'optiMaxToolCalls', order: 84 },
       { key: 'EnableLibreOncology', order: 85 },
+      { key: 'EnableHybridCompute', order: 86 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -3141,6 +3143,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 83,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  EnableHybridCompute: makeBooleanSetting({
+    key: 'EnableHybridCompute',
+    name: 'Enable Hybrid Backend Compute',
+    defaultValue: false,
+    description:
+      'Enable submitting eligible family problems to the hybrid compute backend (local optimization plus an external gateway step). Independent dark-ship flag; requires EnableComputeSubmission ON to function.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 84,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({
