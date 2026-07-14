@@ -99,7 +99,7 @@
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
-    "tldts": "^7.0.28",
+    "tldts": "^7.4.8",
     "unpdf": "^1.6.2",
     "uuid": "^13.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
