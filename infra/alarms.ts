@@ -109,10 +109,10 @@ if (isMonitoredStage) {
    * Alarm: Agent Checkpoint Depth Warning
    *
    * Fires when an execution's agentContinuationQueue self-dispatch depth exceeds 25.
-   * Depth 25 = ~6h of wall-clock time (25 × 15 min); any legitimate run should be
+   * Depth 25 = ~6.25h of wall-clock time (25 x 15 min); any legitimate run should be
    * done well before this. Indicates a runaway agent loop or a stuck abort signal.
-   * Hard limit at depth 50 terminates the execution automatically; this alarm fires
-   * at 25 so ops can investigate before the hard limit is reached.
+   * Hard limit at depth 50 (~12.5h) terminates the execution automatically; this alarm
+   * fires at 25 so ops can investigate before the hard limit is reached.
    *
    * Metric emitted by: agentExecutor.ts → processExecution()
    * Namespace: Lumina5/AgentExecutor / CheckpointDepthWarning
