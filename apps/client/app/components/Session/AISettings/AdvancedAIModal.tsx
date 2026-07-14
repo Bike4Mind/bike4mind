@@ -28,15 +28,17 @@ import {
   KeyboardArrowDown as KeyboardArrowDownIcon,
   ArrowBack as ArrowBackIcon,
 } from '@mui/icons-material';
+import type { Theme } from '@mui/joy/styles';
 import { useTheme } from '@mui/joy';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import {
-  BFL_IMAGE_MODELS,
+  B4MLLMTools,
   BFL_SAFETY_TOLERANCE,
   ChatModels,
   FIXED_TEMPERATURE_MODELS,
   NO_TEMPERATURE_MODELS,
   IMAGE_SIZE_CONSTRAINTS,
+  isBflImageModel,
   ModelInfo,
   ModelName,
   ChatModelName,
@@ -50,8 +52,8 @@ import {
   isGPTImageModel,
 } from '@bike4mind/common';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
-import { ResearchModeConfiguration } from '@client/app/types/ResearchMode';
-import { useLLM } from '@client/app/contexts/LLMContext';
+import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
+import { useLLM, LLMContextProps } from '@client/app/contexts/LLMContext';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import { useShallow } from 'zustand/react/shallow';
 import { ResearchConfigPanel } from './ResearchConfigPanel';
@@ -61,6 +63,7 @@ import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
 import ModelSelection from '../ModelSelection';
 import MetadataChip from './MetaDataChips';
 import {
+  ChipVariant,
   computeDefaultMaxTokens,
   getModelPriceTier,
   getModelSpeedFromStats,
@@ -99,7 +102,9 @@ const commonInputStyles = (_mode: string) => ({
   borderRadius: 8,
   border: `1px solid`,
   borderColor: 'border.solid',
-  backgroundColor: (theme: any) => theme.palette.aiSettings.backgroundColor, // any: MUI theme callback typing
+  // `aiSettings.background` (not `.backgroundColor`, which doesn't exist on the palette) -
+  // surfaced by removing the `any` cast that was previously masking this.
+  backgroundColor: (theme: Theme) => theme.palette.aiSettings.background,
   color: 'text.primary',
 });
 
@@ -117,14 +122,31 @@ const commonTextTitleStyles = {
   fontSize: '16px',
 };
 
-const bflModels = BFL_IMAGE_MODELS as readonly string[];
+interface ImageSettingOption {
+  value: string;
+  label: string;
+}
+
+// `onChange` uses method syntax (not an arrow-function property) so TS applies bivariant
+// parameter checking - the concrete settings built in `imageSettings` each have a narrower
+// `onChange` (e.g. `(value: OpenAIImageSize | null) => void`) that wouldn't otherwise satisfy
+// this shared, wider signature.
+interface ImageSettingItem {
+  label: string;
+  type: 'select' | 'input';
+  value: string | undefined;
+  tooltip?: string;
+  options?: ImageSettingOption[];
+  inputProps?: Record<string, unknown>;
+  onChange(value: string | number | null | undefined): void;
+}
 
 const getAvailableSizes = (model: string) => {
   if (isGPTImage2Model(model)) {
     return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
   } else if (isGPTImageModel(model)) {
     return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
-  } else if (bflModels.includes(model)) {
+  } else if (isBflImageModel(model)) {
     const isKontext = model === ImageModels.FLUX_KONTEXT_PRO || model === ImageModels.FLUX_KONTEXT_MAX;
     if (isKontext) return [];
     return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
@@ -135,7 +157,7 @@ const getAvailableSizes = (model: string) => {
 const getModelConstraintKey = (model: string) => {
   if (isGPTImage2Model(model)) return 'GPT_IMAGE_2';
   if (isGPTImageModel(model)) return 'GPT_IMAGE_1';
-  if (bflModels.includes(model)) return 'BFL';
+  if (isBflImageModel(model)) return 'BFL';
   return 'GPT_IMAGE_1';
 };
 
@@ -152,7 +174,7 @@ const GPT5_2_MODEL_IDS: ReadonlySet<string> = new Set([ChatModels.GPT5_2, ChatMo
 
 const ReasoningEffortSelector: React.FC<{
   model: ModelName;
-  commonInputStyles: (mode: string) => Record<string, unknown>;
+  commonInputStyles: typeof commonInputStyles;
   mode: 'dark' | 'light';
 }> = ({ model, commonInputStyles, mode }) => {
   const isGPT52 = GPT5_2_MODEL_IDS.has(model);
@@ -265,13 +287,13 @@ const ReasoningEffortSelector: React.FC<{
 interface SelectedModelDetailsProps {
   modelInfo: ModelInfo | null;
   model: ModelName;
-  setLLM: (updates: any) => void;
+  setLLM: (updates: Partial<LLMContextProps>) => void;
   setSpokenWords: (words: number) => void;
   historyLines: number;
   setHistoryLines: (lines: number) => void;
   isImageModel: (model: ModelName) => boolean;
   isKontextModel: boolean;
-  priceTierInfo: { tier: string; variant: string };
+  priceTierInfo: { tier: string; variant: ChipVariant };
   maxTokens: number;
   maxContextWindow: number;
   getPriceTierTooltip: (tier: string) => string;
@@ -280,13 +302,12 @@ interface SelectedModelDetailsProps {
   isPopular: boolean;
   metricsLoading: boolean;
   modelSpeed: string | null;
-  getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => any;
+  getModelSpeedVariant: (speed: 'fast' | 'medium' | 'slow') => ChipVariant;
   getModelSpeedTooltip: (speed: 'fast' | 'medium' | 'slow') => string;
   INFINITE_VALUE: number;
   BFL_SAFETY_TOLERANCE: { DEFAULT: number; MIN: number; MAX: number };
-  BFL_IMAGE_MODELS: readonly string[];
-  ImageModels: any;
-  tools: any[];
+  ImageModels: typeof ImageModels;
+  tools: B4MLLMTools[];
   onRollDice: () => void;
   isMobile: boolean;
   max_tokens: number;
@@ -300,12 +321,12 @@ interface SelectedModelDetailsProps {
   isQuestMasterFeatureEnabled: boolean;
   isQuestMasterEnabled: boolean;
   voiceOver: boolean;
-  imageSettings: any[];
+  imageSettings: ImageSettingItem[];
   prompt_upsampling: boolean;
   safety_tolerance: number;
-  commonTextTitleStyles: any;
-  commonInputStyles: (mode: string) => any;
-  commonSelectStyles: (mode: string) => any;
+  commonTextTitleStyles: typeof commonTextTitleStyles;
+  commonInputStyles: typeof commonInputStyles;
+  commonSelectStyles: typeof commonSelectStyles;
   mode: 'dark' | 'light';
 }
 
@@ -323,14 +344,13 @@ interface AdvancedAIModalProps {
 const ResetButton: React.FC<{
   modelInfo: ModelInfo;
   model: ModelName;
-  setLLM: (updates: any) => void;
+  setLLM: (updates: Partial<LLMContextProps>) => void;
   setSpokenWords: (words: number) => void;
   setHistoryLines: (lines: number) => void;
   isImageModel: (model: ModelName) => boolean;
-  BFL_IMAGE_MODELS: readonly string[];
   BFL_SAFETY_TOLERANCE: { DEFAULT: number; MIN: number; MAX: number };
   INFINITE_VALUE: number;
-  ImageModels: any;
+  ImageModels: typeof ImageModels;
   tooltip?: string;
   width?: string;
   height?: string;
@@ -343,7 +363,6 @@ const ResetButton: React.FC<{
   setSpokenWords,
   setHistoryLines,
   isImageModel,
-  BFL_IMAGE_MODELS,
   BFL_SAFETY_TOLERANCE,
   INFINITE_VALUE,
   ImageModels,
@@ -363,7 +382,7 @@ const ResetButton: React.FC<{
       defaultMaxTokens = Math.min(modelMaxTokens, 16384);
     }
 
-    let quality;
+    let quality: OpenAIImageQuality | undefined;
 
     if (!isImageModel(model)) {
       quality = undefined;
@@ -379,17 +398,14 @@ const ResetButton: React.FC<{
       top_p: 1.0,
       size: isImageModel(model) ? '1024x1024' : undefined,
       quality,
-      style:
-        isImageModel(model) && model !== ImageModels.GPT_IMAGE_1 && !BFL_IMAGE_MODELS.includes(model as any)
-          ? 'vivid'
-          : undefined,
+      style: isImageModel(model) && model !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(model) ? 'vivid' : undefined,
       seed: undefined,
       width: undefined,
       height: undefined,
       aspect_ratio: undefined,
       output_format: isImageModel(model) ? 'jpeg' : undefined,
-      prompt_upsampling: BFL_IMAGE_MODELS.includes(model as any) ? false : undefined,
-      safety_tolerance: BFL_IMAGE_MODELS.includes(model as any) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
+      prompt_upsampling: isBflImageModel(model) ? false : undefined,
+      safety_tolerance: isBflImageModel(model) ? BFL_SAFETY_TOLERANCE.DEFAULT : undefined,
     });
     setSpokenWords(200);
     setHistoryLines(INFINITE_VALUE);
@@ -462,7 +478,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
   getModelSpeedTooltip,
   INFINITE_VALUE,
   BFL_SAFETY_TOLERANCE,
-  BFL_IMAGE_MODELS,
   ImageModels,
   tools,
   onRollDice,
@@ -521,7 +536,6 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
             setSpokenWords={setSpokenWords}
             setHistoryLines={setHistoryLines}
             isImageModel={isImageModel}
-            BFL_IMAGE_MODELS={BFL_IMAGE_MODELS}
             BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
             INFINITE_VALUE={INFINITE_VALUE}
             ImageModels={ImageModels}
@@ -613,7 +627,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 </Box>
               }
               tooltip={getPriceTierTooltip(priceTierInfo.tier)}
-              variant={priceTierInfo.variant as any}
+              variant={priceTierInfo.variant}
               isMaximum={false}
               mode={mode}
             />
@@ -744,7 +758,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   fontSize: { xs: '12px', sm: '14px' },
                   width: { xs: '80px', sm: 'auto' },
                 }}
-                onChange={(e: any) => {
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const rawValue = e.target.value.replace(/\s/g, '');
                   const inputTokens = parseInt(rawValue, 10);
                   if (!isNaN(inputTokens) && inputTokens >= 0) {
@@ -776,7 +790,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                   fontSize: { xs: '12px', sm: '14px' },
                   width: { xs: '80px', sm: 'auto' },
                 }}
-                onChange={(e: any) => {
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const rawValue = e.target.value.replace(/\s/g, '');
                   const outputTokens = parseInt(rawValue, 10);
                   if (
@@ -904,7 +918,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: '.5rem' }}>
                   <Checkbox
                     checked={isQuestMasterEnabled}
-                    onChange={(e: any) => setLLM({ isQuestMasterEnabled: e.target.checked })}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                      setLLM({ isQuestMasterEnabled: e.target.checked })
+                    }
                     title="Enable Quest Master"
                     color="success"
                   />
@@ -1123,7 +1139,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 color="primary"
                 type="number"
                 value={spokenWords}
-                onChange={(e: any) => {
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                   const value = parseInt(e.target.value);
                   if (!isNaN(value) && value >= 0) {
                     setSpokenWords(value);
@@ -1171,11 +1187,11 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     {setting.type === 'select' && (
                       <Select
                         value={setting.value}
-                        onChange={(_, newValue: any) => setting.onChange(newValue)}
+                        onChange={(_, newValue) => setting.onChange(newValue)}
                         indicator={<KeyboardArrowDownIcon />}
                         sx={commonSelectStyles(mode || 'light')}
                       >
-                        {setting.options.map((option: any) => (
+                        {setting.options?.map(option => (
                           <Option key={option.value} value={option.value}>
                             {option.label}
                           </Option>
@@ -1190,7 +1206,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                         color="primary"
                         value={setting.value}
                         {...setting.inputProps}
-                        onChange={(e: any) => {
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                           const value = e.target.value === '' ? undefined : parseInt(e.target.value);
                           if (value !== undefined) {
                             setting.onChange(value);
@@ -1202,7 +1218,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                 </Box>
               </Grid>
             ))}
-            {BFL_IMAGE_MODELS.includes(model as any) && (
+            {isBflImageModel(model) && (
               <>
                 <Grid xs={12} md={6}>
                   <Box
@@ -1221,7 +1237,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     <Box sx={{ minWidth: '120px' }}>
                       <Switch
                         checked={prompt_upsampling ?? false}
-                        onChange={(e: any) => setLLM({ prompt_upsampling: e.target.checked })}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          setLLM({ prompt_upsampling: e.target.checked })
+                        }
                         color={prompt_upsampling ? 'success' : 'neutral'}
                       />
                     </Box>
@@ -1249,7 +1267,9 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                         color="primary"
                         type="number"
                         value={safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
-                        onChange={(e: any) => setLLM({ safety_tolerance: parseInt(e.target.value) })}
+                        onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                          setLLM({ safety_tolerance: parseInt(e.target.value) })
+                        }
                         slotProps={{
                           input: {
                             min: BFL_SAFETY_TOLERANCE.MIN,
@@ -1393,11 +1413,8 @@ const AISettingsTab: React.FC<{
 };
 
 const ResearchModeTab: React.FC<{
-  researchMode: {
-    enabled: boolean;
-    configurations: ResearchModeConfiguration[];
-  };
-  setLLM: (updates: any) => void;
+  researchMode: ResearchModeState;
+  setLLM: (updates: Partial<LLMContextProps>) => void;
   addResearchConfiguration: (config: ResearchModeConfiguration) => void;
   updateResearchConfiguration: (id: string, updates: Partial<ResearchModeConfiguration>) => void;
   removeResearchConfiguration: (id: string) => void;
@@ -1477,7 +1494,7 @@ const ResearchModeTab: React.FC<{
             </Box>
             <SquareSlideToggle
               checked={researchMode.enabled}
-              onChange={(e: any) => setLLM({ researchMode: { ...researchMode, enabled: e.target.checked } })}
+              onChange={e => setLLM({ researchMode: { ...researchMode, enabled: e.target.checked } })}
             />
           </Stack>
         </Box>
@@ -1660,7 +1677,9 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     return { maxContextWindow: maxCtx, maxTokens: maxTok };
   }, [modelInfoRepo]);
 
-  const priceTierInfo = modelInfo ? getModelPriceTier(modelInfo) : { tier: 'Low', variant: 'green' };
+  const priceTierInfo: { tier: string; variant: ChipVariant } = modelInfo
+    ? getModelPriceTier(modelInfo)
+    : { tier: 'Low', variant: 'green' };
 
   const handleModelSelection = useCallback(
     (newModel: ModelName) => {
@@ -1734,7 +1753,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 { value: 'hd', label: 'HD' },
               ],
       },
-      ...(model !== ImageModels.GPT_IMAGE_1 && !bflModels.includes(model)
+      ...(model !== ImageModels.GPT_IMAGE_1 && !isBflImageModel(model)
         ? [
             {
               label: 'Style',
@@ -1757,7 +1776,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
-      ...(!isKontextModel && bflModels.includes(model)
+      ...(!isKontextModel && isBflImageModel(model)
         ? [
             {
               label: 'Width',
@@ -2177,7 +2196,6 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                 getModelSpeedTooltip={getModelSpeedTooltip}
                 INFINITE_VALUE={INFINITE_VALUE}
                 BFL_SAFETY_TOLERANCE={BFL_SAFETY_TOLERANCE}
-                BFL_IMAGE_MODELS={BFL_IMAGE_MODELS}
                 ImageModels={ImageModels}
                 tools={tools}
                 onRollDice={onRollDice}

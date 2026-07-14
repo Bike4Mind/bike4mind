@@ -10,6 +10,7 @@ import {
   LLMModelConfig,
   B4MLLMToolsList,
   LEGACY_IMAGE_MODEL_MAP,
+  isImageModel,
 } from '@bike4mind/common';
 import React, { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 
@@ -23,11 +24,7 @@ import { ResearchModeState, ResearchModeConfiguration } from '../types/ResearchM
 import { computeDefaultMaxTokens } from '../utils/aiSettingsUtils';
 import { useAdminSettings } from './AdminSettingsContext';
 
-function isImageModel(model: string): boolean {
-  return IMAGE_MODELS.includes(model as any);
-}
-
-interface LLMContextProps {
+export interface LLMContextProps {
   model: string;
   imageModel: string;
   imageEditModel: string; // Model used for image editing operations
