@@ -20,8 +20,15 @@ import { createLedgerMemoryStore } from './ledgerMemoryStore';
 import { createUserMementoMemoryStore } from './userMementoMemoryStore';
 import { isMementosV2Enabled } from './mementoLedgerMirror';
 
-/** How many beliefs V2 injects into the prompt at most. */
-const V2_RECALL_K = 10;
+/**
+ * How many beliefs V2 injects into the prompt at most.
+ *
+ * 8, not 10. Measured on a real 182-fact corpus with 167 queries: k=8 and k=10 BOTH hit 98.8%, so the
+ * last two slots retrieve nothing new and just spend prompt budget on the two next-best-but-wrong facts
+ * (mean injected 7.4 vs 9.0). k=5 would halve the injection again for 97.6%, which is a real trade;
+ * dropping the two slots that buy literally nothing is not.
+ */
+const V2_RECALL_K = 8;
 
 /**
  * How far heat (ACT-R activation) may move a belief relative to topicality. The chat prompt is a

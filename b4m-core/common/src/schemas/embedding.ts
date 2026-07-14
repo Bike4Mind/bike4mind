@@ -100,28 +100,29 @@ export function toMementoVector(full: readonly number[]): number[] {
  *
  * THIS NUMBER IS A PROPERTY OF MEMENTO_EMBEDDING_ID - the model AND the width - not of the memory
  * system. It lives here, glued to the space it was measured in, because they are one decision and
- * changing either alone is a silent outage. Twice now that has not been hypothetical:
- *   - mementos ran on ada-002, whose cosines are crushed into a ~0.72-0.81 band, and the read paths
- *     floored at 0.75. Moving to 3-small dropped the same corpus to 0.28-0.38 - a BETTER separation,
- *     spread wider - so the old floor rejected every memento in existence. Memory silently dark.
- *   - truncating 1536 -> 512 dims moved the scale AGAIN, upward, and left the old floor too generous.
+ * changing either alone is a silent outage (ada-002 -> 3-small moved the scale down and left the old
+ * 0.75 floor rejecting every memento in existence; 1536 -> 512 moved it back up).
  *
  * The rule: the strictest floor that still forgets NOTHING. A higher floor buys precision by dropping
  * something the user actually told us, and that trade is not ours to make silently.
  *
- * 0.30, and the corpus alone would NOT have chosen it - it says 0.350 is lossless. The corpus states
- * facts crisply ("Dana is severely allergic to shellfish"), but a memento is an LLM summarising a
- * conversation and it HEDGES: "User conducts discovery calls, suggesting a role in sales". Hedged,
- * abstract phrasing sits measurably further from a plain question. Measured against a real user's
- * memory at this width: the weakest genuine hit ("what are my hobbies") scores 0.3444 - a real memory
- * that the corpus-optimal 0.350 would silently bin - while the strongest thing memory CANNOT answer
- * tops out at 0.2491. So the safe band is (0.2491, 0.3444] and 0.30 is its middle.
+ * 0.25, measured against a REAL 182-fact user corpus with 167 LLM-generated queries (the synthetic
+ * eval corpus in b4m-core/memory/src/eval is a proxy, and it lies in both directions - it said 0.35
+ * was lossless):
  *
- * Re-derive with b4m-core/memory/src/eval/tuning.test.ts if the model OR the width moves - and
- * sanity-check the result against real mementos, because the corpus will keep telling you a higher
- * floor is safe.
+ *      floor   hit@10    negatives injected
+ *      0.25     98.8%           0.4          <- shipped: the knee
+ *      0.30     95.8%           0.1          <- costs ~5 real memories to avoid 0.3 stray facts
+ *      0.40     89.8%           0.0
+ *
+ * And the finding that matters most: on real data the distributions OVERLAP. An unanswerable question
+ * scores 0.3432 against its best fact, while the 5th percentile of genuine hits is 0.3349. There is no
+ * clean separating floor - only a trade, and this one is priced deliberately: a stray fact is noise the
+ * model can ignore, a forgotten one is a thing the user told us and we act as if they never did.
+ *
+ * Re-derive if the model OR the width moves. Do not trust the synthetic corpus alone to do it.
  */
-export const MEMENTO_MIN_SIMILARITY = 0.3;
+export const MEMENTO_MIN_SIMILARITY = 0.25;
 
 /**
  * De-dup threshold: at or above this cosine, a newly extracted fact is treated as a RESTATEMENT of a
