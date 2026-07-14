@@ -150,6 +150,8 @@ export interface BuildSystemPromptOptions {
   user?: IUserDocument;
   /** Slack user ID of the command sender */
   slackUserId?: string;
+  /** Slack channel ID, used to resolve per-channel config (e.g. default GitHub repo) */
+  channelId?: string;
   /** Logger instance */
   logger?: Logger;
 }
@@ -200,7 +202,7 @@ export async function buildSystemPrompt(options: BuildSystemPromptOptions = {}):
 
       const [githubPrompt, jiraPrompt, confluencePrompt] = await Promise.all([
         new GitHubResource(options.user, options.logger)
-          .buildAgentPrompt(threadContext, options.slackUserId)
+          .buildAgentPrompt(threadContext, options.slackUserId, options.channelId)
           .catch(err => {
             options.logger?.warn('Failed to build GitHub resource prompt', {
               error: err instanceof Error ? err.message : String(err),

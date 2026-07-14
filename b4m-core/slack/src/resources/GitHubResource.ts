@@ -271,9 +271,18 @@ export class GitHubResource extends BaseResource {
    * This prompt should only include Slack integration related context.
    * If it's not Slack-specific, add the prompt directly to the agent.
    */
-  async buildAgentPrompt(threadContext?: string, slackUserId?: string): Promise<string> {
+  async buildAgentPrompt(threadContext?: string, slackUserId?: string, channelId?: string): Promise<string> {
     let prompt = '### GITHUB RULES';
     let hasMappings = false;
+
+    const defaultRepository = channelId ? await this.getChannelDefaultRepository(channelId) : null;
+    if (defaultRepository) {
+      prompt += `
+
+📦 DEFAULT REPOSITORY FOR THIS CHANNEL: ${defaultRepository}
+- If the user does NOT name a repository, use "${defaultRepository}" as the repository.
+- If the user explicitly names a repository, ALWAYS use the user's repository instead of this default.`;
+    }
 
     // Collect all Slack User IDs: current user + any mentioned in thread
     const slackUserIds = new Set<string>();
@@ -342,6 +351,28 @@ If the user provides table data (markdown tables, formatted tables, or tabular d
 3. Use the EXACT GitHub username from the mapping (e.g., "jarlacut"), NOT the Slack ID`;
 
     return prompt;
+  }
+
+  /**
+   * Look up the channel's configured default GitHub repository, if any.
+   * @returns "owner/repo" when both parts are configured, null otherwise
+   */
+  private async getChannelDefaultRepository(channelId: string): Promise<string | null> {
+    try {
+      const { SlackChannelConfig } = getSlackDb();
+      // any: SlackChannelConfig is injected via DI registry without a concrete Mongoose model type
+      const channelConfig = await (SlackChannelConfig as any)
+        .findOne({ channelId })
+        .select('githubOwner githubRepo')
+        .lean();
+      if (channelConfig?.githubOwner && channelConfig?.githubRepo) {
+        return `${channelConfig.githubOwner}/${channelConfig.githubRepo}`;
+      }
+      return null;
+    } catch (error) {
+      this.logger.warn('[GitHubResource] Failed to load channel default repository', { error, channelId });
+      return null;
+    }
   }
 
   /**

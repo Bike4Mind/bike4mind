@@ -8,11 +8,16 @@ import { IModelConfig } from './ModelConfigTypes';
  * Allows admins to override the default model, temperature, and max tokens
  * for a specific Slack channel. This is the highest-priority level in
  * the resolution chain: channel -> agent -> org -> system fallback.
+ *
+ * Also carries the channel's default GitHub repository (owner + repo),
+ * used when a user creates an issue from Slack without naming a repo.
  */
 export interface ISlackChannelConfig extends IModelConfig {
   channelId: string;
   slackTeamId: string;
   configuredBy: string;
+  githubOwner?: string;
+  githubRepo?: string;
 }
 
 export interface ISlackChannelConfigDocument extends ISlackChannelConfig, IMongoDocument {}
