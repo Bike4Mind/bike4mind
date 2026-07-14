@@ -7,6 +7,12 @@ name: E2E Tests (Core)
 # advisory full suite (`e2e-manual.yml`, status `e2e/smoke`) so one environment-sensitive
 # spec can't block the core signal. The Core set graduates over time - see
 # apps/client/e2e/README.md ("Core gate") for the criteria to add a project here.
+#
+# MUST STAY IN SYNC WITH e2e-manual.yml: the tested-SHA resolution, deploy-in-flight
+# wait, /api/ping health gate, jq results parser, and commit-status/Slack steps below
+# are near-identical to that workflow. A fix applied to one must be applied to the other,
+# or the e2e/core and e2e/smoke signals will silently diverge. Extracting the shared
+# plumbing into a composite action / reusable workflow_call is tracked as a follow-up.
 
 on:
   workflow_dispatch:
@@ -95,7 +101,15 @@ jobs:
 
       - name: Set trigger label
         id: trigger
-        run: echo "label=Run via Deployer" >> $GITHUB_OUTPUT
+        # gate_run=true is the deployer's post-staging-deploy dispatch; a plain manual
+        # dispatch is a QA run. Label accordingly so an on-call doesn't chase the deploy
+        # pipeline for a hand-triggered run.
+        run: |
+          if [ "${{ inputs.gate_run }}" = "true" ]; then
+            echo "label=Run via Deployer" >> $GITHUB_OUTPUT
+          else
+            echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
+          fi
 
       - name: Checkout code
         uses: actions/checkout@v6
@@ -448,6 +462,10 @@ jobs:
               ]
             }
 
+      # Asymmetry by design: this fails the job only on a real test failure, but the
+      # e2e/core status above also posts `failure` when not_started > 0 (specs registered
+      # but never executed). So the run conclusion can be green while e2e/core is red.
+      # Consumers MUST read the e2e/core commit status, never poll this run's conclusion.
       - name: Fail if Core E2E tests failed
         if: steps.results.outputs.failed != '0'
         run: exit 1

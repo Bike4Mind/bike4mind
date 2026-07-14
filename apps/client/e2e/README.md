@@ -298,6 +298,12 @@ block the "is the app fundamentally alive" check:
 | **Core** | `.github/workflows/e2e-core.yml` | `e2e/core` | Curated, fast, deterministic subset - the gate we can require |
 | **Full suite** | `.github/workflows/e2e-manual.yml` | `e2e/smoke` | Everything, including AI-latency-dependent specs - advisory, for triage |
 
+> **Never make `e2e/core` a branch-protection required check.** This workflow is
+> `workflow_dispatch`-only and stamps the status onto the tested *staging* SHA - it can
+> never report on a merge-queue SHA, so a required-check rule would deadlock the queue.
+> `e2e/core` is consumed by the prod-promotion console (which reads it per-commit), not by
+> GitHub branch protection.
+
 The **Core** run executes a fixed set of whole Playwright projects in a single invocation
 (one run, one report, one status). The current set is defined by `CORE_PROJECTS` in
 `e2e-core.yml`:
@@ -337,12 +343,12 @@ demoting a spec back to advisory over letting a red Core gate get ignored.
 
 ## CI Integration
 
-E2E tests run automatically on **pull request preview deployments** via GitHub Actions (`.github/workflows/ci.yml`):
+Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer adds the **`run-e2e`** label, which triggers `.github/workflows/e2e-on-label.yml`:
 
-1. After the preview deploys, CI waits for the URL to become healthy
-2. Tests run headless with 3 workers against the preview URL
+1. CI waits for the preview URL to become healthy
+2. Tests run headless (1 worker) against the preview URL
 3. Results are posted as a **comment on the PR** with pass/fail counts
-4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>`)
+4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
 In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is **not** a GitHub secret — it lives only in SST: each `pr{n}` preview self-provisions a fresh random value at deploy time, and every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` (the same value the cleanup/create-user API validates against). See issue #251.
 
