@@ -9,8 +9,9 @@ import { PUBLISH_HOST } from './validateBundle';
  *
  * This is the SERVER-SIDE counterpart of the in-app render at
  * `apps/client/pages/api/react-artifact-sandbox.ts` (inert mode): same import-rewrite +
- * default-export unwrap + hook-injection steps, but the JSX->`React.createElement` step runs
- * once here (via esbuild-wasm) instead of in the browser via `new Function`/Babel. The emitted
+ * default-export unwrap + hook-injection steps, and the same transpiler (`@babel/standalone`,
+ * classic runtime) - but the JSX->`React.createElement` step runs once here at publish instead of
+ * in the browser, so the published bundle matches the chat preview. The emitted
  * bundle uses only an inline `<script>` (no eval/new Function/document.write/string timers) plus
  * blessed `<script src>` for the React runtime, so it passes `validateBundle` and renders on the
  * isolated serve origin (whose CSP is `script-src 'unsafe-inline' 'self' <blessed>`).
@@ -50,25 +51,20 @@ export class ReactArtifactTranspileError extends Error {
   }
 }
 
-// esbuild-wasm is imported DYNAMICALLY (not at module load) and initialized once per process. Two
-// reasons: (1) its module-load invariant check throws under a jsdom/happy-dom test environment, so
-// a static import would break every test that merely imports this module or the publish barrel;
-// (2) it is externalized for the Lambda (serverExternalPackages) and only needed when a React
-// artifact is actually published. In Node it auto-loads its bundled esbuild.wasm; `worker: false`
-// runs in-thread (Lambda has no Worker). On failure we clear the cache so a later publish retries.
-let esbuildReady: Promise<typeof import('esbuild-wasm')> | null = null;
-function ensureEsbuild(): Promise<typeof import('esbuild-wasm')> {
-  if (!esbuildReady) {
-    esbuildReady = (async () => {
-      const mod = await import('esbuild-wasm');
-      await mod.initialize({ worker: false });
-      return mod;
-    })().catch(err => {
-      esbuildReady = null;
+// @babel/standalone is imported DYNAMICALLY (cached) so it loads only when a React artifact is
+// actually published - not for every importer of the publish barrel. Unlike esbuild-wasm it has NO
+// persistent service/worker/wasm: it is pure JS and `Babel.transform` is a stateless call, so it
+// survives the Lambda freeze/thaw between invocations. (esbuild-wasm's cached service dies on thaw,
+// throwing "The service was stopped" on the next warm publish.)
+let babelPromise: Promise<typeof import('@babel/standalone')> | null = null;
+function getBabel(): Promise<typeof import('@babel/standalone')> {
+  if (!babelPromise) {
+    babelPromise = import('@babel/standalone').catch(err => {
+      babelPromise = null;
       throw err;
     });
   }
-  return esbuildReady;
+  return babelPromise;
 }
 
 // Any relative reference (import/export-from, side-effect import, require) points at a sibling
@@ -130,22 +126,24 @@ export async function transpileReactSource(source: string): Promise<string> {
     );
   }
 
-  const esbuild = await ensureEsbuild();
+  const Babel = await getBabel();
   const withRequires = rewriteImportsToRequire(source);
 
-  let transformed: string;
+  let transformed: string | null | undefined;
   try {
-    const result = await esbuild.transform(withRequires, {
-      loader: 'jsx',
-      // Classic runtime: emit React.createElement against the React global (no jsx-runtime import,
-      // which would be fatal in a no-module-loader script). Matches the in-app Babel pin.
-      jsx: 'transform',
-      jsxFactory: 'React.createElement',
-      jsxFragment: 'React.Fragment',
-    });
-    transformed = result.code;
+    // Classic runtime: emit React.createElement against the React global (the AUTOMATIC runtime
+    // injects `import { jsx } from "react/jsx-runtime"`, fatal in a no-module-loader script).
+    // Identical config to the in-app sandbox (react-artifact-sandbox.ts) so a published artifact
+    // renders the same as the chat preview.
+    transformed = Babel.transform(withRequires, {
+      presets: [['react', { runtime: 'classic' }]],
+      filename: 'component.jsx',
+    }).code;
   } catch (e) {
     throw new ReactArtifactTranspileError(`JSX transform failed: ${(e as Error).message}`);
+  }
+  if (!transformed) {
+    throw new ReactArtifactTranspileError('JSX transform produced no output.');
   }
 
   return transformed.replace(/export\s+default\s+/g, 'const __DEFAULT_EXPORT__ = ');
