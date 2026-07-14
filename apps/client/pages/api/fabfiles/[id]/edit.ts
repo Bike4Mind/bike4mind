@@ -1,4 +1,4 @@
-import { ChatModels, Permission, isImageServeable } from '@bike4mind/common';
+import { ChatModels, Permission, SupportedFabFileMimeTypes, isImageServeable } from '@bike4mind/common';
 import { FabFile, withTransaction, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { diffLines } from 'diff';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -6,6 +6,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { getFilesStorage } from '@server/utils/storage';
 import { getSettingsByNames } from '@bike4mind/utils';
+import { isAiEditableOfficeMime, extractEditableText, applyEditedText, appendEditedVersion } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { apiKeyService } from '@bike4mind/services';
 import { OperationsModelService } from '@client/services/operationsModelService';
@@ -83,8 +84,9 @@ const handler = baseApi()
           fileSize: file.fileSize,
         });
 
-        // Check if this is a text-based file (mirrors auto-rename.ts's guard - this route
-        // sends file bytes to an LLM and must never forward binary/image content).
+        // Text files send their bytes straight to the LLM (mirrors auto-rename.ts's guard).
+        // Office documents (docx/xlsx) are binary zip containers, so they take a separate
+        // parse -> editable-text path below rather than being forwarded verbatim.
         const textMimeTypes = [
           'text/plain',
           'text/markdown',
@@ -101,8 +103,9 @@ const handler = baseApi()
           'text/x-rust',
         ];
 
-        if (!textMimeTypes.includes(file.mimeType || '')) {
-          throw new BadRequestError('AI editing is only supported for text-based files');
+        const isOffice = isAiEditableOfficeMime(file.mimeType);
+        if (!isOffice && !textMimeTypes.includes(file.mimeType || '')) {
+          throw new BadRequestError('AI editing is only supported for text-based and Office (.docx/.xlsx) files');
         }
 
         // Defense-in-depth: the textMimeTypes allowlist above already excludes
@@ -136,12 +139,23 @@ const handler = baseApi()
           throw new BadRequestError('Failed to fetch file content from storage');
         }
 
-        const originalContent = await contentResponse.text();
-
-        // Check if content looks like an XML error
-        if (originalContent.startsWith('<?xml') && originalContent.includes('Error')) {
-          console.error('[Edit API] S3 returned XML error instead of file content:', originalContent.substring(0, 200));
-          throw new BadRequestError('File content is not accessible. The file may have been moved or deleted.');
+        // For Office files, keep the raw binary (needed to re-serialize on apply) and edit a
+        // text representation of it; for text files the body IS the editable content.
+        let originalContent: string;
+        let originalBuffer: Buffer | null = null;
+        if (isOffice) {
+          originalBuffer = Buffer.from(await contentResponse.arrayBuffer());
+          originalContent = await extractEditableText(originalBuffer, file.mimeType || '');
+        } else {
+          originalContent = await contentResponse.text();
+          // Check if content looks like an XML error
+          if (originalContent.startsWith('<?xml') && originalContent.includes('Error')) {
+            console.error(
+              '[Edit API] S3 returned XML error instead of file content:',
+              originalContent.substring(0, 200)
+            );
+            throw new BadRequestError('File content is not accessible. The file may have been moved or deleted.');
+          }
         }
 
         // Check file size - limit to 50KB for AI editing
@@ -174,6 +188,15 @@ const handler = baseApi()
           throw new BadRequestError(`Failed to initialize model "${modelToUse}". Please check your API keys.`);
         }
 
+        // Office files are edited as a structured text representation; the model must keep
+        // that structure intact so applyEditedText can map the edit back onto the binary.
+        const isSpreadsheet = file.mimeType === SupportedFabFileMimeTypes.XLSX;
+        const officeGuidance = isOffice
+          ? isSpreadsheet
+            ? `\n\nThis spreadsheet is shown as one "### Sheet: <name>" header per sheet followed by CSV rows. A cell whose value begins with "=" is a formula. Keep every sheet header, keep the row/column grid aligned, and preserve formulas unless the instruction changes them.`
+            : `\n\nThis document is shown as one paragraph per line, each prefixed with a "[n]" marker. Keep every [n] marker with one paragraph per line and edit only the text after the marker. To add a paragraph, append a new line using the next [n] number.`
+          : '';
+
         // Generate edit using LLM
         const systemPrompt = `You are a professional file editor. Your task is to edit the provided content according to the user's instruction.
 
@@ -184,7 +207,7 @@ Rules:
 2. Do not add comments or explanations in the edited content
 3. Maintain consistency with the existing code style and conventions
 4. Preserve indentation and whitespace patterns
-5. Return ONLY the edited content, nothing else
+5. Return ONLY the edited content, nothing else${officeGuidance}
 
 File type: ${file.mimeType}
 File name: ${file.fileName}`;
@@ -293,19 +316,44 @@ Return only the edited content without any markdown code blocks or explanations.
 
         // Apply immediately if requested
         if (applyImmediately) {
-          await getFilesStorage().upload(editedContent, s3Key, {
-            ContentType: file.mimeType || 'text/plain',
-          });
+          if (isOffice && originalBuffer) {
+            // Re-serialize the edit back into the binary and store it as a NEW version so the
+            // original bytes are never overwritten.
+            const newBuffer = await applyEditedText(originalBuffer, editedContent, file.mimeType || '');
+            const now = new Date();
+            const { newFilePath, versions } = appendEditedVersion({
+              userId: user.id,
+              fabFileId: String(file._id),
+              fileName: file.fileName,
+              currentFilePath: s3Key,
+              currentFileSize: file.fileSize ?? 0,
+              mimeType: file.mimeType || '',
+              existingVersions: file.versions,
+              newFileSize: newBuffer.length,
+              now,
+            });
+            await getFilesStorage().upload(newBuffer, newFilePath, {
+              ContentType: file.mimeType || 'application/octet-stream',
+            });
+            await FabFile.updateOne(
+              { _id: file._id },
+              { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
+            );
+          } else {
+            await getFilesStorage().upload(editedContent, s3Key, {
+              ContentType: file.mimeType || 'text/plain',
+            });
 
-          await FabFile.updateOne(
-            { _id: file._id },
-            {
-              $set: {
-                updatedAt: new Date(),
-                fileSize: Buffer.byteLength(editedContent, 'utf8'),
-              },
-            }
-          );
+            await FabFile.updateOne(
+              { _id: file._id },
+              {
+                $set: {
+                  updatedAt: new Date(),
+                  fileSize: Buffer.byteLength(editedContent, 'utf8'),
+                },
+              }
+            );
+          }
 
           result.applied = true;
         }

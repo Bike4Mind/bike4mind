@@ -184,3 +184,48 @@ export const versionedFileKey = (params: {
   const { userId, fabFileId, fileName, version } = params;
   return `files/${userId}/${fabFileId}/v${version}_${fileName}`;
 };
+
+/**
+ * Build the version history for a non-destructive AI edit. On the first edit the current
+ * (pre-edit) bytes are seeded as v1 so history is complete, then the edited version is
+ * appended. Returns the S3 key the edited bytes should be written to and the full versions
+ * array to persist; the caller uploads the bytes and repoints `filePath` at `newFilePath`.
+ */
+export const appendEditedVersion = (params: {
+  userId: string;
+  fabFileId: string;
+  fileName: string;
+  currentFilePath: string;
+  currentFileSize: number;
+  mimeType: string;
+  existingVersions?: IFabFileVersion[];
+  newFileSize: number;
+  now: Date;
+}): { newFilePath: string; versions: IFabFileVersion[] } => {
+  const history: IFabFileVersion[] = params.existingVersions?.length
+    ? [...params.existingVersions]
+    : [
+        {
+          version: 1,
+          filePath: params.currentFilePath,
+          fileSize: params.currentFileSize,
+          mimeType: params.mimeType,
+          createdAt: params.now,
+        },
+      ];
+  const newVersion = nextVersionNumber(history);
+  const newFilePath = versionedFileKey({
+    userId: params.userId,
+    fabFileId: params.fabFileId,
+    fileName: params.fileName,
+    version: newVersion,
+  });
+  history.push({
+    version: newVersion,
+    filePath: newFilePath,
+    fileSize: params.newFileSize,
+    mimeType: params.mimeType,
+    createdAt: params.now,
+  });
+  return { newFilePath, versions: history };
+};
