@@ -203,6 +203,24 @@ function findAutomaticFallback(
     'claude-opus-4-8': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
     'claude-opus-4-7': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
 
+    // Bedrock-hosted Claude leads its chain with the Anthropic-direct twin (same model,
+    // other provider path) so a sustained Bedrock outage (503/500/529) degrades to the
+    // direct API before dropping tier or crossing providers. Bedrock<->direct twin IDs
+    // per models.ts. Targets are direct-Anthropic / OpenAI, never Bedrock: Bedrock has no
+    // entry in the apiKeyTable (IAM-auth, not a key), so findAutomaticFallback's key gate
+    // always skips a Bedrock target - a Bedrock model is reachable as the primary, not as
+    // an automatic fallback destination.
+    'global.anthropic.claude-opus-4-8': [
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-sonnet-5',
+      'gpt-5',
+    ],
+    'global.anthropic.claude-opus-4-7': ['claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'gpt-5'],
+    'global.anthropic.claude-opus-4-6-v1': ['claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
+    'global.anthropic.claude-sonnet-4-6': ['claude-sonnet-4-6', 'claude-sonnet-5', 'gpt-5'],
+
     // Claude 4.5/4.6 models fallback hierarchy
     'claude-opus-4-5-20251101': [
       'claude-sonnet-4-6',
@@ -218,7 +236,7 @@ function findAutomaticFallback(
       'claude-haiku-4-5-20251001',
     ],
     'claude-sonnet-5': ['claude-sonnet-4-6', 'claude-sonnet-4-5-20250929', 'gpt-5'],
-    'global.anthropic.claude-sonnet-5': ['global.anthropic.claude-sonnet-4-6', 'gpt-5'],
+    'global.anthropic.claude-sonnet-5': ['claude-sonnet-5', 'claude-sonnet-4-6', 'gpt-5'],
     'claude-sonnet-4-6': ['claude-sonnet-5', 'claude-sonnet-4-5-20250929', 'claude-opus-4-5-20251101', 'gpt-5'],
     'claude-sonnet-4-5-20250929': ['claude-sonnet-5', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001', 'gpt-5'],
 
