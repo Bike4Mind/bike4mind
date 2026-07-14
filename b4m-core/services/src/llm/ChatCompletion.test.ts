@@ -510,10 +510,12 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
     });
 
-    // The preview/E2E-only marker forces the primary to simulate an outage so QA can
-    // exercise the fallback path end-to-end; it throws BEFORE the primary runs and is
-    // gated by E2E_ENDPOINTS_ENABLED (inert in production).
-    it('forces a primary outage via the E2E fallback marker and drives the real fallback', async () => {
+    // Wiring test: with the E2E gate on and the marker present, the affordance throws a
+    // ServiceUnavailableException BEFORE the primary runs, and the loop routes to the
+    // fallback. (isOverloadedError is stubbed false here to skip the same-model overload
+    // retries; the real overload -> forceSwitch path a genuine Bedrock outage takes is
+    // validated end-to-end on the preview, where getLlmWithFallback is not mocked.)
+    it('forces a primary outage via the E2E marker and routes to the fallback', async () => {
       const prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
       process.env.E2E_ENDPOINTS_ENABLED = 'true';
       try {
@@ -575,7 +577,8 @@ describe('ChatCompletionProcess', () => {
         await service.process({ body, logger: mockLogger });
 
         expect(primaryComplete).toBe(0); // marker threw before the primary ran
-        expect(fallbackComplete).toBe(1); // the real fallback attempt executed
+        expect(fallbackComplete).toBe(1); // the loop routed to the fallback attempt
+        expect(mockedGetLlmWithFallback).toHaveBeenCalled();
         expect(mockDb.quests.update).toHaveBeenCalledWith(
           expect.objectContaining({ replies: ['answer from fallback model'], status: 'done', type: 'message' })
         );

@@ -2436,17 +2436,20 @@ export class ChatCompletionProcess {
             // primary backend so the real loop degrades to the equivalent model on another
             // path and renders the "Fallback Model Used" badge. Double-gated and
             // primary-attempt-only: a normal request can never trigger it, and the fallback
-            // attempt still runs for real. Uses a plain "service unavailable" (not an
-            // overload/throttle) so it routes straight to the fallback without the same-model
-            // overload retries. See the Guide for Testers.
+            // attempt still runs for real. The error mimics a Bedrock capacity outage
+            // (ServiceUnavailableException) so it takes the real overloaded-error path:
+            // same-model overload retries, then forceSwitch to the fallback model - matching
+            // how a genuine sustained outage degrades. See the Guide for Testers.
             if (
               isInitialAttempt &&
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
               JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
-              throw new Error(
-                `Service unavailable: simulated ${currentModel.backend} outage for fallback testing (preview only)`
+              const forced = new Error(
+                `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
               );
+              forced.name = 'ServiceUnavailableException';
+              throw forced;
             }
 
             await currentLlm.complete(
