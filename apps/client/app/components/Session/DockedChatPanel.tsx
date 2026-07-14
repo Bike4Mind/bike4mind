@@ -89,7 +89,7 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <SmartToyIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+          <SmartToyIcon sx={{ fontSize: 18, color: 'primary.500' }} />
           <Typography level="body-sm" fontWeight="md">
             AI Chat
           </Typography>
