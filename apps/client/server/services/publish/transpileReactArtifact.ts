@@ -146,7 +146,13 @@ export async function transpileReactSource(source: string): Promise<string> {
     throw new ReactArtifactTranspileError('JSX transform produced no output.');
   }
 
-  return transformed.replace(/export\s+default\s+/g, 'const __DEFAULT_EXPORT__ = ');
+  // Unwrap the default export into a local the bootstrap reads. Handle BOTH forms that
+  // checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because
+  // Babel (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }`
+  // would survive into the classic inline <script> and fail to parse (silently blanking the page).
+  return transformed
+    .replace(/export\s+default\s+/g, 'const __DEFAULT_EXPORT__ = ')
+    .replace(/export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/g, 'const __DEFAULT_EXPORT__ = $1;');
 }
 
 const HOOK_GLOBALS =
