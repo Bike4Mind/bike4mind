@@ -99,6 +99,9 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {/* Session actions first (headerActions leads with the primary New Chat),
+              then window controls. */}
+          {headerActions}
           <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
             <IconButton
               size="sm"
@@ -111,7 +114,6 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
               {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 14 }} />}
             </IconButton>
           </Tooltip>
-          {headerActions}
           <Tooltip title="Float" disableInteractive>
             <IconButton
               size="sm"
