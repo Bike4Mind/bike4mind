@@ -8,6 +8,7 @@ import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
+import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
@@ -174,6 +175,14 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
     expect(canAccessLake(gated, ctx({ userId: 'reader', userTags: ['opti'] }))).toBe(true);
     expect(canManageLake(gated, { userId: 'reader', isAdmin: false })).toBe(false);
   });
+
+  it('denies a stranger on a PUBLIC lake — the read-can-write asymmetry now that public grants read', () => {
+    // A public lake grants READ to any caller (canAccessLake true), but managing it stays
+    // owner/admin only. Pins the asymmetry for the new public surface.
+    const pub = lake({ createdByUserId: 'alice', isPublic: true });
+    expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
+    expect(canManageLake(pub, { userId: 'stranger', isAdmin: false })).toBe(false);
+  });
 });
 
 describe('assertLakeWriteAccess — read-then-manage gate for the upload doors', () => {
@@ -197,6 +206,33 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     await expect(
       assertLakeWriteAccess('lake1', ctx({ userId: 'reader', organizationId: 'orgA', userTags: ['opti'] }), { db })
     ).rejects.toThrow(/creator/i);
+  });
+
+  it('manage-denied for a stranger on a PUBLIC lake — read passes the gate, write must not', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'stranger' }), { db })).rejects.toThrow(/creator/i);
+  });
+});
+
+describe('updateDataLake — gate-after-publish guardrail', () => {
+  it('refuses adding a required tag or entitlement to a public lake (mirrors setLakeVisibility)', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).rejects.toThrow(/public/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows a metadata-only update (rename) on a public lake', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
+    ).resolves.toMatchObject({ name: 'Renamed' });
   });
 });
 

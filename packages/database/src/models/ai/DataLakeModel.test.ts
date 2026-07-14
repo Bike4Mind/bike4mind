@@ -178,6 +178,30 @@ describe('DataLakeRepository.findAccessible — Private-by-default (HTTP/managem
     const res = await dataLakeRepository.findAccessible(ctx({ userId: 'bob', organizationId: 'orgB' }));
     expect(res.map(l => l.slug)).toEqual(['pub']);
   });
+
+  it('management view (includePublic:false) drops the public arm: a stranger is excluded, the owner still sees their own', async () => {
+    await dataLakeRepository.create(
+      baseLake({ slug: 'pubarch', isPublic: true, createdByUserId: 'alice', status: 'archived' })
+    );
+
+    // Browse/read view (default includePublic) would surface it to a stranger...
+    expect(
+      (await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { statuses: ['archived'] })).map(l => l.slug)
+    ).toEqual(['pubarch']);
+    // ...but the management view drops the public arm, so a stranger sees nothing.
+    expect(
+      await dataLakeRepository.findAccessible(ctx({ userId: 'bob' }), { statuses: ['archived'], includePublic: false })
+    ).toEqual([]);
+    // The owner still sees their own archived public lake via the owner arm.
+    expect(
+      (
+        await dataLakeRepository.findAccessible(ctx({ userId: 'alice' }), {
+          statuses: ['archived'],
+          includePublic: false,
+        })
+      ).map(l => l.slug)
+    ).toEqual(['pubarch']);
+  });
 });
 
 describe('DataLakeRepository.findAccessible — management gate (entitlement-aware any-of)', () => {

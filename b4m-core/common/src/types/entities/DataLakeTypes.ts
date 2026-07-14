@@ -122,7 +122,10 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
    * The org and tag constraints are BOTH required for a non-owner: a tag-holder in
    * a different org is excluded. Defaults to the active+draft statuses.
    */
-  findAccessible(ctx: AccessContext, opts?: { statuses?: DataLakeStatus[] }): Promise<IDataLakeDocument[]>;
+  findAccessible(
+    ctx: AccessContext,
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+  ): Promise<IDataLakeDocument[]>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
 }

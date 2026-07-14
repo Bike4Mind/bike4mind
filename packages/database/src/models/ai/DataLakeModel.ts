@@ -207,8 +207,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
    * a lake only when it grants them something: their org (org-scoped lake) or a gate they
    * hold. This is the Private-by-default rule; the owner still matches via the separate arm.
    */
-  async findAccessible(ctx: AccessContext, opts?: { statuses?: DataLakeStatus[] }): Promise<IDataLakeDocument[]> {
+  async findAccessible(
+    ctx: AccessContext,
+    opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
+  ): Promise<IDataLakeDocument[]> {
     const statuses = opts?.statuses ?? (['draft', 'active'] as DataLakeStatus[]);
+    // Public lakes belong in the browse/read list, NOT the archived/deleted MANAGEMENT views:
+    // restore/cleanup are owner/admin-only, so a stranger has no role on someone else's public
+    // lake there. Those views pass includePublic:false; the owner still sees their own via the
+    // owner arm, and org members keep org lakes via the org arm (pre-existing, intended).
+    const includePublic = opts?.includePublic ?? true;
     const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
     const allTags = Array.from(new Set(ctx.userTags.concat(normalizedTags)));
     // Use the ONE canonical normalization (shared with the in-memory filter + write path).
@@ -262,15 +270,16 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     // both-blank arm.
     const publicArm = { $and: [{ isPublic: true }, requirementConstraint] };
 
+    // Non-owner arms: the org/gate arm always applies; the public arm only in browse/read views
+    // (dropped for management views via includePublic - see the note at the top of this method).
+    const nonOwnerArms: Record<string, unknown>[] = [{ $and: [orgConstraint, requirementConstraint, notPrivate] }];
+    if (includePublic) nonOwnerArms.unshift(publicArm);
+
     const filter: Record<string, unknown> = ctx.isAdmin
       ? { status: { $in: statuses } }
       : {
           status: { $in: statuses },
-          $or: [
-            { createdByUserId: ctx.userId },
-            publicArm,
-            { $and: [orgConstraint, requirementConstraint, notPrivate] },
-          ],
+          $or: [{ createdByUserId: ctx.userId }, ...nonOwnerArms],
         };
 
     const results = await this.dataLakeModel.find(filter);

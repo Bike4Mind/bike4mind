@@ -54,18 +54,26 @@ export const listAllDataLakes = async ({ db }: ListDataLakesAdapters): Promise<D
   return [...dynamicConfigs, ...fallbacks];
 };
 
-/** Archived lakes accessible to the user (management view: unarchive). */
+/**
+ * Archived lakes accessible to the user (management view: unarchive). includePublic:false -
+ * this is a management view (restore is owner/admin-only), so it must NOT surface strangers'
+ * public lakes; the owner still sees their own archived public lake via the owner arm.
+ */
 export const listArchivedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<IDataLakeDocument[]> => {
-  return db.dataLakes.findAccessible(ctx, { statuses: ['archived'] });
+  return db.dataLakes.findAccessible(ctx, { statuses: ['archived'], includePublic: false });
 };
 
-/** Soft-deleted lakes accessible to the user (management view: cleanup / restore). */
+/**
+ * Soft-deleted lakes accessible to the user (management view: cleanup / restore). includePublic:
+ * false for the same reason as the archived view - a stranger has no management role on someone
+ * else's public lake.
+ */
 export const listDeletedDataLakes = async (
   ctx: AccessContext,
   { db }: ListDataLakesAdapters
 ): Promise<IDataLakeDocument[]> => {
-  return db.dataLakes.findAccessible(ctx, { statuses: ['deleted'] });
+  return db.dataLakes.findAccessible(ctx, { statuses: ['deleted'], includePublic: false });
 };
