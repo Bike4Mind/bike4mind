@@ -213,7 +213,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(422).json({ error: 'Validation failed', violations: validation.violations });
   }
 
-  // 4b. Cumulative per-owner quota re-check (defense in depth - the draft may
+  // 4d. Cumulative per-owner quota re-check (defense in depth - the draft may
   // have been issued before other publishes consumed the allowance). Excludes
   // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted.
   const quota = await checkPublishQuota({
