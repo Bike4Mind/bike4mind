@@ -57,11 +57,12 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
 
 const numberCell = { fontVariantNumeric: 'tabular-nums' } as const;
 
-// Axios errors carry the server's validation reason in response.data;
-// err.message is only the generic status-code string.
+// The server error envelope puts the human-readable reason in data.error
+// (see server/middlewares/errorHandler.ts); data.message and err.message
+// stay as fallbacks for endpoints that don't follow that envelope.
 const apiErrorMessage = (err: unknown, fallback: string) => {
-  const e = err as { response?: { data?: { message?: string } }; message?: string };
-  return e.response?.data?.message || e.message || fallback;
+  const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string };
+  return e.response?.data?.error || e.response?.data?.message || e.message || fallback;
 };
 
 /** Reconciliation status vs the entered invoice, as % of invoice. */
