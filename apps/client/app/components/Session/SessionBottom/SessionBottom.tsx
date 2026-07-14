@@ -367,7 +367,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           maxWidth: '950px',
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isCompactLayout || isMobile
+          ...(isCompactLayout || isMobile || isDockedLayout
             ? {
                 borderTop: '1px solid',
                 borderTopColor: 'border.solid',
@@ -383,7 +383,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile ? 0 : '.625rem',
+          borderRadius: isCompactLayout || isMobile || isDockedLayout ? 0 : '.625rem',
         })}
       >
         <Box>
