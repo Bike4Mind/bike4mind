@@ -63,3 +63,12 @@ export {
 } from './publishGateToken';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
 export { validateEmbedOrigins, type EmbedOriginsResult } from './embedOrigins';
+export {
+  buildReactArtifactBundle,
+  assembleReactBundleHtml,
+  transpileReactSource,
+  assertPublishableDependencies,
+  PUBLISH_SUPPORTED_DEPENDENCIES,
+  UnsupportedReactDependencyError,
+  ReactArtifactTranspileError,
+} from './transpileReactArtifact';
