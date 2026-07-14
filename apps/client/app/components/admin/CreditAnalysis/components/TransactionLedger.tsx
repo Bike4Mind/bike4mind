@@ -30,7 +30,6 @@ import { formatCredits, numberCell } from '../utils/format';
 import { useTransactionLedger, LedgerFilters } from '../hooks/useTransactionLedger';
 
 const DAY_OPTIONS = [7, 30, 90, 365] as const;
-const DEDUCT_TYPES = new Set<CreditTransactionType>(CREDIT_DEDUCT_TRANSACTION_TYPES);
 const ALL_TYPES: CreditTransactionType[] = [...CREDIT_ADD_TRANSACTION_TYPES, ...CREDIT_DEDUCT_TRANSACTION_TYPES];
 
 const labelFor = (t: string) => t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -193,7 +192,10 @@ export const TransactionLedger: React.FC = () => {
               </thead>
               <tbody>
                 {rows.map(r => {
-                  const isDeduct = DEDUCT_TYPES.has(r.type);
+                  // Sign comes from the ledger's own value (usage is stored negative),
+                  // not from the type - so a mis-signed row stays visible in this audit view.
+                  const negative = r.credits < 0;
+                  const sessionId = r.sessionId;
                   return (
                     <tr key={r.id}>
                       <td>{formatWhen(r.createdAt)}</td>
@@ -202,19 +204,19 @@ export const TransactionLedger: React.FC = () => {
                       <td title={r.model}>{r.model ?? '—'}</td>
                       <td title={r.actingUserId}>{r.actingUserName ?? (r.actingUserId ? 'Unknown user' : '—')}</td>
                       <td style={{ textAlign: 'right', ...numberCell }}>
-                        <Chip size="sm" variant="soft" color={isDeduct ? 'danger' : 'success'}>
-                          {isDeduct ? '-' : '+'}
+                        <Chip size="sm" variant="soft" color={negative ? 'danger' : 'success'}>
+                          {negative ? '-' : '+'}
                           {formatCredits(Math.abs(r.credits))}
                         </Chip>
                       </td>
                       <td>
-                        {r.sessionId && (
+                        {sessionId && (
                           <Tooltip title="Open session">
                             <IconButton
                               size="sm"
                               variant="plain"
                               data-testid="ledger-drilldown-btn"
-                              onClick={() => navigate({ to: '/notebooks/$id', params: { id: r.sessionId! } })}
+                              onClick={() => navigate({ to: '/notebooks/$id', params: { id: sessionId } })}
                             >
                               <OpenInNewIcon fontSize="small" />
                             </IconButton>

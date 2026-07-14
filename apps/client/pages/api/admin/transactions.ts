@@ -3,6 +3,8 @@ import { creditTransactionRepository } from '@bike4mind/database';
 import {
   CreditHolderType,
   COMPLETION_SOURCES,
+  CREDIT_ADD_TRANSACTION_TYPES,
+  CREDIT_DEDUCT_TRANSACTION_TYPES,
   type CreditTransactionType,
   type IAdminLedgerResponse,
   type ILedgerRow,
@@ -11,18 +13,28 @@ import { ForbiddenError } from '@server/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
-/** Accept a repeated (`type=a&type=b`) or comma-joined (`type=a,b`) query param as a string array. */
-const csvArray = z
+const TRANSACTION_TYPES = [...CREDIT_ADD_TRANSACTION_TYPES, ...CREDIT_DEDUCT_TRANSACTION_TYPES] as [
+  CreditTransactionType,
+  ...CreditTransactionType[],
+];
+
+/**
+ * A repeated (`type=a&type=b`) or comma-joined (`type=a,b`) param, validated
+ * against the known transaction types so a bogus value 422s (parity with
+ * `source`) rather than silently matching nothing.
+ */
+const typeParam = z
   .union([z.string(), z.array(z.string())])
   .optional()
-  .transform(v => (v === undefined ? [] : (Array.isArray(v) ? v : v.split(',')).map(s => s.trim()).filter(Boolean)));
+  .transform(v => (v === undefined ? [] : (Array.isArray(v) ? v : v.split(',')).map(s => s.trim()).filter(Boolean)))
+  .pipe(z.array(z.enum(TRANSACTION_TYPES)));
 
 const QuerySchema = z.object({
   organizationId: z.string().min(1),
   page: z.coerce.number().int().min(1).optional(),
   limit: z.coerce.number().int().min(1).max(100).optional(),
   days: z.coerce.number().int().min(1).max(365).optional(),
-  type: csvArray,
+  type: typeParam,
   source: z.enum(COMPLETION_SOURCES).optional(),
   model: z.string().min(1).optional(),
 });
@@ -47,7 +59,7 @@ const handler = baseApi().get(async (req, res) => {
   const { data, total } = await creditTransactionRepository.queryLedgerPage(
     organizationId,
     CreditHolderType.Organization,
-    { days, transactionTypes: type as CreditTransactionType[], source, model, limit, skip: (page - 1) * limit }
+    { days, transactionTypes: type, source, model, limit, skip: (page - 1) * limit }
   );
 
   // Resolve the acting-member ids that some rows carry to display names.
