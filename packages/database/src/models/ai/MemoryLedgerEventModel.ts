@@ -211,6 +211,42 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
   }
 
   /**
+   * Re-write one event's encrypted vector in place, with its new space stamp.
+   *
+   * Safe on an append-only, tamper-evident ledger ONLY because the embedding is deliberately excluded
+   * from the chain hash (see `chainCanonical` in @bike4mind/memory): it is DERIVED from the fact, not a
+   * claim about it, so it is recomputable and droppable without `verifyChain` ever noticing. The fact's
+   * commitment - the thing the chain actually binds - is untouched here.
+   *
+   * Cipher and stamp move TOGETHER, so a crash can never leave an event whose vector is in one space
+   * while its label claims another. That state would be worse than the un-migrated one, because the
+   * read paths would trust it.
+   */
+  async rewriteEmbedding(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    hash: string,
+    embedding: { cipher: string; iv: string; tag: string; model: string }
+  ): Promise<number> {
+    const res = await this.model.updateOne(
+      // Keyed by the event's chain HASH, not its _id: the hash is what uniquely identifies an event in
+      // the chain, and it is the field that actually comes back from a lean read. Scoped to the
+      // principal as well, so a caller cannot rewrite someone else's vector by guessing a hash.
+      { principalKind, principalId, ownerUserId, hash },
+      {
+        $set: {
+          embeddingCipher: embedding.cipher,
+          embeddingIv: embedding.iv,
+          embeddingTag: embedding.tag,
+          embeddingModel: embedding.model,
+        },
+      }
+    );
+    return res.modifiedCount ?? 0;
+  }
+
+  /**
    * Mark a principal's whole chain shredded and remove every fact payload (plaintext and
    * ciphertext). Belt-and-suspenders to destroying the key: the key alone makes ciphertext
    * unreadable, but clearing the payloads reclaims space and makes the shred explicit. The

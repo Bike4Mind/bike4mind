@@ -8,6 +8,7 @@ import {
   MEMENTO_EMBEDDING_MODEL,
   MEMENTO_MIN_SIMILARITY,
   mementoEmbeddingIsCurrent,
+  toMementoVector,
 } from '@bike4mind/common';
 import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -161,7 +162,8 @@ export async function getRelevantMementos(
   // STEP 4: Generate embedding for user prompt
   logger?.debug?.('Generating embedding for prompt:', prompt.substring(0, 100));
   try {
-    const promptEmbedding = await embeddingService.generateEmbedding(prompt);
+    // Same vector space as the stored mementos - see toMementoVector.
+    const promptEmbedding = toMementoVector(await embeddingService.generateEmbedding(prompt));
     // STEP 5: Fetch mementos from database
     const mementos = await adapters.db.mementos.findByUserId(userId, {
       tier: tier === 'all' ? undefined : tier,

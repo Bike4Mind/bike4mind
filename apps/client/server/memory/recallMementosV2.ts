@@ -6,7 +6,12 @@ import {
   mementoRepository,
 } from '@bike4mind/database';
 import { embeddingScorer, mergeStores, recall } from '@bike4mind/memory';
-import { MEMENTO_EMBEDDING_MODEL, MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
+import {
+  MEMENTO_EMBEDDING_ID,
+  MEMENTO_EMBEDDING_MODEL,
+  MEMENTO_MIN_SIMILARITY,
+  toMementoVector,
+} from '@bike4mind/common';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import { apiKeyService } from '@bike4mind/services';
 import { getSettingsByNames } from '@bike4mind/utils';
@@ -23,11 +28,11 @@ const V2_RECALL_K = 10;
  * QUERY, so what the user just asked about is the primary axis and recency/frequency the tiebreaker.
  * `recall` squashes activation into 0..1 and leaves relevance raw, so this reads directly as "how much
  * cosine is a maximally hot memory worth". Swept on the eval corpus (b4m-core/memory/src/eval), which
- * walls it in tightly on both sides: at 0.02 heat is too weak to rank a user's RETRACTION above the
- * fact it overturns; by 0.08 heat starts overriding topicality outright. 0.05 is the midpoint of the
+ * walls it in tightly on both sides: below ~0.01 heat is too weak to rank a user's RETRACTION above the
+ * fact it overturns; by ~0.05 heat starts overriding topicality outright. 0.025 is the midpoint of the
  * only band that does both.
  */
-const V2_ACTIVATION_WEIGHT = 0.05;
+const V2_ACTIVATION_WEIGHT = 0.025;
 
 
 /**
@@ -58,7 +63,7 @@ async function embedQuery(userId: string, query: string): Promise<{ vector: numb
   }
 
   const embeddingService = new EmbeddingFactory(config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-  return { vector: await embeddingService.generateEmbedding(query), model: MEMENTO_EMBEDDING_MODEL };
+  return { vector: toMementoVector(await embeddingService.generateEmbedding(query)), model: MEMENTO_EMBEDDING_ID };
 }
 
 /**

@@ -6,8 +6,10 @@ import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline'
 import {
   ChatModels,
   MEMENTO_DEDUP_SIMILARITY,
+  MEMENTO_EMBEDDING_ID,
   MEMENTO_EMBEDDING_MODEL,
   mementoEmbeddingIsCurrent,
+  toMementoVector,
   MementoTier,
   MementoType,
 } from '@bike4mind/common';
@@ -149,7 +151,9 @@ export const handler = withEventContext(async (event, logger) => {
     console.debug('Processing evaluation', { summary: evaluation.summary, importance: evaluation.importance });
 
     // Embed the summary, not the raw prompt - the summary is the actual personal info
-    const summaryEmbedding = await embeddingService.generateEmbedding(evaluation.summary);
+    // Truncate into the memento vector space. Every memento path must do this to the SAME width, or
+    // the stored fact and the query scoring it land in different spaces and cosine returns noise.
+    const summaryEmbedding = toMementoVector(await embeddingService.generateEmbedding(evaluation.summary));
     logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
 
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
@@ -187,7 +191,7 @@ export const handler = withEventContext(async (event, logger) => {
             summary: evaluation.summary,
             fullContent: updatedFullContent, // append new prompt to history
             embedding: summaryEmbedding,
-            embeddingModel: MEMENTO_EMBEDDING_MODEL,
+            embeddingModel: MEMENTO_EMBEDDING_ID,
             weight: newWeight,
             lastAccessedAt: new Date(),
             tags: mergedTags,
@@ -221,7 +225,7 @@ export const handler = withEventContext(async (event, logger) => {
       fullContent: prompt,
       tags: evaluation.tags || [],
       embedding: summaryEmbedding,
-      embeddingModel: MEMENTO_EMBEDDING_MODEL,
+      embeddingModel: MEMENTO_EMBEDDING_ID,
       lastAccessedAt: new Date(),
     });
 

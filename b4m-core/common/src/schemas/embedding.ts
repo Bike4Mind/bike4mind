@@ -49,32 +49,79 @@ export function isSupportedEmbeddingModel(model: string): model is SupportedEmbe
 export const MEMENTO_EMBEDDING_MODEL: SupportedEmbeddingModel = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 
 /**
+ * How many dimensions of that model's vector mementos actually keep.
+ *
+ * text-embedding-3-* are MATRYOSHKA models: the information is front-loaded, so the first N components
+ * are themselves a valid embedding. Truncating to N is exactly what OpenAI's `dimensions` parameter
+ * does, and it is free here in a way that matters, because the vector is the dominant cost in this
+ * system twice over - the ledger encrypts one per event and the fold pulls one per live belief across
+ * the wire from a remote Mongo, and every memento stores one.
+ *
+ * 512 was measured, not guessed (b4m-core/memory/src/eval/dimensions.test.ts): against the full 1536 it
+ * holds hit rate at 100%, MRR at 1.000, and the de-dup separation at +0.073 - identical on every axis -
+ * for a THIRD of the bytes. Quality only starts to slip at 384 and the de-dup band narrows at 128.
+ */
+export const MEMENTO_EMBEDDING_DIMS = 512;
+
+/**
+ * The identity of the vector space mementos live in - and it is the MODEL PLUS THE WIDTH, because a
+ * truncated vector is a different space, not a smaller version of the same one. Cosine between a
+ * 1536-dim vector and a 512-dim one is not "less precise", it is undefined.
+ *
+ * This is what gets stamped on every stored vector, and stamping the model alone would be the exact
+ * silent-outage bug this codebase has now hit twice: two vectors both honestly labelled
+ * "text-embedding-3-small", one 1536 wide and one 512, compared against each other and scored on noise.
+ * Widening or narrowing the vector therefore CHANGES THIS STRING, which makes every existing vector
+ * read as stale (untrusted, not assumed) until the migration re-stamps it. That is the intended
+ * behaviour, not an inconvenience.
+ */
+export const MEMENTO_EMBEDDING_ID = `${MEMENTO_EMBEDDING_MODEL}@${MEMENTO_EMBEDDING_DIMS}`;
+
+/**
+ * Take a full-width model vector into the memento vector space: truncate, then L2-normalize.
+ *
+ * The renormalization is what OpenAI's own `dimensions` parameter does after truncating. Cosine is
+ * scale-invariant so it changes nothing for retrieval, but it keeps the stored vectors unit-norm - so
+ * anything that ever reaches for a dot product gets the right answer instead of a subtly wrong one.
+ *
+ * EVERY memento path must funnel its vectors through here - both the stored fact and the query it is
+ * scored against - or the two land in different spaces. A length mismatch does not throw; it scores 0,
+ * which the topicality floor then silently discards. That failure looks exactly like "the user never
+ * told us that".
+ */
+export function toMementoVector(full: readonly number[]): number[] {
+  const truncated = full.slice(0, MEMENTO_EMBEDDING_DIMS);
+  const norm = Math.sqrt(truncated.reduce((sum, x) => sum + x * x, 0));
+  return norm > 0 ? truncated.map(x => x / norm) : truncated;
+}
+
+/**
  * Topicality floor for memento retrieval: below this cosine to the query, a memento is not surfaced.
  *
- * THIS NUMBER IS A PROPERTY OF MEMENTO_EMBEDDING_MODEL, NOT OF THE MEMORY SYSTEM. It lives here, glued
- * to the model it was measured against, because the two are one decision and changing either alone is
- * a silent outage. That is not hypothetical: mementos previously ran on ada-002, whose cosines are
- * crushed into a ~0.72-0.81 band, and the read paths floored at 0.75. The same corpus under 3-small
- * scores 0.28-0.38 - a BETTER separation, spread across a wider band - so the old 0.75 floor rejects
- * literally every memento. The eval caught exactly that: V1 scored hit@10 of 0.0%, memory silently
- * dark, no error anywhere.
+ * THIS NUMBER IS A PROPERTY OF MEMENTO_EMBEDDING_ID - the model AND the width - not of the memory
+ * system. It lives here, glued to the space it was measured in, because they are one decision and
+ * changing either alone is a silent outage. Twice now that has not been hypothetical:
+ *   - mementos ran on ada-002, whose cosines are crushed into a ~0.72-0.81 band, and the read paths
+ *     floored at 0.75. Moving to 3-small dropped the same corpus to 0.28-0.38 - a BETTER separation,
+ *     spread wider - so the old floor rejected every memento in existence. Memory silently dark.
+ *   - truncating 1536 -> 512 dims moved the scale AGAIN, upward, and left the old floor too generous.
  *
  * The rule: the strictest floor that still forgets NOTHING. A higher floor buys precision by dropping
  * something the user actually told us, and that trade is not ours to make silently.
  *
- * 0.25, not the 0.313 the eval corpus alone would pick - and the gap is the interesting part. The
- * corpus states facts crisply ("Dana is severely allergic to shellfish"), but mementos are written by
- * an LLM summarising a conversation, and it HEDGES: "User conducts discovery calls, suggesting a role
- * in sales". Hedged, abstract phrasing sits measurably further from a plain question than a crisp fact
- * does. Measured against a real user's mementos: the best match for "what do I do for work" scores
- * 0.2991 - a genuine, useful memory that the corpus-optimal 0.313 would silently discard, while true
- * noise ("what is the capital of Peru") tops out around 0.14. The synthetic corpus is a proxy and it
- * FLATTERS us on this axis; the margin is what pays for that.
+ * 0.30, and the corpus alone would NOT have chosen it - it says 0.350 is lossless. The corpus states
+ * facts crisply ("Dana is severely allergic to shellfish"), but a memento is an LLM summarising a
+ * conversation and it HEDGES: "User conducts discovery calls, suggesting a role in sales". Hedged,
+ * abstract phrasing sits measurably further from a plain question. Measured against a real user's
+ * memory at this width: the weakest genuine hit ("what are my hobbies") scores 0.3444 - a real memory
+ * that the corpus-optimal 0.350 would silently bin - while the strongest thing memory CANNOT answer
+ * tops out at 0.2491. So the safe band is (0.2491, 0.3444] and 0.30 is its middle.
  *
- * Re-derive with b4m-core/memory/src/eval/tuning.test.ts if the model moves - and sanity-check the
- * result against real mementos, because the corpus will keep telling you a higher floor is safe.
+ * Re-derive with b4m-core/memory/src/eval/tuning.test.ts if the model OR the width moves - and
+ * sanity-check the result against real mementos, because the corpus will keep telling you a higher
+ * floor is safe.
  */
-export const MEMENTO_MIN_SIMILARITY = 0.25;
+export const MEMENTO_MIN_SIMILARITY = 0.3;
 
 /**
  * De-dup threshold: at or above this cosine, a newly extracted fact is treated as a RESTATEMENT of a
@@ -110,7 +157,7 @@ export const MEMENTO_DEDUP_SIMILARITY = 0.89;
  * and guessing is how you get silent garbage. Such mementos are repaired by the re-embed backfill.
  */
 export const mementoEmbeddingIsCurrent = (memento: { embeddingModel?: string | null }): boolean =>
-  memento.embeddingModel === MEMENTO_EMBEDDING_MODEL;
+  memento.embeddingModel === MEMENTO_EMBEDDING_ID;
 
 /**
  * Public list price in USD per input token, by embedding model. Embeddings bill on

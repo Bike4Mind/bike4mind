@@ -1,5 +1,5 @@
 import type { IMemoryLedgerEvent, MemoryPrincipalKind } from '@bike4mind/database';
-import { MEMENTO_EMBEDDING_MODEL } from '@bike4mind/common';
+import { MEMENTO_EMBEDDING_ID } from '@bike4mind/common';
 import {
   foldEvents,
   sealEvent,
@@ -113,7 +113,7 @@ export async function appendMemoryEvent(
       embeddingTag: sealedEmbedding?.tag,
       // Stamp the space this vector lives in. The ledger is append-only - this can never be corrected
       // later, so an unstamped or stale-model vector must be ignored at read time rather than trusted.
-      ...(sealedEmbedding ? { embeddingModel: MEMENTO_EMBEDDING_MODEL } : {}),
+      ...(sealedEmbedding ? { embeddingModel: MEMENTO_EMBEDDING_ID } : {}),
       evidenceTier: sealed.evidenceTier,
       salience: sealed.salience,
       at: sealed.at,
@@ -156,7 +156,7 @@ function toMemoryEvent(d: IMemoryLedgerEvent, dek: Buffer | null): MemoryEvent {
   // The ledger cannot be re-embedded in place - it is append-only - so this gate is permanent, not a
   // migration shim.
   const embedding =
-    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_MODEL
+    dek && d.embeddingCipher && d.embeddingIv && d.embeddingTag && d.embeddingModel === MEMENTO_EMBEDDING_ID
       ? (decryptVector(dek, { cipher: d.embeddingCipher, iv: d.embeddingIv, tag: d.embeddingTag }) ?? undefined)
       : undefined;
 
@@ -215,7 +215,7 @@ async function attachEmbeddings(
     for (const hash of belief.derivedFrom) {
       const row = byHash.get(hash);
       if (!row?.embeddingCipher || !row.embeddingIv || !row.embeddingTag) continue;
-      if (row.embeddingModel !== MEMENTO_EMBEDDING_MODEL) continue;
+      if (row.embeddingModel !== MEMENTO_EMBEDDING_ID) continue;
 
       const vector = decryptVector(dek, {
         cipher: row.embeddingCipher,

@@ -79,16 +79,16 @@ export interface RecallOptions {
    * is the maximum cosine a belief can gain by being maximally top-of-mind - so it reads directly as
    * "how much similarity is a hot memory worth".
    *
-   * Default 0.05, and the window is NARROWER than it looks - the eval corpus walls it in on both
-   * sides, and they are close together:
-   *   - at 0.02 heat is too weak to settle a genuine tie: a fact the user has RETRACTED still outranks
-   *     the retraction (0.344 vs 0.329 - the same, for practical purposes), and recall confidently
+   * Default 0.025, and the window is NARROW - the eval corpus walls it in on both sides, close together:
+   *   - below ~0.01 heat is too weak to settle a genuine tie: a fact the user has RETRACTED still
+   *     outranks the retraction (the two are equally on-topic by construction), and recall confidently
    *     serves a belief its owner has taken back.
-   *   - by 0.08 heat has stopped breaking ties and started overriding topic: ranking quality falls as
+   *   - by ~0.05 heat has stopped breaking ties and started overriding topic: ranking quality falls as
    *     merely-recent beliefs climb over the on-topic one.
-   * 0.05 is the midpoint of the only band that satisfies both. Treat this as a delicate knob, not a
-   * dial to taste: re-run the sweep rather than nudging it, and note the band MOVES with `minRelevance`
-   * (a lower floor admits more near-relevant beliefs for heat to shuffle).
+   * 0.025 is the midpoint of the only band that satisfies both. Treat this as a delicate knob, not a
+   * dial to taste: re-run the sweep rather than nudging it, and note the band MOVES with BOTH
+   * `minRelevance` and the embedding width - narrowing the vector rescales every cosine, which rescales
+   * how much a unit of heat is worth against it.
    *
    * Do NOT normalize relevance to make this weight "feel" scale-free - see `recallProbability`. The
    * whole point is that relevance keeps its true magnitudes, so a near-tie stays a near-tie and heat
@@ -115,7 +115,7 @@ export interface RecalledBelief {
 }
 
 const DEFAULT_K = 8;
-const DEFAULT_ACTIVATION_WEIGHT = 0.05;
+const DEFAULT_ACTIVATION_WEIGHT = 0.025;
 
 /**
  * Squash an unbounded ACT-R activation into 0..1 - the recall PROBABILITY of a belief with that
