@@ -66,6 +66,12 @@ export const PublishSourceSchema = z.object({
   messageId: z.string().optional(),
   /** Set when kind === 'fabfile'. */
   fabFileId: z.string().optional(),
+  /**
+   * Set when the uploaded index.html is RAW React/JSX source rather than an inert page: finalize
+   * transpiles it into a self-contained inert HTML bundle at publish time (issue #21). Absent for
+   * already-inert HTML/SVG bundles that need no server transform.
+   */
+  artifactType: z.literal('react').optional(),
 });
 export type PublishSource = z.infer<typeof PublishSourceSchema>;
 
