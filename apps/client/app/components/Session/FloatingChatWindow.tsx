@@ -376,7 +376,16 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
       >
-        <SmartToyIcon sx={{ fontSize: 20, color: 'primary.500' }} />
+        <Box
+          sx={theme => ({
+            display: 'flex',
+            '--Icon-color': theme.palette.sidenav?.navItemIcon,
+            color: theme.palette.sidenav?.navItemIcon,
+            opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
+          })}
+        >
+          <SmartToyIcon sx={{ fontSize: 20 }} />
+        </Box>
         <Typography level="body-sm" fontWeight="md">
           AI Chat
         </Typography>
@@ -435,7 +444,16 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <DragIndicatorIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-            <SmartToyIcon sx={{ fontSize: 18, color: 'primary.500' }} />
+            <Box
+              sx={theme => ({
+                display: 'flex',
+                '--Icon-color': theme.palette.sidenav?.navItemIcon,
+                color: theme.palette.sidenav?.navItemIcon,
+                opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
+              })}
+            >
+              <SmartToyIcon sx={{ fontSize: 18 }} />
+            </Box>
             <Typography level="body-sm" fontWeight="md">
               AI Chat
             </Typography>

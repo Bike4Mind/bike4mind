@@ -89,8 +89,23 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <SmartToyIcon sx={{ fontSize: 18, color: 'primary.500' }} />
-          <Typography level="body-sm" fontWeight="md">
+          {/* Match the sidenav nav-item treatment (SidenavNav.tsx iconSlot); the Joy Box
+              carries the palette tokens because the Material icon's sx lacks them. */}
+          <Box
+            sx={theme => ({
+              display: 'flex',
+              '--Icon-color': theme.palette.sidenav?.navItemIcon,
+              color: theme.palette.sidenav?.navItemIcon,
+              opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
+            })}
+          >
+            <SmartToyIcon sx={{ fontSize: 18 }} />
+          </Box>
+          <Typography
+            level="body-sm"
+            fontWeight="md"
+            sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
+          >
             AI Chat
           </Typography>
         </Box>
