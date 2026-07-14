@@ -109,7 +109,7 @@ import {
   type StartExecutionPayload,
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
-import { MAX_CHECKPOINT_DEPTH, classifyCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -550,26 +550,17 @@ async function processExecution(
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
-  // indefinitely. Hard limit at MAX_CHECKPOINT_DEPTH; warning metric at CHECKPOINT_DEPTH_WARNING.
-  // classifyCheckpointDepth is a pure helper (agentExecutor.checkpointDepth.ts) so the
-  // thresholds and boundary logic can be unit-tested independently.
-  const depthVerdict = classifyCheckpointDepth(checkpointDepth);
-  if (depthVerdict === 'warn' || depthVerdict === 'terminate') {
-    logger.warn('[CheckpointDepth] Self-dispatch depth approaching hard limit', { checkpointDepth, executionId });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthWarning', 1, { executionId });
-  }
-  if (depthVerdict === 'terminate') {
-    logger.error('[CheckpointDepth] Max self-dispatch depth exceeded — terminating execution', {
-      checkpointDepth,
-      executionId,
-    });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, { executionId });
-    await agentExecutionRepository.markFailed(executionId, {
-      message: `Execution exceeded maximum self-dispatch depth (${MAX_CHECKPOINT_DEPTH}) — possible runaway agent loop`,
-    });
-    await sendWs('failed', { executionId, reason: 'max_checkpoint_depth_exceeded' });
-    return;
-  }
+  // indefinitely. Must stay above the DB load below - terminating before any DB work is the
+  // point of the guard. The guard itself lives in agentExecutor.checkpointDepth.ts so its
+  // thresholds and side effects can be unit-tested without this module's Mongo/AWS/SST deps.
+  const terminated = await enforceCheckpointDepth(checkpointDepth, {
+    executionId,
+    logger,
+    emitMetric,
+    markFailed: agentExecutionRepository.markFailed.bind(agentExecutionRepository),
+    sendWs,
+  });
+  if (terminated) return;
 
   try {
     // Load execution document

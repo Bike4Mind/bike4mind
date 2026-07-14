@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   MAX_CHECKPOINT_DEPTH,
   CHECKPOINT_DEPTH_WARNING,
   classifyCheckpointDepth,
+  enforceCheckpointDepth,
 } from './agentExecutor.checkpointDepth';
 // Import the REAL schemas (not mirrors) so these tests break if someone accidentally
 // removes checkpointDepth or changes it from optional to required.
@@ -98,5 +99,73 @@ describe('TaggedQueueMessageSchema continuation branch checkpointDepth', () => {
 
   it('rejects non-integer depths', () => {
     expect(TaggedQueueMessageSchema.safeParse({ ...base, checkpointDepth: 0.5 }).success).toBe(false);
+  });
+});
+
+// enforceCheckpointDepth: the side effects processExecution relies on. The classifier above
+// is pure; these tests pin what the guard actually DOES at each verdict, which is the part
+// that silently regresses (a dropped markFailed leaves the execution hung in `running`).
+describe('enforceCheckpointDepth', () => {
+  const makeDeps = () => ({
+    executionId: 'exec-1',
+    logger: { warn: vi.fn(), error: vi.fn() },
+    emitMetric: vi.fn().mockResolvedValue(undefined),
+    markFailed: vi.fn().mockResolvedValue(undefined),
+    sendWs: vi.fn().mockResolvedValue(undefined),
+  });
+
+  const metricNames = (deps: ReturnType<typeof makeDeps>) => deps.emitMetric.mock.calls.map(call => call[1]);
+
+  it('does nothing below the warning threshold', async () => {
+    const deps = makeDeps();
+    await expect(enforceCheckpointDepth(0, deps)).resolves.toBe(false);
+    expect(deps.emitMetric).not.toHaveBeenCalled();
+    expect(deps.markFailed).not.toHaveBeenCalled();
+    expect(deps.sendWs).not.toHaveBeenCalled();
+  });
+
+  it('warns without terminating between the warning threshold and the hard limit', async () => {
+    const deps = makeDeps();
+    await expect(enforceCheckpointDepth(CHECKPOINT_DEPTH_WARNING, deps)).resolves.toBe(false);
+    expect(metricNames(deps)).toEqual(['CheckpointDepthWarning']);
+    // The execution must survive a warn - only the hard limit is allowed to kill it.
+    expect(deps.markFailed).not.toHaveBeenCalled();
+    expect(deps.sendWs).not.toHaveBeenCalled();
+  });
+
+  it('terminates at the hard limit: emits the exceeded metric, marks failed, notifies the client', async () => {
+    const deps = makeDeps();
+    await expect(enforceCheckpointDepth(MAX_CHECKPOINT_DEPTH, deps)).resolves.toBe(true);
+
+    expect(metricNames(deps)).toEqual(['CheckpointDepthWarning', 'CheckpointDepthExceeded']);
+    expect(deps.emitMetric).toHaveBeenCalledWith('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, {
+      executionId: 'exec-1',
+    });
+    expect(deps.markFailed).toHaveBeenCalledWith('exec-1', {
+      message: expect.stringContaining(`maximum self-dispatch depth (${MAX_CHECKPOINT_DEPTH})`),
+    });
+    // The client listens for this exact reason string to render the runaway-loop failure.
+    expect(deps.sendWs).toHaveBeenCalledWith('failed', {
+      executionId: 'exec-1',
+      reason: 'max_checkpoint_depth_exceeded',
+    });
+  });
+
+  it('terminates above the hard limit', async () => {
+    const deps = makeDeps();
+    await expect(enforceCheckpointDepth(MAX_CHECKPOINT_DEPTH + 10, deps)).resolves.toBe(true);
+    expect(metricNames(deps)).toContain('CheckpointDepthExceeded');
+    expect(deps.markFailed).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks the execution failed before notifying the client, so a failed send cannot leave it running', async () => {
+    const deps = makeDeps();
+    const order: string[] = [];
+    deps.markFailed.mockImplementation(async () => void order.push('markFailed'));
+    deps.sendWs.mockImplementation(async () => void order.push('sendWs'));
+
+    await enforceCheckpointDepth(MAX_CHECKPOINT_DEPTH, deps);
+
+    expect(order).toEqual(['markFailed', 'sendWs']);
   });
 });
