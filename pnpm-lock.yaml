@@ -123,8 +123,8 @@ importers:
   apps/client:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.97.1
-        version: 0.97.1(zod@4.4.3)
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1099,8 +1099,8 @@ importers:
   b4m-core/llm-adapters:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.97.1
-        version: 0.97.1(zod@4.4.3)
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1154,8 +1154,8 @@ importers:
   b4m-core/mcp:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.97.1
-        version: 0.97.1(zod@4.4.3)
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@bike4mind/common':
         specifier: workspace:*
         version: link:../common
@@ -1209,8 +1209,8 @@ importers:
   b4m-core/services:
     dependencies:
       '@anthropic-ai/sdk':
-        specifier: ^0.97.1
-        version: 0.97.1(zod@4.4.3)
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@aws-sdk/client-bedrock-runtime':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1595,8 +1595,8 @@ importers:
         specifier: 1.2.0
         version: 1.2.0(zod@4.4.3)
       '@anthropic-ai/sdk':
-        specifier: ^0.97.1
-        version: 0.97.1(zod@4.4.3)
+        specifier: ^0.111.0
+        version: 0.111.0(zod@4.4.3)
       '@aws-sdk/client-apigatewaymanagementapi':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -2074,8 +2074,8 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
-  '@anthropic-ai/sdk@0.97.1':
-    resolution: {integrity: sha512-wOf7AUeJPitcVpvKO4UMu63mWH5SaVipkGd7OOQJt/G6VYGlV8D2Gp9dLxOrttDJh/9gqPqdaBwDGcBevumeAg==}
+  '@anthropic-ai/sdk@0.111.0':
+    resolution: {integrity: sha512-1hUqKi+uJQoS5X90+InwHbFAXMvgq0DnsC5hVLEeSRaODiU5WvmqDAcVCmGS2wC0pN9Z8jtWCbWw7JLzeDdm/Q==}
     hasBin: true
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
@@ -12259,7 +12259,7 @@ snapshots:
       package-manager-detector: 1.7.0
       tinyexec: 1.2.4
 
-  '@anthropic-ai/sdk@0.97.1(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.111.0(zod@4.4.3)':
     dependencies:
       json-schema-to-ts: 3.1.1
       standardwebhooks: 1.0.0
@@ -20282,7 +20282,7 @@ snapshots:
 
   json-schema-to-ts@3.1.1:
     dependencies:
-      '@babel/runtime': 7.29.2
+      '@babel/runtime': 7.29.7
       ts-algebra: 2.0.0
 
   json-schema-traverse@0.4.1: {}
