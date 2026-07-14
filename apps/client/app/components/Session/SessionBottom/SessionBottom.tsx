@@ -352,7 +352,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
       className="session-bottom"
       sx={{
         pb: isCompactLayout || isMobile || isDockedLayout ? '0' : '1.25rem',
-        paddingTop: '20px',
+        paddingTop: isDockedLayout ? 0 : '20px',
         position: 'relative',
       }}
       display={'flex'}
