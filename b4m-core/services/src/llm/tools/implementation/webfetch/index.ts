@@ -38,9 +38,9 @@ interface WebFetchResult {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const PDF_TIMEOUT_MS = 90_000;
 
-// Max extracted characters kept from a fetched page. Anything past this is dropped
-// (see the silent-truncation incident in issue #452); truncation is now surfaced
-// via the in-band marker and citable/telemetry fields rather than dropped silently.
+// Max characters returned per fetch. Content past this is no longer dropped (the
+// silent-truncation incident, issue #452): the tail is surfaced via the in-band marker and
+// citable/telemetry fields, and the model can page through it with offset (issue #497).
 const WEB_FETCH_CONTENT_CAP = 50_000;
 
 /**
@@ -143,8 +143,9 @@ type FirecrawlFetchOptions = {
  *
  * @param adapters - Database adapters for fetching Firecrawl API key
  * @param url - URL to fetch
- * @param options - Optional configuration (e.g. maxTimeoutMs for Lambda-constrained callers)
- * @returns Capped markdown, title, and size/truncation metrics (see WebFetchResult)
+ * @param options - Optional configuration (maxTimeoutMs for Lambda-constrained callers; offset to
+ *                  window into a long page for continuation)
+ * @returns One [offset, offset+cap) chunk of markdown, title, and size/truncation metrics (see WebFetchResult)
  */
 export async function firecrawlFetch(
   adapters: GetEffectiveApiKeyAdapters,
