@@ -399,6 +399,116 @@ describe('ChatCompletionProcess', () => {
       expect(tokenUsage.settledBasis).toBe('provider');
     });
 
+    // Idempotency guard for a cross-model failover (issue #15): the failed primary
+    // attempt streamed partial output AND provider usage before erroring. The loop must
+    // settle on ONLY the successful fallback attempt's usage (the per-attempt reset at
+    // the top of the loop discards the failed counts) and stream ONLY the fallback's
+    // reply - no double-bill, no duplicated partial output on the server side.
+    it('settles a failover on the fallback attempt usage only, discarding the failed attempt', async () => {
+      const primaryInputTokens = 999; // failed attempt - must NOT be billed
+      const primaryOutputTokens = 999;
+      const fallbackInputTokens = 100; // successful attempt - the sole billing basis
+      const fallbackOutputTokens = 50;
+
+      // Production populates promptMeta.model during prompt assembly (before the loop);
+      // the fallback branch rewrites it, so seed it as that precondition.
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+
+      mockedCalculateTotalTokenLength.mockResolvedValue(80);
+      mockTokenizer.countTokens.mockResolvedValue(40);
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      // Retryable, non-overloaded, non-timeout error so the loop routes to the
+      // cross-model fallback block rather than a same-model retry.
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      // Primary streams partial output + usage, then fails.
+      let primaryCalls = 0;
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          primaryCalls++;
+          await cb(['partial from primary'], {
+            inputTokens: primaryInputTokens,
+            outputTokens: primaryOutputTokens,
+          });
+          throw new Error('ServiceUnavailableException: Bedrock is unable to process your request');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // Fallback model + backend the loop switches to.
+      const fallbackModel = {
+        id: 'claude-opus-4-8',
+        type: 'text' as const,
+        name: 'Claude Opus 4.8',
+        backend: ModelBackend.Anthropic,
+        max_tokens: 100,
+        contextWindow: 200_000,
+        can_stream: true,
+        pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+        supportsImageVariation: false,
+      };
+      let fallbackCalls = 0;
+      const fallbackBackend = {
+        complete: vi.fn().mockImplementation(async (_model, _messages, _opts, cb) => {
+          fallbackCalls++;
+          await cb(['Hello from fallback'], {
+            inputTokens: fallbackInputTokens,
+            outputTokens: fallbackOutputTokens,
+          });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: 'claude-opus-4-8',
+      };
+      mockedGetLlmWithFallback.mockResolvedValue({ model: fallbackModel, backend: fallbackBackend, attempt: 1 } as any);
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      // Exactly one primary attempt and one fallback attempt.
+      expect(primaryCalls).toBe(1);
+      expect(fallbackCalls).toBe(1);
+
+      // Only the fallback attempt's reply survives (server-side streaming state was reset).
+      expect(mockDb.quests.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: ['Hello from fallback'],
+          status: 'done',
+          type: 'message',
+          fallbackInfo: expect.objectContaining({ fallbackModel: 'claude-opus-4-8' }),
+        })
+      );
+
+      // Settlement bills the fallback attempt's provider usage only - the failed
+      // primary's 999/999 was discarded by the per-attempt reset (no double-bill).
+      const updateCall = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.tokenUsage?.estimatedCost !== undefined
+      );
+      expect(updateCall).toBeDefined();
+      const tokenUsage = updateCall[0].promptMeta.tokenUsage;
+      expect(tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
+      expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+    });
+
     // Adapters coerce missing usage to zero (e.g. DeepSeek and Llama-on-Bedrock
     // streaming never populate usage), so {0,0} means "provider reported nothing",
     // not "the call was free". Settlement must fall back to the local estimate.
