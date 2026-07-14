@@ -157,6 +157,14 @@ function extractImportedModules(source: string): string[] {
  * (Settings, Home, Bell, Star, User, ...) and 422 a component that never imported lucide.
  */
 export function assertPublishableDependencies(source: string): void {
+  // Bare side-effect imports (`import 'x';`) match neither extractImportedModules nor the rewrite,
+  // so they would survive into the classic inline <script> and blank the page (parse error before
+  // the render try/catch). Reject cleanly instead.
+  if (/^\s*import\s+['"]/m.test(source)) {
+    throw new ReactArtifactTranspileError(
+      'Side-effect imports (import "...") are not supported. Import a default or named binding, or inline the code.'
+    );
+  }
   for (const dep of extractImportedModules(source)) {
     if (!PUBLISH_SUPPORTED_DEPENDENCIES.includes(dep)) {
       throw new UnsupportedReactDependencyError(dep);
@@ -202,9 +210,13 @@ export async function transpileReactSource(source: string): Promise<string> {
   // checkHasDefaultExport accepts - `export default X` and `export { X as default }` - because
   // Babel (preset-react only) leaves module syntax untouched, so an unhandled `export { ... }`
   // would survive into the classic inline <script> and fail to parse (silently blanking the page).
-  return transformed
-    .replace(/export\s+default\s+/g, 'const __DEFAULT_EXPORT__ = ')
-    .replace(/export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/g, 'const __DEFAULT_EXPORT__ = $1;');
+  return (
+    transformed
+      // Anchored to line-start (`m`): Babel emits top-level exports at column 0, so this rewrites the
+      // real statement but NOT a literal "export default ..." embedded in a string / JSX text.
+      .replace(/^(\s*)export\s+default\s+/gm, '$1const __DEFAULT_EXPORT__ = ')
+      .replace(/^\s*export\s*\{\s*([A-Za-z_$][\w$]*)\s+as\s+default\s*\}\s*;?/gm, 'const __DEFAULT_EXPORT__ = $1;')
+  );
 }
 
 const HOOK_GLOBALS = `var ${HOOK_GLOBAL_NAMES.map(h => `${h}=React.${h}`).join(',')};`;
