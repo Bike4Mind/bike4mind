@@ -92,7 +92,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "sst": "4.17.1"
+    "sst": "4.14.1"
   },
   "overrides": {
     "canvas": "../_EXCLUDED_"
