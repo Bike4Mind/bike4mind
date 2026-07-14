@@ -2,7 +2,6 @@
 
 import React, { useCallback, useState } from 'react';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
 import HorizontalSplitIcon from '@mui/icons-material/HorizontalSplit';
@@ -89,18 +88,6 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          {/* Match the sidenav nav-item treatment (SidenavNav.tsx iconSlot); the Joy Box
-              carries the palette tokens because the Material icon's sx lacks them. */}
-          <Box
-            sx={theme => ({
-              display: 'flex',
-              '--Icon-color': theme.palette.sidenav?.navItemIcon,
-              color: theme.palette.sidenav?.navItemIcon,
-              opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
-            })}
-          >
-            <SmartToyIcon sx={{ fontSize: 18 }} />
-          </Box>
           <Typography
             level="body-sm"
             fontWeight="md"
