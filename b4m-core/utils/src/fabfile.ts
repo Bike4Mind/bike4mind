@@ -1,4 +1,4 @@
-import { IFabFile, SupportedFabFileMimeTypes } from '@bike4mind/common';
+import { IFabFile, IFabFileVersion, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import axios from 'axios';
 import { BadRequestError, CorruptedFileError } from './errors';
 import { Logger } from '@bike4mind/observability';
@@ -162,4 +162,25 @@ export const getFileContent = async (
   }
 
   return content;
+};
+
+/** The next 1-based version number given the existing (possibly absent) version history. */
+export const nextVersionNumber = (versions?: Pick<IFabFileVersion, 'version'>[]): number => {
+  if (!versions || versions.length === 0) return 1;
+  return Math.max(...versions.map(v => v.version)) + 1;
+};
+
+/**
+ * A new, non-colliding S3 key for a file version's bytes. Versioned keys live under a
+ * per-file prefix so a prior version is never overwritten, and keep the original file name
+ * (extension included) so downloads stay valid.
+ */
+export const versionedFileKey = (params: {
+  userId: string;
+  fabFileId: string;
+  fileName: string;
+  version: number;
+}): string => {
+  const { userId, fabFileId, fileName, version } = params;
+  return `files/${userId}/${fabFileId}/v${version}_${fileName}`;
 };
