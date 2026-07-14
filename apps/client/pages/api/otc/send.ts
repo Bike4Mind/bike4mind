@@ -21,7 +21,10 @@ const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
   .use(
     rateLimit({
-      limit: 5,
+      // E2E (non-prod only - isE2EEnabled is hard-false on production) draws all sends
+      // from a single shared CI IP, so the per-IP cap is lifted there to let every
+      // OTC-requesting spec run to completion instead of racing a 429.
+      limit: () => (isE2EEnabled() ? Infinity : 5),
       windowMs: 15 * 60 * 1000, // 5 sends per 15 min per IP
     })
   )
@@ -45,7 +48,11 @@ const handler = baseApi({ auth: false })
     // record already exists the upsert hits the unique-email index (E11000) and returns
     // allowed:false. This replaces the previous check-then-act (non-atomic) pattern that
     // allowed N concurrent requests to all read "no record" and all send an email.
-    const cooldownCheck = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, OTC_SEND_COOLDOWN_MS);
+    // E2E (non-prod only) collapses the cooldown to 0 so repeated sends to the same
+    // address within a run never 429 - tryReserveSlot still writes/refreshes the
+    // PendingOtcToken record each time, so storeNonce and verify keep working below.
+    const cooldownMs = isE2EEnabled() ? 0 : OTC_SEND_COOLDOWN_MS;
+    const cooldownCheck = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, cooldownMs);
     if (!cooldownCheck.allowed) {
       res.setHeader('Retry-After', String(cooldownCheck.retryAfterSeconds ?? 0));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
