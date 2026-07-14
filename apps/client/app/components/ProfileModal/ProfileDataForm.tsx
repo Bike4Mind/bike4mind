@@ -20,7 +20,11 @@ interface ProfileDataFormProps {
 const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, onCancel }) => {
   const [editUser, setEditUser] = useState<IUserDocument>({ ...userData, organizationId: userData.organizationId?.id });
   const [editing, setEditing] = useState(false);
-  const [dirty, setDirty] = useState(false);
+  // Track which fields the user actually edited so handleSave only sends those.
+  // Re-sending unedited fields is a read-modify-write hazard: the update endpoint
+  // $sets whatever it receives, so a stale/absent value can clobber stored data.
+  const [editedFields, setEditedFields] = useState<Partial<Record<keyof IUserDocument, boolean>>>({});
+  const dirty = Object.keys(editedFields).length > 0;
   const contactOptions = ['Text', 'Call', 'Email'];
   const shirtOptions = ['XS', 'S', 'M', 'L', 'XL', 'XXL'];
   const updateUser = useUpdateUser();
@@ -35,7 +39,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
 
   const handleChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = event.target;
-    setDirty(true);
+    setEditedFields(prev => ({ ...prev, [name]: true }));
     setEditUser(prev => ({ ...prev, [name]: value }));
   };
 
@@ -50,6 +54,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
           );
           const data = await response.json();
 
+          setEditedFields(prev => ({ ...prev, geoLocation: true }));
           setEditUser({ ...editUser, geoLocation: data.locality });
         },
         () => {
@@ -69,17 +74,17 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
       formattedInput = `${formattedInput.slice(0, 9)}-${formattedInput.slice(9, 13)}`;
     }
 
-    setDirty(true);
+    setEditedFields(prev => ({ ...prev, phone: true }));
     setEditUser(prev => ({ ...prev, phone: formattedInput }));
   };
 
   const handlePreferredContact = (event: React.ChangeEvent | null, value: string) => {
-    setDirty(true);
+    setEditedFields(prev => ({ ...prev, preferredContact: true }));
     setEditUser(prev => ({ ...prev, preferredContact: value }));
   };
 
   const handlePreferredShirt = (event: React.ChangeEvent | null, value: string) => {
-    setDirty(true);
+    setEditedFields(prev => ({ ...prev, tshirtSize: true }));
     setEditUser(prev => ({ ...prev, tshirtSize: value }));
   };
 
@@ -88,11 +93,13 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
     if (updatedQuestions[index]) {
       updatedQuestions[index][key] = value;
     }
+    setEditedFields(prev => ({ ...prev, securityQuestions: true }));
     setEditUser(prev => ({ ...prev, securityQuestions: updatedQuestions }));
   };
 
   const handleAddSecurityQuestion = () => {
     const newQuestion: ISecurityQuestion = { question: '', answer: '' };
+    setEditedFields(prev => ({ ...prev, securityQuestions: true }));
     setEditUser(prev => ({
       ...prev,
       securityQuestions: [...(prev.securityQuestions || []), newQuestion],
@@ -100,6 +107,7 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
   };
 
   const handleDeleteSecurityQuestion = (index: number) => {
+    setEditedFields(prev => ({ ...prev, securityQuestions: true }));
     setEditUser(prev => ({
       ...prev,
       securityQuestions: prev.securityQuestions ? prev.securityQuestions?.filter((_, i) => i !== index) : [],
@@ -107,36 +115,33 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
   };
 
   const handleSave = async () => {
-    try {
-      if (!editUser.id) {
-        throw new Error('User ID not found');
-      }
-
-      // Destructure fields that shouldn't be updated from editUser to avoid sending them
-      const { lastCreditsPurchasedAt, lastNotebookId, ...userDataToUpdate } = editUser;
-
-      // Ensure arrays are initialized
-      const dataToUpdate = {
-        ...userDataToUpdate,
-        userNotes: editUser.userNotes || [],
-        // Convert boolean fields
-        isAdmin: Boolean(editUser.isAdmin),
-        isBanned: Boolean(editUser.isBanned),
-        isModerated: Boolean(editUser.isModerated),
-      };
-
-      setEditing(true);
-      setDirty(false);
-      updateUser.mutate(
-        {
-          id: editUser.id,
-          data: dataToUpdate,
-        },
-        { onSettled: () => setEditing(false) }
-      );
-    } catch (error) {
-      console.error('Failed to update user:', error);
+    if (!editUser.id) {
+      console.error('Failed to update user: User ID not found');
+      return;
     }
+
+    // Send only the fields the user actually edited. Fields the form does not
+    // manage (userNotes, isAdmin/isBanned/isModerated, ...) are never included,
+    // so they cannot be clobbered by a stale/absent value on save.
+    const editedKeys = (Object.keys(editedFields) as (keyof IUserDocument)[]).filter(key => editedFields[key]);
+
+    // Nothing edited -> no PUT (avoids a no-op write that only bumps updatedAt).
+    if (editedKeys.length === 0) {
+      return;
+    }
+
+    const data = Object.fromEntries(editedKeys.map(key => [key, editUser[key]])) as Partial<IUserDocument>;
+
+    setEditing(true);
+    setEditedFields({});
+
+    updateUser.mutate(
+      {
+        id: editUser.id,
+        data,
+      },
+      { onSettled: () => setEditing(false) }
+    );
   };
   return (
     <>
@@ -191,7 +196,10 @@ const ProfileDataForm: React.FC<ProfileDataFormProps> = ({ userData, adminMode, 
             </Typography>
             <SingleOrganizationSelector
               currentOrgId={editUser.organizationId}
-              onChange={orgId => setEditUser(prev => ({ ...prev, organizationId: orgId }))}
+              onChange={orgId => {
+                setEditedFields(prev => ({ ...prev, organizationId: true }));
+                setEditUser(prev => ({ ...prev, organizationId: orgId }));
+              }}
             />
           </Grid>
           <Grid className="profile-data-form-field-container" data-testid="profile-form-field" xs={12} sm={6} md={4}>
