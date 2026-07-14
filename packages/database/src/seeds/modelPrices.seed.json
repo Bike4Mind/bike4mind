@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-13T02:20:57.544Z",
+  "generatedAt": "2026-07-14T04:19:46.670Z",
   "entries": [
     {
       "modelId": "ai21.j2-mid-v1",
@@ -734,6 +734,22 @@
         "256000": {
           "input": 0.000003,
           "output": 0.000015
+        }
+      }
+    },
+    {
+      "modelId": "grok-4.5",
+      "unit": "per_token",
+      "pricing": {
+        "200000": {
+          "input": 0.000002,
+          "output": 0.000006,
+          "cache_read": 5e-7
+        },
+        "500000": {
+          "input": 0.000004,
+          "output": 0.000012,
+          "cache_read": 0.000001
         }
       }
     },
