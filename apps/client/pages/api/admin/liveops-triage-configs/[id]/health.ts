@@ -11,21 +11,16 @@
 
 import { getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
-import {
-  liveopsTriageConfigRepository,
-  slackDevWorkspaceRepository,
-  apiKeyRepository,
-  adminSettingsRepository,
-} from '@bike4mind/database';
+import { liveopsTriageConfigRepository, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError, ForbiddenError } from '@server/utils/errors';
-import { decryptToken } from '@server/security/tokenEncryption';
 import { Types } from 'mongoose';
 import { GitHubService } from '@server/services/githubService';
 import { SlackClient } from '@bike4mind/slack';
 import { apiKeyService } from '@bike4mind/services';
 import { sanitizeErrorMessage, REQUIRED_GITHUB_LABELS } from '@server/services/liveopsTriageService';
 import { JiraIssueTracker } from '@server/services/issueTrackers/jiraIssueTracker';
+import { resolveJiraConfig, resolveSlackBotToken } from '@server/services/liveopsConnectionResolver';
 
 const logger = new Logger({ metadata: { service: 'liveops-config-health' } });
 
@@ -78,12 +73,16 @@ const handler = baseApi().get(async (req, res) => {
     if (config.issueTracker === 'github') {
       // GitHub Connection Check
       try {
-        const githubService = await GitHubService.forSystem(logger);
+        const githubService = config.organizationId
+          ? await GitHubService.forOrganization(config.organizationId, logger)
+          : await GitHubService.forSystem(logger);
         if (!githubService) {
           checks.push({
             name: 'GitHub Connection',
             status: 'error',
-            message: 'No system GitHub connection configured. Configure via Admin → GitHub Connection.',
+            message: config.organizationId
+              ? 'No GitHub connection configured for this organization. Configure via Organization Settings.'
+              : 'No system GitHub connection configured. Configure via Admin → GitHub Connection.',
           });
           // Always show Repository Access check (can't check without connection)
           checks.push({
@@ -199,7 +198,12 @@ const handler = baseApi().get(async (req, res) => {
     } else {
       // Jira Connection Check
       try {
-        const jiraTracker = new JiraIssueTracker(config.jiraProjectKey || '', config.jiraIssueType || 'Bug', logger);
+        const jiraTracker = new JiraIssueTracker(
+          config.jiraProjectKey || '',
+          config.jiraIssueType || 'Bug',
+          logger,
+          config.organizationId ? () => resolveJiraConfig(config.organizationId, logger) : undefined
+        );
         const healthResult = await jiraTracker.checkHealth();
 
         if (healthResult.healthy) {
@@ -253,29 +257,15 @@ const handler = baseApi().get(async (req, res) => {
 
     // Check 2: Slack Bot Token (with channel validation)
     try {
-      let slackBotToken: string | null = null;
-
-      if (config.slackWorkspaceId) {
-        const workspace = await slackDevWorkspaceRepository.findByIdWithToken(String(config.slackWorkspaceId));
-        if (workspace) {
-          slackBotToken = decryptToken(workspace.slackBotToken) ?? null;
-        }
-      } else {
-        // Fallback to first active workspace
-        const activeWorkspaces = await slackDevWorkspaceRepository.findAllActive();
-        if (activeWorkspaces.length > 0 && activeWorkspaces[0].slackTeamId) {
-          const workspaceWithToken = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(
-            activeWorkspaces[0].slackTeamId
-          );
-          slackBotToken = decryptToken(workspaceWithToken?.slackBotToken) ?? null;
-        }
-      }
+      const slackBotToken = await resolveSlackBotToken(config, logger);
 
       if (!slackBotToken) {
         checks.push({
           name: 'Slack Bot Token',
           status: 'error',
-          message: 'No active Slack workspace found. Configure via Admin → Slack Workspaces.',
+          message: config.organizationId
+            ? 'No enabled Slack workspace for this organization. Configure via Organization Settings.'
+            : 'No active Slack workspace found. Configure via Admin → Slack Workspaces.',
         });
       } else {
         // Validate by testing auth for both source and output channels

@@ -81,6 +81,7 @@ export * from './JiraWebhookConfigTypes';
 export * from './JiraWebhookSubscriptionTypes';
 export * from './JiraWebhookDeliveryTypes';
 export * from './OrgGitHubConnectionTypes';
+export * from './OrgJiraConnectionTypes';
 export * from './QuestCapabilityTypes';
 export * from './SystemPromptTypes';
 export * from './DataLakeTypes';
