@@ -367,7 +367,9 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         data-testid="session-bottom-container"
         sx={theme => ({
           width: isMobile ? '100vw' : '100%',
-          maxWidth: '950px',
+          // Docked/floating panels are already width-constrained; capping the input
+          // at 950px would leave visible panel-background gutters beside it.
+          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : '950px',
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
           ...(isDockedLayout
