@@ -14,6 +14,11 @@ vi.mock('./firecrawlApp', () => ({
   resolveFirecrawlApp: (x: unknown) => x,
 }));
 
+// The llms.txt probe runs an SSRF guard that resolves DNS; default every host to a public IP so
+// the probe tests exercise the fetch path. Individual tests override to simulate private targets.
+const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
+vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
+
 import { firecrawlFetch, truncationMarker, webFetchBody, webFetchTool } from './index';
 import type { ToolContext } from '../../base/types';
 import type { CitableSource } from '@bike4mind/common';
@@ -68,6 +73,8 @@ beforeEach(() => {
   scrapeUrl.mockClear();
   fetchMock.mockClear();
   fetchMock.mockImplementation(async () => fetchRes(404));
+  dnsLookup.mockClear();
+  dnsLookup.mockImplementation(async () => [{ address: '93.184.216.34', family: 4 }]);
 });
 
 describe('truncationMarker', () => {
@@ -293,6 +300,49 @@ describe('firecrawlFetch llms.txt probe', () => {
     expect(res.truncated).toBe(true); // still more to read, but we are already paging
     expect(res.llmsTxtUrl).toBeUndefined();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('does not probe (SSRF guard) when the origin is a literal private host', async () => {
+    bigDoc();
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'http://169.254.169.254/latest/meta-data/');
+    expect(res.llmsTxtUrl).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled(); // rejected before any network call
+  });
+
+  it('does not probe (SSRF guard) when the origin resolves to a private address', async () => {
+    bigDoc();
+    dnsLookup.mockImplementation(async () => [{ address: '10.1.2.3', family: 4 }]);
+    fetchMock.mockImplementation(async () => fetchRes(200));
+    const res = await firecrawlFetch(adapters, 'https://rebind.example.com/docs/page');
+    expect(res.llmsTxtUrl).toBeUndefined();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('firecrawlFetch input hardening', () => {
+  it('coerces a non-finite offset to 0 instead of returning a silent empty string', async () => {
+    scrapeMarkdown = 'x'.repeat(200_000);
+    // Simulates the unvalidated tool/CLI path passing offset:"abc".
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc', {
+      offset: 'abc' as unknown as number,
+    });
+    expect(res.offset).toBe(0);
+    expect(res.extractedChars).toBe(CAP);
+    expect(res.truncated).toBe(true);
+  });
+
+  it('does not split a surrogate pair at the window boundary', async () => {
+    // Emoji (U+1F600) is a surrogate pair; place one so the raw cap would land between its halves.
+    scrapeMarkdown = 'a'.repeat(CAP - 1) + '\u{1F600}' + 'b'.repeat(10_000);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+    // The window shrank by one to exclude the lone high surrogate.
+    expect(res.extractedChars).toBe(CAP - 1);
+    const lastCode = res.markdown.charCodeAt(res.markdown.length - 1);
+    expect(lastCode >= 0xd800 && lastCode <= 0xdbff).toBe(false);
+    // The full pair starts the next chunk intact.
+    const next = await firecrawlFetch(adapters, 'https://example.com/doc', { offset: res.offset + res.extractedChars });
+    expect(next.markdown.startsWith('\u{1F600}')).toBe(true);
   });
 });
 

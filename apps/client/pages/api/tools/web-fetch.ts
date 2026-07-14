@@ -20,9 +20,11 @@ const handler = baseApi().post(async (req, res) => {
     },
   };
 
-  // Frontend Lambda has a 60s timeout - cap Firecrawl timeout to leave headroom for response
+  // Frontend Lambda has a 60s timeout. Cap Firecrawl below it AND reserve headroom for the
+  // llms.txt probe (up to LLMS_TXT_PROBE_TIMEOUT_MS, awaited after the scrape on a truncated
+  // first read) plus response serialization, so a slow-but-successful fetch cannot tip over 60s.
   const result = await firecrawlFetch(dbAdapters, url, {
-    maxTimeoutMs: 55_000,
+    maxTimeoutMs: 52_000,
     offset,
   });
 

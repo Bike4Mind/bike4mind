@@ -4,6 +4,7 @@ import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { FirecrawlApp } from './firecrawlApp';
+import { unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/client researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
@@ -107,6 +108,11 @@ async function probeLlmsTxt(pageUrl: string): Promise<string | undefined> {
   }
 
   const probe = async (candidate: string): Promise<string | undefined> => {
+    // SSRF guard: this is a direct server-side fetch against a user/model-supplied origin, so
+    // reject private/loopback/metadata targets and use redirect:'error' so a public origin cannot
+    // 302-pivot to an internal address after the check. See ssrfGuard.ts.
+    if (await unsafeFetchUrlReason(new URL(candidate))) return undefined;
+
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LLMS_TXT_PROBE_TIMEOUT_MS);
     try {
@@ -114,6 +120,7 @@ async function probeLlmsTxt(pageUrl: string): Promise<string | undefined> {
         method: 'GET',
         headers: { Range: 'bytes=0-0' },
         signal: controller.signal,
+        redirect: 'error',
       });
       const contentType = res.headers.get('content-type') ?? '';
       const found = res.ok && !contentType.includes('text/html');
@@ -224,9 +231,22 @@ export async function firecrawlFetch(
   // whole document and has no native paging, so continuation is client-side: the model pages via
   // the offset it reads from the truncation marker. Capturing originalChars lets callers surface
   // that more remains instead of silently dropping the tail (issue #452, continuation in #497).
-  const offset = Math.max(0, Math.floor(options?.offset ?? 0));
+  // The offsets are only valid against a STABLE page - each call re-scrapes, so if the source
+  // changes between calls the windows may not line up. Not worth tracking for these sizes.
+  //
+  // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
+  // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
+  const rawOffset = options?.offset;
+  const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
   const originalChars = result.markdown.length;
-  const markdown = result.markdown.slice(offset, offset + WEB_FETCH_CONTENT_CAP);
+  // Avoid splitting a surrogate pair at the window's end - a lone high surrogate is rejected by
+  // some LLM APIs. Shrink the window by one so the split code unit starts the next chunk instead.
+  let end = offset + WEB_FETCH_CONTENT_CAP;
+  if (end < originalChars) {
+    const lastCode = result.markdown.charCodeAt(end - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+  }
+  const markdown = result.markdown.slice(offset, end);
   const extractedChars = markdown.length;
   const truncated = offset + extractedChars < originalChars;
   Logger.globalInstance.log(
@@ -376,7 +396,7 @@ export const webFetchTool: ToolDefinition = {
     toolSchema: {
       name: 'web_fetch',
       description:
-        'Fetches and reads the FULL CONTENT of a specific URL that the user provides. Use this when the user gives you a direct URL link (e.g., "fetch https://example.com", "read this article https://...", "summarize the content at https://..."). This tool downloads the page content and converts it to markdown for you to read. Long pages are returned in chunks: if the result ends with a "[web_fetch: ... offset=N ...]" marker, more content remains - call web_fetch again with the same url and that offset to read the next chunk. You can then answer questions, summarize, or extract information from the content yourself. DO NOT use web_search when the user provides a specific URL - always use web_fetch instead.',
+        'Fetches and reads the content of a specific URL that the user provides. Use this when the user gives you a direct URL link (e.g., "fetch https://example.com", "read this article https://...", "summarize the content at https://..."). This tool downloads the page content and converts it to markdown for you to read. Long pages are returned in chunks: if the result ends with a "[web_fetch: ... offset=N ...]" marker, more content remains - call web_fetch again with the same url and that offset to read the next chunk (repeat until there is no marker to read the whole page). You can then answer questions, summarize, or extract information from the content yourself. DO NOT use web_search when the user provides a specific URL - always use web_fetch instead.',
       parameters: {
         type: 'object',
         properties: {
