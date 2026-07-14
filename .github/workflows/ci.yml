@@ -332,16 +332,26 @@ jobs:
   # serial sum. The heavy suites are isolated onto their own runners:
   #   - client: the large apps/client suite (thousands of fast files) — alone so
   #     it keeps the whole box for file parallelism.
-  #   - rest: every other package, run together with a bounded per-package
-  #     worker pool (VITEST_MAX_WORKERS) so concurrent packages don't
-  #     oversubscribe CPU. See vitest.shared.ts.
+  #   - services: by far the heaviest remaining package (test-file count and
+  #     Mongo-backed setup cost), alone so it doesn't drag down a shared bucket.
+  #   - cli-slack, data: hand-grouped buckets of the next-heaviest packages, kept
+  #     under a bounded per-package worker pool (VITEST_MAX_WORKERS) so concurrent
+  #     packages don't oversubscribe CPU. See vitest.shared.ts.
+  #   - misc: a NEGATION catch-all (every non-client package minus the ones
+  #     explicitly placed above) instead of an explicit include list. This makes
+  #     bucket coverage complete by construction: a package with a `test` script
+  #     that isn't named in services/cli-slack/data always lands in misc, so it
+  #     can never be silently dropped from the matrix. Moving a package into one
+  #     of the named buckets requires adding it there AND excluding it here, or it
+  #     will run twice; there's no automated guard against that, so update both
+  #     when rebalancing.
   # The `test` job below aggregates these shards into the required "Run Tests"
   # status check.
   test-shards:
     needs: core-build
     # Self-hosted org pool (philips-labs/terraform-aws-github-runner, m6a/m6i.2xlarge,
     # 8 vCPU / 32 GB) instead of the GitHub-hosted ubuntu-latest-m larger-runner pool,
-    # which is capped at 10 concurrent org-wide. The shard fan-out (client/rest) was a
+    # which is capped at 10 concurrent org-wide. The test shard fan-out was a
     # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
     # Matches polaris's test runner (_test.yml).
     runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
@@ -358,10 +368,20 @@ jobs:
           - name: client
             filter: '--filter @bike4mind/client'
             workers: ''
-          # Many packages run concurrently here; cap each package's pool so
-          # `workspace-concurrency (4) × workers ≈ cores` — no oversubscription.
-          - name: rest
-            filter: "--filter '!@bike4mind/client'"
+          - name: services
+            filter: '--filter @bike4mind/services'
+            workers: ''
+          # Many packages run concurrently in the buckets below; cap each
+          # package's pool so `workspace-concurrency (4) x workers ~= cores`,
+          # no oversubscription.
+          - name: cli-slack
+            filter: '--filter @bike4mind/cli --filter @bike4mind/slack --filter @bike4mind/voice'
+            workers: '25%'
+          - name: data
+            filter: '--filter @bike4mind/common --filter @bike4mind/database --filter @bike4mind/db-core --filter @bike4mind/core'
+            workers: '25%'
+          - name: misc
+            filter: "--filter '!@bike4mind/client' --filter '!@bike4mind/services' --filter '!@bike4mind/cli' --filter '!@bike4mind/slack' --filter '!@bike4mind/voice' --filter '!@bike4mind/common' --filter '!@bike4mind/database' --filter '!@bike4mind/db-core' --filter '!@bike4mind/core'"
             workers: '25%'
 
     steps:
