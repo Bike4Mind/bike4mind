@@ -280,6 +280,13 @@ export class InsufficientCreditsError extends Error {
   }
 }
 
+/**
+ * Prompt marker that, on preview/E2E deploys only (never production), forces the primary
+ * model to simulate a sustained outage so the provider/model fallback path can be exercised
+ * end-to-end by QA. See the gated check in the completion loop and the Guide for Testers.
+ */
+export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
+
 function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -2420,6 +2427,27 @@ export class ChatCompletionProcess {
               backend: currentModel.backend,
               cacheTTL: cacheStrategy.cacheTTL,
             });
+
+            // Preview/E2E-only test affordance: provider/model fallback is a sustained-
+            // outage safety net that can't be exercised without a real 5xx/throttle, so
+            // there is no way for QA to verify it on a preview otherwise. When E2E
+            // endpoints are enabled (production forces E2E off - see isE2EEnabled) AND the
+            // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a sustained outage on the
+            // primary backend so the real loop degrades to the equivalent model on another
+            // path and renders the "Fallback Model Used" badge. Double-gated and
+            // primary-attempt-only: a normal request can never trigger it, and the fallback
+            // attempt still runs for real. Uses a plain "service unavailable" (not an
+            // overload/throttle) so it routes straight to the fallback without the same-model
+            // overload retries. See the Guide for Testers.
+            if (
+              isInitialAttempt &&
+              process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
+              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+            ) {
+              throw new Error(
+                `Service unavailable: simulated ${currentModel.backend} outage for fallback testing (preview only)`
+              );
+            }
 
             await currentLlm.complete(
               currentModel.id,

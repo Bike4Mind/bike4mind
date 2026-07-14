@@ -6,6 +6,7 @@ import {
   isAbortError,
   isRequestTimeoutError,
   isStreamIdleTimeoutError,
+  FORCE_FALLBACK_TEST_MARKER,
 } from './ChatCompletionProcess';
 import {
   buildAndSortMessages,
@@ -507,6 +508,122 @@ describe('ChatCompletionProcess', () => {
       const tokenUsage = updateCall[0].promptMeta.tokenUsage;
       expect(tokenUsage.actualInputTokens).toBe(fallbackInputTokens);
       expect(tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
+    });
+
+    // The preview/E2E-only marker forces the primary to simulate an outage so QA can
+    // exercise the fallback path end-to-end; it throws BEFORE the primary runs and is
+    // gated by E2E_ENDPOINTS_ENABLED (inert in production).
+    it('forces a primary outage via the E2E fallback marker and drives the real fallback', async () => {
+      const prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
+      process.env.E2E_ENDPOINTS_ENABLED = 'true';
+      try {
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+
+        // Primary must never run — the marker throws before currentLlm.complete.
+        let primaryComplete = 0;
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async () => {
+            primaryComplete++;
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+
+        let fallbackComplete = 0;
+        const fallbackModel = {
+          id: 'claude-opus-4-8',
+          type: 'text' as const,
+          name: 'Claude Opus 4.8',
+          backend: ModelBackend.Anthropic,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        };
+        mockedGetLlmWithFallback.mockResolvedValue({
+          model: fallbackModel,
+          backend: {
+            complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+              fallbackComplete++;
+              await cb(['answer from fallback model']);
+            }),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: 'claude-opus-4-8',
+          },
+          attempt: 1,
+        } as any);
+
+        mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        await service.process({ body, logger: mockLogger });
+
+        expect(primaryComplete).toBe(0); // marker threw before the primary ran
+        expect(fallbackComplete).toBe(1); // the real fallback attempt executed
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['answer from fallback model'], status: 'done', type: 'message' })
+        );
+      } finally {
+        if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;
+        else process.env.E2E_ENDPOINTS_ENABLED = prevEnv;
+      }
+    });
+
+    // The marker is inert without the E2E gate (production safety).
+    it('ignores the fallback marker when E2E endpoints are disabled', async () => {
+      const prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
+      delete process.env.E2E_ENDPOINTS_ENABLED;
+      try {
+        let primaryComplete = 0;
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async (_m, _ms, _o, cb) => {
+            primaryComplete++;
+            await cb(['normal answer']);
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: ChatModels.GPT4,
+        });
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: ChatModels.GPT4,
+            type: 'text',
+            name: 'GPT-4',
+            backend: ModelBackend.OpenAI,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: {},
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
+
+        const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+        await service.process({ body, logger: mockLogger });
+
+        expect(primaryComplete).toBe(1); // marker ignored — primary ran normally
+        expect(mockedGetLlmWithFallback).not.toHaveBeenCalled();
+      } finally {
+        if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;
+        else process.env.E2E_ENDPOINTS_ENABLED = prevEnv;
+      }
     });
 
     // Adapters coerce missing usage to zero (e.g. DeepSeek and Llama-on-Bedrock
