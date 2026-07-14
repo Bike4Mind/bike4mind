@@ -10,11 +10,15 @@ import {
   IOwnerSpendModel,
   IOwnerUsageSummary,
   IProviderMonthCogs,
+  ISessionModelUsage,
+  ISessionQuestUsage,
+  ISessionUsageSummary,
   ISettlementBreakdown,
   IUsageEvent,
   IUsageEventInput,
   IUsageEventRepository,
   IUsageSpendBucket,
+  IUsageSpendWithTokens,
   IUserMargin,
   USAGE_EVENT_FEATURES,
   USAGE_EVENT_STATUSES,
@@ -68,6 +72,8 @@ UsageEventSchema.index({ createdAt: -1 });
 UsageEventSchema.index({ createdAt: -1, settledBasis: 1 });
 // Supports ownerUsageSummary()'s $match on ownerId + ownerType + createdAt (per-org dashboard).
 UsageEventSchema.index({ ownerId: 1, ownerType: 1, createdAt: -1 });
+// Supports sessionUsageSummary()'s $match on sessionId (per-session usage detail).
+UsageEventSchema.index({ sessionId: 1, createdAt: -1 });
 
 export type IUsageEventModel = Model<IUsageEventDocument>;
 
@@ -284,6 +290,63 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: result?.byModel ?? [],
       byFeature: result?.byFeature ?? [],
       // $facet yields totals as a 0- or 1-element array; unwrap to a scalar bucket.
+      totals: result?.totals?.[0] ?? emptyTotals,
+    };
+  }
+
+  async sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary> {
+    // Every cut shares the same sums (spend + token quantities), so define once.
+    const sums = {
+      requests: { $sum: 1 },
+      cogsUsd: { $sum: '$costUsd' },
+      creditsCharged: { $sum: '$creditsCharged' },
+      inputTokens: { $sum: '$inputTokens' },
+      outputTokens: { $sum: '$outputTokens' },
+      cachedInputTokens: { $sum: '$cachedInputTokens' },
+    } as const;
+    const fields = {
+      requests: 1,
+      cogsUsd: 1,
+      creditsCharged: 1,
+      inputTokens: 1,
+      outputTokens: 1,
+      cachedInputTokens: 1,
+    } as const;
+
+    const [result] = await this.model.aggregate<{
+      byQuest: ISessionQuestUsage[];
+      byModel: ISessionModelUsage[];
+      totals: IUsageSpendWithTokens[];
+    }>([
+      { $match: { sessionId } },
+      {
+        $facet: {
+          byQuest: [
+            { $group: { _id: '$requestId', ...sums } },
+            { $project: { _id: 0, requestId: '$_id', ...fields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          byModel: [
+            { $group: { _id: { provider: '$provider', model: '$model' }, ...sums } },
+            { $project: { _id: 0, provider: '$_id.provider', model: '$_id.model', ...fields } },
+            { $sort: { creditsCharged: -1 } },
+          ],
+          totals: [{ $group: { _id: null, ...sums } }, { $project: { _id: 0, ...fields } }],
+        },
+      },
+    ]);
+
+    const emptyTotals: IUsageSpendWithTokens = {
+      requests: 0,
+      cogsUsd: 0,
+      creditsCharged: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedInputTokens: 0,
+    };
+    return {
+      byQuest: result?.byQuest ?? [],
+      byModel: result?.byModel ?? [],
       totals: result?.totals?.[0] ?? emptyTotals,
     };
   }

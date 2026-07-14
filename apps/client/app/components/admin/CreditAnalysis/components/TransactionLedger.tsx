@@ -15,8 +15,7 @@ import {
   Typography,
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import OpenInNewIcon from '@mui/icons-material/OpenInNew';
-import { useNavigate } from '@tanstack/react-router';
+import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import {
   COMPLETION_SOURCES,
   CREDIT_ADD_TRANSACTION_TYPES,
@@ -28,6 +27,7 @@ import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import SharedPaginationControls from '@client/app/components/admin/Subscriptions/components/PaginationControls';
 import { formatCredits, numberCell } from '../utils/format';
 import { useTransactionLedger, LedgerFilters } from '../hooks/useTransactionLedger';
+import { SessionUsageDetailModal } from './SessionUsageDetailModal';
 
 const DAY_OPTIONS = [7, 30, 90, 365] as const;
 const ALL_TYPES: CreditTransactionType[] = [...CREDIT_ADD_TRANSACTION_TYPES, ...CREDIT_DEDUCT_TRANSACTION_TYPES];
@@ -45,11 +45,11 @@ type OrgOption = { id: string; name: string };
  * Member is shown only where the write path recorded it (API/CLI org-billed rows).
  */
 export const TransactionLedger: React.FC = () => {
-  const navigate = useNavigate();
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
   const [filters, setFilters] = useState<LedgerFilters>({ days: 30, type: 'all', source: 'all' });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
 
   const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
   const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations({
@@ -211,14 +211,14 @@ export const TransactionLedger: React.FC = () => {
                       </td>
                       <td>
                         {sessionId && (
-                          <Tooltip title="Open session">
+                          <Tooltip title="Session usage detail">
                             <IconButton
                               size="sm"
                               variant="plain"
                               data-testid="ledger-drilldown-btn"
-                              onClick={() => navigate({ to: '/notebooks/$id', params: { id: sessionId } })}
+                              onClick={() => setDetailSessionId(sessionId)}
                             >
-                              <OpenInNewIcon fontSize="small" />
+                              <QueryStatsIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
                         )}
@@ -253,6 +253,8 @@ export const TransactionLedger: React.FC = () => {
           />
         </>
       )}
+
+      <SessionUsageDetailModal sessionId={detailSessionId} onClose={() => setDetailSessionId(null)} />
     </Box>
   );
 };

@@ -199,6 +199,66 @@ export interface IOrgUsageDashboardResponse {
   totals: IUsageSpendBucket;
 }
 
+/** A spend bucket that also carries token quantities, for session-level detail. */
+export interface IUsageSpendWithTokens extends IUsageSpendBucket {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+}
+
+/** Session spend for one quest (requestId is the questId for chat/image/video). */
+export interface ISessionQuestUsage extends IUsageSpendWithTokens {
+  requestId: string;
+}
+
+/** Session spend for one provider/model pair. */
+export interface ISessionModelUsage extends IUsageSpendWithTokens {
+  provider: string;
+  model: string;
+}
+
+/**
+ * One session's usage rolled up by quest and by model in a single pass, plus
+ * totals. Powers the per-session usage-detail drill-down.
+ */
+export interface ISessionUsageSummary {
+  totals: IUsageSpendWithTokens;
+  byQuest: ISessionQuestUsage[];
+  byModel: ISessionModelUsage[];
+}
+
+/** One model's slice of an agent execution's iteration billing. */
+export interface ISessionAgentModelUsage {
+  model: string;
+  iterations: number;
+  credits: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * An agent execution that ran in a session, with its iteration billing rolled
+ * up by model. `totalCreditsUsed` is the execution's own atomic total (includes
+ * children rolled up on completion); `parentExecutionId` marks subagent runs.
+ */
+export interface ISessionAgentExecution {
+  executionId: string;
+  status?: string;
+  parentExecutionId?: string;
+  totalCreditsUsed: number;
+  iterationCount: number;
+  byModel: ISessionAgentModelUsage[];
+}
+
+/** Wire shape of GET /api/admin/session-usage. */
+export interface ISessionUsageResponse {
+  sessionId: string;
+  usage: ISessionUsageSummary;
+  executions: ISessionAgentExecution[];
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
@@ -221,4 +281,7 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    * aggregation. Powers the per-org usage dashboard.
    */
   ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
+
+  /** One session's usage rolled up by quest and by model (all events for the session). */
+  sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary>;
 }
