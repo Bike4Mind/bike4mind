@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
+import { NamedApiKeyUsage } from './CreditTransactionTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -196,6 +197,8 @@ export interface IOrgUsageDashboardResponse {
   byMember: NamedOwnerSpendMember[];
   byModel: IOwnerSpendModel[];
   byFeature: IOwnerSpendFeature[];
+  /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
+  byApiKey: NamedApiKeyUsage[];
   totals: IUsageSpendBucket;
 }
 
