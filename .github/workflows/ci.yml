@@ -3,8 +3,8 @@ name: CI
 # App CI: build, typecheck, lint, unit tests, and the CLI e2e harness. The merge
 # gate for this repo. Deploys no longer run here: staging + production are handled
 # by the internal deployer (deploy.bike4mind.com), and PR previews are created on
-# demand by maintainers there. See the `deploy-status` job for why the required
-# check is still named "Deploy".
+# demand by maintainers there. See the `ci-complete` job for the single required
+# "CI Complete" aggregate check.
 
 on:
   push:
@@ -16,7 +16,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     # NOTE: no workflow-level paths-ignore. The `changes` gate below evaluates
     # the per-PR (merge-base) diff and skips the build/test legs on non-deployable
-    # changes, while still reporting the required Deploy/Run Tests checks (a
+    # changes, while still reporting the required CI Complete/Run Tests checks (a
     # paths-ignore-skipped workflow never reports them and hangs the PR).
   merge_group:
     branches: [main]
@@ -116,6 +116,9 @@ jobs:
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
+      - name: Check user $lookup field projections
+        run: node scripts/check-user-lookup-projection.mjs
+
       - name: Check deploy contract matches infra
         run: python3 scripts/check-deploy-contract.py
 
@@ -142,7 +145,7 @@ jobs:
       - name: Calculate core packages content hash
         id: core-hash
         run: |
-          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core | awk '{print $3}' | sort | md5sum | awk '{print $1}')
+          TREE_HASH_B4M=$(git ls-tree -r HEAD b4m-core packages/database | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONFIG_HASH=$(git ls-tree HEAD package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json 2>/dev/null | awk '{print $3}' | sort | md5sum | awk '{print $1}')
           CONTENT_HASH=$(echo "${TREE_HASH_B4M}${CONFIG_HASH}" | md5sum | awk '{print $1}')
           echo "content_hash=$CONTENT_HASH" >> $GITHUB_OUTPUT
@@ -179,6 +182,7 @@ jobs:
           name: core-build-${{ steps.core-hash.outputs.content_hash }}
           path: |
             b4m-core/*/dist
+            packages/database/dist
           retention-days: 7
           if-no-files-found: error
 
@@ -228,7 +232,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -302,7 +308,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -391,7 +399,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -497,7 +507,9 @@ jobs:
         uses: actions/download-artifact@v7
         with:
           name: core-build-${{ needs.core-build.outputs.core-content-hash }}
-          path: b4m-core
+          # Artifact paths are relative to the repo root (the common ancestor of
+          # b4m-core/*/dist and packages/database/dist).
+          path: .
         continue-on-error: true
 
       - name: Build bike4mind core packages (fallback)
@@ -523,30 +535,30 @@ jobs:
 
   # verify-docs-build removed: the Docusaurus scaffolding (docs-site/package.json,
   # lockfile, config) is not tracked in this repo, so the build can never succeed
-  # here and was failing the required Deploy check on every docs-touching PR.
+  # here and was failing the required CI Complete check on every docs-touching PR.
   # Markdown content is still validated by the help-content tests in the test
   # suite. Restore the job (and .github/workflows/_verify-docs-build.yml) when
   # the scaffolding lands.
 
   # ============================================================
   # CI gate aggregation. The branch rulesets (main-protection + prod-protection)
-  # require a status check named exactly "Deploy". Deploy itself moved out of
-  # this repo to the internal deployer, so this job no longer gates a deploy;
-  # it re-exposes a single stable "Deploy" check that turns red if any CI leg
-  # failed. The check name is deliberately kept as "Deploy" so the existing
-  # rulesets keep matching; renaming it to "CI" is a follow-up that must edit
-  # both rulesets in the same change (a required check with no matching job
-  # hangs every PR).
+  # require a single status check named exactly "CI Complete". Deploy moved out
+  # of this repo to the internal deployer, so there is no deploy to gate; this
+  # job re-exposes one stable check that turns red if any CI leg failed.
   #
   # Red when ANY CI leg (changes/core-build/typecheck/lint/test/cli-e2e)
   # genuinely FAILED. Green when everything succeeded OR was legitimately
   # skipped (a non-deployable change skips core-build..cli-e2e, and a skipped
   # required check counts as passing). This surfaces typecheck/lint/cli-e2e
   # failures (none of which are individually required checks) through the one
-  # required "Deploy" check instead of letting them pass silently.
+  # required "CI Complete" check instead of letting them pass silently.
+  #
+  # NOTE: this job name IS the required-check context. Renaming it must happen
+  # in lockstep with editing both rulesets, or a required check with no matching
+  # job hangs every PR.
   # ============================================================
-  deploy-status:
-    name: Deploy
+  ci-complete:
+    name: CI Complete
     needs: [changes, core-build, typecheck, lint, test, cli-e2e]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}

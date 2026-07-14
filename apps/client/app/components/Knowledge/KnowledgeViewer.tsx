@@ -90,6 +90,7 @@ import { useArtifactPersistence } from '@client/app/hooks/useArtifactPersistence
 import ContentPreviewModal from '@client/app/components/ProfileModal/ContentPreviewModal';
 import { useAdminTools } from '@client/app/hooks/useAdminTools';
 import { useMessageFiles } from '@client/app/hooks/useMessageFiles';
+import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useQuestExport } from '@client/app/hooks/data/useQuestExport';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
 
@@ -266,6 +267,39 @@ const useKnowledgeViewer = create<KnowledgeViewerState>(() => ({
 
 export const setKnowledgeViewer = useKnowledgeViewer.setState;
 
+/**
+ * Decides whether the KnowledgeViewer should overwrite the content it is currently showing
+ * with the copy fetched from the DB.
+ *
+ * The content shown when the viewer opens is the freshly-iterated/streamed version, which
+ * reaches memory (via the chat preview card and the one-shot write on open) BEFORE the async
+ * on-quest-completion persist finishes. During that window a DB read returns the PREVIOUS
+ * version. Blindly applying it is the #457 regression - the just-opened version flickers back
+ * to the stale one. The opened content carries no version of its own, so we cannot compare
+ * versions directly; instead we compare the DB version against a `baselineVersion` captured
+ * when the current content was pinned (the DB version present at open time):
+ *
+ *  - If the DB content already equals what we show, there is nothing to do.
+ *  - Otherwise adopt the DB copy ONLY when it is a strictly NEWER version than the baseline
+ *    (a genuine new persisted version), never a same-or-older-version stale read.
+ *
+ * Missing versions coerce to 0. Extracted as a pure predicate so the guard can be unit tested
+ * without mounting KnowledgeViewer.
+ */
+export const shouldSyncArtifactFromDb = (params: {
+  currentContent?: string;
+  latestContent?: string;
+  latestVersion?: number;
+  baselineVersion?: number;
+}): boolean => {
+  // Already showing the DB's content - nothing to sync.
+  if (params.latestContent === params.currentContent) return false;
+
+  // Content differs: adopt only a strictly newer version than the pinned baseline, so the
+  // stale read during the persist race cannot downgrade the just-opened version.
+  return (params.latestVersion ?? 0) > (params.baselineVersion ?? 0);
+};
+
 const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   if (!item || item.type !== 'file') return false;
   const mime = item.content.mimeType;
@@ -334,6 +368,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
   const recentArtifacts = useSessionLayout(s => s.recentArtifacts);
   const selectedArtifactId = useSessionLayout(s => s.selectedArtifactId);
   const { canUseAdminTools } = useAdminTools();
+  const isMobile = useIsMobile();
   const { selectedTabIndex, showLineNumbers } = useKnowledgeViewer();
   const layout = useSessionLayout(s => s.layout);
   const questExport = useQuestExport();
@@ -358,9 +393,26 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
   // Ref tracks the last updated version to prevent infinite loops.
   const lastUpdatedVersionRef = React.useRef<number | undefined>(undefined);
+  // The artifact id (and DB version at that moment) that the currently-shown content was
+  // pinned to. Captured on (re)open so shouldSyncArtifactFromDb only adopts a strictly newer
+  // persisted version, never the stale read during the async persist race (#457).
+  const syncArtifactIdRef = React.useRef<string | undefined>(undefined);
+  const syncBaselineVersionRef = React.useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (latestArtifact?.artifact.id && artifactData?.id && artifactData.id === latestArtifact.artifact.id) {
+      // On switching to a different artifact, pin the baseline to the DB version present now
+      // (the version the just-opened content sits at or ahead of) and reset loop tracking.
+      // Re-baseline keys on the artifact id only, NOT on close/reopen of the same id. That is
+      // safe because handleOpenInViewer invalidates the ['artifact', id] query on open and the
+      // "content matches" short-circuit in shouldSyncArtifactFromDb covers a same-id reopen; a
+      // refactor that removes either precondition must also re-pin the baseline on reopen.
+      if (syncArtifactIdRef.current !== artifactData.id) {
+        syncArtifactIdRef.current = artifactData.id;
+        syncBaselineVersionRef.current = latestArtifact.artifact.version;
+        lastUpdatedVersionRef.current = undefined;
+      }
+
       if (lastUpdatedVersionRef.current === latestArtifact.artifact.version) {
         return;
       }
@@ -373,12 +425,17 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
       type PersistedType = (typeof persistedTypes)[number];
       const isPersistedType = (persistedTypes as readonly string[]).includes(artifactData.type);
 
-      // Skip when nothing changed, to avoid infinite loops.
+      // Skip when nothing changed (avoids an infinite loop) and never regress to an older
+      // persisted version - see shouldSyncArtifactFromDb for the #457 rationale.
       // Loose cast: all persisted artifact shapes agree on `content: string`.
       const currentArtifact = artifactData.content as { content?: string; version?: number };
-      const needsUpdate =
-        latestArtifact.content?.content !== currentArtifact.content ||
-        latestArtifact.artifact.version !== currentArtifact.version;
+
+      const needsUpdate = shouldSyncArtifactFromDb({
+        currentContent: currentArtifact.content,
+        latestContent: latestArtifact.content?.content,
+        latestVersion: latestArtifact.artifact.version,
+        baselineVersion: syncBaselineVersionRef.current,
+      });
 
       if (!needsUpdate) {
         // Advance the ref even when skipping, so this version is not rechecked.
@@ -388,6 +445,8 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
 
       if (isPersistedType && artifactData.content) {
         lastUpdatedVersionRef.current = latestArtifact.artifact.version;
+        // Adopting a strictly newer version - advance the pinned baseline to it.
+        syncBaselineVersionRef.current = latestArtifact.artifact.version;
 
         // Generic persisted-artifact envelope. Each concrete type (ReactArtifact,
         // HtmlArtifact, etc.) has this shape plus type-specific metadata; keep the
@@ -1199,7 +1258,17 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
           gap: '8px',
         })}
       >
-        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '1rem', width: '100%' }}>
+        <Box
+          sx={{
+            display: 'grid',
+            // On phones the toolbar has too many icon buttons to fit beside the file
+            // selector, so stack them (selector on top, controls below) and let the
+            // controls row wrap - otherwise download/close overflow off-screen (#457).
+            gridTemplateColumns: isMobile ? '1fr' : '1fr auto',
+            gap: '1rem',
+            width: '100%',
+          }}
+        >
           <Grid sm xs={12}>
             <Select
               className="knowledge-viewer-select"
@@ -1229,8 +1298,10 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
           <Grid
             sx={(theme: Theme) => ({
               display: 'flex',
+              flexWrap: 'wrap',
+              rowGap: '8px',
               gap: '8px',
-              justifyContent: 'flex-end',
+              justifyContent: isMobile ? 'flex-start' : 'flex-end',
               '& .MuiSvgIcon-root, .lucide-picture-in-picture, .lucide-x': {
                 height: '16px',
                 width: '16px',

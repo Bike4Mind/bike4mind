@@ -142,9 +142,10 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
   // SubagentOrchestrator's before/after-run setters are single-slot.
   //
   // Usage tracking: each spawned agent gets a live-usage entry in the store
-  // (updated per step, driving the status bar), and on completion its final
-  // totals are folded into session.metadata subagent rollups. Keyed by a
-  // per-run id (agent instances are not reused; names can run concurrently).
+  // (updated per step, driving the status bar), removed when the run ends.
+  // Keyed by a per-run id (agent instances are not reused; names can run
+  // concurrently). Final totals reach session.metadata separately via the
+  // orchestrator's onSubagentUsage callback (wired in index.tsx).
   const subagentRunState = new WeakMap<ReActAgent, { runId: string; usageHandler: () => void }>();
   let nextSubagentRunId = 0;
   orchestrator.setBeforeRunCallback((subagent, subagentType) => {
@@ -168,7 +169,7 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
     subagent.on('observation', usageHandler);
     subagent.on('final_answer', usageHandler);
   });
-  orchestrator.setAfterRunCallback((subagent, subagentType) => {
+  orchestrator.setAfterRunCallback((subagent, _subagentType) => {
     subagent.off('thought', stepHandler);
     subagent.off('observation', stepHandler);
     subagent.off('action', stepHandler);
@@ -182,9 +183,10 @@ export function wireAgentEvents(input: WireAgentEventsInput): void {
       subagent.off('observation', runState.usageHandler);
       subagent.off('final_answer', runState.usageHandler);
       subagentRunState.delete(subagent);
-      const { removeLiveSubagentUsage, recordSubagentCompletion } = useCliStore.getState();
-      removeLiveSubagentUsage(runState.runId);
-      recordSubagentCompletion(subagentType, subagent.getTokenUsage(), subagent.getCreditsUsage());
+      // Only the live entry is cleared here - the session rollup happens via
+      // the orchestrator's onSubagentUsage callback (see index.tsx), which
+      // fires exactly once per run on every exit path.
+      useCliStore.getState().removeLiveSubagentUsage(runState.runId);
     }
   });
 }

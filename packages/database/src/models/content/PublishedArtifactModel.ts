@@ -24,7 +24,10 @@ export interface PublishedArtifactAccessGate {
   kind: 'passphrase' | 'domain';
   /** bcrypt hash; `select: false` in the schema so reads never leak it by default. */
   passphraseHash?: string | null;
-  /** Lowercased registrable domains, exact-match only (no substrings). */
+  /** Lowercased email-domain allowlist, stored AS ENTERED (never reduced to eTLD+1).
+   *  A viewer matches when their verified email host equals an entry or is a subdomain
+   *  of it: `acme.com` admits `mail.acme.com`, but `acme.onmicrosoft.com` does NOT
+   *  admit `evil.onmicrosoft.com`. Enforced in checkAccessGate. */
   allowedDomains?: string[];
 }
 

@@ -1,20 +1,22 @@
 import React, { useEffect, useState } from 'react';
 import { Box, Card, Typography, Chip, Stack, IconButton, Tooltip } from '@mui/joy';
 import {
-  Code as CodeIcon,
-  OpenInFull as ExpandIcon,
-  ContentCopy as CopyIcon,
-  Save as SaveIcon,
-  ExpandMore as ExpandMoreIcon,
-  ExpandLess as ExpandLessIcon,
+  OpenInFullOutlined as ExpandIcon,
+  ContentCopyOutlined as CopyIcon,
+  SaveOutlined as SaveIcon,
+  ExpandMoreOutlined as ExpandMoreIcon,
+  ExpandLessOutlined as ExpandLessIcon,
 } from '@mui/icons-material';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter/dist/cjs';
 import { oneDark } from 'react-syntax-highlighter/dist/cjs/styles/prism';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import { useSelectedArtifactContentSync } from '@client/app/hooks/useSelectedArtifactContentSync';
 import { useSessions, useWorkBenchFiles, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { KnowledgeType } from '@bike4mind/common';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'sonner';
+import { brand } from '@client/app/utils/themes/colors';
+import { actionButtonSx } from './ArtifactPreviewCard';
 
 interface CodeArtifactData {
   title: string;
@@ -29,23 +31,6 @@ interface CodeArtifactPreviewCardProps {
   artifactId: string;
   onExpand?: () => void;
 }
-
-const getLanguageColor = (language: string) => {
-  switch (language.toLowerCase()) {
-    case 'typescript':
-    case 'tsx':
-      return 'primary';
-    case 'javascript':
-    case 'jsx':
-      return 'warning';
-    case 'python':
-      return 'success';
-    case 'rust':
-      return 'danger';
-    default:
-      return 'neutral';
-  }
-};
 
 const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data, artifactId, onExpand }) => {
   const isSelected = useSessionLayout(s => s.selectedArtifactId) === artifactId;
@@ -140,32 +125,18 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
     }
   };
 
-  // Listen for selected artifact content changes and update the knowledge viewer
-  useEffect(() => {
-    const currentState = useSessionLayout.getState();
-
-    // Only update if this artifact is currently selected and the content has actually changed
-    if (currentState.selectedArtifactId === artifactId && currentState.artifactData?.type === 'code') {
-      const currentContent = currentState.artifactData.content as CodeArtifactData;
-
-      // Compare the actual content to avoid unnecessary updates
-      if (JSON.stringify(currentContent) !== JSON.stringify(data)) {
-        setSessionLayout({
-          artifactData: {
-            ...currentState.artifactData,
-            content: data,
-          },
-        });
-      }
-    }
-  }, [artifactId, data.code, data.title, data.description]);
+  // Propagate live content changes to the Knowledge Base without letting a scroll-driven
+  // (re)mount of a same-id card clobber the newest version - see the hook for the #457 detail.
+  useSelectedArtifactContentSync(artifactId, 'code', data.code, data);
 
   return (
     <Card
       className="code-artifact-preview-card"
       variant="outlined"
       sx={{
-        backgroundColor: 'background.level1',
+        // Matches ArtifactPreviewCard: the sidebar/header surface, not Joy's undefined
+        // background.level1 default.
+        backgroundColor: 'background.surface2',
         borderRadius: '8px',
         position: 'relative',
         overflow: 'visible',
@@ -181,69 +152,95 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
       }}
       onClick={handleToggleExpand}
     >
-      {/* Code Icon Badge */}
-      <Box
+      {/* Type badge: the language in a pill overhanging the card corner. Matches
+          ArtifactPreviewCard's badge - keep the two in sync. */}
+      <Chip
         className="code-artifact-icon-badge"
-        sx={{
+        size="sm"
+        variant="solid"
+        sx={theme => ({
           position: 'absolute',
           top: '-8px',
           left: '-8px',
-          backgroundColor: 'background.surface',
-          borderRadius: '50%',
-          padding: '4px',
-          boxShadow: 'sm',
           zIndex: 1,
-        }}
+          backgroundColor: brand[800],
+          color: 'text.primary',
+          border: 'none',
+          paddingInline: '8px',
+          '&:hover': { backgroundColor: brand[800] },
+          // Light mode's text.primary is near-black and unreadable on the blue pill.
+          [theme.getColorSchemeSelector('light')]: { color: '#fff' },
+        })}
       >
-        <CodeIcon className="code-artifact-icon" color="primary" sx={{ fontSize: '16px' }} />
-      </Box>
+        {data.language}
+      </Chip>
 
       {/* Main Content */}
-      <Box className="code-artifact-content" sx={{ p: 1.5, pt: 2 }}>
+      {/* No padding here: the Card already provides it. */}
+      <Box className="code-artifact-content">
+        {/* Title leads the row so the stats line below aligns flush with it; the chevron
+            follows immediately. Matches ArtifactPreviewCard - keep the two in sync. */}
         <Stack className="code-artifact-header" direction="row" spacing={1} alignItems="center">
-          <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+          <Stack direction="row" alignItems="center" sx={{ minWidth: 0, gap: '4px' }}>
+            <Typography
+              className="code-artifact-title"
+              level="title-sm"
+              sx={{
+                color: 'text.primary',
+                // Shrink (and ellipsize) but never grow, so the chevron stays next to the text.
+                flex: '0 1 auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {data.title}
+            </Typography>
+
+            <Tooltip title={isExpanded ? 'Collapse' : 'Expand'} placement="top">
+              <IconButton
+                size="sm"
+                variant="plain"
+                color="neutral"
+                // Joy icons read --Icon-fontSize / --Icon-color; plain `fontSize`/`color`
+                // on the button is outranked by the theme's own icon styles.
+                sx={theme => ({
+                  flexShrink: 0,
+                  marginLeft: 0,
+                  // Joy sizes IconButton from --IconButton-size; `width`/`height` alone
+                  // lose to its minWidth/minHeight defaults.
+                  '--IconButton-size': '24px',
+                  minWidth: '24px',
+                  minHeight: '24px',
+                  '--Icon-fontSize': '16px',
+                  '--Icon-color': theme.vars.palette.text.tertiary,
+                  '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
+                })}
+                onClick={handleToggleExpand}
+                data-testid="code-artifact-toggle-btn"
+              >
+                {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
+              </IconButton>
+            </Tooltip>
+          </Stack>
+
+          <Box sx={{ flex: 1 }} />
+
+          <Tooltip title="Copy code to clipboard" placement="top">
             <IconButton
               size="sm"
               variant="plain"
               color="neutral"
-              onClick={handleToggleExpand}
-              data-testid="code-artifact-toggle-btn"
+              sx={theme => ({ ...actionButtonSx(theme), '--Icon-fontSize': '16px' })}
+              onClick={handleCopy}
             >
-              {isExpanded ? <ExpandLessIcon /> : <ExpandMoreIcon />}
-            </IconButton>
-          </Tooltip>
-
-          <Typography
-            className="code-artifact-title"
-            level="title-sm"
-            sx={{
-              color: 'primary.plainColor',
-              flex: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {data.title}
-          </Typography>
-
-          <Chip
-            className="code-artifact-language-chip"
-            size="sm"
-            variant="soft"
-            color={getLanguageColor(data.language)}
-          >
-            {data.language}
-          </Chip>
-
-          <Tooltip title="Copy code to clipboard" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" onClick={handleCopy}>
               <CopyIcon />
             </IconButton>
           </Tooltip>
 
           <Tooltip title="Save as file to workbench" placement="top">
-            <IconButton size="sm" variant="plain" color="neutral" onClick={handleSaveAsFile}>
+            <IconButton size="sm" variant="plain" color="neutral" sx={actionButtonSx} onClick={handleSaveAsFile}>
               <SaveIcon />
             </IconButton>
           </Tooltip>
@@ -253,6 +250,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
               size="sm"
               variant="plain"
               color="neutral"
+              sx={actionButtonSx}
               onClick={handleOpenInViewer}
               data-testid="code-artifact-expand-btn"
             >
@@ -263,7 +261,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
 
         {/* Loading skeleton for large code blocks */}
         {!isContentReady ? (
-          <Box sx={{ mt: 1 }}>
+          <Box sx={{ mt: 2 }}>
             <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
               Loading large code block ({data.lineCount} lines)...
             </Typography>
@@ -288,7 +286,6 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
               className="code-artifact-stats"
               level="body-xs"
               sx={{
-                mt: 1,
                 color: 'text.tertiary',
               }}
             >
@@ -298,7 +295,7 @@ const CodeArtifactPreviewCard: React.FC<CodeArtifactPreviewCardProps> = ({ data,
             {/* Code Preview (expandable) */}
             <Box
               sx={{
-                mt: 1,
+                mt: 2,
                 borderRadius: 'sm',
                 overflow: 'auto',
                 maxHeight: isExpanded ? '400px' : '60px',

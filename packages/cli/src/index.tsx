@@ -802,6 +802,13 @@ function CliApp() {
           // Always set the trigger - the useEffect will wait for isThinking to be false
           useCliStore.getState().setPendingBackgroundTrigger(true);
         },
+        onSubagentUsage: usage => {
+          useCliStore.getState().recordSubagentUsage({
+            agentName: usage.agentName,
+            tokens: usage.totalTokens,
+            credits: usage.totalCredits,
+          });
+        },
       });
 
       // Create agent_delegate tool (with background support)
@@ -2609,7 +2616,14 @@ function CliApp() {
             ...activeSession,
             messages: rewindedMessages,
             updatedAt: new Date().toISOString(),
-            metadata: newMetadata,
+            metadata: {
+              ...newMetadata,
+              // Not derivable from message data - carry forward rather than zeroing
+              subagentCalls: activeSession.metadata.subagentCalls,
+              subagentTokens: activeSession.metadata.subagentTokens,
+              subagentCost: activeSession.metadata.subagentCost,
+              subagentUsage: activeSession.metadata.subagentUsage,
+            },
           };
 
           // Prefill the input with the selected message

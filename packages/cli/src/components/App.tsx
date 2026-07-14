@@ -67,11 +67,11 @@ export function App({
   const currentModel = useCliStore(state => state.session?.model || ChatModels.CLAUDE_4_5_SONNET);
   const totalTokens = useCliStore(state => state.session?.metadata.totalTokens || 0);
   const totalCredits = useCliStore(state => state.session?.metadata.totalCredits);
-  // Spawned-agent usage: completed runs (session metadata) + currently-running ones (live map)
+  // Spawned-agent usage: completed runs (session metadata rollup) + currently-running ones (live map)
   const subagentTokens = useCliStore(
     state => (state.session?.metadata.subagentTokens || 0) + selectLiveSubagentTokens(state)
   );
-  const subagentCredits = useCliStore(
+  const subagentCost = useCliStore(
     state => (state.session?.metadata.subagentCost || 0) + selectLiveSubagentCredits(state)
   );
   const subagentActive = useCliStore(state => Object.keys(state.liveSubagentUsage).length > 0);
@@ -347,8 +347,8 @@ export function App({
               model={currentModel}
               tokenUsage={totalTokens}
               creditsUsage={totalCredits}
-              subagentTokens={subagentTokens}
-              subagentCredits={subagentCredits}
+              subagentTokenUsage={subagentTokens}
+              subagentCreditsUsage={subagentCost}
               subagentActive={subagentActive}
             />
           </Box>

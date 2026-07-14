@@ -81,15 +81,44 @@ Each row shows the price currently in force for one model: input/output rates (p
 
 ## Margins
 
-The Margins sub-tab reports revenue versus provider cost over the last 30 days, with a header chip showing the current pricing target (credits charged per $1 of provider cost). A refresh button reloads all three views:
+The Margins sub-tab reports revenue versus provider cost over the last 30 days, with a header chip showing the current pricing target (credits charged per $1 of provider cost). A refresh button reloads all four views:
 
 | View | Description |
 |------|-------------|
 | **By model by day** | Daily credits charged, provider cost, and effective margin per model. |
 | **By user (worst margin first)** | Per-user margin over the window, sorted so underpriced usage surfaces first. |
-| **Monthly COGS by provider** | Month-by-month provider cost totals, used for invoice reconciliation. |
+| **Monthly COGS by provider** | Month-by-month provider cost totals with invoice reconciliation (below). |
+| **Settlement basis** | How usage was priced: provider-reported token counts versus the local estimate fallback, with average token deltas as an estimate-quality signal. |
 
 Rows below the target chip's rate were charged under older pricing or indicate a leak worth investigating.
+
+### Invoice reconciliation
+
+Each closed month-by-provider row accepts the provider's actual invoice total (with a required note naming the invoice and its billing period). The table then shows the delta between the invoice and recorded cost, and a status chip:
+
+| Chip | Meaning |
+|------|---------|
+| **match** | Delta under 2% of the invoice. No action. |
+| **review** | Delta between 2% and 10%. Worth a look. |
+| **gap** | Delta over 10%. Decompose it (below). |
+| **no invoice** | Nothing entered yet. The current month stays here until it closes. |
+
+Entries are append-only: a correction is a new entry, and the newest one counts. The recorded-cost side always includes all traffic (user-billed, organization-billed, and internal operational usage), because providers invoice everything.
+
+#### Monthly runbook
+
+1. Wait for the month to close (months are UTC) and provider invoices to arrive.
+2. Enter each invoice total with a note naming the invoice id and its billing period.
+3. Green chips: done. Otherwise decompose the gap:
+
+| Gap signature | Likely cause | Action |
+|---------------|--------------|--------|
+| Uniform percentage across a provider's models | Stale catalog prices | Update rates in the Model Pricing tab |
+| Invoice exceeds recorded cost, token counts look low | Missing usage events | Instrument the unmetered path |
+| Provider invoices you but has no row at all | Fully unmetered feature | Loudest signature; treat as a bug |
+| Small constant offset | Billing-period or timezone skew, provider rounding | Note it; no action inside tolerance |
+
+Two standing caveats: months here are UTC while some providers bill in local-time periods, and recorded cost can move slightly after month close as late events land, so re-check a chip before escalating.
 
 ## Best Practices
 

@@ -134,17 +134,77 @@ describe('checkVisibility - domain gate', () => {
   });
   it('admits a VERIFIED email on an allowlisted domain, case-insensitively', async () => {
     mockUserFindById.mockResolvedValue({ email: 'Jo@ACME.com', emailVerified: true });
-    expect(await checkVisibility(gated, gViewer)).toEqual({ ok: true });
+    // Success also reports the viewer's registrable domain so the caller can audit
+    // the view without a second lookup.
+    expect(await checkVisibility(gated, gViewer)).toEqual({ ok: true, viewerEmailDomain: 'acme.com' });
   });
   it('rejects an unverified email even on the right domain', async () => {
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com', emailVerified: false });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403, reason: 'domain' });
   });
-  it('rejects a verified email on the wrong domain - exact match only, no suffix tricks', async () => {
+  it('rejects a verified email on a lookalike domain - no suffix tricks', async () => {
+    // evilacme.com does not end in '.acme.com'; acme.com.evil.io ends in evil.io.
     mockUserFindById.mockResolvedValue({ email: 'jo@evilacme.com', emailVerified: true });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403 });
     mockUserFindById.mockResolvedValue({ email: 'jo@acme.com.evil.io', emailVerified: true });
     expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: false, status: 403 });
+  });
+  it('admits a verified viewer on a SUBDOMAIN of an allowlisted org domain', async () => {
+    mockUserFindById.mockResolvedValue({ email: 'jo@mail.acme.com', emailVerified: true });
+    expect(await checkVisibility(gated, gViewer)).toMatchObject({ ok: true, viewerEmailDomain: 'acme.com' });
+  });
+  it('does NOT widen a subdomain allowlist ENTRY to its parent org', async () => {
+    // Allowlisting mail.acme.com must admit mail.acme.com (and its subdomains) only -
+    // never hr.acme.com or the bare acme.com org.
+    const subEntry = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['mail.acme.com'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@acme.com', emailVerified: true });
+    expect(await checkVisibility(subEntry, gViewer)).toMatchObject({ ok: false, status: 403 });
+    mockUserFindById.mockResolvedValue({ email: 'jo@hr.acme.com', emailVerified: true });
+    expect(await checkVisibility(subEntry, gViewer)).toMatchObject({ ok: false, status: 403 });
+    mockUserFindById.mockResolvedValue({ email: 'jo@mail.acme.com', emailVerified: true });
+    expect(await checkVisibility(subEntry, gViewer)).toMatchObject({ ok: true });
+    mockUserFindById.mockResolvedValue({ email: 'jo@eu.mail.acme.com', emailVerified: true });
+    expect(await checkVisibility(subEntry, gViewer)).toMatchObject({ ok: true });
+  });
+  it('does NOT admit a sibling tenant under a shared SaaS suffix (onmicrosoft.com)', async () => {
+    // The core of the security fix: an entry must never be reduced to its registrable
+    // domain, or acme.onmicrosoft.com would collapse to onmicrosoft.com and admit every
+    // other Microsoft 365 tenant.
+    const tenant = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['acme.onmicrosoft.com'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@evil.onmicrosoft.com', emailVerified: true });
+    expect(await checkVisibility(tenant, gViewer)).toMatchObject({ ok: false, status: 403 });
+    mockUserFindById.mockResolvedValue({ email: 'jo@acme.onmicrosoft.com', emailVerified: true });
+    expect(await checkVisibility(tenant, gViewer)).toMatchObject({ ok: true });
+  });
+  it('admits a subdomain viewer across a multi-level public suffix (acme.co.uk)', async () => {
+    const coUk = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['acme.co.uk'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@sub.acme.co.uk', emailVerified: true });
+    expect(await checkVisibility(coUk, gViewer)).toMatchObject({ ok: true });
+  });
+  it('fails closed when the allowlist has only invalid (public/private-suffix) entries', async () => {
+    // Bare public suffix co.uk and bare private suffix github.io are both dropped, so a
+    // legacy/misconfigured entry can never admit an entire shared suffix.
+    const bogus = {
+      ...gatedBase,
+      visibility: 'public' as const,
+      accessGate: { kind: 'domain' as const, allowedDomains: ['co.uk', 'github.io'] },
+    };
+    mockUserFindById.mockResolvedValue({ email: 'jo@anything.co.uk', emailVerified: true });
+    expect(await checkVisibility(bogus, gViewer)).toMatchObject({ ok: false, status: 403 });
+    mockUserFindById.mockResolvedValue({ email: 'jo@someone.github.io', emailVerified: true });
+    expect(await checkVisibility(bogus, gViewer)).toMatchObject({ ok: false, status: 403 });
   });
   it('fails closed on a misconfigured empty allowlist', async () => {
     const empty = {

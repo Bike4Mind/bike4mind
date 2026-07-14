@@ -18,6 +18,13 @@ import { resolve } from 'path';
  * useSendMessage.hostCreate.test.ts pattern and locks the invariant cheaply.
  * The test fails if any gate is swapped back to a raw `experimentalFeatures.agentMode`
  * read.
+ *
+ * MAINTENANCE CONTRACT: these assertions match exact substrings of useSendMessage.ts,
+ * so they are coupled to the current gating names and structure. Update them in the
+ * same commit as any rename or extraction of these idioms - a legitimate refactor
+ * will fail this test even though the kill switch still works. Note the converse
+ * too: a *new* routing path to agent_executor added without the gate passes green
+ * here, so add its signal to the AND-gate assertions below when one appears.
  */
 describe('useSendMessage - Agent Mode admin kill switch (regression)', () => {
   const source = readFileSync(resolve(__dirname, 'useSendMessage.ts'), 'utf8');

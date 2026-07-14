@@ -8,7 +8,6 @@ const storeState = {
   updatePendingMessage: vi.fn(),
   updateLiveSubagentUsage: vi.fn(),
   removeLiveSubagentUsage: vi.fn(),
-  recordSubagentCompletion: vi.fn(),
 };
 vi.mock('../store', () => ({
   useCliStore: { getState: vi.fn(() => storeState) },
@@ -126,14 +125,13 @@ describe('wireAgentEvents', () => {
     expect(storeState.updateLiveSubagentUsage).toHaveBeenLastCalledWith(expect.any(String), 'explore', 1200, 7);
   });
 
-  it('folds final usage into the session and clears the live entry on afterRun', () => {
+  it('clears the live entry on afterRun (session rollup is onSubagentUsage, not this path)', () => {
     const subagent = createFakeSubagent(2500, 12);
     getBeforeRun()(subagent, 'explore');
     const runId = storeState.updateLiveSubagentUsage.mock.calls[0][0] as string;
 
     getAfterRun()(subagent, 'explore');
     expect(storeState.removeLiveSubagentUsage).toHaveBeenCalledWith(runId);
-    expect(storeState.recordSubagentCompletion).toHaveBeenCalledWith('explore', 2500, 12);
   });
 
   it('uses distinct run ids for concurrent same-name subagents', () => {
@@ -146,10 +144,9 @@ describe('wireAgentEvents', () => {
     expect(runIdA).not.toBe(runIdB);
   });
 
-  it('does not record usage on afterRun for a subagent it never saw beforeRun', () => {
+  it('does not touch the live map on afterRun for a subagent it never saw beforeRun', () => {
     const subagent = createFakeSubagent(999, 9);
     getAfterRun()(subagent, 'explore');
     expect(storeState.removeLiveSubagentUsage).not.toHaveBeenCalled();
-    expect(storeState.recordSubagentCompletion).not.toHaveBeenCalled();
   });
 });

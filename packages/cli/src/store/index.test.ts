@@ -7,7 +7,25 @@ import {
   selectLiveSubagentCredits,
 } from './index.js';
 import type { PermissionResponse } from '../components';
+import type { Session } from '../storage';
 import type { ShellSession, ShellSessionStatus } from '@bike4mind/services/llm/tools/cliTools';
+
+function makeSession(overrides?: Partial<Session['metadata']>): Session {
+  return {
+    id: 'session-1',
+    name: 'Test session',
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    model: 'claude',
+    messages: [],
+    metadata: {
+      totalTokens: 0,
+      totalCost: 0,
+      toolCallCount: 0,
+      ...overrides,
+    },
+  };
+}
 
 describe('interactionMode cycle', () => {
   beforeEach(() => {
@@ -73,6 +91,61 @@ describe('paste state', () => {
     expect(state.pastedContent).toBeNull();
     expect(state.pastedLineCount).toBe(0);
     expect(state.inputValue).toBe('');
+  });
+});
+
+describe('recordSubagentUsage', () => {
+  beforeEach(() => {
+    useCliStore.setState({ session: null });
+  });
+
+  it('is a no-op when there is no active session', () => {
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 5 });
+    expect(useCliStore.getState().session).toBeNull();
+  });
+
+  it('initializes and increments calls/tokens/credits on the first call', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 150, credits: 3 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(1);
+    expect(metadata?.subagentTokens).toBe(150);
+    expect(metadata?.subagentCost).toBe(3);
+  });
+
+  it('accumulates across multiple calls', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 2 });
+    useCliStore.getState().recordSubagentUsage({ tokens: 50, credits: 1 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(2);
+    expect(metadata?.subagentTokens).toBe(150);
+    expect(metadata?.subagentCost).toBe(3);
+  });
+
+  it('treats undefined credits as 0 without producing NaN', () => {
+    useCliStore.setState({ session: makeSession() });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 42 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.subagentCalls).toBe(1);
+    expect(metadata?.subagentTokens).toBe(42);
+    expect(metadata?.subagentCost).toBe(0);
+  });
+
+  it('leaves other metadata fields untouched', () => {
+    useCliStore.setState({ session: makeSession({ totalTokens: 999, toolCallCount: 7 }) });
+
+    useCliStore.getState().recordSubagentUsage({ tokens: 10 });
+
+    const metadata = useCliStore.getState().session?.metadata;
+    expect(metadata?.totalTokens).toBe(999);
+    expect(metadata?.toolCallCount).toBe(7);
   });
 });
 
@@ -267,11 +340,11 @@ describe('subagent usage tracking', () => {
     expect(selectLiveSubagentCredits(useCliStore.getState())).toBe(4);
   });
 
-  it('folds completions into session metadata rollups and per-agent breakdown', () => {
-    const { recordSubagentCompletion } = useCliStore.getState();
-    recordSubagentCompletion('explore', 1000, 5);
-    recordSubagentCompletion('explore', 500, 2);
-    recordSubagentCompletion('plan', 300, 1);
+  it('recordSubagentUsage with an agentName also maintains the per-agent breakdown', () => {
+    const { recordSubagentUsage } = useCliStore.getState();
+    recordSubagentUsage({ agentName: 'explore', tokens: 1000, credits: 5 });
+    recordSubagentUsage({ agentName: 'explore', tokens: 500, credits: 2 });
+    recordSubagentUsage({ agentName: 'plan', tokens: 300, credits: 1 });
 
     const metadata = useCliStore.getState().session!.metadata;
     expect(metadata.subagentCalls).toBe(3);
@@ -283,9 +356,10 @@ describe('subagent usage tracking', () => {
     });
   });
 
-  it('recordSubagentCompletion is a no-op without a session', () => {
-    useCliStore.setState({ session: null });
-    useCliStore.getState().recordSubagentCompletion('explore', 100, 1);
-    expect(useCliStore.getState().session).toBeNull();
+  it('recordSubagentUsage without an agentName updates rollups but not the breakdown', () => {
+    useCliStore.getState().recordSubagentUsage({ tokens: 100, credits: 1 });
+    const metadata = useCliStore.getState().session!.metadata;
+    expect(metadata.subagentTokens).toBe(100);
+    expect(metadata.subagentUsage).toBeUndefined();
   });
 });

@@ -19,7 +19,7 @@ import { handleImageEditCommand, handleImageGenerationCommand } from '../command
 import { CommandHandlers, CommandKey, extractCommandAndParams, handleCommand } from '@client/app/utils/commands';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSearch } from '@tanstack/react-router';
-import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
 import { useDeleteQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useQueryClient } from '@tanstack/react-query';
 import { SendMessageOptions } from '@client/app/utils/llm';
@@ -114,7 +114,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId }) => 
   const theme = useTheme();
   const mode = theme.palette.mode;
   const { settings } = useUserSettings();
-  const { chatCompletion, setChatCompletion } = useSubscribeChatCompletion(sessionId);
+  const { chatCompletion, setChatCompletion } = useChatCompletionContext();
   const { search, showPinnedOnly } = useNotebookSearch();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();

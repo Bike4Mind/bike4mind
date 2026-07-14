@@ -204,10 +204,12 @@ if (Config.GITHUB_CLIENT_ID && Config.GITHUB_CLIENT_ID !== 'not-configured') {
     // the overloads correctly. Cast around the RC's faulty overload resolution;
     // runtime is unchanged (passReqToCallback defaults to false, so verify receives
     // (accessToken, refreshToken, profile, done)). See typecheck-report.md.
-    new (GitHubStrategy as unknown as new (
-      options: Record<string, unknown>,
-      verify: (...args: any[]) => void
-    ) => GitHubStrategy)(
+    new (
+      GitHubStrategy as unknown as new (
+        options: Record<string, unknown>,
+        verify: (...args: any[]) => void
+      ) => GitHubStrategy
+    )(
       {
         clientID: Config.GITHUB_CLIENT_ID,
         clientSecret: Config.GITHUB_CLIENT_SECRET,

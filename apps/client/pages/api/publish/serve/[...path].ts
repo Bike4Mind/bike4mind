@@ -12,12 +12,14 @@ import {
   checkVisibility,
   collectInlineAssets,
   prepareShareMeta,
+  recordGatedView,
   renderBundleLoaderShell,
   renderSandboxedBundle,
   stripToText,
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
+import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
@@ -328,6 +330,16 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(access.status).json({ error: access.error });
   }
 
+  // #408: audit an authenticated view of a DOMAIN-gated artifact. Access is granted
+  // here, so bumpViewCount below records both the aggregate count and (for domain
+  // gates) the per-account audit row. Computed once so whichever view-serving branch
+  // runs records it exactly once (assets of gated bundles are inlined, so no
+  // sub-request double-counts). Fire-and-forget inside bumpViewCount.
+  const gateViewAudit =
+    gateArtifact.accessGate?.kind === 'domain'
+      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
+      : undefined;
+
   if (isShare) {
     // No-sign-in links are unlisted capabilities: keep them out of search indexes,
     // and stop the token leaking to third parties via the Referer header on any
@@ -370,7 +382,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     );
     res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
     return res.status(200).send(page);
   }
 
@@ -520,7 +532,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
     return res.status(200).send(srcdoc);
   }
 
@@ -627,7 +639,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
   return res.status(200).send(wrapperPage);
 });
 
@@ -988,7 +1000,10 @@ const CRAWLER_UA_RE =
 function bumpViewCount(
   artifact: { publicId: string; ownerId: string },
   viewer: { id?: string } | undefined,
-  userAgent?: string
+  userAgent?: string,
+  // #408: when the served view passed a gate, record per-account attribution
+  // alongside the aggregate counter. Only set for authenticated gate views.
+  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
 ): void {
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
@@ -996,6 +1011,18 @@ function bumpViewCount(
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
   const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
   void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
+  // Audit non-owner authenticated gate views only: the point is who OTHER than the
+  // owner reached a gated artifact, and the owner bypasses their own gate anyway.
+  if (gateView && viewer?.id && !isOwner) {
+    void recordGatedView({
+      publicId: artifact.publicId,
+      viewerId: String(viewer.id),
+      gateKind: gateView.gateKind,
+      viewerEmailDomain: gateView.viewerEmailDomain,
+      sourceIp: gateView.sourceIp,
+      userAgent,
+    });
+  }
 }
 
 /**

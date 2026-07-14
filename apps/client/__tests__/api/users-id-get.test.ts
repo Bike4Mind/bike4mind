@@ -77,7 +77,10 @@ describe('GET /api/users/[id]', () => {
     expect(res.json).toHaveBeenCalledWith({ error: 'User not found' });
   });
 
-  it('returns full profile when requester is the same user (self)', async () => {
+  // Self / admin get the profile with credentials stripped (via redactUserSecretsForSelf),
+  // but keep the self/admin-only fields (email, credits, ...) that the public DTO omits,
+  // plus securityQuestions + userNotes which the profile-edit form loads and round-trips.
+  it('returns the profile with credentials stripped for the same user (self)', async () => {
     const targetUser = mockUserDoc({ id: 'user-self-123' });
     (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
       populate: vi.fn().mockReturnThis(),
@@ -89,13 +92,23 @@ describe('GET /api/users/[id]', () => {
 
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-    // Full document must be returned untouched - not the public DTO
-    expect(res.json).toHaveBeenCalledWith(targetUser);
     const payload = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(payload).toEqual(targetUser);
+    // self-only fields present (unlike the public DTO)
+    expect(payload.id).toBe('user-self-123');
+    expect(payload.email).toBe('john@example.com');
+    expect(payload.currentCredits).toBe(9999);
+    // edit-form fields kept
+    expect(payload.securityQuestions).toBeDefined();
+    expect(payload.userNotes).toBeDefined();
+    // credentials stripped
+    expect(payload.oauthCredentials).toBeUndefined();
+    expect(payload.loginRecords).toBeUndefined();
+    expect(payload.googleDrive?.accessToken).toBeUndefined();
+    expect(payload.atlassianConnect?.accessToken).toBeUndefined();
+    expect(payload.slackSettings?.slackUserToken).toBeUndefined();
   });
 
-  it('returns full profile when requester is an admin viewing another user', async () => {
+  it('returns the profile with credentials stripped for an admin viewing another user', async () => {
     const targetUser = mockUserDoc({ id: 'user-target-456' });
     (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
       populate: vi.fn().mockReturnThis(),
@@ -107,28 +120,37 @@ describe('GET /api/users/[id]', () => {
 
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-    // Full document must be returned untouched - not the public DTO
-    expect(res.json).toHaveBeenCalledWith(targetUser);
     const payload = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(payload).toEqual(targetUser);
+    expect(payload.id).toBe('user-target-456');
+    expect(payload.email).toBe('john@example.com');
+    expect(payload.securityQuestions).toBeDefined();
+    expect(payload.userNotes).toBeDefined();
+    expect(payload.oauthCredentials).toBeUndefined();
+    expect(payload.loginRecords).toBeUndefined();
+    expect(payload.googleDrive?.accessToken).toBeUndefined();
+    expect(payload.atlassianConnect?.accessToken).toBeUndefined();
+    expect(payload.slackSettings?.slackUserToken).toBeUndefined();
   });
 
-  it('returns full profile when an admin fetches their own profile', async () => {
+  it('returns the profile with credentials stripped when an admin fetches their own profile', async () => {
     const targetUser = mockUserDoc({ id: 'admin-self-123', isAdmin: true });
     (User.findById as ReturnType<typeof vi.fn>).mockReturnValue({
       populate: vi.fn().mockReturnThis(),
       select: vi.fn().mockResolvedValue(targetUser),
     });
 
-    // isSelf is true AND isAdmin is true - isSelf branch wins, full doc returned
     const req = mockReq('admin-self-123', 'admin-self-123', true);
     const res = mockRes();
 
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req, res);
 
-    expect(res.json).toHaveBeenCalledWith(targetUser);
     const payload = (res.json as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(payload).toEqual(targetUser);
+    expect(payload.id).toBe('admin-self-123');
+    expect(payload.isAdmin).toBe(true);
+    expect(payload.oauthCredentials).toBeUndefined();
+    expect(payload.loginRecords).toBeUndefined();
+    expect(payload.googleDrive?.accessToken).toBeUndefined();
+    expect(payload.atlassianConnect?.accessToken).toBeUndefined();
   });
 
   it('returns only public fields when a non-admin user fetches another user', async () => {

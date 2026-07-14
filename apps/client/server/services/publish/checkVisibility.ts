@@ -1,4 +1,5 @@
 import type { PublishVisibility } from '@bike4mind/common';
+import { registrableDomain } from '@bike4mind/utils/registrableDomain';
 import type { PublishUser } from './checkScopePermission';
 
 /**
@@ -44,7 +45,13 @@ export interface VisibilityContext {
 }
 
 export type VisibilityResult =
-  | { ok: true }
+  | {
+      ok: true;
+      /** On a DOMAIN-gate pass, the viewer's registrable email domain, so the
+       *  caller can audit the view without a second User lookup. Absent for
+       *  ungated / owner-admin / non-domain passes. */
+      viewerEmailDomain?: string;
+    }
   | {
       ok: false;
       status: 401 | 403;
@@ -116,9 +123,18 @@ export async function checkAccessGate(
   if (!user?.id) {
     return { ok: false, status: 401, error: 'Authentication required', reason: 'domain' };
   }
-  const allowed = (gate.allowedDomains ?? []).map(d => d.toLowerCase());
+  // Match an allowlist ENTRY as stored (exact host, or a subdomain of it) - NEVER
+  // by reducing the entry to its registrable domain. Reducing the entry side would
+  // collapse `acme.onmicrosoft.com` to the shared `onmicrosoft.com` and admit every
+  // other tenant under it. The viewer side needs no reduction either: the subdomain
+  // suffix already lets `mail.acme.com` in through an `acme.com` gate, while
+  // `evilacme.com` / `acme.com.evil.io` still fail. Drop any entry that is not a
+  // real registrable domain (a bare public/private suffix like co.uk / github.io)
+  // so a legacy or misconfigured entry can't widen the gate; empty -> fail closed.
+  const allowed = (gate.allowedDomains ?? [])
+    .map(d => d.trim().toLowerCase())
+    .filter(d => registrableDomain(d, { allowPrivateDomains: true }) !== null);
   if (allowed.length === 0) {
-    // A domain gate with no domains is a misconfiguration; fail closed.
     return { ok: false, status: 403, error: 'Not authorized', reason: 'domain' };
   }
   const { User } = await import('@bike4mind/database');
@@ -126,10 +142,12 @@ export async function checkAccessGate(
     .select('email emailVerified')
     .lean<{ email?: string; emailVerified?: boolean } | null>();
   const email = viewer?.email?.toLowerCase() ?? '';
-  const domain = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
-  // Exact domain match only - no substring/suffix matching - and only for
-  // VERIFIED emails (same rule as the entitlement domain grants).
-  if (viewer?.emailVerified === true && domain && allowed.includes(domain)) return { ok: true };
+  const viewerHost = email.includes('@') ? email.slice(email.lastIndexOf('@') + 1) : '';
+  const hostMatches = !!viewerHost && allowed.some(e => viewerHost === e || viewerHost.endsWith(`.${e}`));
+  // Only VERIFIED emails match (same rule as the entitlement domain grants).
+  if (viewer?.emailVerified === true && hostMatches) {
+    return { ok: true, viewerEmailDomain: registrableDomain(viewerHost) ?? viewerHost };
+  }
   return {
     ok: false,
     status: 403,
