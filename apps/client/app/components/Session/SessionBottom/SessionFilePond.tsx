@@ -1,5 +1,6 @@
 import React from 'react';
 import { toast } from 'sonner';
+import { useQueryClient } from '@tanstack/react-query';
 import { Box } from '@mui/joy';
 import 'filepond-plugin-image-preview/dist/filepond-plugin-image-preview.css';
 import 'filepond/dist/filepond.min.css';
@@ -11,6 +12,7 @@ import {
   consumeBufferedModerationStatus,
   patchPendingMessageFileModerationStatus,
 } from '@client/app/hooks/useSessionLayout';
+import { GearsStatusResponse } from '@client/app/hooks/useGearsStatus';
 import { LexicalChatInputRef } from '../LexicalChatInput';
 import styles from '../FilePond.module.css';
 
@@ -49,6 +51,20 @@ export function SessionFilePond({
   chatInputValue,
   setChatInputValue,
 }: SessionFilePondProps) {
+  const queryClient = useQueryClient();
+
+  // A first upload unlocks the 'files' gear server-side, but the Gears status
+  // query has a 5-minute staleTime - without an explicit invalidation the Gears
+  // page keeps showing the unearned "Upload your first file" CTA until a reload.
+  // Only invalidate while the gear is still locked so routine uploads don't
+  // refetch the status on every attachment.
+  const invalidateGearsStatusOnFirstFile = () => {
+    const status = queryClient.getQueryData<GearsStatusResponse>(['gears', 'status']);
+    const filesGear = status?.gears.find(g => g.key === 'files');
+    if (!filesGear || filesGear.unlocked) return;
+    void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
+  };
+
   return (
     <Box
       sx={{
@@ -216,6 +232,8 @@ export function SessionFilePond({
                     setChatInputValue(newValue);
                   }
                 }
+
+                invalidateGearsStatusOnFirstFile();
 
                 load(fabFile.id);
 
