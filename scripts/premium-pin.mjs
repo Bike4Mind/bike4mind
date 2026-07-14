@@ -95,9 +95,15 @@ function cmdMerged(pins, name) {
   const owner = process.env.PREMIUM_OVERLAY_OWNER || 'Bike4Mind';
   const repo = `${owner}/${key}`;
   console.log(`Resolving ${repo}@${ref} to its latest commit SHA...`);
-  const sha = execFileSync('gh', ['api', `repos/${repo}/commits/${ref}`, '--jq', '.sha'], {
-    encoding: 'utf8',
-  }).trim();
+  let sha;
+  try {
+    sha = execFileSync('gh', ['api', `repos/${repo}/commits/${ref}`, '--jq', '.sha'], {
+      encoding: 'utf8',
+    }).trim();
+  } catch (err) {
+    console.error(`Error: 'gh api' failed to resolve ${repo}@${ref}: ${(err.stderr || err.message).trim()}`);
+    process.exit(1);
+  }
   if (!SHA_RE.test(sha)) {
     console.error(`Error: unexpected response from gh api (not a 40-char SHA): '${sha}'`);
     process.exit(1);
