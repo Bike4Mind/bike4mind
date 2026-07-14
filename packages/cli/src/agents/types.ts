@@ -330,6 +330,10 @@ export interface BackgroundAgentJob {
   endTime?: number;
   /** Result summary (available when completed) */
   resultSummary?: string;
+  /** Total tokens used by this job (available when completed) */
+  totalTokens?: number;
+  /** Total B4M credits used by this job (available when completed) */
+  totalCredits?: number;
   /** Error message (available when failed) */
   error?: string;
   /** Groups jobs spawned in the same LLM turn for consolidated notifications */

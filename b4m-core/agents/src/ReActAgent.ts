@@ -809,6 +809,14 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
   }
 
   /**
+   * Get current B4M credit usage. Cheap accessor for hot paths
+   * (e.g. per-step listeners surfacing live subagent usage).
+   */
+  getCreditsUsage(): number {
+    return this.totalCredits;
+  }
+
+  /**
    * Get tool call count
    */
   getToolCallCount(): number {

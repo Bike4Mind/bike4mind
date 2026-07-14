@@ -137,6 +137,30 @@ describe('SubagentOrchestrator onSubagentUsage rollup', () => {
     });
   });
 
+  it('fires onSubagentUsage exactly once with accumulated usage when the run fails', async () => {
+    mockRun.mockRejectedValue(new Error('backend exploded'));
+
+    const onSubagentUsage = vi.fn();
+    const orchestrator = new SubagentOrchestrator(makeDeps({ onSubagentUsage }));
+
+    await expect(
+      orchestrator.delegateToAgent({
+        task: 'do something that fails',
+        agentName: 'test-agent',
+        parentSessionId: 'session-1',
+      })
+    ).rejects.toThrow('backend exploded');
+
+    // Reads the agent's usage getters (absent on this mock, so zeros); the
+    // point is the rollup fires on the failure path and only once.
+    expect(onSubagentUsage).toHaveBeenCalledTimes(1);
+    expect(onSubagentUsage).toHaveBeenCalledWith({
+      agentName: 'test-agent',
+      totalTokens: 0,
+      totalCredits: 0,
+    });
+  });
+
   it('does not throw when onSubagentUsage is not provided', async () => {
     mockRun.mockResolvedValue({
       finalAnswer: 'Done',

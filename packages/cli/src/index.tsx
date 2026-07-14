@@ -803,7 +803,11 @@ function CliApp() {
           useCliStore.getState().setPendingBackgroundTrigger(true);
         },
         onSubagentUsage: usage => {
-          useCliStore.getState().recordSubagentUsage({ tokens: usage.totalTokens, credits: usage.totalCredits });
+          useCliStore.getState().recordSubagentUsage({
+            agentName: usage.agentName,
+            tokens: usage.totalTokens,
+            credits: usage.totalCredits,
+          });
         },
       });
 
@@ -2618,6 +2622,7 @@ function CliApp() {
               subagentCalls: activeSession.metadata.subagentCalls,
               subagentTokens: activeSession.metadata.subagentTokens,
               subagentCost: activeSession.metadata.subagentCost,
+              subagentUsage: activeSession.metadata.subagentUsage,
             },
           };
 
@@ -2884,6 +2889,28 @@ function CliApp() {
           }
         } else {
           console.log(`\nNo usage data available for the last ${USAGE_DAYS} days.`);
+        }
+
+        // Per-agent breakdown of spawned-agent usage in the current session
+        const usageSession = useCliStore.getState().session;
+        const subagentUsage = usageSession?.metadata.subagentUsage;
+        if (subagentUsage && Object.keys(subagentUsage).length > 0) {
+          const meta = usageSession.metadata;
+          console.log('\nSpawned Agents (this session):');
+          const sortedAgents = Object.entries(subagentUsage).sort((a, b) => b[1].tokens - a[1].tokens);
+          for (const [agentName, agentUsage] of sortedAgents) {
+            const paddedAgent = agentName.padEnd(MODEL_NAME_COLUMN_WIDTH);
+            const creditsPart = agentUsage.credits > 0 ? `, ${agentUsage.credits.toLocaleString()} credits` : '';
+            console.log(
+              `  ${paddedAgent}${agentUsage.calls} call${agentUsage.calls === 1 ? '' : 's'}, ` +
+                `${agentUsage.tokens.toLocaleString()} tokens${creditsPart}`
+            );
+          }
+          const totalCreditsPart =
+            (meta.subagentCost || 0) > 0 ? `, ${(meta.subagentCost || 0).toLocaleString()} credits` : '';
+          console.log(
+            `  Total: ${meta.subagentCalls || 0} calls, ${(meta.subagentTokens || 0).toLocaleString()} tokens${totalCreditsPart}`
+          );
         }
 
         break;

@@ -1491,6 +1491,70 @@ describe('BackgroundAgentManager', () => {
     });
   });
 
+  describe('usage tracking', () => {
+    const usageResult: AgentExecutionResult = {
+      agentName: 'test-agent',
+      thoroughness: 'medium',
+      summary: 'Test result summary',
+      parentSessionId: 'test-session',
+      resumeId: 'test-resume-id',
+      finalAnswer: 'Test answer',
+      steps: [],
+      completionInfo: {
+        totalTokens: 4321,
+        totalInputTokens: 4000,
+        totalOutputTokens: 321,
+        totalCredits: 9,
+        iterations: 2,
+        toolCalls: 1,
+        reachedMaxIterations: false,
+      },
+    };
+
+    it('records token and credit usage on the completed job', async () => {
+      const orchestrator = createMockOrchestrator({ resolveWith: usageResult });
+      const manager = new BackgroundAgentManager(orchestrator);
+
+      const jobId = manager.spawn(createSpawnOptions());
+      await waitForAllJobsTerminal(manager);
+
+      const job = manager.getJob(jobId);
+      expect(job?.status).toBe('completed');
+      expect(job?.totalTokens).toBe(4321);
+      expect(job?.totalCredits).toBe(9);
+    });
+
+    it('leaves usage fields unset on failed jobs', async () => {
+      const orchestrator = createMockOrchestrator({ rejectWith: new Error('boom') });
+      const manager = new BackgroundAgentManager(orchestrator);
+
+      const jobId = manager.spawn(createSpawnOptions());
+      await waitForAllJobsTerminal(manager);
+
+      const job = manager.getJob(jobId);
+      expect(job?.status).toBe('failed');
+      expect(job?.totalTokens).toBeUndefined();
+      expect(job?.totalCredits).toBeUndefined();
+    });
+
+    it('includes aggregated usage in the consolidated group notification header', async () => {
+      const orchestrator = createMockOrchestrator({ resolveWith: usageResult });
+      const manager = new BackgroundAgentManager(orchestrator);
+
+      manager.setCurrentTurn('turn-usage');
+      manager.spawn(createSpawnOptions());
+      manager.spawn(createSpawnOptions());
+      manager.setCurrentTurn(null);
+      await waitForAllJobsTerminal(manager);
+
+      const notifications = manager.drainNotifications();
+      expect(notifications).toHaveLength(1);
+      const headerLine = notifications[0].split('\n')[0];
+      expect(headerLine).toContain('8,642 tokens');
+      expect(headerLine).toContain('18 credits');
+    });
+  });
+
   describe('resume history linkage', () => {
     it('delegates with resumeId set to the job id so history keys to it', async () => {
       const orchestrator = createMockOrchestrator();

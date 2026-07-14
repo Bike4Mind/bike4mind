@@ -130,10 +130,13 @@ export interface Session {
     totalCost: number;
     totalCredits?: number; // Total B4M credits used in this session
     toolCallCount: number;
-    // Subagent execution tracking
+    // Subagent execution tracking (spawned agents: agent_delegate, skills, background jobs)
     subagentCalls?: number;
     subagentTokens?: number;
+    /** Total B4M credits consumed by spawned agents (same unit as totalCredits) */
     subagentCost?: number;
+    /** Per-agent usage breakdown, keyed by agent name (for /usage) */
+    subagentUsage?: Record<string, { calls: number; tokens: number; credits: number }>;
     // Compaction tracking
     compactedFrom?: string; // Original session ID if this is a compacted session
     // Durable workflow state (Q-inspired agentic patterns)
