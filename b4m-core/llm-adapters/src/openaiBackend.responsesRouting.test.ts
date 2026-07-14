@@ -7,8 +7,12 @@
  * (`RESPONSES_API_TOOL_MODELS`), where reasoning + tools work together and
  * `reasoning_effort` is preserved.
  *
+ * The Responses turns stream: text arrives via `response.output_text.delta` events
+ * and the terminal `response.completed` carries usage + output items.
+ *
  * Asserted:
  *  - GPT-5 + tools            -> responses.create (NOT chat.completions); reasoning kept; flat tools; input translated
+ *  - GPT-5 + tools, terminal text -> streamed token-by-token (multiple text frames), stream:true requested
  *  - GPT-5 + tools, function_call returned -> toolFn executes, then recursion synthesizes via chat.completions
  *  - GPT-5 + tools, executeTools:false -> responses.create called, toolFn NOT run, tool reported
  *  - GPT-4o + tools           -> NOT routed (chat.completions only)
@@ -37,6 +41,29 @@ function functionCallResponse(name: string, args: AnyRecord, callId = 'call_1') 
   };
 }
 
+/**
+ * Wrap a terminal Responses payload as the SSE event stream the streaming
+ * `/v1/responses` path consumes: one `response.output_text.delta` per output_text
+ * segment (chunked to exercise incremental streaming), then a terminal
+ * `response.completed` carrying the full payload (usage + output items).
+ */
+function toResponseStream(payload: AnyRecord): AsyncIterable<AnyRecord> {
+  const events: AnyRecord[] = [];
+  for (const item of (payload.output as AnyRecord[]) ?? []) {
+    if (item.type !== 'message') continue;
+    for (const part of (item.content as AnyRecord[]) ?? []) {
+      if (part.type !== 'output_text') continue;
+      // Split into per-word deltas so tests can assert token-by-token streaming.
+      const words = String(part.text).match(/\S+\s*/g) ?? [];
+      for (const w of words) events.push({ type: 'response.output_text.delta', delta: w });
+    }
+  }
+  events.push({ type: 'response.completed', response: payload });
+  return (async function* () {
+    for (const e of events) yield e;
+  })();
+}
+
 /** A terminal Chat Completions payload (used for the post-tool synthesis turn). */
 function terminalChatCompletion(content = 'Loaded the problem.') {
   return {
@@ -53,7 +80,9 @@ function buildBackend(opts?: {
   const responsesQueue = [...(opts?.responses ?? [terminalResponse()])];
   const chatQueue = [...(opts?.chat ?? [terminalChatCompletion()])];
 
-  const responsesCreate = vi.fn(async (_params: AnyRecord) => responsesQueue.shift() ?? terminalResponse());
+  const responsesCreate = vi.fn(async (_params: AnyRecord) =>
+    toResponseStream(responsesQueue.shift() ?? terminalResponse())
+  );
   const chatCreate = vi.fn(async (_params: AnyRecord) => chatQueue.shift() ?? terminalChatCompletion());
 
   (backend as unknown as { _api: unknown })._api = {
@@ -109,6 +138,29 @@ describe('OpenAIBackend /v1/responses routing for GPT-5 narrator family + tools'
     expect(Array.isArray(input)).toBe(true);
     expect(input.some(i => i.role === 'system')).toBe(true);
     expect(input.some(i => i.role === 'user')).toBe(true);
+  });
+
+  it('streams terminal text token-by-token via responses.create with stream:true', async () => {
+    const { backend, responsesCreate, chatCreate } = buildBackend({
+      responses: [terminalResponse('Here is your answer now')],
+    });
+
+    const emits = await run(backend, ChatModels.GPT5, { tools: [sampleTool], reasoningEffort: 'medium' });
+
+    // Streaming was requested on the Responses call.
+    expect((responsesCreate.mock.calls[0][0] as AnyRecord).stream).toBe(true);
+    expect(chatCreate).not.toHaveBeenCalled();
+
+    // Text arrived incrementally: more than one non-empty text frame, and the
+    // concatenation reconstructs the full answer.
+    const textFrames = emits.map(e => e.text.filter((t): t is string => !!t).join('')).filter(s => s.length > 0);
+    expect(textFrames.length).toBeGreaterThan(1);
+    expect(textFrames.join('')).toBe('Here is your answer now');
+
+    // Final frame is metadata-only (no text) and carries the terminal token usage.
+    const last = emits.at(-1)!;
+    expect(last.text.every(t => !t)).toBe(true);
+    expect((last.info as { outputTokens?: number }).outputTokens).toBe(4);
   });
 
   it('executes a returned function_call, then synthesizes via chat.completions on recursion', async () => {

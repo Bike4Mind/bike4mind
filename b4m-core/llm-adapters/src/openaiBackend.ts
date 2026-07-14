@@ -17,7 +17,9 @@ import {
 import OpenAI from 'openai';
 import { ChatCompletionChunk, ChatCompletionCreateParams } from 'openai/resources/chat/completions';
 import type {
+  Response as OpenAIResponse,
   ResponseCreateParamsNonStreaming,
+  ResponseCreateParamsStreaming,
   ResponseInputItem,
   ResponseOutputItem,
   Tool as ResponsesTool,
@@ -1876,18 +1878,6 @@ export class OpenAIBackend implements ICompletionBackend {
     return items;
   }
 
-  /** Concatenate the assistant text (`output_text`) from a Responses output array. */
-  private extractResponsesText(output: ResponseOutputItem[]): string {
-    let text = '';
-    for (const item of output) {
-      if (item.type !== 'message') continue;
-      for (const part of item.content) {
-        if (part.type === 'output_text') text += part.text;
-      }
-    }
-    return text;
-  }
-
   /**
    * Resolve reasoning effort for the Responses path. Mirrors the chat path
    * (explicit user preference wins, else auto-classify from query complexity) -
@@ -1905,14 +1895,19 @@ export class OpenAIBackend implements ICompletionBackend {
   }
 
   /**
-   * Completion via OpenAI's `/v1/responses` API (non-streaming), used for the GPT-5
+   * Completion via OpenAI's `/v1/responses` API (streaming), used for the GPT-5
    * narrator family when tools are present (see RESPONSES_API_TOOL_MODELS). Unlike
    * `/v1/chat/completions`, this endpoint reliably emits real tool calls for reasoning
    * models while keeping `reasoning_effort`. It reuses the same tool-execution +
    * recursion loop as `complete()`: after tools run, results are pushed onto `messages`
    * and we recurse via `complete()` - a reasoning model with tools re-routes here; the
    * terminal (tools-dropped) synthesis turn falls through to the streaming chat path.
-   * (Full streaming Responses path tracked separately.)
+   *
+   * Streaming: text is forwarded token-by-token via `response.output_text.delta`
+   * events (matching the chat path's per-chunk callback contract), and the terminal
+   * `response.completed`/`incomplete` event carries the full `Response` (usage +
+   * output items) that the tool-handling tail below consumes exactly as the
+   * non-streaming path did.
    */
   private async completeViaResponses(
     model: string,
@@ -1931,10 +1926,10 @@ export class OpenAIBackend implements ICompletionBackend {
     const input = this.toResponsesInput(chatMessages);
     const reasoningEffort = this.resolveReasoningEffort(model, options);
 
-    const params: ResponseCreateParamsNonStreaming = {
+    const params: ResponseCreateParamsStreaming = {
       model,
       input,
-      stream: false,
+      stream: true,
       // Stateless: we resend the full translated history each turn (matching the chat
       // path's rebuild-from-messages recursion), so no server-side conversation state.
       store: false,
@@ -1942,7 +1937,7 @@ export class OpenAIBackend implements ICompletionBackend {
       ...(reasoningEffort
         ? {
             reasoning: {
-              effort: reasoningEffort as NonNullable<ResponseCreateParamsNonStreaming['reasoning']>['effort'],
+              effort: reasoningEffort as NonNullable<ResponseCreateParamsStreaming['reasoning']>['effort'],
             },
           }
         : {}),
@@ -1953,7 +1948,9 @@ export class OpenAIBackend implements ICompletionBackend {
       ...(this._endUserId ? { safety_identifier: this._endUserId } : {}),
     };
 
-    const response = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
+    // withRetry wraps stream establishment only; a mid-stream failure surfaces during
+    // iteration below and is not retried (mirrors the chat streaming path).
+    const stream = await withRetry(() => this._api.responses.create(params, { signal: options.abortSignal }), {
       maxRetries: 3,
       initialDelayMs: 500,
       maxDelayMs: 10000,
@@ -1963,20 +1960,50 @@ export class OpenAIBackend implements ICompletionBackend {
       abortSignal: options.abortSignal,
     }).then(r => r.result);
 
-    const inputTokens = response.usage?.input_tokens ?? 0;
-    const outputTokens = response.usage?.output_tokens ?? 0;
+    // Stream text deltas live; capture the terminal Response for usage + tool handling.
+    // Usage is only known at the terminal event, so per-delta emits carry the running
+    // accumulators (this turn's tokens stay 0 until the final frame) - the same
+    // assign-not-add pattern the chat path relies on for cross-turn totals.
+    let finalResponse: OpenAIResponse | undefined;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for await (const event of stream) {
+      if (event.type === 'response.output_text.delta') {
+        await callback([event.delta], {
+          inputTokens: accumInputTokens + inputTokens,
+          outputTokens: accumOutputTokens + outputTokens,
+          toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
+        });
+      } else if (event.type === 'response.completed' || event.type === 'response.incomplete') {
+        finalResponse = event.response;
+      } else if (event.type === 'response.failed') {
+        throw new Error(
+          `OpenAI Responses stream failed for ${model}: ${event.response.error?.message ?? 'unknown error'}`
+        );
+      } else if (event.type === 'error') {
+        throw new Error(`OpenAI Responses stream error for ${model}: ${event.message}`);
+      }
+    }
 
-    const functionCalls = response.output.filter(
+    if (!finalResponse) {
+      throw new Error(`OpenAI Responses stream for ${model} ended without a terminal response event`);
+    }
+
+    inputTokens = finalResponse.usage?.input_tokens ?? 0;
+    outputTokens = finalResponse.usage?.output_tokens ?? 0;
+
+    const functionCalls = finalResponse.output.filter(
       (item): item is Extract<ResponseOutputItem, { type: 'function_call' }> => item.type === 'function_call'
     );
 
-    // Terminal turn - no tool calls. Emit the model's text.
+    // Terminal turn - no tool calls. Text was already delivered via the delta events
+    // above, so emit a final metadata-only frame carrying the true usage + stopReason.
     if (functionCalls.length === 0) {
       // The Responses API reports truncation via incomplete_details rather than a
       // per-choice finish_reason string; map it onto the same stopReason vocabulary
       // the chat-completions path uses.
-      const stopReason = normalizeOpenAIResponsesStopReason(response.incomplete_details?.reason);
-      await callback([this.extractResponsesText(response.output)], {
+      const stopReason = normalizeOpenAIResponsesStopReason(finalResponse.incomplete_details?.reason);
+      await callback([], {
         inputTokens: accumInputTokens + inputTokens,
         outputTokens: accumOutputTokens + outputTokens,
         toolsUsed: toolsUsed.length > 0 ? toolsUsed : undefined,
