@@ -114,8 +114,8 @@ export function assertPublishableDependencies(source: string): void {
 
 /**
  * JSX -> inert classic-runtime JS. Rewrites imports, transpiles JSX to `React.createElement`
- * via esbuild-wasm, then unwraps `export default` into a `__DEFAULT_EXPORT__` local the bootstrap
- * reads. Output contains no import/export statements and no eval.
+ * via @babel/standalone, then unwraps `export default` into a `__DEFAULT_EXPORT__` local the
+ * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
   const relImport = findRelativeImport(source);
