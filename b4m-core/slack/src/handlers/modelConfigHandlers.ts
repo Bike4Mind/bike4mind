@@ -233,6 +233,8 @@ export async function handleChannelConfigEdit(
         preferredModel: existing?.preferredModel,
         temperature: existing?.temperature,
         maxTokens: existing?.maxTokens,
+        githubOwner: existing?.githubOwner,
+        githubRepo: existing?.githubRepo,
       }),
     });
     return {};
@@ -285,7 +287,7 @@ export async function handleChannelModelConfigSubmission(
     return {
       response_action: 'errors',
       errors: {
-        model_block: submission.error,
+        [submission.errorBlock ?? 'model_block']: submission.error,
       },
     };
   }
@@ -297,12 +299,18 @@ export async function handleChannelModelConfigSubmission(
       preferredModel: submission.preferredModel,
       temperature: submission.temperature,
       maxTokens: submission.maxTokens,
+      githubOwner: submission.githubOwner ?? null,
+      githubRepo: submission.githubRepo ?? null,
       configuredBy: user.id,
     });
 
     logger.info('[Slack Interactive] Channel model config saved', {
       channelId: submission.channelId,
       model: submission.preferredModel,
+      githubRepo:
+        submission.githubOwner && submission.githubRepo
+          ? `${submission.githubOwner}/${submission.githubRepo}`
+          : undefined,
       slackUserId: user.id,
     });
 
@@ -368,6 +376,8 @@ export async function refreshAppHomeForAdmin(
       preferredModel: c.preferredModel,
       temperature: c.temperature,
       maxTokens: c.maxTokens,
+      githubOwner: c.githubOwner,
+      githubRepo: c.githubRepo,
     }));
 
     if (dbUser?.organizationId) {

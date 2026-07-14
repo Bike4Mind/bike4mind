@@ -23,6 +23,8 @@ interface SlackButtonElement {
  */
 export interface ChannelConfigSummary extends IModelConfig {
   channelId: string;
+  githubOwner?: string;
+  githubRepo?: string;
 }
 
 export interface AppHomeUserContext {
@@ -400,6 +402,7 @@ export class AppHomeBuilder {
         if (cfg.preferredModel) parts.push(`Model: \`${cfg.preferredModel}\``);
         if (cfg.temperature !== undefined) parts.push(`Temp: ${cfg.temperature}`);
         if (cfg.maxTokens !== undefined) parts.push(`Tokens: ${cfg.maxTokens}`);
+        if (cfg.githubOwner && cfg.githubRepo) parts.push(`Repo: \`${cfg.githubOwner}/${cfg.githubRepo}\``);
         const detail = parts.length > 0 ? parts.join(' | ') : '_defaults_';
 
         blocks.push({

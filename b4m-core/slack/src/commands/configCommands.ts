@@ -107,6 +107,7 @@ export async function handleConfigCommand(context: B4mCommandContext): Promise<B
     const systemPrompt = await buildSystemPrompt({
       user: dbUser,
       slackUserId,
+      channelId,
       logger,
     });
 
