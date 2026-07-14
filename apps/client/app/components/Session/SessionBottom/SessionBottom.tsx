@@ -367,18 +367,20 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
           maxWidth: '950px',
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isCompactLayout || isMobile || isDockedLayout
-            ? {
-                borderTop: '1px solid',
-                borderTopColor: 'border.solid',
-                borderLeft: 'none',
-                borderRight: 'none',
-                borderBottom: 'none',
-              }
-            : {
-                border: '1px solid',
-                borderColor: 'border.solid',
-              }),
+          ...(isDockedLayout
+            ? { border: 'none' }
+            : isCompactLayout || isMobile
+              ? {
+                  borderTop: '1px solid',
+                  borderTopColor: 'border.solid',
+                  borderLeft: 'none',
+                  borderRight: 'none',
+                  borderBottom: 'none',
+                }
+              : {
+                  border: '1px solid',
+                  borderColor: 'border.solid',
+                }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
