@@ -2,7 +2,6 @@
 
 import React, { useCallback, useState } from 'react';
 import { Box, IconButton, Typography, Tooltip } from '@mui/joy';
-import SmartToyIcon from '@mui/icons-material/SmartToy';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
 import HorizontalSplitIcon from '@mui/icons-material/HorizontalSplit';
@@ -80,7 +79,8 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          padding: '8px 12px',
+          height: '48px',
+          padding: '0 16px',
           backgroundColor: theme.palette.background.level1,
           borderBottom: '1px solid',
           borderColor: theme.palette.divider,
@@ -89,13 +89,19 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
         })}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <SmartToyIcon sx={{ fontSize: 18, color: 'primary.main' }} />
-          <Typography level="body-sm" fontWeight="md">
+          <Typography
+            level="body-sm"
+            fontWeight="md"
+            sx={theme => ({ color: theme.palette.sidenav?.navItemText ?? theme.palette.text.primary })}
+          >
             AI Chat
           </Typography>
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          {/* Session actions first (headerActions leads with the primary New Chat),
+              then window controls. */}
+          {headerActions}
           <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
             <IconButton
               size="sm"
@@ -108,7 +114,6 @@ const DockedChatPanel: React.FC<DockedChatPanelProps> = ({ children, headerActio
               {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 14 }} />}
             </IconButton>
           </Tooltip>
-          {headerActions}
           <Tooltip title="Float" disableInteractive>
             <IconButton
               size="sm"
