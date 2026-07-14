@@ -84,6 +84,29 @@ export { Counter as default };`;
     expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
+  it('does not corrupt a literal "export default" embedded in JSX text (line-anchored unwrap)', async () => {
+    const src = `import { useState } from 'react';
+function Doc() {
+  const [x] = useState(0);
+  return <pre>{"export default Foo"}</pre>;
+}
+export default Doc;`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain('export default Foo'); // the string literal text survives
+    expect(indexHtml).not.toContain('__DEFAULT_EXPORT__ = Foo'); // NOT rewritten inside the string
+    expect(indexHtml).toContain('__DEFAULT_EXPORT__ = Doc'); // the real top-level export is unwrapped
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
+  it('rejects a bare side-effect import cleanly instead of blanking the page', async () => {
+    const src = `import 'some-polyfill';
+import { useState } from 'react';
+export default function C() { const [n] = useState(0); return <div>{n}</div>; }`;
+    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
+      ReactArtifactTranspileError
+    );
+  });
+
   it('escapes a closing script tag in the source so it cannot break out of the inline script', async () => {
     const src = `function C() { return <div>{"</script><img src=x onerror=alert(1)>"}</div>; }\nexport default C;`;
     const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
