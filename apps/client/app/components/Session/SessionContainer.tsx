@@ -698,7 +698,9 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   </Box>
                 </Box>
               )}
-              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {/* pb keeps the last message's action row from touching the input divider
+                  now that the docked input has no top padding of its own. */}
+              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
