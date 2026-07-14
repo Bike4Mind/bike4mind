@@ -31,6 +31,7 @@ const handler = baseApi()
     // Resolve + access-gate the lake first (not-found-style denial). Writes are then
     // further restricted to owner/admin inside each service.
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    dataLakeService.assertLakeWritable(lake);
     const actor = { userId: ctx.userId, isAdmin: ctx.isAdmin };
 
     switch (action) {

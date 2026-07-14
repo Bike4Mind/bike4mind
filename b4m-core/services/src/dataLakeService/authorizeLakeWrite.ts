@@ -1,7 +1,7 @@
 import type { AccessContext, IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { DATALAKE_TAG_PREFIX } from '@bike4mind/common';
 import { BadRequestError } from '@bike4mind/utils';
-import { assertLakeAccess } from './assertLakeAccess';
+import { assertLakeAccess, assertLakeWritable } from './assertLakeAccess';
 
 /** The acting principal for a write/manage decision - resolved from auth, never the body. */
 type ManageActor = Pick<AccessContext, 'userId' | 'isAdmin'>;
@@ -32,6 +32,9 @@ export const assertLakeWriteAccess = async (
   { db }: { db: { dataLakes: Pick<IDataLakeRepository, 'findById' | 'findBySlug'> } }
 ): Promise<IDataLakeDocument> => {
   const lake = await assertLakeAccess(lakeIdOrSlug, ctx, { db });
+  // Fallback lakes are read-only for EVERYONE (even admins, who pass canManageLake):
+  // there is no document to attach files to.
+  assertLakeWritable(lake);
   if (!canManageLake(lake, ctx)) {
     throw new BadRequestError('Only the creator can add files to this data lake');
   }
