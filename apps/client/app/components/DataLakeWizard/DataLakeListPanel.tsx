@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -55,10 +55,28 @@ export default function DataLakeListPanel() {
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const [viewingLake, setViewingLake] = useState<{ id: string; name: string; tagPrefix: string } | null>(null);
-  const [editingLake, setEditingLake] = useState<EditableLake | null>(null);
+  const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
+
+  // Derive the lake being edited from the LIVE list (by id) rather than a snapshot, so a
+  // visibility mutation's cache refresh flows into the settings modal instead of leaving the
+  // Visibility control showing stale pre-mutation state.
+  const editingLake = useMemo<EditableLake | null>(() => {
+    const l = dataLakes?.find(d => d.id === editingLakeId);
+    return l
+      ? {
+          id: l.id,
+          name: l.name,
+          description: l.description ?? '',
+          requiredUserTag: l.requiredUserTag ?? '',
+          requiredEntitlement: l.requiredEntitlement ?? '',
+          organizationId: l.organizationId ?? '',
+          isPublic: l.isPublic ?? false,
+        }
+      : null;
+  }, [dataLakes, editingLakeId]);
 
   const archiveLake = useArchiveDataLake();
   const unarchiveLake = useUnarchiveDataLake();
@@ -161,15 +179,7 @@ export default function DataLakeListPanel() {
                       data-testid={`datalake-settings-btn-${lake.id}`}
                       onClick={e => {
                         stop(e);
-                        setEditingLake({
-                          id: lake.id,
-                          name: lake.name,
-                          description: lake.description ?? '',
-                          requiredUserTag: lake.requiredUserTag ?? '',
-                          requiredEntitlement: lake.requiredEntitlement ?? '',
-                          organizationId: lake.organizationId ?? '',
-                          isPublic: lake.isPublic ?? false,
-                        });
+                        setEditingLakeId(lake.id);
                       }}
                     >
                       <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
@@ -269,7 +279,7 @@ export default function DataLakeListPanel() {
       </Box>
 
       {/* Settings editor */}
-      <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLake(null)} />
+      <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
 
       {/* Viewer modal */}
       <Modal open={!!viewingLake} onClose={() => setViewingLake(null)}>
@@ -372,7 +382,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
 
-  // Re-seed the form whenever a different lake is opened for editing.
+  // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
+  // from the live list, so it changes identity on every refetch - keying on id keeps a
+  // background refresh (e.g. after a visibility change) from clobbering in-progress edits.
   useEffect(() => {
     if (lake) {
       setName(lake.name);
@@ -380,7 +392,17 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
     }
-  }, [lake]);
+    // Intentional id-keying: seed once per lake, not on every live-object refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lake?.id]);
+
+  // Close the publish-confirm whenever the edited lake changes or clears, so it can never
+  // linger over a stale/nulled lake if the parent resets selection while it is open.
+  useEffect(() => {
+    // Reset-on-lake-change is the intent, so the setState here is deliberate.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConfirmPublicOpen(false);
+  }, [lake?.id]);
 
   // A gate can be set or changed but not cleared (the backend rejects empty values). If the
   // user blanks a previously-set gate, the Save silently keeps the old value - surface that
