@@ -10,6 +10,7 @@ import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
+import { listDataLakes } from './listDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -253,6 +254,40 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
     const pub = lake({ createdByUserId: 'alice', isPublic: true });
     expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
     expect(canManageLake(pub, { userId: 'stranger', isAdmin: false })).toBe(false);
+  });
+});
+
+describe('listDataLakes - per-lake canManage flag for the UI', () => {
+  it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+  });
+
+  it('marks every DB lake manageable for an admin', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+  });
+
+  it('marks built-in fallback lakes read-only even for their access holders', async () => {
+    // No DB lakes; the Opti-gated fallback surfaces because the caller holds the tag. It has no
+    // backing document (assertLakeWritable refuses it), so it must never be manageable.
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
   });
 });
 

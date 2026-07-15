@@ -25,8 +25,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
   };
 });
 
+const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => ({ data: [], isLoading: false }),
+  useDataLakes: () => useDataLakes(),
 }));
 
 // Default (flag on) is established per-describe; tests override per-case.
@@ -217,5 +218,59 @@ describe('DataLakeListPanel - EnableDataLakes gating', () => {
     // is a dead end - so the panel must not render at all, mirroring
     // SendToDataLakeModal's render guard.
     expect(screen.queryByTestId('datalake-list-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeListPanel - management affordances gate on canManage', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    useDataLakes.mockReset();
+  });
+
+  const listLake = (over: Record<string, unknown>) => ({
+    id: 'lk',
+    name: 'Lake',
+    slug: 'lake',
+    fileTagPrefix: 'lk:',
+    datalakeTag: 'datalake:lake',
+    ...over,
+  });
+
+  it('shows Add files / Settings / Archive on a lake the caller can manage', () => {
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'mine', name: 'Mine', canManage: true })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
+  });
+
+  it("hides all three on a lake the caller cannot manage (someone else's public lake)", () => {
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'theirs', name: 'Theirs', isPublic: true, canManage: false })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    // The read-only row still renders (and opens the viewer on click) - only the
+    // management affordances are gated.
+    expect(screen.getByTestId('datalake-card-theirs')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
   });
 });

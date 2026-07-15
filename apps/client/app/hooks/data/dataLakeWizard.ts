@@ -663,6 +663,9 @@ export function useDataLakes(enabled = true) {
           datalakeTag: string;
           fileCount?: number;
           createdAt: string;
+          // Server-computed (admin or creator). Management affordances gate on this: the
+          // list includes other users' read-only public lakes. See DataLakeConfig.canManage.
+          canManage?: boolean;
         }>;
       }>('/api/data-lakes');
       return response.data.data;

@@ -54,7 +54,12 @@ export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
-  const [viewingLake, setViewingLake] = useState<{ id: string; name: string; tagPrefix: string } | null>(null);
+  const [viewingLake, setViewingLake] = useState<{
+    id: string;
+    name: string;
+    tagPrefix: string;
+    canManage: boolean;
+  } | null>(null);
   const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
@@ -131,7 +136,14 @@ export default function DataLakeListPanel() {
                 variant="outlined"
                 data-testid={`datalake-card-${lake.id}`}
                 sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                onClick={() => setViewingLake({ id: lake.id, name: lake.name, tagPrefix: lake.fileTagPrefix })}
+                onClick={() =>
+                  setViewingLake({
+                    id: lake.id,
+                    name: lake.name,
+                    tagPrefix: lake.fileTagPrefix,
+                    canManage: !!lake.canManage,
+                  })
+                }
               >
                 <Stack direction="row" alignItems="center" gap={1.5}>
                   <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
@@ -150,55 +162,62 @@ export default function DataLakeListPanel() {
                       )}
                     </Stack>
                   </Box>
-                  <Tooltip title="Add files" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="primary"
-                      data-testid={`datalake-addfiles-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        openWizardForLake({
-                          id: lake.id,
-                          slug: lake.slug,
-                          name: lake.name,
-                          fileTagPrefix: lake.fileTagPrefix,
-                          requiredUserTag: lake.requiredUserTag,
-                          requiredEntitlement: lake.requiredEntitlement,
-                        });
-                      }}
-                    >
-                      <AddIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Settings" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="neutral"
-                      data-testid={`datalake-settings-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        setEditingLakeId(lake.id);
-                      }}
-                    >
-                      <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Archive" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="warning"
-                      data-testid={`datalake-archive-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        archiveLake.mutate(lake.id);
-                      }}
-                    >
-                      <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                      enforces the same rule). The list surfaces other users' read-only public
+                      lakes, so render these only when the caller may manage this lake. */}
+                  {lake.canManage && (
+                    <>
+                      <Tooltip title="Add files" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="primary"
+                          data-testid={`datalake-addfiles-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            openWizardForLake({
+                              id: lake.id,
+                              slug: lake.slug,
+                              name: lake.name,
+                              fileTagPrefix: lake.fileTagPrefix,
+                              requiredUserTag: lake.requiredUserTag,
+                              requiredEntitlement: lake.requiredEntitlement,
+                            });
+                          }}
+                        >
+                          <AddIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Settings" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="neutral"
+                          data-testid={`datalake-settings-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            setEditingLakeId(lake.id);
+                          }}
+                        >
+                          <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Archive" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="warning"
+                          data-testid={`datalake-archive-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            archiveLake.mutate(lake.id);
+                          }}
+                        >
+                          <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </>
+                  )}
                 </Stack>
               </Card>
             ))}
@@ -297,6 +316,7 @@ export default function DataLakeListPanel() {
               dataLakeId={viewingLake.id}
               dataLakeName={viewingLake.name}
               tagPrefix={viewingLake.tagPrefix}
+              canManage={viewingLake.canManage}
               onClose={() => setViewingLake(null)}
             />
           )}
