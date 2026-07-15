@@ -287,6 +287,29 @@ describe('registry parity: OPTIONAL_DEP_CDN (in-app) vs PUBLISH_REACT_DEP_SCRIPT
       expect(OPTIONAL_DEP_CDN[dep]?.globalVar, `global mismatch for "${dep}"`).toBe(global);
     }
   });
+
+  it('pins the same major version on both paths (publish path major covers the in-app exact version)', () => {
+    // The publish path pins a MAJOR (`recharts@2.x.js`, `xlsx@0.18.x.js` since 0.x is unstable); the
+    // in-app CDN url pins an EXACT version (`recharts@2.8.0`). They must share that major so a
+    // published artifact loads the same major-version UMD it previewed against.
+    for (const [dep, { path }] of Object.entries(PUBLISH_REACT_DEP_SCRIPTS)) {
+      const publishMajor = path.match(/@(\d[\d.]*)\.x\.js$/)?.[1];
+      const cdnVersion = OPTIONAL_DEP_CDN[dep]?.url.match(/@(\d[\d.]*)\//)?.[1];
+      expect(publishMajor, `no major-version token in publish path for "${dep}"`).toBeTruthy();
+      expect(cdnVersion, `no version in in-app CDN url for "${dep}"`).toBeTruthy();
+      expect(
+        cdnVersion === publishMajor || cdnVersion!.startsWith(`${publishMajor}.`),
+        `version mismatch for "${dep}": in-app ${cdnVersion} vs publish ${publishMajor}.x`
+      ).toBe(true);
+    }
+  });
+
+  it('pins the mathjs in-app CDN to the unminified browser build (lib/browser/math.js, not .min.js)', () => {
+    // mathjs 11.x ships NO minified browser UMD - the `.min.js` path 404s and every mathjs preview
+    // fails to load. Locks the fix for that regression (the self-hosted publish copy matches).
+    expect(OPTIONAL_DEP_CDN.mathjs.url).toContain('/lib/browser/math.js');
+    expect(OPTIONAL_DEP_CDN.mathjs.url).not.toContain('math.min.js');
+  });
 });
 
 describe('rewriteImportsToRequire', () => {
@@ -314,5 +337,11 @@ describe('rewriteImportsToRequire', () => {
     expect(out).toContain(`const LineChart = require('recharts');`);
     expect(out).toContain(`const { BarChart } = LineChart;`);
     expect(out).not.toContain('const LineChart, {'); // the previously-emitted invalid destructuring
+  });
+
+  it('rewrites a namespace import to a single require (import * as d3 -> require)', () => {
+    const out = rewriteImportsToRequire(`import * as d3 from 'd3';`);
+    expect(out).toContain(`const d3 = require('d3');`);
+    expect(out).not.toContain('* as'); // no leftover invalid `const * as d3 = require('d3')`
   });
 });
