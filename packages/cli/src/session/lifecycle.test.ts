@@ -280,6 +280,9 @@ describe('session lifecycle', () => {
       // default preserves the last 2 exchanges (4 messages) verbatim after the summary
       expect(compacted.messages).toHaveLength(5);
       expect(useCliStore.getState().isThinking).toBe(false);
+      // Compact swaps the active session, so the usage cache must be invalidated
+      // too - matching create/resume (issue #602).
+      expect(ctx.onSessionReplaced).toHaveBeenCalledOnce();
     });
   });
 
