@@ -660,7 +660,7 @@ describe('ChatCompletionProcess', () => {
         mockedShouldTriggerFallback.mockReturnValue(true);
         mockedIsOverloadedError.mockReturnValue(false);
 
-        // Bedrock primary must never run — the marker throws before currentLlm.complete.
+        // Bedrock primary must never run - the marker throws before currentLlm.complete.
         let primaryComplete = 0;
         mockedGetLlmByModel.mockReturnValue({
           complete: vi.fn().mockImplementation(async () => {
