@@ -143,6 +143,16 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       default: CreditHolderType.User,
     },
     organizationId: { type: String },
+    // Embed key (epic #41): agent this key is bound to (required when scopes includes EMBED_CHAT),
+    // its https origin allow-list, and optional white-label branding. See IUserApiKey / IEmbedBranding.
+    agentId: { type: String },
+    allowedOrigins: [{ type: String }],
+    branding: {
+      primaryColor: { type: String },
+      logoUrl: { type: String },
+      displayName: { type: String },
+      hideBranding: { type: Boolean },
+    },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
@@ -187,6 +197,7 @@ UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
+UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });
 
 UserApiKeySchema.plugin(softDeletePlugin);
 
