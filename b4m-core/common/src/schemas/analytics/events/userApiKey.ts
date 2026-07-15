@@ -4,6 +4,7 @@ export enum UserApiKeyEvents {
   CREATED = 'User API Key Created',
   USED = 'User API Key Used',
   ROTATED = 'User API Key Rotated',
+  UPDATED = 'User API Key Updated',
   REVOKED = 'User API Key Revoked',
   RATE_LIMITED = 'User API Key Rate Limited',
   EXPIRED = 'User API Key Expired',
@@ -52,6 +53,16 @@ export interface IUserApiKeyRotatedEvent extends IBaseEvent {
   };
 }
 
+export interface IUserApiKeyUpdatedEvent extends IBaseEvent {
+  type: UserApiKeyEvents.UPDATED;
+  metadata: {
+    keyId: string;
+    name: string;
+    /** Which fields changed (e.g. 'agentId', 'allowedOrigins', 'branding'). */
+    updatedFields: string[];
+  };
+}
+
 export interface IUserApiKeyRevokedEvent extends IBaseEvent {
   type: UserApiKeyEvents.REVOKED;
   metadata: {
@@ -95,6 +106,7 @@ export type UserApiKeyEventPayload =
   | IUserApiKeyCreatedEvent
   | IUserApiKeyUsedEvent
   | IUserApiKeyRotatedEvent
+  | IUserApiKeyUpdatedEvent
   | IUserApiKeyRevokedEvent
   | IUserApiKeyRateLimitedEvent
   | IUserApiKeyExpiredEvent

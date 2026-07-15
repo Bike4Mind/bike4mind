@@ -1,0 +1,80 @@
+import { ApiKeyScope, EmbedOriginsSchema, IUserApiKeyRepository } from '@bike4mind/common';
+import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
+import { z } from 'zod';
+
+const embedBrandingSchema = z.object({
+  primaryColor: z.string().optional(),
+  logoUrl: z.string().optional(),
+  displayName: z.string().optional(),
+  hideBranding: z.boolean().optional(),
+});
+
+const updateEmbedKeySchema = z.object({
+  keyId: z.string(),
+  // Every field optional: only the provided fields change. `allowedOrigins`
+  // reuses the common schema (dedup + cap; each entry must be an
+  // already-normalized exact https origin). Host-aware first-party rejection
+  // lives at the route, which has the runtime host.
+  agentId: z.string().min(1).optional(),
+  allowedOrigins: EmbedOriginsSchema.optional(),
+  branding: embedBrandingSchema.optional(),
+});
+
+export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;
+
+interface UpdateEmbedKeyAdapters {
+  db: {
+    userApiKeys: IUserApiKeyRepository;
+  };
+}
+
+export interface UpdateEmbedKeyResult {
+  id: string;
+  name: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: {
+    primaryColor?: string;
+    logoUrl?: string;
+    displayName?: string;
+    hideBranding?: boolean;
+  };
+}
+
+/**
+ * Configure an existing embed key (epic #41 Phase E): rebind the agent, replace
+ * the origin allow-list, or update the branding fields. Only keys carrying the
+ * `embed:chat` scope can be configured - the embed fields are meaningless on any
+ * other key (mirrors the create-side coherence invariant). Absent fields are
+ * left untouched; `allowedOrigins: []` explicitly clears the allow-list.
+ */
+export const updateEmbedKey = async (
+  userId: string,
+  parameters: UpdateEmbedKeyParameters,
+  adapters: UpdateEmbedKeyAdapters
+): Promise<UpdateEmbedKeyResult> => {
+  const { db } = adapters;
+  const params = secureParameters(parameters, updateEmbedKeySchema);
+
+  const apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  if (!apiKey) {
+    throw new NotFoundError('API key not found');
+  }
+  if (!apiKey.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
+    throw new BadRequestError('Only embed:chat keys can be configured with embed settings');
+  }
+
+  if (params.agentId !== undefined) apiKey.agentId = params.agentId;
+  if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
+  if (params.branding !== undefined) apiKey.branding = params.branding;
+
+  await db.userApiKeys.update(apiKey);
+
+  return {
+    id: apiKey.id,
+    name: apiKey.name,
+    agentId: apiKey.agentId,
+    allowedOrigins: apiKey.allowedOrigins,
+    branding: apiKey.branding,
+  };
+};

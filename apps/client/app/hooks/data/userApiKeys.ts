@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
+import { IUserApiKeyDocument, ApiKeyScope, IEmbedBranding } from '@bike4mind/common';
 import { toast } from 'sonner';
 
 function parseValidationError(error: any): string {
@@ -40,6 +40,18 @@ export interface CreateUserApiKeyRequest {
   };
   /** When set, mint an org-billed key charging this organization's credit pool. */
   organizationId?: string;
+  /** Embed key (epic #41): the agent to bind, its https origin allow-list, and optional branding. */
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
+}
+
+/** Configure an existing embed key - only the provided fields change. */
+export interface UpdateEmbedKeyRequest {
+  keyId: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
 }
 
 /** An organization the current user may bill API-key usage to. */
@@ -108,6 +120,24 @@ export function useRotateUserApiKey({ onSuccess }: { onSuccess?: (result: Rotate
     onSuccess: result => {
       queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
       if (onSuccess) onSuccess(result);
+    },
+  });
+}
+
+export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<IUserApiKeyDocument, Error, UpdateEmbedKeyRequest>({
+    mutationFn: async ({ keyId, ...data }) => {
+      const response = await api.patch(`/api/user-api-keys/${keyId}`, data);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
+      if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
     },
   });
 }

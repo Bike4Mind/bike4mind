@@ -35,7 +35,7 @@ function errMessage(err: unknown): string {
  * reduces a full URL to its origin (frame-ancestors is origin-level anyway). An
  * explicit `http://` is left as-is so parseEmbedOrigin rejects it loudly.
  */
-function coerceToOrigin(raw: string): string {
+export function coerceToOrigin(raw: string): string {
   const s = raw.trim();
   if (!s) return s;
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(s) ? s : `https://${s}`;

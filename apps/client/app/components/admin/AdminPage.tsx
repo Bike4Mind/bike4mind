@@ -38,6 +38,7 @@ import { NotebookFilepondProvider } from '@client/app/components/Session/Noteboo
 import { useGetSession } from '@client/app/hooks/data/sessions';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import ModalsAdminTab from './AdminModalTab';
+import EmbedKeysTab from './EmbedKeysTab';
 import AdminWhatsNewModalsTab from './AdminWhatsNewModalsTab';
 import { resolveEnvironmentBanner } from './environmentBanner';
 import AnalyticsTab from './Analytics';
@@ -602,6 +603,7 @@ const AdminPage = ({ enableUserMigration }: AdminPageProps) => {
               <TabPanel value={AdminTab.SlackWorkspaces}>
                 {activeTab === AdminTab.SlackWorkspaces && <SlackWorkspacesTab />}
               </TabPanel>
+              <TabPanel value={AdminTab.EmbedKeys}>{activeTab === AdminTab.EmbedKeys && <EmbedKeysTab />}</TabPanel>
               <TabPanel value={AdminTab.ToolDefinitions}>
                 {activeTab === AdminTab.ToolDefinitions && <ToolDefinitionsTab />}
               </TabPanel>
