@@ -38,7 +38,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
   // in toSafeOrganization (top-level stripeCustomerId/userId would be undefined).
   const plain = (
     typeof (organization as { toJSON?: unknown }).toJSON === 'function'
-      ? (organization as { toJSON: () => typeof organization }).toJSON()
+      ? (organization as unknown as { toJSON: () => NonNullable<typeof organization> }).toJSON()
       : organization
   ) as NonNullable<typeof organization>;
 
@@ -51,9 +51,7 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
     description: rest.description ?? plain.description,
     // Only allow billing contact changes for owners and admins, not managers
     billingContact:
-      isManager && !isOwner && !user.isAdmin
-        ? plain.billingContact
-        : (rest.billingContact ?? plain.billingContact),
+      isManager && !isOwner && !user.isAdmin ? plain.billingContact : (rest.billingContact ?? plain.billingContact),
     // Managers can update systemPrompt intentionally - they customize org-wide AI
     // behavior. Authorization is already checked via findUpdateAccessById.
     systemPrompt: rest.systemPrompt ?? plain.systemPrompt,
