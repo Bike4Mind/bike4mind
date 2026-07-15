@@ -2330,12 +2330,20 @@ export class ChatCompletionProcess {
       timer.phase('llm_completion');
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
+      // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
+      // model per hop, so the cap must cover the longest chain (the flagship Opus chain has
+      // 4 Anthropic entries before its cross-provider tail) to actually cross providers.
+      const MAX_FALLBACK_HOPS = 5;
+
       // Initialize fallback variables in proper scope
       let completionSuccess = false;
       let lastError: Error | null = null;
       let currentModel = modelInfo;
       let currentLlm = llm;
       let fallbackAttempt = 0;
+      // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
+      // so no hop re-selects a model that just failed.
+      const triedModelIds = new Set<string>([modelInfo.id]);
       let overloadRetryCount = 0;
       let overloadRetriesExhausted = false;
       let toolPairingRetried = false;
@@ -2350,8 +2358,9 @@ export class ChatCompletionProcess {
       try {
         const modelInferenceStartTime = Date.now();
 
-        // Max iterations: up to 3 overload retries + 1 fallback attempt + 1 initial = 5
-        while (!completionSuccess && fallbackAttempt <= 1) {
+        // Loop covers the primary attempt plus up to MAX_FALLBACK_HOPS cross-model hops
+        // (same-model overload/timeout retries below re-enter without advancing fallbackAttempt).
+        while (!completionSuccess && fallbackAttempt <= MAX_FALLBACK_HOPS) {
           try {
             const isInitialAttempt = fallbackAttempt === 0;
 
@@ -2432,17 +2441,19 @@ export class ChatCompletionProcess {
             // outage safety net that can't be exercised without a real 5xx/throttle, so
             // there is no way for QA to verify it on a preview otherwise. When E2E
             // endpoints are enabled (production forces E2E off - see isE2EEnabled) AND the
-            // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a sustained outage on the
-            // primary backend so the real loop degrades to the equivalent model on another
-            // path and renders the "Fallback Model Used" badge. Double-gated and
-            // primary-attempt-only: a normal request can never trigger it, and the fallback
-            // attempt still runs for real. The error mimics a Bedrock capacity outage
-            // (ServiceUnavailableException) so it takes the real overloaded-error path:
-            // same-model overload retries, then forceSwitch to the fallback model - matching
-            // how a genuine sustained outage degrades. See the Guide for Testers.
+            // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a provider-wide Anthropic
+            // outage: fail every Bedrock- and Anthropic-backed hop so the real loop multi-hops
+            // off the Anthropic path entirely and degrades to a cross-provider model (OpenAI/
+            // Gemini), rendering the "Fallback Model Used" badge with the provider-path switch.
+            // Double-gated (E2E-only, never production) and confined to the Anthropic family, so
+            // a normal request can never trigger it and the surviving cross-provider hop runs for
+            // real. The error mimics a Bedrock capacity outage (ServiceUnavailableException) so it
+            // takes the real overloaded-error path: same-model overload retries on the primary,
+            // then forceSwitch through the fallback chain - matching how a genuine sustained
+            // outage degrades. See the Guide for Testers.
             if (
-              isInitialAttempt &&
               process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
+              (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
               JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
             ) {
               const forced = new Error(
@@ -2757,9 +2768,9 @@ export class ChatCompletionProcess {
               continue;
             }
 
-            // If we've already tried fallback, throw the last error
-            if (fallbackAttempt >= 1) {
-              logger.warn(`🚫 [Fallback] Fallback attempt already tried, no more attempts`);
+            // If we've exhausted the bounded multi-hop traversal, throw the last error
+            if (fallbackAttempt >= MAX_FALLBACK_HOPS) {
+              logger.warn(`🚫 [Fallback] Multi-hop budget exhausted (${MAX_FALLBACK_HOPS} hops), no more attempts`);
               throw lastError;
             }
 
@@ -2768,14 +2779,17 @@ export class ChatCompletionProcess {
               // Extract fallback model ID from request
               const fallbackModelId = body.fallbackModel;
 
-              const originalModel = currentModel; // Store original model before fallback
+              const failedModel = currentModel; // the model that just failed this hop
               const fallbackResult = await getLlmWithFallback(
                 currentModel,
                 fallbackModelId,
                 models,
                 apiKeyTable,
                 logger,
-                { forceSwitch: overloadRetriesExhausted }
+                {
+                  forceSwitch: overloadRetriesExhausted,
+                  excludeModelIds: triedModelIds,
+                }
               );
 
               if (!fallbackResult || fallbackResult.attempt === 0) {
@@ -2788,14 +2802,17 @@ export class ChatCompletionProcess {
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
               fallbackAttempt++;
+              triedModelIds.add(currentModel.id);
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
-              // Store fallback info in quest data for consistent streaming delivery
+              // Store fallback info in quest data for consistent streaming delivery. primaryModel is
+              // the originally-requested model (modelInfo), not the immediately-preceding hop, so
+              // the badge always contrasts the final model against what the user actually asked for.
               const fallbackInfo = {
                 sessionId,
-                primaryModel: originalModel.id,
-                primaryModelName: originalModel.name,
+                primaryModel: modelInfo.id,
+                primaryModelName: modelInfo.name,
                 fallbackModel: currentModel.id,
                 fallbackModelName: currentModel.name,
                 timestamp: Date.now(),
@@ -2810,7 +2827,7 @@ export class ChatCompletionProcess {
                   const fallbackReasonText = lastError instanceof Error ? lastError.message : 'Unknown error';
                   telemetryBuilder.setFallback(true, fallbackReasonText);
                   telemetryBuilder.setActualModel(currentModel.id);
-                  logger.info(`📊 [Telemetry] Recorded fallback: ${originalModel.id} → ${currentModel.id}`);
+                  logger.info(`📊 [Telemetry] Recorded fallback: ${failedModel.id} → ${currentModel.id}`);
                 } catch (telemetryError) {
                   logger.warn(`📊 [Telemetry] Failed to record fallback:`, telemetryError);
                 }
