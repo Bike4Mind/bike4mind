@@ -81,6 +81,14 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
     expect(params.filters?.userId).toBeUndefined();
   });
 
+  it('overrides an attacker-supplied filters.userId for a non-admin', async () => {
+    // A non-admin cannot widen scope by passing someone else's id in the query.
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { 'filters[userId]': 'victim' });
+    await mockRefs.getHandler!(req, res);
+    const params = search.mock.calls[0][1];
+    expect(params.filters.userId).toBe('u1');
+  });
+
   it('strips stripeCustomerId (always) and billingContact (non-owner non-admin) from results', async () => {
     const { req, res } = mocks({ id: 'u1', isAdmin: false });
     await mockRefs.getHandler!(req, res);
