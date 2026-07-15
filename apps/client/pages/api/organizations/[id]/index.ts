@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { organizationService } from '@bike4mind/services';
+import { toSafeOrganization } from '@bike4mind/common';
 import { Request } from 'express';
 import { subscriptionRepository } from '@server/models/Subscription';
 import { SubscriptionOwnerType } from '@client/lib/subscriptions/types';
@@ -21,7 +22,9 @@ const handler = baseApi()
         }
       );
 
-      return res.status(200).json(organization);
+      return res.status(200).json(
+        toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin })
+      );
     })
   )
   .put(
