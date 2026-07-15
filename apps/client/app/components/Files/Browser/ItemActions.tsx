@@ -55,7 +55,7 @@ import KnowledgeChunkControls from '../../Knowledge/KnowledgeChunkControls';
 import { useKnowledgeModal } from '../../Knowledge/KnowledgeModal';
 import { useShallow } from 'zustand/react/shallow';
 import { ProjectAddToModal } from '../../Project/ProjectAddToModal';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowserInstance } from './instanceContext';
 import { useUser } from '@client/app/contexts/UserContext';
 
 const FileBrowserItemActions: FC<{
@@ -72,7 +72,7 @@ const FileBrowserItemActions: FC<{
   const deleteFile = useDeleteFile();
   const confirm = useConfirmation();
   const { mutateAsync: getPresignedUrl } = useGetPresignedUrl();
-  const setFileToShare = useFileBrowser(s => s.setFileToShare);
+  const { setFileToShare } = useFileBrowserInstance();
   const autoRename = useAutoRenameFabFile();
   const applyAutoRename = useApplyAutoRenameFabFile();
   const { currentUser } = useUser();

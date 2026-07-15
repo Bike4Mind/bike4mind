@@ -27,9 +27,8 @@ import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import React, { FC, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { useShallow } from 'zustand/react/shallow';
 import { brand, brandAlpha, green, greenAlpha, orange, red } from '@client/app/utils/themes/colors';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserItemActions from './ItemActions';
 import UsernameText from '@client/app/components/common/UsernameText';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -188,7 +187,7 @@ const FileBrowserItem: FC<IFileBrowserItemProps> = ({ viewType = 'grid', ...rest
 };
 
 const useCommon = (file: IFabFileDocument) => {
-  const [selectedIds, setSelectedIds] = useFileBrowser(useShallow(s => [s.selectedIds, s.setSelectedIds]));
+  const { selectedIds, setSelectedIds } = useFileBrowserInstance();
   const selected = selectedIds.has(file.id);
   const [editMode, setEditMode] = useState(false);
 
