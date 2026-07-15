@@ -137,18 +137,32 @@ export class ProjectsPage extends BasePage {
   async addFileViaFileBrowser(filename: string) {
     await this.page.getByTestId('project-file-browser-btn').click();
 
-    const modal = this.page.getByTestId('file-browser-modal');
+    // Projects now use the unified EmbeddedFileBrowser (shared with the global browser).
+    const modal = this.page.getByTestId('embedded-file-browser-dialog');
     await expect(modal).toBeVisible({ timeout: TIMEOUTS.MODAL });
 
-    // Click the file card/row that contains the filename to select it
+    // The browser opens on the Overview tab; typing in search filters the list and
+    // auto-switches to the selectable List/Grid view.
+    const searchInput = modal.getByTestId('file-browser-search-input').getByRole('textbox');
+    await searchInput.fill(filename);
+
     const fileCard = modal.getByTestId('file-browser-grid-item-card').filter({ hasText: filename });
     const fileListItem = modal.getByTestId('file-browser-list-item').filter({ hasText: filename });
-    const fileTarget = fileCard.or(fileListItem);
-    await expect(fileTarget.first()).toBeVisible({ timeout: TIMEOUTS.ACTION });
-    await fileTarget.first().click();
+    const fileTarget = fileCard.or(fileListItem).first();
+    await expect(fileTarget).toBeVisible({ timeout: TIMEOUTS.ACTION });
 
-    const addBtn = modal.getByTestId('file-browser-bulk-add-btn');
-    await expect(addBtn).toBeVisible({ timeout: TIMEOUTS.ACTION });
+    // Row click toggles selection; retry until the Add button enables (React re-renders
+    // can drop a click between selection and state update).
+    const addBtn = modal.getByTestId('file-browser-add-files-btn');
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      await fileTarget.click();
+      try {
+        await expect(addBtn).toBeEnabled({ timeout: 2_000 });
+        break;
+      } catch {
+        if (attempt === 3) throw new Error(`File selection failed for "${filename}" after 3 attempts`);
+      }
+    }
     await addBtn.click();
   }
 
