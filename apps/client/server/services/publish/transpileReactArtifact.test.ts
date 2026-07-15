@@ -116,7 +116,8 @@ export default function C() { const [n] = useState(0); return <div>{n}</div>; }`
   });
 
   it('rejects a not-yet-publishable dependency with a clear error', async () => {
-    const src = `import { LineChart } from 'recharts';\nexport default function C() { return <LineChart />; }`;
+    // `three` is not in PUBLISH_REACT_DEP_SCRIPTS (nor the in-app allowlist) - must be rejected.
+    const src = `import * as THREE from 'three';\nexport default function C() { return <div>{typeof THREE}</div>; }`;
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       UnsupportedReactDependencyError
     );
@@ -172,6 +173,77 @@ function C() {
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       ReactArtifactTranspileError
     );
+  });
+});
+
+describe('blessed optional dependencies (PR 2)', () => {
+  // dep specifier -> [self-hosted blessed path, require() global the bundle binds]
+  const CASES: Array<[string, string, string]> = [
+    ['recharts', '/static/lib/recharts@2.x.js', 'Recharts'],
+    ['lucide-react', '/static/lib/lucide@1.x.js', 'LucideReactWrapper'],
+    ['d3', '/static/lib/d3@7.x.js', 'd3'],
+    ['lodash', '/static/lib/lodash@4.x.js', '_'],
+    ['mathjs', '/static/lib/mathjs@11.x.js', 'math'],
+    ['papaparse', '/static/lib/papaparse@5.x.js', 'Papa'],
+    ['xlsx', '/static/lib/xlsx@0.18.x.js', 'XLSX'],
+  ];
+
+  it.each(CASES)(
+    'blesses %s: emits the pinned script + require() mapping and passes validateBundle',
+    async (dep, path, global) => {
+      const src = `import Dep from '${dep}';
+export default function C() { return <div>{typeof Dep}</div>; }`;
+      const { indexHtml } = await buildReactArtifactBundle({ source: src, title: dep });
+
+      expect(indexHtml).toContain(path); // blessed self-hosted UMD, not a CDN
+      expect(indexHtml).toContain(`"${dep}":window.${global}`); // wired into the require() moduleMap
+      expect(indexHtml).not.toContain('unpkg.com');
+
+      const result = validateBundle({ indexHtml, manifest: INDEX_MANIFEST });
+      expect(result.violations).toEqual([]);
+      expect(result.valid).toBe(true);
+    }
+  );
+
+  it('loads dep UMDs AFTER the React runtime (recharts externalizes React/PropTypes)', async () => {
+    const src = `import { LineChart } from 'recharts';
+export default function C() { return <LineChart />; }`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    // prop-types must be present and precede recharts, or recharts' UMD factory throws at init.
+    expect(indexHtml.indexOf('/static/lib/prop-types@15.x.js')).toBeGreaterThanOrEqual(0);
+    expect(indexHtml.indexOf('/static/lib/prop-types@15.x.js')).toBeLessThan(
+      indexHtml.indexOf('/static/lib/recharts@2.x.js')
+    );
+  });
+
+  it('embeds the LucideReactWrapper shim only when lucide-react is imported', async () => {
+    const withLucide = await buildReactArtifactBundle({
+      source: `import { Home } from 'lucide-react';\nexport default function C() { return <Home />; }`,
+      title: 'x',
+    });
+    expect(withLucide.indexHtml).toContain('setupLucideWrapper()');
+
+    const withoutLucide = await buildReactArtifactBundle({ source: COUNTER, title: 'x' });
+    expect(withoutLucide.indexHtml).not.toContain('setupLucideWrapper');
+  });
+
+  it('handles an artifact importing multiple blessed deps at once', async () => {
+    const src = `import { LineChart } from 'recharts';
+import _ from 'lodash';
+export default function C() { return <LineChart data={_.range(3)} />; }`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain('/static/lib/recharts@2.x.js');
+    expect(indexHtml).toContain('/static/lib/lodash@4.x.js');
+    expect(indexHtml).toContain('"recharts":window.Recharts');
+    expect(indexHtml).toContain('"lodash":window._');
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
+  it('does not emit any dep script for a dependency-free artifact', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({ source: COUNTER, title: 'x' });
+    for (const [, path] of CASES) {
+      expect(indexHtml).not.toContain(path);
+    }
   });
 });
 
