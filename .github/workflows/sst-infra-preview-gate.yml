@@ -9,11 +9,15 @@ name: SST / infra preview gate
 # The job ALWAYS runs (no path filter) and decides applicability internally, so
 # that as a required check it reports success on unrelated PRs instead of
 # hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
-# deployer adds/removes the label.
+# deployer adds/removes the label. It also fires on `merge_group` (main uses a
+# merge queue): the detection step is gated to `pull_request`, so the queue run
+# is a no-op that still reports the required check green.
 
 on:
   pull_request:
     types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    branches: [main]
 
 permissions:
   contents: read
@@ -25,6 +29,9 @@ jobs:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
       - name: Require a preview for sst / infra changes
+        # merge_group has no pull_request context; skipping here still reports
+        # the required check as passed, so the merge queue is not blocked.
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -32,24 +39,32 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Files changed in this PR (with patches, for sst-pin detection).
-          gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename' > /tmp/files.txt || true
+          # Single fetch of changed files (with patches). No `|| true`: a fetch
+          # failure must redden this gate (fail closed), never silently pass.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files.json
+          jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
           echo "Changed files:"; sed 's/^/  /' /tmp/files.txt || true
 
           applicable=0
           reason=""
 
-          # infra/ , sst.config.ts , or a premium overlay pin bump always need a preview.
-          if grep -qE '^(infra/|sst\.config\.ts$|premium-overlay\.lock\.json$)' /tmp/files.txt; then
+          # Deploy-affecting paths that always need a preview: the root infra/
+          # dir, the @bike4mind/infra package (b4m-core/infra/, imported directly
+          # by the deploy layer), sst.config.ts, and a premium overlay pin bump.
+          # Anchored so it does NOT match data-model dirs like
+          # packages/database/src/models/infra/.
+          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$|premium-overlay\.lock\.json$)' /tmp/files.txt; then
             applicable=1
-            reason="infra/ , sst.config.ts, or premium-overlay.lock.json changed"
+            reason="infra/, b4m-core/infra/, sst.config.ts, or premium-overlay.lock.json changed"
           fi
 
-          # A changed sst pin in any package.json.
+          # A changed sst pin in any package.json. Fail closed if a package.json
+          # changed but GitHub omitted its patch (oversized diff): treat as applicable.
           if [ "$applicable" -eq 0 ]; then
-            gh api "repos/$REPO/pulls/$PR/files" --paginate \
-              -q '.[] | select(.filename|test("package\\.json$")) | .patch // ""' > /tmp/pkgpatches.txt || true
-            if grep -qE '^[+-].*"sst"[[:space:]]*:' /tmp/pkgpatches.txt; then
+            if jq -e '.[] | select(.filename|test("package\\.json$")) | select((.patch // "") == "")' /tmp/pr_files.json >/dev/null; then
+              applicable=1
+              reason="a changed package.json had no inspectable patch (fail-closed)"
+            elif jq -r '.[] | select(.filename|test("package\\.json$")) | .patch // ""' /tmp/pr_files.json | grep -qE '^[+-].*"sst"[[:space:]]*:'; then
               applicable=1
               reason="an sst pin in a package.json changed"
             fi
