@@ -172,6 +172,115 @@ describe('MarginDashboard invoice reconciliation', () => {
   });
 });
 
+describe('MarginDashboard ratio tolerance bands', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setResponses();
+    mockPost.mockResolvedValue({ data: { invoice: {} } });
+  });
+
+  const modelDayRow = (creditsCharged: number) => ({
+    day: '2026-07-14',
+    provider: 'anthropic',
+    model: 'claude-x',
+    requests: 1,
+    cogsUsd: 1,
+    creditsCharged,
+  });
+
+  // Target 1200, margin 1.2 -> break-even 1000. Bands: green within +/-2%
+  // (1176-1224), yellow down to break-even and up to +20% (1440), red beyond.
+  it.each([
+    [1200, 'colorSuccess'],
+    [1176, 'colorSuccess'],
+    [1224, 'colorSuccess'],
+    [1175, 'colorWarning'],
+    [1000, 'colorWarning'],
+    [999, 'colorDanger'],
+    [1440, 'colorWarning'],
+    [1441, 'colorDanger'],
+  ])('renders credits %s per $1 with %s', async (credits, colorClass) => {
+    setResponses({
+      'view=model-day': { targetCreditsPerUsd: 1200, rows: [modelDayRow(credits)] },
+    });
+    renderDashboard();
+    const table = await screen.findByTestId('margin-model-day-table');
+    expect(within(table).getByTestId('margin-ratio-chip').className).toContain(colorClass);
+  });
+
+  it('keeps zero-cost rows neutral', async () => {
+    setResponses({
+      'view=model-day': { targetCreditsPerUsd: 1200, rows: [{ ...modelDayRow(10), cogsUsd: 0 }] },
+    });
+    renderDashboard();
+    const table = await screen.findByTestId('margin-model-day-table');
+    expect(within(table).getByTestId('margin-ratio-chip')).toHaveTextContent('n/a');
+  });
+});
+
+describe('MarginDashboard search and filter', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setResponses();
+    mockPost.mockResolvedValue({ data: { invoice: {} } });
+  });
+
+  const userRow = (userId: string, userName: string) => ({
+    userId,
+    userName,
+    requests: 1,
+    cogsUsd: 0.01,
+    creditsCharged: 12,
+  });
+
+  it('filters the by-user table by name search', async () => {
+    setResponses({
+      'view=user': { targetCreditsPerUsd: 1200, rows: [userRow('u1', 'Alice Doe'), userRow('u2', 'Bob Ray')] },
+    });
+    renderDashboard();
+    const table = await screen.findByTestId('margin-user-table');
+    expect(within(table).getByText('Alice Doe')).toBeInTheDocument();
+    fireEvent.change(screen.getByTestId('margin-user-search').querySelector('input')!, {
+      target: { value: 'bob' },
+    });
+    expect(within(table).queryByText('Alice Doe')).not.toBeInTheDocument();
+    expect(within(table).getByText('Bob Ray')).toBeInTheDocument();
+  });
+
+  it('filters the model-day and provider-month tables by provider', async () => {
+    setResponses({
+      'view=model-day': {
+        targetCreditsPerUsd: 1200,
+        rows: [
+          {
+            day: '2026-07-14',
+            provider: 'anthropic',
+            model: 'claude-x',
+            requests: 1,
+            cogsUsd: 1,
+            creditsCharged: 1200,
+          },
+          { day: '2026-07-14', provider: 'openai', model: 'gpt-x', requests: 1, cogsUsd: 1, creditsCharged: 1200 },
+        ],
+      },
+      'view=provider-month': {
+        targetCreditsPerUsd: 1200,
+        rows: [providerRow(), providerRow({ provider: 'anthropic' })],
+      },
+    });
+    renderDashboard();
+    await screen.findByTestId('margin-model-day-table');
+    fireEvent.change(screen.getByTestId('margin-provider-filter').querySelector('input')!, {
+      target: { value: 'openai' },
+    });
+    const modelTable = screen.getByTestId('margin-model-day-table');
+    expect(within(modelTable).queryByText('claude-x')).not.toBeInTheDocument();
+    expect(within(modelTable).getByText('gpt-x')).toBeInTheDocument();
+    const monthTable = screen.getByTestId('margin-provider-month-table');
+    expect(within(monthTable).queryByText('anthropic')).not.toBeInTheDocument();
+  });
+});
+
 describe('MarginDashboard settlement basis section', () => {
   beforeEach(() => {
     vi.clearAllMocks();
