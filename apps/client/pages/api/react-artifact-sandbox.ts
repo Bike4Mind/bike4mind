@@ -143,12 +143,17 @@ const SANDBOX_HTML = `<!DOCTYPE html>
             var rest = Object.assign({}, props);
             delete rest.size; delete rest.color; delete rest.strokeWidth; delete rest.className;
             var kebab = toKebabCase(iconName);
-            var iconContent = (window.lucide && (lucide.icons[kebab] || lucide.icons[iconName])) || '';
+            // lucide's UMD stores each icon as a node array ([tag, attrs][]), NOT an HTML string -
+            // build real SVG children from it (dangerouslySetInnerHTML with the array renders nothing).
+            var node = (window.lucide && lucide.icons && (lucide.icons[iconName] || lucide.icons[kebab])) || null;
+            var children = Array.isArray(node)
+              ? node.map(function (entry, i) { return React.createElement(entry[0], Object.assign({ key: i }, entry[1])); })
+              : null;
             return React.createElement('svg', Object.assign({
               xmlns: 'http://www.w3.org/2000/svg', width: size, height: size, viewBox: '0 0 24 24',
               fill: 'none', stroke: color, strokeWidth: strokeWidth, strokeLinecap: 'round', strokeLinejoin: 'round',
-              className: className, dangerouslySetInnerHTML: { __html: iconContent }
-            }, rest));
+              className: className
+            }, rest), children);
           };
         }
       });
