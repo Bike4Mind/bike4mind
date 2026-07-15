@@ -246,6 +246,15 @@ export function createLedgerMemoryStore(deps: {
       //
       // So: fold on the cheap metadata first to find out which beliefs actually SURVIVE, then fetch
       // vectors for only those. Cost becomes O(live beliefs) instead of O(events-ever-written).
+      //
+      // DO NOT add a materialized-profile cache here to "fix latency" without measuring against a
+      // co-located DB first. Profiled at 256 events / 181 beliefs: the two Mongo queries execute in 1ms
+      // each server-side (clean IXSCANs), and decrypt + fold is ~3ms total. A ~950ms read on a laptop is
+      // laptop -> remote-Atlas round-trips + transferring ~600KB of encrypted vectors over a home link -
+      // a cost production does not pay, because its Lambda sits next to Atlas. A cache would trade real
+      // crypto-shred simplicity (the whole profile would need encrypting under the DEK and invalidating
+      // on every append) for a saving production mostly already has. The dominant production cost is the
+      // query-embedding API call, which recallMementosV2 already runs in parallel with this fold.
       const [docs, dek] = await Promise.all([
         deps.ledger.listChain(principal.kind, principal.id, deps.ownerUserId, { withEmbeddings: false }),
         deps.keys.getDek(principal),
