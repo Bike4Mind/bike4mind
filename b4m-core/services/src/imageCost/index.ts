@@ -67,10 +67,15 @@ export function estimateImageCredits(
   n: number,
   input: CostInput
 ): { requiredCredits: number; usdCost: number } {
-  const totalUsdCost = computeImageUsdCostPerImage(modelInfo.id, input) * n;
+  const usdPerImage = computeImageUsdCostPerImage(modelInfo.id, input);
+  const totalUsdCost = usdPerImage * n;
   const requiredCredits = usdToCredits(totalUsdCost);
   if (!Number.isFinite(requiredCredits)) {
-    throw new UnprocessableEntityError(`Unable to compute credit cost for model "${modelInfo.id}".`);
+    // Keep the per-image value in the message - it distinguishes "calculator
+    // returned NaN/Infinity" from a failure before the multiply in a bug report.
+    throw new UnprocessableEntityError(
+      `Unable to compute credit cost for model "${modelInfo.id}" (got ${usdPerImage}).`
+    );
   }
   return { requiredCredits, usdCost: totalUsdCost };
 }
