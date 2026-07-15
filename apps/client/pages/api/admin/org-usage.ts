@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { usageEventRepository } from '@bike4mind/database';
-import { CreditHolderType, type IOrgUsageDashboardResponse } from '@bike4mind/common';
+import { usageEventRepository, creditTransactionRepository, userApiKeyRepository } from '@bike4mind/database';
+import { CreditHolderType, type IOrgUsageDashboardResponse, type NamedApiKeyUsage } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
@@ -29,17 +29,27 @@ const handler = baseApi().get(async (req, res) => {
 
   const { organizationId, days = 30 } = QuerySchema.parse(req.query);
 
-  const summary = await usageEventRepository.ownerUsageSummary(organizationId, CreditHolderType.Organization, days);
+  // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
+  // by-API-key comes from the ledger, the only source carrying apiKeyId.
+  const [summary, apiKeyUsage, orgKeys] = await Promise.all([
+    usageEventRepository.ownerUsageSummary(organizationId, CreditHolderType.Organization, days),
+    creditTransactionRepository.apiKeyUsageForOwner(organizationId, CreditHolderType.Organization, days),
+    userApiKeyRepository.findByOrganizationId(organizationId),
+  ]);
 
   // Resolve member ids to display names; unresolved ids (deleted/cross-org users)
   // stay undefined so the client can label them rather than show a raw ObjectId.
   const nameById = await resolveUserNames(summary.byMember.map(m => m.userId));
+
+  const keyById = new Map(orgKeys.map(k => [String(k.id), { keyName: k.name, keyPrefix: k.keyPrefix }]));
+  const byApiKey: NamedApiKeyUsage[] = apiKeyUsage.map(u => ({ ...u, ...keyById.get(u.apiKeyId) }));
 
   const response: IOrgUsageDashboardResponse = {
     ...summary,
     organizationId,
     days,
     byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) })),
+    byApiKey,
   };
 
   return res.json(response);

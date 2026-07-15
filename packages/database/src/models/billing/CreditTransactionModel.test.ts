@@ -132,3 +132,61 @@ describe('CreditTransactionRepository.queryLedgerPage', () => {
     expect(res.data).toHaveLength(0);
   });
 });
+
+describe('CreditTransactionRepository.apiKeyUsageForOwner', () => {
+  const recent = () => new Date();
+
+  it('groups completion_api_usage by apiKeyId with spend magnitude and token sums', async () => {
+    await seed([
+      {
+        type: 'completion_api_usage',
+        apiKeyId: 'key-a',
+        credits: -50,
+        inputTokens: 1000,
+        outputTokens: 400,
+        createdAt: recent(),
+      },
+      {
+        type: 'completion_api_usage',
+        apiKeyId: 'key-a',
+        credits: -30,
+        inputTokens: 500,
+        outputTokens: 100,
+        createdAt: recent(),
+      },
+      {
+        type: 'completion_api_usage',
+        apiKeyId: 'key-b',
+        credits: -200,
+        inputTokens: 3000,
+        outputTokens: 900,
+        createdAt: recent(),
+      },
+      // No apiKeyId (web usage) - excluded.
+      { type: 'text_generation_usage', credits: -999, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.apiKeyUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toHaveLength(2);
+    // Biggest spender first; credits reported as positive magnitude.
+    expect(rows).toMatchObject([
+      { apiKeyId: 'key-b', requests: 1, creditsSpent: 200, inputTokens: 3000, outputTokens: 900 },
+      { apiKeyId: 'key-a', requests: 2, creditsSpent: 80, inputTokens: 1500, outputTokens: 500 },
+    ]);
+  });
+
+  it('scopes to the owner and the trailing window', async () => {
+    await seed([{ type: 'completion_api_usage', apiKeyId: 'key-a', credits: -10, createdAt: recent() }]);
+    await seed([
+      { ownerId: 'org-2', type: 'completion_api_usage', apiKeyId: 'key-x', credits: -999, createdAt: recent() },
+    ]);
+    const scoped = await creditTransactionRepository.apiKeyUsageForOwner(ORG, CreditHolderType.Organization);
+    expect(scoped).toHaveLength(1);
+    expect(scoped[0].apiKeyId).toBe('key-a');
+
+    await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+    const windowed = await creditTransactionRepository.apiKeyUsageForOwner(ORG, CreditHolderType.Organization, 30);
+    expect(windowed).toHaveLength(0);
+  });
+});

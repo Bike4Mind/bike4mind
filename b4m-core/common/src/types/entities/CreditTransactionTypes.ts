@@ -313,6 +313,22 @@ export interface ILedgerPage {
 }
 
 /**
+ * One API key's usage rolled up from the ledger (completion_api_usage rows,
+ * which carry `apiKeyId`). Credits are the spend magnitude (positive). The
+ * ledger has no COGS, so this cut carries tokens + credits only, not cogsUsd.
+ */
+export interface IApiKeyUsage {
+  apiKeyId: string;
+  requests: number;
+  creditsSpent: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** API key usage with the key id resolved to its name/prefix by the API. */
+export type NamedApiKeyUsage = IApiKeyUsage & { keyName?: string; keyPrefix?: string };
+
+/**
  * A ledger row shaped for the admin UI: the transaction fields the table needs
  * plus the acting member resolved to a display name. `actingUserId` is only
  * present on API/CLI org-billed rows (metadata.actingUserId); web org-billed
@@ -369,4 +385,11 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
 
   /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
+
+  /**
+   * An owner's API-token spend over the trailing N days (default 30) grouped by
+   * apiKeyId, from completion_api_usage ledger rows. Owner-scoped over the
+   * {ownerId, ownerType, createdAt} index; biggest spender first.
+   */
+  apiKeyUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IApiKeyUsage[]>;
 }
