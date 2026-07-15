@@ -2,9 +2,10 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import Prism from 'prismjs';
 // Side-effect import: registers the repo's Prism language grammars on the shared
-// Prism singleton (HTML/JS/TS/python/bash/sql/...). Kept as the single source of
-// truth for which languages highlight - must stay in sync with the in-app code
-// viewer, which loads the same module.
+// Prism singleton (HTML/JS/TS/python/bash/sql/...). This is the single source of
+// truth for which languages highlight; the in-app code highlighter
+// (CodeHighlightPlugin) imports the same module, so export and in-app rendering
+// stay in sync.
 import '@client/app/components/Session/prism-languages';
 
 /**
