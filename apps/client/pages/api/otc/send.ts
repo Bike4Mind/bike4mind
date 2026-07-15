@@ -44,17 +44,19 @@ const handler = baseApi({ auth: false })
     }
 
     // Atomic per-recipient cooldown (enumeration-safe - see OTC_SEND_COOLDOWN_MS).
-    // tryReserveSlot atomically upserts a timestamp-gated placeholder; if a recent
-    // record already exists the upsert hits the unique-email index (E11000) and returns
-    // allowed:false. This replaces the previous check-then-act (non-atomic) pattern that
-    // allowed N concurrent requests to all read "no record" and all send an email.
-    // E2E (non-prod only) collapses the cooldown to 0 so repeated sends to the same
-    // address within a run never 429 - tryReserveSlot still writes/refreshes the
-    // PendingOtcToken record each time, so storeNonce and verify keep working below.
+    // tryReserveSlot atomically claims a reservation slot for this email; if the
+    // cooldown is still active, or a concurrent request already claimed it, it
+    // returns allowed:false. This replaces the previous check-then-act (non-atomic)
+    // pattern that allowed N concurrent requests to all read "no record" and all
+    // send an email. E2E (non-prod only) collapses the cooldown to 0 so repeated
+    // sends to the same address within a run never 429 on cooldown alone - the
+    // reservation is confirmed below with confirmReservation, which still detects
+    // (and rejects) a genuinely concurrent resend that would otherwise clobber
+    // this one's nonce.
     const cooldownMs = isE2EEnabled() ? 0 : OTC_SEND_COOLDOWN_MS;
-    const cooldownCheck = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, cooldownMs);
-    if (!cooldownCheck.allowed) {
-      res.setHeader('Retry-After', String(cooldownCheck.retryAfterSeconds ?? 0));
+    const reservation = await pendingOtcTokenRepository.tryReserveSlot(normalizedEmail, cooldownMs);
+    if (!reservation.allowed) {
+      res.setHeader('Retry-After', String(reservation.retryAfterSeconds));
       return res.status(429).json({ error: 'Please wait before requesting another code.' });
     }
 
@@ -104,7 +106,19 @@ const handler = baseApi({ auth: false })
     // Playwright. Production never stores it - only the bcrypt hash lives (in the JWT).
     if (result.nonce) {
       const debugCode = isE2EEnabled() ? result.code : undefined;
-      await pendingOtcTokenRepository.storeNonce(normalizedEmail, result.nonce, debugCode);
+      const confirmed = await pendingOtcTokenRepository.confirmReservation(
+        normalizedEmail,
+        reservation.reservedAt,
+        result.nonce,
+        debugCode
+      );
+      if (!confirmed) {
+        // A newer concurrent request for this email superseded our reservation before
+        // we could persist our nonce - the token we'd return here could never verify,
+        // so tell the caller to retry instead of lying that it succeeded.
+        res.setHeader('Retry-After', '0');
+        return res.status(429).json({ error: 'Please wait before requesting another code.' });
+      }
     }
 
     // Uniform response - never reveals whether user exists

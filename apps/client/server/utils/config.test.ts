@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 // Real SST throws in the Resource property getter itself when a resource
 // isn't linked/provisioned on the current stage - simulate that here instead
@@ -122,5 +122,65 @@ describe('Config eager-read hardening', () => {
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OPTIHASHI_API_URL'));
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('OVERWATCH_INGEST_ENABLED'));
     warnSpy.mockRestore();
+  });
+});
+
+describe('isE2EEnabled', () => {
+  const ENV_KEYS = ['E2E_ENDPOINTS_ENABLED', 'IS_LOCAL', 'NODE_ENV'] as const;
+  let savedEnv: Record<string, string | undefined>;
+
+  beforeEach(() => {
+    vi.resetModules();
+    savedEnv = Object.fromEntries(ENV_KEYS.map(key => [key, process.env[key]]));
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  it('is hard-false on production even when E2E_ENDPOINTS_ENABLED and dev-like env vars are set', async () => {
+    mockResourceWithUnlinked({ App: { stage: 'production' } });
+    process.env.E2E_ENDPOINTS_ENABLED = 'true';
+    process.env.IS_LOCAL = 'true';
+    process.env.NODE_ENV = 'development';
+
+    const { isE2EEnabled } = await import('./config');
+
+    expect(isE2EEnabled()).toBe(false);
+  });
+
+  it('is true on a non-production, non-staging stage when E2E_ENDPOINTS_ENABLED is set', async () => {
+    mockResourceWithUnlinked({ App: { stage: 'preview' } });
+    process.env.E2E_ENDPOINTS_ENABLED = 'true';
+    delete process.env.IS_LOCAL;
+    process.env.NODE_ENV = 'test';
+
+    const { isE2EEnabled } = await import('./config');
+
+    expect(isE2EEnabled()).toBe(true);
+  });
+
+  it('is false on staging with no E2E_ENDPOINTS_ENABLED flag, even though it is not production', async () => {
+    mockResourceWithUnlinked({ App: { stage: 'staging' } });
+    delete process.env.E2E_ENDPOINTS_ENABLED;
+    process.env.IS_LOCAL = 'true';
+
+    const { isE2EEnabled } = await import('./config');
+
+    expect(isE2EEnabled()).toBe(false);
+  });
+
+  it('falls back to isDevelopment on a plain non-deployed stage with no E2E flag', async () => {
+    mockResourceWithUnlinked({ App: { stage: 'test' } });
+    delete process.env.E2E_ENDPOINTS_ENABLED;
+    process.env.IS_LOCAL = 'true';
+    delete process.env.NODE_ENV;
+
+    const { isE2EEnabled } = await import('./config');
+
+    expect(isE2EEnabled()).toBe(true);
   });
 });
