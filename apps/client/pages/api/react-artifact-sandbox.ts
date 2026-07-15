@@ -187,11 +187,13 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         var moduleMap = { 'react': React };
         deps.forEach(function (d) { var meta = OPTIONAL_DEPS[d]; if (meta) moduleMap[d] = window[meta.globalVar]; });
         var require = function (module) {
-          if (moduleMap[module]) return moduleMap[module];
+          // hasOwnProperty (not a truthy check): a plain-object moduleMap inherits Object.prototype,
+          // so \`moduleMap['toString']\` etc. would resolve to a prototype method instead of throwing.
+          if (Object.prototype.hasOwnProperty.call(moduleMap, module)) return moduleMap[module];
           throw new Error('Module "' + module + '" is not available');
         };
 
-        var transformedCode = code.replace(/import\\s+([^;]+)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
+        var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
           // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
