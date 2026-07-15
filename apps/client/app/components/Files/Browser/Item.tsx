@@ -187,8 +187,9 @@ const FileBrowserItem: FC<IFileBrowserItemProps> = ({ viewType = 'grid', ...rest
 };
 
 const useCommon = (file: IFabFileDocument) => {
-  const { selectedIds, setSelectedIds } = useFileBrowserInstance();
+  const { selectedIds, setSelectedIds, config } = useFileBrowserInstance();
   const selected = selectedIds.has(file.id);
+  const isAdded = config.addedFileIds?.has(file.id) ?? false;
   const [editMode, setEditMode] = useState(false);
 
   function handleClick() {
@@ -203,11 +204,30 @@ const useCommon = (file: IFabFileDocument) => {
 
   return {
     selected,
+    isAdded,
     editMode,
     setEditMode,
     handleClick,
   };
 };
+
+const AddedBadge: FC = () => (
+  <Chip
+    data-testid="file-browser-item-added-badge"
+    size="sm"
+    variant="soft"
+    startDecorator={<CheckIcon sx={{ fontSize: 12 }} />}
+    sx={{
+      bgcolor: greenAlpha[800][20],
+      color: green[800],
+      fontSize: { xs: '11px', md: '13px' },
+      height: { xs: '20px', md: '24px' },
+      border: `1px solid ${green[800]}`,
+    }}
+  >
+    Added
+  </Chip>
+);
 
 const isImageFile = (filename: string) => {
   const imageExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp'];
@@ -216,7 +236,7 @@ const isImageFile = (filename: string) => {
 
 const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
   const { fileName, fileSize, createdAt, chunked, vectorized, isChunking, isVectorizing } = file;
-  const { selected, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 20);
   const { currentUser } = useUser();
   const sharedUsersList = file.users ?? [];
@@ -462,6 +482,8 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
             isChunking={isChunking}
           />
 
+          {isAdded && <AddedBadge />}
+
           {tags.length - 6 > 0 && (
             <Chip
               size="sm"
@@ -550,7 +572,7 @@ const ListItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
 };
 
 const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = [] }) => {
-  const { selected, editMode, setEditMode, handleClick } = useCommon(file);
+  const { selected, isAdded, editMode, setEditMode, handleClick } = useCommon(file);
   const icon = getFileIcon(file, 32);
   const { chunked, vectorized, isChunking, isVectorizing, fileName } = file;
   const { currentUser } = useUser();
@@ -821,6 +843,7 @@ const GridItem: FC<Omit<IFileBrowserItemProps, 'viewType'>> = ({ file, tags = []
               chunked={chunked}
               isChunking={isChunking}
             />
+            {isAdded && <AddedBadge />}
             {/* Shared recipients (Grid) */}
             {sharedUsersGrid.length > 0 && (
               <Box sx={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'center' }}>

@@ -72,7 +72,7 @@ const FileBrowserItemActions: FC<{
   const deleteFile = useDeleteFile();
   const confirm = useConfirmation();
   const { mutateAsync: getPresignedUrl } = useGetPresignedUrl();
-  const { setFileToShare } = useFileBrowserInstance();
+  const { setFileToShare, config } = useFileBrowserInstance();
   const autoRename = useAutoRenameFabFile();
   const applyAutoRename = useApplyAutoRenameFabFile();
   const { currentUser } = useUser();
@@ -322,7 +322,21 @@ const FileBrowserItemActions: FC<{
           <MenuItem
             onClick={(e: MouseEvent) => {
               e.stopPropagation();
-              if (isSharedToMe) {
+              // Embedded pickers override delete to remove-from-list so the file itself
+              // is never destroyed from the picker (owned files only; shared removal below
+              // is already non-destructive).
+              if (config.onDelete && !isSharedToMe) {
+                const onDelete = config.onDelete;
+                confirm({
+                  title: `Remove ${file.fileName || 'file'}`,
+                  description: 'Remove this file from the list? The file itself is not deleted.',
+                  type: 'warning',
+                  okLabel: 'Remove',
+                  onOk: async () => {
+                    onDelete(file.id);
+                  },
+                });
+              } else if (isSharedToMe) {
                 confirm({
                   title: `Remove ${file.fileName || 'file'}`,
                   description:
@@ -346,11 +360,17 @@ const FileBrowserItemActions: FC<{
               }
             }}
             disabled={deleteFile.isPending}
-            color={isSharedToMe ? 'warning' : 'danger'}
+            color={config.onDelete || isSharedToMe ? 'warning' : 'danger'}
             sx={{ py: 1, mb: 0.125 }}
           >
-            {deleteFile.isPending ? <CircularProgress size="sm" /> : isSharedToMe ? <LinkOffIcon /> : <DeleteOutline />}
-            {isSharedToMe ? 'Remove from my files' : 'Delete'}
+            {deleteFile.isPending ? (
+              <CircularProgress size="sm" />
+            ) : config.onDelete || isSharedToMe ? (
+              <LinkOffIcon />
+            ) : (
+              <DeleteOutline />
+            )}
+            {config.onDelete ? 'Remove from list' : isSharedToMe ? 'Remove from my files' : 'Delete'}
           </MenuItem>
         </Menu>
       </Dropdown>
