@@ -5,6 +5,7 @@ import type { Session, Message, CliConfig, SessionStore, ConfigStore, CommandHis
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
+import type { TodoItem } from '../tools/writeTodosTool.js';
 import type { ModelInfo } from '@bike4mind/common';
 
 /**
@@ -63,6 +64,9 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     additionalDirectories: [],
     featureRegistry: null,
     backgroundManager: null,
+    todoStore: null,
+    decisionStore: null,
+    blockerStore: null,
     setCommandHistory: vi.fn(),
     setAbortController: vi.fn(),
   };
@@ -259,5 +263,77 @@ describe('runTurn', () => {
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     expect(run.mock.calls[0][0]).toBe('first');
     expect(run.mock.calls[1][0]).toBe('second');
+  });
+
+  describe('workflow reminder wiring', () => {
+    const stores = () => ({
+      todoStore: { todos: [{ description: 'fix the bug', status: 'in_progress' }] as TodoItem[] },
+      decisionStore: {
+        decisions: [{ id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' }],
+      },
+      blockerStore: {
+        blockers: [{ id: 'b1', createdAt: ISO, description: 'waiting on API key', status: 'open' as const }],
+      },
+    });
+
+    it('passes a workflowReminder provider that renders the live store state', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, ...stores() });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeTypeOf('function');
+      const rendered = options.workflowReminder!();
+      expect(rendered).toContain('1. [in_progress] fix the bug');
+      expect(rendered).toContain('- waiting on API key');
+      expect(rendered).toContain('- use vitest (rationale: repo standard)');
+    });
+
+    it('re-renders current state on each call (live, not a snapshot)', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const liveStores = stores();
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, ...liveStores });
+
+      await runTurn('hello', ctx);
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+
+      liveStores.blockerStore.blockers[0].status = 'resolved' as never;
+      liveStores.todoStore.todos.push({ description: 'update docs', status: 'pending' });
+
+      const rendered = options.workflowReminder!();
+      expect(rendered).not.toContain('waiting on API key');
+      expect(rendered).toContain('2. [pending] update docs');
+    });
+
+    it('omits the provider when the workflowReminders preference is off', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        configStore: {
+          get: vi.fn(async () => ({ preferences: { workflowReminders: false } })),
+        } as unknown as TurnContext['configStore'],
+        ...stores(),
+      });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeUndefined();
+    });
+
+    it('omits the provider when no workflow stores are wired', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeUndefined();
+    });
   });
 });
