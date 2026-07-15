@@ -227,6 +227,19 @@ export default function C() { return <LineChart />; }`;
     expect(withoutLucide.indexHtml).not.toContain('setupLucideWrapper');
   });
 
+  it('renders lucide icons from the node-array format, not dangerouslySetInnerHTML', async () => {
+    // lucide@1.x exposes icons as node arrays ([tag, attrs][]); the shim must build real SVG
+    // children via React.createElement. Guards against a regression back to the string-injection
+    // form (which rendered invisible icons). The shim lives in a template string, so assert on it.
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `import { Home } from 'lucide-react';\nexport default function C() { return <Home />; }`,
+      title: 'x',
+    });
+    expect(indexHtml).toContain('Array.isArray');
+    expect(indexHtml).toContain('React.createElement(entry[0]');
+    expect(indexHtml).not.toContain('dangerouslySetInnerHTML');
+  });
+
   it('handles an artifact importing multiple blessed deps at once', async () => {
     const src = `import { LineChart } from 'recharts';
 import _ from 'lodash';
