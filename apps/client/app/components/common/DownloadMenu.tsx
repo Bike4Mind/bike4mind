@@ -5,6 +5,7 @@ import SaveAltIcon from '@mui/icons-material/SaveAlt';
 import { toast } from 'react-hot-toast';
 import { marked } from 'marked';
 import { Document, Paragraph, TextRun, Packer, Table, TableRow, TableCell, WidthType } from 'docx';
+import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 
 // Utility: Download a file
 export const downloadFile = (content: string, fileName: string, mimeType: string) => {
@@ -197,15 +198,6 @@ export const convertMarkdownToDocx = async (markdown: string): Promise<Blob> => 
   return await Packer.toBlob(wordDoc);
 };
 
-// Utility: Convert Markdown to HTML
-export const convertMarkdownToHtml = async (markdown: string): Promise<string> => {
-  const html = await marked.parse(markdown);
-  if (typeof html !== 'string') {
-    throw new Error('Failed to convert markdown to HTML');
-  }
-  return `<!DOCTYPE html>\n<html>\n<head>\n  <meta charset=\"UTF-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n  <title>Converted Markdown</title>\n  <style>\n    body {\n      font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif;\n      line-height: 1.6;\n      max-width: 800px;\n      margin: 0 auto;\n      padding: 2rem;\n      color: #333;\n    }\n    h1 { font-size: 2.5em; margin-bottom: 1rem; }\n    h2 { font-size: 2em; margin-bottom: 0.8rem; }\n    h3 { font-size: 1.75em; margin-bottom: 0.6rem; }\n    p { margin-bottom: 1rem; }\n    pre {\n      background-color: #f5f5f5;\n      padding: 1rem;\n      border-radius: 4px;\n      overflow-x: auto;\n      font-family: \"Courier New\", Courier, monospace;\n    }\n    code {\n      font-family: \"Courier New\", Courier, monospace;\n      background-color: #f5f5f5;\n      padding: 0.2em 0.4em;\n      border-radius: 3px;\n    }\n    ul, ol { margin-bottom: 1rem; }\n    li { margin-bottom: 0.5rem; }\n    a { color: #0066cc; text-decoration: none; }\n    a:hover { text-decoration: underline; }\n    blockquote {\n      border-left: 4px solid #ddd;\n      margin: 0;\n      padding-left: 1rem;\n      color: #666;\n    }\n    img { max-width: 100%; height: auto; }\n    table {\n      border-collapse: collapse;\n      width: 100%;\n      margin-bottom: 1rem;\n    }\n    th, td {\n      border: 1px solid #ddd;\n      padding: 0.5rem;\n      text-align: left;\n    }\n    th { background-color: #f5f5f5; }\n  </style>\n</head>\n<body>\n${html}\n</body>\n</html>`;
-};
-
 // Utility: Copy text to clipboard
 export const copyToClipboard = async (content: string): Promise<boolean> => {
   try {
@@ -273,7 +265,8 @@ const DownloadMenu: React.FC<{
           className="download-menu-item-html"
           onClick={async () => {
             try {
-              const html = await convertMarkdownToHtml(content);
+              const title = fileName.replace(/\.mdx?$/, '');
+              const html = await renderMarkdownToStyledHtml(content, { title });
               downloadFile(html, fileName.replace(/\.mdx?$/, '.html'), 'text/html');
             } catch (error) {
               console.error('Error converting to HTML:', error);
