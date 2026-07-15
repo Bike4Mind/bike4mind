@@ -67,6 +67,11 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     todoStore: null,
     decisionStore: null,
     blockerStore: null,
+    workflowStores: {
+      decisionStore: { decisions: [] },
+      blockerStore: { blockers: [] },
+      reviewGateStore: { reviewGates: [] },
+    },
     setCommandHistory: vi.fn(),
     setAbortController: vi.fn(),
   };
@@ -139,6 +144,41 @@ describe('runTurn', () => {
 
     expect(save).toHaveBeenCalledOnce();
     expect(save.mock.calls[0][0]).toMatchObject({ id: 'sess-1', metadata: { totalTokens: 110 } });
+  });
+
+  it('persists durable workflow state logged during the turn onto the saved session', async () => {
+    seedSession([]);
+    const save = vi.fn(async (_session: Session) => undefined);
+    // Simulate a decision logged into the store mid-turn (as log_decision would).
+    const decision = {
+      id: 'd1',
+      timestamp: ISO,
+      summary: 'adopt discriminated unions',
+      rationale: 'model state safely',
+    };
+    const ctx = makeCtx({
+      sessionStore: { save } as unknown as SessionStore,
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('hello', ctx);
+
+    // Without the sync, workflow state would live only in the in-memory store
+    // and be lost to a later auto-compaction that reads session.metadata.
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
+    expect(useCliStore.getState().session!.metadata.workflow?.decisions).toEqual([decision]);
+  });
+
+  it('leaves workflow metadata unset when no durable state was logged', async () => {
+    seedSession([]);
+    const save = vi.fn(async (_session: Session) => undefined);
+    await runTurn('hello', makeCtx({ sessionStore: { save } as unknown as SessionStore }));
+
+    expect(save.mock.calls[0][0].metadata.workflow).toBeUndefined();
   });
 
   it('publishes an abort controller for the turn and clears it when the turn settles', async () => {

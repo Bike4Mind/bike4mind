@@ -48,6 +48,7 @@ import {
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
 import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
+import { buildWorkflowState } from './utils/workflowState.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
   buildHandoffPrompt,
@@ -1349,16 +1350,14 @@ function CliApp() {
           toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
           // Sync durable workflow state from in-memory stores
           workflow:
-            decisionStoreRef.current.decisions.length > 0 ||
-            blockerStoreRef.current.blockers.length > 0 ||
-            reviewGateStoreRef.current.reviewGates.length > 0
-              ? {
-                  decisions: decisionStoreRef.current.decisions,
-                  blockers: blockerStoreRef.current.blockers,
-                  handoff: currentSession.metadata.workflow?.handoff,
-                  reviewGates: reviewGateStoreRef.current.reviewGates,
-                }
-              : currentSession.metadata.workflow,
+            buildWorkflowState(
+              {
+                decisionStore: decisionStoreRef.current,
+                blockerStore: blockerStoreRef.current,
+                reviewGateStore: reviewGateStoreRef.current,
+              },
+              currentSession.metadata.workflow?.handoff
+            ) ?? currentSession.metadata.workflow,
         },
       };
 
@@ -1484,6 +1483,11 @@ function CliApp() {
       todoStore: todoStoreRef.current,
       decisionStore: decisionStoreRef.current,
       blockerStore: blockerStoreRef.current,
+      workflowStores: {
+        decisionStore: decisionStoreRef.current,
+        blockerStore: blockerStoreRef.current,
+        reviewGateStore: reviewGateStoreRef.current,
+      },
       setCommandHistory,
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
     });
@@ -2161,17 +2165,16 @@ function CliApp() {
         // even if handoff generation is skipped or fails. When generateHandoff
         // succeeds it will overwrite this with a fresh workflow object that
         // includes the new handoff.
-        if (
-          decisionStoreRef.current.decisions.length > 0 ||
-          blockerStoreRef.current.blockers.length > 0 ||
-          reviewGateStoreRef.current.reviewGates.length > 0
-        ) {
-          session.metadata.workflow = {
-            decisions: decisionStoreRef.current.decisions,
-            blockers: blockerStoreRef.current.blockers,
-            handoff: session.metadata.workflow?.handoff,
-            reviewGates: reviewGateStoreRef.current.reviewGates,
-          };
+        const syncedWorkflow = buildWorkflowState(
+          {
+            decisionStore: decisionStoreRef.current,
+            blockerStore: blockerStoreRef.current,
+            reviewGateStore: reviewGateStoreRef.current,
+          },
+          session.metadata.workflow?.handoff
+        );
+        if (syncedWorkflow) {
+          session.metadata.workflow = syncedWorkflow;
         }
         // Generate structured handoff so the next session can resume seamlessly.
         // Skipped silently for short sessions or when no agent is available.

@@ -28,6 +28,7 @@ import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { ConversationContext, reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
 import { createReactiveCompactionHandler } from '../utils/reactiveCompaction.js';
+import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } from '../utils/workflowState.js';
 import { formatStep, extractCompactInstructions } from '../utils';
 import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
@@ -64,6 +65,12 @@ export interface TurnContext {
   todoStore: TodoStore | null;
   decisionStore: DecisionStore | null;
   blockerStore: BlockerStore | null;
+  /**
+   * In-memory durable-workflow stores. Flushed onto the session before
+   * compaction so decisions/blockers logged this turn are not dropped when a
+   * stale `metadata.workflow` snapshot is copied into the compacted session.
+   */
+  workflowStores: WorkflowStores;
   /** Mirror the persisted command history into the input's up-arrow recall. */
   setCommandHistory: (history: string[]) => void;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
@@ -93,6 +100,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     todoStore,
     decisionStore,
     blockerStore,
+    workflowStores,
     setCommandHistory,
     setAbortController,
   } = ctx;
@@ -169,9 +177,13 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         if (compactionPrompt) {
           const result = await agent.run(compactionPrompt, { maxIterations: 1 });
 
-          await sessionStore.save(activeSession);
+          // Flush decisions/blockers logged in prior turns but not yet synced
+          // onto the session, so the compacted session carries current workflow
+          // state instead of a stale snapshot.
+          const sessionToCompact = withFlushedWorkflowState(activeSession, workflowStores);
+          await sessionStore.save(sessionToCompact);
           const newSession = createCompactedSession(
-            activeSession,
+            sessionToCompact,
             result.finalAnswer,
             preservedMessages,
             !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
@@ -345,6 +357,12 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         totalTokens: currentSession.metadata.totalTokens + result.completionInfo.totalTokens,
         totalCredits: (currentSession.metadata.totalCredits || 0) + (result.completionInfo.totalCredits || 0),
         toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
+        // Sync durable workflow state so decisions/blockers logged this turn are
+        // persisted (and current for the next turn's auto-compaction), not left
+        // only in the in-memory stores until a /save or handoff.
+        workflow:
+          buildWorkflowState(workflowStores, currentSession.metadata.workflow?.handoff) ??
+          currentSession.metadata.workflow,
       },
     };
 
