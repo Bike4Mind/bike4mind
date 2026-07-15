@@ -46,7 +46,7 @@ describe('FallbackModelBadge', () => {
       </TestWrapper>
     );
 
-    const chip = await screen.findByText('Fallback Model Used');
+    const chip = await screen.findByTestId('fallback-model-badge-chip');
     fireEvent.mouseOver(chip);
 
     const tooltip = await screen.findByText(
@@ -64,7 +64,7 @@ describe('FallbackModelBadge', () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText('Fallback Model Used')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('fallback-model-badge-chip')).not.toBeInTheDocument();
     });
   });
 });

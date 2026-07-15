@@ -647,6 +647,78 @@ describe('ChatCompletionProcess', () => {
       expect(updateCall[0].promptMeta.tokenUsage.actualOutputTokens).toBe(fallbackOutputTokens);
     });
 
+    // Exhaustion path + final-hop cross-provider wiring: every hop fails, so the loop runs the
+    // full MAX_FALLBACK_HOPS budget and throws. Asserts the loop asks getLlmWithFallback for a
+    // cross-provider (preferUntriedBackend) ONLY on the final hop, and settles as errored.
+    it('exhausts the hop budget and sets preferUntriedBackend only on the final hop', async () => {
+      mockQuest.promptMeta.model = { name: ChatModels.GPT4, backend: ModelBackend.OpenAI };
+      mockedShouldTriggerFallback.mockReturnValue(true);
+      mockedIsOverloadedError.mockReturnValue(false);
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async () => {
+          throw new Error('ServiceUnavailableException: primary outage');
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      });
+
+      // Each hop returns a distinct model whose backend also fails, so the loop keeps hopping.
+      const optsSeen: Array<{ preferUntriedBackend?: boolean }> = [];
+      let hopN = 0;
+      mockedGetLlmWithFallback.mockImplementation(async (...callArgs: any[]) => {
+        optsSeen.push(callArgs[5] ?? {});
+        hopN++;
+        return {
+          model: {
+            id: `hop-model-${hopN}`,
+            type: 'text',
+            name: `Hop ${hopN}`,
+            backend: ModelBackend.Anthropic,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi.fn().mockImplementation(async () => {
+              throw new Error('ServiceUnavailableException: hop outage');
+            }),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: `hop-model-${hopN}`,
+          },
+          attempt: 1,
+        } as any;
+      });
+
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          pricing: { 200000: { input: 0, output: 0 } },
+          supportsImageVariation: false,
+        },
+      ]);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }]);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' });
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      // Total exhaustion rethrows the last error (pre-existing loop behavior); swallow it so we
+      // can inspect the per-hop options the loop passed.
+      await service.process({ body, logger: mockLogger }).catch(() => undefined);
+
+      // MAX_FALLBACK_HOPS (5) hops attempted, then the budget-exhausted guard throws.
+      expect(optsSeen.length).toBe(5);
+      // Same-provider degradation on the earlier hops; the cross-provider guarantee only on the last.
+      expect(optsSeen.slice(0, 4).every(o => o.preferUntriedBackend === false)).toBe(true);
+      expect(optsSeen[4].preferUntriedBackend).toBe(true);
+    });
+
     // Wiring test: with the E2E gate on and the marker present, the affordance simulates a
     // provider-wide Anthropic outage - it throws on every Bedrock/Anthropic-backed hop, so the
     // Bedrock primary never runs and the loop crosses to the non-Anthropic fallback (gpt-5),
@@ -729,6 +801,96 @@ describe('ChatCompletionProcess', () => {
         expect(mockedGetLlmWithFallback).toHaveBeenCalled();
         expect(mockDb.quests.update).toHaveBeenCalledWith(
           expect.objectContaining({ replies: ['answer from fallback model'], status: 'done', type: 'message' })
+        );
+      } finally {
+        if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;
+        else process.env.E2E_ENDPOINTS_ENABLED = prevEnv;
+      }
+    });
+
+    // The marker widens per hop, not just on the primary: it must also fire on an INTERMEDIATE
+    // Anthropic-backed fallback hop (so the simulated outage spans the whole provider path) and
+    // then let a subsequent non-Anthropic hop through.
+    it('E2E marker fires on an intermediate Anthropic fallback hop, not only the primary', async () => {
+      const prevEnv = process.env.E2E_ENDPOINTS_ENABLED;
+      process.env.E2E_ENDPOINTS_ENABLED = 'true';
+      try {
+        mockedShouldTriggerFallback.mockReturnValue(true);
+        mockedIsOverloadedError.mockReturnValue(false);
+
+        // Bedrock primary: marker fires before it runs.
+        let primaryComplete = 0;
+        mockedGetLlmByModel.mockReturnValue({
+          complete: vi.fn().mockImplementation(async () => {
+            primaryComplete++;
+          }),
+          getModelInfo: vi.fn().mockResolvedValue([]),
+          currentModel: 'global.anthropic.claude-opus-4-8',
+        });
+
+        // Hop 1 = Anthropic-direct (marker must fire on it too → its backend never completes).
+        // Hop 2 = OpenAI (marker leaves it alone → it completes).
+        let anthropicHopComplete = 0;
+        let openaiHopComplete = 0;
+        const mk = (id: string, backend: ModelBackend, onComplete: () => void, reply?: string) => ({
+          model: {
+            id,
+            type: 'text' as const,
+            name: id,
+            backend,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+          backend: {
+            complete: vi.fn().mockImplementation(async (_m: any, _ms: any, _o: any, cb: any) => {
+              onComplete();
+              if (reply) await cb([reply]);
+            }),
+            getModelInfo: vi.fn().mockResolvedValue([]),
+            currentModel: id,
+          },
+          attempt: 1,
+        });
+        mockedGetLlmWithFallback
+          .mockResolvedValueOnce(mk('claude-opus-4-8', ModelBackend.Anthropic, () => anthropicHopComplete++) as any)
+          .mockResolvedValueOnce(
+            mk('gpt-5', ModelBackend.OpenAI, () => openaiHopComplete++, 'answer from cross-provider') as any
+          );
+
+        mockQuest.promptMeta.model = { name: 'global.anthropic.claude-opus-4-8', backend: ModelBackend.Bedrock };
+        mockedGetAvailableModels.mockResolvedValue([
+          {
+            id: 'global.anthropic.claude-opus-4-8',
+            type: 'text',
+            name: 'Claude 4.8 Opus',
+            backend: ModelBackend.Bedrock,
+            max_tokens: 100,
+            contextWindow: 200_000,
+            pricing: { 200000: { input: 0, output: 0 } },
+            supportsImageVariation: false,
+          },
+        ]);
+        mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: `hi ${FORCE_FALLBACK_TEST_MARKER}` }]);
+        mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}]);
+        mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'hi' });
+
+        const body = {
+          ...startQuestParams,
+          params: { ...startQuestParams.params, model: 'global.anthropic.claude-opus-4-8' },
+          tools: [],
+          projectId: undefined,
+          organizationId: undefined,
+        };
+        await service.process({ body, logger: mockLogger });
+
+        expect(primaryComplete).toBe(0); // marker fired on the Bedrock primary
+        expect(anthropicHopComplete).toBe(0); // marker ALSO fired on the intermediate Anthropic hop
+        expect(openaiHopComplete).toBe(1); // the non-Anthropic hop ran for real
+        expect(mockedGetLlmWithFallback).toHaveBeenCalledTimes(2);
+        expect(mockDb.quests.update).toHaveBeenCalledWith(
+          expect.objectContaining({ replies: ['answer from cross-provider'], status: 'done', type: 'message' })
         );
       } finally {
         if (prevEnv === undefined) delete process.env.E2E_ENDPOINTS_ENABLED;

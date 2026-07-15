@@ -32,6 +32,11 @@ export function getModelProviderLabel(modelId: string | undefined): string | und
   if (id.startsWith('gpt') || id.startsWith('chatgpt') || /^o\d/.test(id)) return 'OpenAI';
   if (id.startsWith('gemini')) return 'Google';
   if (id.startsWith('grok')) return 'xAI';
+  // Bare (non-Bedrock) ids for other direct providers. The `<vendor>.` prefixed forms are
+  // Bedrock-hosted and already caught above; these dash-slug forms are the direct APIs.
+  if (id.startsWith('deepseek')) return 'DeepSeek';
+  if (id.startsWith('mistral') || id.startsWith('mixtral') || id.startsWith('ministral')) return 'Mistral';
+  if (id.startsWith('command') || id.startsWith('cohere')) return 'Cohere';
   return undefined;
 }
 

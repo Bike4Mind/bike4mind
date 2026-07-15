@@ -536,4 +536,98 @@ describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
     expect(result!.model.id).toBe('gpt-5');
     expect(result!.model.backend).toBe(ModelBackend.OpenAI);
   });
+
+  it('skips an already-tried original with forceSwitch:false (multi-hop passes the failed model as original)', async () => {
+    // The non-overload retryable path (e.g. a 502) calls with forceSwitch:false. On a fallback hop
+    // the just-failed model is passed as `originalModel` AND is in excludeModelIds, so the
+    // original-return clause must be skipped and automatic selection must advance instead.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: false,
+      excludeModelIds: new Set(['claude-opus-4-8']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(1); // advanced, did NOT return the excluded original as attempt:0
+    expect(result!.model.id).not.toBe('claude-opus-4-8');
+  });
+});
+
+describe('getLlmWithFallback - cross-provider guarantee (preferUntriedBackend)', () => {
+  // Reproduces the reviewer's blocking finding and its fix: a bounded multi-hop traversal must
+  // reach the cross-provider tail on the REAL, untrimmed preference roster instead of burning the
+  // whole hop budget on same-provider models and hard-failing before it.
+  const MAX_FALLBACK_HOPS = 5; // keep in sync with ChatCompletionProcess.ts
+  const anthropicIds = [
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+  ];
+  const fable = createModelInfo({ id: 'claude-fable-5', backend: ModelBackend.Anthropic });
+  const roster = [
+    ...anthropicIds.map(id => createModelInfo({ id, backend: ModelBackend.Anthropic })),
+    createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI }),
+  ];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  // Mirror the real ChatCompletionProcess loop: seed the primary, then on each hop pass the
+  // just-failed model as `originalModel` with the accumulated exclusion set, flipping
+  // preferUntriedBackend on the final allowed hop.
+  async function runTraversal(preferOnFinal: boolean) {
+    const tried = new Set<string>([fable.id]);
+    let current = fable;
+    let hops = 0;
+    for (let attempt = 0; attempt < MAX_FALLBACK_HOPS; attempt++) {
+      const isFinal = attempt >= MAX_FALLBACK_HOPS - 1;
+      const res = await getLlmWithFallback(current, undefined, roster, apiKeyTable, mockLogger, {
+        forceSwitch: false,
+        excludeModelIds: tried,
+        preferUntriedBackend: preferOnFinal && isFinal,
+      });
+      if (!res || res.attempt === 0) break;
+      current = res.model;
+      tried.add(current.id);
+      hops++;
+    }
+    return { current, hops };
+  }
+
+  it('reaches the cross-provider tail within the hop budget on the full roster', async () => {
+    const { current, hops } = await runTraversal(true);
+    expect(current.backend).toBe(ModelBackend.OpenAI);
+    expect(current.id).toBe('gpt-5');
+    expect(hops).toBeLessThanOrEqual(MAX_FALLBACK_HOPS);
+  });
+
+  it('WITHOUT the final-hop guarantee, exhausts the budget on same-provider models (the bug)', async () => {
+    // Documents why the fix is needed: the same traversal without preferUntriedBackend never
+    // crosses providers on this roster - it ends on an Anthropic model after MAX hops.
+    const { current, hops } = await runTraversal(false);
+    expect(current.backend).toBe(ModelBackend.Anthropic);
+    expect(hops).toBe(MAX_FALLBACK_HOPS);
+  });
+
+  it('preferUntriedBackend forces the fallback onto a backend not yet tried', async () => {
+    // All Anthropic ids tried; only the OpenAI tail remains on an untried backend.
+    const allAnthropicTried = new Set<string>(anthropicIds.filter(id => id !== 'claude-sonnet-4-6'));
+    const sonnet46 = roster.find(m => m.id === 'claude-sonnet-4-6')!;
+    const crossed = await getLlmWithFallback(sonnet46, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allAnthropicTried,
+      preferUntriedBackend: true,
+    });
+    expect(crossed!.model.backend).toBe(ModelBackend.OpenAI);
+    expect(crossed!.model.id).toBe('gpt-5');
+  });
+
+  it('returns null when every candidate is excluded (traversal exhausted)', async () => {
+    const allTried = new Set<string>(roster.map(m => m.id));
+    const result = await getLlmWithFallback(fable, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allTried,
+      preferUntriedBackend: true,
+    });
+    expect(result).toBeNull();
+  });
 });

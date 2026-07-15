@@ -2780,6 +2780,10 @@ export class ChatCompletionProcess {
               const fallbackModelId = body.fallbackModel;
 
               const failedModel = currentModel; // the model that just failed this hop
+              // On the final allowed hop, guarantee the traversal crosses to a different provider:
+              // a provider-wide outage would otherwise burn the whole budget on same-provider
+              // models and hard-fail before ever reaching the cross-provider tail.
+              const isFinalHop = fallbackAttempt >= MAX_FALLBACK_HOPS - 1;
               const fallbackResult = await getLlmWithFallback(
                 currentModel,
                 fallbackModelId,
@@ -2789,6 +2793,7 @@ export class ChatCompletionProcess {
                 {
                   forceSwitch: overloadRetriesExhausted,
                   excludeModelIds: triedModelIds,
+                  preferUntriedBackend: isFinalHop,
                 }
               );
 

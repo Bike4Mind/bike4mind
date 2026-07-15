@@ -219,6 +219,7 @@ const FallbackModelBadge: React.FC<FallbackModelBadgeProps> = ({ sessionId, size
   return (
     <Tooltip title={formatFallbackTooltip(fallbackInfo)} placement="bottom">
       <Chip
+        data-testid="fallback-model-badge-chip"
         variant="soft"
         color="warning"
         size={size}

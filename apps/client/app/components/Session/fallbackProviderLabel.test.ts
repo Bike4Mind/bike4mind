@@ -16,6 +16,10 @@ describe('getModelProviderLabel', () => {
     ['o1-preview', 'OpenAI'],
     ['gemini-2.5-pro-preview-05-06', 'Google'],
     ['grok-2', 'xAI'],
+    ['deepseek-chat', 'DeepSeek'],
+    ['us.deepseek.r1-v1:0', 'Bedrock'], // Bedrock-hosted DeepSeek: region prefix wins
+    ['mistral-large-latest', 'Mistral'],
+    ['command-r-plus', 'Cohere'],
   ])('maps %s -> %s', (id, expected) => {
     expect(getModelProviderLabel(id)).toBe(expected);
   });
