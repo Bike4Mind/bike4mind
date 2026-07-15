@@ -253,7 +253,7 @@ function reactRuntimeScriptTags(): string {
 
 /**
  * Builds `window.LucideReactWrapper` from the blessed `lucide` UMD (global `lucide`), embedded in
- * the bootstrap when a bundle imports `lucide-react`. Kept byte-for-byte equivalent to the in-app
+ * the bootstrap when a bundle imports `lucide-react`. Kept functionally equivalent to the in-app
  * sandbox shim (setupLucideWrapper in apps/client/pages/api/react-artifact-sandbox.ts) so a
  * published lucide artifact renders identically to its chat preview - MUST stay in sync with it.
  * Contains no closing-script-tag sequence, so it is safe inside the inline bootstrap.
@@ -289,7 +289,11 @@ export function assembleReactBundleHtml(input: {
   transpiledCode: string;
   dependencies?: readonly string[];
 }): string {
-  const deps = (input.dependencies ?? []).filter(d => d in PUBLISH_REACT_DEP_SCRIPTS);
+  // hasOwnProperty (not `in`): `in` walks the prototype chain, so a module named `constructor`,
+  // `toString`, etc. would falsely match and yield an undefined path/global.
+  const deps = (input.dependencies ?? []).filter(d =>
+    Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, d)
+  );
   // A literal `</script>` inside the transpiled code (e.g. in a string literal) would close the
   // inline script early; escape it. In a JS string `<\/script>` is identical to `</script>`.
   const safeCode = input.transpiledCode.replace(/<\/(script)/gi, '<\\/$1');
@@ -347,7 +351,9 @@ export async function buildReactArtifactBundle(input: {
     );
   }
   assertPublishableDependencies(input.source);
-  const dependencies = extractImportedModules(input.source).filter(m => m in PUBLISH_REACT_DEP_SCRIPTS);
+  const dependencies = extractImportedModules(input.source).filter(m =>
+    Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
+  );
   const transpiledCode = await transpileReactSource(input.source);
   return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
 }
