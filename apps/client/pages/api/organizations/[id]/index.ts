@@ -22,9 +22,9 @@ const handler = baseApi()
         }
       );
 
-      return res.status(200).json(
-        toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin })
-      );
+      return res
+        .status(200)
+        .json(toSafeOrganization(organization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
     })
   )
   .put(
@@ -41,7 +41,7 @@ const handler = baseApi()
         }
       );
 
-      return res.json(updatedOrganization);
+      return res.json(toSafeOrganization(updatedOrganization, { userId: req.user!.id, isAdmin: req.user!.isAdmin }));
     })
   )
   .delete<Request<unknown, unknown, unknown, { id: string }>>(async (req, res) => {

@@ -10,6 +10,7 @@ import { createMocks } from 'node-mocks-http';
 
 const mockRefs = vi.hoisted(() => ({
   getHandler: null as null | ((req: any, res: any) => unknown),
+  postHandler: null as null | ((req: any, res: any) => unknown),
   lastSearchParams: undefined as any,
 }));
 
@@ -20,19 +21,39 @@ vi.mock('@server/middlewares/baseApi', () => {
       mockRefs.getHandler = fn;
       return chain;
     },
-    post: () => chain,
+    post: (fn: any) => {
+      mockRefs.postHandler = fn;
+      return chain;
+    },
   };
   return { baseApi: () => chain };
 });
 
 const search = vi.hoisted(() =>
   vi.fn(async () => ({
-    data: [{ id: 'org1', userId: 'owner1', name: 'Acme', billingContact: 'billing@acme.com', stripeCustomerId: 'cus_SECRET' }],
+    data: [
+      {
+        id: 'org1',
+        userId: 'owner1',
+        name: 'Acme',
+        billingContact: 'billing@acme.com',
+        stripeCustomerId: 'cus_SECRET',
+      },
+    ],
     hasMore: false,
     total: 1,
   }))
 );
-vi.mock('@bike4mind/services', () => ({ organizationService: { search } }));
+const create = vi.hoisted(() =>
+  vi.fn(async () => ({
+    id: 'orgNew',
+    userId: 'creator1',
+    name: 'Acme',
+    billingContact: 'billing@acme.com',
+    stripeCustomerId: 'cus_SECRET',
+  }))
+);
+vi.mock('@bike4mind/services', () => ({ organizationService: { search, create } }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: {} }));
 
 import '@pages/api/organizations/index';
@@ -76,5 +97,21 @@ describe('GET /api/organizations - scoping + safe serialization', () => {
     const body = res._getJSONData();
     expect(body.data[0].billingContact).toBe('billing@acme.com');
     expect('stripeCustomerId' in body.data[0]).toBe(false);
+  });
+});
+
+describe('POST /api/organizations - safe serialization', () => {
+  beforeEach(() => create.mockClear());
+
+  it('strips stripeCustomerId from the created org before returning it', async () => {
+    const { req, res } = mocks({ id: 'creator1', isAdmin: false });
+    (req as any).body = { name: 'Acme' };
+    await mockRefs.postHandler!(req, res);
+    const body = res._getJSONData();
+    // creator is the owner, so billingContact is kept, but stripeCustomerId never leaks
+    expect(body.name).toBe('Acme');
+    expect('stripeCustomerId' in body).toBe(false);
+    expect(body.billingContact).toBe('billing@acme.com');
+    expect(JSON.stringify(body)).not.toContain('cus_SECRET');
   });
 });

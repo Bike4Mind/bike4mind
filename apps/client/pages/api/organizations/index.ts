@@ -6,7 +6,7 @@ import { Request } from 'express';
 import qs from 'qs';
 import { organizationRepository } from '@bike4mind/database';
 import { organizationService } from '@bike4mind/services';
-import { toSafeOrganizations } from '@bike4mind/common';
+import { toSafeOrganization, toSafeOrganizations } from '@bike4mind/common';
 
 const handler = baseApi()
   .get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
@@ -44,7 +44,7 @@ const handler = baseApi()
       }
     );
 
-    return res.status(201).json(organization);
+    return res.status(201).json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));
   });
 
 export const config = {
