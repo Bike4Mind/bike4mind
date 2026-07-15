@@ -325,7 +325,7 @@ ${reactRuntimeScriptTags()}${depScriptTags ? '\n' + depScriptTags : ''}
     ${HOOK_GLOBALS}
     ${lucideSetup}
     var moduleMap={'react':React${moduleMapEntries}};
-    var require=function(m){if(moduleMap[m])return moduleMap[m];throw new Error('Module "'+m+'" is not available');};
+    var require=function(m){if(Object.prototype.hasOwnProperty.call(moduleMap,m))return moduleMap[m];throw new Error('Module "'+m+'" is not available');};
     ${safeCode}
     var __c=(typeof __DEFAULT_EXPORT__!=='undefined')?__DEFAULT_EXPORT__:null;
     if(!__c){throw new Error('No default-exported component found');}
