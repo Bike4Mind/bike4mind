@@ -1,0 +1,72 @@
+name: SST / infra preview gate
+
+# A PR that changes an sst pin or anything under infra/ must have a preview
+# deploy behind it before it can merge. The one that bit us (an app-only sst
+# bump with no matching overlay pins) was invisible until a real deploy ran,
+# and it ran for the first time on staging. This gate reuses the deployer's
+# `preview-deployed` label as the "a real hydrate+deploy has happened" signal.
+#
+# The job ALWAYS runs (no path filter) and decides applicability internally, so
+# that as a required check it reports success on unrelated PRs instead of
+# hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
+# deployer adds/removes the label.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  preview-gate:
+    name: preview gate
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - name: Require a preview for sst / infra changes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Files changed in this PR (with patches, for sst-pin detection).
+          gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename' > /tmp/files.txt || true
+          echo "Changed files:"; sed 's/^/  /' /tmp/files.txt || true
+
+          applicable=0
+          reason=""
+
+          # infra/ , sst.config.ts , or a premium overlay pin bump always need a preview.
+          if grep -qE '^(infra/|sst\.config\.ts$|premium-overlay\.lock\.json$)' /tmp/files.txt; then
+            applicable=1
+            reason="infra/ , sst.config.ts, or premium-overlay.lock.json changed"
+          fi
+
+          # A changed sst pin in any package.json.
+          if [ "$applicable" -eq 0 ]; then
+            gh api "repos/$REPO/pulls/$PR/files" --paginate \
+              -q '.[] | select(.filename|test("package\\.json$")) | .patch // ""' > /tmp/pkgpatches.txt || true
+            if grep -qE '^[+-].*"sst"[[:space:]]*:' /tmp/pkgpatches.txt; then
+              applicable=1
+              reason="an sst pin in a package.json changed"
+            fi
+          fi
+
+          if [ "$applicable" -eq 0 ]; then
+            echo "No sst / infra changes in this PR. Gate not applicable -> pass."
+            exit 0
+          fi
+
+          echo "This PR touches sst / infra ($reason); a preview deploy is required."
+
+          # The deployer adds `preview-deployed` on a successful preview deploy.
+          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'preview-deployed'; then
+            echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
+            exit 0
+          fi
+
+          echo "::error title=Preview required::This PR changes sst pins or infra/ but no preview deploy has run. Trigger a preview (mention the preview bot on the PR) and let it finish; the 'preview-deployed' label the deployer adds will satisfy this gate. This catches an sst/overlay mismatch on a throwaway stage instead of on staging."
+          exit 1
