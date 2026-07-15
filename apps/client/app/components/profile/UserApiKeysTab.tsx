@@ -77,8 +77,9 @@ const StyledTab = styled(Tab)(({ theme }) => ({
   },
 }));
 
-// Scope presentation model derived from USER_API_KEY_SCOPES by parsing the
-// resource:action convention, so new scopes surface here automatically.
+// Scope presentation model for the New-Key modal, derived from
+// GENERIC_MODAL_API_KEY_SCOPES by parsing the resource:action convention, so new
+// generic-flow scopes surface here automatically (embed:chat is excluded - see below).
 
 const RESOURCE_LABELS: Record<string, string> = {
   notebooks: 'Notebooks',
