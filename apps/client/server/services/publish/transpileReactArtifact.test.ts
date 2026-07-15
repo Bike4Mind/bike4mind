@@ -7,6 +7,8 @@ import {
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
 import { validateBundle, __testing } from './validateBundle';
+import { PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
+import { OPTIONAL_DEP_CDN } from '@client/app/utils/reactArtifactDeps';
 
 const COUNTER = `import { useState } from 'react';
 function Counter() {
@@ -267,6 +269,23 @@ export default function C() { return <div>{typeof constructor}</div>; }`;
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       UnsupportedReactDependencyError
     );
+  });
+});
+
+describe('registry parity: OPTIONAL_DEP_CDN (in-app) vs PUBLISH_REACT_DEP_SCRIPTS (publish)', () => {
+  // The two registries must agree so a published artifact resolves the same globals as the in-chat
+  // preview. Guards against a silent one-sided edit (previously only enforced by a comment).
+  it('covers the same optional dependency keys', () => {
+    const publishKeys = Object.keys(PUBLISH_REACT_DEP_SCRIPTS).sort();
+    // react is a base runtime script in-app (not in OPTIONAL_DEP_CDN), so compare the optional set.
+    const inAppKeys = Object.keys(OPTIONAL_DEP_CDN).sort();
+    expect(publishKeys).toEqual(inAppKeys);
+  });
+
+  it('maps each dependency to the same window global on both paths', () => {
+    for (const [dep, { global }] of Object.entries(PUBLISH_REACT_DEP_SCRIPTS)) {
+      expect(OPTIONAL_DEP_CDN[dep]?.globalVar, `global mismatch for "${dep}"`).toBe(global);
+    }
   });
 });
 
