@@ -27,7 +27,9 @@ const createUserApiKeySchema = z.object({
   // Embed key (epic #41). `allowedOrigins` reuses the common schema (dedup + cap;
   // each entry must be an already-normalized exact https origin). Host-aware
   // first-party rejection lives at the mint route, which has the runtime host.
-  agentId: z.string().optional(),
+  // `.min(1)`: an empty-string agentId is never meaningful and must not slip past
+  // the coherence guard below (which the route mirrors via `!== undefined`).
+  agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
   branding: embedBrandingSchema.optional(),
   rateLimit: z
@@ -122,7 +124,10 @@ export const createUserApiKey = async (
   if (isEmbedKey && !params.agentId) {
     throw new BadRequestError('agentId is required for embed:chat scope');
   }
-  if (!isEmbedKey && (params.agentId || params.allowedOrigins || params.branding)) {
+  if (
+    !isEmbedKey &&
+    (params.agentId !== undefined || params.allowedOrigins !== undefined || params.branding !== undefined)
+  ) {
     throw new BadRequestError('agentId, allowedOrigins, and branding require the embed:chat scope');
   }
 

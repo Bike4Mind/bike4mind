@@ -19,6 +19,11 @@ export type EmbedOriginsResult = { ok: true; value: string[] } | { ok: false; er
  * Returns the normalized, deduped origin list.
  */
 function screenEmbedOrigins(raw: string[]): EmbedOriginsResult {
+  // A hand-crafted request body can send a non-array here; guard so a bad type
+  // becomes a 4xx instead of a TypeError in the loop below (which would 500).
+  if (!Array.isArray(raw)) {
+    return { ok: false, error: 'allowedOrigins must be an array of https origins', code: 'EMBED_ORIGIN_INVALID' };
+  }
   const normalized: string[] = [];
   for (const origin of raw) {
     const parsed = parseEmbedOrigin(origin);
