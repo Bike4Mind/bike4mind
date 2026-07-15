@@ -19,7 +19,7 @@ import SessionExportMenu from './SessionExportMenu';
 // The export utils pull in heavy generators (exceljs/docx); the menu only needs
 // their return values, so stub the whole module.
 vi.mock('@client/app/utils/sessionExport', () => ({
-  toExportableSession: vi.fn(() => ({})),
+  toExportableSession: vi.fn(() => ({ name: 'Test Session' })),
   sessionToMarkdown: vi.fn(() => '# session'),
   sessionToJSON: vi.fn(() => '{}'),
   sessionToCSV: vi.fn(() => ''),

@@ -902,7 +902,9 @@ export const useExportSessionToHtml = () => {
       const quests = await getChatMessages(session.id, { all: true });
       const exportable = toExportableSession(session, quests.data);
       const filename = getSessionExportFilename(session.name);
-      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: session.name });
+      // exportable.name is already formatSessionTitle-cleaned at the boundary;
+      // use it so <title>/<h1> match the body heading on legacy raw-name sessions.
+      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: exportable.name });
       downloadFile(html, `${filename}.html`, 'text/html');
     },
     onSuccess: (_, session) => {

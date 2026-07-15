@@ -135,7 +135,8 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
     setIsHtmlGenerating(true);
     try {
       const exportable = getExportableSession();
-      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: session.name });
+      // exportable.name is already formatSessionTitle-cleaned at the boundary.
+      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: exportable.name });
       downloadFile(html, `${filename}.html`, 'text/html');
       toast.success('HTML exported');
     } catch (error) {
@@ -144,7 +145,7 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
     } finally {
       setIsHtmlGenerating(false);
     }
-  }, [getExportableSession, filename, session.name]);
+  }, [getExportableSession, filename]);
 
   const handleSendToDataLake = useCallback(() => {
     openSendToDataLake({

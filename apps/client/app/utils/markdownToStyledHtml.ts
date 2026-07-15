@@ -108,10 +108,14 @@ function highlightCodeBlocks(doc: Document): void {
   });
 }
 
+// Per-image fetch timeout (ms) so a hung/slow origin can't wedge the export.
+const IMAGE_FETCH_TIMEOUT_MS = 10000;
+
 /**
  * Fetch remote http(s) images and rewrite them to base64 data: URIs so the
  * output is self-contained. Best-effort: data: URIs are left untouched, and any
- * fetch/CORS failure keeps the original URL rather than throwing.
+ * fetch/CORS failure (or the per-image timeout) keeps the original URL rather
+ * than throwing.
  */
 async function inlineRemoteImages(doc: Document): Promise<void> {
   const images = Array.from(doc.querySelectorAll('img'));
@@ -120,14 +124,18 @@ async function inlineRemoteImages(doc: Document): Promise<void> {
       const src = img.getAttribute('src');
       if (!src || src.startsWith('data:')) return;
       if (!/^https?:\/\//i.test(src)) return;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), IMAGE_FETCH_TIMEOUT_MS);
       try {
-        const res = await fetch(src);
+        const res = await fetch(src, { signal: controller.signal });
         if (!res.ok) return;
         const blob = await res.blob();
         const dataUri = await blobToDataUri(blob);
         img.setAttribute('src', dataUri);
       } catch {
         // Leave the original src; a broken image beats a failed export.
+      } finally {
+        clearTimeout(timer);
       }
     })
   );
@@ -147,13 +155,16 @@ function buildTableOfContents(doc: Document): string {
   const headings = Array.from(doc.querySelectorAll('h1, h2, h3'));
   if (headings.length === 0) return '';
 
-  const seen = new Map<string, number>();
+  // Track every assigned id (not just base slugs) so a disambiguated `foo-1`
+  // can't collide with a heading whose text naturally slugifies to `foo-1`.
+  const used = new Set<string>();
   const items = headings.map(h => {
     const text = h.textContent ?? '';
-    let slug = slugify(text);
-    const count = seen.get(slug) ?? 0;
-    seen.set(slug, count + 1);
-    if (count > 0) slug = `${slug}-${count}`;
+    const base = slugify(text);
+    let slug = base;
+    let i = 1;
+    while (used.has(slug)) slug = `${base}-${i++}`;
+    used.add(slug);
     h.setAttribute('id', slug);
     const level = h.tagName.toLowerCase();
     return `<li class="toc-${level}"><a href="#${slug}">${escapeHtml(text)}</a></li>`;

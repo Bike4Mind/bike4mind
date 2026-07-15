@@ -78,6 +78,14 @@ describe('renderMarkdownToStyledHtml', () => {
     expect(html).toContain('https://example.com/a.png');
   });
 
+  it('gives every heading a unique TOC anchor even when slugs would collide', async () => {
+    const md = '# Foo\n\n## Foo\n\n### Foo-1';
+    const html = await renderMarkdownToStyledHtml(md, { includeToc: true });
+    const anchors = [...html.matchAll(/href="#([^"]+)"/g)].map(m => m[1]);
+    expect(new Set(anchors).size).toBe(anchors.length);
+    expect(anchors).toContain('foo');
+  });
+
   it('adds a table of contents only when includeToc is set', async () => {
     const md = '# First\n\ntext\n\n## Second\n\nmore';
     const withToc = await renderMarkdownToStyledHtml(md, { includeToc: true });
