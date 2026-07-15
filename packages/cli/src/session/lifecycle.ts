@@ -215,7 +215,7 @@ export async function compactSession(
 
   const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(session.messages, {
     userInstructions: options.userInstructions,
-    claudeMdInstructions: extractCompactInstructions(ctx.contextContent || ''),
+    claudeMdInstructions: extractCompactInstructions(ctx.contextContent),
   });
 
   if (!compactionPrompt) {

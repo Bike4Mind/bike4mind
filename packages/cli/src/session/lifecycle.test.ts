@@ -133,6 +133,27 @@ describe('session lifecycle', () => {
       expect(onSessionReplaced).toHaveBeenCalledOnce();
     });
 
+    it('drains a stale review-gate prompt and clears the gate store after the resolve microtask', async () => {
+      useCliStore.getState().setSession(makeSession());
+      const resolve = vi.fn();
+      useCliStore.setState({
+        reviewGatePrompt: { id: 'gate-1', description: 'approve?', resolve },
+      });
+      const reviewGateStore = { reviewGates: [{ id: 'g1' }] } as unknown as ReviewGateStore;
+      const drainReviewGatePrompt = vi.fn();
+      const ctx = makeCtx({ reviewGateStore, drainReviewGatePrompt });
+
+      await createFreshSession(ctx);
+      // Flush the deferred reviewGates reset (queued as a microtask so it lands
+      // after the drained gate's resolve continuation).
+      await Promise.resolve();
+
+      // The stale gate is drained from the UI queue and rejected so the agent unwinds.
+      expect(drainReviewGatePrompt).toHaveBeenCalledOnce();
+      expect(resolve).toHaveBeenCalledWith({ decision: 'rejected', note: 'Session cleared.' });
+      expect(reviewGateStore.reviewGates).toEqual([]);
+    });
+
     it('falls back to the configured default model when there is no current session', async () => {
       const created = await createFreshSession(makeCtx({ defaultModel: 'claude-haiku-4-5-20251001' }));
       expect(created.model).toBe('claude-haiku-4-5-20251001');
@@ -165,6 +186,41 @@ describe('session lifecycle', () => {
       expect(useCliStore.getState().session).toEqual(stored);
       expect(ctx.checkpointStore!.setSessionId).toHaveBeenCalledWith('saved-1');
       expect(ctx.onSessionReplaced).toHaveBeenCalledOnce();
+    });
+
+    it('injects the handoff as a leading message when the loaded session has one', async () => {
+      const stored = makeSession({
+        id: 'saved-1',
+        messages: [message('user', 'earlier')],
+        metadata: {
+          totalTokens: 0,
+          totalCost: 0,
+          toolCallCount: 0,
+          workflow: {
+            decisions: [],
+            blockers: [],
+            handoff: {
+              summary: 'pick up where we left off',
+              keyFindings: [],
+              nextSteps: [],
+              pendingDecisions: [],
+              blockers: [],
+              generatedAt: ISO,
+            },
+          },
+        },
+      });
+      const ctx = makeCtx({
+        sessionStore: { load: vi.fn(async () => stored), save: vi.fn() } as unknown as SessionStore,
+      });
+
+      const result = await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      const installed = useCliStore.getState().session!;
+      expect(installed.messages).toHaveLength(2); // handoff message prepended to the original one
+      expect(installed.messages[0].role).toBe('user');
+      expect(installed.messages[0].content).toContain('pick up where we left off');
+      expect(result).toBe(installed);
     });
 
     it('returns null and leaves the store untouched when the load fails', async () => {
@@ -261,13 +317,11 @@ describe('session lifecycle', () => {
 
     it('still returns the prefill when persisting the rewind fails', async () => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
-      useCliStore
-        .getState()
-        .setSession(
-          makeSession({
-            messages: [message('user', 'first'), message('assistant', 'reply'), message('user', 'second')],
-          })
-        );
+      useCliStore.getState().setSession(
+        makeSession({
+          messages: [message('user', 'first'), message('assistant', 'reply'), message('user', 'second')],
+        })
+      );
       const save = vi.fn(async () => {
         throw new Error('disk full');
       });
