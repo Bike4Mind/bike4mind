@@ -148,6 +148,33 @@ const PendingFirstMessage: FC<{ message: string; isFullWidth?: boolean }> = ({ m
   </Box>
 );
 
+/** Full-container blur overlay shown while files are dragged over the chat. */
+const DropFilesOverlay: FC = () => (
+  <Box
+    sx={{
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: '100%',
+      display: 'flex',
+      justifyContent: 'center',
+      alignItems: 'center',
+      backgroundColor: theme => theme.palette.session.overlayBackground,
+      backdropFilter: 'blur(10px)',
+      zIndex: 110,
+      outline: '2px dashed',
+      outlineColor: 'primary',
+      outlineOffset: '-10px',
+    }}
+  >
+    <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
+      <CloudUploadIcon />
+      <span>Drop files here to upload</span>
+    </Box>
+  </Box>
+);
+
 const SessionContainer: FC<SessionLayoutProps> = ({
   listClosed,
   currentSessionId,
@@ -429,31 +456,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
             onDragOver={handleDragOver}
             onDrop={handleDrop}
           >
-            {isDraggingOver && (
-              <Box
-                sx={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  height: '100%',
-                  display: 'flex',
-                  justifyContent: 'center',
-                  alignItems: 'center',
-                  backgroundColor: (theme: any) => theme.palette.session.overlayBackground,
-                  backdropFilter: 'blur(10px)',
-                  zIndex: 110,
-                  outline: '2px dashed',
-                  outlineColor: 'primary',
-                  outlineOffset: '-10px',
-                }}
-              >
-                <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                  <CloudUploadIcon />
-                  <span>Drop files here to upload</span>
-                </Box>
-              </Box>
-            )}
+            {isDraggingOver && <DropFilesOverlay />}
             <Box
               sx={{
                 width: '100%',
@@ -578,33 +581,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               onDragOver={handleDragOver}
               onDrop={handleDrop}
             >
-              {isDraggingOver && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    backgroundColor: (theme: unknown) =>
-                      (theme as { palette: { session: { overlayBackground: string } } }).palette.session
-                        .overlayBackground,
-                    backdropFilter: 'blur(10px)',
-                    zIndex: 110,
-                    outline: '2px dashed',
-                    outlineColor: 'primary',
-                    outlineOffset: '-10px',
-                  }}
-                >
-                  <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                    <CloudUploadIcon />
-                    <span>Drop files here to upload</span>
-                  </Box>
-                </Box>
-              )}
+              {isDraggingOver && <DropFilesOverlay />}
               {/* Chat content without SessionTop header for compact floating view.
                   pb mirrors the docked panel: keeps the last message's action row
                   off the input divider since the input has no top padding. */}
@@ -673,33 +650,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               onDragOver={handleDragOver}
               onDrop={handleDrop}
             >
-              {isDraggingOver && (
-                <Box
-                  sx={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    display: 'flex',
-                    justifyContent: 'center',
-                    alignItems: 'center',
-                    backgroundColor: (theme: unknown) =>
-                      (theme as { palette: { session: { overlayBackground: string } } }).palette.session
-                        .overlayBackground,
-                    backdropFilter: 'blur(10px)',
-                    zIndex: 110,
-                    outline: '2px dashed',
-                    outlineColor: 'primary',
-                    outlineOffset: '-10px',
-                  }}
-                >
-                  <Box sx={{ textAlign: 'center', display: 'flex', gap: '.5rem', zIndex: 110 }}>
-                    <CloudUploadIcon />
-                    <span>Drop files here to upload</span>
-                  </Box>
-                </Box>
-              )}
+              {isDraggingOver && <DropFilesOverlay />}
               {/* pb keeps the last message's action row from touching the input divider
                   now that the docked input has no top padding of its own. */}
               <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
