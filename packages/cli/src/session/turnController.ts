@@ -391,11 +391,17 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           },
         };
 
-        const sessionWithCancel: Session = {
-          ...currentSession,
-          messages: [...currentSession.messages, cancelMessage],
-          updatedAt: new Date().toISOString(),
-        };
+        // Flush workflow state too: a decision/blocker logged before the user
+        // hit ESC would otherwise live only in the in-memory store and be lost
+        // if the process exits before the next successful turn's save.
+        const sessionWithCancel = withFlushedWorkflowState(
+          {
+            ...currentSession,
+            messages: [...currentSession.messages, cancelMessage],
+            updatedAt: new Date().toISOString(),
+          },
+          workflowStores
+        );
 
         useCliStore.getState().setSession(sessionWithCancel);
         await sessionStore.save(sessionWithCancel);

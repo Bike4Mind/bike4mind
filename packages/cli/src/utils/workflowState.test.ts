@@ -61,6 +61,14 @@ describe('buildWorkflowState', () => {
     expect(result?.handoff).toBe(handoff);
   });
 
+  it('copies the store arrays so the result does not alias the live stores', () => {
+    const decisions = [decision];
+    const result = buildWorkflowState(stores({ decisionStore: { decisions } }));
+    decisions.push({ ...decision, id: 'd2' });
+    // A push into the store after assembly must not leak into the snapshot.
+    expect(result?.decisions).toHaveLength(1);
+  });
+
   it('is non-empty when only review gates are present', () => {
     const result = buildWorkflowState(
       stores({

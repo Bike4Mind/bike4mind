@@ -31,11 +31,13 @@ export function buildWorkflowState(
   const hasState =
     decisionStore.decisions.length > 0 || blockerStore.blockers.length > 0 || reviewGateStore.reviewGates.length > 0;
   if (!hasState) return undefined;
+  // Copy the arrays so session metadata never aliases the live mutable stores -
+  // a later store push must not silently mutate an already-persisted snapshot.
   return {
-    decisions: decisionStore.decisions,
-    blockers: blockerStore.blockers,
+    decisions: [...decisionStore.decisions],
+    blockers: [...blockerStore.blockers],
     handoff: existingHandoff,
-    reviewGates: reviewGateStore.reviewGates,
+    reviewGates: [...reviewGateStore.reviewGates],
   };
 }
 
