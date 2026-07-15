@@ -49,7 +49,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
-import { USER_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { USER_API_KEY_SCOPES, GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
@@ -112,9 +112,14 @@ interface ScopeGroup {
   }[];
 }
 
+// The New-Key modal offers only generic-flow scopes; embed:chat is minted via
+// the dedicated embed flow (epic #41 Phase E), so it is excluded from selection
+// here (but still documented in the Scopes tab below via USER_API_KEY_SCOPES).
+const MODAL_SCOPE_VALUES = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
+
 const SCOPE_GROUPS: ScopeGroup[] = (() => {
   const groups = new Map<string, ScopeGroup>();
-  for (const scope of USER_API_KEY_SCOPES) {
+  for (const scope of GENERIC_MODAL_API_KEY_SCOPES) {
     const [resource, action = ''] = scope.value.split(':');
     if (!groups.has(resource)) {
       groups.set(resource, {
@@ -133,15 +138,15 @@ const SCOPE_GROUPS: ScopeGroup[] = (() => {
   return [...groups.values()];
 })();
 
-const READ_SCOPES = USER_API_KEY_SCOPES.filter(s => s.value.endsWith(':read')).map(s => s.value);
-const WRITE_SCOPES = USER_API_KEY_SCOPES.filter(s => s.value.endsWith(':write')).map(s => s.value);
+const READ_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':read')).map(s => s.value);
+const WRITE_SCOPES = GENERIC_MODAL_API_KEY_SCOPES.filter(s => s.value.endsWith(':write')).map(s => s.value);
 
 type PresetId = 'read' | 'readwrite' | 'full';
 
 const PRESET_SCOPES: Record<PresetId, ApiKeyScope[]> = {
   read: READ_SCOPES,
   readwrite: [...READ_SCOPES, ...WRITE_SCOPES],
-  full: [...USER_API_KEY_SCOPE_VALUES],
+  full: [...MODAL_SCOPE_VALUES],
 };
 
 const PRESETS: { id: PresetId; label: string; description: string }[] = [
@@ -299,7 +304,7 @@ function NewKeyModal({ open, onClose, onSuccess }: NewKeyModalProps) {
             <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
               <Typography level="title-sm">Permissions</Typography>
               <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {formData.scopes.length} of {USER_API_KEY_SCOPE_VALUES.length} enabled
+                {formData.scopes.length} of {MODAL_SCOPE_VALUES.length} enabled
               </Typography>
             </Box>
             <Sheet variant="outlined" sx={{ borderRadius: 'md', overflow: 'hidden' }}>
