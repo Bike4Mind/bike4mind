@@ -1,5 +1,6 @@
 import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
+import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 import { PUBLISH_HOST } from './validateBundle';
 
 /**
@@ -253,27 +254,12 @@ function reactRuntimeScriptTags(): string {
 
 /**
  * Builds `window.LucideReactWrapper` from the blessed `lucide` UMD (global `lucide`), embedded in
- * the bootstrap when a bundle imports `lucide-react`. Kept functionally equivalent to the in-app
- * sandbox shim (setupLucideWrapper in apps/client/pages/api/react-artifact-sandbox.ts) so a
- * published lucide artifact renders identically to its chat preview - MUST stay in sync with it.
- * Contains no closing-script-tag sequence, so it is safe inside the inline bootstrap.
+ * the bootstrap when a bundle imports `lucide-react`. The factory itself is the shared LUCIDE_WRAPPER_FN
+ * (single source of truth with the in-app sandbox at react-artifact-sandbox.ts); here we append the
+ * call so the wrapper is set up as the bootstrap runs. LUCIDE_WRAPPER_FN carries no closing-script-tag
+ * sequence, so it is safe inside the inline bootstrap.
  */
-const LUCIDE_WRAPPER_SETUP = `function setupLucideWrapper(){
-    if(window.LucideReactWrapper)return;
-    var toKebabCase=function(str){return str.replace(/([a-z0-9])([A-Z])/g,'$1-$2').toLowerCase();};
-    window.LucideReactWrapper=new Proxy({},{get:function(target,iconName){
-      return function(props){
-        props=props||{};
-        var size=props.size||24,color=props.color||'currentColor',strokeWidth=props.strokeWidth||2,className=props.className||'';
-        var rest=Object.assign({},props);delete rest.size;delete rest.color;delete rest.strokeWidth;delete rest.className;
-        var kebab=toKebabCase(iconName);
-        var node=(window.lucide&&lucide.icons&&(lucide.icons[iconName]||lucide.icons[kebab]))||null;
-        var children=Array.isArray(node)?node.map(function(entry,i){return React.createElement(entry[0],Object.assign({key:i},entry[1]));}):null;
-        return React.createElement('svg',Object.assign({xmlns:'http://www.w3.org/2000/svg',width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color,strokeWidth:strokeWidth,strokeLinecap:'round',strokeLinejoin:'round',className:className},rest),children);
-      };
-    }});
-  }
-  setupLucideWrapper();`;
+const LUCIDE_WRAPPER_SETUP = `${LUCIDE_WRAPPER_FN}\n  setupLucideWrapper();`;
 
 /**
  * Assemble the final inert index.html: blessed React runtime scripts + any blessed optional-dep
