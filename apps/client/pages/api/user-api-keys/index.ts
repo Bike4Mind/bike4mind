@@ -77,13 +77,14 @@ const handler = baseApi()
     // host). The service re-validates format/dedup/cap and enforces the agentId
     // binding. Pass the normalized list downstream.
     const isEmbedKey = Array.isArray(scopes) && scopes.includes(ApiKeyScope.EMBED_CHAT);
-    let normalizedOrigins: string[] | undefined;
+    const hasEmbedFields = agentId !== undefined || allowedOrigins !== undefined || branding !== undefined;
+    let embedOrigins = allowedOrigins;
     if (isEmbedKey) {
       const originsCheck = validateEmbedKeyOrigins(allowedOrigins);
       if (!originsCheck.ok) {
         throw new BadRequestError(originsCheck.error);
       }
-      normalizedOrigins = originsCheck.value;
+      embedOrigins = originsCheck.value;
     }
 
     const newApiKey = await userApiKeyService.createUserApiKey(
@@ -98,7 +99,10 @@ const handler = baseApi()
           userAgent: req.headers['user-agent'],
           createdFrom: 'dashboard' as const,
         },
-        ...(isEmbedKey ? { agentId, allowedOrigins: normalizedOrigins, branding } : {}),
+        // Forward embed fields whenever present - not only for embed keys - so the
+        // service's coherence invariant rejects a non-embed key that carries them
+        // (fail loud) instead of silently dropping them.
+        ...(isEmbedKey || hasEmbedFields ? { agentId, allowedOrigins: embedOrigins, branding } : {}),
         ...(organizationId
           ? { organizationId, billingOwnerType: CreditHolderType.Organization }
           : { billingOwnerType: CreditHolderType.User }),
