@@ -477,3 +477,63 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     expect(result!.model.id).toBe('gpt-5');
   });
 });
+
+describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
+  // A provider-wide outage walks the preference chain one model per hop. excludeModelIds
+  // carries every already-failed model so each hop advances instead of re-picking a dead model.
+  const opus48 = createModelInfo({ id: 'claude-opus-4-8', backend: ModelBackend.Anthropic });
+  const opus47 = createModelInfo({ id: 'claude-opus-4-7', backend: ModelBackend.Anthropic });
+  const opus46 = createModelInfo({ id: 'claude-opus-4-6', backend: ModelBackend.Anthropic });
+  const sonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+  const allModels = [opus48, opus47, opus46, sonnet5, gpt5];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  it('skips an already-tried model and returns the next chain entry', async () => {
+    // opus-4-8 chain leads with opus-4-7; excluding it must advance to opus-4-6.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('treats an already-tried frontend fallback id as absent and falls through to automatic', async () => {
+    // The frontend keeps sending the same body.fallbackModel each hop; once tried it must
+    // not dead-end the traversal - automatic selection picks the next live chain entry.
+    const result = await getLlmWithFallback(opus48, 'claude-opus-4-7', allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('respects the exclusion on the last-resort path', async () => {
+    // Unknown model with no preference chain falls to the last-resort scan; the excluded
+    // keyed model is skipped in favor of the next available one.
+    const unknown = createModelInfo({ id: 'unknown-model-x', backend: ModelBackend.OpenAI });
+    const modelA = createModelInfo({ id: 'vendor-model-a', backend: ModelBackend.OpenAI });
+    const modelB = createModelInfo({ id: 'vendor-model-b', backend: ModelBackend.OpenAI });
+    const result = await getLlmWithFallback(unknown, undefined, [unknown, modelA, modelB], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['vendor-model-a']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('vendor-model-b');
+  });
+
+  it('walks the full chain across successive hops until a live cross-provider model remains', async () => {
+    // Simulate a provider-wide Anthropic outage: every Anthropic hop is added to the set,
+    // so the traversal ends on the OpenAI tail rather than re-picking a failed Anthropic model.
+    const tried = new Set<string>(['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5']);
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: tried,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('gpt-5');
+    expect(result!.model.backend).toBe(ModelBackend.OpenAI);
+  });
+});
