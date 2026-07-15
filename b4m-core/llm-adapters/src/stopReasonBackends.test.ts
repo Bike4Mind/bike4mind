@@ -107,10 +107,27 @@ describe('OpenAIBackend surfaces stopReason on the /v1/responses path', () => {
     toolFn: async () => 'sunny',
   };
 
+  // The streaming /v1/responses path emits text via `response.output_text.delta`
+  // events, then a terminal `response.completed` (or `response.incomplete` when
+  // incomplete_details is present) carrying the full Response.
+  function responsesEventStream(response: Record<string, unknown>): AsyncIterable<Record<string, unknown>> {
+    const events: Record<string, unknown>[] = [];
+    for (const item of (response.output as Record<string, unknown>[]) ?? []) {
+      if (item.type !== 'message') continue;
+      for (const part of (item.content as Record<string, unknown>[]) ?? []) {
+        if (part.type === 'output_text') events.push({ type: 'response.output_text.delta', delta: part.text });
+      }
+    }
+    events.push({ type: response.incomplete_details ? 'response.incomplete' : 'response.completed', response });
+    return (async function* () {
+      for (const e of events) yield e;
+    })();
+  }
+
   function responsesBackend(response: Record<string, unknown>) {
     const backend = new OpenAIBackend('test-key');
     (backend as unknown as { _api: unknown })._api = {
-      responses: { create: async () => response },
+      responses: { create: async () => responsesEventStream(response) },
     };
     return backend;
   }
@@ -152,10 +169,11 @@ describe('OpenAIBackend surfaces stopReason on the /v1/responses path', () => {
     (backend as unknown as { _api: unknown })._api = {
       // Turn 1: responses.create returns a function_call (not terminal - no stopReason set).
       responses: {
-        create: async () => ({
-          output: [{ type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"NYC"}' }],
-          usage: { input_tokens: 10, output_tokens: 4 },
-        }),
+        create: async () =>
+          responsesEventStream({
+            output: [{ type: 'function_call', call_id: 'call_1', name: 'get_weather', arguments: '{"city":"NYC"}' }],
+            usage: { input_tokens: 10, output_tokens: 4 },
+          }),
       },
       // Turn 2: the tool executes, non-MCP tools are dropped, and recursion falls through
       // to chat.completions.create for the synthesis turn - its finish_reason is what

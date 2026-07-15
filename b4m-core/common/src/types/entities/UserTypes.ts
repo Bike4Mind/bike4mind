@@ -6,6 +6,7 @@ import { ICounters } from './CounterTypes';
 import { IMementoDocument } from './MementoTypes';
 import { ICreditHolder, ICreditHolderMethods } from './CreditHolderTypes';
 import { PaginatedResponse, UserReasoningEffort } from '../common';
+import type { AuthStrategy } from '../../schemas/user';
 
 export enum CollectionType {
   NOTEBOOK = 'notebook',
@@ -570,10 +571,11 @@ export interface IOAuthCredentials {
 }
 
 export interface IAuthProviders {
-  id: string;
-  strategy: string;
-  accessToken: string;
-  refreshToken: string;
+  /** Provider subject/user id. Nullable: legacy rows pre-date schema validation and may carry null. */
+  id: string | null;
+  strategy: AuthStrategy;
+  accessToken?: string;
+  refreshToken?: string;
   // SAML-specific metadata
   samlNameId?: string;
   samlSessionIndex?: string;

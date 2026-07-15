@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
-import { AccountCard } from './ProfileMenu';
+import { AccountCard, closeSideNavOnOverlay } from './ProfileMenu';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: React.ReactNode }) => (
@@ -31,5 +31,23 @@ describe('ProfileMenu AccountCard - enforceCredits gating', () => {
     expect(screen.queryByText('1,234')).not.toBeInTheDocument();
     // The rest of the card still renders - only the balance disappears.
     expect(screen.getByText('Jane')).toBeInTheDocument();
+  });
+});
+
+describe('closeSideNavOnOverlay', () => {
+  it('closes the overlay sidenav on phone and tablet navigation', () => {
+    const setOpenSideNav = vi.fn();
+
+    closeSideNavOnOverlay(true, setOpenSideNav);
+
+    expect(setOpenSideNav).toHaveBeenCalledWith(false);
+  });
+
+  it('leaves the desktop sidenav state unchanged', () => {
+    const setOpenSideNav = vi.fn();
+
+    closeSideNavOnOverlay(false, setOpenSideNav);
+
+    expect(setOpenSideNav).not.toHaveBeenCalled();
   });
 });

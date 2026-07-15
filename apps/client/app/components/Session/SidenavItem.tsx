@@ -7,6 +7,7 @@ import {
   useDownloadSession,
   useExportSessionToExcel,
   useExportSessionToWord,
+  useExportSessionToHtml,
   useSendSessionToDataLake,
   useSummarizeSession,
   useToggleFavoriteSession,
@@ -23,6 +24,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import EditIcon from '@mui/icons-material/Edit';
 import GridOnIcon from '@mui/icons-material/GridOn';
 import ArticleIcon from '@mui/icons-material/Article';
+import HtmlIcon from '@mui/icons-material/Html';
 import FavoriteIcon from '@mui/icons-material/Favorite';
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder';
 import FolderCopyIcon from '@mui/icons-material/FolderCopy';
@@ -124,6 +126,7 @@ const SessionSidenavItem: FC<{
   const downloadSession = useDownloadSession();
   const exportToExcel = useExportSessionToExcel();
   const exportToWord = useExportSessionToWord();
+  const exportToHtml = useExportSessionToHtml();
   const sendToDataLake = useSendSessionToDataLake();
   const { isFeatureEnabled } = useAdminSettingsCache();
   const summarizeSession = useSummarizeSession();
@@ -221,6 +224,10 @@ const SessionSidenavItem: FC<{
   const handleExportToWord = useCallback(() => {
     exportToWord.mutate(session);
   }, [exportToWord, session]);
+
+  const handleExportToHtml = useCallback(() => {
+    exportToHtml.mutate(session);
+  }, [exportToHtml, session]);
 
   const handleCopyAsMarkdown = useCallback(() => {
     copySessionAsMarkdown.mutate(session);
@@ -525,6 +532,14 @@ const SessionSidenavItem: FC<{
                 disabled={exportToWord.isPending}
               >
                 <ArticleIcon /> Export to Word
+              </MenuItem>
+              <MenuItem
+                onClick={handleExportToHtml}
+                className="sidenav-item-menuitem-export-html"
+                data-testid="sidenav-item-menuitem-export-html"
+                disabled={exportToHtml.isPending}
+              >
+                <HtmlIcon /> Export to HTML
               </MenuItem>
               {isFeatureEnabled('EnableDataLakes') && (
                 <MenuItem
@@ -861,6 +876,14 @@ const SessionSidenavItem: FC<{
                   disabled={exportToWord.isPending}
                 >
                   <ArticleIcon /> Export to Word
+                </MenuItem>
+                <MenuItem
+                  onClick={handleExportToHtml}
+                  className="sidenav-item-menuitem-export-html"
+                  data-testid="sidenav-item-menuitem-export-html"
+                  disabled={exportToHtml.isPending}
+                >
+                  <HtmlIcon /> Export to HTML
                 </MenuItem>
                 {isFeatureEnabled('EnableDataLakes') && (
                   <MenuItem

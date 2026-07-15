@@ -316,6 +316,27 @@ describe('applyAccountLink', () => {
       expect(reflect).toEqual({});
     });
 
+    it('collapses duplicate entries for the same strategy left by a concurrent-login race', () => {
+      const other = cred(AuthStrategy.Github, 'gh-sub');
+      const authProviders: IAuthProviders[] = [
+        cred(AuthStrategy.Google, 'sub-1'),
+        other,
+        cred(AuthStrategy.Google, 'sub-1'),
+      ];
+      const oauthCredentials = cred(AuthStrategy.Google, 'sub-1');
+      const { update } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider: false,
+        promoteEmailVerified: false,
+        currentTokenVersion: 0,
+      });
+
+      // The refreshed entry keeps its original position; the stale duplicate is gone.
+      expect(authProviders).toEqual([oauthCredentials, other]);
+      expect(update).toMatchObject({ authProviders });
+    });
+
     it('promotes emailVerified on a refresh without bumping tokenVersion', () => {
       const { update, reflect } = applyAccountLink({
         authProviders: [cred(AuthStrategy.Google, 'sub-1')],

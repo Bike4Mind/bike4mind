@@ -645,8 +645,10 @@ async function handlePermissionResponse(
   // Re-invoke Lambda to resume execution.
   // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
   // Lambda handoff, not in the AgentExecution document, so this handler cannot read it.
-  // The resumed Lambda starts at depth 0. This is safe: permission pauses are user-driven,
-  // not loop-driven, so they cannot cause runaway self-dispatch on their own.
+  // The resumed Lambda starts at depth 0. This is safe on two counts: permission pauses are
+  // user-driven, not loop-driven, so they cannot self-dispatch a runaway on their own; and the
+  // resume runs as status `continuing`, which the executor still bounds via the persisted
+  // `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS) - a counter the message payload cannot reset.
   await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
 
   await lambdaClient.send(
@@ -762,7 +764,8 @@ async function handleGateResponse(
   await agentExecutionRepository.updateStatus(cmd.executionId, 'continuing');
 
   // Note: checkpointDepth is not carried here - same limitation as the permission_response
-  // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own.
+  // path above. Gate resumes are user-driven and cannot cause a runaway loop on their own, and
+  // are likewise bounded by the persisted `lambdaInvocationCount` guard (MAX_LAMBDA_HANDOFFS).
   await lambdaClient.send(
     new InvokeCommand({
       FunctionName: Resource.AgentExecutor.name,

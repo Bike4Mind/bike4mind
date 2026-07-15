@@ -1,0 +1,87 @@
+name: SST / infra preview gate
+
+# A PR that changes an sst pin or anything under infra/ must have a preview
+# deploy behind it before it can merge. The one that bit us (an app-only sst
+# bump with no matching overlay pins) was invisible until a real deploy ran,
+# and it ran for the first time on staging. This gate reuses the deployer's
+# `preview-deployed` label as the "a real hydrate+deploy has happened" signal.
+#
+# The job ALWAYS runs (no path filter) and decides applicability internally, so
+# that as a required check it reports success on unrelated PRs instead of
+# hanging pending. The `labeled`/`unlabeled` triggers re-evaluate the moment the
+# deployer adds/removes the label. It also fires on `merge_group` (main uses a
+# merge queue): the detection step is gated to `pull_request`, so the queue run
+# is a no-op that still reports the required check green.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  merge_group:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  preview-gate:
+    name: preview gate
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    steps:
+      - name: Require a preview for sst / infra changes
+        # merge_group has no pull_request context; skipping here still reports
+        # the required check as passed, so the merge queue is not blocked.
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+
+          # Single fetch of changed files (with patches). No `|| true`: a fetch
+          # failure must redden this gate (fail closed), never silently pass.
+          gh api "repos/$REPO/pulls/$PR/files" --paginate > /tmp/pr_files.json
+          jq -r '.[].filename' /tmp/pr_files.json > /tmp/files.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/files.txt || true
+
+          applicable=0
+          reason=""
+
+          # Deploy-affecting paths that always need a preview: the root infra/
+          # dir, the @bike4mind/infra package (b4m-core/infra/, imported directly
+          # by the deploy layer), sst.config.ts, and a premium overlay pin bump.
+          # Anchored so it does NOT match data-model dirs like
+          # packages/database/src/models/infra/.
+          if grep -qE '^(infra/|b4m-core/infra/|sst\.config\.ts$|premium-overlay\.lock\.json$)' /tmp/files.txt; then
+            applicable=1
+            reason="infra/, b4m-core/infra/, sst.config.ts, or premium-overlay.lock.json changed"
+          fi
+
+          # A changed sst pin in any package.json. Fail closed if a package.json
+          # changed but GitHub omitted its patch (oversized diff): treat as applicable.
+          if [ "$applicable" -eq 0 ]; then
+            if jq -e '.[] | select(.filename|test("package\\.json$")) | select((.patch // "") == "")' /tmp/pr_files.json >/dev/null; then
+              applicable=1
+              reason="a changed package.json had no inspectable patch (fail-closed)"
+            elif jq -r '.[] | select(.filename|test("package\\.json$")) | .patch // ""' /tmp/pr_files.json | grep -qE '^[+-].*"sst"[[:space:]]*:'; then
+              applicable=1
+              reason="an sst pin in a package.json changed"
+            fi
+          fi
+
+          if [ "$applicable" -eq 0 ]; then
+            echo "No sst / infra changes in this PR. Gate not applicable -> pass."
+            exit 0
+          fi
+
+          echo "This PR touches sst / infra ($reason); a preview deploy is required."
+
+          # The deployer adds `preview-deployed` on a successful preview deploy.
+          if gh api "repos/$REPO/issues/$PR/labels" -q '.[].name' | grep -qx 'preview-deployed'; then
+            echo "Found 'preview-deployed' label -> a preview has been deployed. Gate satisfied."
+            exit 0
+          fi
+
+          echo "::error title=Preview required::This PR changes sst pins or infra/ but no preview deploy has run. Trigger a preview (mention the preview bot on the PR) and let it finish; the 'preview-deployed' label the deployer adds will satisfy this gate. This catches an sst/overlay mismatch on a throwaway stage instead of on staging."
+          exit 1

@@ -584,6 +584,7 @@ const AttachFileButton = ({
                 {/* Files Section */}
                 <ListItem sx={{ p: 0 }}>
                   <ListItemButton
+                    data-testid="add-from-file-browser-btn"
                     onClick={() => {
                       setIsOpen(false);
                       setCurrentView('main');

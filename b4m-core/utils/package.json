@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "2.28.0",
+  "version": "3.0.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -94,12 +94,13 @@
     "dotenv": "^17.4.2",
     "file-type": "^22.0.1",
     "jimp": "^1.6.1",
+    "jszip": "^3.10.1",
     "lodash": "^4.18.1",
     "mammoth": "^1.12.0",
     "mime-types": "^3.0.2",
     "openai": "^6.46.0",
     "tiktoken": "^1.0.22",
-    "tldts": "^7.0.28",
+    "tldts": "^7.4.8",
     "unpdf": "^1.6.2",
     "uuid": "^13.0.2",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",

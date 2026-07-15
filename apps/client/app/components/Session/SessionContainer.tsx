@@ -605,8 +605,10 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   </Box>
                 </Box>
               )}
-              {/* Chat content without SessionTop header for compact floating view */}
-              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {/* Chat content without SessionTop header for compact floating view.
+                  pb mirrors the docked panel: keeps the last message's action row
+                  off the input divider since the input has no top padding. */}
+              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
@@ -698,7 +700,9 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   </Box>
                 </Box>
               )}
-              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {/* pb keeps the last message's action row from touching the input divider
+                  now that the docked input has no top padding of its own. */}
+              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (

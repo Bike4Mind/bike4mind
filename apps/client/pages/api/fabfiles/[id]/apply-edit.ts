@@ -4,6 +4,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
+import { isAiEditableOfficeMime, applyEditedText, appendEditedVersion, MAX_OFFICE_EDIT_BYTES } from '@bike4mind/utils';
 import { v4 as uuidv4 } from 'uuid';
 
 const handler = baseApi()
@@ -50,10 +51,6 @@ const handler = baseApi()
       }
 
       try {
-        // Create backup of current content
-        const backupId = uuidv4();
-        const backupPath = `files/${user.id}/backups/${backupId}_${file.fileName}`;
-
         // Get current content for backup
         if (!file.filePath) {
           throw new BadRequestError('File has no content');
@@ -61,6 +58,67 @@ const handler = baseApi()
 
         // Use filePath directly as the S3 key
         const s3Key = file.filePath;
+
+        // Office documents (docx/xlsx): `newContent` is the edited text representation. Re-fetch
+        // the original binary, merge the edit back into it, and store the result as a NEW
+        // version (non-destructive - the original key is left untouched).
+        if (isAiEditableOfficeMime(file.mimeType)) {
+          const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', { expiresIn: 60 });
+          const contentResponse = await fetch(signedUrl);
+          // Surface an S3 fetch failure as such, rather than letting a 4xx/5xx body flow into
+          // applyEditedText and misreport as "not a valid .docx/.xlsx" (mirrors edit.ts).
+          if (!contentResponse.ok) {
+            throw new BadRequestError('Failed to fetch file content from storage');
+          }
+          const originalBuffer = Buffer.from(await contentResponse.arrayBuffer());
+          if (originalBuffer.length > MAX_OFFICE_EDIT_BYTES) {
+            throw new BadRequestError(
+              `File is too large for AI editing (${Math.round(originalBuffer.length / (1024 * 1024))}MB). Maximum is ${Math.round(MAX_OFFICE_EDIT_BYTES / (1024 * 1024))}MB.`
+            );
+          }
+          const newBuffer = await applyEditedText(originalBuffer, newContent, file.mimeType || '');
+
+          const now = new Date();
+          const { newFilePath, versions } = appendEditedVersion({
+            userId: user.id,
+            fabFileId: String(file._id),
+            fileName: file.fileName,
+            currentFilePath: s3Key,
+            currentFileSize: file.fileSize ?? 0,
+            mimeType: file.mimeType || '',
+            existingVersions: file.versions,
+            newFileSize: newBuffer.length,
+            now,
+            nonce: uuidv4(),
+          });
+
+          // The nonce-keyed upload can never collide with a concurrent edit's bytes.
+          await getFilesStorage().upload(newBuffer, newFilePath, {
+            ContentType: file.mimeType || 'application/octet-stream',
+          });
+
+          // Atomic version claim: only repoint if filePath still matches what we edited, so a
+          // concurrent edit can't silently clobber this one (its bytes are just orphaned).
+          const claimed = await FabFile.findOneAndUpdate(
+            { _id: file._id, filePath: s3Key },
+            { $set: { filePath: newFilePath, fileSize: newBuffer.length, versions, updatedAt: now } }
+          );
+          if (!claimed) {
+            throw new BadRequestError('File was modified by another edit. Please reload and try again.');
+          }
+
+          return res.json({
+            success: true,
+            fileId: id,
+            fileName: file.fileName,
+            version: versions[versions.length - 1].version,
+            updatedAt: now,
+          });
+        }
+
+        // Text files: keep the existing overwrite-with-single-backup behavior.
+        const backupId = uuidv4();
+        const backupPath = `files/${user.id}/backups/${backupId}_${file.fileName}`;
 
         const signedUrl = await getFilesStorage().getSignedUrl(s3Key, 'get', {
           expiresIn: 60,

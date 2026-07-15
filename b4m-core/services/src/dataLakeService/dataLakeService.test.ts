@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
-import { canAccessLake, assertLakeAccess } from './assertLakeAccess';
+import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
@@ -160,6 +160,77 @@ describe('assertLakeAccess — not-found-style denial', () => {
   });
 });
 
+describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', () => {
+  // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake.
+  const emptyDb = () => ({
+    dataLakes: {
+      findById: vi.fn().mockRejectedValue(new Error('bad id')),
+      findBySlug: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('resolves opti-knowledge for a tag-holder as a synthetic read-only lake', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(resolved.datalakeTag).toBe('datalake:opti-knowledge');
+    expect(resolved.fileTagPrefix).toBe('opti:');
+    expect(resolved.status).toBe('active');
+    expect(resolved.createdByUserId).toBe('');
+  });
+
+  it('resolves opti-knowledge for a tag-less entitlement holder (any-of parity with the list path)', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ entitlementKeys: ['optihashi:pro'] }), {
+      db: emptyDb(),
+    });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('resolves opti-knowledge for an admin without the tag or entitlement', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ isAdmin: true }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('still denies (not-found-style) a caller who satisfies neither gate', async () => {
+    await expect(assertLakeAccess('opti-knowledge', ctx(), { db: emptyDb() })).rejects.toThrow(/not found/i);
+  });
+
+  it('a DB lake shadowing a fallback slug takes precedence over the fallback', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+      },
+    };
+    await expect(assertLakeAccess('opti-knowledge', ctx({ userId: 'owner' }), { db })).resolves.toBe(dbLake);
+  });
+
+  it('a denied DB lake shadowing a fallback slug is FINAL — no fallback retry around the denial', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner', organizationId: 'orgA' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+      },
+    };
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationId: 'orgB' }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only', () => {
+  it('identifies a fallback lake by config id and refuses the write with a clear read-only error', () => {
+    expect(isFallbackLake({ id: 'opti-knowledge' })).toBe(true);
+    expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
+  });
+
+  it('passes a persisted (ObjectId-style) lake through untouched', () => {
+    expect(isFallbackLake({ id: '507f1f77bcf86cd799439011' })).toBe(false);
+    expect(() => assertLakeWritable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
+  });
+});
+
 describe('canManageLake — the single write/manage rule (creator or admin)', () => {
   it('grants the creator', () => {
     expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'owner', isAdmin: false })).toBe(true);
@@ -212,6 +283,16 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     const l = lake({ createdByUserId: 'owner', isPublic: true });
     const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
     await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'stranger' }), { db })).rejects.toThrow(/creator/i);
+  });
+
+  it('refuses a fallback lake as read-only even for an admin (no document to write into)', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+      },
+    };
+    await expect(assertLakeWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db })).rejects.toThrow(/read-only/i);
   });
 });
 

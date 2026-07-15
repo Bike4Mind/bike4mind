@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
-import { COMPLETION_SOURCES } from '../analytics';
+import { COMPLETION_SOURCES, CompletionSource } from '../analytics';
 
 export enum CreditPurchaseStatus {
   Completed = 'completed',
@@ -291,6 +291,75 @@ export interface ICreditTransactionResponse extends Omit<ICreditTransaction, 'cr
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
 
 /**
+ * Filters for one page of the admin transaction ledger. Every filter is
+ * optional except the page window; all narrow the same
+ * {ownerId, ownerType, createdAt} index scan.
+ */
+export interface ILedgerQueryOptions {
+  /** Trailing window in days (mutually exclusive with an explicit range; days wins if both set). */
+  days?: number;
+  transactionTypes?: CreditTransactionType[];
+  source?: CompletionSource;
+  /** Exact model id match. */
+  model?: string;
+  limit: number;
+  skip: number;
+}
+
+/** One page of ledger documents plus the total matching count for pagination. */
+export interface ILedgerPage {
+  data: ICreditTransactionDocument[];
+  total: number;
+}
+
+/**
+ * One API key's usage rolled up from the ledger (completion_api_usage rows,
+ * which carry `apiKeyId`). Credits are the spend magnitude (positive). The
+ * ledger has no COGS, so this cut carries tokens + credits only, not cogsUsd.
+ */
+export interface IApiKeyUsage {
+  apiKeyId: string;
+  requests: number;
+  creditsSpent: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/** API key usage with the key id resolved to its name/prefix by the API. */
+export type NamedApiKeyUsage = IApiKeyUsage & { keyName?: string; keyPrefix?: string };
+
+/**
+ * A ledger row shaped for the admin UI: the transaction fields the table needs
+ * plus the acting member resolved to a display name. `actingUserId` is only
+ * present on API/CLI org-billed rows (metadata.actingUserId); web org-billed
+ * usage does not record the member on the transaction.
+ */
+export interface ILedgerRow {
+  id: string;
+  createdAt: string; // ISO
+  type: CreditTransactionType;
+  credits: number;
+  source?: CompletionSource;
+  model?: string;
+  questId?: string;
+  sessionId?: string;
+  apiKeyId?: string;
+  description?: string;
+  actingUserId?: string;
+  actingUserName?: string;
+}
+
+/** Wire shape of GET /api/admin/transactions. */
+export interface IAdminLedgerResponse {
+  organizationId: string;
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+  rows: ILedgerRow[];
+}
+
+/**
  * Credit transaction repository interface
  */
 export interface ICreditTransactionRepository extends IBaseRepository<ICreditTransactionDocument> {
@@ -313,4 +382,14 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
       transactionTypes?: CreditTransactionType[];
     }
   ): Promise<ICreditTransactionDocument[]>;
+
+  /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
+  queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
+
+  /**
+   * An owner's API-token spend over the trailing N days (default 30) grouped by
+   * apiKeyId, from completion_api_usage ledger rows. Owner-scoped over the
+   * {ownerId, ownerType, createdAt} index; biggest spender first.
+   */
+  apiKeyUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IApiKeyUsage[]>;
 }

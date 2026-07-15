@@ -1,7 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { ImageModels } from '../models';
 import type { LLMModelConfig } from '../types/entities/LLMTypes';
-import { isGPTImageModel, isGPTImage2Model, requiresImageInput, isModelAccessible } from './modelHelpers';
+import {
+  isGPTImageModel,
+  isGPTImage2Model,
+  requiresImageInput,
+  isModelAccessible,
+  isBflImageModel,
+} from './modelHelpers';
 
 describe('requiresImageInput', () => {
   it('returns true for Flux Kontext models (the only models that mandate image input)', () => {
@@ -60,6 +66,25 @@ describe('isGPTImage2Model', () => {
     expect(isGPTImage2Model(ImageModels.GPT_IMAGE_1)).toBe(false);
     expect(isGPTImage2Model(ImageModels.GPT_IMAGE_1_5)).toBe(false);
     expect(isGPTImage2Model(null)).toBe(false);
+  });
+});
+
+describe('isBflImageModel', () => {
+  // Enumerate the full BFL set (Kontext members included) - the ResetButton `style:'vivid'`
+  // and BFL-panel branches depend on Kontext models counting as BFL.
+  it.each([
+    ImageModels.FLUX_PRO_1_1,
+    ImageModels.FLUX_PRO,
+    ImageModels.FLUX_PRO_ULTRA,
+    ImageModels.FLUX_PRO_FILL,
+    ImageModels.FLUX_KONTEXT_PRO,
+    ImageModels.FLUX_KONTEXT_MAX,
+  ])('true for BFL model %s', model => expect(isBflImageModel(model)).toBe(true));
+  it('false for a non-BFL image model', () => expect(isBflImageModel(ImageModels.GPT_IMAGE_1)).toBe(false));
+  it('false for null/undefined/empty', () => {
+    expect(isBflImageModel(null)).toBe(false);
+    expect(isBflImageModel(undefined)).toBe(false);
+    expect(isBflImageModel('')).toBe(false);
   });
 });
 

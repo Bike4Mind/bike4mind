@@ -42,6 +42,7 @@ const handler = baseApi()
     const ctx = toCtx(req, activeOrg);
 
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    dataLakeService.assertLakeWritable(lake);
 
     const result = await dataLakeService.setLakeVisibility(
       { userId: ctx.userId, isAdmin: ctx.isAdmin, organizationId: ctx.organizationId },

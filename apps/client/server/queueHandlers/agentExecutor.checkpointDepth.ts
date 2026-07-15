@@ -37,3 +37,60 @@ export function classifyCheckpointDepth(depth: number): CheckpointDepthVerdict {
   if (depth >= CHECKPOINT_DEPTH_WARNING) return 'warn';
   return 'ok';
 }
+
+/**
+ * Collaborators the guard needs, declared structurally so this module stays free
+ * of the executor's Mongo/AWS/SST imports (see the file header) and so the guard
+ * can be driven with plain fakes in tests.
+ */
+export interface CheckpointDepthGuardDeps {
+  executionId: string;
+  logger: {
+    warn(message: string, metadata?: Record<string, unknown>): void;
+    error(message: string, metadata?: Record<string, unknown>): void;
+  };
+  emitMetric: (
+    namespace: string,
+    metricName: string,
+    value: number,
+    dimensions?: Record<string, string>
+  ) => Promise<void>;
+  markFailed: (executionId: string, failure: { message: string }) => Promise<unknown>;
+  sendWs: (action: string, payload?: Record<string, unknown>) => Promise<void>;
+}
+
+/**
+ * Apply the two-tier depth guard at the top of processExecution.
+ *
+ * Returns `true` when the execution was terminated, in which case the caller
+ * MUST return immediately without loading the execution: terminating before any
+ * DB work is the whole point of the guard, since a runaway agent would otherwise
+ * chain Lambdas indefinitely.
+ */
+export async function enforceCheckpointDepth(depth: number, deps: CheckpointDepthGuardDeps): Promise<boolean> {
+  const { executionId, logger, emitMetric, markFailed, sendWs } = deps;
+  const verdict = classifyCheckpointDepth(depth);
+
+  if (verdict === 'warn' || verdict === 'terminate') {
+    logger.warn('[CheckpointDepth] Self-dispatch depth approaching hard limit', {
+      checkpointDepth: depth,
+      executionId,
+    });
+    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthWarning', 1, { executionId });
+  }
+
+  if (verdict === 'terminate') {
+    logger.error('[CheckpointDepth] Max self-dispatch depth exceeded - terminating execution', {
+      checkpointDepth: depth,
+      executionId,
+    });
+    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, { executionId });
+    await markFailed(executionId, {
+      message: `Execution exceeded maximum self-dispatch depth (${MAX_CHECKPOINT_DEPTH}) - possible runaway agent loop`,
+    });
+    await sendWs('failed', { executionId, reason: 'max_checkpoint_depth_exceeded' });
+    return true;
+  }
+
+  return false;
+}

@@ -887,3 +887,31 @@ export const useExportSessionToWord = () => {
     },
   });
 };
+
+/**
+ * Hook to export a session to a self-contained, styled HTML document.
+ * Renders the session's markdown through the shared markdown->HTML utility.
+ */
+export const useExportSessionToHtml = () => {
+  return useMutation({
+    mutationFn: async (session: ISessionDocument) => {
+      const { toExportableSession, sessionToMarkdown, getSessionExportFilename } =
+        await import('@client/app/utils/sessionExport');
+      const { renderMarkdownToStyledHtml } = await import('@client/app/utils/markdownToStyledHtml');
+      const { downloadFile } = await import('@client/app/components/common/DownloadMenu');
+      const quests = await getChatMessages(session.id, { all: true });
+      const exportable = toExportableSession(session, quests.data);
+      const filename = getSessionExportFilename(session.name);
+      // exportable.name is already formatSessionTitle-cleaned at the boundary;
+      // use it so <title>/<h1> match the body heading on legacy raw-name sessions.
+      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: exportable.name });
+      downloadFile(html, `${filename}.html`, 'text/html');
+    },
+    onSuccess: (_, session) => {
+      toast.success(`Exported "${formatSessionTitle(session.name)}" to HTML`);
+    },
+    onError: (_, session) => {
+      toast.error(`Failed to export "${formatSessionTitle(session.name)}" to HTML`);
+    },
+  });
+};

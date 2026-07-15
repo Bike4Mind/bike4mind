@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
 import { lambdaVpc } from './vpc';
 import { fabFileBucket, generatedImagesBucket } from './buckets';
 
@@ -296,26 +296,29 @@ const emailIngestionBucketNotification = emailIngestionBucket.notify({
  *
  * Handler: apps/client/server/emailIngestion/emailAnalyzer.dispatch
  */
-const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe({
-  handler: 'apps/client/server/emailIngestion/emailAnalyzer.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '2 minutes',
-  memory: '512 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
-  logging: {
-    retention: '1 week',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel'],
-      resources: ['*'],
+const emailAnalyzerQueueSubscription = emailAnalysisQueue.subscribe(
+  {
+    handler: 'apps/client/server/emailIngestion/emailAnalyzer.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket],
+    logging: {
+      retention: '1 week',
     },
-  ],
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
 
 /**
  * Export resources for use in other infrastructure modules

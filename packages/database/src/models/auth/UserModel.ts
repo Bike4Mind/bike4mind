@@ -1,5 +1,7 @@
 import {
+  AuthStrategy,
   CollectionType,
+  IAuthProviders,
   ISecurityQuestion,
   IUserDocument,
   IUserRepository,
@@ -77,6 +79,30 @@ const MFASchema = new Schema(
     lockedUntil: { type: Date, default: null },
   },
   { _id: false }
+);
+
+// Typed sub-schema for linked SSO identities. Validation only bites on
+// create/save paths - the OAuth link/refresh writes go through User.updateOne
+// (see oauthAccountLink.ts applyAccountLink), which bypasses document
+// validators - so legacy rows (id:null, missing tokens) keep loading fine.
+// `id: false` suppresses the subdocument `id` virtual, which would otherwise
+// conflict with the real provider-subject `id` path.
+const AuthProviderSchema = new Schema<IAuthProviders>(
+  {
+    strategy: { type: String, required: true, enum: Object.values(AuthStrategy) },
+    id: { type: String, default: null },
+    accessToken: { type: String },
+    refreshToken: { type: String },
+    // SAML-specific metadata
+    samlNameId: { type: String },
+    samlSessionIndex: { type: String },
+    samlIdentityProviderId: { type: String },
+    // Okta-specific metadata
+    oktaIdentityProviderId: { type: String },
+    // Whether accessToken/refreshToken are encrypted with SECRET_ENCRYPTION_KEY
+    encrypted: { type: Boolean },
+  },
+  { _id: false, id: false }
 );
 
 const SystemFileEntrySchema = new Schema(
@@ -526,7 +552,7 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     subscribedUntil: { type: String, default: null },
     systemFiles: { type: [SystemFileEntrySchema], default: [] },
     oauthCredentials: { type: Object, default: {} },
-    authProviders: { type: Array, default: [] },
+    authProviders: { type: [AuthProviderSchema], default: [] },
     lastNotebookId: { type: Schema.Types.ObjectId, ref: 'Session' },
     counters: { type: CountersSchema, default: () => ({ counters: [] }) },
     team: { type: String, default: null },
@@ -750,6 +776,28 @@ export const UserSchema = new Schema<IUserDocument, IUserModel>(
     },
   }
 );
+
+// Duplicate-(strategy, id) integrity guard for authProviders. A concurrent
+// first-login race (two logins racing stage-1 miss -> stage-2 miss, see
+// verifyCallback.ts) can try to persist the same provider identity twice on
+// one user; the authProviders_strategy_id index below is deliberately
+// NON-unique (legacy id:null rows), so the guard lives here at the app level.
+// Dedupes rather than rejects so pre-existing duplicate rows self-heal on the
+// next save instead of locking the account out. Later entries win: they carry
+// the freshest tokens. Complements the same-strategy collapse in
+// oauthAccountLink.ts applyAccountLink(), which covers the updateOne link path
+// this save hook never sees.
+UserSchema.pre('save', function (next) {
+  const providers = this.authProviders;
+  if (Array.isArray(providers) && providers.length > 1) {
+    const lastIndexByKey = new Map<string, number>();
+    providers.forEach((p, i) => lastIndexByKey.set(`${p?.strategy} ${p?.id ?? ''}`, i));
+    if (lastIndexByKey.size !== providers.length) {
+      this.authProviders = providers.filter((p, i) => lastIndexByKey.get(`${p?.strategy} ${p?.id ?? ''}`) === i);
+    }
+  }
+  next();
+});
 
 // This will support the $or queries in findByUsernameOrEmail efficiently
 UserSchema.index({

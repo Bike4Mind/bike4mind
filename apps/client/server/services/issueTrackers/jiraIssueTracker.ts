@@ -59,17 +59,19 @@ export class JiraIssueTracker implements IssueTrackerService {
   constructor(
     private readonly projectKey: string,
     private readonly issueType: string = 'Bug',
-    private readonly logger: IssueTrackerLogger
+    private readonly logger: IssueTrackerLogger,
+    // Injected for org-scoped configs (resolves the org's OrgJiraConnection);
+    // defaults to the system-level ATLASSIAN_* environment configuration.
+    private readonly configResolver?: () => Promise<JiraConfig> | JiraConfig
   ) {}
 
   /**
    * Initialize the Jira API connection
    */
-  private ensureInitialized(): JiraApi {
+  private async ensureInitialized(): Promise<JiraApi> {
     if (!this.jiraApi || !this.jiraConfig) {
       try {
-        const atlassianConfig = getAtlassianConfig();
-        this.jiraConfig = atlassianConfig.jira;
+        this.jiraConfig = this.configResolver ? await this.configResolver() : getAtlassianConfig().jira;
         this.jiraApi = new JiraApi(this.jiraConfig);
       } catch (error) {
         throw new Error(`Failed to initialize Jira API: ${error instanceof Error ? error.message : String(error)}`);
@@ -132,7 +134,7 @@ export class JiraIssueTracker implements IssueTrackerService {
    */
   async createIssue(params: CreateIssueParams): Promise<CreatedIssue | null> {
     try {
-      const api = this.ensureInitialized();
+      const api = await this.ensureInitialized();
 
       // Build labels array - Jira auto-creates labels on first use
       const labels = ['liveops-triage', 'bug', params.priority];
@@ -187,7 +189,7 @@ export class JiraIssueTracker implements IssueTrackerService {
    */
   async searchExistingIssues(): Promise<ExistingIssue[]> {
     try {
-      const api = this.ensureInitialized();
+      const api = await this.ensureInitialized();
 
       // JQL to find open issues with liveops-triage label
       const jql = `project = "${this.projectKey}" AND labels = "liveops-triage" AND resolution = Unresolved ORDER BY created DESC`;
@@ -232,7 +234,7 @@ export class JiraIssueTracker implements IssueTrackerService {
    */
   async fetchRecentlyClosedIssues(lookbackDays: number): Promise<ExistingIssue[]> {
     try {
-      const api = this.ensureInitialized();
+      const api = await this.ensureInitialized();
 
       const lookbackDate = new Date();
       lookbackDate.setDate(lookbackDate.getDate() - lookbackDays);
@@ -283,7 +285,7 @@ export class JiraIssueTracker implements IssueTrackerService {
    */
   async checkHealth(): Promise<HealthCheckResult> {
     try {
-      const api = this.ensureInitialized();
+      const api = await this.ensureInitialized();
 
       // Try to get project info to verify access
       const project = await api.getProject({ projectKey: this.projectKey });

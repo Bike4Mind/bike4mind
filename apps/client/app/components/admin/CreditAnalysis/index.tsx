@@ -4,9 +4,11 @@ import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
 import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import BusinessIcon from '@mui/icons-material/Business';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { OrgUsageDashboard } from './components/OrgUsageDashboard';
+import { TransactionLedger } from './components/TransactionLedger';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -42,6 +44,12 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Org Usage</Box>
             </Box>
           </Tab>
+          <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ReceiptLongIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Ledger</Box>
+            </Box>
+          </Tab>
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
@@ -59,6 +67,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="org-usage" sx={{ p: 0 }}>
           <OrgUsageDashboard />
+        </TabPanel>
+
+        <TabPanel value="ledger" sx={{ p: 0 }}>
+          <TransactionLedger />
         </TabPanel>
       </Tabs>
 
