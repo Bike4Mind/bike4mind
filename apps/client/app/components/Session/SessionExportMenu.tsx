@@ -10,6 +10,7 @@ import {
   getSessionExportFilename,
 } from '@client/app/utils/sessionExport';
 import { downloadFile } from '@client/app/components/common/DownloadMenu';
+import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import {
   SaveAlt as ExportIcon,
   Description as MarkdownIcon,
@@ -18,6 +19,7 @@ import {
   ContentCopy as CopyIcon,
   GridOn as ExcelIcon,
   Article as WordIcon,
+  Html as HtmlIcon,
   Storage as StorageIcon,
 } from '@mui/icons-material';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
@@ -53,11 +55,12 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
   const { handleCopyToClipboard } = useCopyToClipboard({ showToast: true });
   const [isExcelGenerating, setIsExcelGenerating] = useState(false);
   const [isDocxGenerating, setIsDocxGenerating] = useState(false);
+  const [isHtmlGenerating, setIsHtmlGenerating] = useState(false);
   const openSendToDataLake = useSendToDataLakeStore(s => s.open);
   const { isFeatureEnabled } = useAdminSettingsCache();
 
   const filename = getSessionExportFilename(session.name);
-  const isExporting = isExcelGenerating || isDocxGenerating;
+  const isExporting = isExcelGenerating || isDocxGenerating || isHtmlGenerating;
 
   const getExportableSession = useCallback(() => {
     return toExportableSession(session, chatHistory);
@@ -127,6 +130,21 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
       setIsDocxGenerating(false);
     }
   }, [getExportableSession, filename]);
+
+  const handleHtmlExport = useCallback(async () => {
+    setIsHtmlGenerating(true);
+    try {
+      const exportable = getExportableSession();
+      const html = await renderMarkdownToStyledHtml(sessionToMarkdown(exportable), { title: session.name });
+      downloadFile(html, `${filename}.html`, 'text/html');
+      toast.success('HTML exported');
+    } catch (error) {
+      console.error('HTML export failed:', error);
+      toast.error('Failed to generate HTML file');
+    } finally {
+      setIsHtmlGenerating(false);
+    }
+  }, [getExportableSession, filename, session.name]);
 
   const handleSendToDataLake = useCallback(() => {
     openSendToDataLake({
@@ -200,6 +218,18 @@ const SessionExportMenu: React.FC<SessionExportMenuProps> = ({
           </ListItemDecorator>
           Word (.docx)
           {isDocxGenerating && (
+            <Typography level="body-xs" sx={{ ml: 1, color: 'neutral.500' }}>
+              Generating...
+            </Typography>
+          )}
+        </MenuItem>
+
+        <MenuItem data-testid="session-export-html" onClick={handleHtmlExport} disabled={isHtmlGenerating}>
+          <ListItemDecorator>
+            {isHtmlGenerating ? <CircularProgress size="sm" /> : <HtmlIcon fontSize="small" />}
+          </ListItemDecorator>
+          HTML (.html)
+          {isHtmlGenerating && (
             <Typography level="body-xs" sx={{ ml: 1, color: 'neutral.500' }}>
               Generating...
             </Typography>

@@ -1,10 +1,12 @@
 import React, { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import type { IChatHistoryItemDocument, ISessionDocument } from '@bike4mind/common';
 import { useSendToDataLakeStore } from '@client/app/stores/useSendToDataLakeStore';
+import { downloadFile } from '@client/app/components/common/DownloadMenu';
+import { renderMarkdownToStyledHtml } from '@client/app/utils/markdownToStyledHtml';
 import SessionExportMenu from './SessionExportMenu';
 
 /**
@@ -29,6 +31,10 @@ vi.mock('@client/app/utils/sessionExport', () => ({
 vi.mock('@client/app/components/common/DownloadMenu', () => ({
   default: () => null,
   downloadFile: vi.fn(),
+}));
+
+vi.mock('@client/app/utils/markdownToStyledHtml', () => ({
+  renderMarkdownToStyledHtml: vi.fn(async () => '<!DOCTYPE html><html></html>'),
 }));
 
 vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
@@ -98,8 +104,24 @@ describe('SessionExportMenu - EnableDataLakes gating', () => {
     expect(screen.getByTestId('session-export-csv')).toBeInTheDocument();
     expect(screen.getByTestId('session-export-excel')).toBeInTheDocument();
     expect(screen.getByTestId('session-export-docx')).toBeInTheDocument();
+    expect(screen.getByTestId('session-export-html')).toBeInTheDocument();
     expect(screen.getByTestId('session-copy-markdown')).toBeInTheDocument();
     expect(screen.getByTestId('session-copy-json')).toBeInTheDocument();
+  });
+
+  it('exports styled HTML via the shared util when the HTML item is clicked', async () => {
+    renderAndOpenMenu();
+
+    fireEvent.click(screen.getByTestId('session-export-html'));
+
+    await waitFor(() =>
+      expect(renderMarkdownToStyledHtml).toHaveBeenCalledWith('# session', { title: 'Test Session' })
+    );
+    await waitFor(() => {
+      const [, name, mimeType] = vi.mocked(downloadFile).mock.calls.at(-1)!;
+      expect(name).toBe('session-export.html');
+      expect(mimeType).toBe('text/html');
+    });
   });
 
   it('still opens the Send to Data Lake modal from the item when the feature is on', () => {
