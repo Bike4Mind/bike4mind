@@ -144,7 +144,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
             delete rest.size; delete rest.color; delete rest.strokeWidth; delete rest.className;
             var kebab = toKebabCase(iconName);
             // lucide's UMD stores each icon as a node array ([tag, attrs][]), NOT an HTML string -
-            // build real SVG children from it (dangerouslySetInnerHTML with the array renders nothing).
+            // build real SVG children from it (injecting the array as innerHTML renders nothing).
             var node = (window.lucide && lucide.icons && (lucide.icons[iconName] || lucide.icons[kebab])) || null;
             var children = Array.isArray(node)
               ? node.map(function (entry, i) { return React.createElement(entry[0], Object.assign({ key: i }, entry[1])); })
@@ -198,6 +198,10 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           // would emit an invalid \`const * as d3 = require(...)\` (matches the publish transpiler).
           var ns = imports.trim().match(/^\\*\\s+as\\s+(\\w+)$/);
           if (ns) return 'const ' + ns[1] + " = require('" + module + "');";
+          // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
+          // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
+          var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
+          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + mixed[2] + ' = ' + mixed[1] + ';';
           return 'const ' + imports + " = require('" + module + "');";
         });
 
