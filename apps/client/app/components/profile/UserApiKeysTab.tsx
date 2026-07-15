@@ -49,7 +49,7 @@ import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
 import WarningIcon from '@mui/icons-material/Warning';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import { IUserApiKeyDocument, ApiKeyScope } from '@bike4mind/common';
-import { USER_API_KEY_SCOPES, GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
+import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import { useState } from 'react';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import dayjs from 'dayjs';
@@ -115,7 +115,7 @@ interface ScopeGroup {
 
 // The New-Key modal offers only generic-flow scopes; embed:chat is minted via
 // the dedicated embed flow (epic #41 Phase E), so it is excluded from selection
-// here (but still documented in the Scopes tab below via USER_API_KEY_SCOPES).
+// here (and from the Scopes docs tab below - see scopeDescriptions).
 const MODAL_SCOPE_VALUES = GENERIC_MODAL_API_KEY_SCOPES.map(s => s.value);
 
 const SCOPE_GROUPS: ScopeGroup[] = (() => {
@@ -765,7 +765,10 @@ ai_response = response.json()`,
     },
   };
 
-  const scopeDescriptions = USER_API_KEY_SCOPES;
+  // Docs tab shows only generic-flow scopes; dedicated-flow scopes (embed:chat) are
+  // hidden until their mint flow ships (epic #41 Phase E) so we don't advertise a
+  // scope/endpoint a user cannot use yet.
+  const scopeDescriptions = GENERIC_MODAL_API_KEY_SCOPES;
 
   const copyCode = (code: string) => {
     handleCopyToClipboard(code);

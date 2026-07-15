@@ -15,10 +15,12 @@ export interface ApiKeyScopeOption {
  * bridge-only `ApiKeyScope.CC_BRIDGE` (`cc-bridge:connect`), which are granted
  * through dedicated flows, not user-facing key creation.
  *
- * `embed:chat` is listed (so it is documented and a recognized selectable scope)
- * but is filtered out of the generic New-Key modals: an embed key needs an
- * agentId + origin allow-list those forms do not collect, so embed keys are
- * minted through the dedicated embed flow (epic #41 Phase E), not here.
+ * `embed:chat` is a member of this catalog (the source of truth for the scope) but
+ * is a dedicated-flow scope: it is filtered out of the generic New-Key modals AND
+ * the Scopes docs tab (via GENERIC_MODAL_API_KEY_SCOPES) until its mint flow ships,
+ * because an embed key needs an agentId + origin allow-list those surfaces do not
+ * collect and its endpoint lands in Phase B. Embed keys are minted through the
+ * dedicated embed flow (epic #41 Phase E), not here.
  */
 export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
