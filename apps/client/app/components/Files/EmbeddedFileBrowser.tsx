@@ -23,7 +23,19 @@ const EmbeddedFileBrowser = forwardRef<EmbeddedFileBrowserHandle, EmbeddedFileBr
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [fileToShare, setFileToShare] = useState<IFabFileDocument | null>(null);
 
-    useImperativeHandle(ref, () => ({ handleOpen: () => setOpen(true) }), []);
+    // Reset selection/share on open so a dismissed-without-adding picker doesn't reopen
+    // with stale pre-checked rows (which could drive an accidental re-add).
+    useImperativeHandle(
+      ref,
+      () => ({
+        handleOpen: () => {
+          setSelectedIds(new Set());
+          setFileToShare(null);
+          setOpen(true);
+        },
+      }),
+      []
+    );
 
     const value = useMemo<FileBrowserInstanceValue>(
       () => ({

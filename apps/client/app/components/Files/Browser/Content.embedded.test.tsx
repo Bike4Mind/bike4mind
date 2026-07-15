@@ -25,13 +25,15 @@ const testFile = {
 } as unknown as IFabFileDocument;
 
 const updateSessionMutate = vi.fn();
+// Spy on the destructive global bulk-delete so we can assert the embedded path NEVER reaches it.
+const bulkDeleteMutate = vi.fn();
 // useConfirmation returns a runner that immediately invokes onOk, so delete flows resolve synchronously.
 const confirmRun = vi.fn((opts: { onOk?: () => void | Promise<void> }) => opts.onOk?.());
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
   usePaginatedSearchFabFiles: () => ({ data: { data: [testFile], total: 1 }, isLoading: false, isFetching: false }),
   useSearchFabFiles: () => ({ data: { data: [], total: 0 }, isLoading: false }),
-  useBulkDeleteFiles: () => ({ mutateAsync: vi.fn() }),
+  useBulkDeleteFiles: () => ({ mutateAsync: bulkDeleteMutate }),
   useCreateFabFile: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 vi.mock('@client/app/hooks/data/tag', () => ({
@@ -115,6 +117,7 @@ const renderContent = (config: FileBrowserConfig) => {
 describe('FileBrowserContent embedded config', () => {
   beforeEach(() => {
     updateSessionMutate.mockClear();
+    bulkDeleteMutate.mockClear();
     confirmRun.mockClear();
   });
 
@@ -128,7 +131,7 @@ describe('FileBrowserContent embedded config', () => {
     expect(updateSessionMutate).not.toHaveBeenCalled();
   });
 
-  it('Delete calls config.onDelete with the selected ids (batched) instead of deleting the files', () => {
+  it('Delete calls config.onDelete with the selected ids and NEVER the destructive global delete', () => {
     const onDelete = vi.fn();
     renderContent({ onDelete });
 
@@ -136,5 +139,8 @@ describe('FileBrowserContent embedded config', () => {
 
     expect(confirmRun).toHaveBeenCalled();
     expect(onDelete).toHaveBeenCalledWith(['f1']);
+    // The whole point of the refactor: an embedded picker must not fall through to the
+    // file-destroying useBulkDeleteFiles path.
+    expect(bulkDeleteMutate).not.toHaveBeenCalled();
   });
 });
