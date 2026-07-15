@@ -245,6 +245,16 @@ export default function C() { return <LineChart data={_.range(3)} />; }`;
       expect(indexHtml).not.toContain(path);
     }
   });
+
+  it('rejects an Object.prototype key as a dependency (hasOwnProperty, not `in`)', async () => {
+    // `constructor` is on Object.prototype, so a naive `in` check would treat it as blessed and
+    // emit an undefined script path/global. It must be rejected like any unsupported module.
+    const src = `import constructor from 'constructor';
+export default function C() { return <div>{typeof constructor}</div>; }`;
+    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
+      UnsupportedReactDependencyError
+    );
+  });
 });
 
 describe('rewriteImportsToRequire', () => {
