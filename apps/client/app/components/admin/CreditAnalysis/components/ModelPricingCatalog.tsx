@@ -419,11 +419,22 @@ export const ModelPricingCatalog: React.FC = () => {
             <Stack spacing={1}>
               {history.map((row, idx) => {
                 const tier = firstTier(row);
-                // Diff against the chronologically previous row (history is newest first).
+                // Diff against the chronologically previous row (history is newest
+                // first), across EVERY tier: a reprice touching only a higher
+                // threshold must not read as "no rate changes" in an audit view.
                 const prior = history[idx + 1];
-                const priorTier = prior ? firstTier(prior) : undefined;
-                const changedFields = priorTier
-                  ? RATE_FIELDS.filter(f => (tier[f] ?? undefined) !== (priorTier[f] ?? undefined))
+                const thresholds = prior
+                  ? Array.from(new Set([...Object.keys(row.pricing), ...Object.keys(prior.pricing)])).sort(
+                      (a, b) => Number(a) - Number(b)
+                    )
+                  : [];
+                const multiTier = thresholds.length > 1;
+                const changes = prior
+                  ? thresholds.flatMap(threshold =>
+                      RATE_FIELDS.filter(
+                        f => (row.pricing[threshold]?.[f] ?? undefined) !== (prior.pricing[threshold]?.[f] ?? undefined)
+                      ).map(f => ({ threshold, f }))
+                    )
                   : [];
                 return (
                   <Sheet key={idx} variant="soft" sx={{ p: 1, borderRadius: 'sm' }} data-testid="history-row">
@@ -435,25 +446,31 @@ export const ModelPricingCatalog: React.FC = () => {
                         variant="soft"
                         data-testid="history-who"
                       >
-                        {isSeedRow(row) ? 'seed' : (row.repricedBy ?? '-')}
+                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : '-')}
                       </Chip>
                     </Stack>
                     <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>
                       {row.note || 'no note'}
                     </Typography>
-                    {priorTier ? (
-                      changedFields.length === 0 ? (
+                    {prior ? (
+                      changes.length === 0 ? (
                         <Typography level="body-xs">no rate changes</Typography>
                       ) : (
-                        changedFields.map(f => (
-                          <Typography key={f} level="body-xs" sx={numberCell} data-testid={`history-diff-${f}`}>
-                            {RATE_LABELS[f]}:{' '}
+                        changes.map(({ threshold, f }) => (
+                          <Typography
+                            key={`${threshold}-${f}`}
+                            level="body-xs"
+                            sx={numberCell}
+                            data-testid={`history-diff-${threshold}-${f}`}
+                          >
+                            {RATE_LABELS[f]}
+                            {multiTier ? ` (tier ${Number(threshold).toLocaleString()})` : ''}:{' '}
                             <Typography component="span" color="danger" sx={{ textDecoration: 'line-through' }}>
-                              {formatRate(row.unit, priorTier[f])}
+                              {formatRate(row.unit, prior.pricing[threshold]?.[f])}
                             </Typography>{' '}
                             {'->'}{' '}
                             <Typography component="span" color="success">
-                              {formatRate(row.unit, tier[f])}
+                              {formatRate(row.unit, row.pricing[threshold]?.[f])}
                             </Typography>
                           </Typography>
                         ))

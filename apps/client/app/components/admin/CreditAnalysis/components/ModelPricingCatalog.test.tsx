@@ -158,15 +158,72 @@ describe('ModelPricingCatalog', () => {
     expect(newest.getByTestId('history-who')).toHaveTextContent('admin-1');
     expect(newest.getByText('invoice X')).toBeInTheDocument();
     // Diff against the older row: input $4 -> $9, output $16 -> $27.
-    expect(newest.getByTestId('history-diff-input')).toHaveTextContent('$4');
-    expect(newest.getByTestId('history-diff-input')).toHaveTextContent('$9');
-    expect(newest.getByTestId('history-diff-output')).toHaveTextContent('$16');
-    expect(newest.getByTestId('history-diff-output')).toHaveTextContent('$27');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$4');
+    expect(newest.getByTestId('history-diff-0-input')).toHaveTextContent('$9');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$16');
+    expect(newest.getByTestId('history-diff-0-output')).toHaveTextContent('$27');
 
     const oldest = within(rows[1]);
     expect(oldest.getByTestId('history-who')).toHaveTextContent('seed');
-    expect(oldest.queryByTestId('history-diff-input')).not.toBeInTheDocument();
+    expect(oldest.queryByTestId('history-diff-0-input')).not.toBeInTheDocument();
     expect(oldest.getByText(/\$4/)).toBeInTheDocument();
+  });
+
+  it('diffs every tier, not just the first (multi-tier reprice audit)', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 3e-6, output: 9e-6 } },
+            effectiveFrom: '2026-07-05T00:00:00.000Z',
+            note: 'long-context tier reprice',
+            repricedBy: 'admin-1',
+          },
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '272000': { input: 1e-6, output: 6e-6 }, '1050000': { input: 2e-6, output: 9e-6 } },
+            effectiveFrom: '2026-07-01T00:00:00.000Z',
+            note: 'adapter-seed',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    const rows = await screen.findAllByTestId('history-row');
+    const newest = within(rows[0]);
+    // Only the 1050000 tier's input changed ($2 -> $3); the first tier must not diff.
+    const diff = newest.getByTestId('history-diff-1050000-input');
+    expect(diff).toHaveTextContent('$2');
+    expect(diff).toHaveTextContent('$3');
+    expect(newest.queryByTestId('history-diff-272000-input')).not.toBeInTheDocument();
+    expect(newest.queryByText('no rate changes')).not.toBeInTheDocument();
+  });
+
+  it('shows who performed a revert even though the row carries the seed note', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '0': { input: 4e-6, output: 16e-6 } },
+            effectiveFrom: '2026-07-06T00:00:00.000Z',
+            note: 'adapter-seed',
+            repricedBy: 'admin-1',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    const rows = await screen.findAllByTestId('history-row');
+    expect(within(rows[0]).getByTestId('history-who')).toHaveTextContent('admin-1');
   });
 
   it('ignores a stale history response when a newer model was opened (no cross-model audit mixups)', async () => {
