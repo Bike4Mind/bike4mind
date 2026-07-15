@@ -247,6 +247,10 @@ export async function compactSession(
 
     useCliStore.getState().setSession(newSession);
     useCliStore.getState().clearPendingMessages();
+    // Compact installs a new active session just like create/resume, so the
+    // usage cache must be invalidated too - otherwise it keeps reflecting the
+    // pre-compact session until its TTL expires (issue #602).
+    ctx.onSessionReplaced();
 
     console.log('✅ Conversation compacted');
     console.log(`\u{1F4DD} New session: ${newSession.name}`);
