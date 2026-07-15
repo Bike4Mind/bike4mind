@@ -62,9 +62,11 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
     });
   };
 
-  const handleRemovePrompt = (fileId: string) => {
-    removeSystemPrompt({ projectId: project.id, fileId });
+  const handleRemovePrompt = (fileIds: string[]) => {
+    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
   };
+
+  const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
 
   return (
     <>
@@ -131,6 +133,7 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
         ref={fileBrowserRef}
         onAdd={handleBulkAdd}
         onDelete={handleRemovePrompt}
+        addedFileIds={systemPromptFileIds}
         addButtonLabelKey="file_browser.add_files_to_project"
       />
     </>
@@ -182,9 +185,11 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
     });
   };
 
-  const handleRemovePrompt = (fileId: string) => {
-    removeSystemPrompt({ projectId: project.id, fileId });
+  const handleRemovePrompt = (fileIds: string[]) => {
+    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
   };
+
+  const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
 
   return (
     <Stack gap="20px" sx={{ height: '100%' }} className="project-system-prompt-tab-container">
@@ -309,6 +314,7 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
         ref={fileBrowserRef}
         onAdd={handleBulkAdd}
         onDelete={handleRemovePrompt}
+        addedFileIds={systemPromptFileIds}
         addButtonLabelKey="file_browser.add_files_to_project"
       />
     </Stack>

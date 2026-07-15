@@ -128,13 +128,13 @@ describe('FileBrowserContent embedded config', () => {
     expect(updateSessionMutate).not.toHaveBeenCalled();
   });
 
-  it('Delete calls config.onDelete for each selected file instead of deleting the file', () => {
+  it('Delete calls config.onDelete with the selected ids (batched) instead of deleting the files', () => {
     const onDelete = vi.fn();
     renderContent({ onDelete });
 
     fireEvent.click(screen.getByTestId('file-browser-delete-btn'));
 
     expect(confirmRun).toHaveBeenCalled();
-    expect(onDelete).toHaveBeenCalledWith('f1');
+    expect(onDelete).toHaveBeenCalledWith(['f1']);
   });
 });

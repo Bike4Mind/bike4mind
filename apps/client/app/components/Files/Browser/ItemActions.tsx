@@ -333,7 +333,7 @@ const FileBrowserItemActions: FC<{
                   type: 'warning',
                   okLabel: 'Remove',
                   onOk: async () => {
-                    onDelete(file.id);
+                    onDelete([file.id]);
                   },
                 });
               } else if (isSharedToMe) {

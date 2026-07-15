@@ -78,6 +78,14 @@ const ProjectFiles: FC<{
     [projectId, removeFiles]
   );
 
+  // Picker delete: remove a batch of files from the project in one request.
+  const handleRemoveFiles = useCallback(
+    (fileIds: string[]) => {
+      removeFiles({ projectId, fileIds });
+    },
+    [projectId, removeFiles]
+  );
+
   const handleBulkAdd = useCallback(
     (files: IFabFileDocument[]) => {
       const fileIds = files.map(file => file.id);
@@ -441,7 +449,7 @@ const ProjectFiles: FC<{
       <EmbeddedFileBrowser
         ref={fileBrowserRef}
         onAdd={handleBulkAdd}
-        onDelete={handleRemoveFile}
+        onDelete={handleRemoveFiles}
         addedFileIds={projectFileIds}
         addButtonLabelKey="file_browser.add_files_to_project"
       />

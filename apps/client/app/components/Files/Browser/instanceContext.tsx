@@ -14,8 +14,8 @@ import { useFileBrowser } from '../Browser';
 export interface FileBrowserConfig {
   /** Primary bottom-bar action for the selected files. Undefined = add to the current session/workbench (global default). */
   onAdd?: (files: IFabFileDocument[]) => void;
-  /** Per-file delete. Undefined = delete the file globally (with confirm); embedded pickers override to e.g. remove-from-project. */
-  onDelete?: (fileId: string) => void;
+  /** Delete for a batch of file ids. Undefined = delete the files globally (with confirm); embedded pickers override to e.g. remove-from-project. Takes an array so callers can batch (one request/toast for a bulk delete). */
+  onDelete?: (fileIds: string[]) => void;
   /** Files already present in the caller's context; drives the "Added" indicator on each item. */
   addedFileIds?: Set<string>;
   /** i18n key for the add-button label; undefined uses the default notebook copy. */

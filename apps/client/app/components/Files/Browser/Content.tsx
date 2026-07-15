@@ -295,7 +295,7 @@ const FileBrowserContent = () => {
         type: 'warning',
         okLabel: 'Remove',
         onOk: async () => {
-          ids.forEach(id => onDelete(id));
+          onDelete(ids);
           setSelectedIds(new Set<string>());
         },
       });
