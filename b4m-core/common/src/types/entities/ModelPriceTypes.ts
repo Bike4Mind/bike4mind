@@ -54,6 +54,8 @@ export const ModelPrice = z.object({
   effectiveFrom: z.date(),
   /** Provenance: 'adapter-seed', an invoice reference, a price-page URL, etc. */
   note: z.string().optional(),
+  /** Admin who appended the row (reprice/revert); absent on seeded rows. */
+  repricedBy: z.string().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });

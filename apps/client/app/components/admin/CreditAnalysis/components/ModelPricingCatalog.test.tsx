@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import React from 'react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -124,6 +124,49 @@ describe('ModelPricingCatalog', () => {
 
     const alert = await screen.findByTestId('reprice-modal-error');
     expect(alert).toHaveTextContent('reserved for seed provenance');
+  });
+
+  it('renders history as a diff with who and why; oldest row shows plain rates', async () => {
+    renderCatalog();
+    await screen.findByTestId('model-pricing-row-gpt-x-per_token');
+    mockGet.mockResolvedValueOnce({
+      data: {
+        history: [
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '0': { input: 9e-6, output: 27e-6 } },
+            effectiveFrom: '2026-07-05T00:00:00.000Z',
+            note: 'invoice X',
+            repricedBy: 'admin-1',
+          },
+          {
+            modelId: 'gpt-x',
+            unit: 'per_token',
+            pricing: { '0': { input: 4e-6, output: 16e-6 } },
+            effectiveFrom: '2026-07-01T00:00:00.000Z',
+            note: 'adapter-seed',
+          },
+        ],
+      },
+    });
+    fireEvent.click(screen.getByTestId('model-pricing-history-gpt-x-per_token'));
+    const rows = await screen.findAllByTestId('history-row');
+    expect(rows).toHaveLength(2);
+
+    const newest = within(rows[0]);
+    expect(newest.getByTestId('history-who')).toHaveTextContent('admin-1');
+    expect(newest.getByText('invoice X')).toBeInTheDocument();
+    // Diff against the older row: input $4 -> $9, output $16 -> $27.
+    expect(newest.getByTestId('history-diff-input')).toHaveTextContent('$4');
+    expect(newest.getByTestId('history-diff-input')).toHaveTextContent('$9');
+    expect(newest.getByTestId('history-diff-output')).toHaveTextContent('$16');
+    expect(newest.getByTestId('history-diff-output')).toHaveTextContent('$27');
+
+    const oldest = within(rows[1]);
+    expect(oldest.getByTestId('history-who')).toHaveTextContent('seed');
+    expect(oldest.queryByTestId('history-diff-input')).not.toBeInTheDocument();
+    expect(oldest.getByText(/\$4/)).toBeInTheDocument();
   });
 
   it('ignores a stale history response when a newer model was opened (no cross-model audit mixups)', async () => {

@@ -32,6 +32,7 @@ interface PriceRow {
   pricing: Record<string, IModelPriceTier>;
   effectiveFrom: string;
   note?: string;
+  repricedBy?: string;
 }
 
 // Mirrors SEED_NOTE in @bike4mind/database (a server-only package; importing
@@ -235,7 +236,8 @@ export const ModelPricingCatalog: React.FC = () => {
       {isLoading && rows.length === 0 ? (
         <CircularProgress size="sm" />
       ) : (
-        <Sheet sx={{ maxHeight: 480, overflow: 'auto' }}>
+        // Viewport-relative so the catalog fills the tab; scroll stays internal.
+        <Sheet sx={{ maxHeight: 'calc(100vh - 240px)', minHeight: 320, overflow: 'auto' }}>
           <Table stickyHeader hoverRow size="sm" data-testid="model-pricing-table">
             <thead>
               <tr>
@@ -417,17 +419,53 @@ export const ModelPricingCatalog: React.FC = () => {
             <Stack spacing={1}>
               {history.map((row, idx) => {
                 const tier = firstTier(row);
+                // Diff against the chronologically previous row (history is newest first).
+                const prior = history[idx + 1];
+                const priorTier = prior ? firstTier(prior) : undefined;
+                const changedFields = priorTier
+                  ? RATE_FIELDS.filter(f => (tier[f] ?? undefined) !== (priorTier[f] ?? undefined))
+                  : [];
                 return (
                   <Sheet key={idx} variant="soft" sx={{ p: 1, borderRadius: 'sm' }} data-testid="history-row">
-                    <Typography level="body-sm">
-                      {new Date(row.effectiveFrom).toLocaleString()} - {row.note || 'no note'}
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography level="body-sm">{new Date(row.effectiveFrom).toLocaleString()}</Typography>
+                      <Chip
+                        size="sm"
+                        color={isSeedRow(row) ? 'primary' : 'neutral'}
+                        variant="soft"
+                        data-testid="history-who"
+                      >
+                        {isSeedRow(row) ? 'seed' : (row.repricedBy ?? '-')}
+                      </Chip>
+                    </Stack>
+                    <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>
+                      {row.note || 'no note'}
                     </Typography>
-                    <Typography level="body-xs" sx={numberCell}>
-                      in {formatRate(row.unit, tier.input)} / out {formatRate(row.unit, tier.output)}
-                      {tier.audio_input !== undefined &&
-                        ` / audio in ${formatRate(row.unit, tier.audio_input)} / audio out ${formatRate(row.unit, tier.audio_output)}`}{' '}
-                      ({UNIT_SUFFIX[row.unit] ?? row.unit})
-                    </Typography>
+                    {priorTier ? (
+                      changedFields.length === 0 ? (
+                        <Typography level="body-xs">no rate changes</Typography>
+                      ) : (
+                        changedFields.map(f => (
+                          <Typography key={f} level="body-xs" sx={numberCell} data-testid={`history-diff-${f}`}>
+                            {RATE_LABELS[f]}:{' '}
+                            <Typography component="span" color="danger" sx={{ textDecoration: 'line-through' }}>
+                              {formatRate(row.unit, priorTier[f])}
+                            </Typography>{' '}
+                            {'->'}{' '}
+                            <Typography component="span" color="success">
+                              {formatRate(row.unit, tier[f])}
+                            </Typography>
+                          </Typography>
+                        ))
+                      )
+                    ) : (
+                      <Typography level="body-xs" sx={numberCell}>
+                        in {formatRate(row.unit, tier.input)} / out {formatRate(row.unit, tier.output)}
+                        {tier.audio_input !== undefined &&
+                          ` / audio in ${formatRate(row.unit, tier.audio_input)} / audio out ${formatRate(row.unit, tier.audio_output)}`}{' '}
+                        ({UNIT_SUFFIX[row.unit] ?? row.unit})
+                      </Typography>
+                    )}
                   </Sheet>
                 );
               })}
