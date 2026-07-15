@@ -294,6 +294,7 @@ function CliApp() {
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
+  const todoStoreRef = useRef(createTodoStore());
 
   // Use Zustand store for UI state. The session is the single source of truth;
   // handlers read the latest value via `useCliStore.getState().session` and
@@ -834,7 +835,7 @@ function CliApp() {
       const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
 
       // Create write_todos tool for task tracking
-      const todoStore = createTodoStore();
+      const todoStore = todoStoreRef.current;
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)
@@ -852,6 +853,10 @@ function CliApp() {
         blockerStoreRef.current.blockers = [];
         reviewGateStoreRef.current.reviewGates = [];
       }
+
+      // Todos are never persisted; start every (re)init with a clean list so a
+      // prior session's todos cannot bleed into this one in the same process.
+      todoStoreRef.current.todos = [];
 
       // Create skill tool for AI-driven skill invocation (unless disabled)
       const enableSkillTool = config.preferences.enableSkillTool !== false;
@@ -1796,6 +1801,7 @@ function CliApp() {
     const handoff = buildLocalHandoff(session, {
       decisions: decisionStoreRef.current.decisions,
       blockers: blockerStoreRef.current.blockers,
+      todos: todoStoreRef.current.todos,
     });
     applyHandoffToWorkflow(session, handoff);
     const filePath = await writeHandoffMarkdown(session);

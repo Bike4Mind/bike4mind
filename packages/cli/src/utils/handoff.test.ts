@@ -18,6 +18,7 @@ import {
   LOCAL_HANDOFF_MESSAGE_TAIL,
 } from './handoff.js';
 import type { Message, Session, SessionHandoff, WorkflowState } from '../storage/types.js';
+import type { TodoItem } from '../tools/writeTodosTool.js';
 
 function createHandoff(overrides: Partial<SessionHandoff> = {}): SessionHandoff {
   return {
@@ -435,9 +436,9 @@ describe('handoff', () => {
 
       expect(handoff.summary).toContain('Local handoff');
       expect(handoff.summary).toContain('Test Session');
-      expect(handoff.keyFindings).toEqual([]);
-      expect(handoff.nextSteps).toEqual([]);
-      expect(handoff.pendingDecisions).toEqual(['Use Postgres (rationale: JSONB support)']);
+      expect(handoff.keyFindings).toEqual(['Use Postgres (rationale: JSONB support)']);
+      expect(handoff.nextSteps).toEqual(['Resolve blocker: Missing API key']);
+      expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual(['Missing API key']);
       expect(handoff.generatedAt).toBeTruthy();
     });
@@ -448,6 +449,8 @@ describe('handoff', () => {
       const handoff = buildLocalHandoff(session);
 
       expect(handoff.summary).toContain('Local handoff');
+      expect(handoff.keyFindings).toEqual([]);
+      expect(handoff.nextSteps).toEqual([]);
       expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual([]);
     });
@@ -470,10 +473,53 @@ describe('handoff', () => {
         ],
       });
 
-      expect(handoff.pendingDecisions).toEqual(['Fresh (rationale: fresh)']);
+      expect(handoff.keyFindings).toEqual(['Fresh (rationale: fresh)']);
+      expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual(['Fresh blocker']);
-      expect(handoff.pendingDecisions).not.toContain('Stale');
+      expect(handoff.keyFindings).not.toContain('Stale (rationale: stale)');
       expect(handoff.blockers).not.toContain('Stale blocker');
+    });
+
+    it('enriches from decisions, open todos, and open blockers, dropping done/cancelled', () => {
+      const workflow: WorkflowState = {
+        decisions: [
+          { id: 'd1', timestamp: '2026-01-01T00:00:00.000Z', summary: 'Use Postgres', rationale: 'JSONB support' },
+          { id: 'd2', timestamp: '2026-01-02T00:00:00.000Z', summary: 'Adopt Vitest', rationale: 'Faster' },
+        ],
+        blockers: [
+          { id: 'b1', createdAt: 'now', description: 'Missing API key', status: 'open' },
+          { id: 'b2', createdAt: 'now', description: 'Already fixed', status: 'resolved' },
+        ],
+      };
+      const session = createSession([createMessage('user', 'hi', 0)], workflow);
+      const todos: TodoItem[] = [
+        { description: 'Write migration', status: 'in_progress' },
+        { description: 'Add tests', status: 'pending' },
+        { description: 'Ship it', status: 'completed' },
+        { description: 'Old idea', status: 'cancelled' },
+      ];
+
+      const handoff = buildLocalHandoff(session, {
+        decisions: workflow.decisions,
+        blockers: workflow.blockers,
+        todos,
+      });
+
+      expect(handoff.keyFindings).toEqual([
+        'Use Postgres (rationale: JSONB support)',
+        'Adopt Vitest (rationale: Faster)',
+      ]);
+      expect(handoff.nextSteps).toEqual(['Write migration', 'Add tests', 'Resolve blocker: Missing API key']);
+      expect(handoff.pendingDecisions).toEqual([]);
+      expect(handoff.blockers).toEqual(['Missing API key']);
+
+      expect(handoff.summary).toContain('Test Session');
+      expect(handoff.summary).toContain('model claude-sonnet');
+      expect(handoff.summary).toContain('2 decisions');
+      expect(handoff.summary).toContain('1 open blockers');
+      expect(handoff.summary).toContain('2 open todos');
+      expect(handoff.summary).toContain('Current task: Write migration');
+      expect(handoff.summary).toContain('Latest decision: Adopt Vitest');
     });
   });
 
