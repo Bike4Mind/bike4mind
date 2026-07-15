@@ -1,3 +1,4 @@
+import { AuthStrategy } from '@bike4mind/common';
 import { userRepository, identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -35,21 +36,21 @@ const handler = baseApi({ auth: false })
 
         if (hasSocialOnly) {
           const provider = authProviders[0];
-          if (provider.strategy === 'google') {
+          if (provider.strategy === AuthStrategy.Google) {
             return res.json({
               strategy: 'google',
               requiresRedirect: true,
               redirectUrl: `/api/auth/google`,
             });
           }
-          if (provider.strategy === 'github') {
+          if (provider.strategy === AuthStrategy.Github) {
             return res.json({
               strategy: 'github',
               requiresRedirect: true,
               redirectUrl: `/api/auth/github`,
             });
           }
-          if (provider.strategy === 'okta') {
+          if (provider.strategy === AuthStrategy.Okta) {
             // Check if there's a database IDP for this user's domain
             const oktaIdp = await identityProviderRepository.findActiveByEmailDomain(emailDomain);
             const hasIdp = oktaIdp && oktaIdp.type === 'okta' && oktaIdp.oktaConfig;
@@ -63,7 +64,7 @@ const handler = baseApi({ auth: false })
         }
 
         const hasOkta =
-          authProviders?.some(provider => provider.strategy === 'okta') ||
+          authProviders?.some(provider => provider.strategy === AuthStrategy.Okta) ||
           (oauthCredentials && oauthCredentials.strategy === 'okta');
 
         if (hasOkta) {
@@ -79,7 +80,7 @@ const handler = baseApi({ auth: false })
         }
 
         // Check if user has SAML metadata (for future SAML users)
-        const hasSaml = authProviders?.some(provider => provider.strategy === 'saml');
+        const hasSaml = authProviders?.some(provider => provider.strategy === AuthStrategy.SAML);
 
         if (hasSaml) {
           const idp = await identityProviderRepository.findActiveByEmailDomain(emailDomain);

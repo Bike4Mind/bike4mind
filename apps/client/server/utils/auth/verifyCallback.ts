@@ -181,8 +181,9 @@ const authenticateUser = async (
       const incomingId = oauthCredentials.id;
       // NOTE: existingProviderIndex is the FIRST entry for this strategy. If an
       // account ever holds multiple entries for one strategy with different ids,
-      // a stage-1 hit on a later entry could be mis-evaluated here. The upsert
-      // path prevents creating such duplicates today; may need further hardening.
+      // a stage-1 hit on a later entry could be mis-evaluated here. Duplicates
+      // are now collapsed on write (applyAccountLink) and on save (UserModel
+      // pre-save guard), so such rows self-heal on the next login.
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
