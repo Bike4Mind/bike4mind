@@ -322,10 +322,10 @@ const FileBrowserItemActions: FC<{
           <MenuItem
             onClick={(e: MouseEvent) => {
               e.stopPropagation();
-              // Embedded pickers override delete to remove-from-list so the file itself
-              // is never destroyed from the picker (owned files only; shared removal below
-              // is already non-destructive).
-              if (config.onDelete && !isSharedToMe) {
+              // Embedded pickers override delete to remove-from-list (for owned AND shared
+              // files) so the picker never destroys a file or drops a share; matches the
+              // bulk delete path in Content.
+              if (config.onDelete) {
                 const onDelete = config.onDelete;
                 confirm({
                   title: `Remove ${file.fileName || 'file'}`,
