@@ -31,7 +31,7 @@
 
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
-import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
+import { MEMENTO_MIN_SIMILARITY, buildMemoryContext } from '@bike4mind/common';
 import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
 import { mementoService } from '@bike4mind/services';
@@ -72,10 +72,15 @@ export interface MementosPreambleResult {
 
 const EMPTY_RESULT: MementosPreambleResult = Object.freeze({ preamble: '', mementoIds: [] as string[] });
 
-/** One preamble shape for both pipelines, so a user's memory reads identically whichever one served it. */
-const buildPreamble = (lines: string[]): string =>
-  `\n\n[KNOWN FACTS ABOUT THE USER — Use these to personalize your response when relevant. ` +
-  `Do not mention this list explicitly unless asked.]\n${lines.join('\n')}`;
+/**
+ * One preamble shape for both pipelines - and the SAME framing chat mode uses (see buildMemoryContext).
+ * Takes raw facts, not pre-decorated lines: the old format tagged each with a "% relevant" score, which
+ * is exactly the retrieval-metadata that makes the model recite its memory instead of using it.
+ */
+const buildPreamble = (facts: string[]): string => {
+  const context = buildMemoryContext(facts.map(sanitizeSummary));
+  return context ? `\n\n${context}` : '';
+};
 
 export async function getFirstIterationMementosPreamble(
   execution: MementoRetrievalExecution,
@@ -96,15 +101,12 @@ export async function getFirstIterationMementosPreamble(
         logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
         return EMPTY_RESULT;
       }
-      const lines = v2.map(
-        ({ fact, relevance }) => `  - [${Math.round(relevance * 100)}% relevant] ${sanitizeSummary(fact)}`
-      );
       logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
         executionId: execution.id,
         count: v2.length,
       });
       // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
-      return { preamble: buildPreamble(lines), mementoIds: [] };
+      return { preamble: buildPreamble(v2.map(({ fact }) => fact)), mementoIds: [] };
     }
 
     if (!execution.enableMementos) return EMPTY_RESULT;
@@ -126,16 +128,13 @@ export async function getFirstIterationMementosPreamble(
     }
 
     const mementoIds = relevantMementos.map(({ memento }) => String(memento.id));
-    const lines = relevantMementos.map(
-      ({ memento, similarity }) => `  - [${Math.round(similarity * 100)}% relevant] ${sanitizeSummary(memento.summary)}`
-    );
 
     logger.info('[Mementos] Injected mementos into first-iteration context', {
       executionId: execution.id,
       count: relevantMementos.length,
     });
 
-    return { preamble: buildPreamble(lines), mementoIds };
+    return { preamble: buildPreamble(relevantMementos.map(({ memento }) => memento.summary)), mementoIds };
   } catch (err) {
     logger.warn('[Mementos] Failed to retrieve mementos for first iteration — proceeding without preamble', {
       executionId: execution.id,

@@ -82,9 +82,13 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(options.topK).toBe(10);
     expect(options.minSimilarity).toBe(MEMENTO_MIN_SIMILARITY);
 
-    expect(preamble).toContain('[KNOWN FACTS ABOUT THE USER');
-    expect(preamble).toContain('[92% relevant] User enjoys playing chess on Saturdays');
-    expect(preamble).toContain('[81% relevant] User prefers TypeScript over JavaScript');
+    // The facts are present, framed as the assistant's own standing knowledge - NOT as a dossier with
+    // relevance scores, which is what made the model recite its memory. See buildMemoryContext.
+    expect(preamble).toContain('User enjoys playing chess on Saturdays');
+    expect(preamble).toContain('User prefers TypeScript over JavaScript');
+    expect(preamble).toContain('the way a friend who remembers would');
+    expect(preamble).not.toContain('% relevant');
+    expect(preamble).not.toContain('KNOWN FACTS ABOUT THE USER');
     expect(mementoIds).toEqual(['m1', 'm2']);
     expect(logger.info).toHaveBeenCalledWith('[Mementos] Injected mementos into first-iteration context', {
       executionId: 'exec-1',
@@ -178,7 +182,7 @@ describe('getFirstIterationMementosPreamble', () => {
     const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), makeLogger());
 
     expect(preamble).toContain('User is a marine biologist');
-    expect(preamble).toContain('61% relevant');
+    expect(preamble).not.toContain('% relevant'); // framed as knowledge, not a scored list
     // V2 beliefs are not V1 mementos and carry no memento id to track.
     expect(mementoIds).toEqual([]);
     expect(getRelevantMementosMock).not.toHaveBeenCalled();

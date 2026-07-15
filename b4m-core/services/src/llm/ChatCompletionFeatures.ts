@@ -47,6 +47,7 @@ import {
   ImageModerationIncident,
   isExperimentalFeatureEnabled,
   MEMENTO_MIN_SIMILARITY,
+  buildMemoryContext,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import { getRelevantMementos } from '../mementoService';
@@ -425,7 +426,10 @@ export class MementoFeature implements ChatCompletionFeature {
       if (v2 !== null) {
         this.usedMementoIds = [];
         this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);
-        return v2.map(({ fact }) => ({ role: 'system' as const, content: `[Memory] ${fact}` }));
+        // ONE framed system block, not one note-card per fact - see buildMemoryContext. Injecting each
+        // belief as its own `[Memory] ...` message is what made the model recite its memory.
+        const context = buildMemoryContext(v2.map(({ fact }) => fact));
+        return context ? [{ role: 'system' as const, content: context }] : [];
       }
     }
 
@@ -463,14 +467,12 @@ export class MementoFeature implements ChatCompletionFeature {
     // Store memento IDs for later tracking in onComplete
     this.usedMementoIds = relevantMementos.map(({ memento }) => memento.id);
 
-    const contextMessages: IMessage[] = relevantMementos.map(({ memento, similarity }) => ({
-      role: 'system',
-      content: `[Memory - ${(similarity * 100).toFixed(0)}% relevant] ${memento.summary}`,
-    }));
-
-    this.logger.log(`• Added ${contextMessages.length} relevant memories to context\n`);
-
-    return contextMessages;
+    // ONE framed block through the shared builder - same framing as V2 and agent mode. The old format
+    // put each memento in its own system message tagged with a "% relevant" score, which is exactly the
+    // kind of retrieval-metadata that invites the model to talk about its memory instead of using it.
+    const context = buildMemoryContext(relevantMementos.map(({ memento }) => memento.summary));
+    this.logger.log(`• Added ${relevantMementos.length} relevant memories to context\n`);
+    return context ? [{ role: 'system' as const, content: context }] : [];
   }
 
   async onComplete({ quest, model }: { quest: IChatHistoryItemDocument; model: string }): Promise<void> {

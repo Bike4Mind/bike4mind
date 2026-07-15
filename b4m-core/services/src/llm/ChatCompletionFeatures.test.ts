@@ -187,8 +187,16 @@ describe('MementoFeature - Mementos V2 injection', () => {
     const messages = await call(new MementoFeature(makeCtx(recallMementosV2)));
     // The feature hands over the opt-in it already resolved, so the recall need not re-fetch the user.
     expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like', { enabled: true });
-    expect(messages.map(m => m.content)).toEqual(['[Memory] User loves sushi', '[Memory] User works in pharma']);
-    expect(messages.every(m => m.role === 'system')).toBe(true);
+
+    // ONE framed system block carrying both facts - not one `[Memory] ...` note-card per fact. That
+    // per-message format (with its `[Memory]` label) was A/B-measured to make the model recite its
+    // memory; the single knowledge-framed block scored 0% transcript-talk. See buildMemoryContext.
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('system');
+    expect(messages[0].content).toContain('User loves sushi');
+    expect(messages[0].content).toContain('User works in pharma');
+    expect(messages[0].content).not.toContain('[Memory]');
+    expect(messages[0].content).toContain('the way a friend who remembers would');
   });
 
   it('injects nothing when V2 is on but the recall is empty', async () => {
