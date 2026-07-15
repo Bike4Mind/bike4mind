@@ -11,13 +11,8 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useTranslation } from 'react-i18next';
 import { Box, CircularProgress, IconButton, Input, Stack, Tooltip, Typography, Divider } from '@mui/joy';
-import FileBrowser from '@client/app/components/FileBrowser';
-import { useGetFabFiles } from '@client/app/hooks/data/fabFiles';
-import { useUser } from '@client/app/contexts/UserContext';
-import { useSessions } from '@client/app/contexts/SessionsContext';
-import { useKnowledgeModal } from '@client/app/components/Knowledge/KnowledgeModal';
+import EmbeddedFileBrowser, { EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { useAddFilesToProject } from '@client/app/hooks/data/projects';
-import { userCanDeleteDoc, userCanShareDoc, userCanUpdateDoc } from '@client/app/utils/userPermission';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
 import { getErrorMessage } from '@client/app/utils/error';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
@@ -35,16 +30,12 @@ const ProjectFiles: FC<{
   const [sortField, setSortField] = useState<'fileName' | 'createdAt'>('createdAt');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const { t } = useTranslation();
-  const { data: fabFilesData, fetchNextPage } = useGetFabFiles('');
-  const { currentUser } = useUser();
-  const { currentSession } = useSessions();
-  const { setOpen: setKnowledgeModalOpen, setSelectedFabFileId, setViewOnly } = useKnowledgeModal();
   const { mutate: addFilesToProject } = useAddFilesToProject();
   const projectFileIds = useMemo(() => new Set(files.map(f => f.id)), [files]);
   const [isDragging, setIsDragging] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const dragCounter = useRef(0);
-  const fileBrowserRef = useRef<{ handleOpen: () => void }>(null);
+  const fileBrowserRef = useRef<EmbeddedFileBrowserHandle>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const debouncedSearch = useMemo(
@@ -87,29 +78,6 @@ const ProjectFiles: FC<{
     [projectId, removeFiles]
   );
 
-  const handleFabFileClick = useCallback(
-    (file: IFabFileDocument) => {
-      setSelectedFabFileId(file.id);
-      setViewOnly(false);
-      setKnowledgeModalOpen(true);
-    },
-    [setSelectedFabFileId, setKnowledgeModalOpen, setViewOnly]
-  );
-
-  const handleFabFileDelete = useCallback(
-    async (fileId: string, callback: (err?: Error) => void) => {
-      try {
-        await removeFiles({ projectId, fileIds: [fileId] });
-        callback();
-        return true;
-      } catch (error) {
-        callback(error as Error);
-        return false;
-      }
-    },
-    [removeFiles, projectId]
-  );
-
   const handleBulkAdd = useCallback(
     (files: IFabFileDocument[]) => {
       const fileIds = files.map(file => file.id);
@@ -128,14 +96,6 @@ const ProjectFiles: FC<{
       }
     }
   }, [onRefresh]);
-
-  const handleRefresh = useCallback(async () => {
-    await fetchNextPage({ cancelRefetch: true });
-  }, [fetchNextPage]);
-
-  const handleScrollEnd = useCallback(() => {
-    fetchNextPage();
-  }, [fetchNextPage]);
 
   const handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -203,9 +163,6 @@ const ProjectFiles: FC<{
       e.target.value = '';
     }
   };
-
-  const fabFiles = fabFilesData?.pages?.flatMap(page => page.data) || [];
-  const totalFiles = fabFilesData?.pages?.[0]?.total || 0;
 
   return (
     <>
@@ -481,23 +438,12 @@ const ProjectFiles: FC<{
         )}
       </Stack>
 
-      <FileBrowser
+      <EmbeddedFileBrowser
         ref={fileBrowserRef}
-        fabFiles={fabFiles}
-        totalFiles={totalFiles}
-        currentSession={currentSession}
-        isFetching={isFetching}
-        onFabFileClick={handleFabFileClick}
-        openKnowledgeModal={handleFabFileClick}
-        onFabFileDelete={handleFabFileDelete}
-        canUpdate={file => userCanUpdateDoc(currentUser, file)}
-        canDelete={file => userCanDeleteDoc(currentUser, file)}
-        canShare={file => userCanShareDoc(currentUser, file)}
-        onBulkAdd={handleBulkAdd}
-        onRefresh={handleRefresh}
-        onScrollEnd={handleScrollEnd}
-        hideButton={true}
+        onAdd={handleBulkAdd}
+        onDelete={handleRemoveFile}
         addedFileIds={projectFileIds}
+        addButtonLabelKey="file_browser.add_files_to_project"
       />
     </>
   );
