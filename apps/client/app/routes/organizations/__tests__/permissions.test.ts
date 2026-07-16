@@ -125,4 +125,49 @@ describe('Organization Permissions', () => {
       expect(canManageOrg(permissions)).toBe(true);
     });
   });
+
+  describe('canViewUsage Helper', () => {
+    // Mirrors the canViewUsage memo in $id.tsx, which intentionally does NOT use
+    // the permission set: it must match the server gate (verifyOrgAccess) exactly
+    // - admin, org owner, or team manager - so the Usage tab never shows to
+    // someone the API would 404. Kept in sync with orgAccess.ts::verifyOrgAccess.
+    const canViewUsage = (
+      currentUser: { id: string; isAdmin?: boolean } | null,
+      organization: { userId: string; managerId?: string | null } | null
+    ): boolean => {
+      if (!currentUser || !organization) return false;
+      if (currentUser.isAdmin) return true;
+      if (currentUser.id === organization.userId) return true;
+      return organization.managerId === currentUser.id;
+    };
+
+    const org = { userId: 'owner123', managerId: 'manager456' };
+
+    it('allows the org owner', () => {
+      expect(canViewUsage({ id: 'owner123' }, org)).toBe(true);
+    });
+
+    it('allows the team manager', () => {
+      expect(canViewUsage({ id: 'manager456' }, org)).toBe(true);
+    });
+
+    it('allows a platform admin who is neither owner nor manager', () => {
+      expect(canViewUsage({ id: 'someoneelse', isAdmin: true }, org)).toBe(true);
+    });
+
+    it('denies a stranger', () => {
+      expect(canViewUsage({ id: 'stranger999' }, org)).toBe(false);
+    });
+
+    it('denies a plain member with manage permissions but no owner/manager role', () => {
+      // A member can hold share/update (canManageOrg true) yet not be owner/manager;
+      // verifyOrgAccess would 404 them, so the Usage tab must stay hidden.
+      expect(canViewUsage({ id: 'member456' }, { userId: 'owner123', managerId: null })).toBe(false);
+    });
+
+    it('returns false when user or organization is missing', () => {
+      expect(canViewUsage(null, org)).toBe(false);
+      expect(canViewUsage({ id: 'owner123' }, null)).toBe(false);
+    });
+  });
 });

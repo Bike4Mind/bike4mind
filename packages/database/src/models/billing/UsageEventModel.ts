@@ -355,7 +355,8 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
   }
 
   async sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean> {
-    // Existence-only probe; the { sessionId, createdAt } index covers the match.
+    // Existence-only probe; the { sessionId, createdAt } index bounds the scan to
+    // the session's events (ownerId/ownerType are then matched in memory).
     const doc = await this.model.exists({ sessionId, ownerId, ownerType });
     return doc !== null;
   }
