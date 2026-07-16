@@ -15,11 +15,17 @@ function retrySeconds(expiresAt: Date): number {
 
 /**
  * Per-session rate limit for the embed chat surface, keyed on the minted session
- * token's `sessionId` - a distinct namespace from `api-key-rate-limit:`, so it
- * bounds a single browser session on top of (not instead of) the per-key limit.
- * One abusive visitor therefore cannot drain the whole key's budget. Fixed-window
- * minute + day counters on the shared atomic cache (coherent across Lambda/Fargate
- * containers), mirroring checkApiKeyRateLimit's semantics on a separate key space.
+ * token's `sessionId` - a distinct namespace from `api-key-rate-limit:`. It bounds
+ * one browser session to whatever `limits` the caller passes, on a fixed-window
+ * minute+day counter coherent across Lambda/Fargate containers (mirrors
+ * checkApiKeyRateLimit's semantics on a separate key space).
+ *
+ * What it buys depends on the limit the caller supplies: passing a limit TIGHTER
+ * than the per-key limit is what would stop a single visitor from consuming the
+ * whole key's budget - that ratio is an abuse-control tuning decision the caller
+ * owns. The current caller passes the key's own limit, so today this is per-session
+ * attribution/bookkeeping layered on the per-key cap, not an additional throttle;
+ * the per-key + per-IP limits are the real aggregate backstop.
  *
  * Only the token path carries a sessionId; the raw-key (server-to-server) path
  * relies on the per-key + per-IP limits instead.
