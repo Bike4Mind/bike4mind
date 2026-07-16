@@ -1134,115 +1134,6 @@ export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt
   }
 }
 
-export function includeArtifactSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
-  const artifactTriggerKeywords = [
-    'component',
-    'react',
-    'todo',
-    'calculator',
-    'dashboard',
-    'interface',
-    'interactive',
-    'widget',
-    'app',
-    'application',
-    'develop',
-    'code',
-    'program',
-    'script',
-    'html',
-    'javascript',
-    'jsx',
-    'tsx',
-    'demo',
-    'prototype',
-    'showcase',
-    // Long-form / shareable content requests: the model tends to emit a full HTML
-    // document for these, so steer it to wrap that in a text/html artifact instead of
-    // returning raw markup that renders as a wall of source in the chat.
-    'article',
-    'blog',
-    'essay',
-    'newsletter',
-    'web page',
-    'webpage',
-    'landing page',
-    'poster',
-    'brochure',
-    'flyer',
-    'infographic',
-  ];
-
-  const hasArtifactRequest = artifactTriggerKeywords.some(keyword =>
-    userPrompt.toLowerCase().includes(keyword.toLowerCase())
-  );
-
-  if (hasArtifactRequest) {
-    const artifactSystemMessage: IMessage = {
-      role: 'system',
-      content: `When creating interactive content like React components, HTML pages, or SVG graphics, use Claude-style artifact syntax to make them displayable and executable:
-
-For React components, wrap your code like this:
-<artifact identifier="unique-id" type="application/vnd.ant.react" title="Component Title">
-// Your React component code here
-import React, { useState } from 'react';
-
-function MyComponent() {
-  // Component logic
-  return (
-    <div>
-      // JSX content
-    </div>
-  );
-}
-
-export default MyComponent;
-</artifact>
-
-For HTML pages:
-<artifact identifier="unique-id" type="text/html" title="Page Title">
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Title</title>
-  <style>
-    /* CSS styles */
-  </style>
-</head>
-<body>
-  <!-- HTML content -->
-  <script>
-    // JavaScript code
-  </script>
-</body>
-</html>
-</artifact>
-
-For SVG graphics:
-<artifact identifier="unique-id" type="image/svg+xml" title="SVG Title">
-<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
-  <!-- SVG content -->
-</svg>
-</artifact>
-
-Rules:
-1. Use descriptive, kebab-case identifiers
-2. Keep components self-contained with no external dependencies except React hooks
-3. For React: Only use core React hooks (useState, useEffect, useMemo, useCallback)
-4. Use Tailwind CSS classes only (no custom CSS or arbitrary values)
-5. Make components functional and interactive
-6. Always export default for React components
-7. Provide clear, descriptive titles
-
-This artifact syntax makes your creations immediately executable and previewable for users.`,
-    };
-
-    return [artifactSystemMessage, ...messages];
-  }
-
-  return messages;
-}
-
 // Priority order for message retention (lower number = higher priority)
 const MESSAGE_PRIORITY = {
   system: 0, // Keep all system prompts
@@ -1466,10 +1357,10 @@ export async function buildAndSortMessages(
   }
 
   // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the
-  // caller injects (see ChatCompletionProcess). The legacy hardcoded includeArtifactSystemMessage
-  // CONFLICTED with it - it demonstrated `import React, { useState }`, mandated "Tailwind CSS classes
-  // only", and said nothing about publishing - so the model followed it and produced non-publishable
-  // artifacts. Intentionally NOT injected here so ArtifactEmissionPrompt is the single source of truth.
+  // caller injects (see ChatCompletionProcess). A legacy hardcoded artifact prompt used to be injected
+  // here too and CONFLICTED with it - it demonstrated `import React, { useState }`, mandated "Tailwind
+  // CSS classes only", and said nothing about publishing - so the model followed it and produced
+  // non-publishable artifacts. It has been removed so ArtifactEmissionPrompt is the single source of truth.
 
   for (const message of fabMessages.filter(message => message.role === 'system')) {
     const content = (message.content as string) || '';
