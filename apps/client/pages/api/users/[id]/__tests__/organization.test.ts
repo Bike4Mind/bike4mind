@@ -24,7 +24,19 @@ vi.mock('@server/middlewares/baseApi', () => {
 
 const findById = vi.hoisted(() =>
   vi.fn(() => ({
-    populate: () => ({ select: () => Promise.resolve({ organizationId: { id: 'org1', name: 'Acme' } }) }),
+    populate: () => ({
+      select: () =>
+        Promise.resolve({
+          // Org owned by someone else -> the profile owner is a member, not owner.
+          organizationId: {
+            id: 'org1',
+            userId: 'someoneElse',
+            name: 'Acme',
+            billingContact: 'billing@acme.com',
+            stripeCustomerId: 'cus_SECRET',
+          },
+        }),
+    }),
   }))
 );
 vi.mock('@bike4mind/database', () => ({ User: { findById } }));
@@ -51,6 +63,16 @@ describe('GET /api/users/[id]/organization - ownership gate', () => {
     await mockRefs.getHandler!(req, res);
     expect(findById).toHaveBeenCalledWith('me');
     expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('strips billing identifiers when the caller is a member (not owner) of their org', async () => {
+    const { req, res } = mocks({ id: 'me', isAdmin: false }, 'me');
+    await mockRefs.getHandler!(req, res);
+    const body = res._getJSONData();
+    expect(body.name).toBe('Acme');
+    expect('stripeCustomerId' in body).toBe(false);
+    expect('billingContact' in body).toBe(false);
+    expect(JSON.stringify(body)).not.toContain('cus_SECRET');
   });
 
   it("allows an admin to read any user's org", async () => {

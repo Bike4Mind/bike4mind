@@ -1,4 +1,4 @@
-import { REACT_BLESSED_SCRIPT_PATHS } from '@bike4mind/common';
+import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
 import { PUBLISH_HOST } from './validateBundle';
 
@@ -19,14 +19,13 @@ import { PUBLISH_HOST } from './validateBundle';
  */
 
 /**
- * Dependencies whose PUBLISH story exists as of this PR. `react` is the base runtime
- * (react-dom + prop-types load alongside it). The optional in-app deps (recharts, lucide-react,
- * d3, lodash, mathjs, papaparse, xlsx) render in-app but are not yet self-hosted + blessed for
- * publish - they are added in a follow-up PR. Importing a dep that is in-app-only (or unknown)
+ * Dependencies whose PUBLISH story exists. `react` is the base runtime (react-dom + prop-types
+ * load alongside it); the optional deps (recharts, lucide-react, d3, lodash, mathjs, papaparse,
+ * xlsx) are the self-hosted + blessed UMDs in PUBLISH_REACT_DEP_SCRIPTS. Importing anything else
  * fails with UnsupportedReactDependencyError so the publish is rejected cleanly rather than
  * producing a broken page.
  */
-export const PUBLISH_SUPPORTED_DEPENDENCIES: readonly string[] = ['react'];
+export const PUBLISH_SUPPORTED_DEPENDENCIES: readonly string[] = ['react', ...Object.keys(PUBLISH_REACT_DEP_SCRIPTS)];
 
 /** Thrown when the artifact imports a dependency that is not yet publishable. */
 export class UnsupportedReactDependencyError extends Error {
@@ -239,33 +238,82 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;');
 }
 
-/** Blessed React runtime `<script src>` tags. Absolute app-host form when SERVER_DOMAIN is set
- *  (so they load from the app origin even on the isolated `*.usercontent.app` serve origin);
- *  relative otherwise (local dev serves them same-origin). Both forms pass validateBundle. */
+/** A blessed `<script src>` tag. Absolute app-host form when SERVER_DOMAIN is set (so it loads
+ *  from the app origin even on the isolated `*.usercontent.app` serve origin); relative otherwise
+ *  (local dev serves them same-origin). Both forms pass validateBundle. */
+function blessedScriptTag(path: string): string {
+  const src = PUBLISH_HOST ? `https://${PUBLISH_HOST}${path}` : path;
+  return `<script src="${src}"></script>`;
+}
+
+/** Blessed React runtime `<script src>` tags (react + react-dom + prop-types). */
 function reactRuntimeScriptTags(): string {
-  return REACT_BLESSED_SCRIPT_PATHS.map(path => {
-    const src = PUBLISH_HOST ? `https://${PUBLISH_HOST}${path}` : path;
-    return `<script src="${src}"></script>`;
-  }).join('\n');
+  return REACT_BLESSED_SCRIPT_PATHS.map(blessedScriptTag).join('\n');
 }
 
 /**
- * Assemble the final inert index.html: blessed React runtime scripts + a single inline bootstrap
- * that defines the hook/require globals, runs the transpiled component, and mounts it. No eval,
- * no external non-blessed scripts.
+ * Builds `window.LucideReactWrapper` from the blessed `lucide` UMD (global `lucide`), embedded in
+ * the bootstrap when a bundle imports `lucide-react`. Kept functionally equivalent to the in-app
+ * sandbox shim (setupLucideWrapper in apps/client/pages/api/react-artifact-sandbox.ts) so a
+ * published lucide artifact renders identically to its chat preview - MUST stay in sync with it.
+ * Contains no closing-script-tag sequence, so it is safe inside the inline bootstrap.
  */
-export function assembleReactBundleHtml(input: { title: string; transpiledCode: string }): string {
+const LUCIDE_WRAPPER_SETUP = `function setupLucideWrapper(){
+    if(window.LucideReactWrapper)return;
+    var toKebabCase=function(str){return str.replace(/([a-z0-9])([A-Z])/g,'$1-$2').toLowerCase();};
+    window.LucideReactWrapper=new Proxy({},{get:function(target,iconName){
+      return function(props){
+        props=props||{};
+        var size=props.size||24,color=props.color||'currentColor',strokeWidth=props.strokeWidth||2,className=props.className||'';
+        var rest=Object.assign({},props);delete rest.size;delete rest.color;delete rest.strokeWidth;delete rest.className;
+        var kebab=toKebabCase(iconName);
+        var node=(window.lucide&&lucide.icons&&(lucide.icons[iconName]||lucide.icons[kebab]))||null;
+        var children=Array.isArray(node)?node.map(function(entry,i){return React.createElement(entry[0],Object.assign({key:i},entry[1]));}):null;
+        return React.createElement('svg',Object.assign({xmlns:'http://www.w3.org/2000/svg',width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color,strokeWidth:strokeWidth,strokeLinecap:'round',strokeLinejoin:'round',className:className},rest),children);
+      };
+    }});
+  }
+  setupLucideWrapper();`;
+
+/**
+ * Assemble the final inert index.html: blessed React runtime scripts + any blessed optional-dep
+ * UMDs the artifact imports + a single inline bootstrap that defines the hook/require globals,
+ * runs the transpiled component, and mounts it. No eval, no external non-blessed scripts.
+ *
+ * `dependencies` are the optional module specifiers the artifact imports (react excluded); each
+ * must be a key of PUBLISH_REACT_DEP_SCRIPTS (buildReactArtifactBundle guarantees this via
+ * assertPublishableDependencies). Dep UMDs load AFTER the React runtime because they externalize
+ * React/ReactDOM/PropTypes (e.g. recharts) and would throw at init otherwise.
+ */
+export function assembleReactBundleHtml(input: {
+  title: string;
+  transpiledCode: string;
+  dependencies?: readonly string[];
+}): string {
+  // hasOwnProperty (not `in`): `in` walks the prototype chain, so a module named `constructor`,
+  // `toString`, etc. would falsely match and yield an undefined path/global.
+  const deps = (input.dependencies ?? []).filter(d =>
+    Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, d)
+  );
   // A literal `</script>` inside the transpiled code (e.g. in a string literal) would close the
   // inline script early; escape it. In a JS string `<\/script>` is identical to `</script>`.
   const safeCode = input.transpiledCode.replace(/<\/(script)/gi, '<\\/$1');
   const title = escapeHtml(input.title || 'React artifact');
+
+  const depScriptTags = deps.map(d => blessedScriptTag(PUBLISH_REACT_DEP_SCRIPTS[d].path)).join('\n');
+  // lucide-react's require() target (LucideReactWrapper) is built from the loaded `lucide` UMD,
+  // so the shim must run before moduleMap references window.LucideReactWrapper.
+  const lucideSetup = deps.includes('lucide-react') ? LUCIDE_WRAPPER_SETUP : '';
+  const moduleMapEntries = deps
+    .map(d => `,${JSON.stringify(d)}:window.${PUBLISH_REACT_DEP_SCRIPTS[d].global}`)
+    .join('');
 
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 <style>html,body{margin:0;padding:0}*{box-sizing:border-box}#root{min-height:100vh}.b4m-artifact-error{color:#b91c1c;background:#fee2e2;padding:12px;border-radius:4px;border-left:4px solid #b91c1c;font-family:monospace;font-size:12px;white-space:pre-wrap}</style>
-${reactRuntimeScriptTags()}
+${reactRuntimeScriptTags()}${depScriptTags ? '\n' + depScriptTags : ''}
 </head><body>
 <div id="root"></div>
 <script>
@@ -275,8 +323,9 @@ ${reactRuntimeScriptTags()}
   try{
     var React=window.React,ReactDOM=window.ReactDOM;
     ${HOOK_GLOBALS}
-    var moduleMap={'react':React};
-    var require=function(m){if(moduleMap[m])return moduleMap[m];throw new Error('Module "'+m+'" is not available');};
+    ${lucideSetup}
+    var moduleMap={'react':React${moduleMapEntries}};
+    var require=function(m){if(Object.prototype.hasOwnProperty.call(moduleMap,m))return moduleMap[m];throw new Error('Module "'+m+'" is not available');};
     ${safeCode}
     var __c=(typeof __DEFAULT_EXPORT__!=='undefined')?__DEFAULT_EXPORT__:null;
     if(!__c){throw new Error('No default-exported component found');}
@@ -303,6 +352,9 @@ export async function buildReactArtifactBundle(input: {
     );
   }
   assertPublishableDependencies(input.source);
+  const dependencies = extractImportedModules(input.source).filter(m =>
+    Object.prototype.hasOwnProperty.call(PUBLISH_REACT_DEP_SCRIPTS, m)
+  );
   const transpiledCode = await transpileReactSource(input.source);
-  return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode }) };
+  return { indexHtml: assembleReactBundleHtml({ title: input.title, transpiledCode, dependencies }) };
 }

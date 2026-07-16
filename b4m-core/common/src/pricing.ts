@@ -31,6 +31,10 @@ const PRICE_MARGIN = envNumber(
   DEFAULT_PRICE_MARGIN
 );
 
+/** The resolved markup multiple (env override or default). Exported for
+ * read-side displays that need the break-even boundary (target / margin). */
+export const getPriceMargin = (): number => PRICE_MARGIN;
+
 /**
  * What a credit sells for. Every purchase route (credit packages and
  * subscriptions) grants credits at this same uniform rate, so every buyer

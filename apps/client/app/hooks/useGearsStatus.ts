@@ -10,7 +10,7 @@ import { api } from '@client/app/contexts/ApiContext';
 export type GearKind = 'destination' | 'skill';
 
 export type GearKey =
-  // destinations (earn a sidenav slot - except 'files', which stays Gears-page-only)
+  // destinations (earn a sidenav slot)
   | 'projects'
   | 'agents'
   | 'datalakes'

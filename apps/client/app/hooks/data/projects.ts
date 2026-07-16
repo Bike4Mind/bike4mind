@@ -368,25 +368,30 @@ export const useToggleSystemPrompt = (callbacks?: { onSuccess?: () => void; onEr
   });
 };
 
-export const useRemoveSystemPrompt = (callbacks?: { onSuccess?: () => void; onError?: () => void }) => {
+export const useRemoveSystemPromptsFromProject = (callbacks?: { onSuccess?: () => void; onError?: () => void }) => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (params: { projectId: string; fileId: string }) => {
-      const { projectId, fileId } = params;
+    mutationFn: async (params: { projectId: string; fileIds: string[] }) => {
+      const { projectId, fileIds } = params;
       const response = await api.delete<IProjectDocument>(`/api/projects/${projectId}/systemPrompts`, {
-        data: { fileId },
+        data: { fileIds },
       });
       return response.data;
     },
-    onSuccess: (project: IProjectDocument) => {
+    onSuccess: (project: IProjectDocument, { fileIds }) => {
       updateAllQueryData(queryClient, 'projects', 'write', project);
       queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
-      toast.success('System prompt removed successfully');
+      // Same hook serves the bulk picker and the single-row kebab, so pluralize by count.
+      toast.success(`System prompt${fileIds.length === 1 ? '' : 's'} removed successfully`);
       callbacks?.onSuccess?.();
     },
-    onError: () => {
-      toast.error('Failed to remove system prompt');
+    onError: e => {
+      if (isAxiosError(e)) {
+        toast.error(e.response?.data?.error ?? 'Failed to remove system prompts');
+      } else {
+        toast.error('Failed to remove system prompts');
+      }
       callbacks?.onError?.();
     },
   });

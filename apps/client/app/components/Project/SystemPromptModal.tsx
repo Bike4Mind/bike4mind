@@ -23,7 +23,7 @@ import KnowledgeDragDropInput from '../Knowledge/DragDropInput';
 import {
   useAddSystemPromptsToProject,
   useToggleSystemPrompt,
-  useRemoveSystemPrompt,
+  useRemoveSystemPromptsFromProject,
 } from '@client/app/hooks/data/projects';
 import { useGetFabFile } from '@client/app/hooks/data/fabFiles';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
@@ -51,7 +51,7 @@ interface ProjectSystemPromptsModalProps {
 const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project, children }) => {
   const [open, setOpen] = useState(false);
   const { mutate: addSystemPrompts, isPending } = useAddSystemPromptsToProject();
-  const { mutateAsync: removeSystemPrompt } = useRemoveSystemPrompt();
+  const { mutateAsync: removeSystemPrompts } = useRemoveSystemPromptsFromProject();
   const fileBrowserRef = useRef<EmbeddedFileBrowserHandle>(null);
 
   const handleBulkAdd = (files: IFabFileDocument[]) => {
@@ -63,7 +63,7 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
   };
 
   const handleRemovePrompt = (fileIds: string[]) => {
-    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
+    removeSystemPrompts({ projectId: project.id, fileIds });
   };
 
   const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
@@ -143,7 +143,7 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
 // Tab panel variant
 export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) => {
   const { mutate: addSystemPrompts, isPending } = useAddSystemPromptsToProject();
-  const { mutateAsync: removeSystemPrompt } = useRemoveSystemPrompt();
+  const { mutateAsync: removeSystemPrompts } = useRemoveSystemPromptsFromProject();
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const fileBrowserRef = useRef<EmbeddedFileBrowserHandle>(null);
@@ -186,7 +186,7 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
   };
 
   const handleRemovePrompt = (fileIds: string[]) => {
-    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
+    removeSystemPrompts({ projectId: project.id, fileIds });
   };
 
   const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
@@ -328,7 +328,7 @@ interface SystemPromptItemProps {
 
 const SystemPromptItem: FC<SystemPromptItemProps> = ({ projectId, systemPrompt }) => {
   const { mutate: toggleSystemPrompt } = useToggleSystemPrompt();
-  const { mutateAsync: removeSystemPrompt } = useRemoveSystemPrompt();
+  const { mutateAsync: removeSystemPrompts } = useRemoveSystemPromptsFromProject();
   const { data: file, isLoading } = useGetFabFile(systemPrompt.fileId);
   const confirm = useConfirmation();
   const { setOpen, setSelectedFabFileId, setViewOnly } = useKnowledgeModal();
@@ -465,9 +465,9 @@ const SystemPromptItem: FC<SystemPromptItemProps> = ({ projectId, systemPrompt }
                   title: 'Delete System Prompt',
                   description: 'Are you sure you want to delete this system prompt?',
                   onOk: async () => {
-                    await removeSystemPrompt({
+                    await removeSystemPrompts({
                       projectId,
-                      fileId: systemPrompt.fileId,
+                      fileIds: [systemPrompt.fileId],
                     });
                   },
                 });

@@ -1,7 +1,7 @@
 import { organizationService } from '@bike4mind/services';
 import { baseApi } from '@server/middlewares/baseApi';
 import { organizationRepository } from '@bike4mind/database/infra';
-import { OrganizationEvents } from '@bike4mind/common';
+import { OrganizationEvents, toSafeOrganization } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
 
 const handler = baseApi().delete(async (req, res) => {
@@ -23,7 +23,7 @@ const handler = baseApi().delete(async (req, res) => {
     { ability: req.ability }
   );
 
-  return res.json(organization);
+  return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));
 });
 
 export const config = {
