@@ -1,6 +1,8 @@
 import { FC, useMemo } from 'react';
 import { Chip, Tooltip } from '@mui/joy';
-import { estimateImageCredits } from '@bike4mind/services';
+// Lean subpath, NOT the '@bike4mind/services' barrel: the barrel pulls server-only
+// modules into the browser bundle and breaks the build.
+import { estimateImageCredits } from '@bike4mind/services/imageCost';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useShallow } from 'zustand/react/shallow';
 import { useModelInfo } from '../../../hooks/data/useModelInfo';
