@@ -129,13 +129,14 @@ export const BATCH_NON_TERMINAL_STATUSES: BatchStatus[] = ['preparing', 'uploadi
 export const BATCH_TERMINAL_STATUSES: BatchStatus[] = ['completed', 'completed_with_errors', 'failed', 'cancelled'];
 
 export type BatchStatus =
-  | 'preparing'
-  | 'uploading'
-  | 'processing'
-  | 'completed'
-  | 'completed_with_errors'
-  | 'failed'
-  | 'cancelled';
+  'preparing' | 'uploading' | 'processing' | 'completed' | 'completed_with_errors' | 'failed' | 'cancelled';
+
+/**
+ * Why a batch reached a terminal status, when that isn't the normal counter-driven
+ * completion. Absent on a normally-finalized batch; 'reconciler' marks one the stuck-batch
+ * reconciler force-terminated (so a forced terminal is distinguishable in observability).
+ */
+export type BatchCompletionReason = 'reconciler';
 
 export interface IDataLakeBatchFile {
   fabFileId: string;
@@ -175,6 +176,9 @@ export interface IDataLakeBatch {
   // Timing
   startedAt?: Date;
   completedAt?: Date;
+
+  /** Set only when a terminal status was reached by something other than normal completion (e.g. 'reconciler'). */
+  completionReason?: BatchCompletionReason;
 }
 
 export interface IDataLakeBatchDocument extends IDataLakeBatch, IMongoDocument {}
@@ -205,7 +209,8 @@ export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatch
    */
   markTerminalIfActive(
     batchId: string,
-    status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>
+    status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>,
+    completionReason?: BatchCompletionReason
   ): Promise<IDataLakeBatchDocument | null>;
 }
 

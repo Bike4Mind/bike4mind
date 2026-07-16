@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import type { AccessContext, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
-import { dataLakeRepository, DataLakeModel } from './DataLakeModel';
+import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
 import { setupMongoTest } from '../../__test__/utils';
 
 const baseLake = (overrides: Partial<IDataLake> & Pick<IDataLake, 'slug'>): Omit<IDataLake, 'id'> =>
@@ -294,5 +294,25 @@ describe('DataLakeRepository — slug is unique per org', () => {
         baseLake({ slug: 'shared', organizationId: 'orgB', datalakeTag: 'datalake:orgB:shared' })
       )
     ).resolves.toBeDefined();
+  });
+});
+
+describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', () => {
+  setupMongoTest();
+
+  const activeBatch = () => dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1' });
+
+  it('persists completionReason when the reconciler forces a terminal transition', async () => {
+    const batch = await activeBatch();
+    const forced = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
+    expect(forced?.status).toBe('completed_with_errors');
+    expect(forced?.completionReason).toBe('reconciler');
+  });
+
+  it('leaves completionReason unset on a normal (reasonless) terminal transition', async () => {
+    const batch = await activeBatch();
+    const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
+    expect(finalized?.status).toBe('completed');
+    expect(finalized?.completionReason).toBeUndefined();
   });
 });
