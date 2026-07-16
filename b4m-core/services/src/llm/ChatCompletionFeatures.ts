@@ -58,6 +58,7 @@ import {
   postMessageToSlack,
   QuestMaster,
 } from '@bike4mind/utils';
+import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
@@ -1175,12 +1176,20 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
   private retrievalTags: string[];
   /** How the injected context instructs citation: readable name (default) or [N] index. */
   private citationStyle: 'named' | 'indexed';
+  /** Generic retrieval exclusion applied to the candidate file listing (see RetrievalExclusionOptions). */
+  private retrievalFilter: RetrievalExclusionOptions;
 
-  constructor(chatCompletion: ChatCompletionContext, retrievalTags?: string[], citationStyle?: 'named' | 'indexed') {
+  constructor(
+    chatCompletion: ChatCompletionContext,
+    retrievalTags?: string[],
+    citationStyle?: 'named' | 'indexed',
+    retrievalFilter?: RetrievalExclusionOptions
+  ) {
     this.chatCompletion = chatCompletion;
     this.logger = chatCompletion.logger;
     this.retrievalTags = Array.isArray(retrievalTags) ? retrievalTags : [];
     this.citationStyle = citationStyle === 'indexed' ? 'indexed' : 'named';
+    this.retrievalFilter = retrievalFilter ?? {};
   }
 
   async beforeDataGathering(): Promise<{ shouldContinue: boolean }> {
@@ -1246,10 +1255,15 @@ export class KnowledgeRetrievalFeature implements ChatCompletionFeature {
           dataLakeTagPrefixes, // static-registry (open) prefixes
           scopedTagPrefixes, // dynamic-lake prefixes — owner/org-scoped
           excludeContent: true, // metadata only; chunk text + vectors fetched below
+          // Retrieval exclusion (opt-in): keep excluded/unvectorized files out of forced grounding
+          // so this arm agrees with the surface's document-listing predicate. No-op when unset.
+          ...this.retrievalFilter,
         }
       );
 
-      const files = fileResults.data;
+      // Authoritative post-filter: the DB clause above is a best-effort pre-filter; re-apply the
+      // exclusion in memory so correctness never depends on the DB regex engine or fileNameLower.
+      const files = filterRetrievalExcluded(fileResults.data, this.retrievalFilter);
       if (files.length === 0) {
         this.logger.log('🔒 Forced retrieval: no accessible data-lake files');
         return [];

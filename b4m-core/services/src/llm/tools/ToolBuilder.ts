@@ -13,7 +13,7 @@ import { z } from 'zod';
 import type { ServerAgentConfig } from '@bike4mind/agents';
 import { ServerAgentStore } from '../agents/ServerAgentStore';
 import { generateMcpToolsFromCache, LlmTools } from './index';
-import { ToolDefinition } from './base/types';
+import { ToolDefinition, type ToolContext } from './base/types';
 import { validateUserCredits } from './base/utils';
 import {
   extractAndSaveEntitiesFromUserMessage,
@@ -88,6 +88,8 @@ export interface ToolBuilderConfig {
   db: IChatCompletionServiceOptions['db'];
   /** Caller's resolved entitlement keys, forwarded to the tool context (see ToolContext). */
   entitlementKeys?: string[];
+  /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
+  retrievalFilter?: ToolContext['retrievalFilter'];
   logger: Logger;
   storage: IChatCompletionServiceOptions['storage'];
   imageGenerateStorage: IChatCompletionServiceOptions['imageGenerateStorage'];
@@ -417,6 +419,7 @@ export class ToolBuilder {
         logger: this.deps.logger,
         db: this.deps.db,
         entitlementKeys: this.deps.entitlementKeys,
+        retrievalFilter: this.deps.retrievalFilter,
         sessionRepository: this.deps.db.sessions,
         storage: this.deps.storage,
         imageGenerateStorage: this.deps.imageGenerateStorage,

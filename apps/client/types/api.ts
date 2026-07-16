@@ -43,6 +43,8 @@ export const CreateSessionRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  retrievalExcludeFilenameMarkers: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  retrievalVectorizedOnly: z.boolean().optional(),
   temperature: z.number().optional(),
 });
 

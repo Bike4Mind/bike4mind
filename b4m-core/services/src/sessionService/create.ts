@@ -21,6 +21,10 @@ const createSessionParametersSchema = z.object({
   disableUserIntegrations: z.boolean().optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
+  // secureParameters strips unknown keys, so these MUST be declared here or a surface's
+  // retrieval-exclusion opt-in is silently dropped at create time.
+  retrievalExcludeFilenameMarkers: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  retrievalVectorizedOnly: z.boolean().optional(),
   citationStyle: z.enum(['named', 'indexed']).optional(),
   temperature: z.number().optional(),
   maxToolCalls: z.number().int().positive().optional(),

@@ -558,4 +558,85 @@ describe('buildFabFileSearchQuery', () => {
       expect(result.excludeContent).toBe(false);
     });
   });
+
+  // ── 19. Retrieval exclusion (generic marker + vectorized filter) ──────
+  // The tutor RAG bug was retrieval disagreeing with the document-listing predicate;
+  // these lock the query-builder half. The matcher must reproduce a leading-marker,
+  // word-boundary match (NOT a bare prefix) using a DocumentDB-safe regex (no `\b`),
+  // and be a byte-identical no-op when unset.
+  describe('retrieval exclusion', () => {
+    const findMarkerClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
+      ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).find(c => 'fileNameLower' in c) as
+        { fileNameLower: { $not: RegExp } } | undefined;
+    const hasVectorizedClause = (result: ReturnType<typeof buildFabFileSearchQuery>) =>
+      ((result.filter.$and as Record<string, unknown>[] | undefined) ?? []).some(
+        c => JSON.stringify(c) === JSON.stringify({ vectorized: true })
+      );
+
+    it('adds a fileNameLower $not clause with a DocumentDB-safe regex when markers are set', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: ['MARK'] } }));
+      const clause = findMarkerClause(result);
+      expect(clause).toBeDefined();
+      const re = clause!.fileNameLower.$not;
+      expect(re).toBeInstanceOf(RegExp);
+      // Markers are lowercased at the call site (matched against the pre-lowered fileNameLower);
+      // NO `i` flag (index-safe) and NO `\b` (DocumentDB regex subset).
+      expect(re.source).toBe('^(mark)($|[^a-z0-9_])');
+      expect(re.flags).toBe('');
+    });
+
+    it('word-boundary: excludes "MARK - x.pdf" but NOT "MARKdown.pdf"', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: ['MARK'] } }));
+      const re = findMarkerClause(result)!.fileNameLower.$not;
+      // The clause is `$not re`, so a filename the regex MATCHES is the one that gets excluded.
+      expect(re.test('mark - x.pdf')).toBe(true); // excluded
+      expect(re.test('markdown.pdf')).toBe(false); // NOT excluded (word char after marker)
+    });
+
+    it('is case-insensitive via pre-lowered field (matches "mark - x")', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: ['MARK'] } }));
+      const re = findMarkerClause(result)!.fileNameLower.$not;
+      expect(re.test('mark - notes.pdf')).toBe(true);
+    });
+
+    it('escapes regex metacharacters and alternates multiple markers', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: ['MARK', 'a.b'] } }));
+      const re = findMarkerClause(result)!.fileNameLower.$not;
+      expect(re.source).toBe('^(mark|a\\.b)($|[^a-z0-9_])');
+      expect(re.test('a.b file.pdf')).toBe(true);
+      expect(re.test('axb file.pdf')).toBe(false); // '.' is literal, not wildcard
+    });
+
+    it('adds a {vectorized:true} clause when vectorizedOnly is set', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: true } }));
+      expect(hasVectorizedClause(result)).toBe(true);
+    });
+
+    // Byte-identical no-op guard: unset / empty / whitespace-only markers must not change
+    // the query at all (prevents an `^`-matches-everything blackout AND regressing all callers).
+    it('is a byte-identical no-op when markers are unset', () => {
+      const baseline = buildFabFileSearchQuery(makeParams());
+      const withUnset = buildFabFileSearchQuery(makeParams({ options: {} }));
+      expect(JSON.stringify(withUnset.filter)).toBe(JSON.stringify(baseline.filter));
+      expect(findMarkerClause(withUnset)).toBeUndefined();
+      expect(hasVectorizedClause(withUnset)).toBe(false);
+    });
+
+    it.each([[[]], [['']], [['  ']], [['', '  ']]])(
+      'is a byte-identical no-op for empty/whitespace markers %j',
+      markers => {
+        const baseline = buildFabFileSearchQuery(makeParams());
+        const result = buildFabFileSearchQuery(makeParams({ options: { excludeFilenameMarkers: markers } }));
+        expect(JSON.stringify(result.filter)).toBe(JSON.stringify(baseline.filter));
+        expect(findMarkerClause(result)).toBeUndefined();
+      }
+    );
+
+    it('does not set vectorized clause when vectorizedOnly is false/unset', () => {
+      expect(hasVectorizedClause(buildFabFileSearchQuery(makeParams({ options: { vectorizedOnly: false } })))).toBe(
+        false
+      );
+      expect(hasVectorizedClause(buildFabFileSearchQuery(makeParams()))).toBe(false);
+    });
+  });
 });

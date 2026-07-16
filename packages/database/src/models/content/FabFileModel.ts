@@ -140,6 +140,8 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
       excludeContent?: boolean;
+      excludeFilenameMarkers?: string[];
+      vectorizedOnly?: boolean;
     }
   ) {
     const query = buildFabFileSearchQuery({ userId, search, filters, pagination, order, options });

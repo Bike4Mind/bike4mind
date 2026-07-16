@@ -1,4 +1,5 @@
 import { BaseStorage } from '@bike4mind/utils';
+import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { type ICompletionBackend, type ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { Logger } from '@bike4mind/observability';
 import { GetEffectiveApiKeyAdapters } from '../../../apiKeyService';
@@ -72,6 +73,13 @@ export interface ToolContext {
    * absent means tag-only matching (the neutral default). See getDynamicDataLakeAccess.
    */
   entitlementKeys?: string[];
+  /**
+   * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
+   * resolved from the session and threaded down via the tool-builder deps (mirrors
+   * entitlementKeys). Keeps excluded/unvectorized lake files out of tutor retrieval AND citations
+   * so the tools agree with the surface's listing predicate. Absent = no exclusion (default).
+   */
+  retrievalFilter?: RetrievalExclusionOptions;
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;

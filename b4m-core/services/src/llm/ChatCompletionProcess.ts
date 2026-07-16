@@ -1026,7 +1026,9 @@ export class ChatCompletionProcess {
         session.systemPromptText,
         session.forceKnowledgeRetrieval,
         session.retrievalTags,
-        session.citationStyle
+        session.citationStyle,
+        session.retrievalExcludeFilenameMarkers,
+        session.retrievalVectorizedOnly
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -1424,6 +1426,12 @@ export class ChatCompletionProcess {
         user: this.user,
         db: this.db,
         entitlementKeys,
+        // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
+        // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
+        retrievalFilter: {
+          excludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
+          vectorizedOnly: session.retrievalVectorizedOnly,
+        },
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -4194,7 +4202,9 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     systemPromptText?: string,
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
-    citationStyle?: 'named' | 'indexed'
+    citationStyle?: 'named' | 'indexed',
+    retrievalExcludeFilenameMarkers?: string[],
+    retrievalVectorizedOnly?: boolean
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -4275,7 +4285,13 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     // products that must always answer from a curated lake with citations).
     if (forceKnowledgeRetrieval) {
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
-      this.features.set('knowledgeRetrieval', new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle));
+      this.features.set(
+        'knowledgeRetrieval',
+        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, {
+          excludeFilenameMarkers: retrievalExcludeFilenameMarkers,
+          vectorizedOnly: retrievalVectorizedOnly,
+        })
+      );
     }
 
     this.logger.log(`🛠️ Features enabled: ${Array.from(this.features.keys()).join(', ')}`);

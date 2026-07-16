@@ -513,6 +513,21 @@ export interface ISession {
    */
   retrievalTags?: string[];
   /**
+   * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
+   * marker at a WORD BOUNDARY - `^(marker)\b`, not a bare prefix) whose files are kept OUT
+   * of every tutor/RAG retrieval arm, so retrieval agrees with the surface's document-listing
+   * predicate. Host core carries no product-specific marker literals; a surface supplies them
+   * at session-create time. MUST stay in sync with that surface's listing predicate (e.g. the
+   * LibreOncology overlay's `isListableLakeDoc`). Neutral default (unset/empty) = no exclusion.
+   */
+  retrievalExcludeFilenameMarkers?: string[];
+  /**
+   * When true, only vectorized lake files are retrievable in tutor/RAG arms (unvectorized files
+   * are excluded), matching a listing predicate that hides not-yet-vectorized documents.
+   * Generic capability; neutral default (unset) = vectorized and unvectorized both retrievable.
+   */
+  retrievalVectorizedOnly?: boolean;
+  /**
    * How forced knowledge retrieval instructs the model to cite sources.
    * 'named' (default when unset) - cite by readable document name, today's behavior.
    * 'indexed' - the injected retrieval context numbers each distinct source document

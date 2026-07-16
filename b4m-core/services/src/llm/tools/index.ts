@@ -159,7 +159,7 @@ export const generateTools = (
   userId: string,
   user: import('@bike4mind/common').IUserDocument,
   logger: Logger,
-  { db }: { db: ToolContext['db'] },
+  { db, retrievalFilter }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter'] },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
@@ -192,6 +192,7 @@ export const generateTools = (
     imageProcessorLambdaName,
     allowedDirectories,
     entitlementKeys,
+    retrievalFilter,
     codeMinifier,
     availableModels,
   };
