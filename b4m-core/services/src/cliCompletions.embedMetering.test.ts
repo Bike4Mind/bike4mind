@@ -29,6 +29,7 @@ vi.mock('@bike4mind/common', async importOriginal => ({
 }));
 
 import { executeCompletion } from './cliCompletions';
+import { subtractCredits } from './creditService';
 
 function buildDb() {
   const org = { id: 'org1', currentCredits: 500, maxCreditsPerMember: null, userDetails: [] };
@@ -80,7 +81,7 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
     );
   });
 
-  it('records the org usage event even when enforceCredits is off, with creditsCharged 0', async () => {
+  it('records the org usage event even when enforceCredits is off, with creditsCharged 0 and no settlement', async () => {
     enforceCredits = false;
     const { db, usageEvents } = buildDb();
 
@@ -95,6 +96,11 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
         costUsd: 0.001,
       })
     );
+    // Metering is widened, settlement is NOT: with enforcement off, no ledger write
+    // and no credit movement happen - the event never implies a charge that occurred.
+    expect(vi.mocked(subtractCredits)).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((db.organizations as any).incrementCredits).not.toHaveBeenCalled();
   });
 
   it('records no usage event when enforceCredits is off and alwaysRecordUsage is not set (legacy behavior preserved)', async () => {

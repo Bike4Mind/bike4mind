@@ -220,4 +220,64 @@ describe('POST /api/embed/chat', () => {
     // The per-session limiter runs only on the token path, keyed on the token sessionId.
     expect(mockCheckEmbedSessionRateLimit).toHaveBeenCalledWith('sess-1', VALID_INFO.rateLimit);
   });
+
+  function postToken() {
+    return fetch(`${baseUrl}/api/embed/chat`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: 'Bearer session.jwt.token' },
+      body: JSON.stringify(CHAT),
+    });
+  }
+
+  it('rejects a session token whose bound agent/org no longer matches the live key (post-rebind replay)', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    // Key was rebound after the token was minted: the live key now points elsewhere.
+    mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, agentId: 'agent-REBOUND' });
+    const res = await postToken();
+    expect(res.status).toBe(401);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects a bad/expired session token with 401 on the chat route', async () => {
+    mockVerifyEmbedSessionToken.mockImplementation(() => {
+      throw new Error('jwt expired');
+    });
+    const res = await postToken();
+    expect(res.status).toBe(401);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 401 when the live key is revoked mid-TTL on the token path', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    mockVerifyEmbedKeyById.mockRejectedValue(new Error('Embed key is not active'));
+    const res = await postToken();
+    expect(res.status).toBe(401);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('surfaces a mid-stream failure as an SSE error frame (headers already flushed)', async () => {
+    mockExecuteCompletion.mockRejectedValue(new Error('model backend blew up'));
+    const res = await post(CHAT);
+    // Gates passed, so headers flushed with 200; the failure rides the stream, not the status.
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"error"');
+  });
+
+  it('returns a 500 JSON fallback when a pre-stream step throws (no gate handled it)', async () => {
+    mockAgentFindById.mockRejectedValue(new Error('mongo unavailable'));
+    const res = await post(CHAT);
+    expect(res.status).toBe(500);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
 });
