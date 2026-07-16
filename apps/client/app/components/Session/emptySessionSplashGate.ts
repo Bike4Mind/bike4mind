@@ -3,7 +3,7 @@ interface EmptySessionSplashGateArgs {
   hasSplash: boolean;
   /** Raw (unfiltered) quest count for the session. */
   questCount: number;
-  /** Quests query still in flight — bias to hidden so sessions with history never flash the splash. */
+  /** Quests query still in flight - bias to hidden so sessions with history never flash the splash. */
   isFetching: boolean;
   /** A message is streaming or optimistically pending (isStreaming || showOptimisticSpinner). */
   hasActiveQuest: boolean;
