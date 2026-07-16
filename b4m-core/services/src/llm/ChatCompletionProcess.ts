@@ -1771,6 +1771,23 @@ export class ChatCompletionProcess {
         throw new Error('No messages to send to OpenAI');
       }
 
+      // TEMP DIAGNOSTIC (#21 preview debugging) - REMOVE with the pre-build [ARTIFACT-DEBUG] log.
+      // Answers the one open question the pre-build log cannot: did the resolved emission prompt
+      // actually SURVIVE buildAndSortMessages into the final payload? The marker text lives only in
+      // the v2 ArtifactEmissionPrompt, so its presence proves the guidance reaches the model.
+      {
+        const systemMsgs = messages.filter(m => m.role === 'system' && typeof m.content === 'string');
+        const emissionSurvived = systemMsgs.some(m =>
+          (m.content as string).includes('NEVER suggest external services')
+        );
+        logger.info('[ARTIFACT-DEBUG-POST]', {
+          finalMessageCount: messages.length,
+          systemMessageCount: systemMsgs.length,
+          emissionSurvived,
+          maxSafeInputTokens,
+        });
+      }
+
       // Phase 2: Capture message truncation debug info
       const messageTruncationInfo = getLastBuildDebugInfo();
       logger.info(
