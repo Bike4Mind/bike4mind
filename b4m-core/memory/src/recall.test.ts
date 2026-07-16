@@ -41,6 +41,32 @@ describe('recall', () => {
     expect(out.map(r => r.belief.id)).toEqual(['quantum', 'hobby', 'pharma']);
   });
 
+  it('a cosine floor does NOT swallow an embedding-less belief that lexically matches', () => {
+    // The bug two reviewers found: with an embedding scorer AND a cosine minRelevance, a belief with
+    // no vector was scored by lexical Jaccard and then measured against the COSINE floor - which a
+    // Jaccard score never clears, so the belief vanished silently. It must instead be floored on the
+    // lexical scale and survive when it genuinely shares words with the query.
+    const embedded = belief({ id: 'embedded', fact: 'anything', embedding: [1, 0, 0] });
+    const noVector = belief({ id: 'sailing', fact: 'Enjoys sailing on weekends' }); // no embedding
+    const scorer = embeddingScorer([0, 1, 0]); // query vector orthogonal to `embedded` -> cosine 0
+
+    const out = recall([embedded, noVector], 'sailing weekends', {
+      scorer,
+      minRelevance: 0.25, // cosine floor that a Jaccard score can never reach
+    });
+
+    expect(out.map(r => r.belief.id)).toContain('sailing'); // survives on the lexical floor
+  });
+
+  it('the lexical floor still drops an embedding-less belief with no word overlap (no noise)', () => {
+    const noVector = belief({ id: 'sailing', fact: 'Enjoys sailing on weekends' });
+    const scorer = embeddingScorer([0, 1, 0]);
+
+    const out = recall([noVector], 'quantum pharmaceutical revenue', { scorer, minRelevance: 0.25 });
+
+    expect(out).toHaveLength(0); // Jaccard ~0, below the lexical floor -> not injected as noise
+  });
+
   it('limits to k results', () => {
     const out = recall([pharma, quantum, hobby], '', { k: 2 });
     expect(out).toHaveLength(2);
@@ -96,14 +122,20 @@ describe('embeddingScorer', () => {
     expect(scorer('what hue do I fancy', pharmaEmb)).toBeCloseTo(0);
   });
 
-  it('falls back to the lexical scorer for a belief carrying no embedding', () => {
+  it('falls back to the lexical scorer for a belief carrying no embedding, flagged OFF-SCALE', () => {
     const scorer = embeddingScorer([1, 0, 0]);
-    expect(scorer('sailing', noEmb)).toBeGreaterThan(0); // lexical hit, not a 0 from the missing vector
+    const s = scorer('sailing', noEmb);
+    // A lexical hit (not a 0 from the missing vector) AND marked off-scale, so recall floors it on the
+    // lexical scale, not the cosine one - the fix for the cosine-floor-swallows-Jaccard bug.
+    expect(s).toEqual({ relevance: expect.any(Number), offScale: true });
+    expect((s as { relevance: number }).relevance).toBeGreaterThan(0);
   });
 
-  it('falls back to lexical for every belief when the query embedding is unavailable', () => {
+  it('falls back to lexical for every belief when the query embedding is unavailable, off-scale', () => {
     const scorer = embeddingScorer([]);
-    expect(scorer('green color', green)).toBeGreaterThan(0);
+    const s = scorer('green color', green);
+    expect(s).toMatchObject({ offScale: true });
+    expect((s as { relevance: number }).relevance).toBeGreaterThan(0);
   });
 
   it('ranks the on-topic belief over a more-active off-topic one (the V2 ranking gate)', () => {

@@ -260,11 +260,20 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
         $set: { shredded: true },
         // The embedding goes with the fact: it is a semantic image of the same content, so leaving it
         // behind would defeat the shred (inversion could partially reconstruct what was destroyed).
+        //
+        // `salt` goes too. The commitment is sha256(salt + fact) and salt is plaintext, so keeping both
+        // after a shred lets anyone with backup access CONFIRM a guessed fact offline - and the facts
+        // here are low-entropy ("favorite color is green"), so guessing works. Salt is unused for chain
+        // verification once the fact is gone (verifyChain only recomputes the commitment when `fact` is
+        // present, which it never is post-shred), so dropping it costs nothing and closes the hole. The
+        // `commitment` stays because chainCanonical still hashes over it - but without the salt it can no
+        // longer be brute-forced.
         $unset: {
           fact: '',
           factCipher: '',
           factIv: '',
           factTag: '',
+          salt: '',
           embeddingCipher: '',
           embeddingIv: '',
           embeddingTag: '',

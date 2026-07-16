@@ -16,7 +16,20 @@ import { tokenize } from './text';
 import type { Belief } from './types';
 
 /** Relevance of a belief to a query, ideally in 0..1. Injected by the host for embedding recall. */
-export type RecallScorer = (query: string, belief: Belief) => number;
+/**
+ * A relevance score. A bare number is on the scorer's PRIMARY scale (the scale `minRelevance` is
+ * expressed in). `{ relevance, offScale: true }` signals the score came from a fallback on a DIFFERENT
+ * scale - e.g. the embedding scorer dropping to lexical Jaccard for a belief that has no vector - so
+ * recall must NOT judge it against the primary (cosine) floor. Mixing scales silently was a real bug:
+ * a 0.25 cosine floor applied to a Jaccard score (which paraphrases rarely push past 0.05) dropped
+ * every embedding-less belief, killing the very fallback that exists to keep a mixed set audible.
+ */
+export type RelevanceScore = number | { relevance: number; offScale: boolean };
+
+export type RecallScorer = (query: string, belief: Belief) => RelevanceScore;
+
+const normalizeScore = (s: RelevanceScore): { relevance: number; offScale: boolean } =>
+  typeof s === 'number' ? { relevance: s, offScale: false } : s;
 
 /**
  * Default scorer: normalized token overlap (Jaccard) between the query and the belief's fact. Pure
@@ -65,7 +78,9 @@ export function embeddingScorer(
   return (query, belief) =>
     belief.embedding?.length && queryEmbedding.length
       ? cosineSimilarity(queryEmbedding, belief.embedding)
-      : fallback(query, belief);
+      : // No usable vector: score by the fallback, but FLAG it off-scale so recall floors it on the
+        // lexical scale, not the cosine one. Otherwise the cosine floor silently drops it.
+        { relevance: normalizeScore(fallback(query, belief)).relevance, offScale: true };
 }
 
 export interface RecallOptions {
@@ -104,6 +119,13 @@ export interface RecallOptions {
    * invitation to confabulate from a memory that has nothing to do with the question.
    */
   minRelevance?: number;
+  /**
+   * Floor for OFF-SCALE scores - beliefs the scorer could only judge by the lexical fallback (no
+   * vector). `minRelevance` is a cosine and cannot be applied to a Jaccard score, so these get their
+   * own bar. Default 0.1: a genuinely word-matching belief still surfaces, pure noise (Jaccard ~0)
+   * stays out. Only relevant when a scorer returns off-scale scores (the embedding scorer's fallback).
+   */
+  lexicalMinRelevance?: number;
 }
 
 export interface RecalledBelief {
@@ -116,6 +138,8 @@ export interface RecalledBelief {
 
 const DEFAULT_K = 8;
 const DEFAULT_ACTIVATION_WEIGHT = 0.025;
+/** Bar for lexical-fallback (off-scale) scores; keeps word-matching beliefs, drops Jaccard-0 noise. */
+const DEFAULT_LEXICAL_MIN_RELEVANCE = 0.1;
 
 /**
  * Squash an unbounded ACT-R activation into 0..1 - the recall PROBABILITY of a belief with that
@@ -152,12 +176,17 @@ export function recall(beliefs: readonly Belief[], query: string, options: Recal
   const activationWeight = options.activationWeight ?? DEFAULT_ACTIVATION_WEIGHT;
   const k = options.k ?? DEFAULT_K;
   const minRelevance = options.minRelevance ?? 0;
+  const lexicalMinRelevance = options.lexicalMinRelevance ?? DEFAULT_LEXICAL_MIN_RELEVANCE;
 
-  // Score, then apply the floor on RAW relevance, then normalize over what survives - so the
-  // normalization describes the beliefs actually in contention.
+  // Score, then apply a SCALE-APPROPRIATE floor: cosine scores against `minRelevance`, lexical-fallback
+  // (off-scale) scores against `lexicalMinRelevance`. A single floor across both scales is the bug this
+  // guards against - a cosine 0.25 bar silently rejects every Jaccard score.
   const candidates = beliefs
-    .map(belief => ({ belief, relevance: scorer(query, belief), activation: belief.activation ?? 0 }))
-    .filter(c => c.relevance >= minRelevance);
+    .map(belief => {
+      const { relevance, offScale } = normalizeScore(scorer(query, belief));
+      return { belief, relevance, offScale, activation: belief.activation ?? 0 };
+    })
+    .filter(c => c.relevance >= (c.offScale ? lexicalMinRelevance : minRelevance));
 
   if (candidates.length === 0) return [];
 

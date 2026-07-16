@@ -76,7 +76,13 @@ export interface MemoryEventInput {
  * tamper-evident log.
  */
 export interface MemoryEvent extends MemoryEventInput {
-  salt: string;
+  /**
+   * Per-event random salt. Present on a live event; DROPPED on shred (alongside the fact) so a guessed
+   * low-entropy fact cannot be confirmed offline against the commitment. Optional because a shredded
+   * event legitimately has none - and it is not needed after shred: verifyChain only recomputes the
+   * commitment when the fact is present, which it never is once shredded.
+   */
+  salt?: string;
   /** Salted hash of the fact; this (not the fact) is what the chain hash binds to. */
   commitment: string;
   /** True once the plaintext `fact` has been shredded; the commitment and chain stay intact. */
@@ -129,12 +135,16 @@ export function sealEvent(prevHash: string | null, input: MemoryEventInput): Mem
 }
 
 /**
- * Shred an event's plaintext: remove `fact` while keeping the salt, commitment, hash, and links. The
+ * Shred an event's plaintext: remove `fact` AND `salt`, keeping the commitment, hash, and links. The
  * chain still verifies afterwards and the fold redacts the belief. In production the same effect
  * comes from destroying the fact's encryption key; this models it for a plaintext ledger.
  */
 export function shredEvent(event: MemoryEvent): MemoryEvent {
-  const { fact: _fact, ...rest } = event;
+  // Drop the salt with the fact. commitment = sha256(salt + fact) and salt is plaintext, so keeping
+  // both would let a guessed low-entropy fact be confirmed offline against the commitment. Salt is
+  // unused for tamper-evidence once the fact is gone (verifyChain only recomputes the commitment when
+  // the fact is present), so this is free. Mirrors markShredded on the persisted ledger.
+  const { fact: _fact, salt: _salt, ...rest } = event;
   return { ...rest, shredded: true };
 }
 
@@ -168,7 +178,10 @@ export function verifyChain(chain: readonly MemoryEvent[]): ChainVerification {
     const e = chain[i];
     if (e.prevHash !== prevHash) return { ok: false, brokenAt: i };
     if (e.hash !== sha256(chainCanonical(e, e.commitment, prevHash))) return { ok: false, brokenAt: i };
-    if (!e.shredded && e.fact !== undefined && e.commitment !== commit(e.salt, e.fact)) {
+    // Only a LIVE event (not shredded, fact present) can have its commitment recomputed - and such an
+    // event always carries its salt. A shredded event has neither fact nor salt; its commitment stands
+    // on the chain hash alone, which is the whole point of shred-safety.
+    if (!e.shredded && e.fact !== undefined && e.salt !== undefined && e.commitment !== commit(e.salt, e.fact)) {
       return { ok: false, brokenAt: i };
     }
     prevHash = e.hash;
