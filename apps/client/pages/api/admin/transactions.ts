@@ -10,6 +10,7 @@ import {
   type ILedgerRow,
 } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -40,21 +41,25 @@ const QuerySchema = z.object({
 });
 
 /**
- * Admin endpoint: one organization's credit-transaction ledger, paginated and
- * filterable (date / type / source / model). Owner-scoped to the org's pool,
- * newest first. Reads CreditTransactionModel (the signed ledger) so totals
- * reconcile with the org's currentCredits.
+ * One organization's credit-transaction ledger, paginated and filterable (date
+ * / type / source / model). Owner-scoped to the org's pool, newest first. Reads
+ * CreditTransactionModel (the signed ledger) so totals reconcile with the org's
+ * currentCredits.
  *
  * The acting member is surfaced only where the write path recorded it
  * (metadata.actingUserId - API/CLI org-billed rows); web org-billed usage does
  * not carry it, so those rows have no member.
+ *
+ * Access: platform admins (cross-org) plus the org's own owner/manager, via
+ * verifyOrgAccess - which pins non-admins to their org and 404s the rest.
  */
 const handler = baseApi().get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+  if (!req.user) {
+    throw new ForbiddenError('Authentication required');
   }
 
   const { organizationId, page = 1, limit = 25, days, type, source, model } = QuerySchema.parse(req.query);
+  await verifyOrgAccess(req.user, organizationId);
 
   const { data, total } = await creditTransactionRepository.queryLedgerPage(
     organizationId,

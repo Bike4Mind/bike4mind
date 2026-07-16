@@ -380,4 +380,36 @@ describe('UsageEventRepository', () => {
       });
     });
   });
+
+  describe('sessionBelongsToOwner', () => {
+    it('is true when the session has an event billed to the owner', async () => {
+      await record({ sessionId: 's-1', ownerId: 'org-1', ownerType: CreditHolderType.Organization });
+
+      const belongs = await usageEventRepository.sessionBelongsToOwner('s-1', 'org-1', CreditHolderType.Organization);
+      expect(belongs).toBe(true);
+    });
+
+    it('is false for a different owner id', async () => {
+      await record({ sessionId: 's-1', ownerId: 'org-1', ownerType: CreditHolderType.Organization });
+
+      const belongs = await usageEventRepository.sessionBelongsToOwner('s-1', 'org-2', CreditHolderType.Organization);
+      expect(belongs).toBe(false);
+    });
+
+    it('is false when the owner type differs (user pool vs org pool)', async () => {
+      await record({ sessionId: 's-1', ownerId: 'org-1', ownerType: CreditHolderType.User });
+
+      const belongs = await usageEventRepository.sessionBelongsToOwner('s-1', 'org-1', CreditHolderType.Organization);
+      expect(belongs).toBe(false);
+    });
+
+    it('is false for a session with no events', async () => {
+      const belongs = await usageEventRepository.sessionBelongsToOwner(
+        's-none',
+        'org-1',
+        CreditHolderType.Organization
+      );
+      expect(belongs).toBe(false);
+    });
+  });
 });

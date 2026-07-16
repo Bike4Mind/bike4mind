@@ -350,6 +350,12 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       totals: result?.totals?.[0] ?? emptyTotals,
     };
   }
+
+  async sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean> {
+    // Existence-only probe; the { sessionId, createdAt } index covers the match.
+    const doc = await this.model.exists({ sessionId, ownerId, ownerType });
+    return doc !== null;
+  }
 }
 
 export const UsageEvent =

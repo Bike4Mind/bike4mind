@@ -1,15 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { useUser } from '@client/app/contexts/UserContext';
 import { IOrgUsageDashboardResponse } from '@bike4mind/common';
 
 /**
  * One organization's AI spend summary (burn chart + member/model/feature cuts).
- * Gated to admins and to a selected org; disabled until both hold.
+ * Disabled until an org is selected. Access is enforced server-side (admins
+ * cross-org; an org's owner/manager scoped to their org), so this fires for any
+ * authenticated caller and the server 404s an org they can't see.
  */
 export const useOrgUsage = (organizationId: string | null, days: number) => {
-  const isAdmin = useUser(s => s.isAdmin);
-
   return useQuery({
     queryKey: ['org-usage', organizationId, days],
     queryFn: async () => {
@@ -18,7 +17,7 @@ export const useOrgUsage = (organizationId: string | null, days: number) => {
       });
       return data;
     },
-    enabled: isAdmin && !!organizationId,
+    enabled: !!organizationId,
     staleTime: 1000 * 60 * 5,
   });
 };

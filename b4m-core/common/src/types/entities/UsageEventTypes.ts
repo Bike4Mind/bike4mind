@@ -293,4 +293,12 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** One session's usage rolled up by quest and by model (all events for the session). */
   sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary>;
+
+  /**
+   * True if any usage event for the session was billed to (ownerId, ownerType).
+   * Sessions carry no org of their own; the billing owner lives on the usage
+   * events, so this is how a non-admin caller proves a session's spend belongs
+   * to an org they can access (session-usage detail authorization).
+   */
+  sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean>;
 }

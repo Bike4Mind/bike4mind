@@ -39,37 +39,41 @@ const formatWhen = (iso: string) =>
 type OrgOption = { id: string; name: string };
 
 /**
- * Admin transaction-ledger: an organization's paginated, filterable credit
- * ledger (date / type / source / model) with drill-down to the session that
- * generated a charge. Reads CreditTransactionModel via /api/admin/transactions.
- * Member is shown only where the write path recorded it (API/CLI org-billed rows).
+ * An organization's paginated, filterable credit ledger (date / type / source /
+ * model) with drill-down to the session that generated a charge. Reads
+ * CreditTransactionModel via /api/admin/transactions. Member is shown only where
+ * the write path recorded it (API/CLI org-billed rows).
+ *
+ * With `organizationId` the org is fixed and the picker is hidden - this is the
+ * org owner/manager surface (their org only). Without it, an admin picks any org.
  */
-export const TransactionLedger: React.FC = () => {
+export const TransactionLedger: React.FC<{ organizationId?: string }> = ({ organizationId: fixedOrgId }) => {
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
   const [filters, setFilters] = useState<LedgerFilters>({ days: 30, type: 'all', source: 'all' });
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [detailSessionId, setDetailSessionId] = useState<string | null>(null);
 
+  const activeOrgId = fixedOrgId ?? selectedOrg?.id ?? null;
+
   const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
-  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations({
-    page: 1,
-    limit: 20,
-    search: orgSearch,
-    filters: { personal: false },
-    orderBy: { by: 'name', direction: 'asc' },
-  });
+  // Skipped in fixed-org mode - the picker is hidden and non-admins can't list orgs.
+  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations(
+    {
+      page: 1,
+      limit: 20,
+      search: orgSearch,
+      filters: { personal: false },
+      orderBy: { by: 'name', direction: 'asc' },
+    },
+    { enabled: !fixedOrgId }
+  );
   const orgOptions: OrgOption[] = useMemo(
     () => (orgResult?.data ?? []).map(o => ({ id: String(o.id), name: o.name })),
     [orgResult]
   );
 
-  const { data, isLoading, isFetching, error, refetch } = useTransactionLedger(
-    selectedOrg?.id ?? null,
-    filters,
-    page,
-    limit
-  );
+  const { data, isLoading, isFetching, error, refetch } = useTransactionLedger(activeOrgId, filters, page, limit);
 
   // Any filter change invalidates the current page offset.
   const patchFilters = (patch: Partial<LedgerFilters>) => {
@@ -88,21 +92,25 @@ export const TransactionLedger: React.FC = () => {
         spacing={1}
         sx={{ mb: 1 }}
       >
-        <Autocomplete
-          placeholder="Select an organization"
-          options={orgOptions}
-          getOptionLabel={o => o.name}
-          isOptionEqualToValue={(o, v) => o.id === v.id}
-          value={selectedOrg}
-          onChange={(_, value) => {
-            setSelectedOrg(value);
-            setPage(1);
-          }}
-          onInputChange={(_, value) => setOrgSearch(value)}
-          loading={orgsLoading}
-          sx={{ minWidth: 240 }}
-          data-testid="ledger-org-select"
-        />
+        {fixedOrgId ? (
+          <Box />
+        ) : (
+          <Autocomplete
+            placeholder="Select an organization"
+            options={orgOptions}
+            getOptionLabel={o => o.name}
+            isOptionEqualToValue={(o, v) => o.id === v.id}
+            value={selectedOrg}
+            onChange={(_, value) => {
+              setSelectedOrg(value);
+              setPage(1);
+            }}
+            onInputChange={(_, value) => setOrgSearch(value)}
+            loading={orgsLoading}
+            sx={{ minWidth: 240 }}
+            data-testid="ledger-org-select"
+          />
+        )}
         <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
           <Select
             size="sm"
@@ -146,7 +154,7 @@ export const TransactionLedger: React.FC = () => {
           <IconButton
             size="sm"
             onClick={() => refetch()}
-            disabled={!selectedOrg || isFetching}
+            disabled={!activeOrgId || isFetching}
             data-testid="ledger-refresh-btn"
           >
             <RefreshIcon />
@@ -165,7 +173,7 @@ export const TransactionLedger: React.FC = () => {
         </Alert>
       )}
 
-      {!selectedOrg ? (
+      {!activeOrgId ? (
         <Box sx={{ p: 4, textAlign: 'center' }}>
           <Typography level="body-sm" color="neutral">
             Select an organization to see its transaction ledger.
@@ -254,7 +262,11 @@ export const TransactionLedger: React.FC = () => {
         </>
       )}
 
-      <SessionUsageDetailModal sessionId={detailSessionId} onClose={() => setDetailSessionId(null)} />
+      <SessionUsageDetailModal
+        sessionId={detailSessionId}
+        organizationId={fixedOrgId}
+        onClose={() => setDetailSessionId(null)}
+      />
     </Box>
   );
 };
