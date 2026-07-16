@@ -52,7 +52,6 @@ const handler = baseApi({ auth: false })
         keyId: info.keyId,
         agentId: info.agentId!,
         organizationId: info.organizationId!,
-        allowedOrigins: info.allowedOrigins,
         sessionId: randomUUID(),
       },
       EMBED_SESSION_TTL_SECONDS

@@ -173,6 +173,13 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('returns 403 when the embed key organization no longer exists', async () => {
+    mockOrgFindById.mockResolvedValue(null);
+    const res = await post(CHAT);
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
   it('returns 422 when the owner org is out of credits (unconditional pre-flight)', async () => {
     mockAssertOwnerHasCredits.mockImplementation(() => {
       const err = new Error('has insufficient credits to run this request') as Error & { statusCode: number };

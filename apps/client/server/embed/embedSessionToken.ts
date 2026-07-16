@@ -26,8 +26,6 @@ export const EmbedSessionContextSchema = z.object({
   organizationId: z.string().min(1),
   /** Fresh per mint; the per-session rate-limit and abuse-attribution handle. */
   sessionId: z.string().min(1),
-  /** Copied from the key so the chat route can enforce Origin without a DB read. */
-  allowedOrigins: z.array(z.string()).optional(),
 });
 
 export type EmbedSessionContext = z.infer<typeof EmbedSessionContextSchema>;

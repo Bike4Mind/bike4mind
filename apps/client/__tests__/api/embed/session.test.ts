@@ -60,7 +60,6 @@ describe('POST /api/embed/session - mint embed session token', () => {
     const claims = verifyEmbedSessionToken(body.session_token);
     expect(claims).toMatchObject({ keyId: 'key-1', agentId: 'agent-1', organizationId: 'org-1' });
     expect(claims.sessionId).toBeTruthy();
-    expect(claims.allowedOrigins).toEqual(['https://example.com']);
   });
 
   it('never returns the raw embed key', async () => {

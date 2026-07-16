@@ -17,7 +17,6 @@ const ctx: EmbedSessionContext = {
   agentId: 'agent-1',
   organizationId: 'org-1',
   sessionId: 'sess-1',
-  allowedOrigins: ['https://example.com'],
 };
 
 describe('embedSessionToken', () => {

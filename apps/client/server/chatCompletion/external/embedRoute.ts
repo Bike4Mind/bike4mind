@@ -196,6 +196,13 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           .json({ error: 'unprocessable', error_description: 'Bound agent has no configured model' });
       }
 
+      // A key can outlive its org (org deleted while the key stayed active). That is a
+      // data-integrity condition, not a balance one - fail closed with a clear 403
+      // rather than a misleading 422, and never fall back to any other pool.
+      if (!org) {
+        return res.status(403).json({ error: 'forbidden', error_description: 'Embed key organization not found' });
+      }
+
       // Unconditional pre-flight balance check against the owner org (runs even when
       // enforceCredits is off). Must precede any stream bytes so it can 422.
       try {
