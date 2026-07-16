@@ -66,12 +66,18 @@ Tools:
 - optihashi_schedule: run solvers on a formulated problem and return results.
 
 Loop:
-1. If the scenario spans multiple distinct problems, call optihashi_decompose first with the full plan.
-   If it is a single well-posed problem, skip straight to optihashi_formulate.
-2. Then walk the plan ONE step at a time: formulate (or edit) the step's instance -> schedule it to
-   solve -> READ the result from the observation -> decide to advance, refine, or stop.
-3. Read every solver result before moving on. If a result is poor or infeasible, refine the formulation
-   (optihashi_edit_problem) and re-solve rather than blindly advancing.
+1. If the scenario spans multiple distinct problems, call optihashi_decompose ONCE with the full plan.
+   IMPORTANT: optihashi_decompose automatically formulates and loads STEP 1 as the active brief -- do
+   NOT call optihashi_formulate for step 1, it is already loaded. (Only if the scenario is a single
+   well-posed problem with no decomposition: call optihashi_formulate once to load it.)
+2. Solve the currently loaded step: call optihashi_schedule to run solvers on the active brief, then READ
+   the result from the observation.
+3. Advance to the NEXT planned step (2, 3, ...): call optihashi_formulate to build THAT step's instance
+   -- this is the ONLY time you formulate; never re-formulate a step that is already loaded -- then call
+   optihashi_schedule, then read the result. Repeat until every planned step has been solved.
+4. If optihashi_formulate returns a validation error, fix the specific field it names and retry that one
+   call once with corrected, complete parameters for the step's family. Use optihashi_edit_problem only to
+   adjust the CURRENT active brief when a solver result is poor or infeasible, then re-schedule.
 
 Discipline:
 - Be conservative about compute tier: most scenarios are well served by classical/durable solvers; say so
