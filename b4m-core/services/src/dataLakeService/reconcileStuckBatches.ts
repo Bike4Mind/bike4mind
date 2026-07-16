@@ -44,7 +44,7 @@ export const reconcileStuckBatches = async (
   });
 
   for (const batch of stuck) {
-    const won = await db.batches.markTerminalIfActive(batch.id, 'completed_with_errors');
+    const won = await db.batches.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
     if (!won) continue; // a real increment finalized it first - nothing to reconcile.
     forced.push(batch.id);
     logger?.warn(`Reconciler forced stuck batch ${batch.id} terminal (idle > ${timeoutMs}ms)`);
