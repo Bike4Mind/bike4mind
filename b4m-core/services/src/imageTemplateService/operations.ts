@@ -14,6 +14,22 @@ import { assertAuthenticated, assertInteractive } from './access';
  * to `caller.id` resolved server-side; a client never names another user.
  */
 
+/**
+ * Stable serialization of a settings blob for duplicate detection: keys sorted,
+ * null/undefined dropped (an absent field and an explicitly-null one are treated
+ * the same). Both the stored and incoming blobs pass through the same Zod parse,
+ * so their key sets are consistent and this comparison is reliable.
+ */
+function canonicalSettings(settings: unknown): string {
+  const obj = (settings ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    const v = obj[key];
+    if (v !== undefined && v !== null) out[key] = v;
+  }
+  return JSON.stringify(out);
+}
+
 /** List the caller's templates (usageCount desc, then newest). API keys get nothing. */
 export async function listTemplates(
   caller: IImageTemplateCaller,
@@ -46,6 +62,15 @@ export async function saveTemplate(
 ): Promise<IImageGenerationTemplateDocument> {
   assertAuthenticated(caller);
   assertInteractive(caller);
+
+  // Reject an exact-settings duplicate for this model (regardless of name), so the
+  // same config isn't saved twice under different names.
+  const incoming = canonicalSettings(input.settings);
+  const siblings = await db.templates.listByModel(caller.id, input.model);
+  const duplicate = siblings.find(t => canonicalSettings(t.settings) === incoming);
+  if (duplicate) {
+    throw new UnprocessableEntityError(`You already have a template with these settings ("${duplicate.name}").`);
+  }
 
   // Soft cap: count-then-create is not atomic, so tightly-concurrent creates can
   // briefly overshoot the cap. Acceptable for M1 (bounded by the create rate

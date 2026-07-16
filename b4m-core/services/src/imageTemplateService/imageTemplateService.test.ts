@@ -72,16 +72,43 @@ describe('saveTemplate', () => {
 
   it('binds ownership to the caller and defaults usageCount', async () => {
     const countOwned = vi.fn().mockResolvedValue(0);
+    const listByModel = vi.fn().mockResolvedValue([]);
     const create = vi.fn().mockImplementation(async (d: any) => ({ ...d, id: 'new' }));
-    const result = await saveTemplate(caller({ id: 'u1' }), withRepo({ countOwned, create }), input);
+    const result = await saveTemplate(caller({ id: 'u1' }), withRepo({ countOwned, listByModel, create }), input);
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', usageCount: 0 }));
     expect(result.id).toBe('new');
   });
 
+  it('rejects a same-settings duplicate for the model, regardless of name', async () => {
+    const listByModel = vi
+      .fn()
+      .mockResolvedValue([
+        tpl({ id: 'existing', name: 'My Other Name', model: 'flux-pro-1.1', settings: { quality: 'hd' } }),
+      ]);
+    const create = vi.fn();
+    const countOwned = vi.fn().mockResolvedValue(1);
+    await expect(saveTemplate(caller(), withRepo({ listByModel, countOwned, create }), input)).rejects.toThrow(
+      /already have a template/i
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('allows a same-settings template bound to a DIFFERENT model', async () => {
+    // listByModel is model-scoped, so a gpt-image-1 sibling never matches a flux save.
+    const listByModel = vi.fn().mockResolvedValue([]);
+    const countOwned = vi.fn().mockResolvedValue(0);
+    const create = vi.fn().mockImplementation(async (d: any) => ({ ...d, id: 'new' }));
+    await expect(saveTemplate(caller(), withRepo({ listByModel, countOwned, create }), input)).resolves.toBeTruthy();
+    expect(listByModel).toHaveBeenCalledWith('u1', 'flux-pro-1.1');
+  });
+
   it('rejects author-time when at the per-user cap', async () => {
     const countOwned = vi.fn().mockResolvedValue(IMAGE_TEMPLATES_PER_USER_MAX);
+    const listByModel = vi.fn().mockResolvedValue([]);
     const create = vi.fn();
-    await expect(saveTemplate(caller(), withRepo({ countOwned, create }), input)).rejects.toThrow(/limit/i);
+    await expect(saveTemplate(caller(), withRepo({ countOwned, listByModel, create }), input)).rejects.toThrow(
+      /limit/i
+    );
     expect(create).not.toHaveBeenCalled();
   });
 

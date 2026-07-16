@@ -8,6 +8,7 @@ import {
   IMAGE_TEMPLATE_DESCRIPTION_MAX,
   type ImageGenerationTemplateInputType,
 } from '@bike4mind/common';
+import { getErrorMessage } from '@client/app/utils/error';
 import { useCreateImageTemplate } from '../../../hooks/data/imageTemplates';
 
 interface SaveTemplateModalProps {
@@ -94,9 +95,9 @@ export const SaveTemplateModal: FC<SaveTemplateModalProps> = ({ open, onClose })
       reset();
       onClose();
     } catch (err: unknown) {
-      // Server enforces the per-user cap and validation; surface its message.
-      const message = err instanceof Error ? err.message : 'Could not save template';
-      toast.error(message);
+      // Server enforces dedup, the per-user cap, and validation; surface its
+      // message (getErrorMessage reads the server body, not the generic axios text).
+      toast.error(getErrorMessage(err));
     }
   };
 
