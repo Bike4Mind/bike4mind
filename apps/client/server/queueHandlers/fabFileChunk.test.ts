@@ -78,6 +78,8 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(h.updateFileStatus).toHaveBeenCalledWith('batch-1', 'ff1', 'failed', CHUNK_ERR);
     expect(h.incrementCounter).toHaveBeenCalledWith('batch-1', 'failedFiles');
     expect(h.sendToClient).toHaveBeenCalledTimes(1);
+    // Batch id is attached to log metadata for a data-lake file (incident triage).
+    expect(mockLogger.updateMetadata).toHaveBeenCalledWith({ batchId: 'batch-1' });
   });
 
   it('does not double-count the batch failure on redelivery (markFailedIfNotAlready=false)', async () => {
@@ -93,5 +95,7 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
     expect(h.markFailedIfNotAlready).toHaveBeenCalledWith('ff1', CHUNK_ERR);
     expect(h.incrementCounter).not.toHaveBeenCalled();
+    // No batch -> no batchId in log metadata.
+    expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
   });
 });
