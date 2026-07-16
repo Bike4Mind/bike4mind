@@ -1,5 +1,6 @@
 export * from './accept';
 export * from './cancel';
+export * from './cancelInviteById';
 export * from './cancelOwnDocument';
 export * from './create';
 export * from './get';
