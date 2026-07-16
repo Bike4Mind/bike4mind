@@ -59,6 +59,8 @@ interface SessionLayoutProps {
   autoHideOnEmpty?: boolean;
   /** Custom splash to show instead of NotebookSplash when no session is active */
   customSplash?: React.ReactNode;
+  /** Opt-in splash shown inside the chat area when the active session has no messages yet. Forwarded to SessionMiddle. */
+  emptySessionSplash?: React.ReactNode;
   /** Extra action buttons rendered in the FloatingChatWindow header (before minimize/close) */
   floatingChatHeaderActions?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
@@ -181,6 +183,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   isLoading,
   autoHideOnEmpty,
   customSplash,
+  emptySessionSplash,
   floatingChatHeaderActions,
   onSessionCreated,
 }) => {
@@ -505,7 +508,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                     customSplash || <NotebookSplash />
                   ) : (
                     <Box sx={{ position: 'relative', flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0 }}>
-                      <SessionMiddle isFullWidth={isFullWidth} sessionId={currentSessionId} />
+                      <SessionMiddle
+                        isFullWidth={isFullWidth}
+                        sessionId={currentSessionId}
+                        emptySessionSplash={emptySessionSplash}
+                      />
                       {pendingFirstMessage && (
                         <Box
                           sx={{
@@ -599,7 +606,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                       flexDirection: 'column',
                     }}
                   >
-                    <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
+                    <SessionMiddle
+                      isFullWidth={false}
+                      sessionId={currentSessionId}
+                      emptySessionSplash={emptySessionSplash}
+                    />
                     {pendingFirstMessage && (
                       <Box
                         sx={{
@@ -657,7 +668,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
-                  <SessionMiddle isFullWidth={false} sessionId={currentSessionId} />
+                  <SessionMiddle
+                    isFullWidth={false}
+                    sessionId={currentSessionId}
+                    emptySessionSplash={emptySessionSplash}
+                  />
                 )}
               </Box>
               <Box
