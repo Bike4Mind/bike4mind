@@ -20,6 +20,7 @@ import ToolsButton from './AISettings/ToolsButton';
 import AgentsButton from './AISettings/AgentsButton';
 import BriefcaseButton from './AISettings/BriefcaseButton';
 import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
+import { ImageTemplateControls } from './ImageTemplates/ImageTemplateControls';
 
 // Re-export store for consumers that import from this file
 export { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
@@ -53,9 +54,10 @@ const AISettings: FC<AISettingsProps> = ({
     useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings])
   );
 
-  const { isFeatureEnabled } = useFeatureEnabled();
+  const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
   const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
+  const isImageTemplatesEnabled = isAdminFeatureEnabled('EnableImageTemplates');
 
   const tools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
@@ -201,6 +203,9 @@ const AISettings: FC<AISettingsProps> = ({
             </Tooltip>
           </Box>
         )}
+
+        {/* Image Templates (save/apply reusable image-mode settings) */}
+        {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
 
         {!isTablet && (
           <>
