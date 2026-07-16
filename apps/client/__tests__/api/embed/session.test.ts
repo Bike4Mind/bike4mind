@@ -41,7 +41,7 @@ function makeReq(headers: Record<string, string> = {}) {
   return { req, res };
 }
 
-describe('POST /api/embed/session — mint embed session token', () => {
+describe('POST /api/embed/session - mint embed session token', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockVerifyEmbedApiKey.mockResolvedValue(VALID_INFO);

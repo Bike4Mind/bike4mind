@@ -119,7 +119,7 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
   });
 });
 
-describe('validateUserApiKey — embed context fields', () => {
+describe('validateUserApiKey - embed context fields', () => {
   it('flows agentId and allowedOrigins through for an embed:chat key', async () => {
     const { repo } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
