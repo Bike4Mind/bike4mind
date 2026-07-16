@@ -20,11 +20,12 @@ describe('embedCors', () => {
     expect(next).toHaveBeenCalledOnce();
   });
 
-  it('answers an OPTIONS preflight with 204 and does not call next', () => {
+  it('answers an OPTIONS preflight with 204 (cacheable) and does not call next', () => {
     const { res, next } = run('OPTIONS', { origin: 'https://example.com' });
     expect(res._getStatusCode()).toBe(204);
     expect(res._isEndCalled()).toBe(true);
     expect(res.getHeader('Access-Control-Allow-Origin')).toBe('https://example.com');
+    expect(res.getHeader('Access-Control-Max-Age')).toBe('600');
     expect(next).not.toHaveBeenCalled();
   });
 

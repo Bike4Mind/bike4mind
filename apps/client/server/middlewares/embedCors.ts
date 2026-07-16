@@ -17,6 +17,8 @@ import { Request, Response, NextFunction } from 'express';
  */
 const ALLOW_METHODS = 'POST, OPTIONS';
 const ALLOW_HEADERS = 'Content-Type, X-API-Key, Authorization';
+// Let browsers cache the preflight so a chatty widget doesn't re-preflight every turn.
+const MAX_AGE_SECONDS = '600';
 
 export function embedCors() {
   return (req: Request, res: Response, next: NextFunction): void => {
@@ -28,6 +30,7 @@ export function embedCors() {
       res.setHeader('Access-Control-Allow-Headers', ALLOW_HEADERS);
     }
     if (req.method === 'OPTIONS') {
+      res.setHeader('Access-Control-Max-Age', MAX_AGE_SECONDS);
       res.status(204).end();
       return;
     }

@@ -101,7 +101,9 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
   const auth = headers.authorization;
   const bearer = auth && /^bearer /i.test(auth) ? auth.slice(7).trim() : undefined;
 
-  // A bearer that is NOT a raw b4m_ key is the minted session token.
+  // A bearer that is NOT a raw b4m_ key is the minted session token (a JWT always
+  // starts with `eyJ`). This discriminator is coupled to the `b4m_` key prefix that
+  // extractApiKeyFromHeaders keys on - if that prefix ever changes, both move together.
   if (bearer && !bearer.startsWith('b4m_')) {
     const claims = verifyEmbedSessionToken(bearer);
     const info = await verifyEmbedKeyById(claims.keyId);
@@ -182,6 +184,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       if (!agent || agent.deletedAt) {
         return res.status(404).json({ error: 'not_found', error_description: 'Bound agent not found' });
       }
+      // A personal agent (userId set) is reachable only by its creator's keys; for an
+      // embed key to be usable across org members the bound agent must be org-shared
+      // (organizationId set, no userId). The admin UI that mints embed keys (#634)
+      // should surface that constraint.
       if (
         (agent.organizationId && agent.organizationId !== ctx.organizationId) ||
         (agent.userId && agent.userId !== ctx.userId)
@@ -204,7 +210,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Unconditional pre-flight balance check against the owner org (runs even when
-      // enforceCredits is off). Must precede any stream bytes so it can 422.
+      // enforceCredits is off). Must precede any stream bytes so it can 422. This is a
+      // coarse floor (requiredCredits defaults to 1) - exact settlement/refusal happens
+      // inside executeCompletion; a broke-but-nonzero org can still trip the mid-stream
+      // InsufficientCreditsError. A rough per-model pre-estimate here is a later refinement.
       try {
         assertOwnerHasCredits(org);
       } catch (creditErr) {
