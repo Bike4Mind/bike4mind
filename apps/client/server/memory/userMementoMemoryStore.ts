@@ -1,4 +1,4 @@
-import { mementoEmbeddingIsCurrent } from '@bike4mind/common';
+import { MementoTier, mementoEmbeddingIsCurrent } from '@bike4mind/common';
 import {
   userMementosToProfile,
   type MemoryProfile,
@@ -35,7 +35,13 @@ export function createUserMementoMemoryStore(deps: { mementos: UserMementoReader
   return {
     async readProfile(principal: Principal): Promise<MemoryProfile | null> {
       if (principal.kind !== 'user' || principal.id !== deps.ownerUserId) return null;
-      const mementos = await deps.mementos.findByUserId(deps.ownerUserId, { select: PROFILE_FIELDS });
+      // HOT only, to match V1's own injection gate (getRelevantMementos defaults tier=HOT). Without
+      // this, a V2 user's union recall was eligible to surface WARM/COLD V1 mementos that V1
+      // deliberately demoted out of the prompt - stale legacy facts leaking back in through the V2 read.
+      const mementos = await deps.mementos.findByUserId(deps.ownerUserId, {
+        tier: MementoTier.HOT,
+        select: PROFILE_FIELDS,
+      });
 
       // Drop any vector written in a different model's space before it reaches recall. Cosine across
       // spaces is noise, and recall cannot tell noise from a score - it would rank on it. Stripped of

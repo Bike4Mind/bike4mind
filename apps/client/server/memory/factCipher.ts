@@ -138,12 +138,32 @@ export function resolveMasterKey(secret = process.env.MEMORY_KEY_SECRET): Buffer
   return secret ? createHash('sha256').update(secret).digest() : undefined;
 }
 
+/** True outside local dev - a raw DEK here is a real backup-confidentiality hole, not a dev convenience. */
+const isDeployedEnv = (): boolean => {
+  const stage = process.env.SST_STAGE ?? process.env.STAGE ?? '';
+  return process.env.NODE_ENV === 'production' && stage !== '' && !/^(dev|local|test)/i.test(stage);
+};
+let warnedNoMasterKey = false;
+
 /**
- * A KeyProvider backed by a keyring. If `masterKey` is set, DEKs are envelope-wrapped at rest so a
- * DB dump alone cannot read facts; without it (dev), DEKs are stored raw - still shred-safe, since
- * deletion destroys the key, but not confidential against a full DB read.
+ * A KeyProvider backed by a keyring. If `masterKey` is set (MEMORY_KEY_SECRET), DEKs are
+ * envelope-wrapped at rest so a DB dump alone cannot read facts; without it (dev), DEKs are stored raw
+ * - still SHRED-safe (deletion destroys the key), but NOT confidential against a full DB/backup read.
+ *
+ * Running a deployed stage without the secret silently voids the "unreadable even in backups" promise -
+ * the raw DEK sits next to the ciphertext, so a pre-shred backup is fully recoverable. We do not hard
+ * throw (that would take memory down on a misconfig), but we surface it LOUDLY via console.error once,
+ * so it lands in error monitoring instead of degrading in silence.
  */
 export function createKeyProvider(keyring: Keyring, masterKey = resolveMasterKey()): KeyProvider {
+  if (!masterKey && !warnedNoMasterKey && isDeployedEnv()) {
+    warnedNoMasterKey = true;
+    console.error(
+      '[memory] MEMORY_KEY_SECRET is not set in a deployed stage: principal keys are stored RAW next to ' +
+        'the ciphertext, so a backup taken before a crypto-shred is fully recoverable. Set the secret to ' +
+        'restore envelope-wrapping and the backup-unreadability guarantee.'
+    );
+  }
   const store = (dek: Buffer): string => (masterKey ? wrapDek(masterKey, dek) : RAW + dek.toString('base64'));
   return {
     async getOrCreateDek(principal, ownerUserId) {

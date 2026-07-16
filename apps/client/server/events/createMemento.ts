@@ -35,9 +35,11 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
+  // Deliberately NOT logging `prompt` or the extracted summaries: they are the exact plaintext V2
+  // encrypts, and logs have their own retention outside the crypto-shred boundary - a shred that
+  // destroys the DEK would leave the fact readable in log storage. Counts and ids only.
   logger.updateMetadata({
     userId,
-    prompt,
     model,
     sessionId,
     questId,
@@ -71,12 +73,7 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  logger.updateMetadata({
-    evaluationsCount: evaluations.length,
-    evaluations,
-  });
-
-  console.debug('Evaluation results:', { count: evaluations.length, evaluations });
+  logger.updateMetadata({ evaluationsCount: evaluations.length });
 
   // The V2 write. When V1 is also on the two run side by side (a flip back to V1 loses nothing); when
   // V1 is OFF this is the only thing that persists the fact, which is what makes V2 standalone.
@@ -148,7 +145,7 @@ export const handler = withEventContext(async (event, logger) => {
   let updatedCount = 0;
 
   for (const evaluation of evaluations) {
-    console.debug('Processing evaluation', { summary: evaluation.summary, importance: evaluation.importance });
+    console.debug('Processing evaluation', { importance: evaluation.importance });
 
     // Embed the summary, not the raw prompt - the summary is the actual personal info
     // Truncate into the memento vector space. Every memento path must do this to the SAME width, or
@@ -175,8 +172,6 @@ export const handler = withEventContext(async (event, logger) => {
       console.info('Similar personal information found, updating existing memento', {
         existingMementoId: mostSimilarMemento.id,
         similarity: highestSimilarity.toFixed(3),
-        existingSummary: mostSimilarMemento.summary,
-        newSummary: evaluation.summary,
       });
 
       const newWeight = Math.max(mostSimilarMemento.weight, evaluation.importance * 100);
@@ -202,7 +197,6 @@ export const handler = withEventContext(async (event, logger) => {
       console.info('Successfully updated existing memento with new information', {
         mementoId: mostSimilarMemento.id,
         newWeight,
-        newSummary: evaluation.summary,
       });
 
       updatedCount++;
