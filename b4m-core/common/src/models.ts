@@ -232,6 +232,7 @@ export enum ChatModels {
   GROK_2 = 'grok-2-1212',
   GROK_2_VISION = 'grok-2-vision-1212',
   GROK_4 = 'grok-4-0709',
+  GROK_4_5 = 'grok-4.5',
   GROK_BETA = 'grok-beta',
   GROK_VISION_BETA = 'grok-vision-beta',
 }

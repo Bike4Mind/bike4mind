@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/mcp",
-  "version": "1.40.3",
+  "version": "1.41.0",
   "publishConfig": {
     "access": "restricted"
   },
@@ -70,7 +70,7 @@
     "vitest": "^4.1.10"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.97.1",
+    "@anthropic-ai/sdk": "^0.111.0",
     "@bike4mind/common": "workspace:*",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@octokit/rest": "^22.0.1",

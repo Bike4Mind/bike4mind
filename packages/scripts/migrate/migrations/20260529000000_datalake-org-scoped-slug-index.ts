@@ -15,6 +15,23 @@ import { type MigrationFile } from './index';
  * fail on legacy data. We still pre-flight for duplicate (organizationId, slug)
  * groups and fail loudly with the offending ids rather than risk a silent broken
  * unique build.
+ *
+ * autoIndex at scale: the new compound index is built by Mongoose autoIndex on the
+ * first app boot after deploy, NOT here. On DocumentDB an index build runs in the
+ * FOREGROUND and holds a collection-level lock for its duration, so on a large
+ * DataLake collection that first boot can stall writes noticeably. If the collection
+ * is large, build it out-of-band before the deploy (createIndex on
+ * { organizationId: 1, slug: 1 }, unique, off-peak) so autoIndex finds it already
+ * present; on a small collection the one-time foreground build is fine.
+ *
+ * Manual rollback runbook: down() is intentionally a no-op (recreating the global
+ * unique slug_1 would fail the moment two orgs share a slug). To actually revert:
+ *   1. Confirm no two rows share a slug across orgs (the group-by in up(), matching
+ *      on slug alone). Resolve any collisions first.
+ *   2. Drop the compound index: db.datalakes.dropIndex('organizationId_1_slug_1').
+ *   3. Recreate the legacy index: db.datalakes.createIndex({ slug: 1 }, { unique: true }).
+ * Reverting is only safe while global slug uniqueness still holds, so it is a manual,
+ * deliberate operation - never automatic.
  */
 const migration: MigrationFile = {
   id: 20260529000000,

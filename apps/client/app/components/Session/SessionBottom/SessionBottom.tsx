@@ -195,6 +195,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
 
   const isCompactLayout = useSessionLayout(s => s.layout === 'vertical' || s.layout === 'pip');
+  // Docked panels (dockRight/dockBottom) own their bottom edge; the outer pb
+  // would just add dead space under the input.
+  const isDockedLayout = useSessionLayout(s => s.layout === 'dockRight' || s.layout === 'dockBottom');
+  // The floating chat window frames the input itself, so like docked it drops the
+  // outer spacing and rounded card look; unlike docked it keeps a top separator.
+  const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -347,7 +353,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     <Box
       ref={ref}
       className="session-bottom"
-      sx={{ pb: isCompactLayout || isMobile ? '0' : '1.25rem', paddingTop: '20px', position: 'relative' }}
+      sx={{
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
+        position: 'relative',
+      }}
       display={'flex'}
       justifyContent={'center'}
     >
@@ -357,26 +367,30 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         data-testid="session-bottom-container"
         sx={theme => ({
           width: isMobile ? '100vw' : '100%',
-          maxWidth: '950px',
+          // Docked/floating panels are already width-constrained; capping the input
+          // at 950px would leave visible panel-background gutters beside it.
+          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : '950px',
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isCompactLayout || isMobile
-            ? {
-                borderTop: '1px solid',
-                borderTopColor: 'border.solid',
-                borderLeft: 'none',
-                borderRight: 'none',
-                borderBottom: 'none',
-              }
-            : {
-                border: '1px solid',
-                borderColor: 'border.solid',
-              }),
+          ...(isDockedLayout
+            ? { border: 'none' }
+            : isCompactLayout || isMobile || isFloatingLayout
+              ? {
+                  borderTop: '1px solid',
+                  borderTopColor: 'border.solid',
+                  borderLeft: 'none',
+                  borderRight: 'none',
+                  borderBottom: 'none',
+                }
+              : {
+                  border: '1px solid',
+                  borderColor: 'border.solid',
+                }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile ? 0 : '.625rem',
+          borderRadius: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem',
         })}
       >
         <Box>

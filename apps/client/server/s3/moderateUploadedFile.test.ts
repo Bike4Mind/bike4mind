@@ -22,6 +22,10 @@ const PDF_SIGNATURE = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(64)
 // Neither a real PNG nor a real PDF - file-type can't sniff this, so callers fall back to
 // the declared mimeType (documents the "sniff inconclusive" branch).
 const UNSNIFFABLE_BYTES = Buffer.from('just some plain text, not a real file');
+// A ZIP local-file header - what a partial read of an OOXML file (docx/xlsx/pptx) sniffs as
+// when the OOXML marker entries sit past the sniffed window.
+const ZIP_SIGNATURE = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.alloc(60)]);
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
 function deps(overrides: Partial<Parameters<typeof moderateUploadedFile>[0]> = {}) {
   return {
@@ -59,6 +63,24 @@ describe('moderateUploadedFile', () => {
     expect(result.moderationStatus).toBe('clean');
     expect(result.correctedMimeType).toBeUndefined();
     expect(d.downloadBytes).not.toHaveBeenCalled();
+  });
+
+  it('keeps a declared OOXML mimeType when a partial read only sniffs the generic zip container', async () => {
+    // xlsx/docx/pptx are ZIP containers; a partial sniff sees `application/zip`. That generic
+    // type must NOT clobber the declared OOXML subtype (else viewers / AI-editing break).
+    const d = deps({ mimeType: XLSX_MIME, downloadPartialBytes: vi.fn(async () => ZIP_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result.moderationStatus).toBe('clean');
+    expect(result.correctedMimeType).toBeUndefined(); // declared XLSX preserved, not corrected to zip
+    expect(d.downloadBytes).not.toHaveBeenCalled(); // treated as non-image, no full scan
+  });
+
+  it('still corrects to application/zip for a non-OOXML declared type that sniffs as zip', async () => {
+    // The OOXML preservation is scoped: a genuine zip declared as something else is still corrected.
+    const d = deps({ mimeType: 'image/png', downloadPartialBytes: vi.fn(async () => ZIP_SIGNATURE) });
+    const result = await moderateUploadedFile(d);
+    expect(result.correctedMimeType).toBe('application/zip');
+    expect(d.downloadBytes).not.toHaveBeenCalled(); // zip is non-image, so no scan
   });
 
   it('returns clean when an image scans clean', async () => {

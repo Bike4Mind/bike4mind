@@ -28,7 +28,7 @@ import ShareDocumentModal from '../../common/ShareModal';
 import CreateKnowledgeFromUrl from '../../Knowledge/CreateKnowledgeFromUrl';
 import { useKnowledgeModal } from '../../Knowledge/KnowledgeModal';
 import TagForm from '../../Tag/Form';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowserInstance } from './instanceContext';
 import FileBrowserActions from './Actions';
 import FileBrowserFilter from './Filter';
 import FileBrowserList from './List';
@@ -38,7 +38,6 @@ import TagSidebar from './TagSidebar';
 import { TagViewPanel } from './TagView';
 import { HomeViewPanel } from './HomeView';
 import { MobileSearchFilter } from './MobileSearchFilter';
-import { useAddFilesToProject } from '@client/app/hooks/data/projects';
 import { UploadActionsSelect } from './UploadActionsSelect';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
@@ -53,9 +52,7 @@ const FileBrowserContent = () => {
   const { t } = useTranslation();
   const { currentUser } = useUser();
   const confirm = useConfirmation();
-  const [selectedIds, setSelectedIds] = useFileBrowser(useShallow(s => [s.selectedIds, s.setSelectedIds]));
-  const [, setOpen] = useFileBrowser(useShallow(s => [s.open, s.setOpen]));
-  const [fileToShare, setFileToShare] = useFileBrowser(useShallow(s => [s.fileToShare, s.setFileToShare]));
+  const { selectedIds, setSelectedIds, setOpen, fileToShare, setFileToShare, config } = useFileBrowserInstance();
   const [showBulkShareModal, setShowBulkShareModal] = useState(false);
   const model = useLLM(state => state.model);
   const { data: modelInfo } = useModelInfo();
@@ -139,7 +136,6 @@ const FileBrowserContent = () => {
   const allFiles = data?.data || [];
   const totalFiles = data?.total || 0;
   const totalPages = Math.ceil(totalFiles / FILES_PER_PAGE);
-  const { mutate: addFilesToProject } = useAddFilesToProject();
 
   // What Select All should select for the currently active tab: the Overview tab only
   // ever shows the "Recent" files, not the full paginated list.
@@ -215,6 +211,15 @@ const FileBrowserContent = () => {
   }
 
   function handleAdd() {
+    // Embedded pickers supply their own primary action (e.g. add-to-project); the global
+    // browser falls through to the session/workbench add below.
+    if (config.onAdd) {
+      config.onAdd(selectedFiles);
+      setSelectedIds(new Set<string>());
+      setOpen(false);
+      return;
+    }
+
     const { setWorkBenchFiles } = useWorkBenchStore.getState();
 
     const applicableFiles = selectedFiles.filter(f => !workBenchFiles.some(w => w.id === f.id));
@@ -251,8 +256,6 @@ const FileBrowserContent = () => {
     const fileNames = applicableFiles.map(f => f.fileName).join(', ');
     const newWorkBenchFiles = [...workBenchFiles, ...applicableFiles];
     const knowledgeIds = newWorkBenchFiles.map(f => f.id);
-    const projectsPageOpen = window.location?.pathname.includes('/projects');
-    const projectId = window.location?.pathname.split('/').pop();
 
     // Optimistic update
     setWorkBenchFiles(currentSessionId ?? '', newWorkBenchFiles);
@@ -273,22 +276,32 @@ const FileBrowserContent = () => {
         }
       );
     }
-    // if projects page is open, add files to project
-    if (projectsPageOpen) {
-      const projectKnowledgeIds = applicableFiles.map(f => f.id);
-      addFilesToProject({ projectId: projectId ?? '', fileIds: projectKnowledgeIds });
-      // no toast since addFilesToProject already has a toast
-    }
-    // if nothing else, add to workbench
-    else {
-      toast.success(t('file_browser.add_file_success', { fileNames }));
-    }
+    toast.success(t('file_browser.add_file_success', { fileNames }));
 
     setSelectedIds(new Set<string>());
     setOpen(false);
   }
 
   async function handleDelete() {
+    // Embedded pickers can override delete (e.g. remove-from-project) so the files
+    // themselves are never destroyed from the picker.
+    if (config.onDelete) {
+      const ids = Array.from(selectedIds);
+      if (ids.length === 0) return;
+      const onDelete = config.onDelete;
+      confirm({
+        title: `Remove ${ids.length} file(s)`,
+        description: 'Remove the selected files from this list? The files themselves are not deleted.',
+        type: 'warning',
+        okLabel: 'Remove',
+        onOk: async () => {
+          onDelete(ids);
+          setSelectedIds(new Set<string>());
+        },
+      });
+      return;
+    }
+
     // Partition selected files into owned vs shared
     const ownedCount = selectedFiles.filter(f => f.userId === currentUser?.id).length;
     const sharedCount = selectedFiles.filter(f => f.userId !== currentUser?.id).length;
@@ -823,6 +836,7 @@ const FileBrowserContent = () => {
             onSelectAll={handleSelectAll}
             onDelete={handleDelete}
             onAdd={handleAdd}
+            addButtonLabelKey={config.addButtonLabelKey}
             onShare={handleBulkShare}
             currentPage={currentPage}
             totalPages={totalPages}

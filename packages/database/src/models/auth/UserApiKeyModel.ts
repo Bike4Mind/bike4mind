@@ -4,6 +4,7 @@ import {
   ApiKeyStatus,
   ApiKeyScope,
   CreditHolderType,
+  IEmbedBranding,
   IUserApiKeyDocument,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
@@ -143,6 +144,24 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       default: CreditHolderType.User,
     },
     organizationId: { type: String },
+    // Embed key (epic #41): agent this key is bound to (required when scopes includes EMBED_CHAT),
+    // its https origin allow-list, and optional white-label branding. See IUserApiKey / IEmbedBranding.
+    // `default: undefined` on both so a non-embed key does not materialize an empty
+    // `[]`/`{}` (which would otherwise echo in the API response for every key).
+    agentId: { type: String },
+    allowedOrigins: { type: [String], default: undefined },
+    branding: {
+      type: new mongoose.Schema<IEmbedBranding>(
+        {
+          primaryColor: { type: String },
+          logoUrl: { type: String },
+          displayName: { type: String },
+          hideBranding: { type: Boolean },
+        },
+        { _id: false }
+      ),
+      default: undefined,
+    },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },
@@ -187,6 +206,7 @@ UserApiKeySchema.index({ keyPrefix: 1, status: 1 });
 UserApiKeySchema.index({ expiresAt: 1 });
 UserApiKeySchema.index({ productId: 1, status: 1 }, { sparse: true });
 UserApiKeySchema.index({ organizationId: 1, status: 1 }, { sparse: true });
+UserApiKeySchema.index({ agentId: 1, status: 1 }, { sparse: true });
 
 UserApiKeySchema.plugin(softDeletePlugin);
 

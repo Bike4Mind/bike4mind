@@ -62,6 +62,40 @@ describe('GET /api/react-artifact-sandbox', () => {
     expect(getBody()).toMatch(/<script src="https:\/\/unpkg\.com\/prop-types@[\d.]+\/prop-types\.min\.js"><\/script>/);
   });
 
+  // Parity with publish (transpileReactArtifact.ts): the inert transform must unwrap BOTH
+  // `export default X` and `export { X as default }`. Without the second, that form survives into
+  // this classic script as a parse error and blanks the preview - while it publishes+renders fine
+  // (the divergence #544 introduced). Structural guard (the in-browser transform has no unit seam).
+  it('unwraps the `export { X as default }` default-export form too (parity with publish)', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain('__DEFAULT_EXPORT__ = '); // default-export unwrap present
+    expect(body).toContain('as\\s+default'); // ...and the `export { X as default }` rewrite
+  });
+
+  // Parity with publish: lucide icons must be built from lucide's node-array format via
+  // React.createElement children, NOT dangerouslySetInnerHTML (which injected the array as a
+  // string -> invisible icons). Structural guard (the shim lives in the template string).
+  it('renders lucide icons from the node-array format, not dangerouslySetInnerHTML', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain('React.createElement(entry[0]');
+    expect(body).toContain('Array.isArray');
+    expect(body).not.toContain('dangerouslySetInnerHTML');
+  });
+
+  // Parity with the publish transpiler's import rewriting: namespace (import * as d3) and mixed
+  // default+named (import Foo, { bar }) must be handled, else they emit invalid require() code.
+  it('handles namespace and mixed default+named imports (parity with publish)', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain('\\*\\s+as\\s+(\\w+)'); // namespace-import rewrite
+    expect(body).toContain('(\\w+)\\s*,\\s*(\\{'); // mixed default+named rewrite
+  });
+
   // This route's OWN response-header CSP grants 'unsafe-eval' in
   // script-src so Babel/new Function work, WITHOUT the app-origin CSP (proxy.ts) ever
   // carrying it. If a future change drops it from here, React artifacts break - pin it.

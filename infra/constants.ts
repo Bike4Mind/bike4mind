@@ -3,6 +3,21 @@ const isStagingStage = $app.stage === 'dev';
 /** Stages that run at full production scale (reserved concurrency, full memory, etc.) */
 export const PRODUCTION_STAGES: readonly string[] = ['production', 'dev'];
 
+/**
+ * Subscriber options for a single-record queue handler (one that reads only
+ * `event.Records[0]` rather than iterating `event.Records`).
+ *
+ * SQS defaults an event-source mapping to a batch size of 10. A single-record handler
+ * that returns success after reading record 0 causes SQS to delete the WHOLE batch as
+ * processed, so records 1..N are silently dropped: nothing errors and nothing is
+ * dead-lettered. Pinning size 1 makes each record its own invocation, so a failure can
+ * only ever lose the record that actually failed (and that one goes to the DLQ).
+ *
+ * A handler that genuinely needs throughput must instead iterate `event.Records` and
+ * report partial-batch failures (ReportBatchItemFailures) -- do NOT reach for this const.
+ */
+export const SINGLE_RECORD_BATCH = { batch: { size: 1 } } as const;
+
 export const DEFAULT_LAMBDA_ENVIRONMENT = {
   SEED_APP_NAME: $app.name,
   SEED_STAGE_NAME: $app.stage,

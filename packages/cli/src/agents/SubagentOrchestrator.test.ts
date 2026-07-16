@@ -172,6 +172,60 @@ describe('SubagentOrchestrator history capture', () => {
   });
 });
 
+describe('SubagentOrchestrator run lifecycle callbacks', () => {
+  /** LLM whose completion always throws, so agent.run() rejects. */
+  function createFailingLlm(): ICompletionBackend {
+    return {
+      currentModel: 'test-model',
+      getModelInfo: async () => [],
+      complete: async () => {
+        throw new Error('backend exploded');
+      },
+      pushToolMessages: vi.fn(),
+    };
+  }
+
+  it('invokes afterRunCallback on success', async () => {
+    const orchestrator = createRunnableOrchestrator(new AgentHistoryStore(), createOneShotLlm('done'));
+    const afterRun = vi.fn();
+    orchestrator.setAfterRunCallback(afterRun);
+
+    await orchestrator.delegateToAgent({
+      task: 'do the thing',
+      agentName: 'tester',
+      parentSessionId: 'session-1',
+      agentDefinition: inlineAgent(),
+    });
+
+    expect(afterRun).toHaveBeenCalledTimes(1);
+    expect(afterRun).toHaveBeenCalledWith(expect.anything(), 'tester');
+  });
+
+  it('invokes afterRunCallback when the run fails, so live-usage entries never leak', async () => {
+    const orchestrator = createRunnableOrchestrator(new AgentHistoryStore(), createFailingLlm());
+    const beforeRun = vi.fn();
+    const afterRun = vi.fn();
+    orchestrator.setBeforeRunCallback(beforeRun);
+    orchestrator.setAfterRunCallback(afterRun);
+
+    await expect(
+      orchestrator.delegateToAgent({
+        task: 'do the thing',
+        agentName: 'tester',
+        parentSessionId: 'session-1',
+        agentDefinition: inlineAgent(),
+      })
+    ).rejects.toThrow('backend exploded');
+
+    // The failure path must still pair beforeRun with afterRun - the CLI's
+    // wireAgentEvents relies on it to remove the live status-bar entry and
+    // fold partial usage into the session rollup.
+    expect(beforeRun).toHaveBeenCalledTimes(1);
+    expect(afterRun).toHaveBeenCalledTimes(1);
+    expect(afterRun).toHaveBeenCalledWith(beforeRun.mock.calls[0][0], 'tester');
+  });
+});
+
 describe('resume_agent end-to-end through the real orchestrator', () => {
   it('a delegated session, resumed via the tool, replays its prior conversation into the new run', async () => {
     // Records the messages the LLM sees on each call, so we can prove the

@@ -17,6 +17,10 @@ const CreateConfigSchema = z.object({
   name: z.string().min(1).max(100),
   enabled: z.boolean().optional().default(false),
 
+  // Org scoping: when set, the worker resolves GitHub/Jira/Slack strictly from
+  // this organization's connections (no system-level fallback)
+  organizationId: z.string().min(1).max(100).optional(),
+
   // Slack settings
   slackWorkspaceId: z.string().optional(),
   slackChannelId: z
@@ -70,7 +74,12 @@ const handler = baseApi()
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
-      const configs = await liveopsTriageConfigRepository.findAll();
+      // Optional org filter: list only that organization's configs
+      const { organizationId } = req.query;
+      const configs =
+        typeof organizationId === 'string' && organizationId.length > 0
+          ? await liveopsTriageConfigRepository.findByOrganizationId(organizationId)
+          : await liveopsTriageConfigRepository.findAll();
       return res.json(configs);
     } catch (error) {
       console.error('[LIVEOPS-CONFIG-API] Error fetching configs:', error);

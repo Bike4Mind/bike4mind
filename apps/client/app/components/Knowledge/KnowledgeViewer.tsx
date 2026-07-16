@@ -311,15 +311,30 @@ const isMarkdownFile = (item: KnowledgeItem | undefined) => {
   );
 };
 
+// docx/xlsx are AI-editable via the binary round-trip path (kept in sync with
+// isAiEditableOfficeMime in @bike4mind/utils, which the /edit route enforces server-side).
+const isAiEditableOfficeFile = (item: KnowledgeItem | undefined) => {
+  if (!item || item.type !== 'file') return false;
+  const mime = item.content.mimeType;
+  return mime === SupportedFabFileMimeTypes.DOCX || mime === SupportedFabFileMimeTypes.XLSX;
+};
+
+const isAiEditableFile = (item: KnowledgeItem | undefined) => isMarkdownFile(item) || isAiEditableOfficeFile(item);
+
+// Text edits gate on 50 KB of content; Office files gate on a larger BINARY size because the
+// real content-size limit is enforced server-side on the extracted text representation.
+const AI_EDIT_TEXT_SIZE_LIMIT = 50 * 1024;
+const AI_EDIT_OFFICE_SIZE_LIMIT = 5 * 1024 * 1024;
+
 const isWithinSizeLimit = (item: KnowledgeItem) => {
   if (!item || item.type !== 'file') return false;
-  // 50 kb only
-  return item.content.fileSize < 50 * 1024;
+  const limit = isAiEditableOfficeFile(item) ? AI_EDIT_OFFICE_SIZE_LIMIT : AI_EDIT_TEXT_SIZE_LIMIT;
+  return item.content.fileSize < limit;
 };
 
 const buttonTooltipTitle = (item: KnowledgeItem) => {
-  if (!isWithinSizeLimit(item)) return 'Edit with AI disabled. File is too large (max 50kb).';
-  if (!isMarkdownFile(item)) return 'Edit with AI disabled. This is a non-markdown file.';
+  if (!isWithinSizeLimit(item)) return 'Edit with AI disabled. File is too large.';
+  if (!isAiEditableFile(item)) return 'Edit with AI disabled. This file type is not supported.';
   return 'Edit with AI';
 };
 
@@ -1422,7 +1437,7 @@ const KnowledgeViewer: React.FC<KnowledgeViewerProps> = ({ autoHideOnEmpty = tru
                         borderColor: theme.palette.divider,
                       })}
                       disabled={
-                        !isMarkdownFile(knowledgeItems[selectedTabIndex]) ||
+                        !isAiEditableFile(knowledgeItems[selectedTabIndex]) ||
                         !isWithinSizeLimit(knowledgeItems[selectedTabIndex])
                       }
                       data-testid="knowledgeviewer-ai-edit-btn"

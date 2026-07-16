@@ -12,8 +12,8 @@ import { TanStackRouterDevtools } from '@tanstack/router-devtools';
 import { CircularProgress, Box, Typography } from '@mui/joy';
 import NotebookLayout from '@client/app/components/layouts/Notebook';
 import { useUser } from '@client/app/contexts/UserContext';
-import { useAccessToken } from '@client/app/hooks/useAccessToken';
-import { buildRedirectTo, shouldRedirectToConsent } from '@client/app/utils/authRedirect';
+import { buildRedirectTo } from '@client/app/utils/authRedirect';
+import { enforceConsentRedirect } from '@client/app/utils/consentGuard';
 
 // Keep layout components as eager imports for optimal performance
 import RestrictedPage from './components/common/RestrictedPage';
@@ -142,6 +142,9 @@ const builtStandalonePremiumRoutes = premiumRoutes
     return createRoute({
       getParentRoute: () => rootRoute,
       path: descriptor.path,
+      // Standalone premium pages bypass the layoutRoute consent guard (they hang off rootRoute),
+      // so opt them in via the shared guard like the other standalone routes (issue #382).
+      beforeLoad: ({ location }) => enforceConsentRedirect(location),
       component: () => <ProviderBundle>{gated}</ProviderBundle>,
     });
   });
@@ -175,7 +178,7 @@ const layoutRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'layout',
   beforeLoad: ({ location }) => {
-    const { currentUser, isHydrated } = useUser.getState();
+    const { currentUser } = useUser.getState();
     if (!currentUser) {
       const redirectTo = buildRedirectTo(
         location.pathname,
@@ -188,26 +191,10 @@ const layoutRoute = createRoute({
       });
     }
 
-    // P0-B abuse gate: route an authenticated-but-not-yet-consented account (in
-    // practice a brand-new OAuth/SAML/OTC user) to the acceptance interstitial. UX only - the
-    // server consent-gate middleware is the real enforcement - but it turns opaque 403s into a
-    // smooth redirect. Gated on `isHydrated` so a rehydrated pre-deploy session (whose persisted
-    // user stub predates `aupAcceptedVersion`) does not flash the interstitial before /api/identify
-    // refetches the server-authoritative value, and on a live `accessToken` so a token-less/broken
-    // session goes to /login (which can re-auth) rather than being trapped in a /login <->
-    // /accept-policies loop - see shouldRedirectToConsent and issue #386.
-    const { accessToken } = useAccessToken.getState();
-    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
-      const redirectTo = buildRedirectTo(
-        location.pathname,
-        location.searchStr,
-        location.hash ? `#${location.hash}` : ''
-      );
-      throw redirect({
-        to: '/accept-policies',
-        search: redirectTo ? { redirectTo } : undefined,
-      });
-    }
+    // P0-B abuse gate: route an authenticated-but-not-yet-consented account (in practice a
+    // brand-new OAuth/SAML/OTC user) to the acceptance interstitial. Shared with the standalone
+    // rootRoute children so the guard can't drift (see enforceConsentRedirect / issue #382).
+    enforceConsentRedirect(location);
 
     // Handle redirects stored in sessionStorage to work around CloudFront Access Denied
     // on SPA routes (CloudFront can only serve "/" directly; all other paths return 403).
@@ -801,6 +788,7 @@ const hudRoute = createRoute({
 const slackInstallRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations/slack/install',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <SlackInstallPage />
@@ -811,6 +799,7 @@ const slackInstallRoute = createRoute({
 const slackSuccessRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations/slack/success',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <SlackSuccessPage />
@@ -828,6 +817,7 @@ const slackSuccessRoute = createRoute({
 const slackErrorRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations/slack/error',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <SlackErrorPage />
@@ -845,6 +835,7 @@ const slackErrorRoute = createRoute({
 const atlassianSelectSiteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/integrations/atlassian/select-site',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <AtlassianSelectSitePage />
@@ -853,29 +844,16 @@ const atlassianSelectSiteRoute = createRoute({
 });
 
 // Device activation route (OAuth device flow). A rootRoute child (own chrome, not the notebook
-// layout), so it does NOT inherit the layoutRoute consent guard. Re-run just the consent check here
-// so an authenticated-but-not-yet-consented user is routed to /accept-policies (preserving a return
-// path back to /activate?code=...) instead of being shown the form only to have Approve Device fail
-// the server consent gate with a misleading 403. The unauthenticated -> /login redirect stays in the
-// component (shouldRedirectToConsent is a no-op without a currentUser). See issue #369.
+// layout), so it does NOT inherit the layoutRoute consent guard - it opts in via the shared
+// enforceConsentRedirect so an authenticated-but-not-yet-consented user is routed to
+// /accept-policies (preserving a return path back to /activate?code=...) instead of being shown the
+// form only to have Approve Device fail the server consent gate with a misleading 403. The
+// unauthenticated -> /login redirect stays in the component (the guard is a no-op without a
+// currentUser). See issues #369 and #382.
 const activateRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/activate',
-  beforeLoad: ({ location }) => {
-    const { currentUser, isHydrated } = useUser.getState();
-    const { accessToken } = useAccessToken.getState();
-    if (shouldRedirectToConsent({ currentUser, isHydrated, accessToken })) {
-      const redirectTo = buildRedirectTo(
-        location.pathname,
-        location.searchStr,
-        location.hash ? `#${location.hash}` : ''
-      );
-      throw redirect({
-        to: '/accept-policies',
-        search: redirectTo ? { redirectTo } : undefined,
-      });
-    }
-  },
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <ActivatePage />
@@ -892,6 +870,7 @@ const activateRoute = createRoute({
 const adminRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/admin',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <RestrictedPage requireAdmin={true}>
       {/* These providers are not usually needed in an unprotected page. This prevents unnecessary API fetch */}
@@ -929,6 +908,7 @@ const emailUnsubscribeRoute = createRoute({
 const oauthAuthorizeRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/oauth/authorize',
+  beforeLoad: ({ location }) => enforceConsentRedirect(location),
   component: () => (
     <Suspense fallback={<RouteLoadingFallback />}>
       <OAuthAuthorizePage />

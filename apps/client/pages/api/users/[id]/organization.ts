@@ -1,7 +1,8 @@
-import { IOrganization } from '@bike4mind/common';
+import { IOrganization, toSafeOrganization } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { User } from '@bike4mind/database';
+import { ForbiddenError } from '@server/utils/errors';
 
 /**
  * Get the organization of a user
@@ -9,6 +10,12 @@ import { User } from '@bike4mind/database';
 const handler = baseApi().get(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const userId = req.query.id;
+
+    // The organization document carries billing and member data, so only the
+    // user themselves or an admin may read their org via this route.
+    if (userId !== req.user.id && !req.user.isAdmin) {
+      throw new ForbiddenError('Not authorized to view this organization');
+    }
 
     const user = await User.findById(userId)
       .populate({
@@ -20,7 +27,9 @@ const handler = baseApi().get(
       .select('organizationId');
     const organization = (user?.organizationId as unknown as IOrganization) || null;
 
-    return res.json(organization);
+    // The caller may be a member (not owner) of their primary org, so strip billing
+    // identifiers unless they own it or are an admin.
+    return res.json(toSafeOrganization(organization, { userId: req.user.id, isAdmin: req.user.isAdmin }));
   })
 );
 

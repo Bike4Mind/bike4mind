@@ -21,6 +21,8 @@ interface FileBrowserActionsProps {
   onSelectAll: () => void;
   onDelete: () => void;
   onAdd: () => void;
+  /** i18n key for the add-button label when files are selected; defaults to the notebook copy. */
+  addButtonLabelKey?: string;
   onShare: () => void;
   onTag: (tag: IFileTag) => Promise<void>;
   className?: string;
@@ -38,6 +40,7 @@ const FileBrowserActions: FC<FileBrowserActionsProps> = ({
   onSelectAll,
   onDelete,
   onAdd,
+  addButtonLabelKey,
   onShare,
   onTag,
   currentPage = 1,
@@ -431,7 +434,7 @@ const FileBrowserActions: FC<FileBrowserActionsProps> = ({
         <Add sx={{ strokeWidth: '2' }} />
         <Box component="span" sx={{ display: { xs: 'none', md: 'inline' } }}>
           {selectedCount > 0
-            ? t('file_browser.add_files_to_notebook', { count: selectedCount })
+            ? t(addButtonLabelKey ?? 'file_browser.add_files_to_notebook', { count: selectedCount })
             : t('file_browser.add_files')}
         </Box>
       </Button>

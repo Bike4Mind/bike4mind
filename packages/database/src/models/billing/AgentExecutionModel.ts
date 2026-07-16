@@ -822,6 +822,23 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
   }
 
   /**
+   * All executions in a session, projected to just the billing fields, for the
+   * per-session usage-detail view. Uses the {sessionId, status} index; oldest
+   * first so the trace reads top to bottom.
+   */
+  async findBillingBySessionId(
+    sessionId: string
+  ): Promise<
+    Array<Pick<IAgentExecution, 'id' | 'status' | 'parentExecutionId' | 'totalCreditsUsed' | 'iterationBilling'>>
+  > {
+    const results = await this.model
+      .find({ sessionId })
+      .select('status parentExecutionId totalCreditsUsed iterationBilling')
+      .sort({ createdAt: 1 });
+    return results.map(doc => doc.toObject());
+  }
+
+  /**
    * Find background children spawned by a parent execution. Used by the abort cascade
    * to propagate aborts from the parent to its background children. Returns only
    * children that are still in an active status.

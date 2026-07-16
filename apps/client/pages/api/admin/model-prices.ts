@@ -75,6 +75,7 @@ const handler = baseApi()
         pricing: entry.pricing,
         effectiveFrom: new Date(),
         note: SEED_NOTE,
+        repricedBy: req.user.id,
       });
       return res.json({ row });
     }
@@ -122,6 +123,7 @@ const handler = baseApi()
       pricing,
       effectiveFrom: new Date(),
       note,
+      repricedBy: req.user.id,
     });
     return res.json({ row });
   });

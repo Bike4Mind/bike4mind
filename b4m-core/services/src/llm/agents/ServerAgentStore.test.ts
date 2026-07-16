@@ -104,6 +104,21 @@ describe('ServerAgentStore', () => {
     });
   });
 
+  describe('getExclusiveMcpServers', () => {
+    it('returns the built-in agents exclusive MCP servers (includes atlassian from project_manager)', () => {
+      // agent_executor relies on this value to withhold atlassian from the parent LLM while routing
+      // it to the delegated project_manager subagent. If it stops returning atlassian, the fix breaks.
+      const store = new ServerAgentStore({});
+      expect(store.getExclusiveMcpServers()).toContain('atlassian');
+    });
+
+    it('dedups a server claimed by more than one agent', () => {
+      const extra = makeCustomAgent({ name: 'second_atlassian_agent', exclusiveMcpServers: ['atlassian'] });
+      const store = new ServerAgentStore({}, { orgAgents: [extra] });
+      expect(store.getExclusiveMcpServers().filter(s => s === 'atlassian')).toHaveLength(1);
+    });
+  });
+
   describe('getFilteredStore', () => {
     it('returns a store containing only the named agents (custom + built-in)', () => {
       const store = new ServerAgentStore({}, { orgAgents: [makeCustomAgent({ name: 'compliance_reviewer' })] });

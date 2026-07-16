@@ -143,12 +143,17 @@ const SANDBOX_HTML = `<!DOCTYPE html>
             var rest = Object.assign({}, props);
             delete rest.size; delete rest.color; delete rest.strokeWidth; delete rest.className;
             var kebab = toKebabCase(iconName);
-            var iconContent = (window.lucide && (lucide.icons[kebab] || lucide.icons[iconName])) || '';
+            // lucide's UMD stores each icon as a node array ([tag, attrs][]), NOT an HTML string -
+            // build real SVG children from it (injecting the array as innerHTML renders nothing).
+            var node = (window.lucide && lucide.icons && (lucide.icons[iconName] || lucide.icons[kebab])) || null;
+            var children = Array.isArray(node)
+              ? node.map(function (entry, i) { return React.createElement(entry[0], Object.assign({ key: i }, entry[1])); })
+              : null;
             return React.createElement('svg', Object.assign({
               xmlns: 'http://www.w3.org/2000/svg', width: size, height: size, viewBox: '0 0 24 24',
               fill: 'none', stroke: color, strokeWidth: strokeWidth, strokeLinecap: 'round', strokeLinejoin: 'round',
-              className: className, dangerouslySetInnerHTML: { __html: iconContent }
-            }, rest));
+              className: className
+            }, rest), children);
           };
         }
       });
@@ -182,13 +187,23 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         var moduleMap = { 'react': React };
         deps.forEach(function (d) { var meta = OPTIONAL_DEPS[d]; if (meta) moduleMap[d] = window[meta.globalVar]; });
         var require = function (module) {
-          if (moduleMap[module]) return moduleMap[module];
+          // hasOwnProperty (not a truthy check): a plain-object moduleMap inherits Object.prototype,
+          // so \`moduleMap['toString']\` etc. would resolve to a prototype method instead of throwing.
+          if (Object.prototype.hasOwnProperty.call(moduleMap, module)) return moduleMap[module];
           throw new Error('Module "' + module + '" is not available');
         };
 
-        var transformedCode = code.replace(/import\\s+([^;]+)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
+        var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
+          // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
+          // would emit an invalid \`const * as d3 = require(...)\` (matches the publish transpiler).
+          var ns = imports.trim().match(/^\\*\\s+as\\s+(\\w+)$/);
+          if (ns) return 'const ' + ns[1] + " = require('" + module + "');";
+          // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
+          // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
+          var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
+          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + mixed[2] + ' = ' + mixed[1] + ';';
           return 'const ' + imports + " = require('" + module + "');";
         });
 
@@ -217,7 +232,13 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           }
         }
 
-        var codeWithoutExports = processedCode.replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ');
+        // Unwrap the default export into the local the render reads. Handle BOTH forms that
+        // checkHasDefaultExport accepts - \`export default X\` and \`export { X as default }\` - so the
+        // preview stays in parity with publish (transpileReactArtifact.ts does the same); otherwise
+        // the \`export { ... }\` survives into this classic script as a parse error and blanks #root.
+        var codeWithoutExports = processedCode
+          .replace(/export\\s+default\\s+/g, 'const __DEFAULT_EXPORT__ = ')
+          .replace(/export\\s*\\{\\s*([A-Za-z_$][\\w$]*)\\s+as\\s+default\\s*\\}/g, 'const __DEFAULT_EXPORT__ = $1');
 
         if (mode === 'inert') {
           // Eval-free execution (#9403 M3): Babel.transform above only PARSES + GENERATES code

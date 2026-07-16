@@ -26,6 +26,7 @@ const handler = baseApi()
     // Gate first (org-aware, not-found-style denial) so this write path can't be used
     // to probe existence or act cross-org - consistent with the lifecycle endpoint.
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    dataLakeService.assertLakeWritable(lake);
 
     const updated = await dataLakeService.updateDataLake(
       { userId: ctx.userId, isAdmin: ctx.isAdmin },
@@ -43,6 +44,7 @@ const handler = baseApi()
     const { id } = req.query as { id: string };
     const ctx = await toAccessContext(req);
     const lake = await dataLakeService.assertLakeAccess(id, ctx, { db: { dataLakes: dataLakeRepository } });
+    dataLakeService.assertLakeWritable(lake);
 
     const archived = await dataLakeService.archiveDataLake({ userId: ctx.userId, isAdmin: ctx.isAdmin }, lake.id, {
       db: {

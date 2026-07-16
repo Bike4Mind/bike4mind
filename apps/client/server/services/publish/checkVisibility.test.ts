@@ -1,6 +1,23 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { checkVisibility, type VisibilityCheckArtifact } from './checkVisibility';
 import type { PublishUser } from './checkScopePermission';
+
+const { mockUserFindById, projectFindOne } = vi.hoisted(() => ({
+  mockUserFindById: vi.fn(),
+  projectFindOne: vi.fn(),
+}));
+
+vi.mock('@bike4mind/database', () => ({
+  User: {
+    findById: (...a: unknown[]) => ({
+      select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }),
+    }),
+  },
+  Project: { findOne: (...a: unknown[]) => projectFindOne(...a) },
+}));
+
+// Project.findOne(...).select('_id').lean()
+const lean = (value: unknown) => ({ select: () => ({ lean: () => Promise.resolve(value) }) });
 
 const artifact = (over: Partial<VisibilityCheckArtifact> = {}): VisibilityCheckArtifact => ({
   visibility: 'private',
@@ -75,21 +92,36 @@ describe('checkVisibility', () => {
     const r = await checkVisibility(artifact({ visibility: 'private' }), user());
     expect(r).toMatchObject({ ok: false, status: 403 });
   });
+
+  describe('project visibility (issue #610 - member path)', () => {
+    beforeEach(() => {
+      projectFindOne.mockReset();
+    });
+
+    const projectArtifact = artifact({ visibility: 'project', scopeId: 'p1', ownerId: 'someone-else' });
+
+    it('queries the stored users.userId membership path, never users.id', async () => {
+      projectFindOne.mockReturnValue(lean(null));
+      await checkVisibility(projectArtifact, user());
+
+      const [query] = projectFindOne.mock.calls[0] as [{ $or: Array<Record<string, unknown>> }];
+      expect(query.$or).toEqual(expect.arrayContaining([{ userId: 'viewer1' }, { 'users.userId': 'viewer1' }]));
+      expect(query.$or.flatMap(clause => Object.keys(clause))).not.toContain('users.id');
+    });
+
+    it('allows a project member (row matched by users.userId)', async () => {
+      projectFindOne.mockReturnValue(lean({ _id: 'p1' }));
+      expect(await checkVisibility(projectArtifact, user())).toEqual({ ok: true });
+    });
+
+    it('403s a non-member', async () => {
+      projectFindOne.mockReturnValue(lean(null));
+      expect(await checkVisibility(projectArtifact, user())).toMatchObject({ ok: false, status: 403 });
+    });
+  });
 });
 
 // Access gates (issue #383) - layered on top of visibility: 'public'
-import { vi, beforeEach } from 'vitest';
-
-const { mockUserFindById } = vi.hoisted(() => ({ mockUserFindById: vi.fn() }));
-
-vi.mock('@bike4mind/database', () => ({
-  User: {
-    findById: (...a: unknown[]) => ({
-      select: () => ({ lean: () => Promise.resolve(mockUserFindById(...a)) }),
-    }),
-  },
-}));
-
 const gatedBase = { ownerId: 'owner1', scopeId: 'scope1' } as const;
 const gViewer = { id: 'viewer1' };
 const gOwner = { id: 'owner1' };

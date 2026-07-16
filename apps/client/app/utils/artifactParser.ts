@@ -365,7 +365,7 @@ export function extractReactDependencies(content: string): string[] {
  * Checks if React component has a default export
  */
 export function checkHasDefaultExport(content: string): boolean {
-  return /export\s+default\s+/i.test(content) || /export\s*{\s*\w+\s+as\s+default\s*}/i.test(content);
+  return /export\s+default\s+/i.test(content) || /export\s*{\s*[A-Za-z_$][\w$]*\s+as\s+default\s*}/i.test(content);
 }
 
 /**

@@ -1,5 +1,6 @@
 import Grid from '@mui/joy/Grid';
 import { FC, PropsWithChildren, ReactNode, useEffect, useState } from 'react';
+import { useLocation } from '@tanstack/react-router';
 import NotebookSideNav from './Sidenav';
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
@@ -78,8 +79,15 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   // Knowledge viewer is open when layout is not 'hide'
   const isKnowledgeViewerOpen = layout !== 'hide';
 
+  // Mirrors useOptiAccess's route check: '/opti' only exists in overlay builds.
+  const { pathname } = useLocation();
+  const isOptiRoute = pathname.startsWith('/opti');
+
   const getContentPadding = (): string => {
     if (isMobile) return '0px';
+    // The Opti hub manages its own edge-to-edge layout (docked chat + splitter);
+    // the notebook gutter would double up as a visible frame around it.
+    if (isOptiRoute) return '0px';
     if (openSideNav && isKnowledgeViewerOpen) return '12px 12px 12px 12px';
     if (openSideNav) return '12px 12px 12px 12px';
     if (isKnowledgeViewerOpen) return '12px 12px 12px 36px';

@@ -6,6 +6,7 @@ export * from './ArtifactVersionModel';
 export * from './BriefcasePromptModel';
 export * from './FabFileModel';
 export * from './FavoriteModel';
+export * from './ImageGenerationTemplateModel';
 export * from './ImageModerationIncidentModel';
 export * from './ImportHistoryJobModel';
 export * from './AnnotationModel';

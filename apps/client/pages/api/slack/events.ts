@@ -393,6 +393,8 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
             preferredModel: c.preferredModel,
             temperature: c.temperature,
             maxTokens: c.maxTokens,
+            githubOwner: c.githubOwner,
+            githubRepo: c.githubRepo,
           }));
         }
       }
@@ -826,6 +828,7 @@ const handler = baseApi({ auth: false }).post(async (req, res) => {
     getUserName: (userId: string) => slackClient.getUserName(userId),
     user,
     slackUserId: slackEvent.user,
+    channelId: slackEvent.channel,
     logger,
   });
   req.logger.info(systemPrompt);
