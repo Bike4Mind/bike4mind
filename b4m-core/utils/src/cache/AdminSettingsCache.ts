@@ -204,7 +204,10 @@ export class AdminSettingsCache {
     const fetchStart = Date.now();
 
     const setting = await db.adminSettings.findBySettingName(settingName);
-    const value = setting?.settingValue || null;
+    // `?? null`, not `|| null`: a setting stored as boolean `false` (e.g. an admin-disabled
+    // defaultValue:true flag) must survive the round-trip. `|| null` collapsed it to null,
+    // which let the caller fall back to the default and silently re-enable the flag.
+    const value = setting?.settingValue ?? null;
 
     const fetchTime = Date.now() - fetchStart;
     this.logger.debug(`📦 Cached individual setting '${settingName}' in ${fetchTime}ms`);
