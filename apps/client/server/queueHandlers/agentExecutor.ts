@@ -123,7 +123,7 @@ import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
-import type { Context, SQSEvent } from 'aws-lambda';
+import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 
 registerLambdaErrorHandlers();
 
@@ -429,8 +429,11 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
   let startPayload: StartExecutionPayload | undefined;
 
   if (isSqsEvent) {
-    // Process all SQS records, not just the first
+    // Process all SQS records, not just the first. The queue is subscribed with
+    // batch.partialResponses: true, so a per-record failure is reported via
+    // batchItemFailures instead of swallowed, letting SQS retry/DLQ just that record.
     const sqsEvent = event as SQSEvent;
+    const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
     for (const record of sqsEvent.Records) {
       // Per-record try/catch so a poison message (malformed JSON, schema
       // mismatch) doesn't take down the rest of the batch. SQS's own DLQ
@@ -486,12 +489,13 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
           messageId: record.messageId,
           error: recordErr instanceof Error ? recordErr.message : String(recordErr),
         });
-        // Don't rethrow - let the batch complete. The failed record will be
-        // retried via SQS's at-least-once delivery; persistently malformed
-        // messages eventually go to the DLQ.
+        // Report this record as failed so SQS retries/DLQs it; keep processing the
+        // rest. The continuation is CAS-guarded (processExecution claims the
+        // execution before mutating it), so a retry-driven redelivery is safe.
+        batchItemFailures.push({ itemIdentifier: record.messageId });
       }
     }
-    return;
+    return { batchItemFailures };
   } else if (isStartPayload(event as Record<string, unknown>)) {
     // Distinguish start vs continuation by payload shape
     startPayload = StartExecutionSchema.parse(event);

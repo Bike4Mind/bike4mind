@@ -15,6 +15,7 @@ import {
 } from '@bike4mind/common';
 import { dispatchWithLogger } from '@server/queueHandlers/utils';
 import mailer from '@server/utils/mailer';
+import { SQSBatchResponse } from 'aws-lambda';
 import { z } from 'zod';
 
 const BatchPayload = z.object({
@@ -30,8 +31,11 @@ const PARALLEL_SEND_SIZE = 5;
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_DELAY_MS = 1000; // 1 second delay between retries
 
-export const dispatch = dispatchWithLogger(async (event, context, logger) => {
-  // Process all SQS records in this invocation (supports batch processing)
+export const dispatch = dispatchWithLogger<SQSBatchResponse>(async (event, context, logger) => {
+  // Process all SQS records in this invocation (supports batch processing). The queue is
+  // subscribed with batch.partialResponses: true, so a per-record failure is reported here
+  // instead of swallowed, letting SQS retry/DLQ just that record.
+  const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
   for (const record of event.Records) {
     try {
       const body = JSON.parse(record.body);
@@ -109,9 +113,12 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       await checkJobCompletion(jobId, logger);
     } catch (error) {
       logger.error('Failed to process batch record', error);
-      // Continue processing other records even if one fails
+      // Report this record as failed so SQS retries/DLQs it; keep processing the rest.
+      batchItemFailures.push({ itemIdentifier: record.messageId });
     }
   }
+
+  return { batchItemFailures };
 });
 
 async function processAttempt(
