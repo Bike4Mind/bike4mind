@@ -1502,6 +1502,7 @@ function CliApp() {
     decisionStore: decisionStoreRef.current,
     blockerStore: blockerStoreRef.current,
     reviewGateStore: reviewGateStoreRef.current,
+    todoStore: todoStoreRef.current,
     onSessionReplaced: () => {
       usageCache = null;
     },
