@@ -1502,6 +1502,7 @@ function CliApp() {
     decisionStore: decisionStoreRef.current,
     blockerStore: blockerStoreRef.current,
     reviewGateStore: reviewGateStoreRef.current,
+    todoStore: todoStoreRef.current,
     onSessionReplaced: () => {
       usageCache = null;
     },
@@ -1798,6 +1799,7 @@ function CliApp() {
     const handoff = buildLocalHandoff(session, {
       decisions: decisionStoreRef.current.decisions,
       blockers: blockerStoreRef.current.blockers,
+      todos: todoStoreRef.current.todos,
     });
     applyHandoffToWorkflow(session, handoff);
     const filePath = await writeHandoffMarkdown(session);

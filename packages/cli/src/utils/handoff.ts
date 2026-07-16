@@ -10,6 +10,7 @@ import type {
   WorkflowDecision,
   WorkflowState,
 } from '../storage/types.js';
+import type { TodoItem } from '../tools/writeTodosTool.js';
 
 /**
  * Sessions with fewer messages than this skip handoff generation.
@@ -288,25 +289,42 @@ const LOCAL_HANDOFF_MESSAGE_CHARS = 1500;
  * may not yet have been synced from those refs. Without it, the handoff would
  * reflect a stale snapshot while `applyHandoffToWorkflow` writes the fresh
  * refs - leaving the handoff and the surrounding workflow object out of sync.
+ * The optional `todos` carries the live in-memory todo list (never persisted to
+ * the session), so the fallback can surface open work as next steps.
  */
 export function buildLocalHandoff(
   session: Session,
-  workflowOverride?: { decisions: WorkflowDecision[]; blockers: WorkflowBlocker[] }
+  workflowOverride?: {
+    decisions: WorkflowDecision[];
+    blockers: WorkflowBlocker[];
+    todos?: TodoItem[];
+  }
 ): SessionHandoff {
   const workflow = session.metadata.workflow;
   const decisions = workflowOverride?.decisions ?? workflow?.decisions ?? [];
   const allBlockers = workflowOverride?.blockers ?? workflow?.blockers ?? [];
   const openBlockers = allBlockers.filter(b => b.status === 'open');
+  const todos = workflowOverride?.todos ?? [];
+  const openTodos = todos.filter(t => t.status === 'pending' || t.status === 'in_progress');
+  const currentTask = todos.find(t => t.status === 'in_progress');
 
-  const summary =
-    `Local handoff for session "${session.name}" (${session.messages.length} messages, model ${session.model}). ` +
-    `Generated from session state without an LLM call — no narrative synthesis.`;
+  const parts: string[] = [
+    `Local handoff for session "${session.name}" (${session.messages.length} messages, model ${session.model}).`,
+    `${decisions.length} decisions, ${openBlockers.length} open blockers, ${openTodos.length} open todos.`,
+  ];
+  if (currentTask) {
+    parts.push(`Current task: ${currentTask.description}.`);
+  }
+  if (decisions.length > 0) {
+    parts.push(`Latest decision: ${decisions[decisions.length - 1].summary}.`);
+  }
+  parts.push('Generated from session state without an LLM call; no narrative synthesis.');
 
   return {
-    summary,
-    keyFindings: [],
-    nextSteps: [],
-    pendingDecisions: decisions.map(d => `${d.summary} (rationale: ${d.rationale})`),
+    summary: parts.join(' '),
+    keyFindings: decisions.map(d => `${d.summary} (rationale: ${d.rationale})`),
+    nextSteps: [...openTodos.map(t => t.description), ...openBlockers.map(b => `Resolve blocker: ${b.description}`)],
+    pendingDecisions: [],
     blockers: openBlockers.map(b => b.description),
     generatedAt: new Date().toISOString(),
   };

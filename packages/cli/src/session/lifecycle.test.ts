@@ -10,7 +10,7 @@ import {
 import { useCliStore } from '../store';
 import type { Session, Message, SessionStore } from '../storage';
 import type { ReActAgent } from '@bike4mind/agents';
-import type { DecisionStore, BlockerStore, ReviewGateStore } from '../tools';
+import type { DecisionStore, BlockerStore, ReviewGateStore, TodoStore } from '../tools';
 
 /**
  * Boundary tests for the extracted session lifecycle (issue #228, phase 3). They
@@ -62,6 +62,7 @@ function makeCtx(overrides: Partial<SessionLifecycleContext> = {}): SessionLifec
     decisionStore: { decisions: [] } as DecisionStore,
     blockerStore: { blockers: [] } as BlockerStore,
     reviewGateStore: { reviewGates: [] } as ReviewGateStore,
+    todoStore: { todos: [] } as TodoStore,
     onSessionReplaced: vi.fn(),
     drainReviewGatePrompt: vi.fn(),
   };
@@ -118,8 +119,9 @@ describe('session lifecycle', () => {
         .setSession(makeSession({ id: 'old', model: 'claude-opus-4-8', messages: [message('user', 'x')] }));
       const decisionStore = { decisions: [{ id: 'd1' }] } as unknown as DecisionStore;
       const blockerStore = { blockers: [{ id: 'b1' }] } as unknown as BlockerStore;
+      const todoStore = { todos: [{ description: 'stale', status: 'in_progress' }] } as unknown as TodoStore;
       const onSessionReplaced = vi.fn();
-      const ctx = makeCtx({ decisionStore, blockerStore, onSessionReplaced });
+      const ctx = makeCtx({ decisionStore, blockerStore, todoStore, onSessionReplaced });
 
       const created = await createFreshSession(ctx);
 
@@ -129,6 +131,9 @@ describe('session lifecycle', () => {
       expect(useCliStore.getState().session).toBe(created);
       expect(decisionStore.decisions).toEqual([]);
       expect(blockerStore.blockers).toEqual([]);
+      // Todos are never persisted; a session switch must clear them so a prior
+      // session's todos cannot bleed into the new session's offline handoff.
+      expect(todoStore.todos).toEqual([]);
       expect(ctx.checkpointStore!.setSessionId).toHaveBeenCalledWith(created.id);
       expect(onSessionReplaced).toHaveBeenCalledOnce();
     });
