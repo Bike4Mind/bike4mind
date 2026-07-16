@@ -33,6 +33,50 @@ import {
 const CANCELLED_TOOL_RESULT = 'Tool call cancelled before execution (run aborted).';
 
 /**
+ * Prefix tag marking the injected live-workflow-state reminder message (see
+ * AgentRunOptions.workflowReminder). Single source of truth for both the
+ * remove-on-refresh check and the message builder so they cannot drift.
+ * User-role (not system) because tool_result exchanges already produce
+ * consecutive user messages mid-conversation; a mid-list system message is
+ * not portable across provider adapters.
+ */
+export const WORKFLOW_REMINDER_MARKER = '[Workflow state reminder]';
+
+/** True when a message is a previously-injected workflow reminder. */
+function isWorkflowReminder(message: IMessage): boolean {
+  return (
+    message.role === 'user' &&
+    typeof message.content === 'string' &&
+    message.content.startsWith(WORKFLOW_REMINDER_MARKER)
+  );
+}
+
+/**
+ * Remove any injected workflow reminder in place. Called before history
+ * trimming each iteration: the reminder is a plain-string user message, which
+ * trimConversationHistory's boundary heuristic would otherwise mistake for an
+ * iteration nudge.
+ */
+function removeWorkflowReminder(messages: IMessage[]): void {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (isWorkflowReminder(messages[i])) messages.splice(i, 1);
+  }
+}
+
+/**
+ * Append a fresh workflow reminder as the LAST message before the LLM call.
+ * Tail placement keeps the ever-changing reminder from invalidating the
+ * cached prompt prefix. No-op when the provider is absent or returns empty.
+ */
+function appendWorkflowReminder(messages: IMessage[], provider?: () => string | null): void {
+  if (!provider) return;
+  const body = provider()?.trim();
+  if (body) {
+    messages.push({ role: 'user', content: `${WORKFLOW_REMINDER_MARKER}\n${body}` });
+  }
+}
+
+/**
  * Map a tool execution result to the observation string appended to history.
  * Backfills a cancellation placeholder for tools that never ran (absent from the
  * results map) or were aborted mid-flight, so every advertised tool_use is
@@ -306,6 +350,11 @@ export class ReActAgent extends EventEmitter {
         const iterStartInputTokens = this.totalInputTokens;
         const iterStartOutputTokens = this.totalOutputTokens;
 
+        // Drop the previous iteration's workflow reminder BEFORE trimming so
+        // it is never counted as an iteration boundary and never stacks; a
+        // fresh copy is appended at the tail below.
+        removeWorkflowReminder(messages);
+
         // Trim conversation history AND steps to last N iterations if configured.
         // Both are trimmed together to keep messages and steps arrays consistent
         // and prevent unbounded memory growth during long-running agent loops.
@@ -313,6 +362,8 @@ export class ReActAgent extends EventEmitter {
           trimConversationHistory(messages, maxHistoryIterations, this.initialMessageCount);
           trimSteps(this.steps, maxHistoryIterations);
         }
+
+        appendWorkflowReminder(messages, options.workflowReminder);
 
         // Build cache strategy for prompt caching (system prompt + tools are static across iterations)
         const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
@@ -1049,12 +1100,18 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
 
       this.context.logger.debug(`[ReActAgent] Starting iteration ${this.iterations}/${maxIterations}`);
 
+      // Drop the previous iteration's workflow reminder BEFORE trimming (see
+      // the matching block in run()); a fresh copy is appended below.
+      removeWorkflowReminder(this.messages);
+
       // Trim conversation history and steps to last N iterations
       const maxHistoryIterations = options.maxHistoryIterations ?? 4;
       if (maxHistoryIterations > 0 && this.iterations > 1) {
         trimConversationHistory(this.messages, maxHistoryIterations, this.initialMessageCount);
         trimSteps(this.steps, maxHistoryIterations);
       }
+
+      appendWorkflowReminder(this.messages, options.workflowReminder);
 
       let iterationComplete = false;
       let currentText = '';

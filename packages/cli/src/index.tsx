@@ -295,6 +295,7 @@ function CliApp() {
   const imageStoreInitPromise = useRef<Promise<ImageStore> | null>(null);
 
   // Durable workflow stores - refs so they're accessible across all callbacks
+  const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
@@ -842,7 +843,8 @@ function CliApp() {
       const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
 
       // Create write_todos tool for task tracking
-      const todoStore = createTodoStore();
+      const todoStore = todoStoreRef.current;
+      todoStore.todos = [];
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)
@@ -1479,6 +1481,9 @@ function CliApp() {
       additionalDirectories: state.additionalDirectories,
       featureRegistry: state.featureRegistry,
       backgroundManager: state.backgroundManager,
+      todoStore: todoStoreRef.current,
+      decisionStore: decisionStoreRef.current,
+      blockerStore: blockerStoreRef.current,
       setCommandHistory,
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
     });
