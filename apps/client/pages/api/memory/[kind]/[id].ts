@@ -6,7 +6,14 @@ import {
   memoryPrincipalKeyRepository,
   mementoRepository,
 } from '@bike4mind/database';
-import { firstMatchStore, mergeStores, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
+import {
+  firstMatchStore,
+  mergeStores,
+  readPrincipalMemory,
+  recall,
+  subjectKey,
+  type PrincipalKind,
+} from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
 import { createLedgerMemoryStore, purgeUserMemory, shredBelief } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
@@ -57,12 +64,36 @@ handler.delete(async (req, res) => {
   }
 
   // ?subject=<beliefId> shreds ONE belief (the "delete this memory" action from the V2 dashboard); no
-  // subject shreds the WHOLE principal ("delete all my memory"). The belief id IS the stored subject
-  // HMAC, matched directly.
+  // subject shreds the WHOLE principal ("delete all my memory").
+  //
+  // A belief in the unified view can be backed by the LEDGER (its id is a subject HMAC) or by a V1
+  // MEMENTO (its id is a Mongo _id), and a ledger belief can ALSO have a V1 memento TWIN carrying the
+  // same plaintext fact. So a real "delete forever" has to hit BOTH stores, exactly like the
+  // whole-principal purge - otherwise the memento survives, reappears on refetch, and is re-injected
+  // into the next chat prompt. `deleted === 0` means nothing matched (the caller surfaces that as a
+  // failure rather than a false success).
   const subject = typeof req.query.subject === 'string' ? req.query.subject : undefined;
   if (subject) {
+    const ledgerStore = createLedgerMemoryStore({
+      ledger: memoryLedgerRepository,
+      keys: createKeyProvider(memoryPrincipalKeyRepository),
+      ownerUserId: id,
+    });
+    // The belief's fact, read before the shred, is what identifies a V1 memento twin (same fact) that
+    // has a different id from the ledger belief and would otherwise be missed.
+    const profile = await ledgerStore.readProfile({ kind: 'user', id });
+    const beliefFact = profile?.beliefs.find(b => b.id === subject)?.fact;
+    const factKey = beliefFact ? subjectKey(beliefFact) : undefined;
+
     const shredded = await shredBelief(memoryLedgerRepository, { kind: 'user', id }, id, subject);
-    return res.status(200).json({ ok: true, shredded });
+
+    const mementos = await mementoRepository.findByUserId(id, { select: 'summary' });
+    const mementoIds = mementos
+      .filter(m => String(m.id) === subject || (factKey && subjectKey(m.summary) === factKey))
+      .map(m => String(m.id));
+    const mementosDeleted = await mementoRepository.deleteByIdsForUser(mementoIds, id);
+
+    return res.status(200).json({ ok: true, shredded, mementosDeleted, deleted: shredded + mementosDeleted });
   }
 
   // Both halves, or it is not deletion: the unified read serves the ledger UNIONED with the user's

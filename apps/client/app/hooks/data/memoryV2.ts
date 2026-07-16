@@ -1,6 +1,7 @@
 import { api } from '@client/app/contexts/ApiContext';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 
 /**
  * Mementos V2 (the principal-scoped ledger) data hooks for the profile dashboard. V2 memory is a set
@@ -55,10 +56,27 @@ export function useShredBelief() {
 
   return useMutation({
     mutationFn: async (beliefId: string) => {
-      await api.delete(`/api/memory/user/${userId}`, { params: { subject: beliefId } });
+      // Guard: a delete firing while auth is un-hydrated would POST to `/user/undefined` (the literal
+      // string) and fail confusingly. Fail fast instead.
+      if (!userId) throw new Error('Not signed in');
+      const { data } = await api.delete<{ deleted: number }>(`/api/memory/user/${userId}`, {
+        params: { subject: beliefId },
+      });
+      return data;
     },
-    onSuccess: () => {
+    onSuccess: result => {
       queryClient.invalidateQueries({ queryKey: v2MemoryKey(userId) });
+      // `deleted === 0` is a SUCCESSFUL HTTP call that shredded nothing (the belief matched neither the
+      // ledger nor a memento). Surfacing it as a failure is what stops "delete forever" from silently
+      // lying - the belief would otherwise just reappear on the refetch with no explanation.
+      if (result.deleted === 0) {
+        toast.error('That memory could not be deleted - please refresh and try again.');
+      } else {
+        toast.success('Memory deleted.');
+      }
+    },
+    onError: () => {
+      toast.error('Failed to delete that memory.');
     },
   });
 }

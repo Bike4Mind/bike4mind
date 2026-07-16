@@ -28,7 +28,15 @@ const relativeTime = (iso: string): string => {
   return `${Math.floor(days / 365)}y ago`;
 };
 
-const BeliefRow = ({ belief, onShred, shredding }: { belief: V2Belief; onShred: () => void; shredding: boolean }) => {
+const BeliefRow = ({
+  belief,
+  onShred,
+  shredding,
+}: {
+  belief: V2Belief;
+  onShred: (opts: { onSettled: () => void }) => void;
+  shredding: boolean;
+}) => {
   const [confirming, setConfirming] = useState(false);
   const sal = belief.salience ? SALIENCE[belief.salience] : undefined;
 
@@ -60,7 +68,14 @@ const BeliefRow = ({ belief, onShred, shredding }: { belief: V2Belief; onShred: 
           <Typography level="body-xs" textColor="danger.plainColor">
             Delete forever?
           </Typography>
-          <Button size="sm" color="danger" variant="solid" loading={shredding} onClick={onShred} data-testid="v2-belief-shred-confirm">
+          <Button
+            size="sm"
+            color="danger"
+            variant="solid"
+            loading={shredding}
+            onClick={() => onShred({ onSettled: () => setConfirming(false) })}
+            data-testid="v2-belief-shred-btn"
+          >
             Yes
           </Button>
           <Button size="sm" variant="plain" onClick={() => setConfirming(false)}>
@@ -69,7 +84,14 @@ const BeliefRow = ({ belief, onShred, shredding }: { belief: V2Belief; onShred: 
         </Stack>
       ) : (
         <Tooltip title="Delete this memory (irreversible)">
-          <IconButton size="sm" color="danger" variant="plain" onClick={() => setConfirming(true)} data-testid="v2-belief-delete-btn">
+          <IconButton
+            size="sm"
+            color="danger"
+            variant="plain"
+            aria-label="Delete this memory"
+            onClick={() => setConfirming(true)}
+            data-testid="v2-belief-delete-btn"
+          >
             <DeleteIcon fontSize="small" />
           </IconButton>
         </Tooltip>
@@ -97,7 +119,7 @@ const MementosV2Panel = () => {
         </Box>
       )}
 
-      {isError && (
+      {isError && !beliefs && (
         <Typography level="body-sm" color="danger">
           Could not load your memory. Please refresh or re-authenticate.
         </Typography>
@@ -120,7 +142,7 @@ const MementosV2Panel = () => {
                 key={b.id}
                 belief={b}
                 shredding={shred.isPending && shred.variables === b.id}
-                onShred={() => shred.mutate(b.id)}
+                onShred={opts => shred.mutate(b.id, opts)}
               />
             ))}
           </Stack>

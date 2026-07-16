@@ -47,3 +47,39 @@ describe('MementoRepository.deleteAllByUserId', () => {
     expect(await mementoRepository.deleteAllByUserId('nobody')).toBe(0);
   });
 });
+
+describe('MementoRepository.deleteByIdsForUser', () => {
+  setupMongoTest();
+
+  it('deletes only the given ids, owner-scoped, leaving the rest', async () => {
+    // The per-belief V2 shred uses this to remove the V1 memento backing (or twinning) a deleted
+    // belief. It must delete exactly the targeted mementos and nothing else.
+    const a = await memento('u1', 'keep me');
+    const b = await memento('u1', 'delete me');
+    const c = await memento('u1', 'also keep');
+
+    const deleted = await mementoRepository.deleteByIdsForUser([String(b.id)], 'u1');
+
+    expect(deleted).toBe(1);
+    const remaining = (await mementoRepository.findByUserId('u1', {})).map(m => String(m.id)).sort();
+    expect(remaining).toEqual([String(a.id), String(c.id)].sort());
+  });
+
+  it('will not delete another user`s memento even given its id', async () => {
+    const mine = await memento('u1', 'mine');
+    const theirs = await memento('u2', 'theirs');
+
+    // u1 tries to delete u2's memento by passing its id - the ownerUserId scope blocks it.
+    const deleted = await mementoRepository.deleteByIdsForUser([String(theirs.id)], 'u1');
+
+    expect(deleted).toBe(0);
+    expect(await Memento.countDocuments({ _id: theirs.id })).toBe(1);
+    expect(await Memento.countDocuments({ _id: mine.id })).toBe(1);
+  });
+
+  it('is a no-op for an empty id list (never issues a delete that could match everything)', async () => {
+    await memento('u1', 'safe');
+    expect(await mementoRepository.deleteByIdsForUser([], 'u1')).toBe(0);
+    expect(await Memento.countDocuments({ userId: 'u1' })).toBe(1);
+  });
+});

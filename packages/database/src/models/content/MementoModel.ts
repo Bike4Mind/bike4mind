@@ -87,6 +87,19 @@ class MementoRepository extends BaseRepository<IMementoDocument> implements IMem
    * coming back through the V2 unified read, which unions the ledger with these mementos. Deletion
    * has to be real.
    */
+  /**
+   * Hard-delete specific mementos, owner-scoped. Used by the per-belief V2 shred to remove the V1
+   * memento(s) backing a belief - a belief in the unified view can be a V1 memento (deleted by its own
+   * id) or a ledger belief with a V1 memento TWIN carrying the same plaintext fact (deleted by fact
+   * match). Leaving either behind re-injects the "deleted" fact into the next chat prompt. Owner-scoped
+   * so a caller can only delete their own.
+   */
+  async deleteByIdsForUser(ids: string[], userId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const res = await this.model.deleteMany({ _id: { $in: ids }, userId });
+    return res.deletedCount ?? 0;
+  }
+
   async deleteAllByUserId(userId: string): Promise<number> {
     const res = await this.model.deleteMany({ userId });
     return res.deletedCount ?? 0;
