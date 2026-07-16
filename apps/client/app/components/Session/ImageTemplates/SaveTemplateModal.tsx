@@ -10,6 +10,7 @@ import {
 } from '@bike4mind/common';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useCreateImageTemplate } from '../../../hooks/data/imageTemplates';
+import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 interface SaveTemplateModalProps {
   open: boolean;
@@ -77,7 +78,7 @@ export const SaveTemplateModal: FC<SaveTemplateModalProps> = ({ open, onClose })
         // The modal only renders for image models (parent-gated), so the active
         // model is a valid template model; the string->enum cast is safe here.
         model: model as ImageGenerationTemplateInputType['model'],
-        settings: {
+        settings: imageTemplateSettingsSnapshot({
           size,
           quality,
           style,
@@ -86,10 +87,10 @@ export const SaveTemplateModal: FC<SaveTemplateModalProps> = ({ open, onClose })
           width,
           height,
           aspect_ratio,
-          output_format: output_format ?? undefined,
+          output_format,
           safety_tolerance,
           prompt_upsampling,
-        },
+        }),
       });
       toast.success('Template saved');
       reset();

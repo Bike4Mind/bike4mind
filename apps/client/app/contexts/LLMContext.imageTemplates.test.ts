@@ -13,20 +13,18 @@ const template = (overrides: Partial<IImageGenerationTemplateDocument> = {}): II
     ...overrides,
   }) as IImageGenerationTemplateDocument;
 
-describe('LLMContext image-template apply + drift', () => {
+describe('LLMContext applyImageTemplate', () => {
   beforeEach(() => {
     useLLM.getState().resetSettings();
-    useLLM.setState({ currentTemplateId: null });
   });
 
-  it('applyImageTemplate loads model + settings and marks the template current', () => {
+  it('loads the template model + settings into the store', () => {
     useLLM.getState().applyImageTemplate(template());
     const s = useLLM.getState();
     expect(s.model).toBe('flux-pro-1.1');
     expect(s.imageModel).toBe('flux-pro-1.1');
     expect(s.quality).toBe('hd');
     expect(s.width).toBe(1024);
-    expect(s.currentTemplateId).toBe('t1');
   });
 
   it('resets image-setting fields the template omits, so apply reproduces the snapshot', () => {
@@ -40,31 +38,5 @@ describe('LLMContext image-template apply + drift', () => {
     const s = useLLM.getState();
     expect(s.quality).toBe('hd');
     expect(s.width).toBe(1024); // default, not the prior 2048
-  });
-
-  it('a manual image-setting change via setLLM clears the applied-template chip', () => {
-    useLLM.getState().applyImageTemplate(template());
-    expect(useLLM.getState().currentTemplateId).toBe('t1');
-
-    useLLM.getState().setLLM({ quality: 'standard' });
-    expect(useLLM.getState().currentTemplateId).toBeNull();
-  });
-
-  it('a non-image setting change does NOT clear the chip', () => {
-    useLLM.getState().applyImageTemplate(template());
-    useLLM.getState().setLLM({ temperature: 0.5 });
-    expect(useLLM.getState().currentTemplateId).toBe('t1');
-  });
-
-  it('changing the model clears the chip', () => {
-    useLLM.getState().applyImageTemplate(template());
-    useLLM.getState().setLLM({ model: 'gpt-image-1' });
-    expect(useLLM.getState().currentTemplateId).toBeNull();
-  });
-
-  it('explicitly clearing currentTemplateId works and is not treated as drift', () => {
-    useLLM.getState().applyImageTemplate(template());
-    useLLM.getState().setLLM({ currentTemplateId: null });
-    expect(useLLM.getState().currentTemplateId).toBeNull();
   });
 });

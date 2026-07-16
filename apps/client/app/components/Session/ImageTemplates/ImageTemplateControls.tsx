@@ -1,27 +1,56 @@
-import { FC, useState } from 'react';
-import { Box, Chip, ChipDelete, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
+import { FC, useMemo, useState } from 'react';
+import { Box, Chip, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import { Bookmarks as TemplateIcon } from '@mui/icons-material';
 import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
-import type { IImageGenerationTemplateDocument } from '@bike4mind/common';
+import { canonicalizeTemplateSettings, type IImageGenerationTemplateDocument } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useImageTemplates, useApplyImageTemplate } from '../../../hooks/data/imageTemplates';
 import { CostPreviewChip } from './CostPreviewChip';
 import { SaveTemplateModal } from './SaveTemplateModal';
 import { ManageTemplatesModal } from './ManageTemplatesModal';
+import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 const fixedHeight = { height: '32px !important', minHeight: '32px !important' };
 
 /**
  * Image-mode template controls for the composer settings bar: an exact-model
  * picker (only templates bound to the active model are offered), the applied-
- * template chip, and the live cost-preview chip. Hosts the Save/Manage modals.
- * Rendered by the parent only when an image model is active and the feature flag
- * is on.
+ * template indicator, and the live cost-preview chip. Hosts the Save/Manage
+ * modals. Rendered by the parent only when an image model is active and the
+ * feature flag is on.
  */
 export const ImageTemplateControls: FC = () => {
-  const [model, currentTemplateId, applyImageTemplate, setLLM] = useLLM(
-    useShallow(s => [s.model, s.currentTemplateId, s.applyImageTemplate, s.setLLM])
+  const [
+    model,
+    applyImageTemplate,
+    size,
+    quality,
+    style,
+    seed,
+    n,
+    width,
+    height,
+    aspect_ratio,
+    output_format,
+    safety_tolerance,
+    prompt_upsampling,
+  ] = useLLM(
+    useShallow(s => [
+      s.model,
+      s.applyImageTemplate,
+      s.size,
+      s.quality,
+      s.style,
+      s.seed,
+      s.n,
+      s.width,
+      s.height,
+      s.aspect_ratio,
+      s.output_format,
+      s.safety_tolerance,
+      s.prompt_upsampling,
+    ])
   );
   const { data: templates = [] } = useImageTemplates();
   const applyMutation = useApplyImageTemplate();
@@ -29,14 +58,50 @@ export const ImageTemplateControls: FC = () => {
   const [saveOpen, setSaveOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
 
-  // Exact-model: only offer templates bound to the active model. This also
-  // guards a coupling: AdvancedAISettings has a [model]-gated effect that force-
-  // resets quality/style on model change. Because apply never changes the model
-  // (the template's model === the active model), that effect can't fire and
-  // clobber the template's quality/style. If this filter is ever loosened to
-  // allow cross-model apply, that reset must be reconciled.
-  const matching = templates.filter(t => t.model === model);
-  const applied = currentTemplateId ? templates.find(t => t.id === currentTemplateId) : undefined;
+  // Exact-model: only offer templates bound to the active model. This also guards
+  // a coupling: AdvancedAISettings has a [model]-gated effect that force-resets
+  // quality/style on model change. Because apply never changes the model (the
+  // template's model === the active model), that effect can't fire and clobber the
+  // template's quality/style. If this filter is ever loosened to allow cross-model
+  // apply, that reset must be reconciled.
+  const matching = useMemo(() => templates.filter(t => t.model === model), [templates, model]);
+
+  // The indicator is DERIVED from current settings, not from a remembered apply:
+  // if the live config equals a saved template's settings, show it - whether the
+  // user applied it or dialed in the same config by hand. Save-time dedup
+  // guarantees at most one template per model matches a given settings blob, so
+  // the match is unambiguous.
+  const applied = useMemo(() => {
+    const current = canonicalizeTemplateSettings(
+      imageTemplateSettingsSnapshot({
+        size,
+        quality,
+        style,
+        seed,
+        n,
+        width,
+        height,
+        aspect_ratio,
+        output_format,
+        safety_tolerance,
+        prompt_upsampling,
+      })
+    );
+    return matching.find(t => canonicalizeTemplateSettings(t.settings) === current);
+  }, [
+    matching,
+    size,
+    quality,
+    style,
+    seed,
+    n,
+    width,
+    height,
+    aspect_ratio,
+    output_format,
+    safety_tolerance,
+    prompt_upsampling,
+  ]);
 
   const handleApply = async (template: IImageGenerationTemplateDocument) => {
     try {
@@ -86,15 +151,7 @@ export const ImageTemplateControls: FC = () => {
       </Dropdown>
 
       {applied && (
-        <Chip
-          size="sm"
-          variant="soft"
-          color="primary"
-          data-testid="applied-template-chip"
-          endDecorator={
-            <ChipDelete data-testid="applied-template-clear" onClick={() => setLLM({ currentTemplateId: null })} />
-          }
-        >
+        <Chip size="sm" variant="soft" color="primary" data-testid="applied-template-chip">
           {applied.name}
         </Chip>
       )}

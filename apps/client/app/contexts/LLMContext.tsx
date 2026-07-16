@@ -53,9 +53,9 @@ export interface LLMContextProps {
   width: number | undefined;
   height: number | undefined;
   aspect_ratio: string | undefined;
-  /** Id of the currently-applied image template (drives the applied-template chip); cleared once settings drift. */
-  currentTemplateId: string | null;
-  /** Apply a saved image template: load its model + settings and mark it current. */
+  /** Apply a saved image template: load its model + settings into the store.
+   *  The applied-template indicator is DERIVED from a settings match in the UI,
+   *  not tracked here (see ImageTemplateControls). */
   applyImageTemplate: (template: IImageGenerationTemplateDocument) => void;
   thinking?: {
     enabled: boolean;
@@ -141,7 +141,6 @@ const DEFAULTS = {
   width: 1024,
   height: 768,
   aspect_ratio: '16:9',
-  currentTemplateId: null,
   thinking: {
     enabled: false,
     budget_tokens: 16000,
@@ -195,10 +194,6 @@ const IMAGE_SETTINGS_DEFAULTS = Object.fromEntries(
   IMAGE_SETTING_KEYS.map(k => [k, DEFAULTS[k]])
 ) as Partial<LLMContextProps>;
 
-// Changing any image setting (or the model) means the active config no longer
-// matches an applied template, so the applied-template chip must clear.
-const IMAGE_TEMPLATE_DRIFT_KEYS: (keyof LLMContextProps)[] = ['model', 'imageModel', ...IMAGE_SETTING_KEYS];
-
 export const useLLM = create(
   persist<LLMContextProps>(
     (set, get) => ({
@@ -234,12 +229,6 @@ export const useLLM = create(
             newState.lastUsedImageModel = params.imageModel;
           }
 
-          // A manual image-setting change drops the applied-template chip. The apply
-          // action sets currentTemplateId itself (not via setLLM), so it's unaffected.
-          if (params.currentTemplateId === undefined && IMAGE_TEMPLATE_DRIFT_KEYS.some(k => k in params)) {
-            newState.currentTemplateId = null;
-          }
-
           return newState;
         });
       },
@@ -254,7 +243,6 @@ export const useLLM = create(
           imageModel: template.model,
           lastUsedImageModel: template.model,
           ...(template.settings as Partial<LLMContextProps>),
-          currentTemplateId: template.id,
         }));
       },
       setResearchMode: (mode: Partial<ResearchModeState>) => {

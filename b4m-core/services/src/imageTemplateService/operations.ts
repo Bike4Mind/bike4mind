@@ -4,7 +4,12 @@ import type {
   ImageGenerationTemplateInputType,
   ImageGenerationTemplateUpdateInputType,
 } from '@bike4mind/common';
-import { IMAGE_TEMPLATES_PER_USER_MAX, NotFoundError, UnprocessableEntityError } from '@bike4mind/common';
+import {
+  IMAGE_TEMPLATES_PER_USER_MAX,
+  NotFoundError,
+  UnprocessableEntityError,
+  canonicalizeTemplateSettings,
+} from '@bike4mind/common';
 import type { ImageTemplateServiceAdapters } from './ports';
 import { assertAuthenticated, assertInteractive } from './access';
 
@@ -13,22 +18,6 @@ import { assertAuthenticated, assertInteractive } from './access';
  * framework/DB import - mirroring the briefcaseService shape. Ownership is bound
  * to `caller.id` resolved server-side; a client never names another user.
  */
-
-/**
- * Stable serialization of a settings blob for duplicate detection: keys sorted,
- * null/undefined dropped (an absent field and an explicitly-null one are treated
- * the same). Both the stored and incoming blobs pass through the same Zod parse,
- * so their key sets are consistent and this comparison is reliable.
- */
-function canonicalSettings(settings: unknown): string {
-  const obj = (settings ?? {}) as Record<string, unknown>;
-  const out: Record<string, unknown> = {};
-  for (const key of Object.keys(obj).sort()) {
-    const v = obj[key];
-    if (v !== undefined && v !== null) out[key] = v;
-  }
-  return JSON.stringify(out);
-}
 
 /** List the caller's templates (usageCount desc, then newest). API keys get nothing. */
 export async function listTemplates(
@@ -65,9 +54,9 @@ export async function saveTemplate(
 
   // Reject an exact-settings duplicate for this model (regardless of name), so the
   // same config isn't saved twice under different names.
-  const incoming = canonicalSettings(input.settings);
+  const incoming = canonicalizeTemplateSettings(input.settings);
   const siblings = await db.templates.listByModel(caller.id, input.model);
-  const duplicate = siblings.find(t => canonicalSettings(t.settings) === incoming);
+  const duplicate = siblings.find(t => canonicalizeTemplateSettings(t.settings) === incoming);
   if (duplicate) {
     throw new UnprocessableEntityError(`You already have a template with these settings ("${duplicate.name}").`);
   }
