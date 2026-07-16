@@ -11,13 +11,15 @@ import { Config } from '@server/utils/config';
 // Audience scopes the token to the embed chat surface, so a leaked token can't be
 // replayed against other JWT-accepting routes (login, websocket, CLI, voice).
 //
-// Revocation: the token carries the key's context and is trusted without a DB
-// read on the hot path, so it survives a key revocation (or an allowedOrigins
-// edit) until it expires. The short TTL bounds that window; a surface that needs
-// immediate revocation must re-load key status instead of trusting the token.
+// Revocation: this token is only a short-lived session handle, not a standalone
+// bearer of the key's authority. The chat route re-loads the live key by id on
+// every request (verifyEmbedKeyById re-checks ACTIVE + expiry + scope + the
+// credential class), so a revoked/expired key or an allowedOrigins edit takes
+// effect immediately - not TTL-bounded. The short TTL is a backstop, not the
+// revocation mechanism.
 const EMBED_TOKEN_AUDIENCE = 'embed-chat';
 
-/** Session token lifetime. Short so a leaked/stale token expires quickly (see revocation note). */
+/** Session token lifetime. Short as a backstop on a leaked token (see revocation note). */
 export const EMBED_SESSION_TTL_SECONDS = 5 * 60; // 300s
 
 export const EmbedSessionContextSchema = z.object({
