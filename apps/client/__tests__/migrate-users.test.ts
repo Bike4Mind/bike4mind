@@ -18,12 +18,18 @@ vi.mock('@bike4mind/services', () => ({
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: (...args: unknown[]) => unknown) => fn(),
+}));
+
+vi.mock('@bike4mind/database/auth', () => ({
   userRepository: {
     findByEmail: (...args: unknown[]) => mockFindByEmail(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
   },
+}));
+
+vi.mock('@bike4mind/database/infra', () => ({
   organizationRepository: {},
-  withTransaction: (fn: (...args: unknown[]) => unknown) => fn(),
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({

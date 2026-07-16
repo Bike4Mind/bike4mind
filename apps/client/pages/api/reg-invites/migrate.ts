@@ -1,6 +1,8 @@
 import { RegInviteEvents, requireEnv } from '@bike4mind/common';
 import { organizationService, userService } from '@bike4mind/services';
-import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
+import { withTransaction } from '@bike4mind/database';
+import { organizationRepository } from '@bike4mind/database/infra';
+import { userRepository } from '@bike4mind/database/auth';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
