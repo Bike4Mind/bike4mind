@@ -210,6 +210,14 @@ Highlights:
 - **`/terminal-setup`** — configures Shift+Enter for multi-line input in your
   terminal.
 
+> **Switching models:** there is no `/model` command (yet — tracked in
+> [#645](https://github.com/Bike4Mind/bike4mind/issues/645)). Model selection
+> lives in **`/config`**: open the config editor, arrow to the **model** field,
+> and pick from the list of CLI-compatible models fetched from the server. The
+> change applies live — session, agent, and backend all switch immediately, no
+> restart needed. Running with `--ollama-host <url>` adds a local Ollama
+> endpoint's models to the same picker.
+
 And the keyboard shortcuts — mostly the classic readline bindings, plus a few
 CLI-specific ones:
 
