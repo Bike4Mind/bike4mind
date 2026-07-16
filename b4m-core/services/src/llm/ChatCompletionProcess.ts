@@ -1785,6 +1785,11 @@ export class ChatCompletionProcess {
           systemMessageCount: systemMsgs.length,
           emissionSurvived,
           maxSafeInputTokens,
+          // Dump each system message so we can see what competes with the emission prompt.
+          systemHeads: systemMsgs.map(m => {
+            const c = m.content as string;
+            return { len: c.length, head: c.slice(0, 140) };
+          }),
         });
       }
 
