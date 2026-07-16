@@ -3,6 +3,7 @@ import { Config } from '@server/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
+  ApiKeyStatus,
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
@@ -154,24 +155,61 @@ export async function verifyBridgeApiKey(headers: Record<string, string | undefi
 }
 
 /**
- * Verify an API key that authorizes the public embed completion surface. Beyond
- * the `EMBED_CHAT` scope this enforces two properties of the embed credential
- * class itself (so every embed surface - session mint and chat - inherits them):
+ * The two properties of the embed credential class, enforced on every embed
+ * surface (session mint and chat) so neither can be reached with a key that
+ * lacks them:
  *   - org-only: usage bills a bounded Organization pool, never a user's pool.
  *   - a bound agent: the key resolves exactly one agent; without it there is no
- *     persona/tenant to run, so fail closed rather than mint an unbound token.
- * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ *     persona/tenant to run, so fail closed.
  */
-export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
-  const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
-
+function assertEmbedCredential(info: ApiKeyInfo): void {
   if (info.billingOwnerType !== CreditHolderType.Organization || !info.organizationId) {
     throw new Error('Embed keys must be organization-owned');
   }
   if (!info.agentId) {
     throw new Error('Embed key is not bound to an agent');
   }
+}
 
+/**
+ * Verify an API key that authorizes the public embed completion surface (the
+ * raw-key path: X-API-Key / Authorization). Requires the EMBED_CHAT scope plus
+ * the embed credential-class properties above.
+ * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ */
+export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
+  const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
+  assertEmbedCredential(info);
+  return info;
+}
+
+/**
+ * Resolve an embed key by its id (the session-token path, where the raw secret
+ * is not in hand). Re-loads the live key doc and re-applies the ACTIVE-status,
+ * scope, and credential-class checks, so a session token cannot outlive a key
+ * that was revoked/disabled within its short TTL - the revocation-safety the
+ * token itself cannot provide.
+ * @throws Error if the key is missing, not active, or not a valid embed key.
+ */
+export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
+  const key = await userApiKeyRepository.findById(keyId);
+  if (!key || key.status !== ApiKeyStatus.ACTIVE) {
+    throw new Error('Embed key is not active');
+  }
+  if (!key.scopes?.includes(ApiKeyScope.EMBED_CHAT)) {
+    throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
+  }
+  const info: ApiKeyInfo = {
+    keyId: key.id,
+    userId: key.userId,
+    scopes: key.scopes,
+    rateLimit: key.rateLimit,
+    billingOwnerType: key.billingOwnerType,
+    organizationId: key.organizationId,
+    agentId: key.agentId,
+    allowedOrigins: key.allowedOrigins,
+  };
+  assertEmbedCredential(info);
   return info;
 }
 

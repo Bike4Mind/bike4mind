@@ -6,6 +6,7 @@ import { Config } from '@server/utils/config';
 import { registerInternalRoutes } from './internal/route';
 import { registerExternalRoutes } from './external/sseRoute';
 import { registerWsCompletionRoutes } from './external/wsRoute';
+import { registerEmbedRoutes } from './external/embedRoute';
 
 /**
  * ChatCompletion - always-on HTTP worker (Fargate). Serves both internal quest
@@ -80,6 +81,10 @@ export function createApp() {
   // WebSocket). Replaced the CliWsCompletionHandler Lambda; its background completions
   // join the same drain set.
   registerWsCompletionRoutes(app, track);
+
+  // Public embed chat endpoint (agent-bound, anonymous end-user, org-billed SSE).
+  // Same always-on rationale + drain set as the completions route.
+  registerEmbedRoutes(app, track);
 
   return app;
 }

@@ -93,6 +93,12 @@ export interface CompletionParams {
    */
   source?: CompletionSource;
   /**
+   * Persona/system prompt prepended as a leading `system` message before the
+   * caller's `messages`. Used by the embed path to run a configured agent's
+   * persona without the WS/ReAct executor. Absent for the plain CLI/API path.
+   */
+  systemPrompt?: string;
+  /**
    * Record the analytics usage event even when `enforceCredits` is off. The
    * credit ledger/settlement stays gated by `enforceCredits` (nothing is ever
    * double-charged); only the usage-event write is hoisted. Used by the embed
@@ -121,8 +127,13 @@ function estimateInputTokens(messages: IMessage[]): number {
  * Used by Next.js API route, Lambda function, and available for 3rd party integrations
  */
 export async function executeCompletion(params: CompletionParams): Promise<void> {
-  const { userId, model, messages, options, db, logger, onChunk, apiKeyInfo } = params;
+  const { userId, model, options, db, logger, onChunk, apiKeyInfo } = params;
   const source: CompletionSource = params.source ?? 'api';
+  // Prepend the persona as a leading system message when the caller supplies one
+  // (embed path). The rest of the pipeline treats this as the message list.
+  const messages: IMessage[] = params.systemPrompt
+    ? [{ role: 'system', content: params.systemPrompt }, ...params.messages]
+    : params.messages;
   const completionStartTime = Date.now();
 
   // Resolve the credit holder. Org-billed API keys reserve from and settle to the
