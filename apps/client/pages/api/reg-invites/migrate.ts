@@ -1,12 +1,11 @@
 import { RegInviteEvents, requireEnv } from '@bike4mind/common';
-import { userService } from '@bike4mind/services';
-import { userRepository } from '@bike4mind/database';
+import { organizationService, userService } from '@bike4mind/services';
+import { organizationRepository, userRepository, withTransaction } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { EmailEvents } from '@server/utils/eventBus';
 import { getLogoUrl, buildEmailLogoImg } from '@server/utils/mailer/emailHelpers';
-import { addUserToOrganization } from '@server/managers/organizationManager';
 import { z } from 'zod';
 
 const migrateRequestSchema = z.object({
@@ -103,12 +102,15 @@ const handler = baseApi().post(async (req, res) => {
       }
 
       if (orgId) {
-        await userRepository.update({ id: userId, organizationId: orgId });
-        await addUserToOrganization({
-          organizationId: orgId,
-          userId,
-          force: true,
-        });
+        // Admin-only migration path (gated above). addMember sets the user's
+        // organizationId itself, so no separate user write is needed here.
+        await withTransaction(() =>
+          organizationService.addMember(
+            req.user,
+            { organizationId: orgId, userId, force: true },
+            { db: { organizations: organizationRepository, users: userRepository }, logger: req.logger }
+          )
+        );
       }
 
       createdUsers.push({
