@@ -1074,4 +1074,24 @@ describe('AgentExecutionRepository', () => {
       expect(pollable?.error?.timedOut).toBe(true);
     });
   });
+
+  describe('findBillingBySessionId', () => {
+    it('returns every execution for the session when no org is given (admin view)', async () => {
+      const sessionId = new mongoose.Types.ObjectId().toString();
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId, organizationId: 'org-1' }));
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId, organizationId: 'org-2' }));
+
+      const rows = await agentExecutionRepository.findBillingBySessionId(sessionId);
+      expect(rows).toHaveLength(2);
+    });
+
+    it('scopes to a single org when given (no cross-org executions leak to a non-admin)', async () => {
+      const sessionId = new mongoose.Types.ObjectId().toString();
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId, organizationId: 'org-1' }));
+      await agentExecutionRepository.create(makeBaseExecution({ sessionId, organizationId: 'org-2' }));
+
+      const rows = await agentExecutionRepository.findBillingBySessionId(sessionId, 'org-1');
+      expect(rows).toHaveLength(1);
+    });
+  });
 });

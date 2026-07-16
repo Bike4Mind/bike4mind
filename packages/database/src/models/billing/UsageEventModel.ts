@@ -294,7 +294,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     };
   }
 
-  async sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary> {
+  async sessionUsageSummary(
+    sessionId: string,
+    owner?: { ownerId: string; ownerType: CreditHolderType }
+  ): Promise<ISessionUsageSummary> {
     // Every cut shares the same sums (spend + token quantities), so define once.
     const sums = {
       requests: { $sum: 1 },
@@ -318,7 +321,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: ISessionModelUsage[];
       totals: IUsageSpendWithTokens[];
     }>([
-      { $match: { sessionId } },
+      { $match: owner ? { sessionId, ownerId: owner.ownerId, ownerType: owner.ownerType } : { sessionId } },
       {
         $facet: {
           byQuest: [

@@ -291,8 +291,17 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
    */
   ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
 
-  /** One session's usage rolled up by quest and by model (all events for the session). */
-  sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary>;
+  /**
+   * One session's usage rolled up by quest and by model. Defaults to all events
+   * for the session; pass `owner` to scope to a single credit holder - a session
+   * can carry events billed to more than one owner (billing owner is resolved
+   * per-request, not pinned to the session), so a non-admin caller must scope to
+   * their org or they would see another owner's spend in the same session.
+   */
+  sessionUsageSummary(
+    sessionId: string,
+    owner?: { ownerId: string; ownerType: CreditHolderType }
+  ): Promise<ISessionUsageSummary>;
 
   /**
    * True if any usage event for the session was billed to (ownerId, ownerType).

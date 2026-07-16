@@ -62,11 +62,14 @@ describe('GET /api/admin/session-usage — access', () => {
     mockFindBillingBySessionId.mockResolvedValue([]);
   });
 
-  it('lets an admin read any session without an org and without the ownership probe', async () => {
+  it('lets an admin read the whole session cross-org (unscoped queries, no ownership probe)', async () => {
     const { res, run } = call({ isAdmin: true });
     await run();
     expect(mockVerifyOrgAccess).not.toHaveBeenCalled();
     expect(mockSessionBelongsToOwner).not.toHaveBeenCalled();
+    // No owner filter: admins see the full cross-org rollup.
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, undefined);
+    expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, undefined);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });
 
@@ -76,11 +79,15 @@ describe('GET /api/admin/session-usage — access', () => {
     expect(mockSessionUsageSummary).not.toHaveBeenCalled();
   });
 
-  it('lets an org owner read a session billed to their org', async () => {
+  it('scopes an org owner to their org slice of the session (no cross-owner leak)', async () => {
     const { res, run } = call({ isAdmin: false, query: { sessionId: SESSION, organizationId: ORG } });
     await run();
     expect(mockVerifyOrgAccess).toHaveBeenCalledWith({ id: 'user-1', isAdmin: false }, ORG);
     expect(mockSessionBelongsToOwner).toHaveBeenCalledWith(SESSION, ORG, 'Organization');
+    // Both response queries owner-scoped to the org - a mixed-owner session must
+    // not surface another owner's spend to a non-admin.
+    expect(mockSessionUsageSummary).toHaveBeenCalledWith(SESSION, { ownerId: ORG, ownerType: 'Organization' });
+    expect(mockFindBillingBySessionId).toHaveBeenCalledWith(SESSION, ORG);
     expect(res._getJSONData().sessionId).toBe(SESSION);
   });
 

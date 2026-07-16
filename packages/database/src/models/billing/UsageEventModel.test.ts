@@ -379,6 +379,28 @@ describe('UsageEventRepository', () => {
         totals: { requests: 0, cogsUsd: 0, creditsCharged: 0, inputTokens: 0, outputTokens: 0, cachedInputTokens: 0 },
       });
     });
+
+    it('scopes to a single owner when one is given (mixed-owner session)', async () => {
+      // Same session, spend billed to two different owners - the org owner must
+      // only ever see their org's slice, never the other owner's.
+      await record({
+        sessionId: 's-mix',
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+        creditsCharged: 100,
+      });
+      await record({ sessionId: 's-mix', ownerId: 'user-x', ownerType: CreditHolderType.User, creditsCharged: 999 });
+
+      const scoped = await usageEventRepository.sessionUsageSummary('s-mix', {
+        ownerId: 'org-1',
+        ownerType: CreditHolderType.Organization,
+      });
+      expect(scoped.totals).toMatchObject({ requests: 1, creditsCharged: 100 });
+
+      // Unscoped (admin) still sees the whole session.
+      const all = await usageEventRepository.sessionUsageSummary('s-mix');
+      expect(all.totals).toMatchObject({ requests: 2, creditsCharged: 1099 });
+    });
   });
 
   describe('sessionBelongsToOwner', () => {
