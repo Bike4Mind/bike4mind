@@ -152,7 +152,8 @@ export class AppHomeDataService {
       .find({
         $or: [
           { userId }, // User is owner
-          { 'users.id': userId }, // User is member
+          // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+          { 'users.userId': userId }, // User is member
         ],
         deletedAt: { $exists: false },
       })
