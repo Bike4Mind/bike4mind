@@ -4,10 +4,17 @@ import { cosineSimilarity } from '../recall';
 import { buildBeliefs, CORPUS_BELIEFS, CORPUS_QUERIES, DEDUP_DISTINCT, DEDUP_MERGE } from './corpus';
 import { aggregate, scoreQuery } from './metrics';
 import { retrieveV2 } from './policies';
-import fixture from './embeddings.fixture.json';
+import fixture from './embeddings-1536.fixture.json';
 
 /**
  * How much retrieval quality does TRUNCATING the embedding cost?
+ *
+ * This reads the FULL-WIDTH 1536-dim fixture (embeddings-1536.fixture.json) - NOT the 512-dim
+ * production fixture the other eval files use. That matters: truncating a fixture that is ALREADY 512
+ * to 1024/1536 is a no-op, and an earlier version of this test did exactly that, so its "512 == 1536"
+ * claim passed tautologically (it compared identical vectors). Truncating from the genuine 1536 source
+ * makes the losslessness a real measurement, and the 512 row here is provably what production ships
+ * (truncate(1536)->512 renormalized equals the production fixture byte-for-byte).
  *
  * text-embedding-3-* are Matryoshka models: the information is front-loaded, so the first N components
  * are themselves a usable embedding. Truncating to N dims is what OpenAI's `dimensions` parameter does,
@@ -32,9 +39,18 @@ const full = fixture.vectors as Record<string, number[]>;
 
 const WIDTHS = [1536, 1024, 768, 512, 384, 256, 128];
 
-/** Truncate every vector to `d` dims - i.e. what the model would have returned at `dimensions: d`. */
+/**
+ * Truncate to `d` dims then L2-normalize - EXACTLY what toMementoVector (and OpenAI's `dimensions`
+ * parameter) does. Renormalizing is what makes the 512 row equal production, not just a prefix of it.
+ */
 const truncate = (d: number): Record<string, number[]> =>
-  Object.fromEntries(Object.entries(full).map(([k, v]) => [k, v.slice(0, d)]));
+  Object.fromEntries(
+    Object.entries(full).map(([k, v]) => {
+      const t = v.slice(0, d);
+      const norm = Math.sqrt(t.reduce((s, x) => s + x * x, 0));
+      return [k, norm > 0 ? t.map(x => x / norm) : t];
+    })
+  );
 
 const activationOf = (t: number[], n: number) => baseLevelActivation(t, n, DEFAULT_ACTIVATION);
 const positives = CORPUS_QUERIES.filter(q => q.relevant.length > 0);

@@ -15,7 +15,6 @@
 import { tokenize } from './text';
 import type { Belief } from './types';
 
-/** Relevance of a belief to a query, ideally in 0..1. Injected by the host for embedding recall. */
 /**
  * A relevance score. A bare number is on the scorer's PRIMARY scale (the scale `minRelevance` is
  * expressed in). `{ relevance, offScale: true }` signals the score came from a fallback on a DIFFERENT
@@ -153,7 +152,7 @@ const DEFAULT_LEXICAL_MIN_RELEVANCE = 0.1;
  * actively wrong: it rescales whatever spread happens to be present up to the full 0..1 range, so two
  * beliefs that are all but equally on-topic get torn apart into 1.0 and 0.0. With a small candidate
  * set that is catastrophic. Measured: a user states a preference, later retracts it, and asks about
- * it. Both beliefs clear the floor at cosine 0.344 and 0.329 - a 0.015 gap, i.e. a tie. Min-max
+ * it. Both beliefs clear the floor at cosine 0.366 and 0.363 (fixture, 512-dim) - a ~0.003 gap, a tie. Min-max
  * turned that tie into the maximum possible gap, and activation could not overturn it at ANY weight:
  * recall confidently served the fact the user had explicitly taken back.
  */

@@ -27,7 +27,7 @@ import fixture from './embeddings.fixture.json';
  *
  *   activationWeight -> bounded on BOTH sides, so it is a window rather than a maximum:
  *     - too LOW and heat cannot settle a genuine tie. A fact and the user's later RETRACTION of it are
- *       equally on-topic by construction (cosine 0.344 vs 0.329), so topicality cannot separate them
+ *       equally on-topic by construction (cosine 0.366 vs 0.363), so topicality cannot separate them
  *       and recall serves the belief its owner has taken back.
  *     - too HIGH and heat stops breaking ties and starts overriding topic: merely-recent beliefs climb
  *       over the on-topic one and ranking quality falls.

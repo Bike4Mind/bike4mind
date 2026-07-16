@@ -43,8 +43,8 @@ export function isSupportedEmbeddingModel(model: string): model is SupportedEmbe
  *
  * Chosen by measurement, not taste - see b4m-core/memory/src/eval. Against ada-002 on the same corpus:
  * MRR 1.000 vs 0.953 (the right belief ranked FIRST for every query), precision 94% vs 48%, and a
- * fifth the cost per token. It is also 1536-dim, same as ada-002, so nothing about the vector storage
- * changes.
+ * fifth the cost per token. The model returns 1536 dims; mementos truncate that to 512 (Matryoshka,
+ * see MEMENTO_EMBEDDING_DIMS), a third the storage, measured lossless in dimensions.test.ts.
  */
 export const MEMENTO_EMBEDDING_MODEL: SupportedEmbeddingModel = OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL;
 

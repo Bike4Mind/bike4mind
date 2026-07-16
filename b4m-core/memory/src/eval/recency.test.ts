@@ -50,7 +50,7 @@ describe('Mementos recall: a retracted fact must not outrank the one that replac
     // The control. At activationWeight 0 the two beliefs are separated by topicality alone, and
     // topicality cannot tell "my favorite color is teal" from "my favorite color is now burnt
     // orange". This is the experiment that says the ACT-R term is load-bearing rather than decorative,
-    // and it is why the shipped weight is 0.1 and not 0.
+    // and it is why the shipped weight is 0.025 and not 0.
     const ranked = retrieveV2(beliefs, emb[QUERY_ID], QUERY, { ...SHIPPED, activationWeight: 0 });
 
     expect(ranked.indexOf(CURRENT)).toBeGreaterThan(ranked.indexOf(STALE));
@@ -59,7 +59,7 @@ describe('Mementos recall: a retracted fact must not outrank the one that replac
   it('V1 gets this WRONG - similarity alone has no notion of time', () => {
     // Not a dig at V1's tuning; it is a statement about what V1 can represent. Given the same two
     // beliefs at the same floor, V1 ranks on cosine and nothing else - and cosine puts the STALE fact
-    // first (0.344 vs 0.329), because "favorite color is teal" happens to sit a hair closer to the
+    // first (0.366 vs 0.363), because "favorite color is teal" happens to sit a hair closer to the
     // question than the sentence retracting it. That the retraction is 5 hours old and the fact it
     // overturns is 300 is information V1 simply does not carry.
     //

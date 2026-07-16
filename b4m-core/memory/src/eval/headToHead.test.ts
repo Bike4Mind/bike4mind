@@ -41,7 +41,7 @@ const embeddings = fixture.vectors as Record<string, number[]>;
 /**
  * What production actually runs. MUST stay in sync with apps/client/server/memory/recallMementosV2.ts
  * - an eval of parameters nobody ships is theatre. The floor is the one calibrated for this fixture's
- * model (ada-002); see tuning.test.ts for the sweep it comes from.
+ * model (text-embedding-3-small@512); see tuning.test.ts for the sweep it comes from.
  */
 const SHIPPED = { k: K, activationWeight: 0.025, minRelevance: 0.25 };
 
@@ -52,7 +52,7 @@ const SHIPPED = { k: K, activationWeight: 0.025, minRelevance: 0.25 };
  */
 const V1_SHIPPED = { topK: K, minSimilarity: 0.25 };
 
-/** The floor V1 shipped with when mementos ran on ada-002. See the regression test at the bottom. */
+/** The floor V1 shipped with in the ada-002 era, before the 3-small@512 migration. See the regression test below. */
 const V1_ADA_ERA_FLOOR = 0.75;
 
 const activationOf = (times: number[], now: number) => baseLevelActivation(times, now, DEFAULT_ACTIVATION);
