@@ -14,8 +14,8 @@ export class LoginPage extends BasePage {
   }
 
   /**
-   * Fill the email and click Continue WITHOUT waiting for the OTC step, so a caller can inspect the
-   * strategy/send responses first (e.g. to skip on a shared-IP 429) before asserting the code step.
+   * Fill the email and click Continue WITHOUT waiting for the OTC step, so callers that assert the
+   * code step separately can call expectOtcStep() themselves.
    */
   async submitEmail(email: string) {
     await this.fillMuiInput(this.page.getByTestId('login-email-input').getByRole('textbox'), email);
