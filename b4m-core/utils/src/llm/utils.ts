@@ -1465,9 +1465,11 @@ export async function buildAndSortMessages(
     fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
   }
 
-  if (getSettingsValue('EnableArtifacts', settings)) {
-    fabMessages = includeArtifactSystemMessage(fabMessages, userPromptContent);
-  }
+  // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the
+  // caller injects (see ChatCompletionProcess). The legacy hardcoded includeArtifactSystemMessage
+  // CONFLICTED with it - it demonstrated `import React, { useState }`, mandated "Tailwind CSS classes
+  // only", and said nothing about publishing - so the model followed it and produced non-publishable
+  // artifacts. Intentionally NOT injected here so ArtifactEmissionPrompt is the single source of truth.
 
   for (const message of fabMessages.filter(message => message.role === 'system')) {
     const content = (message.content as string) || '';
