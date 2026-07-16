@@ -35,7 +35,7 @@ export const CostPreviewChip: FC = () => {
   if (credits === null) return null;
 
   return (
-    <Tooltip title="Estimated credit cost for the current settings. Approximate for flexible sizes.">
+    <Tooltip title="Estimated credit cost for the current image generation settings. Approximate for flexible sizes.">
       <Chip size="sm" variant="soft" color="neutral" data-testid="image-cost-preview-chip">
         ~ {credits.toLocaleString()} credits
       </Chip>
