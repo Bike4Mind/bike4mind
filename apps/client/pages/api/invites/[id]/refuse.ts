@@ -1,10 +1,11 @@
 // Refuse an invitation
 // POST /api/invites/[id]/refuse
 
-import { refuseInvite } from '@server/managers/sharingManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToClient } from '@server/websocket/utils';
+import { sharingService } from '@bike4mind/services';
+import { inviteRepository, userRepository } from '@bike4mind/database';
 import * as z from 'zod';
 import { Resource } from 'sst';
 
@@ -21,10 +22,11 @@ const handler = baseApi().post(
       return res.status(400).json({ message: 'Invalid refuse invite request' });
     }
 
-    const invite = await refuseInvite(id, req.user, req.ability!, !!params.public);
-    if (!invite) {
-      return res.status(404).json({ message: 'Invite not found' });
-    }
+    const invite = await sharingService.refuseWholeInvite(
+      req.user.id,
+      { id, isPublic: !!params.public },
+      { db: { invites: inviteRepository, users: userRepository } }
+    );
 
     // trigger refetch on inbox
     const wsEndpoint = Resource.websocket.managementEndpoint;

@@ -7,4 +7,5 @@ export * from './listByDocumentIdAndType';
 export * from './listForDocument';
 export * from './listOwnPending';
 export * from './refuse';
+export * from './refuseWholeInvite';
 export * from './revoke';
