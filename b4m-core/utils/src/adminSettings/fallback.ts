@@ -179,9 +179,13 @@ function findAutomaticFallback(
   originalModel: ModelInfo,
   availableModels: ModelInfo[],
   apiKeyTable: ApiKeyTable,
-  logger: Logger
+  logger: Logger,
+  excludeModelIds?: Set<string>,
+  preferUntriedBackend?: boolean
 ): ModelInfo | null {
   logger.info(`🔍 Finding automatic fallback for ${originalModel.id}`);
+
+  const hasValidKey = (m: ModelInfo) => !!apiKeyTable[m.backend] && apiKeyTable[m.backend] !== 'expired';
 
   // Define fallback preferences for different model types
   const fallbackPreferences: Record<string, string[]> = {
@@ -283,27 +287,51 @@ function findAutomaticFallback(
     );
   }
 
-  // Find first available fallback
+  // Provider-wide-outage guarantee (used on the final allowed hop): prefer a candidate on a
+  // backend NOT yet tried, so a bounded traversal is guaranteed to cross to a different provider
+  // (e.g. OpenAI) within the hop budget instead of burning every hop on same-provider models and
+  // hard-failing before the cross-provider tail. Same-provider tier degradation still happens on
+  // earlier hops, where preferUntriedBackend is false.
+  if (preferUntriedBackend) {
+    const triedBackends = new Set<string>([originalModel.backend]);
+    for (const id of excludeModelIds ?? []) {
+      const tried = availableModels.find(m => m.id === id);
+      if (tried) triedBackends.add(tried.backend);
+    }
+    const crossProvider =
+      preferences
+        .filter(id => !excludeModelIds?.has(id))
+        .map(id => availableModels.find(m => m.id === id))
+        .find((m): m is ModelInfo => !!m && !triedBackends.has(m.backend) && hasValidKey(m)) ??
+      availableModels.find(
+        m => m.id !== originalModel.id && !excludeModelIds?.has(m.id) && !triedBackends.has(m.backend) && hasValidKey(m)
+      );
+    if (crossProvider) {
+      logger.info(`✅ Found cross-provider fallback on untried backend ${crossProvider.backend}: ${crossProvider.id}`);
+      return crossProvider;
+    }
+    // No untried-backend candidate available; fall through to the normal in-order selection.
+  }
+
+  // Find first available fallback. Skip any model already tried this request so a
+  // multi-hop traversal (provider-wide outage) always advances to the next candidate.
   for (const modelId of preferences) {
+    if (excludeModelIds?.has(modelId)) continue;
+
     const fallbackModel = availableModels.find(m => m.id === modelId);
 
-    if (fallbackModel) {
-      // Check if we have API key for this model
-      const hasApiKey = apiKeyTable[fallbackModel.backend] && apiKeyTable[fallbackModel.backend] !== 'expired';
-
-      if (hasApiKey) {
-        logger.info(`✅ Found automatic fallback: ${fallbackModel.id}`);
-        return fallbackModel;
-      }
+    if (fallbackModel && hasValidKey(fallbackModel)) {
+      logger.info(`✅ Found automatic fallback: ${fallbackModel.id}`);
+      return fallbackModel;
     }
   }
 
   // Last resort: find ANY model with valid API key
   for (const model of availableModels) {
     if (model.id === originalModel.id) continue; // Skip the original model
+    if (excludeModelIds?.has(model.id)) continue; // Skip already-tried models
 
-    const hasApiKey = apiKeyTable[model.backend] && apiKeyTable[model.backend] !== 'expired';
-    if (hasApiKey) {
+    if (hasValidKey(model)) {
       logger.info(`✅ Found last-resort fallback: ${model.id}`);
       return model;
     }
@@ -320,6 +348,18 @@ export type LlmWithFallbackOptions = {
    * but its backend configuration is still valid.
    */
   forceSwitch?: boolean;
+  /**
+   * Model ids already tried (and failed) this request. Excluded from every selection
+   * path so a bounded multi-hop traversal never re-picks a model that just failed.
+   */
+  excludeModelIds?: Set<string>;
+  /**
+   * On the final allowed hop of a multi-hop traversal, prefer an automatic fallback on a backend
+   * not yet tried, so a provider-wide outage is guaranteed to cross to a different provider within
+   * the hop budget rather than exhausting it on same-provider models. Only affects automatic
+   * selection (no frontend fallback id).
+   */
+  preferUntriedBackend?: boolean;
 };
 
 /**
@@ -333,18 +373,35 @@ export async function getLlmWithFallback(
   logger: Logger,
   options: LlmWithFallbackOptions = {}
 ): Promise<FallbackAttempt | null> {
-  // Try original model first (unless forceSwitch is requested, e.g. after overload retries exhausted)
-  if (!options.forceSwitch) {
+  const excludeModelIds = options.excludeModelIds;
+
+  // Try original model first, unless forceSwitch is requested (e.g. after overload retries
+  // exhausted) or the original was already tried this request (a multi-hop fallback passes the
+  // just-failed model as `originalModel`, which must never be re-selected).
+  if (!options.forceSwitch && !excludeModelIds?.has(originalModel.id)) {
     const originalBackend = getLlmByModel(apiKeyTable, { modelInfo: originalModel, logger });
     if (originalBackend) {
       return { model: originalModel, backend: originalBackend, attempt: 0 };
     }
   }
 
+  // A frontend-provided fallback that was already tried is treated as absent so the traversal
+  // advances via automatic selection instead of dead-ending on the same repeated id each hop.
+  if (fallbackModelId && excludeModelIds?.has(fallbackModelId)) {
+    fallbackModelId = undefined;
+  }
+
   // If no fallback model provided, try to find one automatically
   if (!fallbackModelId) {
     logger.warn('⚠️ No fallback model provided, attempting automatic fallback selection');
-    const automaticFallback = findAutomaticFallback(originalModel, availableModels, apiKeyTable, logger);
+    const automaticFallback = findAutomaticFallback(
+      originalModel,
+      availableModels,
+      apiKeyTable,
+      logger,
+      excludeModelIds,
+      options.preferUntriedBackend
+    );
 
     if (!automaticFallback) {
       logger.error('❌ No fallback model available (neither provided nor automatic)');

@@ -76,7 +76,7 @@ Each row shows the price currently in force for one model: input/output rates (p
 | Action | Description |
 |--------|-------------|
 | **Reprice** | Appends a new operator price row taking effect immediately. Requires a note documenting where the price comes from (an invoice, a provider pricing page); the note is the audit trail. While an operator row is newest, automatic seed updates skip that model. |
-| **History** | Shows every price the model has ever had, with dates and notes. Rows are append-only and never edited, so history is complete by construction. |
+| **History** | Shows every price the model has ever had as a change log: each entry names who made the change and the note, and highlights the old and new rate for every field that changed. Rows are append-only and never edited, so history is complete by construction. |
 | **Revert** | Offered on operator-priced rows. Appends the adapter table's current rates back under seed management, so future automatic price updates flow to the model again. The operator row remains in history. |
 
 ## Margins
@@ -90,7 +90,7 @@ The Margins sub-tab reports revenue versus provider cost over the last 30 days, 
 | **Monthly COGS by provider** | Month-by-month provider cost totals with invoice reconciliation (below). |
 | **Settlement basis** | How usage was priced: provider-reported token counts versus the local estimate fallback, with average token deltas as an estimate-quality signal. |
 
-Rows below the target chip's rate were charged under older pricing or indicate a leak worth investigating.
+Margin chips are banded against the target: green within 2% of it, yellow between break-even and 20% above target (usually usage charged under older pricing), and red below break-even or more than 20% above target. Red-below means the platform lost money on that usage; red-above means it was charged well over current pricing.
 
 ### Invoice reconciliation
 

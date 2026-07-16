@@ -529,6 +529,8 @@
     "add_files": "Add Files",
     "add_files_to_notebook_one": "Add {{count}} File to Notebook",
     "add_files_to_notebook_other": "Add {{count}} Files to Notebook",
+    "add_files_to_project_one": "Add {{count}} File to Project",
+    "add_files_to_project_other": "Add {{count}} Files to Project",
     "in_project": "In Project"
   },
   "file_properties": {

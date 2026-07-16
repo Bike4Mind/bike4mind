@@ -265,6 +265,19 @@ export interface AgentRunOptions {
    * infra-free - hosts (e.g. the CLI) own the actual compaction strategy.
    */
   onContextLimit?: (messages: IMessage[]) => Promise<IMessage[] | null>;
+  /**
+   * Host-supplied provider for a compact live-workflow-state reminder (open
+   * todos, unresolved blockers, recent decisions). Called before every LLM
+   * call in the ReAct loop; a non-empty return is appended as the LAST message
+   * of the request (a user-role message tagged with WORKFLOW_REMINDER_MARKER),
+   * replacing any reminder from a previous iteration rather than stacking.
+   * Last position is deliberate: the reminder changes every iteration, and
+   * placing it at the tail invalidates as little cached prompt prefix as
+   * possible. Return null/'' to omit the reminder for that call. The provider
+   * owns rendering and token budgeting - the agent only handles placement and
+   * dedup. Not provided: behavior is unchanged.
+   */
+  workflowReminder?: () => string | null;
 }
 
 /**

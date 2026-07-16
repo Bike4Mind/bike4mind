@@ -1,6 +1,6 @@
 {
   "name": "@bike4mind/utils",
-  "version": "2.28.0",
+  "version": "3.0.0",
   "publishConfig": {
     "access": "restricted"
   },

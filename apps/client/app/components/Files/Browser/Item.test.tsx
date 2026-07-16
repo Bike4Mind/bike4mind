@@ -8,6 +8,7 @@ import { KnowledgeType, SupportedFabFileMimeTypes } from '@bike4mind/common';
 import type { IFabFileDocument } from '@bike4mind/common';
 import { getFileIcon } from './Item';
 import FileBrowserItem from './Item';
+import { FileBrowserInstanceProvider, FileBrowserInstanceValue } from './instanceContext';
 
 // Keep the ListItem/GridItem render tests focused on the image-moderation
 // gating rather than the full file-actions menu, tags, and sharing chrome -
@@ -134,5 +135,38 @@ describe('FileBrowserItem image moderation gating', () => {
     renderWithProviders(<FileBrowserItem file={heldImageFile} viewType="grid" />);
     expect(screen.getByTestId('image-moderation-scanning')).toBeInTheDocument();
     expect(screen.queryByRole('img')).toBeNull();
+  });
+});
+
+// The "Added" indicator is driven by config.addedFileIds from the instance context,
+// so an embedded picker can flag files already present in its own list.
+describe('FileBrowserItem added-indicator', () => {
+  const file = makeFile({ id: 'added-1', fileName: 'already-added.txt' });
+
+  const makeInstance = (addedFileIds?: Set<string>): FileBrowserInstanceValue => ({
+    selectedIds: new Set<string>(),
+    setSelectedIds: vi.fn(),
+    open: true,
+    setOpen: vi.fn(),
+    fileToShare: null,
+    setFileToShare: vi.fn(),
+    config: { addedFileIds },
+  });
+
+  const renderWithInstance = (viewType: 'list' | 'grid', addedFileIds?: Set<string>) =>
+    renderWithProviders(
+      <FileBrowserInstanceProvider value={makeInstance(addedFileIds)}>
+        <FileBrowserItem file={file} viewType={viewType} />
+      </FileBrowserInstanceProvider>
+    );
+
+  it.each(['list', 'grid'] as const)('%s shows the Added badge when the file id is in addedFileIds', viewType => {
+    renderWithInstance(viewType, new Set(['added-1']));
+    expect(screen.getByTestId('file-browser-item-added-badge')).toBeInTheDocument();
+  });
+
+  it.each(['list', 'grid'] as const)('%s hides the Added badge when the file is not added', viewType => {
+    renderWithInstance(viewType, new Set(['some-other-id']));
+    expect(screen.queryByTestId('file-browser-item-added-badge')).toBeNull();
   });
 });

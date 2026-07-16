@@ -17,6 +17,7 @@ import { useGetFriendRequests, useReturnToAdmin, useUserLogout } from '@client/a
 import { useAccessToken } from '@client/app/hooks/useAccessToken';
 import { useAppVersion } from '@client/app/hooks/useAppVersion';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { useIsTablet } from '@client/app/hooks/useIsMobile';
 import { useEntitlements } from '@client/app/hooks/data/entitlements';
 import { filterVisiblePremiumNavItems } from '@client/app/utils/premiumNav';
 import { premiumNavItems } from '@client/app/premium-generated/premiumNavItems.generated';
@@ -44,6 +45,11 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import LogoDevIcon from '@mui/icons-material/LogoDev';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import RefreshIcon from '@mui/icons-material/RefreshOutlined';
+import { useNotebookLayout } from '..';
+
+export const closeSideNavOnOverlay = (isOverlay: boolean, setOpenSideNav: (open: boolean) => void) => {
+  if (isOverlay) setOpenSideNav(false);
+};
 
 // Strip the trailing " (Personal)" suffix that useAccounts appends to the personal account name.
 const stripPersonalSuffix = (name: string) => name.replace(/ \(Personal\)$/, '');
@@ -201,6 +207,8 @@ export const AccountCard = ({ name, typeLabel, credits, selected, onSelect, bare
 const ProfileMenu = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const isOverlay = useIsTablet();
+  const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
   const theme = useTheme();
   const { setMode } = useColorScheme();
   const mode = theme.palette.mode;
@@ -238,6 +246,11 @@ const ProfileMenu = () => {
   const closeAll = () => {
     setOpen(false);
     setMoreOpen(false);
+  };
+
+  const closeNavigation = () => {
+    closeSideNavOnOverlay(isOverlay, setOpenSideNav);
+    closeAll();
   };
 
   // Dismiss the menu on any pointer-down outside the whole profile control, or on Escape.
@@ -327,7 +340,7 @@ const ProfileMenu = () => {
               label={t('admin.title', 'Admin')}
               onClick={() => {
                 navigate({ to: '/admin' });
-                setOpen(false);
+                closeNavigation();
               }}
             />
           )}
@@ -344,7 +357,7 @@ const ProfileMenu = () => {
             }
             onClick={() => {
               navigate({ to: '/profile' });
-              setOpen(false);
+              closeNavigation();
             }}
           />
           <MenuRow
@@ -353,7 +366,7 @@ const ProfileMenu = () => {
             label={t('skills.title', 'Skills')}
             onClick={() => {
               navigate({ to: '/skills' });
-              setOpen(false);
+              closeNavigation();
             }}
           />
           <MenuRow
@@ -362,7 +375,7 @@ const ProfileMenu = () => {
             label={t('apiKeys.title', 'API Keys')}
             onClick={() => {
               navigate({ to: '/profile', search: { tab: 'api-keys' } });
-              setOpen(false);
+              closeNavigation();
             }}
           />
           <MenuRow
@@ -371,7 +384,7 @@ const ProfileMenu = () => {
             label={t('organization.teams', 'Teams')}
             onClick={() => {
               navigate({ to: '/organizations' });
-              setOpen(false);
+              closeNavigation();
             }}
           />
           {isCreditsEnabled && (
@@ -565,7 +578,7 @@ const ProfileMenu = () => {
                     label={t('quests.my_quests', 'My Quests')}
                     onClick={() => {
                       navigate({ to: '/quests' });
-                      closeAll();
+                      closeNavigation();
                     }}
                   />
                 )}
@@ -580,7 +593,7 @@ const ProfileMenu = () => {
                       // glue, so their paths can't appear in the static route-tree
                       // union - erase the typed `to` here.
                       navigate({ to: item.path as never });
-                      closeAll();
+                      closeNavigation();
                     }}
                   />
                 ))}

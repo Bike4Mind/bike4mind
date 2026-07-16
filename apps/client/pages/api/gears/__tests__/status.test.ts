@@ -174,8 +174,10 @@ describe('GET /api/gears/status', () => {
   it('unlock by receipt: project membership (not just ownership) is queried', async () => {
     const { promise } = run({ id: 'u1' });
     await promise;
+    // users.userId is the stored membership path (sharingService pushShareable
+    // writes { userId, permissions }); users.id matches nothing in Mongo.
     expect(mocks.projectExists).toHaveBeenCalledWith({
-      $or: [{ userId: 'u1' }, { 'users.id': 'u1' }],
+      $or: [{ userId: 'u1' }, { 'users.userId': 'u1' }],
     });
   });
 });

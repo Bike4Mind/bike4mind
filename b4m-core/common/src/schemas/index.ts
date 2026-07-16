@@ -19,3 +19,4 @@ export * from './lattice';
 export * from './contextTelemetry';
 export * from './dataLake';
 export * from './briefcasePrompt';
+export * from './imageGenerationTemplate';

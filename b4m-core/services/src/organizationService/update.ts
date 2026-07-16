@@ -31,21 +31,30 @@ export const update = async (user: IUserDocument, params: UpdateParameters, adap
 
   if (!organization) throw new NotFoundError('Organization not found');
 
-  const isManager = organization.managerId === user.id;
-  const isOwner = organization.userId === user.id;
+  // Normalize a possibly-hydrated Mongoose doc to a plain object before spreading.
+  // findUpdateAccessById returns a hydrated doc (unlike findAccessibleById, which
+  // returns toJSON()); spreading it copies `_doc`/`$__` and nests the real fields,
+  // which corrupts the response shape AND defeats the response-boundary field strip
+  // in toSafeOrganization (top-level stripeCustomerId/userId would be undefined).
+  const plain = (
+    typeof (organization as { toJSON?: unknown }).toJSON === 'function'
+      ? (organization as unknown as { toJSON: () => NonNullable<typeof organization> }).toJSON()
+      : organization
+  ) as NonNullable<typeof organization>;
+
+  const isManager = plain.managerId === user.id;
+  const isOwner = plain.userId === user.id;
 
   organization = {
-    ...organization,
-    name: rest.name ?? organization.name,
-    description: rest.description ?? organization.description,
+    ...plain,
+    name: rest.name ?? plain.name,
+    description: rest.description ?? plain.description,
     // Only allow billing contact changes for owners and admins, not managers
     billingContact:
-      isManager && !isOwner && !user.isAdmin
-        ? organization.billingContact
-        : (rest.billingContact ?? organization.billingContact),
+      isManager && !isOwner && !user.isAdmin ? plain.billingContact : (rest.billingContact ?? plain.billingContact),
     // Managers can update systemPrompt intentionally - they customize org-wide AI
     // behavior. Authorization is already checked via findUpdateAccessById.
-    systemPrompt: rest.systemPrompt ?? organization.systemPrompt,
+    systemPrompt: rest.systemPrompt ?? plain.systemPrompt,
     updatedAt: new Date(),
   };
 

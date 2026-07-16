@@ -41,7 +41,10 @@ const TIER = { input: 4e-6, output: 16e-6 };
 
 function call(options: { method: 'GET' | 'POST'; isAdmin?: boolean; query?: object; body?: object }) {
   const { req, res } = createMocks({ method: options.method, query: options.query ?? {}, body: options.body });
-  (req as unknown as { user: { isAdmin: boolean } }).user = { isAdmin: options.isAdmin ?? true };
+  (req as unknown as { user: { isAdmin: boolean; id: string } }).user = {
+    isAdmin: options.isAdmin ?? true,
+    id: 'admin-1',
+  };
   return { req, res, run: () => (handler as unknown as (rq: unknown, rs: unknown) => Promise<unknown>)(req, res) };
 }
 
@@ -172,6 +175,21 @@ describe('POST /api/admin/model-prices', () => {
       note: 'adapter-seed',
       pricing: { '0': { input: 9e-6, output: 27e-6 } },
     });
+  });
+
+  it('stamps the requesting admin on reprices and reverts', async () => {
+    mockRowsInForce.mockResolvedValue([{ modelId: 'gpt-x', unit: 'per_token' }]);
+    mockGenerateSeed.mockResolvedValue([
+      { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': { input: 9e-6, output: 27e-6 } } },
+    ]);
+    await call({
+      method: 'POST',
+      body: { modelId: 'gpt-x', unit: 'per_token', pricing: { '0': TIER }, note: 'invoice X' },
+    }).run();
+    expect(mockAppend.mock.calls[0][0].repricedBy).toBe('admin-1');
+
+    await call({ method: 'POST', body: { modelId: 'gpt-x', unit: 'per_token', action: 'revert-to-seed' } }).run();
+    expect(mockAppend.mock.calls[1][0].repricedBy).toBe('admin-1');
   });
 
   it('rejects revert for a model the seed does not manage', async () => {

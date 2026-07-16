@@ -70,9 +70,16 @@ function Counter() {
 }
 export default Counter;`;
 
+// recharts is a blessed publish dep (PR 2) - finalizes to an inert bundle referencing its UMD.
 const RECHARTS_JSX = `import { LineChart } from 'recharts';
 export default function C() {
   return <LineChart />;
+}`;
+
+// `three` is not blessed for publish (nor in the in-app allowlist) - must be rejected at finalize.
+const UNSUPPORTED_JSX = `import * as THREE from 'three';
+export default function C() {
+  return <div>{typeof THREE}</div>;
 }`;
 
 const reactManifest = (rawSource: string) => ({
@@ -134,14 +141,27 @@ describe('finalize - React artifact transpile branch', () => {
     expect(typeof set.sha256Index).toBe('string');
   });
 
-  it('rejects a React draft importing an unsupported dep with a clean 422 (nothing promoted)', async () => {
+  it('transpiles a React draft importing a blessed dep (recharts) and promotes the inert bundle (200)', async () => {
     setDraft(reactManifest(RECHARTS_JSX), RECHARTS_JSX);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const indexUpload = mockUpload.mock.calls.find(c => String(c[1]).endsWith('index.html'));
+    const promotedHtml = (indexUpload![0] as Buffer).toString('utf-8');
+    expect(promotedHtml).toContain('/static/lib/recharts@2.x.js'); // blessed self-hosted UMD
+    expect(promotedHtml).toContain('"recharts":window.Recharts'); // wired into require()
+    expect(promotedHtml).not.toContain('unpkg.com');
+  });
+
+  it('rejects a React draft importing an unsupported dep with a clean 422 (nothing promoted)', async () => {
+    setDraft(reactManifest(UNSUPPORTED_JSX), UNSUPPORTED_JSX);
     const { res, promise } = run({ draftId: DRAFT_ID });
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
     const body = res._getJSONData() as { violations?: Array<{ message: string }> };
-    expect(body.violations?.[0]?.message ?? '').toMatch(/not publishable yet|recharts/i);
+    expect(body.violations?.[0]?.message ?? '').toMatch(/not publishable yet|three/i);
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled(); // no upsert - nothing published
   });
 });

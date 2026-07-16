@@ -7,6 +7,8 @@ import {
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
 import { validateBundle, __testing } from './validateBundle';
+import { PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
+import { OPTIONAL_DEP_CDN } from '@client/app/utils/reactArtifactDeps';
 
 const COUNTER = `import { useState } from 'react';
 function Counter() {
@@ -116,7 +118,8 @@ export default function C() { const [n] = useState(0); return <div>{n}</div>; }`
   });
 
   it('rejects a not-yet-publishable dependency with a clear error', async () => {
-    const src = `import { LineChart } from 'recharts';\nexport default function C() { return <LineChart />; }`;
+    // `three` is not in PUBLISH_REACT_DEP_SCRIPTS (nor the in-app allowlist) - must be rejected.
+    const src = `import * as THREE from 'three';\nexport default function C() { return <div>{typeof THREE}</div>; }`;
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       UnsupportedReactDependencyError
     );
@@ -172,6 +175,117 @@ function C() {
     await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
       ReactArtifactTranspileError
     );
+  });
+});
+
+describe('blessed optional dependencies (PR 2)', () => {
+  // dep specifier -> [self-hosted blessed path, require() global the bundle binds]
+  const CASES: Array<[string, string, string]> = [
+    ['recharts', '/static/lib/recharts@2.x.js', 'Recharts'],
+    ['lucide-react', '/static/lib/lucide@1.x.js', 'LucideReactWrapper'],
+    ['d3', '/static/lib/d3@7.x.js', 'd3'],
+    ['lodash', '/static/lib/lodash@4.x.js', '_'],
+    ['mathjs', '/static/lib/mathjs@11.x.js', 'math'],
+    ['papaparse', '/static/lib/papaparse@5.x.js', 'Papa'],
+    ['xlsx', '/static/lib/xlsx@0.18.x.js', 'XLSX'],
+  ];
+
+  it.each(CASES)(
+    'blesses %s: emits the pinned script + require() mapping and passes validateBundle',
+    async (dep, path, global) => {
+      const src = `import Dep from '${dep}';
+export default function C() { return <div>{typeof Dep}</div>; }`;
+      const { indexHtml } = await buildReactArtifactBundle({ source: src, title: dep });
+
+      expect(indexHtml).toContain(path); // blessed self-hosted UMD, not a CDN
+      expect(indexHtml).toContain(`"${dep}":window.${global}`); // wired into the require() moduleMap
+      expect(indexHtml).not.toContain('unpkg.com');
+
+      const result = validateBundle({ indexHtml, manifest: INDEX_MANIFEST });
+      expect(result.violations).toEqual([]);
+      expect(result.valid).toBe(true);
+    }
+  );
+
+  it('loads dep UMDs AFTER the React runtime (recharts externalizes React/PropTypes)', async () => {
+    const src = `import { LineChart } from 'recharts';
+export default function C() { return <LineChart />; }`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    // prop-types must be present and precede recharts, or recharts' UMD factory throws at init.
+    expect(indexHtml.indexOf('/static/lib/prop-types@15.x.js')).toBeGreaterThanOrEqual(0);
+    expect(indexHtml.indexOf('/static/lib/prop-types@15.x.js')).toBeLessThan(
+      indexHtml.indexOf('/static/lib/recharts@2.x.js')
+    );
+  });
+
+  it('embeds the LucideReactWrapper shim only when lucide-react is imported', async () => {
+    const withLucide = await buildReactArtifactBundle({
+      source: `import { Home } from 'lucide-react';\nexport default function C() { return <Home />; }`,
+      title: 'x',
+    });
+    expect(withLucide.indexHtml).toContain('setupLucideWrapper()');
+
+    const withoutLucide = await buildReactArtifactBundle({ source: COUNTER, title: 'x' });
+    expect(withoutLucide.indexHtml).not.toContain('setupLucideWrapper');
+  });
+
+  it('renders lucide icons from the node-array format, not dangerouslySetInnerHTML', async () => {
+    // lucide@1.x exposes icons as node arrays ([tag, attrs][]); the shim must build real SVG
+    // children via React.createElement. Guards against a regression back to the string-injection
+    // form (which rendered invisible icons). The shim lives in a template string, so assert on it.
+    const { indexHtml } = await buildReactArtifactBundle({
+      source: `import { Home } from 'lucide-react';\nexport default function C() { return <Home />; }`,
+      title: 'x',
+    });
+    expect(indexHtml).toContain('Array.isArray');
+    expect(indexHtml).toContain('React.createElement(entry[0]');
+    expect(indexHtml).not.toContain('dangerouslySetInnerHTML');
+  });
+
+  it('handles an artifact importing multiple blessed deps at once', async () => {
+    const src = `import { LineChart } from 'recharts';
+import _ from 'lodash';
+export default function C() { return <LineChart data={_.range(3)} />; }`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain('/static/lib/recharts@2.x.js');
+    expect(indexHtml).toContain('/static/lib/lodash@4.x.js');
+    expect(indexHtml).toContain('"recharts":window.Recharts');
+    expect(indexHtml).toContain('"lodash":window._');
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
+  });
+
+  it('does not emit any dep script for a dependency-free artifact', async () => {
+    const { indexHtml } = await buildReactArtifactBundle({ source: COUNTER, title: 'x' });
+    for (const [, path] of CASES) {
+      expect(indexHtml).not.toContain(path);
+    }
+  });
+
+  it('rejects an Object.prototype key as a dependency (hasOwnProperty, not `in`)', async () => {
+    // `constructor` is on Object.prototype, so a naive `in` check would treat it as blessed and
+    // emit an undefined script path/global. It must be rejected like any unsupported module.
+    const src = `import constructor from 'constructor';
+export default function C() { return <div>{typeof constructor}</div>; }`;
+    await expect(buildReactArtifactBundle({ source: src, title: 'x' })).rejects.toBeInstanceOf(
+      UnsupportedReactDependencyError
+    );
+  });
+});
+
+describe('registry parity: OPTIONAL_DEP_CDN (in-app) vs PUBLISH_REACT_DEP_SCRIPTS (publish)', () => {
+  // The two registries must agree so a published artifact resolves the same globals as the in-chat
+  // preview. Guards against a silent one-sided edit (previously only enforced by a comment).
+  it('covers the same optional dependency keys', () => {
+    const publishKeys = Object.keys(PUBLISH_REACT_DEP_SCRIPTS).sort();
+    // react is a base runtime script in-app (not in OPTIONAL_DEP_CDN), so compare the optional set.
+    const inAppKeys = Object.keys(OPTIONAL_DEP_CDN).sort();
+    expect(publishKeys).toEqual(inAppKeys);
+  });
+
+  it('maps each dependency to the same window global on both paths', () => {
+    for (const [dep, { global }] of Object.entries(PUBLISH_REACT_DEP_SCRIPTS)) {
+      expect(OPTIONAL_DEP_CDN[dep]?.globalVar, `global mismatch for "${dep}"`).toBe(global);
+    }
   });
 });
 

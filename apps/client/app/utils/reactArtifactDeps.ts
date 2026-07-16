@@ -29,7 +29,9 @@ export const ALLOWED_DEPENDENCIES = [
 export const OPTIONAL_DEP_CDN: Record<string, { url: string; globalVar: string }> = {
   'lucide-react': { url: 'https://unpkg.com/lucide@1.21.0/dist/umd/lucide.min.js', globalVar: 'LucideReactWrapper' },
   recharts: { url: 'https://unpkg.com/recharts@2.8.0/umd/Recharts.js', globalVar: 'Recharts' },
-  mathjs: { url: 'https://unpkg.com/mathjs@11.11.0/lib/browser/math.min.js', globalVar: 'math' },
+  // mathjs 11.x ships only the UNMINIFIED browser UMD (lib/browser/math.js); the `.min.js` path
+  // 404s on the CDN. Must stay in sync with the self-hosted publish copy (mathjs@11.x.js).
+  mathjs: { url: 'https://unpkg.com/mathjs@11.11.0/lib/browser/math.js', globalVar: 'math' },
   lodash: { url: 'https://unpkg.com/lodash@4.17.21/lodash.min.js', globalVar: '_' },
   d3: { url: 'https://unpkg.com/d3@7.8.5/dist/d3.min.js', globalVar: 'd3' },
   papaparse: { url: 'https://unpkg.com/papaparse@5.4.1/papaparse.min.js', globalVar: 'Papa' },

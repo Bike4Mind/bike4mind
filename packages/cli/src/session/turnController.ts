@@ -29,9 +29,13 @@ import { ConversationContext, reconstructTurnBlocks } from '../context/Conversat
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
 import { createReactiveCompactionHandler } from '../utils/reactiveCompaction.js';
 import { formatStep, extractCompactInstructions } from '../utils';
+import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
 import { isTransientNetworkError } from '../llm/retryPolicy';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import type { TodoStore } from '../tools/writeTodosTool.js';
+import type { DecisionStore } from '../tools/decisionLogTool.js';
+import type { BlockerStore } from '../tools/blockerTool.js';
 
 /**
  * Collaborators a single turn needs. React-free by design: the two setters are
@@ -52,6 +56,14 @@ export interface TurnContext {
   additionalDirectories: string[];
   featureRegistry: FeatureModuleRegistry | null;
   backgroundManager: BackgroundAgentManager | null;
+  /**
+   * Live workflow stores (todos / decisions / blockers) backing the
+   * per-iteration workflow reminder (issue: re-inject live workflow state).
+   * Null when the host has no workflow tooling - the reminder is skipped.
+   */
+  todoStore: TodoStore | null;
+  decisionStore: DecisionStore | null;
+  blockerStore: BlockerStore | null;
   /** Mirror the persisted command history into the input's up-arrow recall. */
   setCommandHistory: (history: string[]) => void;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
@@ -78,6 +90,9 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     additionalDirectories,
     featureRegistry,
     backgroundManager,
+    todoStore,
+    decisionStore,
+    blockerStore,
     setCommandHistory,
     setAbortController,
   } = ctx;
@@ -244,6 +259,29 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const turnId = `turn-${randomBytes(4).toString('hex')}`;
     backgroundManager?.setCurrentTurn(turnId);
 
+    // Per-iteration workflow reminder: re-render open todos/blockers/recent
+    // decisions from the live stores before every LLM call so recorded state
+    // doesn't decay as the turn grows (the agent replaces it in place, so the
+    // context cost is a fixed ceiling). Disabled via the workflowReminders
+    // preference or when the host wired no workflow stores.
+    const workflowReminder =
+      cliConfig.preferences.workflowReminders !== false && (todoStore || decisionStore || blockerStore)
+        ? () => {
+            const { text, elided } = renderWorkflowReminder(
+              {
+                todos: todoStore?.todos ?? [],
+                decisions: decisionStore?.decisions ?? [],
+                blockers: blockerStore?.blockers ?? [],
+              },
+              { maxTokens: cliConfig.preferences.workflowReminderMaxTokens }
+            );
+            if (elided > 0) {
+              logger.debug(`[workflowReminder] elided ${elided} item(s) to fit the token cap`);
+            }
+            return text;
+          }
+        : undefined;
+
     let result;
     try {
       result = await agent.run(messageContent, {
@@ -251,6 +289,7 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool,
+        workflowReminder,
         // Mid-loop recovery if a provider context-window error interrupts this
         // turn: compact the in-flight history once and retry, instead of
         // failing the turn and losing the user's work.

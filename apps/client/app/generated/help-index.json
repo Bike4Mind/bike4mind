@@ -7927,6 +7927,11 @@
           "anchor": "removing-a-channel-override"
         },
         {
+          "level": 3,
+          "text": "Default GitHub Repository per Channel",
+          "anchor": "default-github-repository-per-channel"
+        },
+        {
           "level": 2,
           "text": "Agent Model Configuration",
           "anchor": "agent-model-configuration"
@@ -17354,6 +17359,11 @@
               "anchor": "removing-a-channel-override"
             },
             {
+              "level": 3,
+              "text": "Default GitHub Repository per Channel",
+              "anchor": "default-github-repository-per-channel"
+            },
+            {
               "level": 2,
               "text": "Agent Model Configuration",
               "anchor": "agent-model-configuration"
@@ -18845,5 +18855,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-13T08:37:19.793Z"
+  "version": "2026-07-15T14:34:12.156Z"
 }

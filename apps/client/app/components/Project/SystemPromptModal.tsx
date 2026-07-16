@@ -25,18 +25,13 @@ import {
   useToggleSystemPrompt,
   useRemoveSystemPrompt,
 } from '@client/app/hooks/data/projects';
-import { useGetFabFile, useGetFabFiles } from '@client/app/hooks/data/fabFiles';
-import { useFileViewerStore } from '@client/app/components/layouts/Notebook/Sidenav/FileViewerWrapper';
-import { useShallow } from 'zustand/react/shallow';
+import { useGetFabFile } from '@client/app/hooks/data/fabFiles';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
 import { useKnowledgeModal } from '../Knowledge/KnowledgeModal';
 import { useTranslation } from 'react-i18next';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import FolderSharedIcon from '@mui/icons-material/FolderShared';
-import FileBrowser from '@client/app/components/FileBrowser';
-import { useUser } from '@client/app/contexts/UserContext';
-import { useSessions } from '@client/app/contexts/SessionsContext';
-import { userCanDeleteDoc, userCanShareDoc, userCanUpdateDoc } from '@client/app/utils/userPermission';
+import EmbeddedFileBrowser, { EmbeddedFileBrowserHandle } from '@client/app/components/Files/EmbeddedFileBrowser';
 import { createFabFileOnServerWithUpload } from '@client/app/utils/filesAPICalls';
 import { toast } from 'react-hot-toast';
 import { getErrorMessage } from '@client/app/utils/error';
@@ -57,26 +52,7 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
   const [open, setOpen] = useState(false);
   const { mutate: addSystemPrompts, isPending } = useAddSystemPromptsToProject();
   const { mutateAsync: removeSystemPrompt } = useRemoveSystemPrompt();
-  const fileBrowserRef = useRef<{ handleOpen: () => void }>(null);
-  // Use same search parameters as FileList to share React Query cache
-  const [search, sortOrder, filters, sortField] = useFileViewerStore(
-    useShallow(s => [s.search, s.sort, s.filters, s.sortField])
-  );
-  const {
-    data: fabFilesData,
-    fetchNextPage,
-    refetch,
-    hasNextPage,
-  } = useGetFabFiles(search, filters, sortOrder, sortField);
-  const { currentUser } = useUser();
-  const { currentSession } = useSessions();
-  const { setOpen: setKnowledgeModalOpen, setSelectedFabFileId, setViewOnly } = useKnowledgeModal();
-
-  const handleFabFileClick = (file: IFabFileDocument) => {
-    setSelectedFabFileId(file.id);
-    setViewOnly(false);
-    setKnowledgeModalOpen(true);
-  };
+  const fileBrowserRef = useRef<EmbeddedFileBrowserHandle>(null);
 
   const handleBulkAdd = (files: IFabFileDocument[]) => {
     const fileIds = files.map(file => file.id);
@@ -86,30 +62,11 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
     });
   };
 
-  const handleRefresh = async () => {
-    await refetch();
+  const handleRemovePrompt = (fileIds: string[]) => {
+    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
   };
 
-  const handleScrollEnd = () => {
-    if (hasNextPage) fetchNextPage();
-  };
-
-  const handleFabFileDelete = async (fileId: string, callback: (err?: Error) => void) => {
-    try {
-      await removeSystemPrompt({
-        projectId: project.id,
-        fileId,
-      });
-      callback();
-      return true;
-    } catch (error) {
-      callback(error as Error);
-      return false;
-    }
-  };
-
-  const fabFiles = fabFilesData?.pages?.flatMap(page => page.data) || [];
-  const totalFiles = fabFilesData?.pages?.[0]?.total || 0;
+  const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
 
   return (
     <>
@@ -172,22 +129,12 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
         </ModalDialog>
       </Modal>
 
-      <FileBrowser
+      <EmbeddedFileBrowser
         ref={fileBrowserRef}
-        fabFiles={fabFiles}
-        totalFiles={totalFiles}
-        currentSession={currentSession}
-        isFetching={false}
-        onFabFileClick={handleFabFileClick}
-        openKnowledgeModal={handleFabFileClick}
-        onFabFileDelete={handleFabFileDelete}
-        canUpdate={file => userCanUpdateDoc(currentUser, file)}
-        canDelete={file => userCanDeleteDoc(currentUser, file)}
-        canShare={file => userCanShareDoc(currentUser, file)}
-        onBulkAdd={handleBulkAdd}
-        onRefresh={handleRefresh}
-        onScrollEnd={handleScrollEnd}
-        hideButton={true}
+        onAdd={handleBulkAdd}
+        onDelete={handleRemovePrompt}
+        addedFileIds={systemPromptFileIds}
+        addButtonLabelKey="file_browser.add_files_to_project"
       />
     </>
   );
@@ -196,22 +143,10 @@ const ProjectSystemPromptsModal: FC<ProjectSystemPromptsModalProps> = ({ project
 // Tab panel variant
 export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) => {
   const { mutate: addSystemPrompts, isPending } = useAddSystemPromptsToProject();
+  const { mutateAsync: removeSystemPrompt } = useRemoveSystemPrompt();
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const fileBrowserRef = useRef<{ handleOpen: () => void }>(null);
-  // Use same search parameters as FileList to share React Query cache
-  const [search, sortOrder, filters, sortField] = useFileViewerStore(
-    useShallow(s => [s.search, s.sort, s.filters, s.sortField])
-  );
-  const {
-    data: fabFilesData,
-    fetchNextPage,
-    refetch,
-    hasNextPage,
-  } = useGetFabFiles(search, filters, sortOrder, sortField);
-  const { currentUser } = useUser();
-  const { currentSession } = useSessions();
-  const { setOpen: setKnowledgeModalOpen, setSelectedFabFileId, setViewOnly: setViewOnlySecond } = useKnowledgeModal();
+  const fileBrowserRef = useRef<EmbeddedFileBrowserHandle>(null);
 
   const handleFiles = async (files: File[]) => {
     for (const file of files) {
@@ -242,12 +177,6 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
     }
   };
 
-  const handleFabFileClick = (file: IFabFileDocument) => {
-    setSelectedFabFileId(file.id);
-    setViewOnlySecond(false);
-    setKnowledgeModalOpen(true);
-  };
-
   const handleBulkAdd = (files: IFabFileDocument[]) => {
     const fileIds = files.map(file => file.id);
     addSystemPrompts({
@@ -256,16 +185,11 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
     });
   };
 
-  const handleRefresh = async () => {
-    await refetch();
+  const handleRemovePrompt = (fileIds: string[]) => {
+    fileIds.forEach(fileId => removeSystemPrompt({ projectId: project.id, fileId }));
   };
 
-  const handleScrollEnd = () => {
-    if (hasNextPage) fetchNextPage();
-  };
-
-  const fabFiles = fabFilesData?.pages?.flatMap(page => page.data) || [];
-  const totalFiles = fabFilesData?.pages?.[0]?.total || 0;
+  const systemPromptFileIds = new Set(project.systemPrompts?.map(sp => sp.fileId) ?? []);
 
   return (
     <Stack gap="20px" sx={{ height: '100%' }} className="project-system-prompt-tab-container">
@@ -386,25 +310,12 @@ export const SystemPrompts: FC<{ project: IProjectDocument }> = ({ project }) =>
           )}
         </Stack>
       </Box>
-      <FileBrowser
+      <EmbeddedFileBrowser
         ref={fileBrowserRef}
-        fabFiles={fabFiles}
-        totalFiles={totalFiles}
-        currentSession={currentSession}
-        isFetching={false}
-        onFabFileClick={handleFabFileClick}
-        openKnowledgeModal={handleFabFileClick}
-        onFabFileDelete={async (_fileId, callback) => {
-          callback();
-          return true;
-        }}
-        canUpdate={file => userCanUpdateDoc(currentUser, file)}
-        canDelete={file => userCanDeleteDoc(currentUser, file)}
-        canShare={file => userCanShareDoc(currentUser, file)}
-        onBulkAdd={handleBulkAdd}
-        onRefresh={handleRefresh}
-        onScrollEnd={handleScrollEnd}
-        hideButton={true}
+        onAdd={handleBulkAdd}
+        onDelete={handleRemovePrompt}
+        addedFileIds={systemPromptFileIds}
+        addButtonLabelKey="file_browser.add_files_to_project"
       />
     </Stack>
   );
