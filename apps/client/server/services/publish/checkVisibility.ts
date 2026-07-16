@@ -80,9 +80,10 @@ export async function checkVisibility(
   }
   if (artifact.visibility === 'project') {
     const { Project } = await import('@bike4mind/database');
+    // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
     const member = await Project.findOne({
       _id: artifact.scopeId,
-      $or: [{ userId: String(user.id) }, { 'users.id': String(user.id) }],
+      $or: [{ userId: String(user.id) }, { 'users.userId': String(user.id) }],
     })
       .select('_id')
       .lean<{ _id: unknown } | null>();
