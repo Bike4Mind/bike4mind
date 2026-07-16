@@ -127,6 +127,12 @@ ProjectSchema.plugin(softDeletePlugin);
 // Optimized index for searchCollections query - projects collection
 ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
 
+// Membership arm of accessibility checks (gears status, shared-project lookups).
+// Without it, the $or's users.userId clause forces a collection scan on every
+// /api/gears/status poll (Mongo can only index-union an $or when EVERY clause
+// is indexed).
+ProjectSchema.index({ 'users.userId': 1 });
+
 // Unique constraint on project name per user (excluding soft-deleted projects)
 ProjectSchema.index(
   { userId: 1, name: 1 },

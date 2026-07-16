@@ -43,6 +43,7 @@ const ModelPriceSchema = new Schema<IModelPriceDocument>(
     },
     effectiveFrom: { type: Date, required: true },
     note: { type: String, required: false },
+    repricedBy: { type: String, required: false },
   },
   {
     timestamps: true,

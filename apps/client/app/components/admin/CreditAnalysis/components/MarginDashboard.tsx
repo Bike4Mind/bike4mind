@@ -20,6 +20,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { api } from '@client/app/contexts/ApiContext';
 import {
+  getPriceMargin,
   IModelDayMargin,
   IProviderInvoice,
   IProviderMonthCogs,
@@ -36,11 +37,13 @@ interface MarginResponse<T> {
 type NamedUserMargin = IUserMargin & { userName?: string };
 
 /**
- * Credits charged per $1 of COGS vs the current-pricing target.
- * Rows below target were charged under older pricing or indicate a leak.
+ * Credits charged per $1 of COGS vs the current-pricing target, banded:
+ * green within +/-2% of target (stochastic-rounding noise), yellow from
+ * there down to break-even (target / markup) or up to +20% (older pricing,
+ * mild drift), red below break-even (losing money) or above +20%.
  */
 const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> = ({ credits, cogsUsd, target }) => {
-  if (cogsUsd <= 0) {
+  if (cogsUsd <= 0 || target <= 0) {
     return (
       <Chip size="sm" color="neutral" data-testid="margin-ratio-chip">
         n/a
@@ -48,8 +51,11 @@ const RatioChip: React.FC<{ credits: number; cogsUsd: number; target: number }> 
     );
   }
   const ratio = credits / cogsUsd;
+  const breakEven = target / getPriceMargin();
+  const rel = ratio / target;
+  const color = rel >= 0.98 && rel <= 1.02 ? 'success' : ratio >= breakEven && rel <= 1.2 ? 'warning' : 'danger';
   return (
-    <Chip size="sm" color={ratio < target ? 'danger' : 'success'} data-testid="margin-ratio-chip">
+    <Chip size="sm" color={color} data-testid="margin-ratio-chip">
       {Math.round(ratio).toLocaleString()} cr/$
     </Chip>
   );
@@ -86,6 +92,8 @@ export const MarginDashboard: React.FC = () => {
   const [invoices, setInvoices] = useState<IProviderInvoice[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [userSearch, setUserSearch] = useState('');
+  const [providerFilter, setProviderFilter] = useState('');
 
   // Entry modal state; target null = closed.
   const [entryTarget, setEntryTarget] = useState<{ month: string; provider: string } | null>(null);
@@ -122,6 +130,20 @@ export const MarginDashboard: React.FC = () => {
   }, [fetchAll]);
 
   const target = modelDay?.targetCreditsPerUsd ?? 0;
+  const providerNeedle = providerFilter.trim().toLowerCase();
+  const userNeedle = userSearch.trim().toLowerCase();
+  const modelDayRows = (modelDay?.rows ?? []).filter(
+    r => !providerNeedle || r.provider.toLowerCase().includes(providerNeedle)
+  );
+  const userRows = (byUser?.rows ?? []).filter(
+    r =>
+      !userNeedle ||
+      (r.userName ?? '').toLowerCase().includes(userNeedle) ||
+      r.userId.toLowerCase().includes(userNeedle)
+  );
+  const providerMonthRows = (byProvider?.rows ?? []).filter(
+    r => !providerNeedle || r.provider.toLowerCase().includes(providerNeedle)
+  );
   const currentMonth = new Date().toISOString().slice(0, 7);
   const invoiceFor = (month: string, provider: string) =>
     invoices.find(i => i.month === month && i.provider === provider);
@@ -161,6 +183,20 @@ export const MarginDashboard: React.FC = () => {
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
         <Typography level="title-md">Margins (last 30 days)</Typography>
         <Stack direction="row" spacing={1} alignItems="center">
+          <Input
+            size="sm"
+            placeholder="Filter provider"
+            value={providerFilter}
+            onChange={e => setProviderFilter(e.target.value)}
+            data-testid="margin-provider-filter"
+          />
+          <Input
+            size="sm"
+            placeholder="Search user"
+            value={userSearch}
+            onChange={e => setUserSearch(e.target.value)}
+            data-testid="margin-user-search"
+          />
           {target > 0 && (
             <Chip size="sm" color="primary" variant="soft" data-testid="margin-target-chip">
               target: {target.toLocaleString()} credits/$
@@ -174,7 +210,8 @@ export const MarginDashboard: React.FC = () => {
 
       <Alert color="neutral" size="sm" sx={{ mb: 2 }}>
         Data comes from usage events (dual-written since deploy); requests before that are not included. The target is
-        what current pricing charges per $1 of provider cost. red rows recovered fewer credits than that.
+        what current pricing charges per $1 of provider cost. Green chips are within 2% of it, yellow chips are between
+        break-even and +20% (typically older pricing), and red chips are below break-even or more than 20% above target.
       </Alert>
 
       {error && (
@@ -207,7 +244,7 @@ export const MarginDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(modelDay?.rows ?? []).map(row => (
+                  {modelDayRows.map(row => (
                     <tr key={`${row.day}-${row.provider}-${row.model}`}>
                       <td>{row.day}</td>
                       <td>{row.provider}</td>
@@ -220,7 +257,7 @@ export const MarginDashboard: React.FC = () => {
                       </td>
                     </tr>
                   ))}
-                  {(modelDay?.rows ?? []).length === 0 && (
+                  {modelDayRows.length === 0 && (
                     <tr>
                       <td colSpan={7}>
                         <Typography level="body-sm" color="neutral">
@@ -250,7 +287,7 @@ export const MarginDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(byUser?.rows ?? []).map(row => (
+                  {userRows.map(row => (
                     <tr key={row.userId}>
                       <td title={row.userId}>{row.userName ?? row.userId}</td>
                       <td style={{ textAlign: 'right', ...numberCell }}>{row.requests.toLocaleString()}</td>
@@ -261,7 +298,7 @@ export const MarginDashboard: React.FC = () => {
                       </td>
                     </tr>
                   ))}
-                  {(byUser?.rows ?? []).length === 0 && (
+                  {userRows.length === 0 && (
                     <tr>
                       <td colSpan={5}>
                         <Typography level="body-sm" color="neutral">
@@ -297,7 +334,7 @@ export const MarginDashboard: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {(byProvider?.rows ?? []).map(row => {
+                  {providerMonthRows.map(row => {
                     const key = `${row.month}-${row.provider}`;
                     const invoice = invoiceFor(row.month, row.provider);
                     const isCurrent = row.month === currentMonth;
@@ -354,7 +391,7 @@ export const MarginDashboard: React.FC = () => {
                       </tr>
                     );
                   })}
-                  {(byProvider?.rows ?? []).length === 0 && (
+                  {providerMonthRows.length === 0 && (
                     <tr>
                       <td colSpan={11}>
                         <Typography level="body-sm" color="neutral">

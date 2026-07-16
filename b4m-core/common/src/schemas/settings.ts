@@ -261,6 +261,7 @@ export const SettingKeySchema = z.enum([
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'EnableHybridCompute',
+  'EnableHardwareCompute',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1339,6 +1340,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'optiMaxToolCalls', order: 84 },
       { key: 'EnableLibreOncology', order: 85 },
       { key: 'EnableHybridCompute', order: 86 },
+      { key: 'EnableHardwareCompute', order: 87 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -3166,6 +3168,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 84,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  EnableHardwareCompute: makeBooleanSetting({
+    key: 'EnableHardwareCompute',
+    name: 'Enable Hardware Backend Compute',
+    defaultValue: false,
+    description:
+      'Billing kill-switch for running eligible hybrid compute jobs on real external compute hardware (as opposed to the simulator-only path). Independent dark-ship flag; requires EnableComputeSubmission ON to function.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 85,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({

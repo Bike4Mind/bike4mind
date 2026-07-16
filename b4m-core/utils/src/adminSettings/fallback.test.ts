@@ -477,3 +477,157 @@ describe('getLlmWithFallback - Bedrock cross-path fallback chains', () => {
     expect(result!.model.id).toBe('gpt-5');
   });
 });
+
+describe('getLlmWithFallback - excludeModelIds (multi-hop traversal)', () => {
+  // A provider-wide outage walks the preference chain one model per hop. excludeModelIds
+  // carries every already-failed model so each hop advances instead of re-picking a dead model.
+  const opus48 = createModelInfo({ id: 'claude-opus-4-8', backend: ModelBackend.Anthropic });
+  const opus47 = createModelInfo({ id: 'claude-opus-4-7', backend: ModelBackend.Anthropic });
+  const opus46 = createModelInfo({ id: 'claude-opus-4-6', backend: ModelBackend.Anthropic });
+  const sonnet5 = createModelInfo({ id: 'claude-sonnet-5', backend: ModelBackend.Anthropic });
+  const gpt5 = createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI });
+  const allModels = [opus48, opus47, opus46, sonnet5, gpt5];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  it('skips an already-tried model and returns the next chain entry', async () => {
+    // opus-4-8 chain leads with opus-4-7; excluding it must advance to opus-4-6.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('treats an already-tried frontend fallback id as absent and falls through to automatic', async () => {
+    // The frontend keeps sending the same body.fallbackModel each hop; once tried it must
+    // not dead-end the traversal - automatic selection picks the next live chain entry.
+    const result = await getLlmWithFallback(opus48, 'claude-opus-4-7', allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['claude-opus-4-7']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('claude-opus-4-6');
+  });
+
+  it('respects the exclusion on the last-resort path', async () => {
+    // Unknown model with no preference chain falls to the last-resort scan; the excluded
+    // keyed model is skipped in favor of the next available one.
+    const unknown = createModelInfo({ id: 'unknown-model-x', backend: ModelBackend.OpenAI });
+    const modelA = createModelInfo({ id: 'vendor-model-a', backend: ModelBackend.OpenAI });
+    const modelB = createModelInfo({ id: 'vendor-model-b', backend: ModelBackend.OpenAI });
+    const result = await getLlmWithFallback(unknown, undefined, [unknown, modelA, modelB], apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: new Set(['vendor-model-a']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('vendor-model-b');
+  });
+
+  it('walks the full chain across successive hops until a live cross-provider model remains', async () => {
+    // Simulate a provider-wide Anthropic outage: every Anthropic hop is added to the set,
+    // so the traversal ends on the OpenAI tail rather than re-picking a failed Anthropic model.
+    const tried = new Set<string>(['claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5']);
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: tried,
+    });
+    expect(result).not.toBeNull();
+    expect(result!.model.id).toBe('gpt-5');
+    expect(result!.model.backend).toBe(ModelBackend.OpenAI);
+  });
+
+  it('skips an already-tried original with forceSwitch:false (multi-hop passes the failed model as original)', async () => {
+    // The non-overload retryable path (e.g. a 502) calls with forceSwitch:false. On a fallback hop
+    // the just-failed model is passed as `originalModel` AND is in excludeModelIds, so the
+    // original-return clause must be skipped and automatic selection must advance instead.
+    const result = await getLlmWithFallback(opus48, undefined, allModels, apiKeyTable, mockLogger, {
+      forceSwitch: false,
+      excludeModelIds: new Set(['claude-opus-4-8']),
+    });
+    expect(result).not.toBeNull();
+    expect(result!.attempt).toBe(1); // advanced, did NOT return the excluded original as attempt:0
+    expect(result!.model.id).not.toBe('claude-opus-4-8');
+  });
+});
+
+describe('getLlmWithFallback - cross-provider guarantee (preferUntriedBackend)', () => {
+  // Reproduces the reviewer's blocking finding and its fix: a bounded multi-hop traversal must
+  // reach the cross-provider tail on the REAL, untrimmed preference roster instead of burning the
+  // whole hop budget on same-provider models and hard-failing before it.
+  const MAX_FALLBACK_HOPS = 5; // keep in sync with ChatCompletionProcess.ts
+  const anthropicIds = [
+    'claude-fable-5',
+    'claude-opus-4-8',
+    'claude-opus-4-7',
+    'claude-opus-4-6',
+    'claude-sonnet-5',
+    'claude-sonnet-4-6',
+  ];
+  const fable = createModelInfo({ id: 'claude-fable-5', backend: ModelBackend.Anthropic });
+  const roster = [
+    ...anthropicIds.map(id => createModelInfo({ id, backend: ModelBackend.Anthropic })),
+    createModelInfo({ id: 'gpt-5', backend: ModelBackend.OpenAI }),
+  ];
+  const apiKeyTable = { anthropic: 'valid-key', openai: 'valid-key' } as Record<string, string>;
+
+  // Mirror the real ChatCompletionProcess loop: seed the primary, then on each hop pass the
+  // just-failed model as `originalModel` with the accumulated exclusion set, flipping
+  // preferUntriedBackend on the final allowed hop.
+  async function runTraversal(preferOnFinal: boolean) {
+    const tried = new Set<string>([fable.id]);
+    let current = fable;
+    let hops = 0;
+    for (let attempt = 0; attempt < MAX_FALLBACK_HOPS; attempt++) {
+      const isFinal = attempt >= MAX_FALLBACK_HOPS - 1;
+      const res = await getLlmWithFallback(current, undefined, roster, apiKeyTable, mockLogger, {
+        forceSwitch: false,
+        excludeModelIds: tried,
+        preferUntriedBackend: preferOnFinal && isFinal,
+      });
+      if (!res || res.attempt === 0) break;
+      current = res.model;
+      tried.add(current.id);
+      hops++;
+    }
+    return { current, hops };
+  }
+
+  it('reaches the cross-provider tail within the hop budget on the full roster', async () => {
+    const { current, hops } = await runTraversal(true);
+    expect(current.backend).toBe(ModelBackend.OpenAI);
+    expect(current.id).toBe('gpt-5');
+    expect(hops).toBeLessThanOrEqual(MAX_FALLBACK_HOPS);
+  });
+
+  it('WITHOUT the final-hop guarantee, exhausts the budget on same-provider models (the bug)', async () => {
+    // Documents why the fix is needed: the same traversal without preferUntriedBackend never
+    // crosses providers on this roster - it ends on an Anthropic model after MAX hops.
+    const { current, hops } = await runTraversal(false);
+    expect(current.backend).toBe(ModelBackend.Anthropic);
+    expect(hops).toBe(MAX_FALLBACK_HOPS);
+  });
+
+  it('preferUntriedBackend forces the fallback onto a backend not yet tried', async () => {
+    // All Anthropic ids tried; only the OpenAI tail remains on an untried backend.
+    const allAnthropicTried = new Set<string>(anthropicIds.filter(id => id !== 'claude-sonnet-4-6'));
+    const sonnet46 = roster.find(m => m.id === 'claude-sonnet-4-6')!;
+    const crossed = await getLlmWithFallback(sonnet46, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allAnthropicTried,
+      preferUntriedBackend: true,
+    });
+    expect(crossed!.model.backend).toBe(ModelBackend.OpenAI);
+    expect(crossed!.model.id).toBe('gpt-5');
+  });
+
+  it('returns null when every candidate is excluded (traversal exhausted)', async () => {
+    const allTried = new Set<string>(roster.map(m => m.id));
+    const result = await getLlmWithFallback(fable, undefined, roster, apiKeyTable, mockLogger, {
+      forceSwitch: true,
+      excludeModelIds: allTried,
+      preferUntriedBackend: true,
+    });
+    expect(result).toBeNull();
+  });
+});
