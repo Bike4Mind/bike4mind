@@ -92,6 +92,14 @@ export interface CompletionParams {
    * called by the public completions endpoints - never by web chat.
    */
   source?: CompletionSource;
+  /**
+   * Record the analytics usage event even when `enforceCredits` is off. The
+   * credit ledger/settlement stays gated by `enforceCredits` (nothing is ever
+   * double-charged); only the usage-event write is hoisted. Used by the embed
+   * path, which must meter org usage regardless of the platform-wide toggle.
+   * Off by default, so every existing caller keeps its current behavior.
+   */
+  alwaysRecordUsage?: boolean;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
 }
@@ -479,27 +487,6 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
             currentCreditHolder: holderAfterAdjustment,
           }
         );
-
-        // Dual-write usage event: analytics only, never billing.
-        db.usageEvents
-          ?.record({
-            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
-            userId,
-            ownerId: holderId,
-            ownerType: holderType,
-            feature: 'completion_api',
-            provider: modelInfo.backend,
-            model,
-            inputTokens: finalInputTokens,
-            outputTokens: finalOutputTokens,
-            cachedInputTokens: finalCacheReadTokens,
-            cacheWriteTokens: finalCacheCreationTokens,
-            costUsd: usdCost,
-            creditsCharged: actualCredits,
-            status: 'ok',
-            latencyMs: Date.now() - completionStartTime,
-          })
-          .catch(err => logger?.warn?.('Failed to record usage event', err));
       }
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
@@ -513,5 +500,34 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       });
       // Don't throw - completion already happened, but ensure this is tracked
     }
+  }
+
+  // Usage event (analytics/metering), hoisted out of the settlement gate above.
+  // Written whenever the run can be priced (modelInfo present) AND either credit
+  // enforcement is on OR the caller opted into unconditional recording. This is
+  // what lets the embed path meter org usage on a stage with enforceCredits off;
+  // `creditsCharged` is 0 there since no settlement ran, so it never implies a
+  // charge that didn't happen. Existing callers (alwaysRecordUsage undefined)
+  // keep exactly their prior behavior: an event iff enforceCredits was on.
+  if (modelInfo && (enforceCredits || params.alwaysRecordUsage)) {
+    db.usageEvents
+      ?.record({
+        requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+        userId,
+        ownerId: holderId,
+        ownerType: holderType,
+        feature: 'completion_api',
+        provider: modelInfo.backend,
+        model,
+        inputTokens: finalInputTokens,
+        outputTokens: finalOutputTokens,
+        cachedInputTokens: finalCacheReadTokens,
+        cacheWriteTokens: finalCacheCreationTokens,
+        costUsd: finalUsdCost,
+        creditsCharged: enforceCredits ? finalCredits : 0,
+        status: 'ok',
+        latencyMs: Date.now() - completionStartTime,
+      })
+      .catch(err => logger?.warn?.('Failed to record usage event', err));
   }
 }
