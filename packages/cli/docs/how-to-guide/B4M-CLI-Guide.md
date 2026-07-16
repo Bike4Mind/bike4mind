@@ -117,6 +117,19 @@ interactive:
 b4m "summarize the git log"
 ```
 
+### Autocomplete: `/` for commands, `@` for files
+
+Both prompt prefixes autocomplete as you type. Start a `/` command and the CLI
+shows matching commands with descriptions — arrows to navigate, Enter to
+select:
+
+![Slash-command autocomplete — typing /config surfaces the five configuration-related commands](images/command-autocomplete.png)
+
+Type `@` and a few characters to fuzzy-search the project for files to pull
+into context — Tab selects:
+
+![File autocomplete — @pack fuzzy-matches 20 files across the repo with sizes shown](images/file-autocomplete.png)
+
 ### Switching environments (`--dev` / `--prod`)
 
 ```bash
@@ -210,13 +223,28 @@ Highlights:
 - **`/terminal-setup`** — configures Shift+Enter for multi-line input in your
   terminal.
 
-> **Switching models:** there is no `/model` command (yet — tracked in
-> [#645](https://github.com/Bike4Mind/bike4mind/issues/645)). Model selection
-> lives in **`/config`**: open the config editor, arrow to the **model** field,
-> and pick from the list of CLI-compatible models fetched from the server. The
-> change applies live — session, agent, and backend all switch immediately, no
-> restart needed. Running with `--ollama-host <url>` adds a local Ollama
-> endpoint's models to the same picker.
+### Switching models (and the rest of `/config`)
+
+There is no `/model` command (yet — tracked in
+[#645](https://github.com/Bike4Mind/bike4mind/issues/645)). Model selection
+lives in **`/config`**, which opens the interactive Settings editor. The
+**Model** field is first — cycle through the CLI-compatible models fetched
+from the server with Space or the arrow keys:
+
+![Settings editor opened via /config — Model field selected, showing Claude 4.7 Opus](images/config-editor-model.png)
+
+Flip to the model you want — the header shows "(unsaved changes)" until you
+press `q`/Esc to save and exit:
+
+![Settings editor after cycling the Model field to Claude Fable 5 — note the unsaved-changes indicator](images/config-editor-model-changed.png)
+
+The change applies live — session, agent, and backend all switch immediately,
+no restart needed. Running with `--ollama-host <url>` adds a local Ollama
+endpoint's models to the same picker.
+
+The same editor holds the rest of the session-behavior knobs: max iterations,
+max tokens, temperature, auto-save, auto-compact, show-thoughts, theme, and
+export format.
 
 And the keyboard shortcuts — mostly the classic readline bindings, plus a few
 CLI-specific ones:
@@ -255,7 +283,10 @@ Two details worth noting:
   per-session.
 
 For safer tools, `/trust <tool-name>` (section 4) skips the prompt entirely,
-and `/trusted` shows your current list. In headless mode (`-p`), prompts can't
+and `/trusted` shows your current list — read-only tools like these are the
+natural candidates:
+
+![Output of /trusted — file_read, glob_files, grep_search, recent_changes, and web_fetch are trusted](images/trusted-tools.png) In headless mode (`-p`), prompts can't
 be answered interactively — that's what `--dangerously-skip-permissions` is
 for, used sparingly in CI.
 
