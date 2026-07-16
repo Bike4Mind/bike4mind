@@ -23,6 +23,10 @@ export interface ValidationResult {
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization the key bills, present iff billingOwnerType is Organization. */
   organizationId?: string;
+  /** Agent an embed key is bound to, present iff scopes include `embed:chat`. */
+  agentId?: string;
+  /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
+  allowedOrigins?: string[];
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -91,5 +95,7 @@ export const validateUserApiKey = async (
     productId: apiKey.productId,
     billingOwnerType: apiKey.billingOwnerType,
     organizationId: apiKey.organizationId,
+    agentId: apiKey.agentId,
+    allowedOrigins: apiKey.allowedOrigins,
   };
 };

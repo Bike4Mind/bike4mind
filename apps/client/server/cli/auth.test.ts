@@ -42,9 +42,11 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import jwt from 'jsonwebtoken';
-import { checkRateLimit, verifyJwtToken } from './auth';
-import { cacheService } from '@bike4mind/services';
+import { checkRateLimit, verifyJwtToken, verifyEmbedApiKey } from './auth';
+import { cacheService, userApiKeyService } from '@bike4mind/services';
 import { User } from '@bike4mind/database';
+import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
@@ -198,5 +200,66 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
   it('accepts a system account regardless of acceptance (service users never attest)', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ isSystem: true, aupAcceptedVersion: undefined }));
     await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+});
+
+describe('verifyEmbedApiKey (embed credential-class gates)', () => {
+  const rateLimit = { requestsPerMinute: 10, requestsPerDay: 100 };
+  const validEmbed = {
+    isValid: true,
+    userId: 'u1',
+    keyId: 'k1',
+    scopes: [ApiKeyScope.EMBED_CHAT],
+    rateLimit,
+    billingOwnerType: CreditHolderType.Organization,
+    organizationId: 'org-1',
+    agentId: 'agent-1',
+    allowedOrigins: ['https://example.com'],
+  };
+
+  beforeEach(() => {
+    vi.mocked(extractApiKeyFromHeaders).mockReturnValue('b4m_live_embedkey');
+    vi.mocked(userApiKeyService.validateUserApiKey).mockReset();
+  });
+
+  it('returns the bound agentId and allowedOrigins on a valid org-owned embed key', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue(validEmbed);
+    const info = await verifyEmbedApiKey({});
+    expect(info.agentId).toBe('agent-1');
+    expect(info.allowedOrigins).toEqual(['https://example.com']);
+    expect(info.organizationId).toBe('org-1');
+  });
+
+  it('rejects a key without the embed:chat scope', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      scopes: [ApiKeyScope.AI_CHAT],
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/embed:chat/);
+  });
+
+  it('rejects a user-owned embed key (org-only)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      billingOwnerType: CreditHolderType.User,
+      organizationId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/organization-owned/);
+  });
+
+  it('rejects an org-typed key with no organizationId', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      organizationId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/organization-owned/);
+  });
+
+  it('rejects an embed key not bound to an agent (fail closed)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKey).mockResolvedValue({
+      ...validEmbed,
+      agentId: undefined,
+    });
+    await expect(verifyEmbedApiKey({})).rejects.toThrow(/not bound to an agent/);
   });
 });

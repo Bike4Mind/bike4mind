@@ -118,3 +118,46 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     expect(getStored()!.keyPrefix).toHaveLength(KEY_PREFIX_LENGTH);
   });
 });
+
+describe('validateUserApiKey — embed context fields', () => {
+  it('flows agentId and allowedOrigins through for an embed:chat key', async () => {
+    const { repo } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    const { key } = await createUserApiKey(
+      'sys-1',
+      {
+        name: 'embed-key',
+        scopes: [ApiKeyScope.EMBED_CHAT],
+        agentId: 'agent-1',
+        allowedOrigins: ['https://example.com'],
+        metadata: { createdFrom: 'dashboard' as const },
+      },
+      { ...adapters, systemUserId: 'sys-1' }
+    );
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(result.agentId).toBe('agent-1');
+    expect(result.allowedOrigins).toEqual(['https://example.com']);
+  });
+
+  it('leaves embed fields undefined for a non-embed key', async () => {
+    const { repo } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    const { key } = await createUserApiKey('sys-1', mintParams, {
+      ...adapters,
+      systemUserId: 'sys-1',
+    });
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(result.agentId).toBeUndefined();
+    expect(result.allowedOrigins).toBeUndefined();
+  });
+});

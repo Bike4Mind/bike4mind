@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken';
 import { Config } from '@server/utils/config';
-import { IUserDocument, ApiKeyScope, type ApiKeyBillingOwnerType, type CompletionSource } from '@bike4mind/common';
+import {
+  IUserDocument,
+  ApiKeyScope,
+  CreditHolderType,
+  type ApiKeyBillingOwnerType,
+  type CompletionSource,
+} from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
@@ -26,6 +32,10 @@ export interface ApiKeyInfo {
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose pool this key bills, present iff billingOwnerType is Organization. */
   organizationId?: string;
+  /** Agent an embed key is bound to, present iff scopes include `embed:chat`. */
+  agentId?: string;
+  /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
+  allowedOrigins?: string[];
 }
 
 /**
@@ -123,6 +133,8 @@ export async function verifyApiKey(
       rateLimit: validation.rateLimit,
       billingOwnerType: validation.billingOwnerType,
       organizationId: validation.organizationId,
+      agentId: validation.agentId,
+      allowedOrigins: validation.allowedOrigins,
     };
   } catch (error) {
     if (error instanceof Error) {
@@ -139,6 +151,28 @@ export async function verifyApiKey(
  */
 export async function verifyBridgeApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
   return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE] });
+}
+
+/**
+ * Verify an API key that authorizes the public embed completion surface. Beyond
+ * the `EMBED_CHAT` scope this enforces two properties of the embed credential
+ * class itself (so every embed surface - session mint and chat - inherits them):
+ *   - org-only: usage bills a bounded Organization pool, never a user's pool.
+ *   - a bound agent: the key resolves exactly one agent; without it there is no
+ *     persona/tenant to run, so fail closed rather than mint an unbound token.
+ * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ */
+export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
+  const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
+
+  if (info.billingOwnerType !== CreditHolderType.Organization || !info.organizationId) {
+    throw new Error('Embed keys must be organization-owned');
+  }
+  if (!info.agentId) {
+    throw new Error('Embed key is not bound to an agent');
+  }
+
+  return info;
 }
 
 /**
