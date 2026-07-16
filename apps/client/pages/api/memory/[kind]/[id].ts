@@ -8,7 +8,7 @@ import {
 } from '@bike4mind/database';
 import { firstMatchStore, mergeStores, readPrincipalMemory, recall, type PrincipalKind } from '@bike4mind/memory';
 import { createDeepAgentMemoryStore } from '@server/memory/deepAgentMemoryStore';
-import { createLedgerMemoryStore, purgeUserMemory } from '@server/memory/ledgerMemoryStore';
+import { createLedgerMemoryStore, purgeUserMemory, shredBelief } from '@server/memory/ledgerMemoryStore';
 import { createKeyProvider } from '@server/memory/factCipher';
 import { createPersonaAgentMemoryStore } from '@server/memory/personaAgentMemoryStore';
 import { createUserMementoMemoryStore } from '@server/memory/userMementoMemoryStore';
@@ -56,6 +56,15 @@ handler.delete(async (req, res) => {
     return res.status(403).json({ error: 'You can only delete your own user memory for now.' });
   }
 
+  // ?subject=<beliefId> shreds ONE belief (the "delete this memory" action from the V2 dashboard); no
+  // subject shreds the WHOLE principal ("delete all my memory"). The belief id IS the stored subject
+  // HMAC, matched directly.
+  const subject = typeof req.query.subject === 'string' ? req.query.subject : undefined;
+  if (subject) {
+    const shredded = await shredBelief(memoryLedgerRepository, { kind: 'user', id }, id, subject);
+    return res.status(200).json({ ok: true, shredded });
+  }
+
   // Both halves, or it is not deletion: the unified read serves the ledger UNIONED with the user's
   // V1 mementos, so shredding only the ledger left every memento readable - and re-injected into the
   // next chat prompt.
@@ -100,17 +109,23 @@ handler.get(async (req, res) => {
   const profile = await readPrincipalMemory({ kind: kind as PrincipalKind, id }, store);
   if (!profile) return res.status(404).json({ error: 'No memory found for this principal.' });
 
+  // Strip the embedding from each belief before serializing. A vector is 512 floats (~1MB across a
+  // real user's beliefs) that no reader of this endpoint needs - and, like the /api/mementos 502, an
+  // unbounded vector payload is how this route would eventually blow the Lambda response limit.
+  const lean = ({ embedding: _e, ...b }: (typeof profile.beliefs)[number]) => b;
+  const leanProfile = { ...profile, beliefs: profile.beliefs.map(lean) };
+
   const query = typeof req.query.q === 'string' ? req.query.q : undefined;
   if (query !== undefined) {
     const recalled = recall(profile.beliefs, query).map(r => ({
-      belief: r.belief,
+      belief: lean(r.belief),
       relevance: r.relevance,
       score: r.score,
     }));
-    return res.status(200).json({ profile, query, recalled });
+    return res.status(200).json({ profile: leanProfile, query, recalled });
   }
 
-  return res.status(200).json({ profile });
+  return res.status(200).json({ profile: leanProfile });
 });
 
 export default handler;

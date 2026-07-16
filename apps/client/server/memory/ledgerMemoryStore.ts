@@ -48,6 +48,12 @@ export interface LedgerRepo {
     hashes: string[]
   ): Promise<IMemoryLedgerEvent[]>;
   markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number>;
+  markSubjectShredded(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    subject: string
+  ): Promise<number>;
 }
 
 // A concurrent append re-reads the head and retries; a handful of attempts absorbs realistic
@@ -288,6 +294,22 @@ export async function shredPrincipalMemory(
 ): Promise<number> {
   await keys.destroyDek(principal); // the irreversible act; do it first
   return repo.markShredded(principal.kind, principal.id, ownerUserId);
+}
+
+/**
+ * Shred ONE belief - the "delete this memory" action. Removes the fact/embedding/salt for every event
+ * carrying the belief's subject, so that one fact becomes irrecoverable while the principal's key and
+ * all their OTHER beliefs survive. `beliefId` is the folded belief's id, which IS the stored subject
+ * HMAC, so it is matched directly (never re-hashed). Returns the number of events shredded (0 if the
+ * belief does not exist or was already shredded).
+ */
+export async function shredBelief(
+  repo: Pick<LedgerRepo, 'markSubjectShredded'>,
+  principal: Principal,
+  ownerUserId: string,
+  beliefId: string
+): Promise<number> {
+  return repo.markSubjectShredded(principal.kind, principal.id, ownerUserId, beliefId);
 }
 
 /** The memento-side surface `purgeUserMemory` needs; `mementoRepository` satisfies it. */

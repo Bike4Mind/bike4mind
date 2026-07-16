@@ -91,4 +91,32 @@ describe('MemoryLedgerRepository', () => {
     expect(doc.embeddingIv).toBeUndefined();
     expect(doc.embeddingTag).toBeUndefined();
   });
+
+  it('markSubjectShredded shreds ONE belief and leaves the others intact', async () => {
+    // The "delete this memory" action. Shredding one subject must not touch the user's other beliefs -
+    // and, unlike a whole-principal shred, it never destroys the key, so everything else stays readable.
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({ seq: 0, hash: 'h0', subject: 'color', factCipher: 'c1', factIv: 'i1', factTag: 't1' })
+    );
+    await memoryLedgerRepository.tryInsert(
+      sealedEvent({ seq: 1, hash: 'h1', prevHash: 'h0', subject: 'job', factCipher: 'c2', factIv: 'i2', factTag: 't2' })
+    );
+
+    const n = await memoryLedgerRepository.markSubjectShredded('user', 'u1', 'u1', 'color');
+    expect(n).toBe(1);
+
+    const chain = await memoryLedgerRepository.listChain('user', 'u1', 'u1');
+    const color = chain.find(e => e.subject === 'color');
+    const job = chain.find(e => e.subject === 'job');
+    expect(color?.shredded).toBe(true);
+    expect(color?.factCipher).toBeUndefined(); // its fact is gone
+    expect(job?.shredded).toBeFalsy(); // the other belief is untouched
+    expect(job?.factCipher).toBe('c2'); // still readable
+  });
+
+  it('markSubjectShredded is a no-op for a subject that does not exist', async () => {
+    await memoryLedgerRepository.tryInsert(sealedEvent({ seq: 0, hash: 'h0', subject: 'color' }));
+    const n = await memoryLedgerRepository.markSubjectShredded('user', 'u1', 'u1', 'no-such-subject');
+    expect(n).toBe(0);
+  });
 });

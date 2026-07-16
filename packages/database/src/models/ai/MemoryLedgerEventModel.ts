@@ -254,36 +254,54 @@ class MemoryLedgerRepository extends BaseRepository<IMemoryLedgerEvent> {
    * events affected.
    */
   async markShredded(principalKind: MemoryPrincipalKind, principalId: string, ownerUserId: string): Promise<number> {
-    const res = await this.model.updateMany(
-      { principalKind, principalId, ownerUserId },
-      {
-        $set: { shredded: true },
-        // The embedding goes with the fact: it is a semantic image of the same content, so leaving it
-        // behind would defeat the shred (inversion could partially reconstruct what was destroyed).
-        //
-        // `salt` goes too. The commitment is sha256(salt + fact) and salt is plaintext, so keeping both
-        // after a shred lets anyone with backup access CONFIRM a guessed fact offline - and the facts
-        // here are low-entropy ("favorite color is green"), so guessing works. Salt is unused for chain
-        // verification once the fact is gone (verifyChain only recomputes the commitment when `fact` is
-        // present, which it never is post-shred), so dropping it costs nothing and closes the hole. The
-        // `commitment` stays because chainCanonical still hashes over it - but without the salt it can no
-        // longer be brute-forced.
-        $unset: {
-          fact: '',
-          factCipher: '',
-          factIv: '',
-          factTag: '',
-          salt: '',
-          embeddingCipher: '',
-          embeddingIv: '',
-          embeddingTag: '',
-          embeddingModel: '',
-        },
-      }
-    );
+    const res = await this.model.updateMany({ principalKind, principalId, ownerUserId }, SHRED_UPDATE);
+    return res.modifiedCount ?? 0;
+  }
+
+  /**
+   * Shred ONE belief: every event carrying the given `subject`. Same payload removal as markShredded,
+   * but scoped, and deliberately WITHOUT destroying the principal's key - the key stays so the user's
+   * OTHER beliefs remain readable. Removing this subject's ciphertext is what makes the one fact
+   * irrecoverable. This is the "delete this memory" action behind the V2 memory dashboard.
+   *
+   * `subject` is the belief's id as folded (the stored HMAC), so it matches the persisted `subject`
+   * directly - do NOT hash it again.
+   */
+  async markSubjectShredded(
+    principalKind: MemoryPrincipalKind,
+    principalId: string,
+    ownerUserId: string,
+    subject: string
+  ): Promise<number> {
+    const res = await this.model.updateMany({ principalKind, principalId, ownerUserId, subject }, SHRED_UPDATE);
     return res.modifiedCount ?? 0;
   }
 }
+
+/**
+ * The shred payload, shared by whole-principal and per-subject shred so they cannot drift. Marks the
+ * event shredded and removes every recoverable trace of the fact:
+ *  - the fact (plaintext + ciphertext + IV + tag),
+ *  - the embedding (a semantic image of the same content - leaving it lets inversion partially
+ *    reconstruct what was destroyed),
+ *  - the salt (commitment = sha256(salt + fact) with plaintext salt lets a guessed low-entropy fact be
+ *    confirmed offline from a backup; salt is unused for chain verification once the fact is gone).
+ * The commitment, hash, and links are untouched, so verifyChain still passes.
+ */
+const SHRED_UPDATE = {
+  $set: { shredded: true },
+  $unset: {
+    fact: '',
+    factCipher: '',
+    factIv: '',
+    factTag: '',
+    salt: '',
+    embeddingCipher: '',
+    embeddingIv: '',
+    embeddingTag: '',
+    embeddingModel: '',
+  },
+} as const;
 
 // --- Model & Export ---
 
