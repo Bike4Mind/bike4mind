@@ -1648,6 +1648,19 @@ export class ChatCompletionProcess {
         });
       }
 
+      // TEMP DIAGNOSTIC (#21 preview debugging) - REMOVE after we read CloudWatch.
+      logger.info('[ARTIFACT-DEBUG]', {
+        enableArtifacts: getSettingsValue('EnableArtifacts', defaultAdminSettings),
+        hasEmissionKey: 'ArtifactEmissionPrompt' in defaultAdminSettings,
+        rawEmissionLen: (defaultAdminSettings['ArtifactEmissionPrompt'] || '').length,
+        resolvedEmissionLen: (
+          getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT) || ''
+        ).length,
+        resolvedEmissionHead: (
+          getSettingsValue('ArtifactEmissionPrompt', defaultAdminSettings, ARTIFACT_EMISSION_PROMPT) || ''
+        ).slice(0, 50),
+      });
+
       let messages = await buildAndSortMessages(
         previousMessages,
         [
