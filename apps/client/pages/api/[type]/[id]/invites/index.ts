@@ -1,5 +1,4 @@
-import { InviteEvents, InviteType, IShareableDocument, Permission } from '@bike4mind/common';
-import { getInvitesForDocument } from '@server/managers/sharingManager';
+import { InviteEvents, InviteType, Permission } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
@@ -17,7 +16,6 @@ import {
   Organization,
 } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
-import { mongoose } from '@bike4mind/database';
 import { z } from 'zod';
 import { sharingService } from '@bike4mind/services';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -58,20 +56,8 @@ const handler = baseApi()
       const type: string | undefined = req.query.type;
       const id: string | undefined = req.query.id;
 
-      const model: mongoose.Model<any> | null =
-        {
-          files: FabFile,
-          sessions: Session,
-          groups: Group,
-        }[type ?? ''] ?? null;
-
-      if (!id || !model) {
+      if (!id) {
         return res.status(400).json({ message: 'Invalid get invite request' });
-      }
-
-      const document: (mongoose.Document & IShareableDocument) | null = (await model?.findById(id)) ?? null;
-      if (!document) {
-        return res.status(404).json({ message: 'Document not found' });
       }
 
       // Map URL path type to InviteType enum value for consistency
@@ -80,7 +66,22 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid type' });
       }
 
-      const shares = await getInvitesForDocument(inviteType, document, req.ability!);
+      // Share-scoped: the service authorizes via the document's share access
+      // (owner or a users[]-with-share grant), replacing the app-level CASL check.
+      const shares = await sharingService.listInvitesForDocument(
+        req.user,
+        { documentId: id, type: inviteType },
+        {
+          db: {
+            invites: inviteRepository,
+            fabFiles: fabFileRepository,
+            sessions: sessionRepository,
+            projects: projectRepository,
+            organizations: organizationRepository,
+            groups: Group,
+          },
+        }
+      );
       return res.json(shares);
     })
   )

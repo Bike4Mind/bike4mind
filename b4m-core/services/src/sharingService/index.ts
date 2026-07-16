@@ -4,6 +4,7 @@ export * from './cancelOwnDocument';
 export * from './create';
 export * from './get';
 export * from './listByDocumentIdAndType';
+export * from './listForDocument';
 export * from './listOwnPending';
 export * from './refuse';
 export * from './revoke';
