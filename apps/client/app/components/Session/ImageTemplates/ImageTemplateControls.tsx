@@ -1,28 +1,24 @@
-import { FC, useMemo, useState } from 'react';
-import { Box, Chip, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
+import { FC, useMemo } from 'react';
+import { Box, Chip } from '@mui/joy';
 import { Bookmarks as TemplateIcon } from '@mui/icons-material';
 import { useShallow } from 'zustand/react/shallow';
-import type { IImageGenerationTemplateDocument } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useImageTemplates } from '../../../hooks/data/imageTemplates';
+import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
 import { CostPreviewChip } from './CostPreviewChip';
-import { SaveTemplateModal } from './SaveTemplateModal';
-import { ManageTemplatesModal } from './ManageTemplatesModal';
 import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
-const fixedHeight = { height: '32px !important', minHeight: '32px !important' };
-
 /**
- * Image-mode template controls for the composer settings bar: an exact-model
- * picker (only templates bound to the active model are offered), the applied-
- * template indicator, and the live cost-preview chip. Hosts the Save/Manage
- * modals. Rendered by the parent only when an image model is active and the
- * feature flag is on.
+ * Compact image-template affordance for the composer settings bar: the derived
+ * applied-template indicator (clickable - opens the settings modal where the
+ * template panel lives) and the live cost-preview chip. All saving/managing
+ * happens in the modal panel; the bar only reflects state.
  */
 export const ImageTemplateControls: FC = () => {
+  const setModelDetailsOpen = useAdvancedAISettings(s => s.setModelDetailsOpen);
+
   const [
     model,
-    applyImageTemplate,
     size,
     quality,
     style,
@@ -37,7 +33,6 @@ export const ImageTemplateControls: FC = () => {
   ] = useLLM(
     useShallow(s => [
       s.model,
-      s.applyImageTemplate,
       s.size,
       s.quality,
       s.style,
@@ -52,26 +47,13 @@ export const ImageTemplateControls: FC = () => {
     ])
   );
   const { data: templates = [] } = useImageTemplates();
-  const [saveOpen, setSaveOpen] = useState(false);
-  const [manageOpen, setManageOpen] = useState(false);
 
-  // Exact-model: only offer templates bound to the active model. This also guards
-  // a coupling: AdvancedAISettings has a [model]-gated effect that force-resets
-  // quality/style on model change. Because apply never changes the model (the
-  // template's model === the active model), that effect can't fire and clobber the
-  // template's quality/style. If this filter is ever loosened to allow cross-model
-  // apply, that reset must be reconciled.
-  const matching = useMemo(() => templates.filter(t => t.model === model), [templates, model]);
-
-  // The indicator is DERIVED from current settings, not from a remembered apply:
-  // if the live config equals a saved template's settings, show it - whether the
-  // user applied it or dialed in the same config by hand. Save-time dedup
-  // guarantees at most one template per model matches a given settings blob, so
-  // the match is unambiguous.
+  // Derived indicator: the template whose settings equal the live config (dedup
+  // guarantees at most one match per model).
   const applied = useMemo(
     () =>
       findMatchingTemplate(
-        matching,
+        templates,
         model,
         imageTemplateSettingsSnapshot({
           size,
@@ -88,7 +70,7 @@ export const ImageTemplateControls: FC = () => {
         })
       ),
     [
-      matching,
+      templates,
       model,
       size,
       quality,
@@ -104,57 +86,23 @@ export const ImageTemplateControls: FC = () => {
     ]
   );
 
-  // Apply is now purely local: load the template's settings into LLMContext. No
-  // server round-trip - the client already holds the template, and usage is counted
-  // on send (see useRecordImageTemplateUse), not on apply.
-  const handleApply = (template: IImageGenerationTemplateDocument) => applyImageTemplate(template);
-
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-      <Dropdown>
-        <MenuButton
-          data-testid="image-templates-toggle"
-          variant="outlined"
-          size="sm"
-          sx={{ display: 'flex', gap: '6px', borderRadius: '6px', px: 1, ...fixedHeight }}
-        >
-          <TemplateIcon sx={{ color: 'text.primary', width: '14px', height: '14px' }} />
-          <Typography level="body-sm" sx={{ color: 'text.primary', fontSize: '14px' }}>
-            Templates
-          </Typography>
-        </MenuButton>
-        <Menu placement="top" sx={{ minWidth: 220, maxHeight: '50vh', overflowY: 'auto' }}>
-          {matching.length === 0 ? (
-            <MenuItem disabled data-testid="image-templates-empty">
-              No templates for this model
-            </MenuItem>
-          ) : (
-            matching.map(t => (
-              <MenuItem key={t.id} data-testid="image-template-apply-item" onClick={() => handleApply(t)}>
-                {t.name}
-              </MenuItem>
-            ))
-          )}
-          <ListDivider />
-          <MenuItem data-testid="image-template-save-item" onClick={() => setSaveOpen(true)}>
-            Save current settings...
-          </MenuItem>
-          <MenuItem data-testid="image-template-manage-item" onClick={() => setManageOpen(true)}>
-            Manage templates...
-          </MenuItem>
-        </Menu>
-      </Dropdown>
-
       {applied && (
-        <Chip size="sm" variant="soft" color="primary" data-testid="applied-template-chip">
+        <Chip
+          size="sm"
+          variant="soft"
+          color="primary"
+          data-testid="applied-template-chip"
+          onClick={() => setModelDetailsOpen(true)}
+          slotProps={{ action: { 'data-testid': 'applied-template-open' } }}
+          startDecorator={<TemplateIcon sx={{ fontSize: 14 }} />}
+        >
           {applied.name}
         </Chip>
       )}
 
       <CostPreviewChip />
-
-      <SaveTemplateModal open={saveOpen} onClose={() => setSaveOpen(false)} />
-      <ManageTemplatesModal open={manageOpen} onClose={() => setManageOpen(false)} />
     </Box>
   );
 };

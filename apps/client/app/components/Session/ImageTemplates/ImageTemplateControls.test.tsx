@@ -9,9 +9,6 @@ const { holder } = vi.hoisted(() => ({
 
 vi.mock('../../../hooks/data/imageTemplates', () => ({
   useImageTemplates: () => ({ data: holder.templates }),
-  useRecordTemplateUse: () => ({ mutate: vi.fn() }),
-  useCreateImageTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
-  useDeleteImageTemplate: () => ({ mutateAsync: vi.fn() }),
 }));
 
 vi.mock('../../../hooks/data/useModelInfo', () => ({
@@ -19,41 +16,23 @@ vi.mock('../../../hooks/data/useModelInfo', () => ({
 }));
 
 import { useLLM } from '@client/app/contexts/LLMContext';
+import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
 import { ImageTemplateControls } from './ImageTemplateControls';
 import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
-/** Snapshot of the CURRENT store settings - what a saved template must equal to match. */
 const currentSnapshot = () => imageTemplateSettingsSnapshot(useLLM.getState());
 
-describe('ImageTemplateControls', () => {
+describe('ImageTemplateControls (settings bar)', () => {
   beforeEach(() => {
     holder.templates = [];
     useLLM.getState().resetSettings();
     useLLM.setState({ model: 'flux-pro-1.1' });
+    useAdvancedAISettings.getState().setModelDetailsOpen(false);
   });
 
-  it('offers only templates bound to the active model (exact-model)', () => {
-    holder.templates = [
-      { id: 't1', userId: 'u1', name: 'Flux One', model: 'flux-pro-1.1', settings: { quality: 'hd' }, usageCount: 0 },
-      { id: 't2', userId: 'u1', name: 'GPT Two', model: 'gpt-image-1', settings: { quality: 'hd' }, usageCount: 0 },
-    ];
-    render(
-      <TestWrapper>
-        <ImageTemplateControls />
-      </TestWrapper>
-    );
-    fireEvent.click(screen.getByTestId('image-templates-toggle'));
-
-    const items = screen.getAllByTestId('image-template-apply-item');
-    expect(items).toHaveLength(1);
-    expect(items[0]).toHaveTextContent('Flux One');
-    expect(screen.queryByText('GPT Two')).toBeNull();
-  });
-
-  it('shows the indicator when current settings match a template - without an explicit apply', () => {
-    // Template whose settings equal the CURRENT store snapshot -> derived match.
+  it('shows the applied indicator when current settings match a template, and clicking it opens the modal', () => {
     holder.templates = [
       {
         id: 't1',
@@ -70,9 +49,13 @@ describe('ImageTemplateControls', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId('applied-template-chip')).toHaveTextContent('Matches Now');
+
+    expect(useAdvancedAISettings.getState().modelDetailsOpen).toBe(false);
+    fireEvent.click(screen.getByTestId('applied-template-open'));
+    expect(useAdvancedAISettings.getState().modelDetailsOpen).toBe(true);
   });
 
-  it('hides the indicator once settings drift away from the template', () => {
+  it('hides the indicator once settings drift', () => {
     holder.templates = [
       {
         id: 't1',
@@ -83,7 +66,6 @@ describe('ImageTemplateControls', () => {
         usageCount: 0,
       },
     ];
-    // Drift a setting so the snapshot no longer equals the template.
     useLLM.getState().setLLM({ seed: 12345 });
     render(
       <TestWrapper>

@@ -1620,10 +1620,10 @@ export const settingsMap = {
   }),
   EnableImageTemplates: makeBooleanSetting({
     key: 'EnableImageTemplates',
-    name: 'Enable Image Templates',
+    name: 'Enable Image Settings Templates',
     defaultValue: false,
     description:
-      'Server-side gate for reusable image-generation setting templates (save/apply image-mode configs). Off by default; turn on to expose the image-template APIs and picker. Single master toggle: on = available to all users, no per-user opt-in.',
+      'Server-side gate for reusable image settings templates (save/apply image-mode configs). Off by default; turn on to expose the image-template APIs and panel. Single master toggle: on = available to all users, no per-user opt-in.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 88,
