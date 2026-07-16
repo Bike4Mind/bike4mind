@@ -47,7 +47,7 @@ const OPTI_MAX_ITERATIONS = { quick: 6, medium: 16, very_thorough: 30 } as const
 
 /**
  * ReAct-shaped system prompt for the autonomous optimizer loop. Generic optimization guidance
- * only -- no provider names, no "quantum advantage" claims. Prepended to the ReActAgent
+ * only -- no provider names, no unmeasured performance-advantage claims. Prepended to the ReActAgent
  * operational base via the profile's `systemPrompt` -> `personaPrompt` seam, so the loop keeps
  * the base tool-use guidance below this persona.
  *
