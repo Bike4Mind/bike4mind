@@ -1373,13 +1373,18 @@ async function processExecution(
     // limit; fire-and-forget so a slow WS send can't stall the loop. The emitted
     // `iteration` matches the `iteration_step` wire index, so the client clears its
     // per-iteration buffer when the terminal step lands.
+    // Serialize the delta sends through a promise chain. `sendWs` -> API Gateway
+    // postToConnection is a separate async call per frame; firing them concurrently
+    // (fire-and-forget) lets frames arrive out of order and scramble the live text.
+    // Chaining makes each frame await the previous, preserving token order, while the
+    // listener stays non-blocking to the agent loop (we never await the chain here).
+    let textDeltaSendChain: Promise<unknown> = Promise.resolve();
     agent.on('text_delta', ({ delta, iteration }: { delta: string; iteration: number }) => {
       for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
-        void sendWs('agent_text_delta', {
-          executionId,
-          iteration,
-          delta: delta.slice(offset, offset + MAX_STEP_CONTENT),
-        });
+        const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
+        textDeltaSendChain = textDeltaSendChain
+          .then(() => sendWs('agent_text_delta', { executionId, iteration, delta: chunk }))
+          .catch(() => {});
       }
     });
 
