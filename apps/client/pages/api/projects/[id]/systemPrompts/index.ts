@@ -53,9 +53,13 @@ const handler = baseApi()
     asyncHandler<{ id: string }>(async (req, res) => {
       const { id } = req.query as { id: string };
       // Accept a batch { fileIds } and fall back to the legacy single { fileId }.
-      const { fileIds, fileId } = req.body as { fileIds?: string[]; fileId?: string };
-      const ids = fileIds ?? (fileId ? [fileId] : []);
-      if (ids.length === 0) throw new BadRequestError('fileIds is required');
+      // Validate shape here so a malformed body (e.g. fileIds as a string) fails as a
+      // clean 400 rather than slipping to the service's zod parse a layer deeper.
+      const { fileIds, fileId } = req.body as { fileIds?: unknown; fileId?: unknown };
+      const ids = Array.isArray(fileIds) ? fileIds : typeof fileId === 'string' ? [fileId] : [];
+      if (ids.length === 0 || !ids.every((fid): fid is string => typeof fid === 'string')) {
+        throw new BadRequestError('fileIds must be a non-empty array of strings');
+      }
 
       const project = await withTransaction(() =>
         projectService.removeSystemPrompts(

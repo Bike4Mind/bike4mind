@@ -81,7 +81,13 @@ describe('DELETE /api/projects/[id]/systemPrompts - batch removal', () => {
 
   it('rejects an empty body without touching the service', async () => {
     const { req, res } = mocks({});
-    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/required/i);
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/fileIds/i);
+    expect(removeSystemPrompts).not.toHaveBeenCalled();
+  });
+
+  it('rejects a malformed fileIds (non-array) with a 400 before the service', async () => {
+    const { req, res } = mocks({ fileIds: 'abc' });
+    await expect(mockRefs.deleteHandler!(req, res)).rejects.toThrow(/array of strings/i);
     expect(removeSystemPrompts).not.toHaveBeenCalled();
   });
 });
