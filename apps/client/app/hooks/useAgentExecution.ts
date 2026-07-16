@@ -226,6 +226,13 @@ export function useAgentExecutionSubscriptions(): void {
     );
 
     unsubscribers.push(
+      subscribeToAction('agent_text_delta', async (msg: IMessageDataToClient) => {
+        if (msg.action !== 'agent_text_delta') return;
+        store().appendTextDelta(msg.executionId, msg.iteration, msg.delta);
+      })
+    );
+
+    unsubscribers.push(
       subscribeToAction('progress', async (msg: IMessageDataToClient) => {
         if (msg.action !== 'progress') return;
         if (typeof msg.creditsUsed === 'number') {

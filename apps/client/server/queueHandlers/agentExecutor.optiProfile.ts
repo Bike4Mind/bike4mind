@@ -84,7 +84,11 @@ Discipline:
   plainly. Never claim one approach "beats" another or assert any performance advantage you did not measure.
 - Do not loop for its own sake. Stop when: every planned step is formulated and solved, OR the next step
   would add nothing to the user's answer, OR the user's ask is fully addressed.
-- When you stop, give a final answer that summarizes the walk and the result you read from each solve.`;
+- When you stop, give a final answer that summarizes the walk and the result you read from each solve.
+- Narrate as you go: before each tool call, write ONE short sentence saying what you're about to do and
+  why (e.g. "Solving the staffing schedule now to see if resequencing beats the naive order."). This
+  streams to the user live, so it keeps a multi-step run feeling responsive. Keep it to one sentence -
+  the tool call does the real work.`;
 
 /**
  * Build the opti orchestration profile. `systemPrompt` defaults to the built-in loop prompt but
@@ -102,5 +106,11 @@ export function buildOptiOrchestrationProfile(
     defaultThoroughness: 'very_thorough',
     isSynthetic: true,
     systemPrompt,
+    // Disable the confidence gate for the autonomous optimizer loop. The opti tools are
+    // sandboxed (LLM/solver + undoable /opti side-effect, no external mutation) and the
+    // whole point is an unattended decompose -> solve -> advance walk; a single recoverable
+    // formulation error dropping one iteration's confidence must not pause the run for a
+    // human mid-demo. maxIterations (30) stays the runaway backstop.
+    confidenceGateThreshold: 0,
   };
 }

@@ -1176,6 +1176,20 @@ export const IterationStepAction = z.object({
 });
 
 /**
+ * Incremental token delta emitted while the TOP-LEVEL agent's LLM call is streaming
+ * mid-iteration - the top-level analogue of `subagent_text_delta`. Lets the UI render the
+ * agent's reasoning/narration and final answer live instead of waiting for the whole step
+ * (a decompose turn can be ~40s). The client appends `delta` to a per-iteration buffer and
+ * clears it when the iteration's terminal step arrives via `iteration_step`.
+ */
+export const AgentTextDeltaAction = z.object({
+  action: z.literal('agent_text_delta'),
+  executionId: z.string(),
+  iteration: z.number(),
+  delta: z.string(),
+});
+
+/**
  * `progress` is emitted both for status transitions (`status` set) and for
  * per-iteration credit deduction (`creditsUsed` + `iteration` set). One
  * permissive shape; consumers branch on which fields are present.
@@ -1482,6 +1496,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   AgentErrorAction,
   AbortAcknowledgedAction,
   SubagentStartedAction,
+  AgentTextDeltaAction,
   SubagentIterationStepAction,
   SubagentTextDeltaAction,
   SubagentCompletedAction,

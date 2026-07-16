@@ -141,6 +141,14 @@ export interface ParentExecution {
    * before any new step events arrive. Live runs keep this in sync via
    * `appendIteration`. */
   lastKnownIteration: number;
+  /**
+   * Buffer of streaming token deltas for the TOP-LEVEL agent, keyed by 0-indexed
+   * iteration. Populated by `agent_text_delta` events and cleared for an iteration when
+   * its terminal step lands via `appendIteration` (the persisted step's content is
+   * authoritative, so keeping the buffer would double-render). Not persisted to the server
+   * snapshot - replays only show terminal steps. Mirrors ChildExecution.pendingTextByIteration.
+   */
+  pendingTextByIteration?: Record<number, string>;
 }
 
 interface AgentExecutionState {
@@ -161,6 +169,8 @@ interface AgentExecutionState {
   startExecution: (executionId: string, sessionId?: string) => void;
   setStatus: (executionId: string, status: AgentExecutionStatus) => void;
   appendIteration: (executionId: string, iteration: IterationStep) => void;
+  /** Append a streaming token delta to the top-level agent's per-iteration buffer (live typing). */
+  appendTextDelta: (executionId: string, iteration: number, delta: string) => void;
   recordCredits: (executionId: string, credits: number) => void;
   markCompleted: (executionId: string, answer: string | undefined, totalCreditsUsed: number) => void;
   markFailed: (executionId: string, reason: string, message?: string) => void;
@@ -443,12 +453,33 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
 
   appendIteration: (executionId, iteration) =>
     set(state => ({
-      executions: withExecution(state, executionId, exec => ({
-        ...exec,
-        status: exec.status === 'pending' ? 'running' : exec.status,
-        iterations: appendCollapsingFinalAnswer(exec.iterations, iteration),
-        lastKnownIteration: Math.max(exec.lastKnownIteration, iteration.iteration),
-      })),
+      executions: withExecution(state, executionId, exec => {
+        // Clear the streaming buffer for this iteration once its persisted step lands -
+        // the step content is authoritative and already includes what was streamed.
+        let pendingTextByIteration = exec.pendingTextByIteration;
+        if (pendingTextByIteration && pendingTextByIteration[iteration.iteration] !== undefined) {
+          const { [iteration.iteration]: _drop, ...rest } = pendingTextByIteration;
+          pendingTextByIteration = Object.keys(rest).length > 0 ? rest : undefined;
+        }
+        return {
+          ...exec,
+          status: exec.status === 'pending' ? 'running' : exec.status,
+          iterations: appendCollapsingFinalAnswer(exec.iterations, iteration),
+          lastKnownIteration: Math.max(exec.lastKnownIteration, iteration.iteration),
+          pendingTextByIteration,
+        };
+      }),
+    })),
+
+  appendTextDelta: (executionId, iteration, delta) =>
+    set(state => ({
+      executions: withExecution(state, executionId, exec => {
+        const prev = exec.pendingTextByIteration?.[iteration] ?? '';
+        return {
+          ...exec,
+          pendingTextByIteration: { ...(exec.pendingTextByIteration ?? {}), [iteration]: prev + delta },
+        };
+      }),
     })),
 
   recordCredits: (executionId, credits) =>

@@ -1366,6 +1366,22 @@ async function processExecution(
     agent.on('action', streamStep);
     agent.on('observation', streamStep);
     agent.on('final_answer', streamStep);
+    // Forward the top-level agent's streaming token deltas so the console renders the
+    // agent's reasoning/narration and final answer live within each iteration, instead of
+    // the whole step landing at once after a long generation (a decompose turn is ~40s).
+    // Mirrors the subagent `onTextDelta` path. Chunk to stay under the API Gateway frame
+    // limit; fire-and-forget so a slow WS send can't stall the loop. The emitted
+    // `iteration` matches the `iteration_step` wire index, so the client clears its
+    // per-iteration buffer when the terminal step lands.
+    agent.on('text_delta', ({ delta, iteration }: { delta: string; iteration: number }) => {
+      for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
+        void sendWs('agent_text_delta', {
+          executionId,
+          iteration,
+          delta: delta.slice(offset, offset + MAX_STEP_CONTENT),
+        });
+      }
+    });
 
     // Set up timeout watchdog
     const deadlineMs = context.getRemainingTimeInMillis() - TIMEOUT_BUFFER_MS;
@@ -1996,11 +2012,14 @@ async function processExecution(
         // a real pause. Baseline observability before touching signal quality.
         await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
       }
+      // Per-profile override wins over the global default; a profile threshold of 0
+      // disables the gate entirely (confidence is never < 0) for unattended loops.
+      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
       if (
         gate !== null &&
         !iterationResult.isComplete &&
         !iterationResult.reachedMaxIterations &&
-        gate.confidence < CONFIDENCE_GATE_THRESHOLD
+        gate.confidence < confidenceGateThreshold
       ) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
@@ -2009,7 +2028,7 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(CONFIDENCE_GATE_THRESHOLD * 100).toFixed(0)}%`;
+        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's
