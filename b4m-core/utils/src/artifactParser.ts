@@ -1,8 +1,11 @@
 import { Logger } from '@bike4mind/observability';
 import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
 
-// Regular expression to match Claude-style artifact syntax
-const ARTIFACT_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
+// Regular expression to match Claude-style artifact syntax.
+// The opening-tag attribute capture uses a pattern that:
+//  - spans newlines (AI sometimes wraps long attribute lists),
+//  - skips over `>` inside quoted attribute values (e.g. title="A -> B").
+const ARTIFACT_REGEX = /<artifact\s+((?:[^>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)<\/artifact>/gi;
 const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
 
 export interface ParsedArtifact {

@@ -59,6 +59,42 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.artifacts).toHaveLength(0);
     expect(result.cleanedContent).toBe('Just a normal answer with no code or HTML.');
   });
+
+  it('parses an artifact whose opening tag spans multiple lines', () => {
+    const input = [
+      'Here is the app:',
+      '<artifact',
+      '  identifier="app"',
+      '  type="application/vnd.ant.react"',
+      '  title="My App">',
+      'export default function App() { return <div>Hello</div>; }',
+      '</artifact>',
+    ].join('\n');
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('My App');
+    expect(result.artifacts[0].type).toBe('react');
+    expect(result.cleanedContent).not.toContain('<artifact');
+  });
+
+  it('parses an artifact whose title contains ">"', () => {
+    const input =
+      '<artifact identifier="tool" type="application/vnd.ant.react" title="React -> Next.js Migrator">code</artifact>';
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('React -> Next.js Migrator');
+    expect(result.cleanedContent).not.toContain('code');
+  });
+
+  it('does not duplicate artifacts when cleanedContent is empty string', () => {
+    const input =
+      '<artifact identifier="app" type="application/vnd.ant.react" title="App">export default function App() { return <div/>; }</artifact>';
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+  });
 });
 
 /**

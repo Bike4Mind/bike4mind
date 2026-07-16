@@ -1380,7 +1380,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       // drop the partial from that tag onward so no raw HTML leaks into the bubble.
       const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (/^<artifact\s+[^>]*>/.test(tail)) {
+      if (/^<artifact\s+(?:[^>"']|"[^"]*"|'[^']*')*>/.test(tail)) {
         preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
       } else {
         // Opening tag truncated mid-attribute - nothing renderable. Log the dropped

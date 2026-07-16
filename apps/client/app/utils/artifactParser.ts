@@ -1,8 +1,11 @@
 import { ArtifactPayload, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
 import { tryParseChartJSON } from './chartJsonParser';
 
-// Regular expression to match Claude-style artifact syntax
-const ARTIFACT_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
+// Regular expression to match Claude-style artifact syntax.
+// The opening-tag attribute capture uses a pattern that:
+//  - spans newlines (AI sometimes wraps long attribute lists),
+//  - skips over `>` inside quoted attribute values (e.g. title="A -> B").
+const ARTIFACT_REGEX = /<artifact\s+((?:[^>"']|"[^"]*"|'[^']*')*)>([\s\S]*?)<\/artifact>/gi;
 const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
 
 export interface ParsedArtifact {
@@ -199,7 +202,7 @@ export function parseArtifactsWithFallback(
   options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
 ): ArtifactParseResult {
   const parseResult = parseArtifacts(content, options);
-  const contentForConversion = parseResult.cleanedContent || content;
+  const contentForConversion = parseResult.cleanedContent ?? content;
   const convertedContent = convertCodeBlocksToArtifacts(contentForConversion);
   if (convertedContent === contentForConversion) {
     return parseResult;

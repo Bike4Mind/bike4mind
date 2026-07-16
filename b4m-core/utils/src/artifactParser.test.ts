@@ -212,3 +212,54 @@ describe('parseArtifacts - graphically-empty SVG suppression', () => {
     expect(artifacts).toHaveLength(0);
   });
 });
+
+describe('parseArtifacts — multi-line and special-character opening tags', () => {
+  it('parses an artifact whose opening tag spans multiple lines', () => {
+    const input = [
+      'Here is the code:',
+      '<artifact',
+      '  identifier="my-app"',
+      '  type="application/vnd.ant.react"',
+      '  title="My Application">',
+      'export default function App() { return <div>Hi</div>; }',
+      '</artifact>',
+      'Enjoy!',
+    ].join('\n');
+
+    const { artifacts, cleanedContent } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('My Application');
+    expect(artifacts[0].type).toBe('react');
+    expect(cleanedContent).not.toContain('<artifact');
+    expect(cleanedContent).toContain('Enjoy!');
+  });
+
+  it('parses an artifact whose title contains ">"', () => {
+    const input =
+      '<artifact identifier="converter" type="application/vnd.ant.react" title="A -> B Converter">code here</artifact>';
+
+    const { artifacts, cleanedContent } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('A -> B Converter');
+    expect(artifacts[0].content).toBe('code here');
+    expect(cleanedContent).not.toContain('code here');
+  });
+
+  it('parses multiple artifacts when one has ">" in its title', () => {
+    const input = [
+      '<artifact identifier="a" type="application/vnd.ant.react" title="X > Y">code1</artifact>',
+      'Some text between.',
+      '<artifact identifier="b" type="text/html" title="Page">code2</artifact>',
+    ].join('\n');
+
+    const { artifacts, cleanedContent } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(2);
+    // The internal sort (for index-safe removal) reverses order; check by title.
+    const titles = artifacts.map(a => a.title);
+    expect(titles).toContain('X > Y');
+    expect(titles).toContain('Page');
+    expect(cleanedContent).toContain('Some text between.');
+    expect(cleanedContent).not.toContain('code1');
+    expect(cleanedContent).not.toContain('code2');
+  });
+});
