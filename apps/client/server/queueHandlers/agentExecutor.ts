@@ -725,59 +725,64 @@ async function processExecution(
     // Resolved only on new executions; continuations carry forward whatever the
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
-    if (isNewExecution) {
-      if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
-        // Optimizer surface with no pinned `@agent`: use the opti-scoped profile
-        // (optimizer tools only, image-gen/delegation denied, higher iteration
-        // ceiling, ReAct loop prompt) instead of the generic synthetic default.
-        // An explicit `@agent` mention still wins - it sets `agentId` and takes
-        // the persisted-agent path below.
-        orchestrationProfile = buildOptiOrchestrationProfile();
-      } else {
-        // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
-        // `OrchestrationDefaults` here - so no cast is needed.
-        const orchestrationDefaults = await adminSettingsRepository
-          .getSettingsValue('orchestrationDefaults')
-          .catch(err => {
-            logger.warn('[Orchestration] Failed to load orchestrationDefaults; using built-in fallbacks', {
+    // Optimizer surface with no pinned `@agent`: use the opti-scoped profile (optimizer
+    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop
+    // prompt) instead of the generic synthetic default. Resolved on continuations too,
+    // NOT just new executions: it's a deterministic function of the persisted
+    // `session.surface`, and the tool list is rebuilt on every Lambda invocation, so a
+    // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
+    // otherwise collapse the toolbelt to mission-only and the loop could no longer
+    // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
+    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
+    if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
+      orchestrationProfile = buildOptiOrchestrationProfile();
+    } else if (isNewExecution) {
+      // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
+      // `OrchestrationDefaults` here - so no cast is needed.
+      const orchestrationDefaults = await adminSettingsRepository
+        .getSettingsValue('orchestrationDefaults')
+        .catch(err => {
+          logger.warn('[Orchestration] Failed to load orchestrationDefaults; using built-in fallbacks', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+          return undefined;
+        });
+      orchestrationProfile = await resolveTopLevelProfile({
+        agentId: startPayload?.agentId,
+        loadAgent: async (id: string) => {
+          try {
+            const stored = await agentRepository.findById(id);
+            if (!stored) return null;
+            // Reject soft-deleted records - `IAgent.deletedAt` is the soft-delete
+            // marker; the persisted-agent path should not resurrect them.
+            if (stored.deletedAt) return null;
+            // Authz: user-scoped records require an owner match; org-scoped records
+            // require an org match. System agents (`isSystem: true`) have neither
+            // `userId` nor `organizationId` set and are intentionally accessible
+            // to any caller - both guards short-circuit on the falsy side.
+            if (stored.userId && stored.userId !== execution.userId) return null;
+            if (stored.organizationId && stored.organizationId !== execution.organizationId) return null;
+            return stored;
+          } catch (err) {
+            logger.warn('[Orchestration] Failed to load IAgent; falling back to synthetic profile', {
+              agentId: id,
               error: err instanceof Error ? err.message : String(err),
             });
-            return undefined;
-          });
-        orchestrationProfile = await resolveTopLevelProfile({
-          agentId: startPayload?.agentId,
-          loadAgent: async (id: string) => {
-            try {
-              const stored = await agentRepository.findById(id);
-              if (!stored) return null;
-              // Reject soft-deleted records - `IAgent.deletedAt` is the soft-delete
-              // marker; the persisted-agent path should not resurrect them.
-              if (stored.deletedAt) return null;
-              // Authz: user-scoped records require an owner match; org-scoped records
-              // require an org match. System agents (`isSystem: true`) have neither
-              // `userId` nor `organizationId` set and are intentionally accessible
-              // to any caller - both guards short-circuit on the falsy side.
-              if (stored.userId && stored.userId !== execution.userId) return null;
-              if (stored.organizationId && stored.organizationId !== execution.organizationId) return null;
-              return stored;
-            } catch (err) {
-              logger.warn('[Orchestration] Failed to load IAgent; falling back to synthetic profile', {
-                agentId: id,
-                error: err instanceof Error ? err.message : String(err),
-              });
-              return null;
-            }
-          },
-          adminDefaults: orchestrationDefaults,
-          model: execution.model,
-        });
-      }
+            return null;
+          }
+        },
+        adminDefaults: orchestrationDefaults,
+        model: execution.model,
+      });
+    }
+    if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
         profileId: orchestrationProfile.id,
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
+        isContinuation: !isNewExecution,
       });
     }
 
