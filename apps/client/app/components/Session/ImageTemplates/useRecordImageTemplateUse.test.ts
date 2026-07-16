@@ -16,7 +16,8 @@ vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
 }));
 
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { useRecordImageTemplateUse } from './useRecordImageTemplateUse';
+import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
+import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from './useRecordImageTemplateUse';
 import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 const matchingTemplate = () => ({
@@ -28,6 +29,18 @@ const matchingTemplate = () => ({
   usageCount: 0,
 });
 
+describe('isTemplateUseEligiblePrompt', () => {
+  it('is true for a normal generation prompt', () => {
+    expect(isTemplateUseEligiblePrompt('a serene mountain lake')).toBe(true);
+    expect(isTemplateUseEligiblePrompt('  leading whitespace is fine')).toBe(true);
+  });
+
+  it('is false for a user-typed slash command (would otherwise never count OR mis-count)', () => {
+    expect(isTemplateUseEligiblePrompt('/models')).toBe(false);
+    expect(isTemplateUseEligiblePrompt('  /roll 2d6')).toBe(false);
+  });
+});
+
 describe('useRecordImageTemplateUse', () => {
   beforeEach(() => {
     mockMutate.mockReset();
@@ -35,6 +48,7 @@ describe('useRecordImageTemplateUse', () => {
     holder.enabled = true;
     useLLM.getState().resetSettings();
     useLLM.setState({ model: 'flux-pro-1.1' });
+    useAdvancedAISettings.getState().setLiveAI(true);
   });
 
   it('fires increment for the template matching current settings', () => {
@@ -42,6 +56,14 @@ describe('useRecordImageTemplateUse', () => {
     const { result } = renderHook(() => useRecordImageTemplateUse());
     result.current();
     expect(mockMutate).toHaveBeenCalledWith('t1');
+  });
+
+  it('no-op when the AI toggle (liveAI) is off', () => {
+    holder.templates = [matchingTemplate()];
+    useAdvancedAISettings.getState().setLiveAI(false);
+    const { result } = renderHook(() => useRecordImageTemplateUse());
+    result.current();
+    expect(mockMutate).not.toHaveBeenCalled();
   });
 
   it('no-op when no template matches the current settings', () => {

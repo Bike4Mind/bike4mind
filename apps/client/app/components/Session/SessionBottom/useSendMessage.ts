@@ -27,7 +27,7 @@ import { pickRoutingSource } from './pickRoutingSource';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
-import { useRecordImageTemplateUse } from '../ImageTemplates/useRecordImageTemplateUse';
+import { useRecordImageTemplateUse, isTemplateUseEligiblePrompt } from '../ImageTemplates/useRecordImageTemplateUse';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -375,9 +375,12 @@ export function useSendMessage({
     const userId = currentUser!.id;
     const projectId = routerProjectId;
 
-    // Count a template use when a (non-command) prompt is sent on an image model
-    // whose settings match a saved template. Fire-and-forget; gated internally.
-    if (!command) recordImageTemplateUse();
+    // Count a template use when a normal (non-slash-command) prompt is sent on an
+    // image model whose settings match a saved template. Gate on the ORIGINAL
+    // prompt, not `command` - the send path derives a `/gen_image` command for
+    // image models, so `command` is always set here. Fire-and-forget; further
+    // gated internally (feature flag, AI toggle, image model, settings match).
+    if (isTemplateUseEligiblePrompt(prompt)) recordImageTemplateUse();
 
     // Detect agent mentions and auto-attach them before sending the message.
     //

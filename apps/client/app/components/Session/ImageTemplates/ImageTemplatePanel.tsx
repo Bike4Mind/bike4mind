@@ -2,13 +2,13 @@ import { FC, useMemo, useState } from 'react';
 import { Box, Button, Card, Chip, CircularProgress, IconButton, Input, Sheet, Tooltip, Typography } from '@mui/joy';
 import { Delete as DeleteIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
 import { toast } from 'sonner';
-import { useShallow } from 'zustand/react/shallow';
 import { IMAGE_TEMPLATE_NAME_MAX, type ImageGenerationTemplateInputType } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useImageTemplates, useCreateImageTemplate, useDeleteImageTemplate } from '../../../hooks/data/imageTemplates';
-import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsSnapshot';
+import { findMatchingTemplate } from './settingsSnapshot';
+import { useImageSettingsSnapshot } from './useImageSettingsSnapshot';
 
 /**
  * The single home for image settings templates: renders below the image settings
@@ -21,37 +21,8 @@ export const ImageTemplatePanel: FC = () => {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
   const enabled = isAdminFeatureEnabled('EnableImageTemplates');
 
-  const [
-    model,
-    applyImageTemplate,
-    size,
-    quality,
-    style,
-    seed,
-    n,
-    width,
-    height,
-    aspect_ratio,
-    output_format,
-    safety_tolerance,
-    prompt_upsampling,
-  ] = useLLM(
-    useShallow(s => [
-      s.model,
-      s.applyImageTemplate,
-      s.size,
-      s.quality,
-      s.style,
-      s.seed,
-      s.n,
-      s.width,
-      s.height,
-      s.aspect_ratio,
-      s.output_format,
-      s.safety_tolerance,
-      s.prompt_upsampling,
-    ])
-  );
+  const { model, snapshot } = useImageSettingsSnapshot();
+  const applyImageTemplate = useLLM(s => s.applyImageTemplate);
 
   const { data: templates = [], isLoading } = useImageTemplates(enabled);
   const create = useCreateImageTemplate();
@@ -60,26 +31,10 @@ export const ImageTemplatePanel: FC = () => {
   const [name, setName] = useState('');
   const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
-  const snapshot = useMemo(
-    () =>
-      imageTemplateSettingsSnapshot({
-        size,
-        quality,
-        style,
-        seed,
-        n,
-        width,
-        height,
-        aspect_ratio,
-        output_format,
-        safety_tolerance,
-        prompt_upsampling,
-      }),
-    [size, quality, style, seed, n, width, height, aspect_ratio, output_format, safety_tolerance, prompt_upsampling]
-  );
-
+  // `matching` scopes the list to the active model; `applied` matches settings
+  // (findMatchingTemplate filters by model itself, so pass the full list).
   const matching = useMemo(() => templates.filter(t => t.model === model), [templates, model]);
-  const applied = useMemo(() => findMatchingTemplate(matching, model, snapshot), [matching, model, snapshot]);
+  const applied = useMemo(() => findMatchingTemplate(templates, model, snapshot), [templates, model, snapshot]);
 
   if (!enabled) return null;
 

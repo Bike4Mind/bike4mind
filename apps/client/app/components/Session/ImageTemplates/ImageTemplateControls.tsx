@@ -1,12 +1,11 @@
 import { FC, useMemo } from 'react';
 import { Box, Chip } from '@mui/joy';
 import { Bookmarks as TemplateIcon } from '@mui/icons-material';
-import { useShallow } from 'zustand/react/shallow';
-import { useLLM } from '@client/app/contexts/LLMContext';
 import { useImageTemplates } from '../../../hooks/data/imageTemplates';
 import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
 import { CostPreviewChip } from './CostPreviewChip';
-import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsSnapshot';
+import { findMatchingTemplate } from './settingsSnapshot';
+import { useImageSettingsSnapshot } from './useImageSettingsSnapshot';
 
 /**
  * Compact image-template affordance for the composer settings bar: the derived
@@ -16,75 +15,12 @@ import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsS
  */
 export const ImageTemplateControls: FC = () => {
   const setModelDetailsOpen = useAdvancedAISettings(s => s.setModelDetailsOpen);
-
-  const [
-    model,
-    size,
-    quality,
-    style,
-    seed,
-    n,
-    width,
-    height,
-    aspect_ratio,
-    output_format,
-    safety_tolerance,
-    prompt_upsampling,
-  ] = useLLM(
-    useShallow(s => [
-      s.model,
-      s.size,
-      s.quality,
-      s.style,
-      s.seed,
-      s.n,
-      s.width,
-      s.height,
-      s.aspect_ratio,
-      s.output_format,
-      s.safety_tolerance,
-      s.prompt_upsampling,
-    ])
-  );
+  const { model, snapshot } = useImageSettingsSnapshot();
   const { data: templates = [] } = useImageTemplates();
 
   // Derived indicator: the template whose settings equal the live config (dedup
   // guarantees at most one match per model).
-  const applied = useMemo(
-    () =>
-      findMatchingTemplate(
-        templates,
-        model,
-        imageTemplateSettingsSnapshot({
-          size,
-          quality,
-          style,
-          seed,
-          n,
-          width,
-          height,
-          aspect_ratio,
-          output_format,
-          safety_tolerance,
-          prompt_upsampling,
-        })
-      ),
-    [
-      templates,
-      model,
-      size,
-      quality,
-      style,
-      seed,
-      n,
-      width,
-      height,
-      aspect_ratio,
-      output_format,
-      safety_tolerance,
-      prompt_upsampling,
-    ]
-  );
+  const applied = useMemo(() => findMatchingTemplate(templates, model, snapshot), [templates, model, snapshot]);
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
