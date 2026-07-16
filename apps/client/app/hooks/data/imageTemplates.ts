@@ -56,21 +56,15 @@ export function useDeleteImageTemplate() {
 }
 
 /**
- * Apply: bumps usageCount server-side and returns the fresh template for the
- * caller to load into LLMContext. `model` is the active model - the server 422s
- * on an exact-model mismatch (defense-in-depth; the picker also hides mismatches).
+ * Record a use: increments usageCount when a prompt is sent with a template's
+ * settings (matched client-side). Fire-and-forget - deliberately does NOT
+ * invalidate the list, so it doesn't trigger a refetch on every send; the fresh
+ * count is picked up the next time the list is fetched (opening Manage/dropdown).
  */
-export function useApplyImageTemplate() {
-  const qc = useQueryClient();
+export function useRecordTemplateUse() {
   return useMutation({
-    mutationFn: async ({ id, model }: { id: string; model: string }) => {
-      const { data } = await api.post<{ template: IImageGenerationTemplateDocument }>(
-        `/api/image-templates/${id}/apply`,
-        { model }
-      );
-      return data.template;
+    mutationFn: async (id: string) => {
+      await api.post(`/api/image-templates/${id}/use`);
     },
-    // Refresh so the new usageCount (and default sort order) is reflected.
-    onSuccess: () => qc.invalidateQueries({ queryKey: [LIST_KEY] }),
   });
 }

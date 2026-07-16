@@ -16,23 +16,19 @@ const toCaller = (req: Request): IImageTemplateCaller => ({
 const adapters = { db: { templates: imageGenerationTemplateRepository } };
 
 /**
- * POST /api/image-templates/:id/apply - bump usageCount and return the template
- * for the client to load into LLMContext.
- *
- * EXACT-MODEL backstop: an optional `model` in the body is the active model; if
- * present and it differs from the template's bound model, the service rejects
- * (422). The picker also hides mismatches, so this is defense-in-depth.
+ * POST /api/image-templates/:id/use - increment usageCount, recorded when a
+ * prompt is sent with a template's settings (matched client-side). Increment-only;
+ * no body, returns 204.
  */
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableImageTemplates'))
-  .use(rateLimit({ limit: 60, windowMs: 60 * 1000, bucket: 'image-templates/apply' }))
+  .use(rateLimit({ limit: 120, windowMs: 60 * 1000, bucket: 'image-templates/use' }))
   .post(csrfProtection(), async (req, res) => {
     const id = ImageTemplateIdSchema.safeParse(req.query.id);
     if (!id.success) return res.status(400).json({ error: 'Invalid template id' });
 
-    const targetModel = typeof req.body?.model === 'string' ? req.body.model : undefined;
-    const template = await imageTemplateService.applyTemplate(toCaller(req), adapters, id.data, targetModel);
-    return res.json({ template });
+    await imageTemplateService.recordUse(toCaller(req), adapters, id.data);
+    return res.status(204).end();
   });
 
 export const config = {

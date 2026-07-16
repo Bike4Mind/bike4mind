@@ -3,14 +3,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { CssVarsProvider } from '@mui/joy/styles';
 
-const { mockApply, holder } = vi.hoisted(() => ({
-  mockApply: vi.fn(),
+const { holder } = vi.hoisted(() => ({
   holder: { templates: [] as any[] },
 }));
 
 vi.mock('../../../hooks/data/imageTemplates', () => ({
   useImageTemplates: () => ({ data: holder.templates }),
-  useApplyImageTemplate: () => ({ mutateAsync: mockApply }),
+  useRecordTemplateUse: () => ({ mutate: vi.fn() }),
   useCreateImageTemplate: () => ({ mutateAsync: vi.fn(), isPending: false }),
   useDeleteImageTemplate: () => ({ mutateAsync: vi.fn() }),
 }));
@@ -30,7 +29,6 @@ const currentSnapshot = () => imageTemplateSettingsSnapshot(useLLM.getState());
 
 describe('ImageTemplateControls', () => {
   beforeEach(() => {
-    mockApply.mockReset();
     holder.templates = [];
     useLLM.getState().resetSettings();
     useLLM.setState({ model: 'flux-pro-1.1' });

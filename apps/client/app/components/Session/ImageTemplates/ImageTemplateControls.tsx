@@ -1,15 +1,14 @@
 import { FC, useMemo, useState } from 'react';
 import { Box, Chip, Dropdown, ListDivider, Menu, MenuButton, MenuItem, Typography } from '@mui/joy';
 import { Bookmarks as TemplateIcon } from '@mui/icons-material';
-import { toast } from 'sonner';
 import { useShallow } from 'zustand/react/shallow';
-import { canonicalizeTemplateSettings, type IImageGenerationTemplateDocument } from '@bike4mind/common';
+import type { IImageGenerationTemplateDocument } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
-import { useImageTemplates, useApplyImageTemplate } from '../../../hooks/data/imageTemplates';
+import { useImageTemplates } from '../../../hooks/data/imageTemplates';
 import { CostPreviewChip } from './CostPreviewChip';
 import { SaveTemplateModal } from './SaveTemplateModal';
 import { ManageTemplatesModal } from './ManageTemplatesModal';
-import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
+import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 const fixedHeight = { height: '32px !important', minHeight: '32px !important' };
 
@@ -53,8 +52,6 @@ export const ImageTemplateControls: FC = () => {
     ])
   );
   const { data: templates = [] } = useImageTemplates();
-  const applyMutation = useApplyImageTemplate();
-
   const [saveOpen, setSaveOpen] = useState(false);
   const [manageOpen, setManageOpen] = useState(false);
 
@@ -71,48 +68,46 @@ export const ImageTemplateControls: FC = () => {
   // user applied it or dialed in the same config by hand. Save-time dedup
   // guarantees at most one template per model matches a given settings blob, so
   // the match is unambiguous.
-  const applied = useMemo(() => {
-    const current = canonicalizeTemplateSettings(
-      imageTemplateSettingsSnapshot({
-        size,
-        quality,
-        style,
-        seed,
-        n,
-        width,
-        height,
-        aspect_ratio,
-        output_format,
-        safety_tolerance,
-        prompt_upsampling,
-      })
-    );
-    return matching.find(t => canonicalizeTemplateSettings(t.settings) === current);
-  }, [
-    matching,
-    size,
-    quality,
-    style,
-    seed,
-    n,
-    width,
-    height,
-    aspect_ratio,
-    output_format,
-    safety_tolerance,
-    prompt_upsampling,
-  ]);
+  const applied = useMemo(
+    () =>
+      findMatchingTemplate(
+        matching,
+        model,
+        imageTemplateSettingsSnapshot({
+          size,
+          quality,
+          style,
+          seed,
+          n,
+          width,
+          height,
+          aspect_ratio,
+          output_format,
+          safety_tolerance,
+          prompt_upsampling,
+        })
+      ),
+    [
+      matching,
+      model,
+      size,
+      quality,
+      style,
+      seed,
+      n,
+      width,
+      height,
+      aspect_ratio,
+      output_format,
+      safety_tolerance,
+      prompt_upsampling,
+    ]
+  );
 
-  const handleApply = async (template: IImageGenerationTemplateDocument) => {
-    try {
-      // Server bumps usageCount and returns the authoritative copy (422s on a
-      // model mismatch as a backstop); load that into LLMContext.
-      const fresh = await applyMutation.mutateAsync({ id: template.id, model });
-      applyImageTemplate(fresh);
-    } catch {
-      toast.error('Could not apply template');
-    }
-  };
+  // Apply is now purely local: load the template's settings into LLMContext. No
+  // server round-trip - the client already holds the template, and usage is counted
+  // on send (see useRecordImageTemplateUse), not on apply.
+  const handleApply = (template: IImageGenerationTemplateDocument) => applyImageTemplate(template);
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>

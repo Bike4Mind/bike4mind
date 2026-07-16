@@ -1,4 +1,8 @@
-import type { ImageTemplateSettingsType } from '@bike4mind/common';
+import {
+  canonicalizeTemplateSettings,
+  type ImageTemplateSettingsType,
+  type IImageGenerationTemplateDocument,
+} from '@bike4mind/common';
 import type { LLMContextProps } from '@client/app/contexts/LLMContext';
 
 /** The image-mode fields captured into a template's `settings` blob. */
@@ -36,4 +40,19 @@ export function imageTemplateSettingsSnapshot(s: ImageSettingsSource): ImageTemp
     safety_tolerance: s.safety_tolerance,
     prompt_upsampling: s.prompt_upsampling,
   };
+}
+
+/**
+ * The template (if any) whose bound model AND settings match the given config -
+ * exact-model + canonical settings equality. Save-time dedup guarantees at most
+ * one match per model. Shared by the applied-template indicator and the send-time
+ * usage increment so both agree on "these settings ARE this template".
+ */
+export function findMatchingTemplate(
+  templates: IImageGenerationTemplateDocument[],
+  model: string,
+  settings: ImageTemplateSettingsType
+): IImageGenerationTemplateDocument | undefined {
+  const target = canonicalizeTemplateSettings(settings);
+  return templates.find(t => t.model === model && canonicalizeTemplateSettings(t.settings) === target);
 }

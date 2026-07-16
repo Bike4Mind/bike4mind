@@ -27,6 +27,7 @@ import { pickRoutingSource } from './pickRoutingSource';
 import { resolveDispatchTools } from './resolveDispatchTools';
 import { useSessionCacheMigration } from '../hooks/useSessionCacheMigration';
 import { useLLMSettingsAssembly } from '../hooks/useLLMSettingsAssembly';
+import { useRecordImageTemplateUse } from '../ImageTemplates/useRecordImageTemplateUse';
 import { useProgrammaticSubmit } from '../hooks/useProgrammaticSubmit';
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
@@ -140,6 +141,7 @@ export function useSendMessage({
   const queryClient = useQueryClient();
   const { migrateQuests, migrateSession, cleanupOptimistic } = useSessionCacheMigration();
   const { assembleSettings, resolveTools } = useLLMSettingsAssembly();
+  const recordImageTemplateUse = useRecordImageTemplateUse();
   const navigate = useNavigate();
   const location = useLocation();
   const { projectId: routerProjectId } = useSearch({ strict: false }) as { projectId?: string };
@@ -372,6 +374,10 @@ export function useSendMessage({
     const [command, params] = extractCommandAndParams(liveAI, model, INFINITE_VALUE, prompt, enabledFiles);
     const userId = currentUser!.id;
     const projectId = routerProjectId;
+
+    // Count a template use when a (non-command) prompt is sent on an image model
+    // whose settings match a saved template. Fire-and-forget; gated internally.
+    if (!command) recordImageTemplateUse();
 
     // Detect agent mentions and auto-attach them before sending the message.
     //
