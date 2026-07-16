@@ -185,13 +185,16 @@ export const getDefaultChatCompletionOptions = (): DefaultChatCompletionOptions 
     // (not just the libonc Tutor). Pure fn ref; per-request resolution is memoized in core.
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId, sessionId, userId, prompt, model): Promise<void> => {
+    invokeCreateMemento: async (questId, sessionId, userId, prompt, model, flags): Promise<void> => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
     recallMementosV2,

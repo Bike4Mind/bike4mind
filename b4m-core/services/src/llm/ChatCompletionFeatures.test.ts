@@ -162,13 +162,20 @@ describe('MementoFeature - Mementos V2 injection', () => {
     preferences: { experimentalFeatures: new Map([['enableMementosV2', on]]) },
   });
 
+  const invokeCreateMemento = vi.fn();
   const makeCtx = (recallMementosV2: unknown, user: unknown = v2User(true)) =>
     ({
       logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
       user,
       db: {},
       recallMementosV2,
+      invokeCreateMemento,
+      userAbility: {}, // onComplete guards on its presence only
     }) as unknown as ConstructorParameters<typeof MementoFeature>[0];
+
+  // Default WRITE flags for constructions that only exercise the READ path.
+  const READ_ONLY = { writeV1: false, writeV2: true };
+  beforeEach(() => invokeCreateMemento.mockClear());
 
   const call = (feature: MementoFeature) =>
     feature.getContextMessages(
@@ -184,7 +191,7 @@ describe('MementoFeature - Mementos V2 injection', () => {
       { fact: 'User loves sushi', relevance: 0.9 },
       { fact: 'User works in pharma', relevance: 0.4 },
     ]);
-    const messages = await call(new MementoFeature(makeCtx(recallMementosV2)));
+    const messages = await call(new MementoFeature(makeCtx(recallMementosV2), READ_ONLY));
     // The feature hands over the opt-in it already resolved, so the recall need not re-fetch the user.
     expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like', { enabled: true });
 
@@ -200,7 +207,7 @@ describe('MementoFeature - Mementos V2 injection', () => {
   });
 
   it('injects nothing when V2 is on but the recall is empty', async () => {
-    const messages = await call(new MementoFeature(makeCtx(vi.fn().mockResolvedValue([]))));
+    const messages = await call(new MementoFeature(makeCtx(vi.fn().mockResolvedValue([])), READ_ONLY));
     expect(messages).toEqual([]);
   });
 
@@ -209,11 +216,24 @@ describe('MementoFeature - Mementos V2 injection', () => {
     // it always yielded undefined, so this gate never fired for anyone. Off must mean off, and on
     // must mean on - both are asserted here.
     const recallMementosV2 = vi.fn().mockResolvedValue([{ fact: 'should not be used', relevance: 1 }]);
-    const feature = new MementoFeature(makeCtx(recallMementosV2, v2User(false)));
+    const feature = new MementoFeature(makeCtx(recallMementosV2, v2User(false)), READ_ONLY);
 
     await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
 
     expect(recallMementosV2).not.toHaveBeenCalled();
+  });
+
+  it('onComplete forwards the RESOLVED write flags, so the subscriber cannot re-default V1 on', async () => {
+    // The P1 that kept V1 un-deletable: chat published the completion event with NO flags, so the
+    // memento subscriber read a missing enableMementos as true and wrote a V1 memento every turn even
+    // when V1 was off. The feature now forwards the flags it was constructed with.
+    const feature = new MementoFeature(makeCtx(vi.fn().mockResolvedValue([])), { writeV1: false, writeV2: true });
+    await feature.onComplete({ quest: makeQuest(), model: 'gpt-5.4' } as never);
+
+    expect(invokeCreateMemento).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), 'u1', expect.anything(), 'gpt-5.4',
+      { enableMementos: false, enableMementosV2: true }
+    );
   });
 });
 

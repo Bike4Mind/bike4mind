@@ -4234,7 +4234,17 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
     ) {
       this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
-      this.features.set('mementos', new MementoFeature(this));
+      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
+      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
+      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
+      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+      this.features.set(
+        'mementos',
+        new MementoFeature(this, {
+          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
+          writeV2: enableMementosV2,
+        })
+      );
     }
 
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {

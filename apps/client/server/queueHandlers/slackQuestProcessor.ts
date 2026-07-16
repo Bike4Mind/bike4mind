@@ -154,13 +154,23 @@ const getStaticOptions = () => {
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId: string, sessionId: string, userId: string, prompt: string, model: string) => {
+    invokeCreateMemento: async (
+      questId: string,
+      sessionId: string,
+      userId: string,
+      prompt: string,
+      model: string,
+      flags: { enableMementos: boolean; enableMementosV2: boolean }
+    ) => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
     recallMementosV2,

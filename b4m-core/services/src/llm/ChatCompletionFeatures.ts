@@ -173,7 +173,11 @@ export interface IChatCompletionServiceOptions {
     sessionId: string,
     userId: string,
     prompt: string,
-    model: string
+    model: string,
+    // The RESOLVED write flags. Chat must forward these the same way the agent path does, or the
+    // memento subscriber defaults writeV1=true and force-writes a V1 memento on every turn even when
+    // V1 is off - the concrete thing that kept V1 un-deletable.
+    flags: { enableMementos: boolean; enableMementosV2: boolean }
   ) => Promise<void>;
   /**
    * Mementos V2 retrieval, injected by the app tier (b4m-core cannot reach the ledger store). For a
@@ -395,9 +399,15 @@ export class MementoFeature implements ChatCompletionFeature {
   private logger: Logger;
   private user: IUserDocument;
   private usedMementoIds: string[] = [];
+  // Which pipelines this turn should WRITE to, resolved once at construction (where the admin gate and
+  // the per-user opt-in are both in scope) and forwarded on completion - never re-defaulted downstream.
+  private writeV1: boolean;
+  private writeV2: boolean;
 
-  constructor(chatCompletion: ChatCompletionContext) {
+  constructor(chatCompletion: ChatCompletionContext, writeFlags: { writeV1: boolean; writeV2: boolean }) {
     this.chatCompletion = chatCompletion;
+    this.writeV1 = writeFlags.writeV1;
+    this.writeV2 = writeFlags.writeV2;
     this.db = chatCompletion.db;
     this.logger = chatCompletion.logger;
     this.user = chatCompletion.user;
@@ -485,7 +495,10 @@ export class MementoFeature implements ChatCompletionFeature {
       this.logger.log(`• Tracked ${this.usedMementoIds.length} mementos used in quest ${quest.id}`);
     }
 
-    await this.chatCompletion.invokeCreateMemento(quest.id, quest.sessionId, this.user.id, quest.prompt, model);
+    await this.chatCompletion.invokeCreateMemento(quest.id, quest.sessionId, this.user.id, quest.prompt, model, {
+      enableMementos: this.writeV1,
+      enableMementosV2: this.writeV2,
+    });
   }
 }
 
