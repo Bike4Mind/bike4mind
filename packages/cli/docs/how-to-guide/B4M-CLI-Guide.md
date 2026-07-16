@@ -191,7 +191,7 @@ A few worth committing to muscle memory:
   restoring it.
 - **`/save <name>`** and **`/resume`** persist and reopen whole sessions.
 - **`/whoami`** and **`/usage`** show who you're signed in as and the credit
-  summary from section 5.
+  summary from section 6.
 
 Further down the help output are the configuration commands — pointing at a
 self-hosted API, trusting tools so they stop prompting, project config, and
@@ -223,7 +223,47 @@ Ghostty, and Kitty (run `/terminal-setup` to wire it up).
 
 ---
 
-## 5. Keeping an eye on credits
+## 5. Interactive tool permissions
+
+The agent asks before running anything consequential. When it wants to use a
+tool like `bash_execute`, the CLI pauses with a **Permission Required** dialog
+showing exactly what's about to run:
+
+![Permission Required dialog — the agent's proposed bash command with a preview and allow/deny choices](images/permission-prompt.png)
+
+You get three choices (pick with `1-3`, `y`/`n`, or arrows + Enter):
+
+1. **Allow once** — approve just this invocation
+2. **Allow for this session** — stop prompting for this tool until you exit
+3. **Deny** — refuse, and the agent adjusts course
+
+Two details worth noting:
+
+- The **Preview** box shows the literal command before anything executes — what
+  you approve is what runs.
+- Some tools are deliberately excluded from permanent trust: `bash_execute`
+  shows *"This tool cannot be trusted due to its dangerous nature"*, meaning it
+  will never be silently auto-approved via `/trust`, only allowed per-use or
+  per-session.
+
+For safer tools, `/trust <tool-name>` (section 4) skips the prompt entirely,
+and `/trusted` shows your current list. In headless mode (`-p`), prompts can't
+be answered interactively — that's what `--dangerously-skip-permissions` is
+for, used sparingly in CI.
+
+Once approved, the command runs and the result streams back into the
+conversation. Note the secret hygiene: the echoed command shows
+`X-API-Key: [REDACTED]` — the CLI masks credential values in displayed output
+even though the real value was sent to the API:
+
+![Approved command executing — the API key value is redacted in the echoed output, and the agent summarizes what it verified](images/permission-redacted-result.png)
+
+The footer line after each turn (`168,613 tokens · used 1,733 credits`) is your
+per-turn cost readout — the running total shows up in `/usage` (next section).
+
+---
+
+## 6. Keeping an eye on credits
 
 The **`/usage`** command pulls up your **Credit Usage Summary** — balance,
 daily burn rate, projected runway, and a per-model breakdown of the last 30
@@ -237,7 +277,7 @@ last at the current burn rate.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
