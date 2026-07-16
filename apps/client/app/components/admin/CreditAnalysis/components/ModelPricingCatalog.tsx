@@ -32,6 +32,7 @@ interface PriceRow {
   pricing: Record<string, IModelPriceTier>;
   effectiveFrom: string;
   note?: string;
+  repricedBy?: string;
 }
 
 // Mirrors SEED_NOTE in @bike4mind/database (a server-only package; importing
@@ -235,7 +236,8 @@ export const ModelPricingCatalog: React.FC = () => {
       {isLoading && rows.length === 0 ? (
         <CircularProgress size="sm" />
       ) : (
-        <Sheet sx={{ maxHeight: 480, overflow: 'auto' }}>
+        // Viewport-relative so the catalog fills the tab; scroll stays internal.
+        <Sheet sx={{ maxHeight: 'calc(100vh - 240px)', minHeight: 320, overflow: 'auto' }}>
           <Table stickyHeader hoverRow size="sm" data-testid="model-pricing-table">
             <thead>
               <tr>
@@ -417,17 +419,70 @@ export const ModelPricingCatalog: React.FC = () => {
             <Stack spacing={1}>
               {history.map((row, idx) => {
                 const tier = firstTier(row);
+                // Diff against the chronologically previous row (history is newest
+                // first), across EVERY tier: a reprice touching only a higher
+                // threshold must not read as "no rate changes" in an audit view.
+                const prior = history[idx + 1];
+                const thresholds = prior
+                  ? Array.from(new Set([...Object.keys(row.pricing), ...Object.keys(prior.pricing)])).sort(
+                      (a, b) => Number(a) - Number(b)
+                    )
+                  : [];
+                const multiTier = thresholds.length > 1;
+                const changes = prior
+                  ? thresholds.flatMap(threshold =>
+                      RATE_FIELDS.filter(
+                        f => (row.pricing[threshold]?.[f] ?? undefined) !== (prior.pricing[threshold]?.[f] ?? undefined)
+                      ).map(f => ({ threshold, f }))
+                    )
+                  : [];
                 return (
                   <Sheet key={idx} variant="soft" sx={{ p: 1, borderRadius: 'sm' }} data-testid="history-row">
-                    <Typography level="body-sm">
-                      {new Date(row.effectiveFrom).toLocaleString()} - {row.note || 'no note'}
+                    <Stack direction="row" spacing={1} alignItems="center">
+                      <Typography level="body-sm">{new Date(row.effectiveFrom).toLocaleString()}</Typography>
+                      <Chip
+                        size="sm"
+                        color={isSeedRow(row) ? 'primary' : 'neutral'}
+                        variant="soft"
+                        data-testid="history-who"
+                      >
+                        {row.repricedBy ?? (isSeedRow(row) ? 'seed' : '-')}
+                      </Chip>
+                    </Stack>
+                    <Typography level="body-sm" sx={{ fontStyle: 'italic' }}>
+                      {row.note || 'no note'}
                     </Typography>
-                    <Typography level="body-xs" sx={numberCell}>
-                      in {formatRate(row.unit, tier.input)} / out {formatRate(row.unit, tier.output)}
-                      {tier.audio_input !== undefined &&
-                        ` / audio in ${formatRate(row.unit, tier.audio_input)} / audio out ${formatRate(row.unit, tier.audio_output)}`}{' '}
-                      ({UNIT_SUFFIX[row.unit] ?? row.unit})
-                    </Typography>
+                    {prior ? (
+                      changes.length === 0 ? (
+                        <Typography level="body-xs">no rate changes</Typography>
+                      ) : (
+                        changes.map(({ threshold, f }) => (
+                          <Typography
+                            key={`${threshold}-${f}`}
+                            level="body-xs"
+                            sx={numberCell}
+                            data-testid={`history-diff-${threshold}-${f}`}
+                          >
+                            {RATE_LABELS[f]}
+                            {multiTier ? ` (tier ${Number(threshold).toLocaleString()})` : ''}:{' '}
+                            <Typography component="span" color="danger" sx={{ textDecoration: 'line-through' }}>
+                              {formatRate(row.unit, prior.pricing[threshold]?.[f])}
+                            </Typography>{' '}
+                            {'->'}{' '}
+                            <Typography component="span" color="success">
+                              {formatRate(row.unit, row.pricing[threshold]?.[f])}
+                            </Typography>
+                          </Typography>
+                        ))
+                      )
+                    ) : (
+                      <Typography level="body-xs" sx={numberCell}>
+                        in {formatRate(row.unit, tier.input)} / out {formatRate(row.unit, tier.output)}
+                        {tier.audio_input !== undefined &&
+                          ` / audio in ${formatRate(row.unit, tier.audio_input)} / audio out ${formatRate(row.unit, tier.audio_output)}`}{' '}
+                        ({UNIT_SUFFIX[row.unit] ?? row.unit})
+                      </Typography>
+                    )}
                   </Sheet>
                 );
               })}

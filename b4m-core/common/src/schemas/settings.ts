@@ -104,6 +104,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakesDefault',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
+  'EnableImageTemplates',
   'RapidReplySettings',
   'EnableResearchEngine',
   'EnableResearchEngineDefault',
@@ -270,6 +271,7 @@ export const SettingKeySchema = z.enum([
   'EnableComputeSubmission',
   'EnableFamilyCompute',
   'EnableHybridCompute',
+  'EnableHardwareCompute',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1327,6 +1329,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
+      { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnableBmPi', order: 30 },
       { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
@@ -1347,6 +1350,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'optiMaxToolCalls', order: 84 },
       { key: 'EnableLibreOncology', order: 85 },
       { key: 'EnableHybridCompute', order: 86 },
+      { key: 'EnableHardwareCompute', order: 87 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -1623,6 +1627,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
     dependsOn: 'EnableBriefcase',
+  }),
+  EnableImageTemplates: makeBooleanSetting({
+    key: 'EnableImageTemplates',
+    name: 'Enable Image Templates',
+    defaultValue: false,
+    description:
+      'Server-side gate for reusable image-generation setting templates (save/apply image-mode configs). Off by default; turn on to expose the image-template APIs and picker. Single master toggle: on = available to all users, no per-user opt-in.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 88,
   }),
   EnableQuestMaster: makeBooleanSetting({
     key: 'EnableQuestMaster',
@@ -3164,6 +3178,17 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 84,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  EnableHardwareCompute: makeBooleanSetting({
+    key: 'EnableHardwareCompute',
+    name: 'Enable Hardware Backend Compute',
+    defaultValue: false,
+    description:
+      'Billing kill-switch for running eligible hybrid compute jobs on real external compute hardware (as opposed to the simulator-only path). Independent dark-ship flag; requires EnableComputeSubmission ON to function.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 85,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({

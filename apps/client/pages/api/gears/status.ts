@@ -134,8 +134,9 @@ const GEARS: GearDef[] = [
     key: 'projects',
     credits: 1000,
     kind: 'destination',
-    // Owner OR member - same membership arms as the publish project-visibility gate.
-    check: async ({ userId }) => !!(await Project.exists({ $or: [{ userId }, { 'users.id': userId }] })),
+    // Owner OR member. Membership rows are { userId, permissions } (see
+    // sharingService pushShareable) - the path is users.userId, NOT users.id.
+    check: async ({ userId }) => !!(await Project.exists({ $or: [{ userId }, { 'users.userId': userId }] })),
   },
   {
     key: 'agents',

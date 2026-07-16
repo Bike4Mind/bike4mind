@@ -51,7 +51,8 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     const queryConditions: Record<string, unknown> = {
       $or: [
         { userId }, // User is the owner
-        { 'users.id': userId }, // User is a member
+        // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+        { 'users.userId': userId }, // User is a member
       ],
       ...filters.scope,
       deletedAt: { $exists: false },
@@ -126,6 +127,12 @@ ProjectSchema.plugin(softDeletePlugin);
 
 // Optimized index for searchCollections query - projects collection
 ProjectSchema.index({ userId: 1, deletedAt: 1, name: 'text', updatedAt: -1 });
+
+// Membership arm of accessibility checks (gears status, shared-project lookups).
+// Without it, the $or's users.userId clause forces a collection scan on every
+// /api/gears/status poll (Mongo can only index-union an $or when EVERY clause
+// is indexed).
+ProjectSchema.index({ 'users.userId': 1 });
 
 // Unique constraint on project name per user (excluding soft-deleted projects)
 ProjectSchema.index(

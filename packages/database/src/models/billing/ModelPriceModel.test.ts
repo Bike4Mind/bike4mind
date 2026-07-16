@@ -39,6 +39,20 @@ describe('ModelPriceRepository', () => {
     expect(row.pricing['200000']).toMatchObject({ input: 2e-6, output: 8e-6, cache_read: 1e-6, cache_write: 3e-6 });
   });
 
+  it('round-trips repricedBy and returns it in history', async () => {
+    await modelPriceRepository.append({
+      modelId: 'gpt-x',
+      unit: 'per_token',
+      pricing: { '0': tier },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      note: 'invoice X',
+      repricedBy: 'admin-1',
+    });
+
+    const [row] = await modelPriceRepository.historyForModel('gpt-x');
+    expect(row.repricedBy).toBe('admin-1');
+  });
+
   it('rowsInForce returns the newest effective row per model and unit, ignoring future rows', async () => {
     const base = { modelId: 'gpt-x', unit: 'per_token' as const, pricing: { '200000': tier } };
     await modelPriceRepository.append({ ...base, effectiveFrom: new Date('2026-06-01T00:00:00Z'), note: 'june' });

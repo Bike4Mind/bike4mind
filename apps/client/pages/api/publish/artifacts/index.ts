@@ -34,7 +34,8 @@ const handler = baseApi().get(async (req, res) => {
     // resolve the caller's accessible project ids here - the owner-scoped branches above
     // never use them, and doing it eagerly cost an extra Project.find on every dialog
     // update-existing lookup (the hot `?sourceArtifactId` path).
-    const projects = await Project.find({ $or: [{ userId }, { 'users.id': userId }] })
+    // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+    const projects = await Project.find({ $or: [{ userId }, { 'users.userId': userId }] })
       .select('_id')
       .lean<Array<{ _id: unknown }>>();
     const userProjectIds = projects.map(p => String(p._id));

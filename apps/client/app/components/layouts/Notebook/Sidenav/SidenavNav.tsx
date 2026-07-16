@@ -4,6 +4,7 @@ import { useNavigate, useLocation } from '@tanstack/react-router';
 import { useTranslation } from 'react-i18next';
 import { Fragment, ReactNode } from 'react';
 import AddIcon from '@mui/icons-material/Add';
+import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
@@ -18,6 +19,7 @@ import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useOptiAccess } from '@client/app/hooks/data/opti';
+import { useFileBrowser } from '@client/app/components/Files/Browser';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useHelpPanel, openHelpPanel } from '@client/app/hooks/useHelpPanel';
 import { useGearUnlocks, type GearKey } from '@client/app/hooks/useGearsStatus';
@@ -35,10 +37,10 @@ type NavItem = {
 };
 
 /**
- * Primary sidebar navigation - a vertical icon list (New Chat, Agents, Projects, OptiHashi,
- * Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, and Agents
- * follows the `enableAgents` flag. The active row is highlighted by route. Files Manager is
- * deliberately NOT a sidenav destination - it is reachable only via the Gears page.
+ * Primary sidebar navigation - a vertical icon list (New Chat, Files Manager, Agents, Projects,
+ * OptiHashi, Tavern). OptiHashi/Tavern keep the same entitlement gating as the footer menu, and
+ * Agents follows the `enableAgents` flag. The active row is highlighted by route (Files Manager
+ * by the file-browser drawer's open state, since it isn't a route).
  */
 const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all' }) => {
   const theme = useTheme();
@@ -48,6 +50,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   const currentUser = useUser(s => s.currentUser);
   const { isFeatureEnabled } = useFeatureEnabled();
   const { isFeatureEnabled: isAdminFeatureEnabled } = useAdminSettingsCache();
+  const { open: fileBrowserOpen, setOpen: setFileBrowserOpen } = useFileBrowser();
   const isMobile = useIsMobile();
   const setOpenSideNav = useNotebookLayout(s => s.setOpenSideNav);
 
@@ -73,7 +76,7 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
   // the rail settle once, on first paint only).
   const gearUnlocks = useGearUnlocks();
   // Fail OPEN unless a gear is EXPLICITLY present-and-unearned. These rows
-  // (Projects, Agents, ...) were unconditional before Gears, so a loading state,
+  // (Files, Projects, ...) were unconditional before Gears, so a loading state,
   // a catalog that omits/renames the key, or an admin override that drops it
   // must NOT silently remove core navigation app-wide - only a key the server
   // returns as `false` (a known, genuinely-unearned gear) hides its row.
@@ -160,6 +163,20 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
             onClick: () => {
               closeOnMobile();
               navigate({ to: '/data-lakes' });
+            },
+          },
+        ]
+      : []),
+    ...(gearOpen('files')
+      ? [
+          {
+            key: 'files',
+            label: t('files.manager', 'Files Manager'),
+            icon: iconSlot(<FolderSharedIcon sx={{ fontSize: '18px' }} />),
+            isActive: fileBrowserOpen,
+            onClick: () => {
+              closeOnMobile();
+              setFileBrowserOpen(true);
             },
           },
         ]
@@ -255,9 +272,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
 
   // Pinned vs scroll split for the unified-scroll sidebar: the first two items stay
   // pinned at the top. items[0] is always New Chat; items[1] is OptiHashi when Opti is
-  // enabled, otherwise the next earned destination (the conditional Opti/Data-Lakes
-  // entries shift the rest into the scroll slice). The split is purely positional, so
-  // it holds either way.
+  // enabled, otherwise Files Manager (the conditional Opti/Data-Lakes entries shift the
+  // rest into the scroll slice). The split is purely positional, so it holds either way.
   const shownItems = section === 'pinned' ? items.slice(0, 2) : section === 'scroll' ? items.slice(2) : items;
 
   return (
