@@ -1423,7 +1423,13 @@ async function processExecution(
         counters.cacheWriteTokens += billing.cacheWriteTokens;
       }
       if (modelInfo) {
-        counters.cumulativeCost = getTextModelCost(modelInfo, counters.inputTokens, counters.outputTokens);
+        counters.cumulativeCost = getTextModelCost(
+          modelInfo,
+          counters.inputTokens,
+          counters.outputTokens,
+          counters.cacheReadTokens,
+          counters.cacheWriteTokens
+        );
       }
     }
 
@@ -1455,7 +1461,16 @@ async function processExecution(
       }
     ) => {
       if (!modelInfo) return;
-      const cumulativeCost = getTextModelCost(modelInfo, checkpoint.totalInputTokens, checkpoint.totalOutputTokens);
+      // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
+      // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
+      // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
+      const cumulativeCost = getTextModelCost(
+        modelInfo,
+        checkpoint.totalInputTokens,
+        checkpoint.totalOutputTokens,
+        checkpoint.totalCacheReadTokens,
+        checkpoint.totalCacheWriteTokens
+      );
       const costDelta = cumulativeCost - counters.cumulativeCost;
       if (costDelta <= 0) return;
       const inputTokensDelta = checkpoint.totalInputTokens - counters.inputTokens;
@@ -1805,6 +1820,13 @@ async function processExecution(
         maxIterations,
         confidenceGate,
         previousMessages,
+        // Cache the (large, static) system prompt + tool schemas across iterations. An
+        // agent run is always multi-iteration, and previously this was omitted - so the
+        // full system prompt + tools were re-sent at full input price EVERY iteration
+        // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+        // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+        // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+        enableCaching: true,
       });
 
       iterationIndex = iterationResult.checkpoint.iteration;
