@@ -3,6 +3,8 @@ import {
   ApiKeyScope,
   ApiKeyStatus,
   CreditHolderType,
+  EmbedOriginsSchema,
+  IEmbedBranding,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import { secureParameters, BadRequestError } from '@bike4mind/utils';
@@ -11,10 +13,25 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 
+const embedBrandingSchema = z.object({
+  primaryColor: z.string().optional(),
+  logoUrl: z.string().optional(),
+  displayName: z.string().optional(),
+  hideBranding: z.boolean().optional(),
+});
+
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
   scopes: z.array(z.enum(ApiKeyScope)).min(1),
   expiresAt: z.date().optional(),
+  // Embed key (epic #41). `allowedOrigins` reuses the common schema (dedup + cap;
+  // each entry must be an already-normalized exact https origin). Host-aware
+  // first-party rejection lives at the mint route, which has the runtime host.
+  // `.min(1)`: an empty-string agentId is never meaningful and must not slip past
+  // the coherence guard below (which the route mirrors via `!== undefined`).
+  agentId: z.string().min(1).optional(),
+  allowedOrigins: EmbedOriginsSchema.optional(),
+  branding: embedBrandingSchema.optional(),
   rateLimit: z
     .object({
       requestsPerMinute: z.number().min(1).max(10_000).prefault(60),
@@ -70,6 +87,9 @@ export interface CreateUserApiKeyResult {
   productName?: string;
   billingOwnerType?: ApiKeyBillingOwnerType;
   organizationId?: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
   createdAt: Date;
 }
 
@@ -96,6 +116,19 @@ export const createUserApiKey = async (
   // OVERWATCH_INGEST_WRITE requires a productId
   if (params.scopes.includes(ApiKeyScope.OVERWATCH_INGEST_WRITE) && !params.productId) {
     throw new BadRequestError('productId is required for overwatch-ingest:write scope');
+  }
+
+  // Embed key invariants: an embed:chat key is always bound to one agent, and the
+  // embed-only fields are meaningless without the scope (mirrors the OVERWATCH check).
+  const isEmbedKey = params.scopes.includes(ApiKeyScope.EMBED_CHAT);
+  if (isEmbedKey && !params.agentId) {
+    throw new BadRequestError('agentId is required for embed:chat scope');
+  }
+  if (
+    !isEmbedKey &&
+    (params.agentId !== undefined || params.allowedOrigins !== undefined || params.branding !== undefined)
+  ) {
+    throw new BadRequestError('agentId, allowedOrigins, and branding require the embed:chat scope');
   }
 
   // Billing-target invariant: Organization iff organizationId is set. Keys bill a
@@ -155,6 +188,9 @@ export const createUserApiKey = async (
     productName: params.productName,
     billingOwnerType: params.billingOwnerType ?? CreditHolderType.User,
     organizationId: params.organizationId,
+    agentId: params.agentId,
+    allowedOrigins: params.allowedOrigins,
+    branding: params.branding,
   });
 
   return {
@@ -171,6 +207,9 @@ export const createUserApiKey = async (
     productName: apiKeyDocument.productName,
     billingOwnerType: apiKeyDocument.billingOwnerType,
     organizationId: apiKeyDocument.organizationId,
+    agentId: apiKeyDocument.agentId,
+    allowedOrigins: apiKeyDocument.allowedOrigins,
+    branding: apiKeyDocument.branding,
     createdAt: apiKeyDocument.createdAt,
   };
 };

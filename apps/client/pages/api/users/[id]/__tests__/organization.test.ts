@@ -52,7 +52,7 @@ function mocks(user: unknown, id: string) {
 describe('GET /api/users/[id]/organization - ownership gate', () => {
   beforeEach(() => findById.mockClear());
 
-  it('rejects reading another user\'s org without querying the DB', async () => {
+  it("rejects reading another user's org without querying the DB", async () => {
     const { req, res } = mocks({ id: 'me', isAdmin: false }, 'someone-else');
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/not authorized/i);
     expect(findById).not.toHaveBeenCalled();
@@ -75,7 +75,7 @@ describe('GET /api/users/[id]/organization - ownership gate', () => {
     expect(JSON.stringify(body)).not.toContain('cus_SECRET');
   });
 
-  it('allows an admin to read any user\'s org', async () => {
+  it("allows an admin to read any user's org", async () => {
     const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'someone-else');
     await mockRefs.getHandler!(req, res);
     expect(findById).toHaveBeenCalledWith('someone-else');

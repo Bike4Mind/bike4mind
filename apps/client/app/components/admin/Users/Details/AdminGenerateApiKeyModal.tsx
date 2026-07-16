@@ -1,7 +1,7 @@
 import { useAdminGenerateApiKey, CreateUserApiKeyRequest } from '@client/app/hooks/data/userApiKeys';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { IUserDocument } from '@bike4mind/common';
-import { USER_API_KEY_SCOPES, USER_API_KEY_SCOPE_VALUES } from '@client/app/constants/apiKeyScopes';
+import { GENERIC_MODAL_API_KEY_SCOPES } from '@client/app/constants/apiKeyScopes';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import WarningIcon from '@mui/icons-material/Warning';
 import {
@@ -29,7 +29,10 @@ interface AdminGenerateApiKeyModalProps {
   user: IUserDocument;
 }
 
-const scopeOptions = USER_API_KEY_SCOPES;
+// Embed keys are minted through the dedicated embed flow (epic #41 Phase E), not
+// this generic modal, so embed:chat is excluded from the offered scopes.
+const scopeOptions = GENERIC_MODAL_API_KEY_SCOPES;
+const scopeValues = scopeOptions.map(s => s.value);
 
 export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminGenerateApiKeyModalProps) {
   const [formData, setFormData] = useState<CreateUserApiKeyRequest>({
@@ -74,7 +77,7 @@ export default function AdminGenerateApiKeyModal({ open, onClose, user }: AdminG
   const allScopesSelected = scopeOptions.every(s => formData.scopes.includes(s.value));
 
   const toggleAllScopes = () => {
-    setFormData({ ...formData, scopes: allScopesSelected ? [] : [...USER_API_KEY_SCOPE_VALUES] });
+    setFormData({ ...formData, scopes: allScopesSelected ? [] : [...scopeValues] });
   };
 
   if (generatedKey) {

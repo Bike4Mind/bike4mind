@@ -48,11 +48,6 @@ export function toSafeOrganization(org: OrgLike, viewer: OrgViewer): Record<stri
 }
 
 /** Array convenience; drops null/undefined entries. */
-export function toSafeOrganizations(
-  orgs: OrgLike[] | null | undefined,
-  viewer: OrgViewer
-): Record<string, unknown>[] {
-  return (orgs ?? [])
-    .map(o => toSafeOrganization(o, viewer))
-    .filter((o): o is Record<string, unknown> => o !== null);
+export function toSafeOrganizations(orgs: OrgLike[] | null | undefined, viewer: OrgViewer): Record<string, unknown>[] {
+  return (orgs ?? []).map(o => toSafeOrganization(o, viewer)).filter((o): o is Record<string, unknown> => o !== null);
 }
