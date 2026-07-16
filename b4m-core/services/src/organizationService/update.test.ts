@@ -73,9 +73,9 @@ describe('organizationService - update', () => {
     global.Date.now = originalDate.now;
 
     try {
-        await update(mockRegularUser as IUserDocument, updateParams, mockAdapters);
+      await update(mockRegularUser as IUserDocument, updateParams, mockAdapters);
 
-        expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
+      expect(mockAdapters.db.organizations.update).toHaveBeenCalledWith(
         expect.objectContaining({
           ...existingOrganization,
           id: 'org1',

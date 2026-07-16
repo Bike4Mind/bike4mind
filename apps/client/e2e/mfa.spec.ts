@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Page } from '@playwright/test';
+import { type APIRequestContext } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { apiCreateTestUser, apiGetOtcCode } from './helpers/api';
 import { enrollMfa, generateTotp } from './helpers/mfa';
@@ -8,40 +8,10 @@ import type { LoginPage } from './pages/LoginPage';
 /**
  * Submit the email step and read back the emailed OTC via the non-prod test endpoint (same
  * pattern as auth.spec.ts / signup.spec.ts - there is no test mailbox harness).
- *
- * Rate-limit escape hatch: the OTC send (5/15min per IP) and auth-strategy (10/min per IP)
- * checks are rate limited server-side; on the shared CI egress IP a run can legitimately draw
- * a 429, which leaves the form stuck on the email step. That's an infra limit, not a product
- * regression - annotate + skip rather than fail red (mirrors signup.spec.ts).
  */
-async function sendOtcAndReadCode(
-  page: Page,
-  loginPage: LoginPage,
-  request: APIRequestContext,
-  email: string
-): Promise<string> {
-  let rateLimited = false;
-  page.on('response', resp => {
-    if (resp.status() === 429 && /\/api\/(otc\/send|auth\/strategy)/.test(resp.url())) {
-      rateLimited = true;
-    }
-  });
-
+async function sendOtcAndReadCode(loginPage: LoginPage, request: APIRequestContext, email: string): Promise<string> {
   await loginPage.submitEmail(email);
-  try {
-    await loginPage.expectOtcStep();
-  } catch (err) {
-    if (rateLimited) {
-      test.info().annotations.push({
-        type: 'rate-limited',
-        description:
-          'OTC send / auth-strategy returned 429 on the shared CI IP (send 5/15min, strategy 10/min). ' +
-          'Infra rate limit, not a product failure - skipping.',
-      });
-      test.skip();
-    }
-    throw err;
-  }
+  await loginPage.expectOtcStep();
 
   return apiGetOtcCode(request, email);
 }
@@ -60,7 +30,7 @@ test.describe('MFA', () => {
 
     await basePage.clearAllStorage();
     await loginPage.goto();
-    const code = await sendOtcAndReadCode(page, loginPage, request, email);
+    const code = await sendOtcAndReadCode(loginPage, request, email);
     await loginPage.fillOtc(code);
     await loginPage.submitOtcExpectingMfa();
 
@@ -85,7 +55,7 @@ test.describe('MFA', () => {
 
     await basePage.clearAllStorage();
     await loginPage.goto();
-    const code = await sendOtcAndReadCode(page, loginPage, request, email);
+    const code = await sendOtcAndReadCode(loginPage, request, email);
     await loginPage.fillOtc(code);
     await loginPage.submitOtcExpectingMfa();
 

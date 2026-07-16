@@ -26,7 +26,13 @@ vi.mock('@server/middlewares/baseApi', () => {
 const listOwn = vi.hoisted(() =>
   vi.fn(async () => [
     { id: 'owned', userId: 'me', name: 'Mine', billingContact: 'mine@x.com', stripeCustomerId: 'cus_MINE' },
-    { id: 'member', userId: 'someoneElse', name: 'Theirs', billingContact: 'theirs@x.com', stripeCustomerId: 'cus_THEIRS' },
+    {
+      id: 'member',
+      userId: 'someoneElse',
+      name: 'Theirs',
+      billingContact: 'theirs@x.com',
+      stripeCustomerId: 'cus_THEIRS',
+    },
   ])
 );
 vi.mock('@bike4mind/services', () => ({ organizationService: { listOwn } }));

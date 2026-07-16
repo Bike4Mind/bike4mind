@@ -117,7 +117,8 @@ export async function getSettingByName(
   // Allow bypassing cache for testing
   if (options?.skipCache) {
     const setting = await db.adminSettings.findBySettingName(settingName);
-    return setting?.settingValue || null;
+    // `?? null` (not `|| null`) so a stored boolean `false` survives - see AdminSettingsCache.
+    return setting?.settingValue ?? null;
   }
 
   // Use cached version

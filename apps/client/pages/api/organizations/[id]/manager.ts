@@ -1,8 +1,9 @@
-import { assignManager, removeManager } from '@server/managers/organizationManager';
+import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
-import { organizationRepository } from '@bike4mind/database';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
+import { organizationRepository } from '@bike4mind/database/infra';
+import { userRepository } from '@bike4mind/database/auth';
 import { z } from 'zod';
 
 const assignManagerSchema = z.object({
@@ -22,7 +23,7 @@ const handler = baseApi()
       const validatedBody = assignManagerSchema.parse(req.body);
 
       const organization = await organizationRepository.findById(orgId);
-      if (!organization) throw new BadRequestError('Organization not found');
+      if (!organization) throw new NotFoundError('Organization not found');
 
       const isOwner = organization.userId === req.user?.id;
       const isAdmin = req.user?.isAdmin;
@@ -31,10 +32,10 @@ const handler = baseApi()
         throw new ForbiddenError('Only the billing owner or admin can assign a manager');
       }
 
-      await assignManager({
-        organizationId: orgId,
-        managerId: validatedBody.managerId,
-      });
+      await organizationService.assignManager(
+        { organizationId: orgId, managerId: validatedBody.managerId },
+        { db: { organizations: organizationRepository, users: userRepository } }
+      );
 
       return res.status(200).json({ message: 'Manager assigned successfully' });
     })
@@ -45,7 +46,7 @@ const handler = baseApi()
       if (!orgId) throw new BadRequestError('Organization ID is required');
 
       const organization = await organizationRepository.findById(orgId);
-      if (!organization) throw new BadRequestError('Organization not found');
+      if (!organization) throw new NotFoundError('Organization not found');
 
       const isOwner = organization.userId === req.user?.id;
       const isAdmin = req.user?.isAdmin;
@@ -54,9 +55,10 @@ const handler = baseApi()
         throw new ForbiddenError('Only the billing owner or admin can remove a manager');
       }
 
-      await removeManager({
-        organizationId: orgId,
-      });
+      await organizationService.removeManager(
+        { organizationId: orgId },
+        { db: { organizations: organizationRepository } }
+      );
 
       return res.status(200).json({ message: 'Manager removed successfully' });
     })
