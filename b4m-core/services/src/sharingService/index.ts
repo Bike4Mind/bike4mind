@@ -10,3 +10,4 @@ export * from './listOwnPending';
 export * from './refuse';
 export * from './refuseWholeInvite';
 export * from './revoke';
+export * from './updateDocumentSharing';
