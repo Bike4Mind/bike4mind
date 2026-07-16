@@ -46,13 +46,14 @@ branch — no rebuild step needed.
 > (image processing). These compile during install; if bindings ever complain,
 > run `pnpm rebuild better-sqlite3` or check `b4m doctor`.
 
-### Make `b4m` available everywhere (zsh alias)
+### Make `b4m` available everywhere (shell alias)
 
-To run the source checkout from any directory, add an alias to `~/.zshrc`:
+To run the source checkout from any directory, add an alias to your shell rc
+file (`~/.zshrc` or `~/.bashrc`), substituting the path to your clone:
 
 ```bash
-# b4m — Bike4Mind CLI, run from source in the redBike4mind checkout (works from any cwd)
-alias b4m='node /Users/erikbethke/Desktop/bike4mind/redBike4mind/packages/cli/bin/bike4mind-cli.mjs'
+# b4m — Bike4Mind CLI, run from source (works from any cwd)
+alias b4m='node /path/to/bike4mind/packages/cli/bin/bike4mind-cli.mjs'
 ```
 
 Then `source ~/.zshrc` (or open a new terminal) and verify:
