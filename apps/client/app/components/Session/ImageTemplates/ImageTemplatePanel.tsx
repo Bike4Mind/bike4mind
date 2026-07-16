@@ -11,10 +11,10 @@ import { useImageTemplates, useCreateImageTemplate, useDeleteImageTemplate } fro
 import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 /**
- * The single home for image templates (feature B): lives as a column in the
- * image tab of AdvancedAIModal. Save the current settings, apply a saved
- * template (settings update live in the same modal), and delete. Self-gated on
- * the feature flag - renders nothing when off. Scoped to the active model
+ * The single home for image settings templates: renders below the image settings
+ * in the model-settings dialog (AdvancedAIModal). Save the current settings, apply
+ * a saved template (settings update live in the same modal), and delete. Self-gated
+ * on the feature flag - renders nothing when off. Scoped to the active model
  * (exact-model), which follows whatever model is selected in the modal.
  */
 export const ImageTemplatePanel: FC = () => {

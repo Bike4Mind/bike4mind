@@ -59,7 +59,7 @@ export function useDeleteImageTemplate() {
  * Record a use: increments usageCount when a prompt is sent with a template's
  * settings (matched client-side). Fire-and-forget - deliberately does NOT
  * invalidate the list, so it doesn't trigger a refetch on every send; the fresh
- * count is picked up the next time the list is fetched (opening Manage/dropdown).
+ * count is picked up the next time the list is fetched (reopening the templates panel).
  */
 export function useRecordTemplateUse() {
   return useMutation({

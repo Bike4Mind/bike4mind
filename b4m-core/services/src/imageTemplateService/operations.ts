@@ -109,8 +109,8 @@ export async function deleteTemplate(
 /**
  * Record a use of an owned template: bump usageCount. Called when a prompt is
  * sent with the template's settings (matched client-side), so usageCount reflects
- * actual usage rather than picker clicks. Applying a template is purely client-side
- * now (load its settings), so there is no server apply endpoint.
+ * actual usage rather than merely applying a template. Applying is purely
+ * client-side (load its settings), so there is no server apply endpoint.
  */
 export async function recordUse(
   caller: IImageTemplateCaller,

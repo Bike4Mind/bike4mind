@@ -8,8 +8,8 @@ import { findMatchingTemplate, imageTemplateSettingsSnapshot } from './settingsS
 /**
  * Returns a fire-and-forget callback that increments usageCount for the template
  * matching the CURRENT image settings, if any. Call it when a prompt is sent, so
- * usageCount reflects actual usage (settings-matched sends) rather than picker
- * clicks. No-op unless the feature is enabled and an image model is active.
+ * usageCount reflects actual usage (settings-matched sends) rather than merely
+ * applying a template. No-op unless the feature is enabled and an image model is active.
  */
 export function useRecordImageTemplateUse() {
   const { isAdminFeatureEnabled } = useFeatureEnabled();
