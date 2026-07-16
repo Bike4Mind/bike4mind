@@ -1618,6 +1618,9 @@ importers:
       '@aws-sdk/client-lambda':
         specifier: ^3.1080.0
         version: 3.1080.0
+      '@aws-sdk/client-rekognition':
+        specifier: ^3.1080.0
+        version: 3.1080.0
       '@aws-sdk/client-s3':
         specifier: ^3.1080.0
         version: 3.1080.0
@@ -1687,6 +1690,9 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
+      disposable-email-domains:
+        specifier: ^1.0.62
+        version: 1.0.62
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2
@@ -1726,6 +1732,9 @@ importers:
       ink-text-input:
         specifier: ^6.0.0
         version: 6.0.0(ink@7.1.0(@types/react@19.2.17)(react@19.2.7))(react@19.2.7)
+      jimp:
+        specifier: ^1.6.1
+        version: 1.6.1
       jsonwebtoken:
         specifier: ^9.0.3
         version: 9.0.3
@@ -1783,6 +1792,9 @@ importers:
       tiktoken:
         specifier: ^1.0.22
         version: 1.0.22
+      tldts:
+        specifier: ^7.4.8
+        version: 7.4.8
       tree-sitter-wasms:
         specifier: ^0.1.13
         version: 0.1.13
@@ -1804,6 +1816,9 @@ importers:
       web-tree-sitter:
         specifier: 0.25.10
         version: 0.25.10(@types/emscripten@1.41.5)
+      write-excel-file:
+        specifier: ^4.1.1
+        version: 4.1.1
       ws:
         specifier: ^8.21.0
         version: 8.21.0
