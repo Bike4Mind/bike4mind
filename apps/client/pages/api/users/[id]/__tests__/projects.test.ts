@@ -43,7 +43,7 @@ describe('GET /api/users/[id]/projects - ownership gate', () => {
     findAllAccessible.mockClear();
   });
 
-  it("rejects reading another user's projects without hitting the repository", async () => {
+  it('rejects reading another user\'s projects without hitting the repository', async () => {
     const { req, res } = mocks({ id: 'me', isAdmin: false }, 'someone-else');
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/not authorized/i);
     expect(findById).not.toHaveBeenCalled();
@@ -57,7 +57,7 @@ describe('GET /api/users/[id]/projects - ownership gate', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it("allows an admin to read any user's projects", async () => {
+  it('allows an admin to read any user\'s projects', async () => {
     const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'someone-else');
     await mockRefs.getHandler!(req, res);
     expect(findAllAccessible).toHaveBeenCalledTimes(1);

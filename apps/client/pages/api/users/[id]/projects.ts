@@ -9,7 +9,7 @@ const handler = baseApi().get(async (req, res) => {
   // so only the user themselves or an admin may list them. A profile-scoped
   // response for cross-user views (public "Joined Projects") is a tracked follow-up.
   if (userId !== req.user.id && !req.user.isAdmin) {
-    throw new ForbiddenError("Not authorized to view this user's projects");
+    throw new ForbiddenError('Not authorized to view this user\'s projects');
   }
 
   const user = await userRepository.findById(userId);
