@@ -56,7 +56,11 @@ const EMBED_CHAT_ENDPOINT = '/api/embed/chat';
 const HEARTBEAT_INTERVAL_MS = 10_000;
 
 const EmbedChatRequestSchema = z.object({
-  messages: z.array(z.object({ role: z.enum(['user', 'assistant', 'system']), content: z.string() })).min(1),
+  // Only user/assistant turns from the client. The system persona is set
+  // server-side from the bound agent (prepended below); allowing a client
+  // `system` turn would let an anonymous end-user override the configured
+  // agent's constraints, which defeats the point of a constrained embed agent.
+  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).min(1),
   /** Optional echo of the bound agent id; if present it MUST match the key's agent. */
   agentId: z.string().optional(),
   stream: z.boolean().optional(),

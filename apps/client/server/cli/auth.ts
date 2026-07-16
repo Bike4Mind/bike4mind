@@ -196,6 +196,12 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
   if (!key || key.status !== ApiKeyStatus.ACTIVE) {
     throw new Error('Embed key is not active');
   }
+  // Mirror the raw-key path (validateUserApiKey): a key can be past expiry while
+  // still ACTIVE, so the session-token path must reject it too - otherwise a token
+  // minted just before expiry would outlive the key for its whole TTL.
+  if (key.expiresAt && key.expiresAt < new Date()) {
+    throw new Error('Embed key is expired');
+  }
   if (!key.scopes?.includes(ApiKeyScope.EMBED_CHAT)) {
     throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
   }

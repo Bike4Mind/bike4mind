@@ -293,6 +293,14 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not active/);
   });
 
+  it('rejects an expired-but-still-active key (matches the raw-key path)', async () => {
+    vi.mocked(userApiKeyRepository.findById).mockResolvedValue({
+      ...activeKeyDoc,
+      expiresAt: new Date(Date.now() - 1000),
+    } as never);
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/expired/);
+  });
+
   it('rejects a missing key', async () => {
     vi.mocked(userApiKeyRepository.findById).mockResolvedValue(null as never);
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not active/);
