@@ -19,21 +19,12 @@ import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { isOriginPermitted } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
-import type { Request } from 'express';
+import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
 
 /** Per-IP flood backstop on this unauth mint surface. */
 const MINT_RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
-
-/** Collapse Express's `string | string[]` header values to the shape verifyEmbedApiKey reads. */
-function flattenHeaders(headers: Request['headers']): Record<string, string | undefined> {
-  const out: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(headers)) {
-    out[k] = Array.isArray(v) ? v[0] : v;
-  }
-  return out;
-}
 
 const handler = baseApi({ auth: false })
   .use(embedCors())

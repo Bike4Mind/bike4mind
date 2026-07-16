@@ -128,7 +128,9 @@ describe('POST /api/embed/chat', () => {
     expect(text).toContain('[DONE]');
 
     const params = mockExecuteCompletion.mock.calls[0][0];
-    expect(params.systemPrompt).toBe('AGENT PERSONA PROMPT');
+    // Persona is prepended as a leading system message (not a separate param).
+    expect(params.messages[0]).toEqual({ role: 'system', content: 'AGENT PERSONA PROMPT' });
+    expect(params.messages[1]).toEqual({ role: 'user', content: 'hi' });
     expect(params.model).toBe('test-model');
     expect(params.billingOrganizationId).toBe('org-1');
     expect(params.alwaysRecordUsage).toBe(true);

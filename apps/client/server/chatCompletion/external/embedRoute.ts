@@ -26,11 +26,12 @@ import {
   organizationRepository,
   agentRepository,
 } from '@bike4mind/database';
-import { verifyEmbedApiKey, verifyEmbedKeyById } from '@server/cli/auth';
+import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
+import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { hydrateEmbedAgent } from './embedAgentHydration';
 import { Config } from '@server/utils/config';
 import { z } from 'zod';
@@ -72,12 +73,16 @@ interface EmbedContext {
   sessionId?: string;
 }
 
-function flattenHeaders(headers: Request['headers']): Record<string, string | undefined> {
-  const flat: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    flat[key.toLowerCase()] = Array.isArray(value) ? value[0] : value;
-  }
-  return flat;
+function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
+  return {
+    keyId: info.keyId,
+    userId: info.userId,
+    agentId: info.agentId!,
+    organizationId: info.organizationId!,
+    allowedOrigins: info.allowedOrigins,
+    rateLimit: info.rateLimit,
+    ...(sessionId && { sessionId }),
+  };
 }
 
 /**
@@ -99,26 +104,10 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
     if (info.agentId !== claims.agentId || info.organizationId !== claims.organizationId) {
       throw new Error('Session token does not match the embed key');
     }
-    return {
-      keyId: info.keyId,
-      userId: info.userId,
-      agentId: info.agentId!,
-      organizationId: info.organizationId!,
-      allowedOrigins: info.allowedOrigins,
-      rateLimit: info.rateLimit,
-      sessionId: claims.sessionId,
-    };
+    return toContext(info, claims.sessionId);
   }
 
-  const info = await verifyEmbedApiKey(headers);
-  return {
-    keyId: info.keyId,
-    userId: info.userId,
-    agentId: info.agentId!,
-    organizationId: info.organizationId!,
-    allowedOrigins: info.allowedOrigins,
-    rateLimit: info.rateLimit,
-  };
+  return toContext(await verifyEmbedApiKey(headers));
 }
 
 /**
@@ -178,8 +167,14 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         return res.status(403).json({ error: 'forbidden', error_description: 'agentId does not match the embed key' });
       }
 
+      // Both reads are independent and their ids are known now, so fetch in parallel;
+      // the checks below still run in priority order (agent 404/403 before credits 422).
+      const [agent, org] = await Promise.all([
+        agentRepository.findById(ctx.agentId),
+        organizationRepository.findById(ctx.organizationId),
+      ]);
+
       // Resolve the agent SOLELY from the key. Reject deleted or cross-tenant agents.
-      const agent = await agentRepository.findById(ctx.agentId);
       if (!agent || agent.deletedAt) {
         return res.status(404).json({ error: 'not_found', error_description: 'Bound agent not found' });
       }
@@ -199,7 +194,6 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
 
       // Unconditional pre-flight balance check against the owner org (runs even when
       // enforceCredits is off). Must precede any stream bytes so it can 422.
-      const org = await organizationRepository.findById(ctx.organizationId);
       try {
         assertOwnerHasCredits(org);
       } catch (creditErr) {
@@ -239,14 +233,20 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       write(serializeSSEEvent(buildMetaEvent(requestId)));
       const heartbeat = setInterval(() => write(SSE_KEEPALIVE), HEARTBEAT_INTERVAL_MS);
 
+      // Prepend the agent's hydrated persona as a leading system message - the
+      // embed run's configured behavior. Kept at the call site so executeCompletion
+      // stays a plain message-list consumer.
+      const messages: IMessage[] = [
+        { role: 'system', content: hydrated.systemPrompt },
+        ...(body.messages as IMessage[]),
+      ];
+
       try {
         await executeCompletion({
           userId: ctx.userId,
           model: hydrated.model,
-          messages: body.messages as IMessage[],
+          messages,
           options: { temperature: hydrated.temperature, maxTokens: hydrated.maxTokens, stream: true },
-          // Persona hydrated from the agent - the embed run's configured behavior.
-          systemPrompt: hydrated.systemPrompt,
           db: {
             adminSettings: adminSettingsRepository,
             apiKeys: apiKeyRepository,

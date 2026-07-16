@@ -28,7 +28,10 @@ export function assertOwnerHasCredits(
   const required = opts?.requiredCredits ?? 1;
   const balance = owner.currentCredits ?? 0;
   if (balance < required) {
-    const who = owner.name ? `${owner.name} ` : '';
-    throw insufficientCreditsError(`${who}has insufficient credits to run this request`.trimStart());
+    throw insufficientCreditsError(
+      owner.name
+        ? `${owner.name} has insufficient credits to run this request`
+        : 'Insufficient credits to run this request'
+    );
   }
 }
