@@ -105,7 +105,7 @@ describe('sharingService - acceptInvite (Organization)', () => {
 
   it('overwrites a previously selected organizationId with the newly accepted one', async () => {
     // organizationId is the *currently selected* org; accepting a new invite
-    // selects that org, matching organizationManager.addUserToOrganization.
+    // selects that org, matching organizationService.addMember.
     const user = makeUser({ organizationId: 'previous-org' });
     mockAdapters.db.users.findById.mockResolvedValue(user);
     mockAdapters.db.invites.findById.mockResolvedValue(makeInvite());
