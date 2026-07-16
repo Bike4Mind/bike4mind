@@ -1,7 +1,7 @@
 import { organizationService } from '@bike4mind/services';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError } from '@server/utils/errors';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
 import { withTransaction } from '@bike4mind/database';
@@ -19,7 +19,7 @@ const handler = baseApi().post(
     const validatedBody = addUserToOrganizationSchema.parse(req.body);
 
     const organization = await organizationRepository.findById(orgId);
-    if (!organization) throw new BadRequestError('Organization not found');
+    if (!organization) throw new NotFoundError('Organization not found');
 
     const isOwner = organization.userId === req.user?.id;
     const isAdmin = req.user?.isAdmin;

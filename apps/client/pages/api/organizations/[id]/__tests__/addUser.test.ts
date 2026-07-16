@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
-import { BadRequestError, ForbiddenError } from '@server/utils/errors';
+import { ForbiddenError, NotFoundError } from '@server/utils/errors';
 
 /**
  * POST /api/organizations/[id]/addUser gained an explicit billing-owner/admin
@@ -69,11 +69,11 @@ describe('POST /api/organizations/[id]/addUser', () => {
     expect(addMember).not.toHaveBeenCalled();
   });
 
-  it('rejects when the organization does not exist', async () => {
+  it('rejects with NotFoundError when the organization does not exist', async () => {
     findById.mockResolvedValue(null);
     const { req, res } = createMocks({ method: 'POST', query: { id: 'ghost' }, body: { userId: 'u1' } });
     (req as any).user = { id: 'owner1', isAdmin: false };
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(BadRequestError);
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(NotFoundError);
     expect(addMember).not.toHaveBeenCalled();
   });
 });

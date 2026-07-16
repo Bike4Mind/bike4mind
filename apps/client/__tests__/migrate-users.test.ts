@@ -296,6 +296,28 @@ describe('/api/reg-invites/migrate', () => {
     expect(mockAddMember).not.toHaveBeenCalled();
   });
 
+  it('reports a user as failed (account already created) when org assignment throws', async () => {
+    mockFindByEmail.mockResolvedValue(null);
+    mockCreateUser.mockResolvedValue({ id: 'new-user-x', name: 'Xavier', email: 'xavier@example.com' });
+    // Bad/deleted orgId: addMember throws (NotFoundError), caught by the per-user handler.
+    // The old addUserToOrganization silently no-op'd on a missing org; addMember reports it
+    // as a failure instead - but the account was already persisted by createUser, which runs
+    // before the org step and outside withTransaction.
+    mockAddMember.mockRejectedValue(new Error('Organization not found'));
+
+    mockReq.body = {
+      usersData: [{ email: 'xavier@example.com', name: 'Xavier' }],
+      sendEmail: false,
+      orgId: 'deleted-org',
+    };
+
+    // Sole user fails org assignment -> nothing reported as migrated -> handler throws.
+    await expect(handler(mockReq, mockRes)).rejects.toThrow('No users were migrated');
+    // Account creation still happened despite the org-assignment failure.
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(mockAddMember).toHaveBeenCalled();
+  });
+
   it('logs migration event for each user', async () => {
     mockFindByEmail.mockResolvedValue(null);
     mockCreateUser.mockResolvedValue({
