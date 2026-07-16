@@ -67,6 +67,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Tag data-lake vectorize logs with the batch id for incident triage (the lake is derivable
+  // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
+  if (existingFabFile.batchId) logger.updateMetadata({ batchId: existingFabFile.batchId });
+
   // Idempotency: if the file is already fully vectorized, this is a duplicate SQS delivery.
   // Skip to avoid double-counting batch counters. (Per CLAUDE.md - queue handlers must be idempotent.)
   if (
