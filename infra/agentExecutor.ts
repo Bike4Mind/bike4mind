@@ -13,7 +13,7 @@ import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
 import { eventBus } from './eventBus';
 import { imageProcessor } from './imageProcessor';
 import { mcpHandler } from './mcp';
-import { allSecrets } from './secrets';
+import { allSecrets, secrets } from './secrets';
 import { websocketApi } from './websocket';
 import { lambdaVpc } from './vpc';
 import { cdnUrlForLambdaEnv } from './router';
@@ -49,6 +49,13 @@ const SHARED_AGENT_EXECUTOR_CONFIG = {
     ...DEFAULT_LAMBDA_ENVIRONMENT,
     // Personal sst dev stages serve files via the local proxy (apps/client/pages/api/app-files/serve); deployed stages use the real distribution.
     NEXT_PUBLIC_CDN_URL: cdnUrlForLambdaEnv(),
+    // Instance-service dataset seam, consumed by optihashi_decompose. It reads these as
+    // plain env (linking alone only exposes SST_RESOURCE_*), so the agent path needs the
+    // same explicit wiring as the chat path (infra/chatCompletion.ts) — without it, agent
+    // mode always degrades to LLM formulation even where the dataset service is live. Both
+    // default 'not-configured' (inert until ops sets them).
+    OPTIHASHI_INSTANCE_SERVICE_URL: secrets.OPTIHASHI_INSTANCE_SERVICE_URL.value,
+    OPTIHASHI_INSTANCE_SERVICE_TOKEN: secrets.OPTIHASHI_INSTANCE_SERVICE_TOKEN.value,
   },
   permissions: [
     {
