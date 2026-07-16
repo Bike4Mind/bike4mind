@@ -22,11 +22,12 @@ import React from 'react';
 // vi.mock factories are hoisted, so anything they reference must be created via
 // vi.hoisted. `subscribeToAction` is a stable identity so the subscription
 // effect (keyed on it) doesn't re-run across renders.
-const { navigateMock, toastMock, handlers, subscribeToAction } = vi.hoisted(() => {
+const { navigateMock, toastMock, handlers, subscribeToAction, dispatchUiSideEffectsMock } = vi.hoisted(() => {
   const handlers: Record<string, (msg: unknown) => Promise<void>> = {};
   return {
     navigateMock: vi.fn(),
     toastMock: Object.assign(vi.fn(), { error: vi.fn(), success: vi.fn() }),
+    dispatchUiSideEffectsMock: vi.fn(),
     handlers,
     subscribeToAction: (action: string, cb: (msg: unknown) => Promise<void>) => {
       handlers[action] = cb;
@@ -42,6 +43,9 @@ vi.mock('@client/app/router', () => ({ router: { navigate: navigateMock } }));
 vi.mock('sonner', () => ({ toast: toastMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction }),
+}));
+vi.mock('@client/app/utils/uiSideEffectDispatcher', () => ({
+  dispatchUiSideEffects: dispatchUiSideEffectsMock,
 }));
 
 import { useAgentExecutionSubscriptions } from './useAgentExecution';
@@ -260,5 +264,48 @@ describe('useAgentExecutionSubscriptions — depth-2 grandchild store routing', 
     expect(leaf?.status).toBe('completed');
     // Regression guard: no phantom sibling at the top level.
     expect(useAgentExecutionStore.getState().executions['test-exec']?.childExecutions['leaf-exec']).toBeUndefined();
+  });
+});
+
+describe('useAgentExecutionSubscriptions — iteration_step UI side-effects', () => {
+  beforeEach(() => {
+    dispatchUiSideEffectsMock.mockClear();
+    Object.keys(handlers).forEach(k => delete handlers[k]);
+    useAgentExecutionStore.getState().clearAll();
+  });
+
+  it('dispatches a tool side-effect live, keyed on executionId:iteration', async () => {
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['iteration_step']({
+      action: 'iteration_step',
+      executionId: 'e1',
+      iteration: 2,
+      step: { type: 'observation', content: 'done', metadata: { timestamp: 1 } },
+      isComplete: false,
+      uiSideEffects: [{ type: 'populateDecomposition', payload: { foo: 'bar' } }],
+    });
+
+    expect(dispatchUiSideEffectsMock).toHaveBeenCalledTimes(1);
+    expect(dispatchUiSideEffectsMock).toHaveBeenCalledWith(
+      [{ type: 'populateDecomposition', payload: { foo: 'bar' } }],
+      { live: true, dedupeKey: 'e1:2' }
+    );
+  });
+
+  it('does not dispatch when an iteration_step carries no side-effects', async () => {
+    mountSubscriptions();
+    useAgentExecutionStore.getState().startExecution('e1', 's1');
+
+    await handlers['iteration_step']({
+      action: 'iteration_step',
+      executionId: 'e1',
+      iteration: 0,
+      step: { type: 'thought', content: 'thinking', metadata: { timestamp: 1 } },
+      isComplete: false,
+    });
+
+    expect(dispatchUiSideEffectsMock).not.toHaveBeenCalled();
   });
 });

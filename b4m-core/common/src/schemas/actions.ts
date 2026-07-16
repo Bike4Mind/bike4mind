@@ -1160,6 +1160,19 @@ export const IterationStepAction = z.object({
   iteration: z.number(),
   step: AgentStepSchema,
   isComplete: z.boolean(),
+  // UI side-effects a tool emitted during this iteration (same envelope the chat
+  // path collects on quest.uiSideEffects). Carried here - NOT on AgentStepSchema,
+  // which is persisted into the checkpoint - so they stream live to the console
+  // without bloating checkpoints. Optional => backward-compatible with in-flight
+  // frames. Client dispatches them through the shared uiSideEffectDispatcher.
+  uiSideEffects: z
+    .array(
+      z.object({
+        type: z.string(),
+        payload: z.unknown(),
+      })
+    )
+    .optional(),
 });
 
 /**

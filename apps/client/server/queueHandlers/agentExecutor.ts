@@ -43,7 +43,7 @@ import {
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { Permission } from '@bike4mind/common';
+import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
@@ -98,6 +98,7 @@ import {
   pickEffectiveEnabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
+import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 // Wire schemas live in their own side-effect-free module so unit tests can
 // import them without dragging this file's Mongo/AWS/ReActAgent deps and the
 // `registerLambdaErrorHandlers()` call into the test sandbox. See
@@ -725,43 +726,52 @@ async function processExecution(
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
     if (isNewExecution) {
-      // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
-      // `OrchestrationDefaults` here - so no cast is needed.
-      const orchestrationDefaults = await adminSettingsRepository
-        .getSettingsValue('orchestrationDefaults')
-        .catch(err => {
-          logger.warn('[Orchestration] Failed to load orchestrationDefaults; using built-in fallbacks', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-          return undefined;
-        });
-      orchestrationProfile = await resolveTopLevelProfile({
-        agentId: startPayload?.agentId,
-        loadAgent: async (id: string) => {
-          try {
-            const stored = await agentRepository.findById(id);
-            if (!stored) return null;
-            // Reject soft-deleted records - `IAgent.deletedAt` is the soft-delete
-            // marker; the persisted-agent path should not resurrect them.
-            if (stored.deletedAt) return null;
-            // Authz: user-scoped records require an owner match; org-scoped records
-            // require an org match. System agents (`isSystem: true`) have neither
-            // `userId` nor `organizationId` set and are intentionally accessible
-            // to any caller - both guards short-circuit on the falsy side.
-            if (stored.userId && stored.userId !== execution.userId) return null;
-            if (stored.organizationId && stored.organizationId !== execution.organizationId) return null;
-            return stored;
-          } catch (err) {
-            logger.warn('[Orchestration] Failed to load IAgent; falling back to synthetic profile', {
-              agentId: id,
+      if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
+        // Optimizer surface with no pinned `@agent`: use the opti-scoped profile
+        // (optimizer tools only, image-gen/delegation denied, higher iteration
+        // ceiling, ReAct loop prompt) instead of the generic synthetic default.
+        // An explicit `@agent` mention still wins - it sets `agentId` and takes
+        // the persisted-agent path below.
+        orchestrationProfile = buildOptiOrchestrationProfile();
+      } else {
+        // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
+        // `OrchestrationDefaults` here - so no cast is needed.
+        const orchestrationDefaults = await adminSettingsRepository
+          .getSettingsValue('orchestrationDefaults')
+          .catch(err => {
+            logger.warn('[Orchestration] Failed to load orchestrationDefaults; using built-in fallbacks', {
               error: err instanceof Error ? err.message : String(err),
             });
-            return null;
-          }
-        },
-        adminDefaults: orchestrationDefaults,
-        model: execution.model,
-      });
+            return undefined;
+          });
+        orchestrationProfile = await resolveTopLevelProfile({
+          agentId: startPayload?.agentId,
+          loadAgent: async (id: string) => {
+            try {
+              const stored = await agentRepository.findById(id);
+              if (!stored) return null;
+              // Reject soft-deleted records - `IAgent.deletedAt` is the soft-delete
+              // marker; the persisted-agent path should not resurrect them.
+              if (stored.deletedAt) return null;
+              // Authz: user-scoped records require an owner match; org-scoped records
+              // require an org match. System agents (`isSystem: true`) have neither
+              // `userId` nor `organizationId` set and are intentionally accessible
+              // to any caller - both guards short-circuit on the falsy side.
+              if (stored.userId && stored.userId !== execution.userId) return null;
+              if (stored.organizationId && stored.organizationId !== execution.organizationId) return null;
+              return stored;
+            } catch (err) {
+              logger.warn('[Orchestration] Failed to load IAgent; falling back to synthetic profile', {
+                agentId: id,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              return null;
+            }
+          },
+          adminDefaults: orchestrationDefaults,
+          model: execution.model,
+        });
+      }
       logger.info('[Orchestration] Resolved profile', {
         profileId: orchestrationProfile.id,
         profileName: orchestrationProfile.name,
@@ -1127,6 +1137,15 @@ async function processExecution(
     // "image 1 of N" grid renders just like classic chat after the run completes.
     const generatedImages: string[] = [];
 
+    // UI side-effects a tool emitted (e.g. optimizer console populate). The chat path
+    // collects these on quest.uiSideEffects via its onUiSideEffect callback; the agent
+    // path never supplied one, so they were silently dropped. `pendingSideEffects` buffers
+    // the current tool call's effects until the observation step streams (drain-on-observation
+    // in streamStep, 1:1 with the tool result); `allSideEffects` accumulates the whole run for
+    // persistRunAsQuest so a reload can replay them non-destructively.
+    let pendingSideEffects: { type: string; payload: unknown }[] = [];
+    const allSideEffects: { type: string; payload: unknown }[] = [];
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1143,6 +1162,13 @@ async function processExecution(
       },
       onToolFinish: async () => {
         // Tool finish side effects tracked via ReActAgent steps
+      },
+      onUiSideEffect: async sideEffect => {
+        // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
+        // action and observation emits for this tool call. Buffer here; streamStep drains it
+        // onto the observation iteration_step so the effect streams live with its tool result.
+        pendingSideEffects.push(sideEffect);
+        allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
       onSubagentCredits: credits => {
@@ -1283,6 +1309,12 @@ async function processExecution(
     // is synchronous; fire-and-forget the WS send so a slow socket can't stall
     // the iteration loop.
     const streamStep = (step: AgentStep) => {
+      // Attach any UI side-effects the just-finished tool call emitted. Extraction
+      // fires between the action and observation emits, so at observation-emit time
+      // the buffer holds exactly this tool call's effects. Drain on observation to
+      // keep a 1:1 association and empty the buffer for the next call.
+      const drainedSideEffects = step.type === 'observation' ? pendingSideEffects : [];
+      if (drainedSideEffects.length) pendingSideEffects = [];
       void sendWs('iteration_step', {
         executionId,
         // `getIteration()` reflects the agent's internal counter, which is
@@ -1292,6 +1324,7 @@ async function processExecution(
         iteration: Math.max(0, agent.getIteration() - 1),
         step,
         isComplete: false,
+        ...(drainedSideEffects.length ? { uiSideEffects: drainedSideEffects } : {}),
       });
       // Persist in-flight steps so a mid-iteration refresh sees them on
       // reconnect. Without this, `checkpoint.steps` is only written when
@@ -1634,7 +1667,9 @@ async function processExecution(
           executionId,
           partialAnswer ? `Stopped by user. Partial response:\n\n${partialAnswer}` : 'Stopped by user.',
           logger,
-          generatedImages
+          generatedImages,
+          undefined,
+          allSideEffects
         );
         return;
       }
@@ -2072,7 +2107,14 @@ async function processExecution(
       }
     }
 
-    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
+    await persistRunAsQuest(
+      executionId,
+      replyText,
+      logger,
+      generatedImages,
+      finalCheckpoint.finishReason,
+      allSideEffects
+    );
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
