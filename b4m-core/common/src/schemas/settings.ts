@@ -94,6 +94,7 @@ export const SettingKeySchema = z.enum([
   'EnableDataLakesDefault',
   'EnableBriefcase',
   'EnableBriefcaseDefault',
+  'EnableImageTemplates',
   'RapidReplySettings',
   'EnableResearchEngine',
   'EnableResearchEngineDefault',
@@ -1318,6 +1319,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableArtifactsDefault', order: 21 },
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
+      { key: 'EnableImageTemplates', order: 27 },
       { key: 'EnableBmPi', order: 30 },
       { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
@@ -1615,6 +1617,16 @@ export const settingsMap = {
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
     dependsOn: 'EnableBriefcase',
+  }),
+  EnableImageTemplates: makeBooleanSetting({
+    key: 'EnableImageTemplates',
+    name: 'Enable Image Templates',
+    defaultValue: false,
+    description:
+      'Server-side gate for reusable image-generation setting templates (save/apply image-mode configs). Off by default; turn on to expose the image-template APIs and picker. Single master toggle: on = available to all users, no per-user opt-in.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 88,
   }),
   EnableQuestMaster: makeBooleanSetting({
     key: 'EnableQuestMaster',

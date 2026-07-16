@@ -89,5 +89,6 @@ export * from './SreTypes';
 export * from './SecopsTriageTypes';
 export * from './MarketingReportTypes';
 export * from './BriefcasePromptTypes';
+export * from './ImageGenerationTemplateTypes';
 export * from './AudienceVariantTypes';
 export * from './UserComplianceTypes';
