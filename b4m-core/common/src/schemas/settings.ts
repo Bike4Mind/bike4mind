@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CREDITS_PER_USD_COST } from '../pricing';
 import { CHAT_MODELS, ChatModels } from '../models';
 import { BedrockEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
@@ -262,6 +263,8 @@ export const SettingKeySchema = z.enum([
   'EnableFamilyCompute',
   'EnableHybridCompute',
   'EnableHardwareCompute',
+  'HardwareComputeCreditsPerUsd',
+  'HardwareComputeMaxUsdPerRun',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1341,6 +1344,8 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableLibreOncology', order: 85 },
       { key: 'EnableHybridCompute', order: 86 },
       { key: 'EnableHardwareCompute', order: 87 },
+      { key: 'HardwareComputeCreditsPerUsd', order: 88 },
+      { key: 'HardwareComputeMaxUsdPerRun', order: 89 },
       { key: 'EnableQuestMaster', order: 90 },
       { key: 'EnableQuestMasterDefault', order: 91 },
       { key: 'EnableRapidReply', order: 100 },
@@ -3179,6 +3184,42 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 85,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  HardwareComputeCreditsPerUsd: makeNumberSetting({
+    key: 'HardwareComputeCreditsPerUsd',
+    name: 'Hardware Compute: Credits per USD',
+    defaultValue: CREDITS_PER_USD_COST,
+    min: 1,
+    // Must stay >= any realistic CREDITS_PER_USD_COST: the default above is that value,
+    // and a number setting's prefault default is itself validated against max, so a max
+    // below the seeded default would make this setting fail to parse when unset.
+    max: 100_000,
+    description:
+      'Credits charged per $1 of real external compute hardware cost, for reservation and settlement of ' +
+      'eligible hybrid compute jobs run on hardware (see EnableHardwareCompute). Seeded from the ' +
+      'platform-wide USD-to-credits rate so hardware inherits the same markup by default; raise it here ' +
+      'without a deploy if provider hardware pricing changes.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 86,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  HardwareComputeMaxUsdPerRun: makeNumberSetting({
+    key: 'HardwareComputeMaxUsdPerRun',
+    name: 'Hardware Compute: Max USD per run',
+    defaultValue: 100,
+    min: 1,
+    max: 10_000,
+    description:
+      'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
+      'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
+      'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
+      'per-run spend without maintaining a hardcoded device allowlist; raise it here without a deploy ' +
+      'if a legitimately pricier target needs to be reachable.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 87,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({

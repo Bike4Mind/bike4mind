@@ -57,6 +57,19 @@ describe('pricing utils', () => {
       expect(usdToCredits(10)).toBe(20000);
       expect(usdToCredits(0.0005)).toBe(1);
     });
+
+    it('uses the platform default rate when no override is passed', () => {
+      expect(usdToCredits(1)).toBe(2000);
+    });
+
+    it('uses an explicit rate override instead of the platform default', () => {
+      expect(usdToCredits(1, 5000)).toBe(5000);
+      expect(usdToCredits(0.5, 100)).toBe(50);
+    });
+
+    it('still applies the minimum-1-credit floor with an overridden rate', () => {
+      expect(usdToCredits(0.00001, 100)).toBe(1);
+    });
   });
 
   describe('usdToCreditsStochastic', () => {
@@ -121,6 +134,41 @@ describe('pricing utils', () => {
     it('defaults to a working rng when none is injected', () => {
       const charge = usdToCreditsStochastic(0.0001);
       expect(charge === 0 || charge === 1).toBe(true);
+    });
+
+    it('uses an explicit rate override instead of the platform default', () => {
+      // $1 * 100 rate = exactly 100 credits; fraction is 0 so rng must not matter
+      expect(usdToCreditsStochastic(1, () => 0, 100)).toBe(100);
+      expect(usdToCreditsStochastic(1, () => 0.999999, 100)).toBe(100);
+    });
+
+    it('rounds a fractional charge correctly under an overridden rate', () => {
+      // $0.011 * 100 rate = 1.1 raw credits; draw 0.05 < 0.1 -> round up
+      expect(usdToCreditsStochastic(0.011, () => 0.05, 100)).toBe(2);
+      // draw 0.5 >= 0.1 -> keep floor
+      expect(usdToCreditsStochastic(0.011, () => 0.5, 100)).toBe(1);
+    });
+  });
+
+  describe('CREDITS_PER_USD_COST export', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('is exported and matches the default rate used by usdToCredits', async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', undefined);
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', undefined);
+      const pricing = await importPricing();
+      expect(pricing.CREDITS_PER_USD_COST).toBe(2000);
+      expect(pricing.usdToCredits(1)).toBe(pricing.CREDITS_PER_USD_COST);
+    });
+
+    it('reflects env overrides so downstream seeds (e.g. an admin setting default) stay in sync', async () => {
+      vi.stubEnv('NEXT_PUBLIC_PRICE_MARGIN', '2');
+      vi.stubEnv('NEXT_PUBLIC_USD_TO_CREDITS_RATE', '0.001');
+      const pricing = await importPricing();
+      expect(pricing.CREDITS_PER_USD_COST).toBe(2000);
     });
   });
 
