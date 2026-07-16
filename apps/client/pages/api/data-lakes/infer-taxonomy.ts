@@ -13,10 +13,10 @@ import { Request } from 'express';
 // developer), but a tagged user could otherwise burn OpenAI spend unbounded. Admins and
 // developer-tagged users stay uncapped; every other caller who reaches here gets the daily
 // cap. The limit trips in middleware, before any OpenAI call, so a rejected request is free.
-const TAXONOMY_INFERENCE_DAILY_CAP = 50;
+export const TAXONOMY_INFERENCE_DAILY_CAP = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const resolveTaxonomyDailyLimit = (req: Request): number => {
+export const resolveTaxonomyDailyLimit = (req: Request): number => {
   if (isDevelopment()) return Infinity;
   if (req.user?.isAdmin || hasDeveloperUserTag(req.user?.tags)) return Infinity;
   return TAXONOMY_INFERENCE_DAILY_CAP;
