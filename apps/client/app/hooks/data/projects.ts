@@ -379,10 +379,11 @@ export const useRemoveSystemPromptsFromProject = (callbacks?: { onSuccess?: () =
       });
       return response.data;
     },
-    onSuccess: (project: IProjectDocument) => {
+    onSuccess: (project: IProjectDocument, { fileIds }) => {
       updateAllQueryData(queryClient, 'projects', 'write', project);
       queryClient.invalidateQueries({ queryKey: ['fabFiles', 'own'] });
-      toast.success('System prompts removed successfully');
+      // Same hook serves the bulk picker and the single-row kebab, so pluralize by count.
+      toast.success(`System prompt${fileIds.length === 1 ? '' : 's'} removed successfully`);
       callbacks?.onSuccess?.();
     },
     onError: e => {
