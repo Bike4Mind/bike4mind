@@ -196,6 +196,11 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
   // steps have streamed yet for the current iteration (model is still
   // deciding its next move).
   const awaitingFirstStep = isActive && (!lastGroup || lastGroup.steps.length === 0);
+  // Live token stream for the in-flight iteration - the agent's reasoning/narration and
+  // final answer as they generate, so a long turn reads as active typing instead of a
+  // generic spinner. Cleared per-iteration when the terminal step lands (store side).
+  const pendingText = isActive ? execution.pendingTextByIteration?.[execution.lastKnownIteration] : undefined;
+  const hasPendingText = !!pendingText && pendingText.length > 0;
 
   return (
     <Box
@@ -317,12 +322,16 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
               </Accordion>
             );
           })}
-        {/* Active executor with no streamed steps yet on the current iteration
-            (e.g. model is still deciding the next move). The copy rotates
-            every ~2.5s so a long deliberation phase doesn't read as stalled.
-            No spinner - the chip-level spinner is the canonical active
-            indicator; the rotating copy carries the "still alive" signal. */}
-        {awaitingFirstStep ? <ThinkingPlaceholder /> : null}
+        {/* Live streaming text for the in-flight iteration wins over the generic
+            rotating copy - the user sees the agent's actual words as they type
+            instead of a placeholder. Falls back to the rotating "Thinking..."
+            copy only while the model has produced no text yet (e.g. generating a
+            large tool-call argument, which streams as JSON rather than text). */}
+        {hasPendingText ? (
+          <StreamingText text={pendingText!} testId={`iteration-stream-${executionId}-streaming`} />
+        ) : awaitingFirstStep ? (
+          <ThinkingPlaceholder />
+        ) : null}
       </AccordionGroup>
 
       {execution.status === 'aborted' ? (
@@ -375,6 +384,26 @@ const ElapsedTime: FC<{ startedAt: number }> = ({ startedAt }) => {
     </Typography>
   );
 };
+
+// Live token stream for the in-flight iteration. Rendered in place of the rotating
+// "Thinking..." copy the moment the agent produces any text, so a long turn shows the
+// agent's real reasoning/narration typing out. Content is authoritative-once-terminal:
+// the store clears this buffer when the iteration's persisted step lands, so it never
+// double-renders alongside the finalized step.
+const StreamingText: FC<{ text: string; testId: string }> = ({ text, testId }) => (
+  <Box
+    data-testid={testId}
+    sx={{
+      px: 2,
+      py: 1,
+      borderLeft: theme => `2px solid ${theme.palette.primary.softActiveBg}`,
+    }}
+  >
+    <Typography level="body-sm" sx={{ color: 'text.secondary', whiteSpace: 'pre-wrap' }}>
+      {text}
+    </Typography>
+  </Box>
+);
 
 // Extracted so the rotating-copy effect lives in its own component - keeps
 // the hook unconditional under React rules and lets us mount/unmount cleanly

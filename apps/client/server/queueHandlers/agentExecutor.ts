@@ -43,7 +43,7 @@ import {
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { Permission } from '@bike4mind/common';
+import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
@@ -98,6 +98,7 @@ import {
   pickEffectiveEnabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
+import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 // Wire schemas live in their own side-effect-free module so unit tests can
 // import them without dragging this file's Mongo/AWS/ReActAgent deps and the
 // `registerLambdaErrorHandlers()` call into the test sandbox. See
@@ -724,7 +725,18 @@ async function processExecution(
     // Resolved only on new executions; continuations carry forward whatever the
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
-    if (isNewExecution) {
+    // Optimizer surface with no pinned `@agent`: use the opti-scoped profile (optimizer
+    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop
+    // prompt) instead of the generic synthetic default. Resolved on continuations too,
+    // NOT just new executions: it's a deterministic function of the persisted
+    // `session.surface`, and the tool list is rebuilt on every Lambda invocation, so a
+    // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
+    // otherwise collapse the toolbelt to mission-only and the loop could no longer
+    // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
+    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
+    if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
+      orchestrationProfile = buildOptiOrchestrationProfile();
+    } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
       const orchestrationDefaults = await adminSettingsRepository
@@ -762,12 +774,15 @@ async function processExecution(
         adminDefaults: orchestrationDefaults,
         model: execution.model,
       });
+    }
+    if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
         profileId: orchestrationProfile.id,
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
+        isContinuation: !isNewExecution,
       });
     }
 
@@ -1127,6 +1142,15 @@ async function processExecution(
     // "image 1 of N" grid renders just like classic chat after the run completes.
     const generatedImages: string[] = [];
 
+    // UI side-effects a tool emitted (e.g. optimizer console populate). The chat path
+    // collects these on quest.uiSideEffects via its onUiSideEffect callback; the agent
+    // path never supplied one, so they were silently dropped. `pendingSideEffects` buffers
+    // the current tool call's effects until the observation step streams (drain-on-observation
+    // in streamStep, 1:1 with the tool result); `allSideEffects` accumulates the whole run for
+    // persistRunAsQuest so a reload can replay them non-destructively.
+    let pendingSideEffects: { type: string; payload: unknown }[] = [];
+    const allSideEffects: { type: string; payload: unknown }[] = [];
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1143,6 +1167,13 @@ async function processExecution(
       },
       onToolFinish: async () => {
         // Tool finish side effects tracked via ReActAgent steps
+      },
+      onUiSideEffect: async sideEffect => {
+        // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
+        // action and observation emits for this tool call. Buffer here; streamStep drains it
+        // onto the observation iteration_step so the effect streams live with its tool result.
+        pendingSideEffects.push(sideEffect);
+        allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
       onSubagentCredits: credits => {
@@ -1283,6 +1314,12 @@ async function processExecution(
     // is synchronous; fire-and-forget the WS send so a slow socket can't stall
     // the iteration loop.
     const streamStep = (step: AgentStep) => {
+      // Attach any UI side-effects the just-finished tool call emitted. Extraction
+      // fires between the action and observation emits, so at observation-emit time
+      // the buffer holds exactly this tool call's effects. Drain on observation to
+      // keep a 1:1 association and empty the buffer for the next call.
+      const drainedSideEffects = step.type === 'observation' ? pendingSideEffects : [];
+      if (drainedSideEffects.length) pendingSideEffects = [];
       void sendWs('iteration_step', {
         executionId,
         // `getIteration()` reflects the agent's internal counter, which is
@@ -1292,6 +1329,7 @@ async function processExecution(
         iteration: Math.max(0, agent.getIteration() - 1),
         step,
         isComplete: false,
+        ...(drainedSideEffects.length ? { uiSideEffects: drainedSideEffects } : {}),
       });
       // Persist in-flight steps so a mid-iteration refresh sees them on
       // reconnect. Without this, `checkpoint.steps` is only written when
@@ -1328,6 +1366,27 @@ async function processExecution(
     agent.on('action', streamStep);
     agent.on('observation', streamStep);
     agent.on('final_answer', streamStep);
+    // Forward the top-level agent's streaming token deltas so the console renders the
+    // agent's reasoning/narration and final answer live within each iteration, instead of
+    // the whole step landing at once after a long generation (a decompose turn is ~40s).
+    // Mirrors the subagent `onTextDelta` path. Chunk to stay under the API Gateway frame
+    // limit; fire-and-forget so a slow WS send can't stall the loop. The emitted
+    // `iteration` matches the `iteration_step` wire index, so the client clears its
+    // per-iteration buffer when the terminal step lands.
+    // Serialize the delta sends through a promise chain. `sendWs` -> API Gateway
+    // postToConnection is a separate async call per frame; firing them concurrently
+    // (fire-and-forget) lets frames arrive out of order and scramble the live text.
+    // Chaining makes each frame await the previous, preserving token order, while the
+    // listener stays non-blocking to the agent loop (we never await the chain here).
+    let textDeltaSendChain: Promise<unknown> = Promise.resolve();
+    agent.on('text_delta', ({ delta, iteration }: { delta: string; iteration: number }) => {
+      for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
+        const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
+        textDeltaSendChain = textDeltaSendChain
+          .then(() => sendWs('agent_text_delta', { executionId, iteration, delta: chunk }))
+          .catch(() => {});
+      }
+    });
 
     // Set up timeout watchdog
     const deadlineMs = context.getRemainingTimeInMillis() - TIMEOUT_BUFFER_MS;
@@ -1369,7 +1428,13 @@ async function processExecution(
         counters.cacheWriteTokens += billing.cacheWriteTokens;
       }
       if (modelInfo) {
-        counters.cumulativeCost = getTextModelCost(modelInfo, counters.inputTokens, counters.outputTokens);
+        counters.cumulativeCost = getTextModelCost(
+          modelInfo,
+          counters.inputTokens,
+          counters.outputTokens,
+          counters.cacheReadTokens,
+          counters.cacheWriteTokens
+        );
       }
     }
 
@@ -1401,7 +1466,16 @@ async function processExecution(
       }
     ) => {
       if (!modelInfo) return;
-      const cumulativeCost = getTextModelCost(modelInfo, checkpoint.totalInputTokens, checkpoint.totalOutputTokens);
+      // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
+      // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
+      // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
+      const cumulativeCost = getTextModelCost(
+        modelInfo,
+        checkpoint.totalInputTokens,
+        checkpoint.totalOutputTokens,
+        checkpoint.totalCacheReadTokens,
+        checkpoint.totalCacheWriteTokens
+      );
       const costDelta = cumulativeCost - counters.cumulativeCost;
       if (costDelta <= 0) return;
       const inputTokensDelta = checkpoint.totalInputTokens - counters.inputTokens;
@@ -1634,7 +1708,9 @@ async function processExecution(
           executionId,
           partialAnswer ? `Stopped by user. Partial response:\n\n${partialAnswer}` : 'Stopped by user.',
           logger,
-          generatedImages
+          generatedImages,
+          undefined,
+          allSideEffects
         );
         return;
       }
@@ -1749,6 +1825,13 @@ async function processExecution(
         maxIterations,
         confidenceGate,
         previousMessages,
+        // Cache the (large, static) system prompt + tool schemas across iterations. An
+        // agent run is always multi-iteration, and previously this was omitted - so the
+        // full system prompt + tools were re-sent at full input price EVERY iteration
+        // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+        // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+        // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+        enableCaching: true,
       });
 
       iterationIndex = iterationResult.checkpoint.iteration;
@@ -1956,11 +2039,14 @@ async function processExecution(
         // a real pause. Baseline observability before touching signal quality.
         await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
       }
+      // Per-profile override wins over the global default; a profile threshold of 0
+      // disables the gate entirely (confidence is never < 0) for unattended loops.
+      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
       if (
         gate !== null &&
         !iterationResult.isComplete &&
         !iterationResult.reachedMaxIterations &&
-        gate.confidence < CONFIDENCE_GATE_THRESHOLD
+        gate.confidence < confidenceGateThreshold
       ) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
@@ -1969,7 +2055,7 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(CONFIDENCE_GATE_THRESHOLD * 100).toFixed(0)}%`;
+        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's
@@ -2072,7 +2158,14 @@ async function processExecution(
       }
     }
 
-    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
+    await persistRunAsQuest(
+      executionId,
+      replyText,
+      logger,
+      generatedImages,
+      finalCheckpoint.finishReason,
+      allSideEffects
+    );
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
