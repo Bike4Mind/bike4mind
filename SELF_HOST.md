@@ -237,6 +237,12 @@ The `web_search` tool (and `deep_research`) can run against a self-hosted [SearX
 
 Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
 
+### Reading pages: web_fetch and Firecrawl
+
+The `web_fetch` tool (reading a specific URL) and `deep_research` (which extracts page content) use [Firecrawl](https://www.firecrawl.dev/) when it is configured - set `FIRECRAWL_API_URL` (a self-hosted Firecrawl instance, no key needed) and/or `FIRECRAWL_API_KEY` (hosted cloud) in `.env.selfhost`, or the equivalents in Admin > API Keys.
+
+Without any Firecrawl config, `web_fetch` falls back to a **keyless direct fetch** that downloads the page and converts its HTML to markdown - so reading pages works out of the box with no key. That fallback has two limits versus Firecrawl: it does not run JavaScript (heavily client-rendered pages may come back sparse) and it cannot parse PDFs (upload a PDF directly instead). `deep_research` likewise runs on just a web-search provider, using the same plain-fetch reader for extraction.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.

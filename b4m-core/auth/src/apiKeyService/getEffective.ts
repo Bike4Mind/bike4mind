@@ -65,6 +65,25 @@ export const getWebSearchProviderSetting = async (adapters: GetEffectiveApiKeyAd
   return settings?.settingValue?.trim() || null;
 };
 
+export interface FirecrawlConfig {
+  apiKey?: string;
+  apiUrl?: string;
+}
+
+// Resolve Firecrawl config: admin settings first, then the self-host env fallback. A custom apiUrl
+// (self-hosted Firecrawl) is enough on its own - firecrawl-js runs keyless against a non-cloud URL.
+export const getFirecrawlConfig = async (adapters: GetEffectiveApiKeyAdapters): Promise<FirecrawlConfig> => {
+  const { db } = adapters;
+  const [keySetting, urlSetting] = await Promise.all([
+    db.adminSettings.findBySettingName('FirecrawlApiKey'),
+    db.adminSettings.findBySettingName('FirecrawlApiUrl'),
+  ]);
+  return {
+    apiKey: keySetting?.settingValue?.trim() || envKey('FIRECRAWL_API_KEY') || undefined,
+    apiUrl: urlSetting?.settingValue?.trim() || envKey('FIRECRAWL_API_URL') || undefined,
+  };
+};
+
 export const getOpenWeatherKey = async (adapters: GetEffectiveApiKeyAdapters) => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('OpenWeatherKey');

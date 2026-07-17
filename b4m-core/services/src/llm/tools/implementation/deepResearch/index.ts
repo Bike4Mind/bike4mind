@@ -2,7 +2,10 @@ import { ChatModels } from '@bike4mind/common';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
-import { FirecrawlApp } from '../webfetch/firecrawlApp';
+import { getFirecrawlConfig } from '../../../../apiKeyService';
+import { createFirecrawlApp } from '../webfetch/firecrawlApp';
+import { plainFetchScrape } from '../webfetch/plainFetch';
+import { resolveWebSearchProvider } from '../websearch';
 
 interface DeepResearchParams {
   topic: string;
@@ -140,16 +143,18 @@ export async function performDeepResearch(
     state.sources.push(sourceWithTimestamp);
   };
 
-  // Always include Firecrawl searcher and add any configured searchers
-  let searchers: Searcher[] = [];
+  // Resolve the available search + extraction sources. Deep research needs a way to DISCOVER urls
+  // (a web-search provider, or Firecrawl's own search); content extraction can always fall back to
+  // a keyless plain fetch when Firecrawl is not configured (self-host). Error only when there is no
+  // way to search at all.
+  const firecrawlApp = createFirecrawlApp(await getFirecrawlConfig({ db: context.db }));
+  const provider = await resolveWebSearchProvider({ db: context.db });
 
-  // Get Firecrawl API key and create Firecrawl searcher
-  const apiKeySetting = await context.db.adminSettings.findBySettingName('FirecrawlApiKey');
-  if (!apiKeySetting?.settingValue) {
-    log('🔬 Deep Research: Firecrawl API key not found');
+  if (!provider && !firecrawlApp) {
+    log('🔬 Deep Research: no web-search provider or Firecrawl configured');
     return {
       success: false,
-      error: 'Firecrawl API key not configured',
+      error: 'Deep research requires a web search provider (Serper key or SearXNG URL) or Firecrawl to be configured',
       data: {
         findings: [],
         finalAnalysisPrompt: '',
@@ -159,87 +164,87 @@ export async function performDeepResearch(
     };
   }
 
-  const app = new FirecrawlApp({ apiKey: apiKeySetting.settingValue });
-  const firecrawlSearcher: Searcher = {
-    name: 'Firecrawl',
-    search: async (query: string) => {
-      try {
-        const searchResults = await app.search(query);
-        return searchResults.data.map(result => ({
-          url: result.url,
-          title: result.title,
-          type: 'web_url',
-          description: result.description,
-        }));
-      } catch (error) {
-        log(`🔬 Deep Research: Firecrawl search failed for query "${query}":`, error);
-        // Return empty array so research can continue with other searchers
-        return [];
+  const search: Searcher['search'] = provider
+    ? async (query: string) => {
+        const results = await provider.search(query);
+        return results.map(r => ({ url: r.url, title: r.title, description: r.snippet, type: 'web_url' }));
       }
-    },
-    extractContent: async (urls: string[]) => {
-      const extractPromises = urls.map(async url => {
+    : async (query: string) => {
+        if (!firecrawlApp) return []; // unreachable: guarded above, but narrows the type
         try {
-          if (!url) {
-            return [];
-          }
-          addActivity({
-            type: 'extract',
-            status: 'pending',
-            message: `Extracting content from ${url}`,
-            depth: state.depth,
-          });
-
-          const result = await app.scrapeUrl(url, {
-            formats: ['markdown'],
-            actions: [
-              {
-                type: 'wait',
-                milliseconds: 1000,
-              },
-            ],
-          });
-
-          if (result && !result.error && 'markdown' in result && result.markdown) {
-            addActivity({
-              type: 'extract',
-              status: 'complete',
-              message: `Successfully extracted content from ${url}`,
-              depth: state.depth,
-            });
-
-            const textContent = result.markdown.slice(0, 10_000); // Limit to 10000 characters
-            return [{ text: textContent, source: url }];
-          }
-          return [];
+          const searchResults = await firecrawlApp.search(query);
+          return searchResults.data.map(result => ({
+            url: result.url,
+            title: result.title,
+            type: 'web_url',
+            description: result.description,
+          }));
         } catch (error) {
-          addActivity({
-            type: 'extract',
-            status: 'error',
-            message: `Failed to extract content from ${url}`,
-            depth: state.depth,
-          });
-          log(`🔬 Deep Research: Failed to extract content from ${url}:`);
+          log(`🔬 Deep Research: Firecrawl search failed for query "${query}":`, error);
+          // Return empty array so research can continue with other searchers
           return [];
         }
+      };
+
+  const extractContent: Searcher['extractContent'] = async (urls: string[]) => {
+    const extractPromises = urls.map(async url => {
+      if (!url) return [];
+      addActivity({
+        type: 'extract',
+        status: 'pending',
+        message: `Extracting content from ${url}`,
+        depth: state.depth,
       });
-      const results = await Promise.all(extractPromises);
-      return results.flat();
-    },
+      try {
+        let text: string | undefined;
+        if (firecrawlApp) {
+          const result = await firecrawlApp.scrapeUrl(url, {
+            formats: ['markdown'],
+            actions: [{ type: 'wait', milliseconds: 1000 }],
+          });
+          if (result && !result.error && 'markdown' in result && result.markdown) {
+            text = result.markdown.slice(0, 10_000); // Limit to 10000 characters
+          }
+        } else {
+          // Keyless fallback: SSRF-guarded direct fetch + HTML->markdown (self-host, no Firecrawl).
+          const { markdown } = await plainFetchScrape(url);
+          text = markdown.slice(0, 10_000);
+        }
+        if (text) {
+          addActivity({
+            type: 'extract',
+            status: 'complete',
+            message: `Successfully extracted content from ${url}`,
+            depth: state.depth,
+          });
+          return [{ text, source: url }];
+        }
+        return [];
+      } catch (error) {
+        addActivity({
+          type: 'extract',
+          status: 'error',
+          message: `Failed to extract content from ${url}`,
+          depth: state.depth,
+        });
+        log(`🔬 Deep Research: Failed to extract content from ${url}:`);
+        return [];
+      }
+    });
+    const results = await Promise.all(extractPromises);
+    return results.flat();
   };
 
-  // Always start with Firecrawl, then add any configured searchers
-  searchers = [firecrawlSearcher];
+  const primarySearcher: Searcher = { name: provider ? provider.name : 'Firecrawl', search, extractContent };
+
+  // Primary searcher first, then any caller-provided searchers.
+  const searchers: Searcher[] = [primarySearcher];
 
   if (config.searchers && config.searchers.length > 0) {
     searchers.push(...config.searchers);
     log(`🔬 Deep Research: Using ${searchers.length} searcher(s): ${searchers.map(s => s.name).join(', ')}`);
   } else {
-    log('🔬 Deep Research: Using Firecrawl searcher only');
-  }
-
-  if (!searchers.length) {
-    throw new Error('No searchers configured');
+    log(`🔬 Deep Research: Using ${primarySearcher.name} searcher only`);
   }
 
   const generateText = async (prompt: string) => {

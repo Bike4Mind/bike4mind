@@ -1,7 +1,7 @@
 import { createRequire } from 'node:module';
 import { describe, expect, it } from 'vitest';
 import FirecrawlDefault from '@mendable/firecrawl-js';
-import { FirecrawlApp, resolveFirecrawlApp } from './firecrawlApp';
+import { FirecrawlApp, resolveFirecrawlApp, createFirecrawlApp } from './firecrawlApp';
 
 const requireCjs = createRequire(import.meta.url);
 
@@ -30,5 +30,23 @@ describe('resolveFirecrawlApp', () => {
   it('exports a constructable FirecrawlApp in the current module regime', () => {
     const app = new FirecrawlApp({ apiKey: 'test-key' });
     expect(typeof app.scrapeUrl).toBe('function');
+  });
+});
+
+describe('createFirecrawlApp', () => {
+  it('returns null when neither apiKey nor apiUrl is configured', () => {
+    expect(createFirecrawlApp({})).toBeNull();
+  });
+
+  it('constructs an app from an API key (hosted cloud)', () => {
+    const app = createFirecrawlApp({ apiKey: 'test-key' });
+    expect(app).not.toBeNull();
+    expect(typeof app?.scrapeUrl).toBe('function');
+  });
+
+  it('constructs a keyless app from a self-hosted apiUrl', () => {
+    const app = createFirecrawlApp({ apiUrl: 'http://firecrawl:3002' });
+    expect(app).not.toBeNull();
+    expect(typeof app?.scrapeUrl).toBe('function');
   });
 });

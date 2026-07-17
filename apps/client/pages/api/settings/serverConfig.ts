@@ -101,7 +101,7 @@ const handler = baseApi({ auth: true }).get(
  * caches that response for ~5 min (see `useConfig`), so it touches the DB only on
  * a fresh page-load, not on every render.
  */
-async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
+export async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
@@ -113,7 +113,7 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     // getEffectiveLLMApiKeys would add an env fallback the tool never sees.
     const imageProviders = [ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini, ApiKeyType.xai];
 
-    const [webSearchProvider, openWeatherKey, wolframKey, fmpKey, firecrawlSetting, llmKeys, imageKeys] =
+    const [webSearchProvider, openWeatherKey, wolframKey, fmpKey, firecrawlConfig, llmKeys, imageKeys] =
       await Promise.all([
         // web_search resolves to SerpAPI or a local SearXNG instance; mirror the tool's own resolver
         // so the picker never disables a working provider (and vice versa).
@@ -121,8 +121,8 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
         apiKeyService.getOpenWeatherKey(dbAdapters),
         apiKeyService.getWolframAlphaKey(dbAdapters),
         apiKeyService.getFmpApiKey(dbAdapters),
-        // Deep Research uses Firecrawl (not Serper) - mirror the tool's own key read.
-        adminSettingsRepository.findBySettingName('FirecrawlApiKey'),
+        // Deep Research uses Firecrawl (key OR self-hosted URL) - mirror the tool's own resolver.
+        apiKeyService.getFirecrawlConfig(dbAdapters),
         // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
         // so matching its self-host env fallback here is correct.
         userId ? apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
@@ -136,7 +136,7 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     // a tool as available when it would actually fail.
     const usable = (key: string | null | undefined) => !!key && key !== 'expired';
 
-    const hasFirecrawl = !!firecrawlSetting?.settingValue;
+    const hasFirecrawl = !!(firecrawlConfig.apiKey || firecrawlConfig.apiUrl);
     const hasImageKey = imageKeys.some(usable);
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
     // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
@@ -149,8 +149,9 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     return {
       // web_search is available when any provider (SerpAPI or local SearXNG) resolves.
       web_search: !!webSearchProvider,
-      // Deep Research uses the Firecrawl web-scraping service, not Serper.
-      deep_research: hasFirecrawl,
+      // Deep Research works with Firecrawl (key or self-hosted URL) OR a web-search provider
+      // (SerpAPI/SearXNG) - the latter drives search with plain-fetch extraction.
+      deep_research: hasFirecrawl || !!webSearchProvider,
       weather_info: !!openWeatherKey,
       wolfram_alpha: !!wolframKey,
       fmp_financial_data: !!fmpKey,

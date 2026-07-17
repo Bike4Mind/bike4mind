@@ -1,14 +1,15 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
-import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
+import { GetEffectiveApiKeyAdapters, getFirecrawlConfig } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
-import { FirecrawlApp } from './firecrawlApp';
+import { createFirecrawlApp } from './firecrawlApp';
+import { plainFetchScrape } from './plainFetch';
 import { unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/client researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
-export { FirecrawlApp, resolveFirecrawlApp } from './firecrawlApp';
+export { FirecrawlApp, createFirecrawlApp, resolveFirecrawlApp } from './firecrawlApp';
 
 interface WebFetchParams {
   url: string;
@@ -168,19 +169,23 @@ export async function firecrawlFetch(
     throw new Error(`Invalid URL format: ${url}. URL must start with http:// or https://`);
   }
 
-  const apiKeySetting = await adapters.db.adminSettings.findBySettingName('FirecrawlApiKey');
-  if (!apiKeySetting?.settingValue) {
-    Logger.globalInstance.error('❌ WebFetch Tool: Firecrawl API key not configured');
-    throw new Error('Firecrawl API key not configured');
-  }
-
-  const app = new FirecrawlApp({ apiKey: apiKeySetting.settingValue });
-
   // Use longer timeout for PDF URLs - large PDFs need more server-side processing time.
   // Callers with shorter Lambda lifetimes can cap via maxTimeoutMs.
   const isPdf = isPdfUrl(url);
   const desiredTimeout = isPdf ? PDF_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
   const timeoutMs = options?.maxTimeoutMs ? Math.min(desiredTimeout, options.maxTimeoutMs) : desiredTimeout;
+
+  const app = createFirecrawlApp(await getFirecrawlConfig(adapters));
+
+  // No Firecrawl configured (self-host): fall back to a direct fetch + HTML->markdown. The same
+  // windowing/telemetry as the Firecrawl path is applied below so WebFetchResult semantics are
+  // identical; only the extraction source differs (no headless browser / PDF parsing - see
+  // plainFetchScrape).
+  if (!app) {
+    const startedAt = Date.now();
+    const { markdown, title } = await plainFetchScrape(url, { timeoutMs });
+    return buildWebFetchResult(markdown, title, url, options?.offset, Date.now() - startedAt);
+  }
 
   Logger.globalInstance.log(
     `📥 WebFetch Tool: Scraping URL with Firecrawl${isPdf ? ' (PDF mode, extended timeout)' : ''}...`
@@ -227,26 +232,39 @@ export async function firecrawlFetch(
     throw new Error('No content could be extracted from the URL');
   }
 
-  // Return a single [offset, offset + cap) window of the extracted content. Firecrawl returns the
-  // whole document and has no native paging, so continuation is client-side: the model pages via
-  // the offset it reads from the truncation marker. Capturing originalChars lets callers surface
-  // that more remains instead of silently dropping the tail (issue #452, continuation in #497).
-  // The offsets are only valid against a STABLE page - each call re-scrapes, so if the source
-  // changes between calls the windows may not line up. Not worth tracking for these sizes.
-  //
+  return buildWebFetchResult(result.markdown, result.metadata?.title, url, options?.offset, durationMs);
+}
+
+/**
+ * Window the full extracted markdown into one [offset, offset + cap) chunk and attach size/
+ * truncation metrics. Shared by the Firecrawl and plain-fetch paths so their WebFetchResult
+ * semantics (paging, telemetry, llms.txt hint) are identical - only the extraction source differs.
+ *
+ * Firecrawl (and plain fetch) return the whole document with no native paging, so continuation is
+ * client-side: the model pages via the offset it reads from the truncation marker. Capturing
+ * originalChars lets callers surface that more remains instead of silently dropping the tail (issue
+ * #452, continuation in #497). The offsets are only valid against a STABLE page - each call
+ * re-fetches, so if the source changes between calls the windows may not line up.
+ */
+async function buildWebFetchResult(
+  fullMarkdown: string,
+  title: string | undefined,
+  url: string,
+  rawOffset: number | undefined,
+  durationMs: number
+): Promise<WebFetchResult> {
   // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
   // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
-  const rawOffset = options?.offset;
   const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
-  const originalChars = result.markdown.length;
+  const originalChars = fullMarkdown.length;
   // Avoid splitting a surrogate pair at the window's end - a lone high surrogate is rejected by
   // some LLM APIs. Shrink the window by one so the split code unit starts the next chunk instead.
   let end = offset + WEB_FETCH_CONTENT_CAP;
   if (end < originalChars) {
-    const lastCode = result.markdown.charCodeAt(end - 1);
+    const lastCode = fullMarkdown.charCodeAt(end - 1);
     if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
   }
-  const markdown = result.markdown.slice(offset, end);
+  const markdown = fullMarkdown.slice(offset, end);
   const extractedChars = markdown.length;
   const truncated = offset + extractedChars < originalChars;
   Logger.globalInstance.log(
@@ -261,7 +279,7 @@ export async function firecrawlFetch(
 
   return {
     markdown,
-    title: result.metadata?.title,
+    title,
     extractedChars,
     originalChars,
     offset,
