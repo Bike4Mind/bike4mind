@@ -167,10 +167,26 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           throw new Error('Module "' + module + '" is not available');
         };
 
+        // Strip TS type-only import syntax before rewriting to require(): whole \`import type ...\`
+        // statements and inline \`{ type X, y }\` specifiers carry no runtime binding, and this
+        // rewrite runs BEFORE Babel's typescript preset. A binding named \`type\` (\`type as T\`) is
+        // kept. Mirrors stripTypeOnlyImports in the publish transpiler (transpileReactArtifact.ts).
+        var withoutTypeImports = code
+          .replace(/import\\s+type\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?/g, '')
+          .replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"][^'"]+['"]\\s*;?/g, function (stmt, clause) {
+            var brace = clause.match(/\\{([\\s\\S]*?)\\}/);
+            if (!brace) return stmt;
+            var kept = brace[1].split(',').map(function (s) { return s.trim(); })
+              .filter(Boolean).filter(function (s) { return !/^type\\s+(?!as\\b)\\w/.test(s); });
+            var beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\\s*$/, '').trim();
+            if (!kept.length && !beforeBrace) return '';
+            return stmt.replace(/\\{[\\s\\S]*?\\}/, '{ ' + kept.join(', ') + ' }');
+          });
+
         // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
         // const-destructure is a syntax error). Kept in sync with the publish transpiler.
         var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
-        var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
+        var transformedCode = withoutTypeImports.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
           // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
@@ -198,9 +214,14 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           // throws "Cannot use import statement outside a module" and nothing renders. The
           // classic runtime emits React.createElement, which resolves against the in-scope
           // React global. (#9506 follow-up — surfaced once #9539 fixed the script truncation.)
+          // The \`typescript\` preset strips TS syntax (types/generics/interfaces the assistant
+          // emits by default) before the JSX transform (presets run last-to-first). TSX is detected
+          // via the \`.tsx\` filename, NOT preset-typescript allExtensions/isTSX (those conflict with
+          // preset-react JSX detection and break plain JS). Keep in sync with
+          // transpileReactArtifact.ts so the published bundle matches this preview.
           processedCode = Babel.transform(transformedCode, {
-            presets: [['react', { runtime: 'classic' }]],
-            filename: 'component.jsx',
+            presets: [['react', { runtime: 'classic' }], 'typescript'],
+            filename: 'component.tsx',
           }).code;
         } catch (e) {
           processedCode = transformedCode;
