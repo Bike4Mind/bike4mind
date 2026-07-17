@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { MEMENTO_MIN_SIMILARITY } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import {
   getFirstIterationMementosPreamble,
@@ -68,10 +67,8 @@ describe('getFirstIterationMementosPreamble', () => {
     const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), logger);
 
     expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
-    // Verify the call passes userId, query, and the topK / minSimilarity that match MementoFeature so
-    // agent-mode and chat-mode pull the same set. minSimilarity is asserted against the shared
-    // constant, NOT a literal: it is a raw cosine calibrated for MEMENTO_EMBEDDING_MODEL, so a literal
-    // here would just re-pin whichever number was right for the model we used to run.
+    // The V1 path matches MementoFeature's chat-path params (topK 10, minSimilarity 0.75) so agent-mode
+    // and chat-mode pull the same set. This is the flag-OFF path, held byte-for-byte to main.
     const [userId, prompt, options] = getRelevantMementosMock.mock.calls[0] as unknown as [
       string,
       string,
@@ -80,15 +77,14 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(userId).toBe('user-1');
     expect(prompt).toBe('what hobbies do I have');
     expect(options.topK).toBe(10);
-    expect(options.minSimilarity).toBe(MEMENTO_MIN_SIMILARITY);
+    expect(options.minSimilarity).toBe(0.75);
 
-    // The facts are present, framed as the assistant's own standing knowledge - NOT as a dossier with
-    // relevance scores, which is what made the model recite its memory. See buildMemoryContext.
+    // V1 keeps its legacy KNOWN-FACTS preamble with per-memento relevance scores. (The friend-who-
+    // remembers framing is the V2 path, asserted separately below.)
     expect(preamble).toContain('User enjoys playing chess on Saturdays');
     expect(preamble).toContain('User prefers TypeScript over JavaScript');
-    expect(preamble).toContain('the way a friend who remembers would');
-    expect(preamble).not.toContain('% relevant');
-    expect(preamble).not.toContain('KNOWN FACTS ABOUT THE USER');
+    expect(preamble).toContain('% relevant');
+    expect(preamble).toContain('KNOWN FACTS ABOUT THE USER');
     expect(mementoIds).toEqual(['m1', 'm2']);
     expect(logger.info).toHaveBeenCalledWith('[Mementos] Injected mementos into first-iteration context', {
       executionId: 'exec-1',

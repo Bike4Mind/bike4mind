@@ -14,11 +14,20 @@ import { buildMementoExtractionPrompt } from './MementoEvaluationService';
  * reading a transcript back under a heading that says KNOWN FACTS ABOUT THE USER.
  */
 
-const prompt = buildMementoExtractionPrompt('I live in Austin');
+// The fact-style guidance is gated behind `factStyle` (V2 only); with V2 off the prompt is main's.
+const prompt = buildMementoExtractionPrompt('I live in Austin', { factStyle: true });
 
 describe('memento extraction prompt', () => {
   it('carries the user prompt it was asked to evaluate', () => {
     expect(prompt).toContain('I live in Austin');
+  });
+
+  it('omits the fact-style guidance in the default (V1 flag-off) prompt', () => {
+    // V1 (flag-off) must get main's prompt byte-for-byte; the fact-style block is V2-only.
+    const v1Prompt = buildMementoExtractionPrompt('I live in Austin');
+    expect(v1Prompt).not.toMatch(/HOW TO WRITE THE SUMMARY/);
+    expect(v1Prompt).not.toMatch(/do not shred one memento/i);
+    expect(v1Prompt).toContain('Brief one-sentence summary of this specific piece of information');
   });
 
   it('forbids narrating the conversation instead of stating the fact', () => {

@@ -5,10 +5,7 @@ import {
   IMementoRepository,
   MementoTier,
   SupportedEmbeddingModel,
-  MEMENTO_EMBEDDING_MODEL,
-  MEMENTO_MIN_SIMILARITY,
-  mementoEmbeddingIsCurrent,
-  toMementoVector,
+  isSupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel, getSettingsByNames } from '@bike4mind/utils';
 import { Logger } from '@bike4mind/observability';
@@ -91,7 +88,7 @@ export interface GetRelevantMementosAdapters {
  * const mementos = await getRelevantMementos(
  *   'user123',
  *   'How do I use React hooks?',
- *   { topK: 5 },
+ *   { topK: 5, minSimilarity: 0.7 },
  *   { db: { mementos, apiKeys, adminSettings } }
  * );
  *
@@ -107,7 +104,7 @@ export async function getRelevantMementos(
 ): Promise<RelevantMemento[]> {
   const {
     topK = 5,
-    minSimilarity = MEMENTO_MIN_SIMILARITY,
+    minSimilarity = 0.7,
     tier = MementoTier.HOT,
     embeddingModel: providedEmbeddingModel,
     apiKeyTable: providedApiKeyTable,
@@ -133,10 +130,15 @@ export async function getRelevantMementos(
       { logger }
     ));
 
-  // STEP 2: Get embedding model. Mementos pin their own (MEMENTO_EMBEDDING_MODEL) rather than
-  // following the `defaultEmbeddingModel` setting that governs the FAB file corpus - the query MUST
-  // land in the same vector space the mementos were written in, and the two corpora migrate apart.
-  const embeddingModel = providedEmbeddingModel ?? MEMENTO_EMBEDDING_MODEL;
+  // STEP 2: Get embedding model (if not provided)
+  let embeddingModel = providedEmbeddingModel;
+  if (!embeddingModel) {
+    const defaultModel = await adapters.db.adminSettings.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultModel || !isSupportedEmbeddingModel(defaultModel)) {
+      throw new Error('Default embedding model not configured. Please configure it in admin settings.');
+    }
+    embeddingModel = defaultModel as SupportedEmbeddingModel;
+  }
 
   logger?.debug?.('Using embedding model for memento retrieval:', embeddingModel);
 
@@ -162,12 +164,11 @@ export async function getRelevantMementos(
   // STEP 4: Generate embedding for user prompt
   logger?.debug?.('Generating embedding for prompt:', prompt.substring(0, 100));
   try {
-    // Same vector space as the stored mementos - see toMementoVector.
-    const promptEmbedding = toMementoVector(await embeddingService.generateEmbedding(prompt));
+    const promptEmbedding = await embeddingService.generateEmbedding(prompt);
     // STEP 5: Fetch mementos from database
     const mementos = await adapters.db.mementos.findByUserId(userId, {
       tier: tier === 'all' ? undefined : tier,
-      select: 'summary embedding embeddingModel weight tags fullContent lastAccessedAt',
+      select: 'summary embedding weight tags fullContent lastAccessedAt',
     });
 
     logger?.debug?.(`Found ${mementos.length} mementos to search through (tier: ${tier})`);
@@ -178,18 +179,9 @@ export async function getRelevantMementos(
     }
 
     // STEP 6: Compute similarity scores
-    let staleSpace = 0;
     const mementosWithScores: RelevantMemento[] = mementos.reduce<RelevantMemento[]>((acc, memento) => {
       if (!memento.embedding || memento.embedding.length === 0) {
         logger?.warn?.(`Memento ${memento.id} missing embedding, skipping`);
-        return acc;
-      }
-
-      // A vector from another model's space is not comparable to this query - the cosine would be
-      // noise. Skip rather than score: an unrelated number here silently either buries real memories
-      // or promotes junk, and both look like the system working.
-      if (!mementoEmbeddingIsCurrent(memento)) {
-        staleSpace += 1;
         return acc;
       }
 
@@ -205,14 +197,6 @@ export async function getRelevantMementos(
 
       return acc;
     }, []);
-
-    if (staleSpace > 0) {
-      // Loud, because the symptom is invisible: memory just quietly knows less. Cleared by the
-      // memento re-embed backfill.
-      logger?.warn?.(
-        `${staleSpace} of ${mementos.length} mementos were embedded with a different model than ${embeddingModel} and were skipped; run the memento re-embed backfill`
-      );
-    }
 
     // STEP 7: Sort by similarity (highest first) and limit to topK
     const sortedMementos = mementosWithScores.sort((a, b) => b.similarity - a.similarity).slice(0, topK);

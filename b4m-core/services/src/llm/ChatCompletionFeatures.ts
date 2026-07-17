@@ -46,7 +46,6 @@ import {
   SupportedEmbeddingModel,
   ImageModerationIncident,
   isExperimentalFeatureEnabled,
-  MEMENTO_MIN_SIMILARITY,
   buildMemoryContext,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
@@ -450,7 +449,7 @@ export class MementoFeature implements ChatCompletionFeature {
       message,
       {
         topK: 10,
-        minSimilarity: MEMENTO_MIN_SIMILARITY,
+        minSimilarity: 0.75,
         embeddingModel: embeddingFactory.getDefaultEmbeddingModel(),
         logger: this.logger,
       },
@@ -477,12 +476,14 @@ export class MementoFeature implements ChatCompletionFeature {
     // Store memento IDs for later tracking in onComplete
     this.usedMementoIds = relevantMementos.map(({ memento }) => memento.id);
 
-    // ONE framed block through the shared builder - same framing as V2 and agent mode. The old format
-    // put each memento in its own system message tagged with a "% relevant" score, which is exactly the
-    // kind of retrieval-metadata that invites the model to talk about its memory instead of using it.
-    const context = buildMemoryContext(relevantMementos.map(({ memento }) => memento.summary));
-    this.logger.log(`• Added ${relevantMementos.length} relevant memories to context\n`);
-    return context ? [{ role: 'system' as const, content: context }] : [];
+    const contextMessages: IMessage[] = relevantMementos.map(({ memento, similarity }) => ({
+      role: 'system',
+      content: `[Memory - ${(similarity * 100).toFixed(0)}% relevant] ${memento.summary}`,
+    }));
+
+    this.logger.log(`• Added ${contextMessages.length} relevant memories to context\n`);
+
+    return contextMessages;
   }
 
   async onComplete({ quest, model }: { quest: IChatHistoryItemDocument; model: string }): Promise<void> {

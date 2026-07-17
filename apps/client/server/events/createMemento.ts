@@ -5,18 +5,19 @@ import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
 import {
   ChatModels,
-  MEMENTO_DEDUP_SIMILARITY,
-  MEMENTO_EMBEDDING_ID,
+  isSupportedEmbeddingModel,
   MEMENTO_EMBEDDING_MODEL,
-  mementoEmbeddingIsCurrent,
   toMementoVector,
   MementoTier,
   MementoType,
+  SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
 
 const { findMostSimilarMemento } = mementoService;
+
+type EmbeddingService = ReturnType<EmbeddingFactory['createEmbeddingService']>;
 
 export const handler = withEventContext(async (event, logger) => {
   const { userId, prompt, model, sessionId, questId, ...flags } = LLMEvents.CompletionCompleted.schema.parse(
@@ -59,13 +60,15 @@ export const handler = withEventContext(async (event, logger) => {
     { logger }
   );
 
-  // STEP 1: Evaluate prompt first to understand the personal information
+  // STEP 1: Evaluate the prompt into distinct facts. The fact-style extraction prompt is a V2 change:
+  // with V2 off the extraction is main's prompt, so a flag-off V1 user's mementos read exactly as before.
   const mementoEvaluator = new MementoEvaluationService(logger);
   const evaluations = await mementoEvaluator.evaluate({
     apiKeyTable,
     model: model as ChatModels,
     prompt,
     endUserId: userId,
+    factStyle: writeV2,
   });
 
   if (!evaluations || evaluations.length === 0) {
@@ -92,60 +95,67 @@ export const handler = withEventContext(async (event, logger) => {
     }
   };
 
-  // STEP 2: Set up the embedding service. Mementos pin their OWN model rather than following the
-  // `defaultEmbeddingModel` admin setting (which governs the FAB file corpus) - the two corpora
-  // migrate on their own schedules. See MEMENTO_EMBEDDING_MODEL.
-  const requiredProvider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
-
-  // Only include the API key the chosen provider actually needs
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-
-  // A MISSING embedding key is a config gap, not a reason to lose the fact. Recall has a lexical
-  // (Jaccard) fallback for vector-less beliefs, and the re-embed backfill fills the vector in later, so
-  // we degrade to a no-vector write (loud warning) rather than abort - which would drop BOTH the V1 and
-  // V2 write for every evaluation in this turn. A runtime embedding ERROR still throws below (transient,
-  // should surface and retry). `embeddingService === null` means "write facts without a vector".
-  let embeddingKeyMissing = false;
-  if (requiredProvider === 'openai') {
-    if (!apiKeyTable?.openai) embeddingKeyMissing = true;
-    else embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (requiredProvider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) embeddingKeyMissing = true;
-    else embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+  // STEP 2a: V2 embedding service. The ledger is its OWN corpus, pinned to MEMENTO_EMBEDDING_MODEL and
+  // independent of the admin `defaultEmbeddingModel` that governs V1/FAB. A missing key degrades to a
+  // vector-less ledger write (the fact stays lexically recallable and the re-embed backfill vectorizes
+  // it later) rather than dropping the fact.
+  let v2EmbeddingService: EmbeddingService | null = null;
+  if (writeV2) {
+    const v2Provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
+    const v2Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+    let v2KeyMissing = false;
+    if (v2Provider === 'openai') {
+      if (!apiKeyTable?.openai) v2KeyMissing = true;
+      else v2Config.openaiApiKey = apiKeyTable.openai;
+    } else if (v2Provider === 'voyageai') {
+      if (!apiKeyTable?.voyageai) v2KeyMissing = true;
+      else v2Config.voyageApiKey = apiKeyTable.voyageai;
+    }
+    if (v2KeyMissing) {
+      logger.warn(
+        `No ${v2Provider} API key for the V2 ledger embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`
+      );
+    } else {
+      v2EmbeddingService = new EmbeddingFactory(v2Config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+    }
   }
-  // Bedrock uses AWS credentials, no API key needed
 
-  if (embeddingKeyMissing) {
-    logger.warn(
-      `No ${requiredProvider} API key for memento embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`
+  // STEP 2b: V1 embedding service. Held to main's behavior exactly - the admin `defaultEmbeddingModel`,
+  // so the V1 corpus and the V1 query (getRelevantMementos) share a vector space - and a hard failure on
+  // a missing key or unconfigured model, because a V1 memento without a comparable vector is unrecallable.
+  let v1EmbeddingService: EmbeddingService | null = null;
+  if (writeV1) {
+    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+      throw new Error('Default embedding model not configured. Please configure it in admin settings.');
+    }
+    const v1Provider = getProviderFromModel(defaultEmbeddingModel);
+    const v1Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+    if (v1Provider === 'openai') {
+      if (!apiKeyTable?.openai) {
+        throw new Error('OpenAI API key is required for embedding generation but not found. Please add your API key.');
+      }
+      v1Config.openaiApiKey = apiKeyTable.openai;
+    } else if (v1Provider === 'voyageai') {
+      if (!apiKeyTable?.voyageai) {
+        throw new Error('VoyageAI API key is required for embedding generation but not found. Please add your API key.');
+      }
+      v1Config.voyageApiKey = apiKeyTable.voyageai;
+    }
+    // Bedrock uses AWS credentials, no API key needed
+    v1EmbeddingService = new EmbeddingFactory(v1Config).createEmbeddingService(
+      defaultEmbeddingModel as SupportedEmbeddingModel
     );
   }
 
-  const embeddingService = embeddingKeyMissing
-    ? null
-    : new EmbeddingFactory(embeddingConfig).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
-
-  // STEP 3: Get existing HOT mementos once (shared across all evaluations). V1 ONLY - these exist to
-  // de-dup against the V1 collection, and a V2-only user does not have one. V2 de-dups against its own
-  // ledger inside writeFactToLedger.
-  const hotMementos = writeV1
+  // STEP 3: Existing HOT mementos for V1 de-dup (V1 only - a V2-only user has none; V2 de-dups against
+  // its own ledger inside writeFactToLedger).
+  const SIMILARITY_THRESHOLD = 0.88;
+  const existingMementos = writeV1
     ? await Memento.find({ userId, tier: MementoTier.HOT }).select(
-        'summary embedding embeddingModel weight lastAccessedAt fullContent tags'
+        'summary embedding weight lastAccessedAt fullContent tags'
       )
     : [];
-
-  // De-dup compares the new summary's vector against these by cosine, so a memento embedded in a
-  // DIFFERENT model's space cannot take part: the similarity would be noise, and noise below the
-  // threshold reads exactly like "not a duplicate" - so the same fact gets stored twice, forever.
-  // Excluding them means a stale memento may be duplicated once; including them would corrupt the
-  // decision silently. The backfill re-embeds them and the exclusion empties out.
-  const existingMementos = hotMementos.filter(mementoEmbeddingIsCurrent);
-  const staleCount = hotMementos.length - existingMementos.length;
-  if (staleCount > 0) {
-    logger.warn(
-      `${staleCount} of ${hotMementos.length} HOT mementos carry a vector from another embedding model and are excluded from de-dup; run the memento re-embed backfill`
-    );
-  }
 
   logger.debug(`Retrieved ${existingMementos.length} existing HOT mementos for similarity checking`);
 
@@ -156,32 +166,31 @@ export const handler = withEventContext(async (event, logger) => {
   for (const evaluation of evaluations) {
     console.debug('Processing evaluation', { importance: evaluation.importance });
 
-    // Embed the summary, not the raw prompt - the summary is the actual personal info
-    // Truncate into the memento vector space. Every memento path must do this to the SAME width, or
-    // the stored fact and the query scoring it land in different spaces and cosine returns noise.
-    // `undefined` when no embedding key is configured (see the degrade note above).
-    const summaryEmbedding = embeddingService
-      ? toMementoVector(await embeddingService.generateEmbedding(evaluation.summary))
-      : undefined;
-    if (summaryEmbedding) logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
-
     // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
-    // against its own ledger. It does not wait on, or read, anything V1 does below.
-    await writeToLedger(evaluation.summary, summaryEmbedding);
+    // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
+    if (writeV2) {
+      const v2Embedding = v2EmbeddingService
+        ? toMementoVector(await v2EmbeddingService.generateEmbedding(evaluation.summary))
+        : undefined;
+      await writeToLedger(evaluation.summary, v2Embedding);
+    }
 
     if (!writeV1) {
       createdCount++;
       continue;
     }
 
-    // Cosine de-dup needs a vector on BOTH sides. With no embedding this turn, skip straight to a
-    // fresh (vector-less) write - a possible duplicate is the accepted cost of not losing the fact.
-    const { memento: mostSimilarMemento, similarity: highestSimilarity } = summaryEmbedding
-      ? findMostSimilarMemento(summaryEmbedding, existingMementos)
-      : { memento: undefined, similarity: 0 };
+    // V1 memento write - main's behavior: admin-default embedding, 0.88 cosine de-dup, no model stamp.
+    const summaryEmbedding = await v1EmbeddingService!.generateEmbedding(evaluation.summary);
+    logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
+
+    const { memento: mostSimilarMemento, similarity: highestSimilarity } = findMostSimilarMemento(
+      summaryEmbedding,
+      existingMementos
+    );
 
     // STEP 5: Handle similar personal information - update existing memento
-    if (highestSimilarity >= MEMENTO_DEDUP_SIMILARITY && mostSimilarMemento) {
+    if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
       console.info('Similar personal information found, updating existing memento', {
         existingMementoId: mostSimilarMemento.id,
         similarity: highestSimilarity.toFixed(3),
@@ -199,7 +208,6 @@ export const handler = withEventContext(async (event, logger) => {
             summary: evaluation.summary,
             fullContent: updatedFullContent, // append new prompt to history
             embedding: summaryEmbedding,
-            embeddingModel: MEMENTO_EMBEDDING_ID,
             weight: newWeight,
             lastAccessedAt: new Date(),
             tags: mergedTags,
@@ -231,17 +239,15 @@ export const handler = withEventContext(async (event, logger) => {
       summary: evaluation.summary,
       fullContent: prompt,
       tags: evaluation.tags || [],
-      // Stamp the model ONLY alongside a real vector - an un-stamped memento is treated as untrusted
-      // and gets picked up by the re-embed backfill, which is exactly what a vector-less write wants.
-      ...(summaryEmbedding ? { embedding: summaryEmbedding, embeddingModel: MEMENTO_EMBEDDING_ID } : {}),
+      embedding: summaryEmbedding,
       lastAccessedAt: new Date(),
     });
 
-    logger.info('Successfully created memento', {
+    logger.info('Successfully created memento with embedding', {
       mementoId: memento.id,
       importance: evaluation.importance,
       weight: memento.weight,
-      embeddingLength: summaryEmbedding?.length ?? 0,
+      embeddingLength: summaryEmbedding.length,
     });
 
     createdCount++;

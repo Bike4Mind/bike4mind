@@ -16,14 +16,46 @@ const MementoEvalResponseSchema = z.object({
 });
 
 /**
- * The extraction prompt. Exported and pure because it is the single highest-leverage piece of text in
- * the memory system, and no retrieval metric can see it going wrong: a memento written as narration
- * retrieves EXACTLY as well as one written as a fact (filler is common-mode in the embedding and cancels
- * in the cosine). What it costs is what the user experiences - narration-style memories lost 13-1 to
- * fact-style ones under a blind judge, because the assistant ends up reading a transcript back under a
- * heading that says KNOWN FACTS ABOUT THE USER.
+ * The fact-style extraction guidance - the single highest-leverage piece of text in the V2 memory
+ * system. No retrieval metric can see it going wrong: a memento written as narration retrieves EXACTLY
+ * as well as one written as a fact (filler is common-mode in the embedding and cancels in the cosine).
+ * What it costs is what the user experiences - narration-style memories lost 13-1 to fact-style ones
+ * under a blind judge, because the assistant ends up reading a transcript back under a heading that
+ * says KNOWN FACTS ABOUT THE USER.
+ *
+ * Gated behind `factStyle` (V2 only): with V2 off the extraction prompt is held byte-for-byte to main,
+ * so a flag-off V1 user's mementos are written exactly as they were before this work.
  */
-export const buildMementoExtractionPrompt = (prompt: string): string => `
+const FACT_STYLE_GUIDANCE = `
+      HOW TO WRITE THE SUMMARY - this is the part that decides whether the memory is any good:
+
+      Write the FACT. Do not narrate the conversation. A memory is a durable statement about the PERSON,
+      and it has to still read as one a year later with no conversation around it. It gets injected into
+      a future prompt under the heading "KNOWN FACTS ABOUT THE USER", so anything that describes an
+      exchange rather than a person makes the assistant sound like it is reading back a transcript.
+
+      NEVER write:
+        - "The user said/shared/asked/mentioned that ..."   <- narration
+        - "The assistant replied/correctly informed ..."     <- the assistant is not a fact about the user
+        - "This indicates that ..." / "suggesting that ..."  <- hedging. State it or drop it.
+      ALWAYS write the bare fact:
+        BAD : "The user shared his middle name, Paul, but clarified he does not generally use it."
+        GOOD: "Middle name is Paul, though he rarely uses it."
+        BAD : "The user conducts discovery calls, suggesting a role in sales."
+        GOOD: "Works in sales."
+        BAD : "The user asked the assistant for their name, and the AI declined."
+        GOOD: (nothing - this is a record of an exchange, not a fact about the person. isPersonal: false.)
+
+      Keep every specific - names, numbers, places, products, models. Those ARE the value.
+      Keep a fact whole; do not shred one memento into many fragments. Split only genuinely unrelated
+      facts (a job and an allergy are two mementos; a city and the state it is in are one).
+`;
+
+/**
+ * The memento extraction prompt. `factStyle` opts into the V2 fact-style guidance above; omitted/false
+ * reproduces main's prompt exactly (the V1 flag-off path).
+ */
+export const buildMementoExtractionPrompt = (prompt: string, options: { factStyle?: boolean } = {}): string => `
       You are a memory evaluator for a personal AI assistant. Your task is to identify ALL distinct pieces of personally significant information in a user interaction, similar to ChatGPT's memory feature.
 
       IMPORTANT: A single prompt may contain MULTIPLE distinct pieces of personal information. Identify and separate each one.
@@ -49,30 +81,7 @@ export const buildMementoExtractionPrompt = (prompt: string): string => `
       - 5-6: Moderately important (hobbies, casual preferences, interests)
       - 3-4: Somewhat important (minor preferences, casual facts)
       - 1-2: Low importance (trivial preferences)
-
-      HOW TO WRITE THE SUMMARY - this is the part that decides whether the memory is any good:
-
-      Write the FACT. Do not narrate the conversation. A memory is a durable statement about the PERSON,
-      and it has to still read as one a year later with no conversation around it. It gets injected into
-      a future prompt under the heading "KNOWN FACTS ABOUT THE USER", so anything that describes an
-      exchange rather than a person makes the assistant sound like it is reading back a transcript.
-
-      NEVER write:
-        - "The user said/shared/asked/mentioned that ..."   <- narration
-        - "The assistant replied/correctly informed ..."     <- the assistant is not a fact about the user
-        - "This indicates that ..." / "suggesting that ..."  <- hedging. State it or drop it.
-      ALWAYS write the bare fact:
-        BAD : "The user shared his middle name, Paul, but clarified he does not generally use it."
-        GOOD: "Middle name is Paul, though he rarely uses it."
-        BAD : "The user conducts discovery calls, suggesting a role in sales."
-        GOOD: "Works in sales."
-        BAD : "The user asked the assistant for their name, and the AI declined."
-        GOOD: (nothing - this is a record of an exchange, not a fact about the person. isPersonal: false.)
-
-      Keep every specific - names, numbers, places, products, models. Those ARE the value.
-      Keep a fact whole; do not shred one memento into many fragments. Split only genuinely unrelated
-      facts (a job and an allergy are two mementos; a city and the state it is in are one).
-
+${options.factStyle ? FACT_STYLE_GUIDANCE : ''}
       LIMIT: Return a maximum of 10 distinct mementos per evaluation to keep responses focused.
 
       User Prompt:
@@ -84,7 +93,11 @@ export const buildMementoExtractionPrompt = (prompt: string): string => `
         "mementos": [
           {
             "importance": 1-10,
-            "summary": "The fact itself, stated plainly - NOT a description of the conversation",
+            "summary": ${
+              options.factStyle
+                ? '"The fact itself, stated plainly - NOT a description of the conversation"'
+                : '"Brief one-sentence summary of this specific piece of information"'
+            },
             "tags": ["tag1", "tag2"] (optional)
           },
           // ... more mementos for each distinct piece of information
@@ -130,12 +143,15 @@ export class MementoEvaluationService {
     model = ChatModels.GPT4_1_MINI,
     prompt,
     endUserId,
+    factStyle = false,
   }: {
     apiKeyTable: ApiKeyTable;
     model?: ChatModels;
     prompt: string;
     /** End user whose prompt is being evaluated, for provider abuse attribution. */
     endUserId?: string;
+    /** Opt into the V2 fact-style extraction prompt. Default false keeps main's prompt (V1 flag-off). */
+    factStyle?: boolean;
   }): Promise<Array<z.infer<typeof SingleMementoEvalSchema>> | null> {
     let responseContent = '';
 
@@ -151,7 +167,7 @@ export class MementoEvaluationService {
       });
       if (!llm) throw new InternalServerError(`Failed to initialize LLM for model: "${model}"`);
 
-      const llmPrompt = buildMementoExtractionPrompt(prompt);
+      const llmPrompt = buildMementoExtractionPrompt(prompt, { factStyle });
 
       this.logger.debug('Prepared LLM prompt for evaluation', { promptLength: llmPrompt.length });
 
