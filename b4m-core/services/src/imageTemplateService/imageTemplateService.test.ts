@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import type { IImageGenerationTemplateDocument, IImageTemplateCaller } from '@bike4mind/common';
 import { IMAGE_TEMPLATES_PER_USER_MAX } from '@bike4mind/common';
 import { assertAuthenticated, assertInteractive } from './access';
-import { listTemplates, getTemplate, saveTemplate, updateTemplate, deleteTemplate, applyTemplate } from './operations';
+import { listTemplates, getTemplate, saveTemplate, updateTemplate, deleteTemplate, recordUse } from './operations';
 
 const caller = (overrides: Partial<IImageTemplateCaller> = {}): IImageTemplateCaller => ({
   id: 'u1',
@@ -72,16 +72,43 @@ describe('saveTemplate', () => {
 
   it('binds ownership to the caller and defaults usageCount', async () => {
     const countOwned = vi.fn().mockResolvedValue(0);
+    const listByModel = vi.fn().mockResolvedValue([]);
     const create = vi.fn().mockImplementation(async (d: any) => ({ ...d, id: 'new' }));
-    const result = await saveTemplate(caller({ id: 'u1' }), withRepo({ countOwned, create }), input);
+    const result = await saveTemplate(caller({ id: 'u1' }), withRepo({ countOwned, listByModel, create }), input);
     expect(create).toHaveBeenCalledWith(expect.objectContaining({ userId: 'u1', usageCount: 0 }));
     expect(result.id).toBe('new');
   });
 
+  it('rejects a same-settings duplicate for the model, regardless of name', async () => {
+    const listByModel = vi
+      .fn()
+      .mockResolvedValue([
+        tpl({ id: 'existing', name: 'My Other Name', model: 'flux-pro-1.1', settings: { quality: 'hd' } }),
+      ]);
+    const create = vi.fn();
+    const countOwned = vi.fn().mockResolvedValue(1);
+    await expect(saveTemplate(caller(), withRepo({ listByModel, countOwned, create }), input)).rejects.toThrow(
+      /already have a template/i
+    );
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('allows a same-settings template bound to a DIFFERENT model', async () => {
+    // listByModel is model-scoped, so a gpt-image-1 sibling never matches a flux save.
+    const listByModel = vi.fn().mockResolvedValue([]);
+    const countOwned = vi.fn().mockResolvedValue(0);
+    const create = vi.fn().mockImplementation(async (d: any) => ({ ...d, id: 'new' }));
+    await expect(saveTemplate(caller(), withRepo({ listByModel, countOwned, create }), input)).resolves.toBeTruthy();
+    expect(listByModel).toHaveBeenCalledWith('u1', 'flux-pro-1.1');
+  });
+
   it('rejects author-time when at the per-user cap', async () => {
     const countOwned = vi.fn().mockResolvedValue(IMAGE_TEMPLATES_PER_USER_MAX);
+    const listByModel = vi.fn().mockResolvedValue([]);
     const create = vi.fn();
-    await expect(saveTemplate(caller(), withRepo({ countOwned, create }), input)).rejects.toThrow(/limit/i);
+    await expect(saveTemplate(caller(), withRepo({ countOwned, listByModel, create }), input)).rejects.toThrow(
+      /limit/i
+    );
     expect(create).not.toHaveBeenCalled();
   });
 
@@ -105,33 +132,21 @@ describe('updateTemplate / deleteTemplate - ownership', () => {
   });
 });
 
-describe('applyTemplate - exact-model + usage', () => {
-  it('increments usage and returns the fresh doc when the model matches', async () => {
-    const findOwned = vi.fn().mockResolvedValue(tpl({ model: 'flux-pro-1.1' }));
+describe('recordUse', () => {
+  it('increments usageCount for an owned template', async () => {
     const incrementUsage = vi.fn().mockResolvedValue(tpl({ usageCount: 1 }));
-    const result = await applyTemplate(caller(), withRepo({ findOwned, incrementUsage }), 't1', 'flux-pro-1.1');
+    await recordUse(caller(), withRepo({ incrementUsage }), 't1');
     expect(incrementUsage).toHaveBeenCalledWith('t1', 'u1');
-    expect(result.usageCount).toBe(1);
   });
 
-  it('rejects a cross-model apply (exact-model backstop) without incrementing', async () => {
-    const findOwned = vi.fn().mockResolvedValue(tpl({ model: 'flux-pro-1.1' }));
+  it('404s when the template is not owned/missing', async () => {
+    const incrementUsage = vi.fn().mockResolvedValue(null);
+    await expect(recordUse(caller(), withRepo({ incrementUsage }), 't1')).rejects.toThrow(/not found/i);
+  });
+
+  it('denies API-key callers', async () => {
     const incrementUsage = vi.fn();
-    await expect(applyTemplate(caller(), withRepo({ findOwned, incrementUsage }), 't1', 'gpt-image-1')).rejects.toThrow(
-      /cannot be applied/i
-    );
+    await expect(recordUse(caller({ isApiKey: true }), withRepo({ incrementUsage }), 't1')).rejects.toThrow();
     expect(incrementUsage).not.toHaveBeenCalled();
-  });
-
-  it('applies when no target model is supplied (no backstop to enforce)', async () => {
-    const findOwned = vi.fn().mockResolvedValue(tpl());
-    const incrementUsage = vi.fn().mockResolvedValue(tpl({ usageCount: 1 }));
-    await expect(applyTemplate(caller(), withRepo({ findOwned, incrementUsage }), 't1')).resolves.toBeTruthy();
-    expect(incrementUsage).toHaveBeenCalled();
-  });
-
-  it('404s when the template is not owned', async () => {
-    const findOwned = vi.fn().mockResolvedValue(null);
-    await expect(applyTemplate(caller(), withRepo({ findOwned }), 't1', 'flux-pro-1.1')).rejects.toThrow(/not found/i);
   });
 });

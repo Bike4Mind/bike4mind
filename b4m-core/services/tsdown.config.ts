@@ -3,6 +3,9 @@ import { defineConfig } from 'tsdown';
 export default defineConfig({
   entry: [
     'src/index.ts',
+    // Lean, browser-safe entry (pure cost math). Client code must import from
+    // '@bike4mind/services/imageCost', not the barrel, which is server-only.
+    'src/imageCost/index.ts',
     'src/apiKeyService/index.ts',
     'src/creditService/index.ts',
     'src/llm/StatusManager.ts',

@@ -4,8 +4,10 @@ import {
   isGPTImageModel,
   isGeminiImageModel,
   UnprocessableEntityError,
+  // From common, NOT @bike4mind/utils: the utils barrel pulls fab-pipeline
+  // (aws-sdk/dns/v8) and would break the browser build for the cost preview.
+  usdToCredits,
 } from '@bike4mind/common';
-import { usdToCredits } from '@bike4mind/utils';
 import { OpenAICostInput, OpenAIImageCostCalculator } from '../llm/imageCostCalculator/OpenAIImageCostCalculator';
 import { FluxImageCostCalculator } from '../llm/imageCostCalculator/FluxImageCostCalculator';
 import { GeminiImageCostCalculator } from '../llm/imageCostCalculator/GeminiImageCostCalculator';

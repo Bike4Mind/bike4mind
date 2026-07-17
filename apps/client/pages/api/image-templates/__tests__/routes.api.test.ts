@@ -2,13 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 import { NotFoundError, ForbiddenError, UnprocessableEntityError } from '@bike4mind/common';
 
-const { list, get, save, update, del, apply } = vi.hoisted(() => ({
+const { list, get, save, update, del, recordUse } = vi.hoisted(() => ({
   list: vi.fn(),
   get: vi.fn(),
   save: vi.fn(),
   update: vi.fn(),
   del: vi.fn(),
-  apply: vi.fn(),
+  recordUse: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method; .use() no-op; last fn per verb is the
@@ -55,13 +55,13 @@ vi.mock('@bike4mind/services', () => ({
     saveTemplate: (...a: unknown[]) => save(...a),
     updateTemplate: (...a: unknown[]) => update(...a),
     deleteTemplate: (...a: unknown[]) => del(...a),
-    applyTemplate: (...a: unknown[]) => apply(...a),
+    recordUse: (...a: unknown[]) => recordUse(...a),
   },
 }));
 
 import collectionHandler from '../index';
 import idHandler from '../[id]';
-import applyHandler from '../[id]/apply';
+import useHandler from '../[id]/use';
 
 const VALID_ID = '6a1fb3d3e310bb516192e8c8';
 const VALID_CREATE = { name: 'Cinematic', model: 'flux-pro-1.1', settings: { quality: 'hd' } };
@@ -79,7 +79,7 @@ const run = (
 };
 
 beforeEach(() => {
-  [list, get, save, update, del, apply].forEach(m => m.mockReset());
+  [list, get, save, update, del, recordUse].forEach(m => m.mockReset());
 });
 
 describe('GET/POST /api/image-templates', () => {
@@ -167,32 +167,32 @@ describe('GET/PUT/DELETE /api/image-templates/[id]', () => {
   });
 });
 
-describe('POST /api/image-templates/[id]/apply', () => {
+describe('POST /api/image-templates/[id]/use', () => {
   it('rejects an invalid id with 400', async () => {
-    const { res, promise } = run(applyHandler as Handler, 'POST', { id: 'nope' });
+    const { res, promise } = run(useHandler as Handler, 'POST', { id: 'nope' });
     await promise;
     expect(res._getStatusCode()).toBe(400);
-    expect(apply).not.toHaveBeenCalled();
+    expect(recordUse).not.toHaveBeenCalled();
   });
 
-  it('applies a template (200) and forwards the target model from the body', async () => {
-    apply.mockResolvedValue({ id: VALID_ID, usageCount: 1 });
-    const { res, promise } = run(applyHandler as Handler, 'POST', { body: { model: 'flux-pro-1.1' } });
+  it('records a use (204)', async () => {
+    recordUse.mockResolvedValue(undefined);
+    const { res, promise } = run(useHandler as Handler, 'POST', { body: {} });
     await promise;
-    expect(res._getStatusCode()).toBe(200);
-    expect(apply).toHaveBeenCalledWith(expect.anything(), expect.anything(), VALID_ID, 'flux-pro-1.1');
+    expect(res._getStatusCode()).toBe(204);
+    expect(recordUse).toHaveBeenCalledWith(expect.anything(), expect.anything(), VALID_ID);
   });
 
-  it('maps a cross-model apply (service UnprocessableEntityError) to 422', async () => {
-    apply.mockRejectedValue(new UnprocessableEntityError('cannot be applied'));
-    const { res, promise } = run(applyHandler as Handler, 'POST', { body: { model: 'gpt-image-1' } });
+  it('maps a not-found (service NotFoundError) to 404', async () => {
+    recordUse.mockRejectedValue(new NotFoundError('Template not found'));
+    const { res, promise } = run(useHandler as Handler, 'POST', { body: {} });
     await promise;
-    expect(res._getStatusCode()).toBe(422);
+    expect(res._getStatusCode()).toBe(404);
   });
 
   it('maps an API-key denial (service ForbiddenError) to 403', async () => {
-    apply.mockRejectedValue(new ForbiddenError('API keys cannot access personal image templates'));
-    const { res, promise } = run(applyHandler as Handler, 'POST', { body: {}, apiKeyInfo: { scopes: [] } });
+    recordUse.mockRejectedValue(new ForbiddenError('API keys cannot access personal image templates'));
+    const { res, promise } = run(useHandler as Handler, 'POST', { body: {}, apiKeyInfo: { scopes: [] } });
     await promise;
     expect(res._getStatusCode()).toBe(403);
   });

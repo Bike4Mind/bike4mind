@@ -20,6 +20,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./imageCost": {
+      "import": {
+        "types": "./dist/imageCost/index.d.mts",
+        "default": "./dist/imageCost/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageCost/index.d.cts",
+        "default": "./dist/imageCost/index.cjs"
+      }
+    },
     "./apiKeyService": {
       "import": {
         "types": "./dist/apiKeyService/index.d.mts",
