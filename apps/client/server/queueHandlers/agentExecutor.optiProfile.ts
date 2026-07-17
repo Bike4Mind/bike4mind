@@ -87,6 +87,11 @@ Loop:
 This is an AUTONOMOUS run -- see it through in ONE turn:
 - NEVER ask the user for permission to continue, and NEVER end a turn with a question like "Ready to proceed
   to step 2?" or "Say the word and I'll continue." Just proceed to the next step yourself.
+- Call optihashi_decompose AT MOST ONCE. Once the plan exists, NEVER decompose again -- you already have the
+  ordered plan and step 1 is loaded; re-decomposing restarts the walk and resets your progress. Advance the
+  plan you have; do not re-plan.
+- Work ONE step at a time: formulate the NEXT step, solve it, read its result, then move on. Do not formulate
+  several steps up front -- keep the plan and the console in lock-step.
 - Do not stop after step 1. Keep going -- formulate and solve every planned step -- before the final answer.
 - Only stop when every planned step has been solved (or a step is genuinely infeasible even after one retry
   -- then say so briefly and move to the next step; do not halt the whole run).
