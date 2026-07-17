@@ -317,7 +317,81 @@ services:
         echo "Done. Pulled models are now available in the app model picker."
     restart: 'no'
 
+  # Local image generation via a self-hosted Stable-Diffusion server (optional).
+  # Generate images with NO provider API keys, using the SD.Next WebUI's
+  # AUTOMATIC1111-compatible REST API (/sdapi/v1/txt2img). Opt in with the
+  # `imagegen` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile imagegen up -d
+  # Then set IMAGE_GEN_BASE_URL=http://imagegen:7860 in .env.selfhost (see the file).
+  # CPU-only by default so it runs on any host (slow: ~1-3 min/image); for NVIDIA
+  # GPU acceleration add the override file: `-f compose.imagegen-gpu.yaml`.
+  imagegen:
+    image: ${IMAGEGEN_IMAGE:-vladmandic/sdnext-cuda:latest}
+    profiles: ['imagegen']
+    # SD.Next serves the REST API by default. --use-cpu all forces CPU so the
+    # nVidia-base image still runs on a host with no GPU; the GPU override file
+    # replaces this command to drop --use-cpu all. --quick skips the per-boot
+    # reinstall check (the image ships its deps prebuilt). Checkpoints live under
+    # SD_MODELSDIR (/mnt/models/Stable-diffusion); state under SD_DATADIR.
+    command: ['python', 'launch.py', '--listen', '--use-cpu', 'all', '--api', '--quick', '--log', 'sdnext.log']
+    volumes:
+      - imagegen-models:/mnt/models
+      - imagegen-data:/mnt/data
+    # Loopback-only, like the other backing services. Override IMAGEGEN_HOST_PORT
+    # if 7860 is taken (e.g. by a host SD server).
+    ports:
+      - '127.0.0.1:${IMAGEGEN_HOST_PORT:-7860}:7860'
+    healthcheck:
+      # curl may be absent from the image, but python always is; poll the models
+      # endpoint (an empty list before any checkpoint is pulled is still healthy).
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/sdapi/v1/sd-models', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # First boot compiles/loads the backend before the API answers; be generous.
+      start_period: 300s
+
+  # One-shot: download the checkpoint(s) named in IMAGE_GEN_PULL_MODELS (space-
+  # separated URLs) into the shared models volume so they show up in the app's
+  # model picker. Safe to re-run; an already-present file is skipped. Pick your
+  # checkpoint in .env.selfhost (menu + disk/VRAM specs there).
+  imagegen-pull:
+    image: curlimages/curl:latest
+    profiles: ['imagegen']
+    # Write into the same volume SD.Next created as root.
+    user: root
+    depends_on:
+      imagegen:
+        condition: service_healthy
+    environment:
+      IMAGE_GEN_PULL_MODELS: ${IMAGE_GEN_PULL_MODELS:-https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors}
+    volumes:
+      - imagegen-models:/mnt/models
+    entrypoint:
+      - /bin/sh
+      - -c
+      - >
+        set -e;
+        mkdir -p /mnt/models/Stable-diffusion;
+        echo "Pulling: $$IMAGE_GEN_PULL_MODELS";
+        for url in $$IMAGE_GEN_PULL_MODELS; do
+          name=$$(basename "$${url%%\?*}");
+          dest="/mnt/models/Stable-diffusion/$$name";
+          if [ -f "$$dest" ]; then
+            echo "==> $$name already present, skipping";
+          else
+            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest" "$$url" || echo "WARN: failed to download $$url";
+          fi;
+        done;
+        echo "Done. Pulled checkpoints are now available in the app model picker."
+    restart: 'no'
+
 volumes:
   mongo-data:
   minio-data:
   ollama-data:
+  imagegen-models:
+  imagegen-data:

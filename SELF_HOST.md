@@ -219,6 +219,56 @@ Already run Ollama on the host (e.g. a native GPU install)? Skip the `ollama` pr
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
+## Local image generation (no API keys)
+
+Generate images on your own hardware with **no provider API keys**. The stack bundles an optional `imagegen` service (SD.Next) that exposes the AUTOMATIC1111-compatible REST API. When `IMAGE_GEN_BASE_URL` is set, its installed checkpoints appear in the image model picker automatically (as `local-image/<checkpoint>`) and work in chat like any other image model. This is the image counterpart to local models with Ollama.
+
+To enable it:
+
+1. In `.env.selfhost`, uncomment `IMAGE_GEN_BASE_URL` and pick your checkpoint in `IMAGE_GEN_PULL_MODELS`:
+
+   ```bash
+   IMAGE_GEN_BASE_URL=http://imagegen:7860
+   IMAGE_GEN_PULL_MODELS=https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors
+   ```
+
+2. Bring the stack up with the `imagegen` profile (this also downloads the checkpoint on first run):
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile imagegen up -d
+   ```
+
+Open the image model settings and pick your checkpoint. No keys, no admin settings to flip. The first checkpoint download is several GB, so the model may take a few minutes to appear in the picker (which caches models for ~60s).
+
+### Choosing a checkpoint (hardware)
+
+Pick by the hardware you have. "Min GPU VRAM" is what it takes to run comfortably on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
+
+| Checkpoint | Download | Min GPU VRAM | CPU-only RAM | License |
+|------------|---------:|-------------:|-------------:|---------|
+| SD 1.5 (default) | ~4.0 GB | ~4 GB | ~8 GB | CreativeML OpenRAIL-M |
+| SDXL base 1.0 | ~6.9 GB | ~10-12 GB | ~16 GB | CreativeML Open RAIL++-M |
+
+Set one or more (space-separated) `.safetensors` URLs from a public host in `IMAGE_GEN_PULL_MODELS`. Re-running `up` downloads any new ones and skips already-present files. Any A1111-compatible checkpoint URL works. No GPU? Start with SD 1.5.
+
+### Performance (CPU vs GPU)
+
+The bundled `imagegen` service runs **CPU-only by default** so it works on any host - but Stable Diffusion is compute-heavy, so expect roughly **1-3 minutes per image** at 512x512 / 20 steps on CPU. On a GPU with ~4 GB+ free VRAM the same image is about **5-15 seconds**. For NVIDIA GPU acceleration, install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) (see the same steps under "GPU acceleration (NVIDIA)" above), then add the GPU override file as a second `-f`:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.imagegen-gpu.yaml --env-file .env.selfhost --profile imagegen up -d
+```
+
+The GPU override drops the CPU flag so SD.Next uses CUDA; the GPU needs enough free VRAM for your checkpoint (see the table above).
+
+### Using an SD server you already run
+
+Already run an A1111 / SD.Next server on the host? Skip the `imagegen` profile entirely and point the app at it:
+
+```bash
+IMAGE_GEN_BASE_URL=http://host.docker.internal:7860
+```
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -230,6 +280,8 @@ OLLAMA_BASE_URL=http://host.docker.internal:11434
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
 - **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen2.5-coder:1.5b` or `:3b`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
+- **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The picker caches models for ~60s.
+- **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
 - **Chat replies only appear after a refresh** - realtime isn't connecting. Check the `ws` gateway is up (`docker compose -f compose.selfhost.yaml ps ws`) and healthy, that `INTERNAL_WS_SECRET` is set and identical for the `app` and `ws` services, and that `WEBSOCKET_URL`/`WEBSOCKET_MANAGEMENT_ENDPOINT` point at the gateway. In the browser console you should see `ws connected`; a reconnect loop usually means the gateway can't reach the app (`docker compose -f compose.selfhost.yaml logs ws`).
