@@ -14,7 +14,7 @@ const QuerySchema = z.object({
 
 /**
  * Admin endpoint: one organization's AI spend over the trailing window, rolled
- * up by day (burn chart), member, model, and feature.
+ * up by day (burn chart), member, model, feature, API key, and source.
  *
  * Owner-scoped to (ownerId=organizationId, ownerType=Organization), i.e. spend
  * billed to the org's credit pool - this reconciles with the org's currentCredits
@@ -30,10 +30,12 @@ const handler = baseApi().get(async (req, res) => {
   const { organizationId, days = 30 } = QuerySchema.parse(req.query);
 
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
-  // by-API-key comes from the ledger, the only source carrying apiKeyId.
-  const [summary, apiKeyUsage, orgKeys] = await Promise.all([
+  // by-API-key and by-source come from the ledger, the only source carrying
+  // apiKeyId and source.
+  const [summary, apiKeyUsage, sourceUsage, orgKeys] = await Promise.all([
     usageEventRepository.ownerUsageSummary(organizationId, CreditHolderType.Organization, days),
     creditTransactionRepository.apiKeyUsageForOwner(organizationId, CreditHolderType.Organization, days),
+    creditTransactionRepository.sourceUsageForOwner(organizationId, CreditHolderType.Organization, days),
     userApiKeyRepository.findByOrganizationId(organizationId),
   ]);
 
@@ -50,6 +52,7 @@ const handler = baseApi().get(async (req, res) => {
     days,
     byMember: summary.byMember.map(m => ({ ...m, userName: nameById.get(m.userId) })),
     byApiKey,
+    bySource: sourceUsage,
   };
 
   return res.json(response);

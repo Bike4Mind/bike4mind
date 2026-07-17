@@ -190,3 +190,100 @@ describe('CreditTransactionRepository.apiKeyUsageForOwner', () => {
     expect(windowed).toHaveLength(0);
   });
 });
+
+describe('CreditTransactionRepository.sourceUsageForOwner', () => {
+  const recent = () => new Date();
+
+  /**
+   * Pinned rather than derived from AI_USAGE_TRANSACTION_TYPES: deriving it from
+   * the constant under test would make the assertion tautological, since dropping
+   * a type would shrink both the seed and the expectation.
+   */
+  const EXPECTED_AI_USAGE_TYPES = [
+    'text_generation_usage',
+    'image_generation_usage',
+    'image_edit_usage',
+    'video_generation_usage',
+    'realtime_voice_usage',
+    'tool_usage',
+    'completion_api_usage',
+    'speech_to_text_usage',
+  ];
+
+  it('counts every AI usage type', async () => {
+    await seed(EXPECTED_AI_USAGE_TYPES.map(type => ({ type, source: 'web', credits: -10, createdAt: recent() })));
+
+    const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([{ source: 'web', requests: EXPECTED_AI_USAGE_TYPES.length, creditsSpent: 80 }]);
+  });
+
+  it('breaks ties on source so equal-spend buckets keep a stable order', async () => {
+    await seed([
+      { source: 'web', credits: -50, createdAt: recent() },
+      { source: 'cli', credits: -50, createdAt: recent() },
+      { source: 'api', credits: -50, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows.map(r => r.source)).toEqual(['api', 'cli', 'web']);
+  });
+
+  it('groups AI usage by source with spend magnitude, biggest spender first', async () => {
+    await seed([
+      { source: 'web', credits: -50, createdAt: recent() },
+      { source: 'web', credits: -30, createdAt: recent() },
+      { source: 'cli', credits: -200, createdAt: recent() },
+      { type: 'image_generation_usage', source: 'agent', credits: -10, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([
+      { source: 'cli', requests: 1, creditsSpent: 200 },
+      { source: 'web', requests: 2, creditsSpent: 80 },
+      { source: 'agent', requests: 1, creditsSpent: 10 },
+    ]);
+  });
+
+  it('buckets rows with no source as unclassified and pins them last despite outspending', async () => {
+    await seed([
+      { credits: -999, createdAt: recent() }, // predates source tracking
+      { source: 'web', credits: -5, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([
+      { source: 'web', creditsSpent: 5 },
+      { source: 'unclassified', requests: 1, creditsSpent: 999 },
+    ]);
+  });
+
+  it('counts only AI usage, so the buckets sum to the ledger spend', async () => {
+    await seed([
+      { source: 'web', credits: -40, createdAt: recent() },
+      // Non-AI rows: a top-up, a transfer out, and a dispute clawback.
+      { type: 'purchase', credits: 500, createdAt: recent() },
+      { type: 'transfer_credit', source: 'web', credits: -100, createdAt: recent() },
+      { type: 'generic_deduct', credits: -25, createdAt: recent() },
+    ]);
+
+    const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+
+    expect(rows).toMatchObject([{ source: 'web', requests: 1, creditsSpent: 40 }]);
+  });
+
+  it('scopes to the owner and the trailing window', async () => {
+    await seed([{ source: 'web', credits: -10, createdAt: recent() }]);
+    await seed([{ ownerId: 'org-2', source: 'cli', credits: -999, createdAt: recent() }]);
+
+    const scoped = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
+    expect(scoped).toMatchObject([{ source: 'web', creditsSpent: 10 }]);
+
+    await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+    const windowed = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization, 30);
+    expect(windowed).toHaveLength(0);
+  });
+});
