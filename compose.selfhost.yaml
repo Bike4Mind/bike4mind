@@ -207,6 +207,33 @@ services:
       retries: 6
       start_period: 20s
 
+  # Background worker — the self-host replacement for the hosted SST queue consumers
+  # (infra/queues.ts) and cron (infra/cron.ts), neither of which exists in plain Docker.
+  # Long-polls ElasticMQ (research engine; later chunk/vectorize + the event queue) and
+  # runs the task scheduler, calling the SAME handlers the hosted Lambdas use. Reuses the
+  # chatcompletion image; only the command differs (runs server/worker/main.ts). No ports:
+  # it dispatches nothing inbound. Logs: `docker compose -f compose.selfhost.yaml logs -f worker`.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
+    env_file:
+      - .env.selfhost
+    command:
+      ['pnpm', 'exec', 'tsx', '--import', './server/chatCompletion/selfhostSstAlias.mjs', 'server/worker/main.ts']
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+    # Lets it reach a host-native Ollama (OLLAMA_BASE_URL=http://host.docker.internal:11434),
+    # matching the app/chatcompletion containers - background embedding needs it.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    restart: unless-stopped
+
   # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
   # WebSocket. One port (3001) with two faces: a browser-facing socket server
   # (WEBSOCKET_URL=ws://localhost:3001) and an API Gateway Management API

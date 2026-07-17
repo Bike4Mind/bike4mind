@@ -103,19 +103,23 @@ export const sendToQueue = async (queueUrl: string, message: Record<string, unkn
 
 /**
  * Receive messages from an SQS queue without deleting them.
- * Uses short polling (WaitTimeSeconds: 0) for immediate response.
  * Messages become invisible for `visibilityTimeout` seconds.
+ *
+ * `waitTimeSeconds` defaults to 0 (short polling, immediate response) to preserve
+ * existing callers. Pass up to 20 for long polling - used by the self-host worker's
+ * poller loop (server/worker/selfHostWorker.ts) so it blocks instead of busy-spinning.
  */
 export const receiveFromQueue = async (
   queueUrl: string,
   maxMessages: number,
-  visibilityTimeout = 30
+  visibilityTimeout = 30,
+  waitTimeSeconds = 0
 ): Promise<Message[]> => {
   const sqs = createSqsClient();
   const command = new ReceiveMessageCommand({
     QueueUrl: queueUrl,
     MaxNumberOfMessages: Math.min(Math.max(maxMessages, 1), 10),
-    WaitTimeSeconds: 0,
+    WaitTimeSeconds: Math.min(Math.max(waitTimeSeconds, 0), 20),
     VisibilityTimeout: visibilityTimeout,
     AttributeNames: ['All'],
   });

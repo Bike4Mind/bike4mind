@@ -91,6 +91,27 @@ describe('sqs utilities', () => {
 
       expect(mockSend.mock.calls[0][0].input.VisibilityTimeout).toBe(30);
     });
+
+    it('defaults waitTimeSeconds to 0 (short polling) for existing callers', async () => {
+      mockSend.mockResolvedValueOnce({ Messages: [] });
+
+      await receiveFromQueue(TEST_QUEUE_URL, 1, 30);
+
+      expect(mockSend.mock.calls[0][0].input.WaitTimeSeconds).toBe(0);
+    });
+
+    it('long-polls when waitTimeSeconds is passed, clamped to [0, 20]', async () => {
+      mockSend.mockResolvedValue({ Messages: [] });
+
+      await receiveFromQueue(TEST_QUEUE_URL, 1, 30, 20);
+      expect(mockSend.mock.calls[0][0].input.WaitTimeSeconds).toBe(20);
+
+      await receiveFromQueue(TEST_QUEUE_URL, 1, 30, 99);
+      expect(mockSend.mock.calls[1][0].input.WaitTimeSeconds).toBe(20);
+
+      await receiveFromQueue(TEST_QUEUE_URL, 1, 30, -5);
+      expect(mockSend.mock.calls[2][0].input.WaitTimeSeconds).toBe(0);
+    });
   });
 
   describe('deleteFromQueue', () => {
