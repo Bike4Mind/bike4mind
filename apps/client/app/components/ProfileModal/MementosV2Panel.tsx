@@ -78,7 +78,12 @@ const BeliefRow = ({
           >
             Yes
           </Button>
-          <Button size="sm" variant="plain" onClick={() => setConfirming(false)}>
+          <Button
+            size="sm"
+            variant="plain"
+            onClick={() => setConfirming(false)}
+            data-testid="v2-belief-cancel-btn"
+          >
             No
           </Button>
         </Stack>
@@ -101,8 +106,24 @@ const BeliefRow = ({
 };
 
 const MementosV2Panel = () => {
-  const { data: beliefs, isLoading, isError } = useV2Memory();
+  const { data: beliefs, isLoading, isError, refetch } = useV2Memory();
   const shred = useShredBelief();
+  // Per-belief in-flight tracking. A single useMutation only remembers its LATEST `variables`, so with
+  // two shreds running at once the first row would lose its spinner - this Set keeps each row honest.
+  const [pendingIds, setPendingIds] = useState<Set<string>>(new Set());
+  const shredBelief = (id: string, onDone: () => void) => {
+    setPendingIds(prev => new Set(prev).add(id));
+    shred.mutate(id, {
+      onSettled: () => {
+        setPendingIds(prev => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+        onDone();
+      },
+    });
+  };
 
   return (
     <Box sx={{ p: 2 }}>
@@ -120,9 +141,14 @@ const MementosV2Panel = () => {
       )}
 
       {isError && !beliefs && (
-        <Typography level="body-sm" color="danger">
-          Could not load your memory. Please refresh or re-authenticate.
-        </Typography>
+        <Stack spacing={1} sx={{ alignItems: 'flex-start' }}>
+          <Typography level="body-sm" color="danger">
+            Could not load your memory. Please try again or re-authenticate.
+          </Typography>
+          <Button size="sm" variant="soft" onClick={() => refetch()} data-testid="v2-memory-retry-btn">
+            Retry
+          </Button>
+        </Stack>
       )}
 
       {beliefs && beliefs.length === 0 && (
@@ -141,8 +167,8 @@ const MementosV2Panel = () => {
               <BeliefRow
                 key={b.id}
                 belief={b}
-                shredding={shred.isPending && shred.variables === b.id}
-                onShred={opts => shred.mutate(b.id, opts)}
+                shredding={pendingIds.has(b.id)}
+                onShred={opts => shredBelief(b.id, opts.onSettled)}
               />
             ))}
           </Stack>

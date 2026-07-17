@@ -120,6 +120,14 @@ handler.get(async (req, res) => {
       .json({ error: `Unknown principal kind '${kind}'. Expected one of: ${PRINCIPAL_KINDS.join(', ')}.` });
   }
 
+  // Defense-in-depth: a user may only read their OWN user-memory. Each store already owner-scopes its
+  // reads (a cross-user principal returns null -> 404), but this makes the ownership boundary explicit
+  // and independent of every store re-checking it. Agent/org/system kinds are owner-scoped by the
+  // stores below (charter/persona reads are filtered to ownerUserId).
+  if (kind === 'user' && id !== ownerUserId) {
+    return res.status(403).json({ error: 'You can only read your own user memory.' });
+  }
+
   const ledgerStore = createLedgerMemoryStore({
     ledger: memoryLedgerRepository,
     keys: createKeyProvider(memoryPrincipalKeyRepository),
