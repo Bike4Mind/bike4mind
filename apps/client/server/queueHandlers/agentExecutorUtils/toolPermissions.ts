@@ -21,7 +21,7 @@ const ALWAYS_SAFE_TOOLS = new Set([
   'recharts',
   'mermaid_chart',
   'chess_engine',
-  // All four OptiHashi tools share one risk surface: each invokes an LLM/solver and emits
+  // All five OptiHashi tools share one risk surface: each invokes an LLM/solver and emits
   // only an /opti-gated __uiSideEffect the user can Undo - none mutates stored user data or
   // calls out externally (durable/hardware compute submission is separately flag-gated). They
   // must stay grouped so agent mode doesn't auto-run one while pausing its twin for approval,

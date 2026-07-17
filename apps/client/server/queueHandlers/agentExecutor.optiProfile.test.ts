@@ -10,6 +10,7 @@ describe('buildOptiOrchestrationProfile', () => {
     expect(profile.allowedTools).toContain('optihashi_formulate');
     expect(profile.allowedTools).toContain('optihashi_edit_problem');
     expect(profile.allowedTools).toContain('optihashi_schedule');
+    expect(profile.allowedTools).toContain('optihashi_solve');
     // No general-purpose escape hatches that would pull the loop off-task.
     expect(profile.allowedTools).not.toContain('image_generation');
     expect(profile.allowedTools).not.toContain('coordinate_task');
