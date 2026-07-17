@@ -1,3 +1,4 @@
+import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
 import { taskScheduleRepository, connectDB } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
@@ -7,6 +8,7 @@ import { Config } from '@server/utils/config';
 import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
 import { SelfHostWorker } from './selfHostWorker';
+import { dispatchSelfHostEvent } from './eventDispatch';
 
 /**
  * Self-host background worker entrypoint.
@@ -43,6 +45,20 @@ async function main() {
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
   });
+
+  // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
+  // eventBus.publishSelfHost as { detailType, detail }. Read straight from env (not the
+  // Resource shim): this queue is self-host-only, so it isn't in the hosted SST types.
+  // Optional - unset means enrichment simply doesn't run.
+  const eventQueueUrl = process.env.SELF_HOST_EVENT_QUEUE;
+  if (eventQueueUrl) {
+    worker.registerQueueHandler('selfHostEventQueue', eventQueueUrl, async (event: SQSEvent) => {
+      const { detailType, detail } = JSON.parse(event.Records[0].body) as { detailType: string; detail: unknown };
+      await dispatchSelfHostEvent(detailType, detail, bootLogger);
+    });
+  } else {
+    bootLogger.warn('SELF_HOST_EVENT_QUEUE not set; enrichment events will not be consumed');
+  }
 
   // Mirrors cron/scheduler.ts (hosted). Keep the handler map in sync with it.
   worker.registerScheduledTask('scheduler', SCHEDULER_INTERVAL_MS, async () => {
