@@ -44,6 +44,14 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(400).json({ error: `Field 'kind' must be one of: ${EVENT_KINDS.join(', ')}.` });
   }
   const fact = typeof body.fact === 'string' ? body.fact : undefined;
+  // An `assert` establishes the belief's fact; without one, the fold reuses the prior fact while the
+  // assert resets derivedFrom/provenance - silently discarding citations, or (with no prior belief)
+  // injecting the raw subject string as the memory. Fact-less operations belong to affirm/retract.
+  if (eventKind === 'assert' && (!fact || !fact.trim())) {
+    return res
+      .status(400)
+      .json({ error: "An 'assert' event requires a non-empty 'fact'. Use 'affirm' or 'retract' for fact-less operations." });
+  }
   // Subject identity: an explicit subject wins; otherwise derive a stable key from the fact so
   // re-mentions coalesce (affirm) instead of piling up. Null means neither gave a usable key.
   const subject = resolveSubject({ subject: typeof body.subject === 'string' ? body.subject : undefined, fact });

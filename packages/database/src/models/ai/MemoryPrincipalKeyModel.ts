@@ -43,10 +43,12 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
   }
 
   /**
-   * Return the principal's key, minting `candidateDek` if none exists yet. Race-safe: the unique
-   * index + `$setOnInsert` upsert guarantee a single key even under concurrent first writes (the
-   * loser reads the winner's key). The caller generates the candidate so this package never sees a
-   * raw key it did not already hold.
+   * Return the principal's key, minting `candidateDek` if none exists yet. Race-safe: Mongo does NOT
+   * serialize concurrent upserts, so two first-writes for the same new principal both attempt the
+   * insert and the unique index rejects the loser with E11000 - we catch that and re-read the winner's
+   * key (mirroring MemoryLedgerEventModel.tryInsert). The unique index still guarantees a single key;
+   * this just turns the expected collision into a read instead of a thrown 500 / dropped fact. The
+   * caller generates the candidate so this package never sees a raw key it did not already hold.
    */
   async getOrCreate(
     principalKind: IMemoryPrincipalKey['principalKind'],
@@ -54,12 +56,20 @@ class MemoryPrincipalKeyRepository extends BaseRepository<IMemoryPrincipalKey> {
     ownerUserId: string,
     candidateDek: string
   ): Promise<string> {
-    const doc = await this.model.findOneAndUpdate(
-      { principalKind, principalId },
-      { $setOnInsert: { principalKind, principalId, ownerUserId, dek: candidateDek } },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
-    return doc.dek;
+    try {
+      const doc = await this.model.findOneAndUpdate(
+        { principalKind, principalId },
+        { $setOnInsert: { principalKind, principalId, ownerUserId, dek: candidateDek } },
+        { new: true, upsert: true, setDefaultsOnInsert: true }
+      );
+      return doc.dek;
+    } catch (err) {
+      if ((err as { code?: number }).code !== 11000) throw err;
+      // The concurrent first-write that lost the insert race: the winner's key now exists, read it.
+      const existing = await this.findDek(principalKind, principalId);
+      if (existing) return existing;
+      throw err; // 11000 with no readable key back would be a genuine anomaly - do not swallow it.
+    }
   }
 
   /** The principal's key, or null once it has been destroyed (or never existed). */

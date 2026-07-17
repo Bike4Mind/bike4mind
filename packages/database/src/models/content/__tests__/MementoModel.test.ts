@@ -33,7 +33,7 @@ describe('MementoRepository.deleteAllByUserId', () => {
     expect(await Memento.countDocuments({ userId: 'u1' })).toBe(0);
   });
 
-  it('does not touch another user`s mementos', async () => {
+  it('does not touch another users mementos', async () => {
     await memento('u1', 'mine');
     await memento('u2', 'theirs');
 
@@ -65,7 +65,7 @@ describe('MementoRepository.deleteByIdsForUser', () => {
     expect(remaining).toEqual([String(a.id), String(c.id)].sort());
   });
 
-  it('will not delete another user`s memento even given its id', async () => {
+  it('will not delete another users memento even given its id', async () => {
     const mine = await memento('u1', 'mine');
     const theirs = await memento('u2', 'theirs');
 

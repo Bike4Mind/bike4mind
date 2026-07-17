@@ -61,7 +61,13 @@ export async function publishMementoCompletion(execution: MementoCompletionExecu
       // to resolve it properly.
       ...(enableMementos ? {} : { enableMementosV2 }),
     });
-    logger.info('[Mementos] Published completion event', { executionId: execution.id, enableMementos, enableMementosV2 });
+    logger.info('[Mementos] Published completion event', {
+      executionId: execution.id,
+      enableMementos,
+      // When V1 short-circuited the lookup, the V2 opt-in was NOT resolved here (the subscriber does it),
+      // so `enableMementosV2` would just be `true` because V1 is on - log 'deferred', not a false opt-in.
+      enableMementosV2: enableMementos ? 'deferred-to-subscriber' : enableMementosV2,
+    });
   } catch (err) {
     logger.warn('[Mementos] Failed to publish completion event — memento creation skipped', {
       executionId: execution.id,

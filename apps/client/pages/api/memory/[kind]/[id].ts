@@ -11,6 +11,7 @@ import {
   mergeStores,
   readPrincipalMemory,
   recall,
+  REDACTED_FACT,
   subjectKey,
   type PrincipalKind,
 } from '@bike4mind/memory';
@@ -80,9 +81,13 @@ handler.delete(async (req, res) => {
       ownerUserId: id,
     });
     // The belief's fact, read before the shred, is what identifies a V1 memento twin (same fact) that
-    // has a different id from the ledger belief and would otherwise be missed.
+    // has a different id from the ledger belief and would otherwise be missed. An ALREADY-shredded
+    // belief (a retried delete after a partial failure) carries the redaction placeholder, not a fact -
+    // deriving a factKey from '[shredded]' would match any memento normalizing to it and delete unrelated
+    // content, so skip twin-matching in that case (id-match still applies).
     const profile = await ledgerStore.readProfile({ kind: 'user', id });
-    const beliefFact = profile?.beliefs.find(b => b.id === subject)?.fact;
+    const belief = profile?.beliefs.find(b => b.id === subject);
+    const beliefFact = belief && !belief.shredded && belief.fact !== REDACTED_FACT ? belief.fact : undefined;
     const factKey = beliefFact ? subjectKey(beliefFact) : undefined;
 
     const shredded = await shredBelief(memoryLedgerRepository, { kind: 'user', id }, id, subject);

@@ -63,7 +63,8 @@ describe('publishMementoCompletion', () => {
     expect(logger.info).toHaveBeenCalledWith('[Mementos] Published completion event', {
       executionId: 'exec-1',
       enableMementos: true,
-      enableMementosV2: true,
+      // V1 short-circuited the V2 lookup, so the log says 'deferred' rather than a true-because-V1 opt-in.
+      enableMementosV2: 'deferred-to-subscriber',
     });
   });
 
