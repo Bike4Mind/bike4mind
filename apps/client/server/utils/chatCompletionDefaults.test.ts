@@ -1,4 +1,27 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { ChatModels, ModelBackend, type ModelInfo } from '@bike4mind/common';
+
+// Controllable mocks for resolveDefaultChatModel's three dependencies. Hoisted so the
+// vi.mock factories below can reference them; importOriginal preserves every other export
+// so the heavy import graph (and the lazy-contract tests) keep working unchanged.
+const { getEffectiveLLMApiKeysMock, getAvailableModelsMock, getLlmByModelMock } = vi.hoisted(() => ({
+  getEffectiveLLMApiKeysMock: vi.fn(),
+  getAvailableModelsMock: vi.fn(),
+  getLlmByModelMock: vi.fn(),
+}));
+
+vi.mock('@bike4mind/services', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/services')>();
+  return {
+    ...actual,
+    apiKeyService: { ...actual.apiKeyService, getEffectiveLLMApiKeys: getEffectiveLLMApiKeysMock },
+  };
+});
+
+vi.mock('@bike4mind/llm-adapters', async importOriginal => {
+  const actual = await importOriginal<typeof import('@bike4mind/llm-adapters')>();
+  return { ...actual, getAvailableModels: getAvailableModelsMock, getLlmByModel: getLlmByModelMock };
+});
 
 // Guardrail for the chat completion lazy contract:
 // `getDefaultChatCompletionOptions()` previously lived as a module-level
@@ -82,5 +105,73 @@ describe('chatCompletionDefaults factory lazy contract', () => {
     const first = mod.getDefaultChatCompletionOptions();
     const second = mod.getDefaultChatCompletionOptions();
     expect(first).toBe(second);
+  }, 20000);
+});
+
+const makeModel = (id: string, backend: ModelBackend, type: ModelInfo['type'] = 'text'): ModelInfo =>
+  ({ id, name: id, backend, type, contextWindow: 8192, max_tokens: 8192, pricing: {} }) as unknown as ModelInfo;
+
+describe('resolveDefaultChatModel', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it('hosted: returns the Bedrock schema default and does no key/model probing', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: undefined, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET_BEDROCK);
+    expect(result.apiKeys).toBeUndefined();
+    expect(result.models).toBeUndefined();
+    expect(getEffectiveLLMApiKeysMock).not.toHaveBeenCalled();
+    expect(getAvailableModelsMock).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('self-host with an Anthropic key: substitutes the Bedrock default for its direct-API twin', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'sk-ant' });
+    getAvailableModelsMock.mockResolvedValue([makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic)]);
+    getLlmByModelMock.mockReturnValue({ backend: 'anthropic' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: undefined, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
+    expect(result.models).toBeDefined();
+  }, 20000);
+
+  it('self-host, no cloud key, one local Ollama model: falls back to the local model', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: null, ollama: 'http://ollama:11434' });
+    getAvailableModelsMock.mockResolvedValue([
+      makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic),
+      makeModel('qwen2.5-coder:7b', ModelBackend.Ollama),
+    ]);
+    getLlmByModelMock.mockReturnValue(null); // configured cloud default has no usable key
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+    expect(result.model).toBe('qwen2.5-coder:7b');
+  }, 20000);
+
+  it('self-host, nothing usable: returns the unusable cloud default so the caller can reject it', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: null });
+    getAvailableModelsMock.mockResolvedValue([]);
+    getLlmByModelMock.mockReturnValue(null);
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
+    // Populated so the route guard has what it needs to detect the unusable model and raise a 400.
+    expect(result.apiKeys).toBeDefined();
+    expect(result.models).toEqual([]);
+  }, 20000);
+
+  it('self-host: preserves an explicit admin default when its provider key is present', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ openai: 'sk-openai' });
+    getAvailableModelsMock.mockResolvedValue([makeModel(ChatModels.GPT5, ModelBackend.OpenAI)]);
+    getLlmByModelMock.mockReturnValue({ backend: 'openai' });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.GPT5, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.GPT5);
   }, 20000);
 });

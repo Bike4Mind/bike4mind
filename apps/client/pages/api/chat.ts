@@ -1,13 +1,17 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
-import { getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
-import { PipelineTimer } from '@bike4mind/llm-adapters';
+import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
+import { getLlmByModel, PipelineTimer } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
-import { getDefaultChatCompletionOptions, getSharedTokenizer } from '@server/utils/chatCompletionDefaults';
+import {
+  getDefaultChatCompletionOptions,
+  getSharedTokenizer,
+  resolveDefaultChatModel,
+} from '@server/utils/chatCompletionDefaults';
 import { adminSettingsRepository, User, Session } from '@bike4mind/database';
 import { z } from 'zod';
-import { ApiKeyScope, B4MLLMTools, B4MLLMToolsList, ChatModels } from '@bike4mind/common';
+import { ApiKeyScope, B4MLLMTools, B4MLLMToolsList } from '@bike4mind/common';
 import { dispatchQuest } from '@server/utils/dispatchQuest';
 import { premiumLlmTools } from '@server/premium-generated/premiumLlmTools.generated';
 import { recommendTools, mergeTools } from '@client/app/utils/toolRecommender';
@@ -60,21 +64,35 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
     const apiTimer = new PipelineTimer();
     apiTimer.phase('settings');
 
-    // Get default model from admin settings (uses the cached AdminSettingsCache)
+    // Admin settings (uses the cached AdminSettingsCache); reused below for the embedding model.
     const settings = await getSettingsMap({ adminSettings: adminSettingsRepository });
-    // `getSettingsValue` already returns the schema default (Bedrock Claude) when unset; the
-    // `||` is defense-in-depth and must match that default so a future refactor can't silently
-    // re-introduce the key-requiring Anthropic-hosted variant here.
-    let defaultModel = getSettingsValue('DefaultAPIModel', settings) || ChatModels.CLAUDE_5_SONNET_BEDROCK;
-    // Self-host has no Bedrock, so the schema-default model above can only fail
-    // there; substitute the direct-API equivalent (backed by the env/user key).
-    if (process.env.B4M_SELF_HOST === 'true' && defaultModel === ChatModels.CLAUDE_5_SONNET_BEDROCK) {
-      defaultModel = ChatModels.CLAUDE_5_SONNET;
-    }
 
     const simplifiedRequest = SimplifiedChatRequestSchema.parse(req.body);
 
-    const model = simplifiedRequest.model || defaultModel;
+    // An explicit request model wins. Otherwise fall back to the admin default, which on a
+    // local-only self-host box may itself need a fallback (see resolveDefaultChatModel), so
+    // only probe when no explicit model was sent.
+    let model = simplifiedRequest.model;
+    if (!model) {
+      const resolved = await resolveDefaultChatModel({
+        configuredModel: getSettingsValue('DefaultAPIModel', settings),
+        userId: req.user.id,
+        logger: req.logger,
+      });
+      model = resolved.model;
+      // Self-host, no-explicit-model guard: apiKeys/models are populated only on self-host.
+      // If even the resolved default is unusable (no provider key and no local model), fail
+      // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.
+      if (resolved.apiKeys && resolved.models) {
+        const info = resolved.models.find(m => m.id === model);
+        if (!info || !getLlmByModel(resolved.apiKeys, { modelInfo: info, logger: req.logger })) {
+          throw new BadRequestError(
+            'No usable default chat model is configured. Set a provider key (e.g. ANTHROPIC_API_KEY) in ' +
+              '.env.selfhost, enable local models via OLLAMA_BASE_URL, or pass an explicit "model" from GET /api/models.'
+          );
+        }
+      }
+    }
 
     apiTimer.phase('session');
     const sessionId = await getSessionId(simplifiedRequest.sessionId ?? undefined, req.user.id);

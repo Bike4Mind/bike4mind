@@ -29,15 +29,19 @@ import {
   dataLakeRepository,
 } from '@bike4mind/database';
 import {
+  ChatModels,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IMcpServerDocument,
   IUserDocument,
+  ModelBackend,
   Permission,
+  type ModelInfo,
 } from '@bike4mind/common';
 import { MCPClient } from '@bike4mind/mcp';
-import { IChatCompletionServiceOptions } from '@bike4mind/services';
-import { ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
+import { apiKeyService, IChatCompletionServiceOptions } from '@bike4mind/services';
+import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -279,4 +283,65 @@ export function getSharedTokenizer(logger?: ILogger): ITokenizer {
     return sharedTokenizer.withLogger(enrichedLogger);
   }
   return sharedTokenizer;
+}
+
+export interface ResolvedDefaultChatModel {
+  /** The model id to use when a request omits one. */
+  model: string;
+  /**
+   * Effective API keys and the available-models list. Computed only on self-host
+   * (undefined on hosted, where no per-request probing happens) and returned so the
+   * caller can judge the model's usability without re-running the two lookups.
+   */
+  apiKeys?: ApiKeyTable;
+  models?: ModelInfo[];
+}
+
+/**
+ * Resolve the default chat model for a request that omits `model`.
+ *
+ * Hosted (B4M_SELF_HOST !== 'true'): the Bedrock-backed schema default is always
+ * reachable via IAM, so return it directly with zero extra work.
+ *
+ * Self-host: Bedrock never works, so the schema default maps to its direct-API
+ * Anthropic twin - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
+ * the effective keys and the live model list, then keep the configured default when
+ * its provider key is usable, else fall back to the first local Ollama text model
+ * (needs no key), else return the (unusable) default so the caller can raise a clear
+ * error. The live Ollama /api/tags list is the source of truth for local models, not
+ * OLLAMA_PULL_MODELS.
+ */
+export async function resolveDefaultChatModel(params: {
+  configuredModel: string | null | undefined;
+  userId: string;
+  logger?: Logger;
+}): Promise<ResolvedDefaultChatModel> {
+  const cloudDefault = params.configuredModel || ChatModels.CLAUDE_5_SONNET_BEDROCK;
+
+  if (process.env.B4M_SELF_HOST !== 'true') {
+    return { model: cloudDefault };
+  }
+
+  const configuredDefault =
+    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK ? ChatModels.CLAUDE_5_SONNET : cloudDefault;
+
+  const logger = params.logger ?? new Logger();
+  const apiKeys = (await apiKeyService.getEffectiveLLMApiKeys(
+    params.userId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+    { logger }
+  )) as ApiKeyTable;
+  const models = await getAvailableModels(apiKeys);
+
+  const configuredInfo = models.find(m => m.id === configuredDefault);
+  if (configuredInfo && getLlmByModel(apiKeys, { modelInfo: configuredInfo, logger })) {
+    return { model: configuredDefault, apiKeys, models };
+  }
+
+  const localModel = models.find(m => m.backend === ModelBackend.Ollama && m.type === 'text');
+  if (localModel) {
+    return { model: localModel.id, apiKeys, models };
+  }
+
+  return { model: configuredDefault, apiKeys, models };
 }
