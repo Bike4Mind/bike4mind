@@ -46,6 +46,8 @@ export const b4mLLMTools = z.enum([
   'excel_generation',
   // Financial data
   'fmp_financial_data',
+  // Bob synthetic-persona panel (premium overlay tool)
+  'bob_panel_read',
   // User-defined skills - LLM-invocable instruction templates
   'skill',
 ]);
@@ -63,7 +65,7 @@ export const B4MLLMToolsList = b4mLLMTools.options.map(tool => tool);
  */
 export type PremiumOverlayToolName = Extract<
   B4MLLMTools,
-  'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem'
+  'optihashi_schedule' | 'optihashi_formulate' | 'optihashi_edit_problem' | 'bob_panel_read'
 >;
 
 /**
