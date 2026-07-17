@@ -116,6 +116,15 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // internal users reach it via admin/developer bypass, and no signup credits
   // attach to the compute tier.
   { tag: 'opti-compute', entitlements: ['optihashi:compute'] },
+  // Real hardware compute is the STRICTEST tier: the `opti-hardware` tag bridges to
+  // `optihashi:hardware`, the entitlement the server checks in the hardware submit gate
+  // (`requestHasHardwareComputeAccess`) before spending real external-provider money.
+  // Deliberately its own tag, NOT implied by `optihashi:compute` (classical/simulator) or
+  // `optihashi:pro` (local) — a compute-tier user must not silently reach real-money spend.
+  // Granted-only (no Stripe price yet) and intentionally absent from DOMAIN_GRANT_ROWS /
+  // INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS: admins reach it via bypass, and it is
+  // granted per-account (e.g. specific external partner users) rather than by domain/signup.
+  { tag: 'opti-hardware', entitlements: ['optihashi:hardware'] },
   // [DELETION-FOOTPRINT] Overwatch comp grant: the `overwatch` tag bridges to
   // `overwatch:pro`. Admin-only gate was a stopgap before the entitlement model
   // existed (Open Core M0). No Stripe price yet; granted-only initially. Removed

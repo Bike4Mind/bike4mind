@@ -129,6 +129,15 @@ describe('entitlementsForTags', () => {
   it('ignores empty/whitespace tags', () => {
     expect(entitlementsForTags(['', '   '])).toEqual(new Set());
   });
+
+  it('bridges the opti-hardware tag to the real-money hardware entitlement', () => {
+    // Pins the exact grant path an operator uses to authorize a partner account for real
+    // IonQ hardware spend: tagging `opti-hardware` must confer `optihashi:hardware`, the key
+    // the server hardware submit gate checks. A rename/removal here silently locks everyone
+    // (incl. non-admins) out of hardware compute, so lock it by name, not just table-coverage.
+    const granted = entitlementsForTags(['opti-hardware']);
+    expect(granted.has('optihashi:hardware')).toBe(true);
+  });
 });
 
 describe('entitlementsForPriceIds', () => {
