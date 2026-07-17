@@ -130,6 +130,57 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+## Streaming completions API (`/api/ai/v1/completions`)
+
+`POST /api/chat` (above) is the high-level chat API. For a low-level streaming completion - one request in, a token-by-token Server-Sent Events (SSE) stream out - call `/api/ai/v1/completions`. This is the endpoint the CLI uses under the hood, and the one to target from a custom client or agent loop.
+
+On self-host it is served by the **`chatcompletion` container**, not the `app` container: reach it at `http://localhost:8788` by default (override the host port with `CHATCOMPLETION_HOST_PORT`, and advertise the external origin via `CHAT_COMPLETION_PUBLIC_URL`).
+
+**Request** - OpenAI-shaped JSON:
+
+- `model` (**required**) - a model id from `GET /api/models`. Unlike `/api/chat`, this endpoint has **no server-side default**; omit it and the request is rejected.
+- `messages` (**required**) - `[{ "role": "user" | "assistant" | "system", "content": "..." }]`.
+- Optional: `temperature`, `max_tokens`, `tools`, `response_format`, `stream`.
+
+Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_...`, or `Authorization: Bearer <JWT>`.
+
+**Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). In order:
+
+1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
+3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
+4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+6. `data: [DONE]` - terminal sentinel on success.
+
+**Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):
+
+```bash
+curl -N -X POST http://localhost:8788/api/ai/v1/completions \
+  -H "x-api-key: $B4M_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "qwen2.5-coder:7b",
+    "messages": [{ "role": "user", "content": "Say hello in five words." }]
+  }'
+```
+
+Sample transcript:
+
+```
+: keep-alive
+
+data: {"type":"meta","requestId":"1a2b3c4d"}
+
+data: {"type":"content","text":"Hello"}
+
+data: {"type":"content","text":" there, good"}
+
+data: {"type":"content","text":" to meet you","usage":{"inputTokens":13,"outputTokens":5}}
+
+data: [DONE]
+```
+
 ## Drive it with the CLI (`b4m`)
 
 Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly — the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
