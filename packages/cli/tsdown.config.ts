@@ -1,88 +1,75 @@
 import { defineConfig } from 'tsdown';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync } from 'fs';
-import { resolve, dirname, join } from 'path';
+import { cpSync, readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { builtinModules } from 'module';
+import { findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+
+// Minimal structural view of rolldown's module graph - avoids a deep type import
+// from a transitive dep that the config loader can't resolve from packages/cli.
+type ModuleInfoLike = { importedIds: string[]; dynamicallyImportedIds: string[] };
+type PluginContextLike = {
+  getModuleIds(): IterableIterator<string>;
+  getModuleInfo(id: string): ModuleInfoLike | null;
+};
 
 /**
  * Build-time guard against the "bundled workspace package pulled in an npm dep
  * that the CLI never declared" class of bug (e.g. @bike4mind/utils importing
  * `tldts`). We bundle @bike4mind/* inline but keep npm packages external, so
- * every external the emitted bundle references MUST resolve from the CLI's own
- * node_modules - otherwise the published binary dies at startup with
- * ERR_MODULE_NOT_FOUND. This reproduces that resolution at build time and fails
- * the build instead of the user's machine.
+ * every external the emitted bundle references MUST be a declared production
+ * dependency of the CLI - otherwise the published binary dies at startup with
+ * ERR_MODULE_NOT_FOUND once npm installs only the declared closure.
+ *
+ * Walks rolldown's module graph (external imports keep their bare-specifier id;
+ * internal modules are absolute paths) rather than pattern-matching emitted
+ * source, and validates against packages/cli/package.json's declared deps rather
+ * than whatever happens to be resolvable on the build machine (a hoisted-but-
+ * undeclared transitive dep would otherwise pass). Fails the build, not the user.
  */
-function verifyExternalsAreResolvable(distDir: string, pkgDir: string) {
-  const builtins = new Set(builtinModules);
+function verifyBundleExternalsPlugin(pkgDir: string) {
+  return {
+    name: 'verify-bundle-externals',
+    // generateBundle (an output hook) rather than buildEnd: tsdown only invokes
+    // user plugins' output hooks, and generateBundle's PluginContext still
+    // exposes the full module graph via getModuleIds()/getModuleInfo().
+    generateBundle() {
+      const ctx = this as unknown as PluginContextLike;
+      const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8')) as {
+        dependencies?: Record<string, string>;
+        optionalDependencies?: Record<string, string>;
+      };
+      const declaredDeps = new Set([
+        ...Object.keys(pkg.dependencies ?? {}),
+        ...Object.keys(pkg.optionalDependencies ?? {}),
+      ]);
 
-  const mjsFiles: string[] = [];
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) walk(full);
-      else if (full.endsWith('.mjs')) mjsFiles.push(full);
-    }
-  };
-  walk(distDir);
-
-  // Extract module specifiers from the emitted (non-minified) ESM bundle. Each
-  // regex is anchored to a real statement form so we don't match method calls
-  // like `Buffer.from('x')` or string literals that merely contain `from`:
-  //   - `import ... from '...'` / `export ... from '...'` (single-line, as rolldown emits)
-  //   - side-effect `import '...'`
-  //   - dynamic `import('...')`
-  //   - residual `require('...')`
-  const specifierPatterns = [
-    /(?:^|[;\n\r{}])\s*(?:import|export)\b[^;\n\r]*?\bfrom\s*['"]([^'"]+)['"]/g,
-    /(?:^|[;\n\r{}])\s*import\s+['"]([^'"]+)['"]/g,
-    /\bimport\s*\(\s*['"]([^'"]+)['"]/g,
-    /\brequire\s*\(\s*['"]([^'"]+)['"]/g,
-  ];
-
-  const packageNameOf = (spec: string) =>
-    spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
-
-  const resolvableFromCli = (pkgName: string) => {
-    let dir = pkgDir;
-    // Walk up node_modules chains, matching Node's own resolution.
-    for (;;) {
-      if (existsSync(join(dir, 'node_modules', pkgName, 'package.json'))) return true;
-      const parent = dirname(dir);
-      if (parent === dir) return false;
-      dir = parent;
-    }
-  };
-
-  const missing = new Map<string, string>(); // package name -> first file that imports it
-  for (const file of mjsFiles) {
-    const code = readFileSync(file, 'utf8');
-    for (const pattern of specifierPatterns) {
-      for (const match of code.matchAll(pattern)) {
-        const spec = match[1];
-        // Skip relative paths, absolute paths, and scheme-prefixed specifiers (node:, data:, etc.).
-        if (spec.startsWith('.') || spec.startsWith('/') || spec.includes(':')) continue;
-        const pkgName = packageNameOf(spec);
-        if (builtins.has(pkgName)) continue;
-        if (missing.has(pkgName) || resolvableFromCli(pkgName)) continue;
-        missing.set(pkgName, file);
+      // rolldown keeps external imports (static + dynamic) as bare-specifier ids
+      // in the module graph; internal modules are absolute paths (filtered out by
+      // findUndeclaredBundleDeps). This captures dynamic imports that never
+      // surface in OutputChunk.imports (e.g. jimp's `await import('jimp')`).
+      const specifiers = new Set<string>();
+      for (const id of ctx.getModuleIds()) {
+        const info = ctx.getModuleInfo(id);
+        if (!info) continue;
+        for (const dep of info.importedIds) specifiers.add(dep);
+        for (const dep of info.dynamicallyImportedIds) specifiers.add(dep);
       }
-    }
-  }
 
-  if (missing.size > 0) {
-    const details = [...missing.entries()]
-      .map(([pkg, file]) => `  - ${pkg} (from ${file.replace(pkgDir + '/', '')})`)
-      .join('\n');
-    throw new Error(
-      `tsdown: ${missing.size} external import(s) in the CLI bundle cannot be resolved from ` +
-        `packages/cli/node_modules:\n${details}\n\n` +
-        `These are almost certainly transitive deps of a bundled @bike4mind/* package. ` +
-        `Add each to "dependencies" in packages/cli/package.json (see the neverBundle note above).`
-    );
-  }
+      const missing = findUndeclaredBundleDeps(specifiers, declaredDeps);
+      if (missing.length > 0) {
+        throw new Error(
+          `tsdown: ${missing.length} external import(s) in the CLI bundle are not declared in ` +
+            `packages/cli/package.json "dependencies":\n` +
+            missing.map(dep => `  - ${dep}`).join('\n') +
+            `\n\nThese are almost certainly transitive deps of a bundled @bike4mind/* package. ` +
+            `Add each to "dependencies" so a fresh install of @bike4mind/cli can resolve them ` +
+            `(see the neverBundle note below).`
+        );
+      }
+    },
+  };
 }
 
 export default defineConfig({
@@ -100,6 +87,7 @@ export default defineConfig({
   target: 'node24',
   platform: 'node',
   clean: true,
+  plugins: [verifyBundleExternalsPlugin(__dirname)],
   banner: {
     js: '#!/usr/bin/env node',
   },
@@ -127,8 +115,5 @@ export default defineConfig({
     const dest = resolve(__dirname, 'dist/agents/defaults');
     cpSync(src, dest, { recursive: true });
     console.log('Copied agent definitions to dist/agents/defaults');
-
-    verifyExternalsAreResolvable(resolve(__dirname, 'dist'), __dirname);
-    console.log('Verified all external bundle imports resolve from packages/cli/node_modules');
   },
 });
