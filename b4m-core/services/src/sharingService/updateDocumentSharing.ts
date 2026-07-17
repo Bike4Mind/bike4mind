@@ -47,8 +47,8 @@ export const updateDocumentSharing = async (
   }
 
   // Re-read the persisted doc so the response reflects the post-write state (fresh
-  // updatedAt/flags), matching the re-read pattern the other consolidated fns use;
-  // fall back to the pre-write doc if the re-read races to null.
+  // updatedAt), matching the re-read pattern the other consolidated fns use; fall back
+  // to the pre-write doc if the re-read races to null.
   const persisted = (await dbModel.shareable.findUpdateAccessById(user, id)) ?? document;
 
   // findUpdateAccessById returns a hydrated Mongoose doc; normalize to a plain object
@@ -59,6 +59,12 @@ export const updateDocumentSharing = async (
       ? (persisted as unknown as { toJSON: () => Record<string, unknown> }).toJSON()
       : persisted
   ) as Record<string, unknown>;
+
+  // The two flags we just wrote are authoritative for the response, so set them
+  // explicitly - this keeps the response correct even on the (unlikely) fallback path
+  // where the re-read raced to null and `plain` is the un-mutated pre-write doc.
+  plain.isGlobalRead = isGlobalRead;
+  plain.isGlobalWrite = isGlobalWrite;
 
   // FabFile leak-gate: withhold the signed URL from the RESPONSE for a non-image-serveable
   // file (response-only - the stored URL was never in the write above).
