@@ -1,8 +1,9 @@
 import React from 'react';
-import { Box, Text, useStdout } from 'ink';
+import { Box, Text } from 'ink';
 import type { Message } from '../storage';
 import type { AgentStep } from '@bike4mind/agents';
 import { MarkdownRenderer } from './MarkdownRenderer';
+import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 
 /**
  * Truncates a value to maxLength, converting objects to JSON strings.
@@ -29,8 +30,7 @@ const TOOLS_WITH_HIDDEN_ARGS = new Set(['edit_local_file']);
 
 export const MessageItem = React.memo(function MessageItem({ message, showThoughts = true }: MessageItemProps) {
   const isUser = message.role === 'user';
-  const { stdout } = useStdout();
-  const terminalCols = stdout?.columns ?? 80;
+  const [terminalCols] = useStdoutDimensions();
 
   // User-message highlight needs to fill the full row. We tried Yoga
   // `width="100%"` + Box backgroundColor - works in <Static> but not in

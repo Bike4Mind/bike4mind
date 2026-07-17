@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Box, Text, Static, useInput, useStdout } from 'ink';
+import { Box, Text, Static, useInput } from 'ink';
 import { StatusBar } from './StatusBar';
 import { InputPrompt } from './InputPrompt';
 import { AgentThinking } from './AgentThinking';
@@ -22,6 +22,7 @@ import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
 import type { CommandDefinition } from '../config/commands.js';
+import { useStdoutDimensions } from '../hooks/useStdoutDimensions.js';
 
 interface AppProps {
   onMessage: (message: string) => Promise<void>;
@@ -118,9 +119,9 @@ export function App({
 
   // Terminal width - needed to pad queued-message rows so the background
   // color fills the entire row (same pattern as the sent user-prompt
-  // highlight in MessageItem.tsx).
-  const { stdout } = useStdout();
-  const terminalCols = stdout?.columns ?? 80;
+  // highlight in MessageItem.tsx). Subscribes to resize so the live frame
+  // repaints at the new width instead of keeping the stale startup width.
+  const [terminalCols] = useStdoutDimensions();
 
   const handleSubmit = React.useCallback(
     async (input: string) => {
