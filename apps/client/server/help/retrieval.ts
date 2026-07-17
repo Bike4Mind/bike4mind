@@ -62,6 +62,8 @@ export interface RelevantArticle {
 export interface HelpEmbeddingApiKeys {
   openai?: string | null;
   voyageai?: string | null;
+  // Ollama base URL (self-host); keyless local embeddings.
+  ollama?: string | null;
 }
 
 interface RankedChunk {
@@ -362,14 +364,21 @@ export async function searchHelpContext(params: {
         logger.warn(`[HelpRetrieval] Embeddings model "${embeddingModel}" unsupported, using keyword search`);
       } else {
         const requiredProvider = getProviderFromModel(embeddingModel);
-        const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+        const embeddingConfig: {
+          openaiApiKey?: string | null;
+          voyageApiKey?: string | null;
+          ollamaBaseUrl?: string | null;
+        } = {};
         if (requiredProvider === 'openai' && apiKeys?.openai) {
           embeddingConfig.openaiApiKey = apiKeys.openai;
         } else if (requiredProvider === 'voyageai' && apiKeys?.voyageai) {
           embeddingConfig.voyageApiKey = apiKeys.voyageai;
+        } else if (requiredProvider === 'ollama' && apiKeys?.ollama) {
+          // apiKeys.ollama carries the Ollama base URL (no secret) in self-host.
+          embeddingConfig.ollamaBaseUrl = apiKeys.ollama;
         }
 
-        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey) {
+        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey || embeddingConfig.ollamaBaseUrl) {
           const embeddingFactory = new EmbeddingFactory(embeddingConfig);
           const embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
 

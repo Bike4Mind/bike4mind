@@ -633,6 +633,11 @@ export async function processUrlsFromPrompt(
  * Returns a value between -1 and 1, where 1 means identical, 0 means orthogonal, -1 means opposite
  */
 export function computeCosineSimilarity(vector1: number[], vector2: number[]): number {
+  // Vectors of different dimensions cannot be compared: this happens when the
+  // Default Embedding Model changes and old chunks were embedded at another
+  // dimension (e.g. switching between Ollama nomic-embed-text at 768 and OpenAI
+  // at 1536). Score 0 keeps the mismatch out of results instead of returning NaN.
+  if (vector1.length !== vector2.length) return 0;
   const dotProduct = vector1.reduce((sum, value, index) => sum + value * vector2[index], 0);
   const magnitude1 = Math.sqrt(vector1.reduce((sum, value) => sum + value * value, 0));
   const magnitude2 = Math.sqrt(vector2.reduce((sum, value) => sum + value * value, 0));

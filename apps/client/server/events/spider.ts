@@ -595,15 +595,22 @@ export const handler = withEventContext(async (event, logger) => {
         const embeddingModel = defaultEmbeddingModel as SupportedEmbeddingModel;
         const requiredProvider = getProviderFromModel(embeddingModel);
 
-        const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+        const embeddingConfig: {
+          openaiApiKey?: string | null;
+          voyageApiKey?: string | null;
+          ollamaBaseUrl?: string | null;
+        } = {};
 
         if (requiredProvider === 'openai' && apiKeyTable?.openai) {
           embeddingConfig.openaiApiKey = apiKeyTable.openai;
         } else if (requiredProvider === 'voyageai' && apiKeyTable?.voyageai) {
           embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+        } else if (requiredProvider === 'ollama' && apiKeyTable?.ollama) {
+          // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+          embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
         }
 
-        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey) {
+        if (embeddingConfig.openaiApiKey || embeddingConfig.voyageApiKey || embeddingConfig.ollamaBaseUrl) {
           const embeddingFactory = new EmbeddingFactory(embeddingConfig);
           deps.embeddingService = embeddingFactory.createEmbeddingService(embeddingModel);
           deps.embeddingModel = embeddingModel;

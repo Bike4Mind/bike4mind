@@ -48,7 +48,7 @@ export interface SemanticDataLakeSearchParams {
   topK?: number;
   minScore?: number;
   embeddingModel: SupportedEmbeddingModel;
-  apiKeyTable: { openai?: string | null; voyageai?: string | null } | null | undefined;
+  apiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null } | null | undefined;
   /** datalake:* meta-tags for the user's accessible lakes (caller-computed). */
   dataLakeTags: string[];
   /** OPEN static-registry content-tag prefixes (e.g. 'opti:') - ownership-bypass by design. */
@@ -101,13 +101,18 @@ export async function semanticDataLakeSearch(
 
   // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
   const provider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
+    {};
   if (provider === 'openai') {
     if (!apiKeyTable?.openai) throw new Error('OpenAI API key required for semantic search but not found.');
     embeddingConfig.openaiApiKey = apiKeyTable.openai;
   } else if (provider === 'voyageai') {
     if (!apiKeyTable?.voyageai) throw new Error('VoyageAI API key required for semantic search but not found.');
     embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+  } else if (provider === 'ollama') {
+    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+    if (!apiKeyTable?.ollama) throw new Error('Ollama base URL required for semantic search but not found.');
+    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
   }
   const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
   const queryEmbedding = await embeddingService.generateEmbedding(query);

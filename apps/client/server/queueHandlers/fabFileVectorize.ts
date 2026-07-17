@@ -112,19 +112,26 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     const requiredProvider = getProviderFromModel(embeddingModel);
 
     // Only pass the API key for the provider that will be used
-    const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+    const embeddingConfig: {
+      openaiApiKey?: string | null;
+      voyageApiKey?: string | null;
+      ollamaBaseUrl?: string | null;
+    } = {};
 
     if (requiredProvider === 'openai') {
       embeddingConfig.openaiApiKey = apiKeyTable?.openai;
     } else if (requiredProvider === 'voyageai') {
       embeddingConfig.voyageApiKey = apiKeyTable?.voyageai;
+    } else if (requiredProvider === 'ollama') {
+      // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+      embeddingConfig.ollamaBaseUrl = apiKeyTable?.ollama;
     }
 
     // Bedrock doesn't need API keys as it uses AWS credentials
 
     const embeddingService = new EmbeddingFactory(embeddingConfig);
 
-    const embeddingProvider = embeddingService.createEmbeddingService(embeddingModel as any);
+    const embeddingProvider = embeddingService.createEmbeddingService(embeddingModel);
 
     // Pre-flight: filter out chunks that exceed the model's context window.
     // These cannot be embedded and would cause the entire batch to fail.
