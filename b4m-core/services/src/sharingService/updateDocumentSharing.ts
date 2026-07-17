@@ -47,8 +47,13 @@ export const updateDocumentSharing = async (
   ) as Record<string, unknown>;
 
   // Targeted write: persist only the two sharing flags this endpoint owns, so the
-  // stored fileUrl / updatedAt / any read-to-write drift are left untouched.
-  await dbModel.update({ id, isGlobalRead, isGlobalWrite } as never);
+  // stored fileUrl / updatedAt / any read-to-write drift are left untouched. Branch
+  // per type so each concrete repo's Partial<T> accepts the payload (no union cast).
+  if (type === 'files') {
+    await db.fabFiles.update({ id, isGlobalRead, isGlobalWrite });
+  } else {
+    await db.sessions.update({ id, isGlobalRead, isGlobalWrite });
+  }
 
   plain.isGlobalRead = isGlobalRead;
   plain.isGlobalWrite = isGlobalWrite;

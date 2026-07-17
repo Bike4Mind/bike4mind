@@ -39,6 +39,10 @@ export const refuseWholeInvite = async (
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
 
+  // NOTE: createInvite stores `pending: []` for a link invite (not undefined), so an
+  // empty pending list means "link invite OR a fully-consumed email invite" - both are
+  // treated as public-refusable here. Only a still-pending email invite (a non-empty
+  // pending list) is restricted to its named recipients.
   const pending = invite.recipients?.pending;
   const isEmailInvite = Array.isArray(pending) && pending.length > 0;
   const isPendingRecipient = isEmailInvite && !!user.email && pending!.includes(user.email);
