@@ -22,9 +22,10 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 const refuseWholeInvite = vi.hoisted(() => vi.fn());
+const sendToClient = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({ sharingService: { refuseWholeInvite } }));
 vi.mock('@bike4mind/database', () => ({ inviteRepository: {}, userRepository: {} }));
-vi.mock('@server/websocket/utils', () => ({ sendToClient: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('@server/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
 
 import '@pages/api/invites/[id]/refuse';
@@ -32,18 +33,30 @@ import '@pages/api/invites/[id]/refuse';
 describe('POST /api/invites/[id]/refuse', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('delegates to refuseWholeInvite with the caller id + isPublic flag', async () => {
+  it('delegates to refuseWholeInvite with the caller id (no client public flag) and fires the WS refetch', async () => {
     refuseWholeInvite.mockResolvedValue({ id: 'inv-1', remaining: 0 });
+    // a `public: true` body is ignored - the route no longer forwards it
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv-1' }, body: { public: true } });
     (req as any).user = { id: 'u1' };
     await mockRefs.postHandler!(req, res);
 
     expect(refuseWholeInvite).toHaveBeenCalledWith(
       'u1',
-      { id: 'inv-1', isPublic: true },
+      { id: 'inv-1' },
       expect.objectContaining({ db: expect.any(Object) })
     );
+    expect(sendToClient).toHaveBeenCalledOnce();
     expect(res._getJSONData()).toEqual({ id: 'inv-1', remaining: 0 });
+  });
+
+  it('returns 404 without firing the WS event when the invite is gone', async () => {
+    refuseWholeInvite.mockResolvedValue(null);
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv-1' }, body: {} });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(404);
+    expect(sendToClient).not.toHaveBeenCalled();
   });
 
   it('returns 400 when id is missing', async () => {

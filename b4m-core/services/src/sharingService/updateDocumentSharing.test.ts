@@ -18,12 +18,11 @@ describe('sharingService - updateDocumentSharing', () => {
     };
   });
 
-  it('updates a session and persists the sharing flags', async () => {
-    db.sessions.shareable.findUpdateAccessById.mockResolvedValue({
-      id: 's1',
-      isGlobalRead: false,
-      isGlobalWrite: false,
-    });
+  it('updates a session and returns the re-read persisted flags', async () => {
+    // pre-write read (auth), then the post-write re-read reflecting the persisted flags
+    db.sessions.shareable.findUpdateAccessById
+      .mockResolvedValueOnce({ id: 's1', isGlobalRead: false, isGlobalWrite: false })
+      .mockResolvedValueOnce({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
 
     const result = await updateDocumentSharing(
       user,

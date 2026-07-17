@@ -6,27 +6,27 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { sendToClient } from '@server/websocket/utils';
 import { sharingService } from '@bike4mind/services';
 import { inviteRepository, userRepository } from '@bike4mind/database';
-import * as z from 'zod';
 import { Resource } from 'sst';
-
-const isPublicSchema = z.object({
-  public: z.boolean().optional(),
-});
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const id = req.query.id;
-    const params = isPublicSchema.parse(req.body);
 
     if (!id) {
       return res.status(400).json({ message: 'Invalid refuse invite request' });
     }
 
+    // Public-ness (link vs email invite) is derived from invite state in the service;
+    // no client-supplied flag is trusted for the recipient check.
     const invite = await sharingService.refuseWholeInvite(
       req.user.id,
-      { id, isPublic: !!params.public },
+      { id },
       { db: { invites: inviteRepository, users: userRepository } }
     );
+
+    if (!invite) {
+      return res.status(404).json({ message: 'Invite not found' });
+    }
 
     // trigger refetch on inbox
     const wsEndpoint = Resource.websocket.managementEndpoint;

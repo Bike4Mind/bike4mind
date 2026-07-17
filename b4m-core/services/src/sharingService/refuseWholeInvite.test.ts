@@ -48,16 +48,19 @@ describe('sharingService - refuseWholeInvite', () => {
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
-  it('allows an isPublic refuse regardless of the pending list', async () => {
-    const invite = {
+  it('ignores a client-supplied public flag - a non-recipient is still denied on an email invite', async () => {
+    db.invites.findById.mockResolvedValue({
       id: 'inv-1',
       remaining: 1,
       recipients: { pending: ['other@example.com'], accepted: [], refused: [] },
-    };
-    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+    });
 
-    await refuseWholeInvite(userId, { id: 'inv-1', isPublic: true }, { db } as any);
-    expect(db.invites.update).toHaveBeenCalled();
+    // A stray `isPublic: true` is stripped by secureParameters; public-ness is derived
+    // from invite state, so it cannot reopen the arbitrary-refuse hole.
+    await expect(refuseWholeInvite(userId, { id: 'inv-1', isPublic: true } as any, { db } as any)).rejects.toThrow(
+      ForbiddenError
+    );
+    expect(db.invites.update).not.toHaveBeenCalled();
   });
 
   it('allows refusing a link invite (no pending list) by anyone', async () => {

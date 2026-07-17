@@ -44,11 +44,11 @@ describe('GET /api/invites', () => {
     expect(res._getJSONData()).toEqual([{ id: 'i1' }]);
   });
 
-  it('defaults pagination when not supplied', async () => {
+  it('defaults to returning all pending invites (limit 1000) when pagination is not supplied', async () => {
     listOwnPendingInvites.mockResolvedValue({ data: [], total: 0 });
     const { req, res } = createMocks({ method: 'GET', query: {} });
     (req as any).user = { id: 'u1' };
     await mockRefs.getHandler!(req, res);
-    expect(listOwnPendingInvites).toHaveBeenCalledWith(req.user, { limit: 20, page: 1 }, expect.any(Object));
+    expect(listOwnPendingInvites).toHaveBeenCalledWith(req.user, { limit: 1000, page: 1 }, expect.any(Object));
   });
 });

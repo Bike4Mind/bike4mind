@@ -63,6 +63,57 @@ describe('sharingService - cancelInviteById', () => {
     expect(db.invites.update).not.toHaveBeenCalled();
   });
 
+  it('authorizes an Organization invite for an admin via findById', async () => {
+    const admin = { id: 'admin-1', isAdmin: true } as any;
+    const invite = {
+      id: 'inv-1',
+      type: InviteType.Organization,
+      documentId: 'org-1',
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+    db.organizations.findById.mockResolvedValue({ id: 'org-1' });
+
+    await cancelInviteById(admin, { id: 'inv-1' }, { db } as any);
+
+    expect(db.organizations.findById).toHaveBeenCalledWith('org-1');
+    expect(db.organizations.shareable.findShareAccessById).not.toHaveBeenCalled();
+    expect(db.invites.update).toHaveBeenCalled();
+  });
+
+  it('authorizes a Group invite via the parent organization share access (no admin bypass)', async () => {
+    const invite = {
+      id: 'inv-1',
+      type: InviteType.Group,
+      documentId: 'grp-1',
+      remaining: 1,
+      recipients: { pending: [], accepted: [], refused: [] },
+    };
+    db.invites.findById.mockResolvedValueOnce(invite).mockResolvedValueOnce({ ...invite });
+    db.groups.findById.mockResolvedValue({ id: 'grp-1', organizationId: 'org-1' });
+    db.organizations.shareable.findShareAccessById.mockResolvedValue({ id: 'org-1' });
+
+    await cancelInviteById(user, { id: 'inv-1' }, { db } as any);
+
+    expect(db.organizations.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'org-1');
+    expect(db.invites.update).toHaveBeenCalled();
+  });
+
+  it('denies a Group invite whose parent group is missing', async () => {
+    db.invites.findById.mockResolvedValue({
+      id: 'inv-1',
+      type: InviteType.Group,
+      documentId: 'grp-gone',
+      remaining: 1,
+      recipients: {},
+    });
+    db.groups.findById.mockResolvedValue(null);
+
+    await expect(cancelInviteById(user, { id: 'inv-1' }, { db } as any)).rejects.toThrow(UnauthorizedError);
+    expect(db.invites.update).not.toHaveBeenCalled();
+  });
+
   it('throws NotFoundError when the invite does not exist', async () => {
     db.invites.findById.mockResolvedValue(null);
     await expect(cancelInviteById(user, { id: 'missing' }, { db } as any)).rejects.toThrow(NotFoundError);

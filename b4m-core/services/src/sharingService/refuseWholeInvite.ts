@@ -4,7 +4,6 @@ import { z } from 'zod';
 
 const refuseWholeInviteSchema = z.object({
   id: z.string(),
-  isPublic: z.boolean().optional().default(false),
 });
 
 type RefuseWholeInviteParameters = z.infer<typeof refuseWholeInviteSchema>;
@@ -22,16 +21,17 @@ interface RefuseWholeInviteAdapters {
  * distinct from the own-slot `refuse`). Authorization replaces the manager's CASL
  * `acceptOrRefuse` scope, which was computed-then-ignored - so the manager let ANY
  * authenticated user refuse ANY invite. We now require the caller to actually be a
- * recipient: an email invite (pending set) may only be refused by a pending
- * recipient; a link invite (no pending list) or an explicit `isPublic` refuse is
- * open, matching the CASL `$or` arm.
+ * recipient: an email invite (pending set) may only be refused by a pending recipient;
+ * a link invite (no pending list) is open, matching the CASL `$or` arm. Public-ness is
+ * derived from invite state, NOT from a request flag - trusting a client `isPublic`
+ * would reopen the arbitrary-refuse hole this closes.
  */
 export const refuseWholeInvite = async (
   userId: string,
   parameters: RefuseWholeInviteParameters,
   { db }: RefuseWholeInviteAdapters
 ): Promise<IInviteDocument | null> => {
-  const { id, isPublic } = secureParameters(parameters, refuseWholeInviteSchema);
+  const { id } = secureParameters(parameters, refuseWholeInviteSchema);
 
   const user = await db.users.findById(userId);
   if (!user) throw new NotFoundError('User not found');
@@ -39,14 +39,14 @@ export const refuseWholeInvite = async (
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');
 
-  // NOTE: createInvite stores `pending: []` for a link invite (not undefined), so an
-  // empty pending list means "link invite OR a fully-consumed email invite" - both are
-  // treated as public-refusable here. Only a still-pending email invite (a non-empty
-  // pending list) is restricted to its named recipients.
+  // createInvite stores `pending: []` for a link invite (not undefined), so an empty
+  // pending list means "link invite OR a fully-consumed email invite" - both are open
+  // to a public refuse. Only a still-pending email invite (a non-empty pending list)
+  // is restricted to its named recipients.
   const pending = invite.recipients?.pending;
   const isEmailInvite = Array.isArray(pending) && pending.length > 0;
   const isPendingRecipient = isEmailInvite && !!user.email && pending!.includes(user.email);
-  if (!isPublic && isEmailInvite && !isPendingRecipient) {
+  if (isEmailInvite && !isPendingRecipient) {
     throw new ForbiddenError('Not authorized to refuse this invite');
   }
 

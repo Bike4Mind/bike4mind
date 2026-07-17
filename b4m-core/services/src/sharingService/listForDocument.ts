@@ -56,11 +56,12 @@ export const listInvitesForDocument = async (
       ? await db.organizations.findById(documentId)
       : await db.organizations.shareable.findShareAccessById(user, documentId);
   } else if (type === InviteType.Group) {
+    // Group share access is the parent org's share access, checked unconditionally
+    // (no isAdmin short-circuit) to match the sibling `cancelInvite`/`createInvite`:
+    // ability.ts grants admins read/update/delete on Organization but NOT share.
     const group = await db.groups.findById(documentId);
     if (group) {
-      authorized = user.isAdmin
-        ? await db.organizations.findById(group.organizationId)
-        : await db.organizations.shareable.findShareAccessById(user, group.organizationId);
+      authorized = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
     }
   }
 

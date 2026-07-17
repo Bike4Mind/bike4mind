@@ -6,8 +6,11 @@ import { inviteRepository } from '@bike4mind/database';
 import { sharingService } from '@bike4mind/services';
 import { z } from 'zod';
 
+// The pre-consolidation CASL path returned every pending invite with no pagination, so
+// default `limit` to the service's own 1000 ceiling to preserve that "return all" wire
+// contract for external clients (no silent truncation). Pagination stays opt-in via query.
 const paginationSchema = z.object({
-  limit: z.coerce.number().min(1).max(100).prefault(20),
+  limit: z.coerce.number().min(1).max(1000).prefault(1000),
   page: z.coerce.number().min(1).prefault(1),
 });
 

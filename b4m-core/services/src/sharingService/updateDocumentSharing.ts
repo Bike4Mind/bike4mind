@@ -37,26 +37,28 @@ export const updateDocumentSharing = async (
   const document = await dbModel.shareable.findUpdateAccessById(user, id);
   if (!document) throw new NotFoundError(`${type} not found for ${id}`);
 
-  // findUpdateAccessById returns a hydrated Mongoose doc; normalize to a plain object
-  // before mutating/returning (per organizationService.update) so the response shape is
-  // correct and the field strip below actually takes effect.
-  const plain = (
-    typeof (document as { toJSON?: unknown }).toJSON === 'function'
-      ? (document as unknown as { toJSON: () => Record<string, unknown> }).toJSON()
-      : document
-  ) as Record<string, unknown>;
-
   // Targeted write: persist only the two sharing flags this endpoint owns, so the
-  // stored fileUrl / updatedAt / any read-to-write drift are left untouched. Branch
-  // per type so each concrete repo's Partial<T> accepts the payload (no union cast).
+  // stored fileUrl is left untouched. Branch per type so each concrete repo's
+  // Partial<T> accepts the payload (no union cast).
   if (type === 'files') {
     await db.fabFiles.update({ id, isGlobalRead, isGlobalWrite });
   } else {
     await db.sessions.update({ id, isGlobalRead, isGlobalWrite });
   }
 
-  plain.isGlobalRead = isGlobalRead;
-  plain.isGlobalWrite = isGlobalWrite;
+  // Re-read the persisted doc so the response reflects the post-write state (fresh
+  // updatedAt/flags), matching the re-read pattern the other consolidated fns use;
+  // fall back to the pre-write doc if the re-read races to null.
+  const persisted = (await dbModel.shareable.findUpdateAccessById(user, id)) ?? document;
+
+  // findUpdateAccessById returns a hydrated Mongoose doc; normalize to a plain object
+  // (per organizationService.update) so the response shape is correct and the field
+  // strip below actually takes effect.
+  const plain = (
+    typeof (persisted as { toJSON?: unknown }).toJSON === 'function'
+      ? (persisted as unknown as { toJSON: () => Record<string, unknown> }).toJSON()
+      : persisted
+  ) as Record<string, unknown>;
 
   // FabFile leak-gate: withhold the signed URL from the RESPONSE for a non-image-serveable
   // file (response-only - the stored URL was never in the write above).

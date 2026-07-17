@@ -70,6 +70,27 @@ describe('sharingService - listInvitesForDocument', () => {
     );
   });
 
+  it('authorizes an Organization invite for an admin via findById', async () => {
+    const admin = { id: 'admin-1', isAdmin: true } as any;
+    db.organizations.findById.mockResolvedValue({ id: documentId });
+    db.invites.findAllByDocumentId.mockResolvedValue([{ id: 'i9', documentId, type: InviteType.Organization }]);
+
+    const result = await listInvitesForDocument(admin, { documentId, type: InviteType.Organization }, { db } as any);
+
+    expect(db.organizations.findById).toHaveBeenCalledWith(documentId);
+    expect(db.organizations.shareable.findShareAccessById).not.toHaveBeenCalled();
+    expect(result).toHaveLength(1);
+  });
+
+  it('denies a Group whose parent group is missing', async () => {
+    db.groups.findById.mockResolvedValue(null);
+
+    await expect(listInvitesForDocument(user, { documentId, type: InviteType.Group }, { db } as any)).rejects.toThrow(
+      UnauthorizedError
+    );
+    expect(db.invites.findAllByDocumentId).not.toHaveBeenCalled();
+  });
+
   it('returns an empty array when the document has no invites of that type', async () => {
     db.sessions.shareable.findShareAccessById.mockResolvedValue({ id: documentId });
     db.invites.findAllByDocumentId.mockResolvedValue([]);
