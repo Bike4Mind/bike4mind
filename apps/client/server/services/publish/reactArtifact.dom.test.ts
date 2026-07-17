@@ -93,6 +93,25 @@ describe('published bundle executes in a DOM', () => {
     expect(buttons.length).toBe(1);
     expect(buttons[0].textContent).toBe('+');
   });
+
+  it('resolves a blessed dep through the bundle moduleMap/require (window global -> component)', async () => {
+    installReactStub();
+    // The bundle maps 'lodash' -> window._ in its moduleMap; stub that global so require('lodash')
+    // resolves to it. A wrong moduleMap key or a UMD-global typo would make require throw
+    // ("Module ... is not available") -> the bootstrap renders "Error:" and this test fails.
+    (window as any)._ = { capitalize: (s: string) => s.toUpperCase() };
+    const src = `import { capitalize } from 'lodash';
+export default function C() {
+  return <div>{capitalize('hi')}</div>;
+}`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+
+    new Function(extractBootstrap(indexHtml))();
+
+    const root = document.getElementById('root')!;
+    expect(root.textContent).not.toContain('Error:');
+    expect(root.textContent).toContain('HI'); // capitalize ran via require('lodash') -> window._
+  });
 });
 
 describe('LUCIDE_WRAPPER_FN executes (the icon logic that previously shipped invisible icons)', () => {
