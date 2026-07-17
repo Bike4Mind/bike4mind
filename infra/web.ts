@@ -31,6 +31,7 @@ import {
   slackExportQueue,
   githubWebhookQueue,
   questExportQueue,
+  dataLakeCleanupQueue,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -151,6 +152,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     overwatchAnalyticsQueue: overwatchAnalyticsQueue.url,
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
+    dataLakeCleanupQueue: dataLakeCleanupQueue.url,
   },
 });
 

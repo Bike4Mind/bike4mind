@@ -611,6 +611,34 @@ const questExportQueueSubscription = questExportQueue.subscribe(
   SINGLE_RECORD_BATCH
 );
 
+// Data Lake Cleanup Queue
+// Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
+// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
+const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: dataLakeCleanupQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeCleanup.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
+
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
 const whatsNewHighlightsQueueDLQ = new sst.aws.Queue('whatsNewHighlightsQueueDLQ', {
@@ -1162,6 +1190,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  dataLakeCleanupQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1186,6 +1215,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  dataLakeCleanupQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1212,6 +1242,7 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  dataLakeCleanupQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

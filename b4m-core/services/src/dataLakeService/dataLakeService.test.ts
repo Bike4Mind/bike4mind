@@ -466,6 +466,27 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     ).resolves.toBeUndefined();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
+
+  it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['f1', 'f2', 'f3']);
+    adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });
+
+    // Every file's chunks and every batch are still deleted, despite the chunk size < count.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(3);
+    expect(adapters.db.batches.delete).toHaveBeenCalledTimes(3);
+
+    // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
+    const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
+    const hardDelete = adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0];
+    const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
+    const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
+    expect(lastChunk).toBeLessThan(hardDelete);
+    expect(hardDelete).toBeLessThan(firstBatch);
+    expect(firstBatch).toBeLessThan(lakeDelete);
+  });
 });
 
 describe('reconcileStuckBatches — guarded read-time reconciliation', () => {

@@ -467,10 +467,20 @@ export async function apiUpdateDataLake(
  * then irreversible cleanup (phase 2). The DELETE route only *archives* (reversible), which
  * would leave test lakes accumulating on the shared stage, so we drive the purge directly.
  * Never throws so an afterAll cleanup can't fail a green run.
+ *
+ * Cleanup is enqueued to a background queue (returns 202), so poll until the lake record is
+ * actually gone before returning - otherwise teardown races the consumer and leaves lakes on
+ * the shared stage. Bounded so a slow/stuck consumer can't hang the suite.
  */
 export async function apiDeleteDataLake(request: APIRequestContext, token: string, dataLakeId: string): Promise<void> {
   await apiLakeLifecycle(request, token, dataLakeId, 'delete').catch(() => 0);
   await apiLakeLifecycle(request, token, dataLakeId, 'cleanup').catch(() => 0);
+  for (let i = 0; i < 20; i++) {
+    // The lake record is deleted last, so a not-found on its articles means the sweep finished.
+    const status = await apiGetDataLakeArticlesStatus(request, token, dataLakeId).catch(() => 0);
+    if (status === 404) return;
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
 }
 
 interface SkillSeed {

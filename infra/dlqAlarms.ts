@@ -31,6 +31,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  dataLakeCleanupQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -210,6 +211,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'QuestExport',
     sourceQueue: 'questExportQueue',
     queue: questExportQueueDLQ,
+  },
+  {
+    label: 'data-lake-cleanup',
+    displayName: 'Data Lake Cleanup',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeCleanupQueue',
+    queue: dataLakeCleanupQueueDLQ,
   },
   {
     label: 'video-generation',
