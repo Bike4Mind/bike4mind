@@ -30,10 +30,17 @@ export class ApiClient {
   private client: AxiosInstance;
   private configStore: ConfigStore;
   private oauthClient: OAuthClient;
+  private apiKey?: string;
 
-  constructor(baseURL: string = 'http://localhost:3000', configStore?: ConfigStore) {
+  /**
+   * @param apiKey - When set, requests authenticate with this instance API key via
+   *   the `x-api-key` header and the OAuth-JWT path (Bearer injection + refresh-on-401)
+   *   is bypassed entirely. Omit to keep the default stored-JWT behavior unchanged.
+   */
+  constructor(baseURL: string = 'http://localhost:3000', configStore?: ConfigStore, apiKey?: string) {
     this.configStore = configStore || new ConfigStore();
     this.oauthClient = new OAuthClient(baseURL);
+    this.apiKey = apiKey;
 
     this.client = axios.create({
       baseURL,
@@ -44,9 +51,15 @@ export class ApiClient {
       },
     });
 
-    // Add request interceptor to inject access token
+    // Add request interceptor to inject credentials. An API key takes precedence and
+    // never mixes with a stored JWT - the two auth schemes are mutually exclusive.
     this.client.interceptors.request.use(
       async config => {
+        if (this.apiKey) {
+          config.headers['x-api-key'] = this.apiKey;
+          return config;
+        }
+
         const tokens = await this.configStore.getAuthTokens();
 
         if (tokens) {
@@ -69,6 +82,12 @@ export class ApiClient {
           logger.debug('AUTH: Received 401 Unauthorized');
         } else if (error.response?.status === 403) {
           logger.error('403 Forbidden', error);
+        }
+
+        // API-key auth has no refresh token to rotate, so a 401 is terminal - skip
+        // the JWT refresh dance and let the caller surface it.
+        if (this.apiKey) {
+          return Promise.reject(error);
         }
 
         // If 401 and we haven't retried yet, try to refresh token

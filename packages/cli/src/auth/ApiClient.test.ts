@@ -128,3 +128,54 @@ describe('ApiClient.checkSessionValid', () => {
     expect(await client.checkSessionValid()).toBe(true);
   });
 });
+
+describe('ApiClient API key auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('injects x-api-key and never a Bearer token when an API key is set', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(ok(config));
+    }) as AxiosAdapter;
+
+    await client.get('/api/sessions');
+
+    expect(seen?.headers['x-api-key']).toBe('b4m_live_secret');
+    expect(seen?.headers.Authorization).toBeUndefined();
+    // The stored-JWT path must not be consulted at all when an API key is present.
+    expect(mockGetAuthTokens).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a token refresh on 401 when an API key is set', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+
+    await expect(client.get('/api/sessions')).rejects.toBeInstanceOf(AxiosError);
+    expect(mockRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('still injects a Bearer token when no API key is set (unchanged JWT path)', async () => {
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'jwt-token',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      userId: 'user-1',
+    });
+    const client = new ApiClient('http://localhost:3000');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(ok(config));
+    }) as AxiosAdapter;
+
+    await client.get('/api/sessions');
+
+    expect(seen?.headers.Authorization).toBe('Bearer jwt-token');
+    expect(seen?.headers['x-api-key']).toBeUndefined();
+  });
+});
