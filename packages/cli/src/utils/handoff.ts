@@ -151,8 +151,10 @@ function selectHandoffExcerpt(filtered: Message[]): {
   if (summaryIdx !== -1) {
     head = [filtered[summaryIdx]];
     headEndExclusive = summaryIdx + 1;
-  } else if (filtered.some(m => m.content.startsWith(COMPACTION_SUMMARY_MARKER))) {
+  } else if (tail.some(m => m.content.startsWith(COMPACTION_SUMMARY_MARKER))) {
     // A summary exists only inside the tail window - already shown, so no head.
+    // The backward loop above already proved [0, tailStart) has no marker, so
+    // scanning only the tail is equivalent and states the intent directly.
     head = [];
     headEndExclusive = 0;
   } else {
