@@ -219,6 +219,24 @@ Already run Ollama on the host (e.g. a native GPU install)? Skip the `ollama` pr
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
+## Local web search (no SerpAPI key)
+
+The `web_search` tool (and `deep_research`) can run against a self-hosted [SearXNG](https://docs.searxng.org/) metasearch engine instead of the paid SerpAPI, so search works with **no external search key**. The stack bundles an optional `searxng` service.
+
+1. In `.env.selfhost`, uncomment `SEARXNG_BASE_URL`:
+
+   ```bash
+   SEARXNG_BASE_URL=http://searxng:8080
+   ```
+
+2. Bring the stack up with the `search` profile:
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
+   ```
+
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
