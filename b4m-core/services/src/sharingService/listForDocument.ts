@@ -1,16 +1,7 @@
-import {
-  IFabFileRepository,
-  IGroupDocument,
-  IInviteDocument,
-  IInviteRepository,
-  InviteType,
-  IOrganizationRepository,
-  IProjectRepository,
-  ISessionRepository,
-  IUserDocument,
-} from '@bike4mind/common';
-import { secureParameters, UnauthorizedError } from '@bike4mind/utils';
+import { IInviteDocument, IInviteRepository, InviteType, IUserDocument } from '@bike4mind/common';
+import { secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
+import { authorizeByInviteType, InviteTypeAuthAdapters } from './authorizeByInviteType';
 
 const listInvitesForDocumentSchema = z.object({
   documentId: z.string(),
@@ -20,22 +11,15 @@ const listInvitesForDocumentSchema = z.object({
 type ListInvitesForDocumentParameters = z.infer<typeof listInvitesForDocumentSchema>;
 
 interface ListInvitesForDocumentAdapters {
-  db: {
+  db: InviteTypeAuthAdapters & {
     invites: Pick<IInviteRepository, 'findAllByDocumentId'>;
-    fabFiles: Pick<IFabFileRepository, 'shareable'>;
-    sessions: Pick<ISessionRepository, 'shareable'>;
-    projects: Pick<IProjectRepository, 'shareable'>;
-    organizations: Pick<IOrganizationRepository, 'shareable' | 'findById'>;
-    groups: { findById: (id: string) => Promise<IGroupDocument | null> };
   };
 }
 
 /**
- * Lists every invite on a shareable document. Share-scoped: the caller must have
- * share access to the document (owner or a users[]-with-share grant), matching the
- * app-level CASL `Permission.share` this replaced. NOTE: the group-share arm CASL
- * also matched is not covered by `findShareAccessById` - a small pre-existing
- * narrowing shared with `createInvite`/`cancelInvite`.
+ * Lists every invite on a shareable document, filtered to the given type. Share-scoped
+ * via `authorizeByInviteType` (owner / users-share / groups-share, replacing the
+ * app-level CASL `Permission.share`).
  */
 export const listInvitesForDocument = async (
   user: IUserDocument,
@@ -44,28 +28,7 @@ export const listInvitesForDocument = async (
 ): Promise<IInviteDocument[]> => {
   const { documentId, type } = secureParameters(parameters, listInvitesForDocumentSchema);
 
-  let authorized: unknown = null;
-  if (type === InviteType.FabFile) {
-    authorized = await db.fabFiles.shareable.findShareAccessById(user, documentId);
-  } else if (type === InviteType.Session) {
-    authorized = await db.sessions.shareable.findShareAccessById(user, documentId);
-  } else if (type === InviteType.Project) {
-    authorized = await db.projects.shareable.findShareAccessById(user, documentId);
-  } else if (type === InviteType.Organization) {
-    authorized = user.isAdmin
-      ? await db.organizations.findById(documentId)
-      : await db.organizations.shareable.findShareAccessById(user, documentId);
-  } else if (type === InviteType.Group) {
-    // Group share access is the parent org's share access, checked unconditionally
-    // (no isAdmin short-circuit) to match the sibling `cancelInvite`/`createInvite`:
-    // ability.ts grants admins read/update/delete on Organization but NOT share.
-    const group = await db.groups.findById(documentId);
-    if (group) {
-      authorized = await db.organizations.shareable.findShareAccessById(user, group.organizationId);
-    }
-  }
-
-  if (!authorized) throw new UnauthorizedError('Unauthorized');
+  await authorizeByInviteType(user, type, documentId, db);
 
   const invites = await db.invites.findAllByDocumentId(documentId);
   return invites.filter(invite => invite.type === type);

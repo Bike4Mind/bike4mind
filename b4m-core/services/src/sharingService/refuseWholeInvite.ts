@@ -1,4 +1,4 @@
-import { IInviteDocument, IInviteRepository, IUserRepository } from '@bike4mind/common';
+import { IInviteDocument, IInviteRepository, IUserDocument } from '@bike4mind/common';
 import { ForbiddenError, NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -11,7 +11,6 @@ type RefuseWholeInviteParameters = z.infer<typeof refuseWholeInviteSchema>;
 interface RefuseWholeInviteAdapters {
   db: {
     invites: Pick<IInviteRepository, 'findById' | 'update'>;
-    users: Pick<IUserRepository, 'findById'>;
   };
 }
 
@@ -24,17 +23,15 @@ interface RefuseWholeInviteAdapters {
  * recipient: an email invite (pending set) may only be refused by a pending recipient;
  * a link invite (no pending list) is open, matching the CASL `$or` arm. Public-ness is
  * derived from invite state, NOT from a request flag - trusting a client `isPublic`
- * would reopen the arbitrary-refuse hole this closes.
+ * would reopen the arbitrary-refuse hole this closes. Takes the resolved user doc, like
+ * its sibling sharing-service fns.
  */
 export const refuseWholeInvite = async (
-  userId: string,
+  user: Pick<IUserDocument, 'email'>,
   parameters: RefuseWholeInviteParameters,
   { db }: RefuseWholeInviteAdapters
 ): Promise<IInviteDocument | null> => {
   const { id } = secureParameters(parameters, refuseWholeInviteSchema);
-
-  const user = await db.users.findById(userId);
-  if (!user) throw new NotFoundError('User not found');
 
   const invite = await db.invites.findById(id);
   if (!invite) throw new NotFoundError('Invite not found');

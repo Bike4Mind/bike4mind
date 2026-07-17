@@ -24,7 +24,7 @@ vi.mock('@server/middlewares/baseApi', () => {
 const refuseWholeInvite = vi.hoisted(() => vi.fn());
 const sendToClient = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@bike4mind/services', () => ({ sharingService: { refuseWholeInvite } }));
-vi.mock('@bike4mind/database', () => ({ inviteRepository: {}, userRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ inviteRepository: {} }));
 vi.mock('@server/websocket/utils', () => ({ sendToClient }));
 vi.mock('sst', () => ({ Resource: { websocket: { managementEndpoint: 'ws://test' } } }));
 
@@ -33,15 +33,15 @@ import '@pages/api/invites/[id]/refuse';
 describe('POST /api/invites/[id]/refuse', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('delegates to refuseWholeInvite with the caller id (no client public flag) and fires the WS refetch', async () => {
+  it('delegates to refuseWholeInvite with the caller doc (no client public flag) and fires the WS refetch', async () => {
     refuseWholeInvite.mockResolvedValue({ id: 'inv-1', remaining: 0 });
     // a `public: true` body is ignored - the route no longer forwards it
     const { req, res } = createMocks({ method: 'POST', query: { id: 'inv-1' }, body: { public: true } });
-    (req as any).user = { id: 'u1' };
+    (req as any).user = { id: 'u1', email: 'u1@example.com' };
     await mockRefs.postHandler!(req, res);
 
     expect(refuseWholeInvite).toHaveBeenCalledWith(
-      'u1',
+      req.user,
       { id: 'inv-1' },
       expect.objectContaining({ db: expect.any(Object) })
     );

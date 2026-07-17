@@ -5,7 +5,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToClient } from '@server/websocket/utils';
 import { sharingService } from '@bike4mind/services';
-import { inviteRepository, userRepository } from '@bike4mind/database';
+import { inviteRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
 
 const handler = baseApi().post(
@@ -18,11 +18,7 @@ const handler = baseApi().post(
 
     // Public-ness (link vs email invite) is derived from invite state in the service;
     // no client-supplied flag is trusted for the recipient check.
-    const invite = await sharingService.refuseWholeInvite(
-      req.user.id,
-      { id },
-      { db: { invites: inviteRepository, users: userRepository } }
-    );
+    const invite = await sharingService.refuseWholeInvite(req.user, { id }, { db: { invites: inviteRepository } });
 
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found' });
