@@ -165,6 +165,29 @@ describe('GET /api/react-artifact-sandbox', () => {
     expect(body).not.toMatch(/presets:\s*\['react'\]/);
   });
 
+  // Regression: the transform MUST include preset-typescript (the assistant emits TS by default:
+  // types, generics, interfaces). Structural guard - the in-browser transform has no unit seam, so
+  // assert the served shell wires it. Must stay in sync with transpileReactArtifact.ts (publish).
+  it('includes the typescript preset and a .tsx filename so TS artifacts transpile', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain("'typescript'"); // preset-typescript strips TS before the JSX transform
+    expect(body).toContain("filename: 'component.tsx'"); // TSX detected via extension
+  });
+
+  // Regression: TS type-only imports (`import type ...`, inline `{ type X }`) carry no runtime
+  // binding and must be stripped BEFORE the regex require-rewrite, else they emit invalid
+  // `const { type X } = ...`. Structural guard (in-browser transform has no unit seam); mirrors
+  // stripTypeOnlyImports in the publish transpiler (transpileReactArtifact.ts).
+  it('strips TS type-only imports before rewriting to require()', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain('withoutTypeImports'); // the strip pass is wired ahead of the rewrite
+    expect(body).toContain('import\\s+type\\s+'); // whole-clause type-only import removal
+  });
+
   // Regression guard: a literal `</script>` inside a JS comment in the
   // inline <script> block terminates script data early (the HTML tokenizer doesn't parse
   // JS), truncating the script (-> "Unexpected end of input") and dumping the rest of the
