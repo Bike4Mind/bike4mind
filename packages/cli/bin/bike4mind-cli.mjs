@@ -197,7 +197,32 @@ const argv = await yargs(hideBin(process.argv))
       }, async () => {
         // Handled by external command handler
       })
-      .demandCommand(1, 'You must provide a subcommand (list, add, remove, enable, disable)');
+      .command('serve', 'Run Bike4Mind as an MCP server (stdio by default, or --http)', (yargs) => {
+        return yargs
+          .option('http', {
+            type: 'boolean',
+            description: 'Serve over streamable HTTP instead of stdio',
+            default: false,
+          })
+          .option('port', {
+            type: 'number',
+            description: 'Port for --http mode',
+            default: 7000,
+          })
+          .option('api-key', {
+            type: 'string',
+            description: 'Bike4Mind API key (overrides B4M_API_KEY and the stored login)',
+          })
+          .option('api-url', {
+            type: 'string',
+            description: 'Bike4Mind API URL (overrides B4M_API_URL and the configured backend)',
+          })
+          .example('b4m mcp serve', 'Serve over stdio for Claude Desktop and other local clients')
+          .example('b4m mcp serve --http --port 7000', 'Serve over streamable HTTP on port 7000');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .demandCommand(1, 'You must provide a subcommand (list, add, remove, enable, disable, serve)');
   })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
@@ -296,7 +321,9 @@ if (isDev) {
 // Handle --api-url / --reset-api flags
 // These mutate ~/.bike4mind/config.json and exit before any auth flow runs,
 // so devs can recover from a misconfigured customUrl without editing JSON.
-if (argv['reset-api'] || argv['api-url'] !== undefined) {
+// `mcp serve` has its own ephemeral --api-url (points that one server at a
+// backend without touching config), so skip the mutate-and-exit path for it.
+if ((argv['reset-api'] || argv['api-url'] !== undefined) && argv._[0] !== 'mcp') {
   try {
     let handleApiCommand;
 
