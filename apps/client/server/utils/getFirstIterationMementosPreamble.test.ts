@@ -15,6 +15,14 @@ vi.mock('@bike4mind/services', () => ({
   },
 }));
 
+/** V2 returns null for a user who is not on V2 - which is what hands control to the V1 path. */
+const recallMementosV2Mock =
+  vi.fn<(...args: unknown[]) => Promise<Array<{ fact: string; relevance: number }> | null>>();
+
+vi.mock('@server/memory/recallMementosV2', () => ({
+  recallMementosV2: (...args: unknown[]) => recallMementosV2Mock(...args),
+}));
+
 const makeExecution = (overrides: Partial<MementoRetrievalExecution> = {}): MementoRetrievalExecution => ({
   id: 'exec-1',
   userId: 'user-1',
@@ -45,6 +53,8 @@ describe('getFirstIterationMementosPreamble', () => {
   beforeEach(() => {
     getRelevantMementosMock.mockReset();
     getRelevantMementosMock.mockResolvedValue([]);
+    recallMementosV2Mock.mockReset();
+    recallMementosV2Mock.mockResolvedValue(null); // default: user is NOT on V2, so V1 handles it
   });
 
   it('returns a formatted preamble and mementoIds on the happy path', async () => {
@@ -57,8 +67,8 @@ describe('getFirstIterationMementosPreamble', () => {
     const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), logger);
 
     expect(getRelevantMementosMock).toHaveBeenCalledTimes(1);
-    // Verify the call passes userId, query, and the topK / minSimilarity that
-    // match MementoFeature so agent-mode and chat-mode pull the same set.
+    // The V1 path matches MementoFeature's chat-path params (topK 10, minSimilarity 0.75) so agent-mode
+    // and chat-mode pull the same set. This is the flag-OFF path, held byte-for-byte to main.
     const [userId, prompt, options] = getRelevantMementosMock.mock.calls[0] as unknown as [
       string,
       string,
@@ -69,9 +79,12 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(options.topK).toBe(10);
     expect(options.minSimilarity).toBe(0.75);
 
-    expect(preamble).toContain('[KNOWN FACTS ABOUT THE USER');
-    expect(preamble).toContain('[92% relevant] User enjoys playing chess on Saturdays');
-    expect(preamble).toContain('[81% relevant] User prefers TypeScript over JavaScript');
+    // V1 keeps its legacy KNOWN-FACTS preamble with per-memento relevance scores. (The friend-who-
+    // remembers framing is the V2 path, asserted separately below.)
+    expect(preamble).toContain('User enjoys playing chess on Saturdays');
+    expect(preamble).toContain('User prefers TypeScript over JavaScript');
+    expect(preamble).toContain('% relevant');
+    expect(preamble).toContain('KNOWN FACTS ABOUT THE USER');
     expect(mementoIds).toEqual(['m1', 'm2']);
     expect(logger.info).toHaveBeenCalledWith('[Mementos] Injected mementos into first-iteration context', {
       executionId: 'exec-1',
@@ -79,13 +92,11 @@ describe('getFirstIterationMementosPreamble', () => {
     });
   });
 
-  it('returns empty preamble and empty mementoIds when enableMementos is false', async () => {
-    const logger = makeLogger();
-
+  it('returns empty preamble and empty mementoIds when enableMementos is false and the user is not on V2', async () => {
     const { preamble, mementoIds } = await getFirstIterationMementosPreamble(
       makeExecution({ enableMementos: false }),
       makeAdapters(),
-      logger
+      makeLogger()
     );
 
     expect(preamble).toBe('');
@@ -159,5 +170,43 @@ describe('getFirstIterationMementosPreamble', () => {
     expect(preamble).toContain('User likes chess and tennis');
     expect(preamble).not.toContain('User likes\nchess');
     expect(preamble).not.toContain('chess\rand');
+  });
+
+  it('serves a V2 user from the ledger and never touches the V1 path', async () => {
+    recallMementosV2Mock.mockResolvedValueOnce([{ fact: 'User is a marine biologist', relevance: 0.61 }]);
+
+    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), makeLogger());
+
+    expect(preamble).toContain('User is a marine biologist');
+    expect(preamble).not.toContain('% relevant'); // framed as knowledge, not a scored list
+    // V2 beliefs are not V1 mementos and carry no memento id to track.
+    expect(mementoIds).toEqual([]);
+    expect(getRelevantMementosMock).not.toHaveBeenCalled();
+  });
+
+  it('gives a V2 user their memory in agent mode even with V1 switched OFF', async () => {
+    // The regression this exists for: agent mode gated retrieval on `enableMementos` alone, so a user
+    // who had moved to V2 ran completely un-personalized in agent mode while chat knew them fine. That
+    // is also the precondition for ever deleting V1 - agent mode cannot depend on the V1 flag.
+    recallMementosV2Mock.mockResolvedValueOnce([{ fact: 'User keeps a lathe in the woodshop', relevance: 0.63 }]);
+
+    const { preamble } = await getFirstIterationMementosPreamble(
+      makeExecution({ enableMementos: false }),
+      makeAdapters(),
+      makeLogger()
+    );
+
+    expect(preamble).toContain('User keeps a lathe in the woodshop');
+    expect(getRelevantMementosMock).not.toHaveBeenCalled();
+  });
+
+  it('stays silent for a V2 user whose memory has nothing relevant', async () => {
+    recallMementosV2Mock.mockResolvedValueOnce([]);
+
+    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), makeLogger());
+
+    expect(preamble).toBe('');
+    expect(mementoIds).toEqual([]);
+    expect(getRelevantMementosMock).not.toHaveBeenCalled();
   });
 });

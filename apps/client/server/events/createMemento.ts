@@ -6,23 +6,46 @@ import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline'
 import {
   ChatModels,
   isSupportedEmbeddingModel,
+  MEMENTO_EMBEDDING_MODEL,
+  toMementoVector,
   MementoTier,
   MementoType,
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
+import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
 
 const { findMostSimilarMemento } = mementoService;
 
-export const handler = withEventContext(async (event, logger) => {
-  const { userId, prompt, model, sessionId, questId } = LLMEvents.CompletionCompleted.schema.parse(event.properties);
+type EmbeddingService = ReturnType<EmbeddingFactory['createEmbeddingService']>;
 
+export const handler = withEventContext(async (event, logger) => {
+  const { userId, prompt, model, sessionId, questId, ...flags } = LLMEvents.CompletionCompleted.schema.parse(
+    event.properties
+  );
+
+  // WHICH pipelines capture this turn. The publisher resolves both (it is the only place that sees the
+  // user's opt-ins AND the admin override) - but an event in flight from before those fields existed
+  // has neither, and could only have come from the V1-gated publisher, so a missing `enableMementos`
+  // reads as true.
+  const writeV1 = flags.enableMementos ?? true;
+  const writeV2 = flags.enableMementosV2 ?? (await isMementosV2Enabled(userId).catch(() => false));
+
+  if (!writeV1 && !writeV2) {
+    logger.info('Neither memento pipeline is enabled for this user, skipping');
+    return;
+  }
+
+  // Deliberately NOT logging `prompt` or the extracted summaries: they are the exact plaintext V2
+  // encrypts, and logs have their own retention outside the crypto-shred boundary - a shred that
+  // destroys the DEK would leave the fact readable in log storage. Counts and ids only.
   logger.updateMetadata({
     userId,
-    prompt,
     model,
     sessionId,
     questId,
+    writeV1,
+    writeV2,
   });
 
   const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
@@ -37,13 +60,15 @@ export const handler = withEventContext(async (event, logger) => {
     { logger }
   );
 
-  // STEP 1: Evaluate prompt first to understand the personal information
+  // STEP 1: Evaluate the prompt into distinct facts. The fact-style extraction prompt is a V2 change:
+  // with V2 off the extraction is main's prompt, so a flag-off V1 user's mementos read exactly as before.
   const mementoEvaluator = new MementoEvaluationService(logger);
   const evaluations = await mementoEvaluator.evaluate({
     apiKeyTable,
     model: model as ChatModels,
     prompt,
     endUserId: userId,
+    factStyle: writeV2,
   });
 
   if (!evaluations || evaluations.length === 0) {
@@ -51,48 +76,86 @@ export const handler = withEventContext(async (event, logger) => {
     return;
   }
 
-  logger.updateMetadata({
-    evaluationsCount: evaluations.length,
-    evaluations,
-  });
+  logger.updateMetadata({ evaluationsCount: evaluations.length });
 
-  console.debug('Evaluation results:', { count: evaluations.length, evaluations });
+  // The V2 write. When V1 is also on the two run side by side (a flip back to V1 loses nothing); when
+  // V1 is OFF this is the only thing that persists the fact, which is what makes V2 standalone.
+  //
+  // Best-effort ONLY while V1 is also writing - if V2 is the sole pipeline, a swallowed failure would
+  // mean the user told us something and we quietly dropped it, so it must surface.
+  const sources = [sessionId, questId].filter((x): x is string => Boolean(x));
+  const writeToLedger = async (summary: string, embedding?: number[]) => {
+    if (!writeV2) return;
+    try {
+      await writeFactToLedger({ userId, summary, sources, embedding });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!writeV1) throw new Error(`Mementos V2 is the only enabled pipeline and its write failed: ${message}`);
+      logger.warn('Mementos V2: ledger write failed (V1 memento unaffected)', { error: message });
+    }
+  };
 
-  // STEP 2: Get embedding model and setup embedding service
-  const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-
-  if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-    throw new Error('Default embedding model not configured. Please configure it in admin settings.');
+  // STEP 2a: V2 embedding service. The ledger is its OWN corpus, pinned to MEMENTO_EMBEDDING_MODEL and
+  // independent of the admin `defaultEmbeddingModel` that governs V1/FAB. A missing key degrades to a
+  // vector-less ledger write (the fact stays lexically recallable and the re-embed backfill vectorizes
+  // it later) rather than dropping the fact.
+  let v2EmbeddingService: EmbeddingService | null = null;
+  if (writeV2) {
+    const v2Provider = getProviderFromModel(MEMENTO_EMBEDDING_MODEL);
+    const v2Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+    let v2KeyMissing = false;
+    if (v2Provider === 'openai') {
+      if (!apiKeyTable?.openai) v2KeyMissing = true;
+      else v2Config.openaiApiKey = apiKeyTable.openai;
+    } else if (v2Provider === 'voyageai') {
+      if (!apiKeyTable?.voyageai) v2KeyMissing = true;
+      else v2Config.voyageApiKey = apiKeyTable.voyageai;
+    }
+    if (v2KeyMissing) {
+      logger.warn(
+        `No ${v2Provider} API key for the V2 ledger embedding (${MEMENTO_EMBEDDING_MODEL}); writing facts WITHOUT a vector. They stay lexically recallable, and the re-embed backfill will vectorize them once a key is present.`
+      );
+    } else {
+      v2EmbeddingService = new EmbeddingFactory(v2Config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
+    }
   }
 
-  logger.debug('Using embedding model:', defaultEmbeddingModel);
-
-  const requiredProvider = getProviderFromModel(defaultEmbeddingModel);
-
-  // Only include the API key the chosen provider actually needs
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-
-  if (requiredProvider === 'openai') {
-    if (!apiKeyTable?.openai) {
-      throw new Error('OpenAI API key is required for embedding generation but not found. Please add your API key.');
+  // STEP 2b: V1 embedding service. Held to main's behavior exactly - the admin `defaultEmbeddingModel`,
+  // so the V1 corpus and the V1 query (getRelevantMementos) share a vector space - and a hard failure on
+  // a missing key or unconfigured model, because a V1 memento without a comparable vector is unrecallable.
+  let v1EmbeddingService: EmbeddingService | null = null;
+  if (writeV1) {
+    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
+    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
+      throw new Error('Default embedding model not configured. Please configure it in admin settings.');
     }
-    embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (requiredProvider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) {
-      throw new Error('VoyageAI API key is required for embedding generation but not found. Please add your API key.');
+    const v1Provider = getProviderFromModel(defaultEmbeddingModel);
+    const v1Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+    if (v1Provider === 'openai') {
+      if (!apiKeyTable?.openai) {
+        throw new Error('OpenAI API key is required for embedding generation but not found. Please add your API key.');
+      }
+      v1Config.openaiApiKey = apiKeyTable.openai;
+    } else if (v1Provider === 'voyageai') {
+      if (!apiKeyTable?.voyageai) {
+        throw new Error('VoyageAI API key is required for embedding generation but not found. Please add your API key.');
+      }
+      v1Config.voyageApiKey = apiKeyTable.voyageai;
     }
-    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+    // Bedrock uses AWS credentials, no API key needed
+    v1EmbeddingService = new EmbeddingFactory(v1Config).createEmbeddingService(
+      defaultEmbeddingModel as SupportedEmbeddingModel
+    );
   }
-  // Bedrock uses AWS credentials, no API key needed
 
-  const embeddingFactory = new EmbeddingFactory(embeddingConfig);
-  const embeddingService = embeddingFactory.createEmbeddingService(defaultEmbeddingModel as SupportedEmbeddingModel);
-
-  // STEP 3: Get existing HOT mementos once (shared across all evaluations)
+  // STEP 3: Existing HOT mementos for V1 de-dup (V1 only - a V2-only user has none; V2 de-dups against
+  // its own ledger inside writeFactToLedger).
   const SIMILARITY_THRESHOLD = 0.88;
-  const existingMementos = await Memento.find({ userId, tier: MementoTier.HOT }).select(
-    'summary embedding weight lastAccessedAt fullContent tags'
-  );
+  const existingMementos = writeV1
+    ? await Memento.find({ userId, tier: MementoTier.HOT }).select(
+        'summary embedding weight lastAccessedAt fullContent tags'
+      )
+    : [];
 
   logger.debug(`Retrieved ${existingMementos.length} existing HOT mementos for similarity checking`);
 
@@ -101,10 +164,24 @@ export const handler = withEventContext(async (event, logger) => {
   let updatedCount = 0;
 
   for (const evaluation of evaluations) {
-    console.debug('Processing evaluation', { summary: evaluation.summary, importance: evaluation.importance });
+    console.debug('Processing evaluation', { importance: evaluation.importance });
 
-    // Embed the summary, not the raw prompt - the summary is the actual personal info
-    const summaryEmbedding = await embeddingService.generateEmbedding(evaluation.summary);
+    // V2 persists the fact on its own terms - its own subject resolution and its own semantic de-dup
+    // against its own ledger, in the 3-small space. It does not wait on, or read, anything V1 does below.
+    if (writeV2) {
+      const v2Embedding = v2EmbeddingService
+        ? toMementoVector(await v2EmbeddingService.generateEmbedding(evaluation.summary))
+        : undefined;
+      await writeToLedger(evaluation.summary, v2Embedding);
+    }
+
+    if (!writeV1) {
+      createdCount++;
+      continue;
+    }
+
+    // V1 memento write - main's behavior: admin-default embedding, 0.88 cosine de-dup, no model stamp.
+    const summaryEmbedding = await v1EmbeddingService!.generateEmbedding(evaluation.summary);
     logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
 
     const { memento: mostSimilarMemento, similarity: highestSimilarity } = findMostSimilarMemento(
@@ -117,8 +194,6 @@ export const handler = withEventContext(async (event, logger) => {
       console.info('Similar personal information found, updating existing memento', {
         existingMementoId: mostSimilarMemento.id,
         similarity: highestSimilarity.toFixed(3),
-        existingSummary: mostSimilarMemento.summary,
-        newSummary: evaluation.summary,
       });
 
       const newWeight = Math.max(mostSimilarMemento.weight, evaluation.importance * 100);
@@ -143,7 +218,6 @@ export const handler = withEventContext(async (event, logger) => {
       console.info('Successfully updated existing memento with new information', {
         mementoId: mostSimilarMemento.id,
         newWeight,
-        newSummary: evaluation.summary,
       });
 
       updatedCount++;

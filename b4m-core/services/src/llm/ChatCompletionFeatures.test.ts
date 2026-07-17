@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   ContextSummarizationFeature,
   KnowledgeRetrievalFeature,
+  MementoFeature,
   SessionPromptFeature,
   shouldSummarizeSession,
   SUMMARIZATION_CONFIG,
@@ -149,6 +150,90 @@ describe('ContextSummarizationFeature', () => {
       );
       expect(contextSummarizeSession).toHaveBeenCalledOnce();
     });
+  });
+});
+
+describe('MementoFeature - Mementos V2 injection', () => {
+  // The V2 opt-in is stored as a Mongoose Map, and the feature reads it off the in-hand user
+  // document (no DB round trip). Model that shape here - a plain object would not exercise the
+  // Map-aware read that the chat gate depends on.
+  const v2User = (on: boolean) => ({
+    id: 'u1',
+    preferences: { experimentalFeatures: new Map([['enableMementosV2', on]]) },
+  });
+
+  const invokeCreateMemento = vi.fn();
+  const makeCtx = (recallMementosV2: unknown, user: unknown = v2User(true)) =>
+    ({
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user,
+      db: {},
+      recallMementosV2,
+      invokeCreateMemento,
+      userAbility: {}, // onComplete guards on its presence only
+    }) as unknown as ConstructorParameters<typeof MementoFeature>[0];
+
+  // Default WRITE flags for constructions that only exercise the READ path.
+  const READ_ONLY = { writeV1: false, writeV2: true };
+  beforeEach(() => invokeCreateMemento.mockClear());
+
+  const call = (feature: MementoFeature) =>
+    feature.getContextMessages(
+      makeQuest(),
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'what do i like',
+      1000,
+      undefined as unknown as Parameters<typeof feature.getContextMessages>[4]
+    );
+
+  it('injects the V2 union recall as system messages and skips the V1 path', async () => {
+    const recallMementosV2 = vi.fn().mockResolvedValue([
+      { fact: 'User loves sushi', relevance: 0.9 },
+      { fact: 'User works in pharma', relevance: 0.4 },
+    ]);
+    const messages = await call(new MementoFeature(makeCtx(recallMementosV2), READ_ONLY));
+    // The feature hands over the opt-in it already resolved, so the recall need not re-fetch the user.
+    expect(recallMementosV2).toHaveBeenCalledWith('u1', 'what do i like', { enabled: true });
+
+    // ONE framed system block carrying both facts - not one `[Memory] ...` note-card per fact. That
+    // per-message format (with its `[Memory]` label) was A/B-measured to make the model recite its
+    // memory; the single knowledge-framed block scored 0% transcript-talk. See buildMemoryContext.
+    expect(messages).toHaveLength(1);
+    expect(messages[0].role).toBe('system');
+    expect(messages[0].content).toContain('User loves sushi');
+    expect(messages[0].content).toContain('User works in pharma');
+    expect(messages[0].content).not.toContain('[Memory]');
+    expect(messages[0].content).toContain('the way a friend who remembers would');
+  });
+
+  it('injects nothing when V2 is on but the recall is empty', async () => {
+    const messages = await call(new MementoFeature(makeCtx(vi.fn().mockResolvedValue([])), READ_ONLY));
+    expect(messages).toEqual([]);
+  });
+
+  it('does NOT take the V2 path for a user who has not opted in', async () => {
+    // The regression that kept V2 dark: the flag lives in a Mongoose Map, and a dot-access read of
+    // it always yielded undefined, so this gate never fired for anyone. Off must mean off, and on
+    // must mean on - both are asserted here.
+    const recallMementosV2 = vi.fn().mockResolvedValue([{ fact: 'should not be used', relevance: 1 }]);
+    const feature = new MementoFeature(makeCtx(recallMementosV2, v2User(false)), READ_ONLY);
+
+    await call(feature).catch(() => []); // V1 path may fail on the stub db; we only care about the gate
+
+    expect(recallMementosV2).not.toHaveBeenCalled();
+  });
+
+  it('onComplete forwards the RESOLVED write flags, so the subscriber cannot re-default V1 on', async () => {
+    // The P1 that kept V1 un-deletable: chat published the completion event with NO flags, so the
+    // memento subscriber read a missing enableMementos as true and wrote a V1 memento every turn even
+    // when V1 was off. The feature now forwards the flags it was constructed with.
+    const feature = new MementoFeature(makeCtx(vi.fn().mockResolvedValue([])), { writeV1: false, writeV2: true });
+    await feature.onComplete({ quest: makeQuest(), model: 'gpt-5.4' } as never);
+
+    expect(invokeCreateMemento).toHaveBeenCalledWith(
+      expect.anything(), expect.anything(), 'u1', expect.anything(), 'gpt-5.4',
+      { enableMementos: false, enableMementosV2: true }
+    );
   });
 });
 

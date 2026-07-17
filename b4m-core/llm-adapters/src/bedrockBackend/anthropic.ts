@@ -820,10 +820,16 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           }
 
           const content = previousMessage.content as MessageContentText[];
-          if (content.some(c => c.type === 'text')) {
-            return cur;
-          }
-          // Ensure value.content is a valid string before adding to message
+          // APPEND, never discard. This branch used to bail out with `return cur` whenever the
+          // accumulated content already held a text block - which is true for every message after
+          // the second - so a run of N same-role messages silently collapsed to the FIRST TWO and
+          // the rest vanished before the request was built.
+          //
+          // System messages are all consecutive at the head of the prompt, so on Bedrock that meant
+          // only the date + artifact prompt survived: the help-center prompt, tool guidance,
+          // knowledge retrieval, session/org prompts and BOTH Mementos versions were dropped, with
+          // no error and no log. Mementos could never reach the model on a Bedrock Claude - the
+          // default chat model.
           const textContent = typeof value.content === 'string' ? value.content : '';
           if (textContent) {
             previousMessage.content = [...content, { type: 'text', text: textContent }];

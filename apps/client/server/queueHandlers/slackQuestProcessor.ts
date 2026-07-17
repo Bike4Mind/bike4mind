@@ -66,6 +66,7 @@ import {
 } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 // Cache static ChatCompletion options that don't change between invocations
@@ -153,15 +154,26 @@ const getStaticOptions = () => {
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId: string, sessionId: string, userId: string, prompt: string, model: string) => {
+    invokeCreateMemento: async (
+      questId: string,
+      sessionId: string,
+      userId: string,
+      prompt: string,
+      model: string,
+      flags: { enableMementos: boolean; enableMementosV2: boolean }
+    ) => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,

@@ -23,6 +23,7 @@ import {
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
+  isExperimentalFeatureEnabled,
   isImageServeable,
   QuestErrorCode,
   getQuestErrorCode,
@@ -384,6 +385,7 @@ export function computeSettlementDelta(
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
+  public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -436,6 +438,7 @@ export class ChatCompletionProcess {
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
+    this.recallMementosV2 = options.recallMementosV2;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -4217,10 +4220,31 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled
-    if (optimizedFeatureList.includes('mementos') && enableMementos && adminSettingsEnableMementos) {
-      this.logger.log('  - Enabling Mementos feature');
-      this.features.set('mementos', new MementoFeature(this));
+    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
+    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
+    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    //
+    // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
+    // Map at runtime, so reading it with dot access silently yields undefined and the feature never
+    // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
+    // prompt even for a user who had opted in.
+    const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
+    if (
+      optimizedFeatureList.includes('mementos') &&
+      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
+    ) {
+      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
+      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
+      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
+      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+      this.features.set(
+        'mementos',
+        new MementoFeature(this, {
+          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
+          writeV2: enableMementosV2,
+        })
+      );
     }
 
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {
