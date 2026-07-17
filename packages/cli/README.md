@@ -135,6 +135,7 @@ b4m mcp list                              # List configured MCP servers
 b4m mcp add <name> -- <command...>        # Add an MCP server
 b4m mcp remove <name>                     # Remove an MCP server
 b4m mcp enable <name> | disable <name>    # Toggle a server on/off
+b4m mcp serve [--http] [--port <n>]       # Expose Bike4Mind itself as an MCP server
 b4m update                                # Check for and install CLI updates
 b4m doctor                                # Diagnose the CLI installation (Node, registry, ripgrep, native modules)
 ```
@@ -388,6 +389,17 @@ You can also run any MCP server via npx or custom executables:
 - 🔧 **Atlassian** - Jira/Confluence integration (requires `ATLASSIAN_ACCESS_TOKEN`, `ATLASSIAN_CLOUD_ID`, `ATLASSIAN_SITE_URL`)
 
 **Note:** Internal MCP servers must be built and available in the `b4m-core/packages/mcp/dist/src/` directory. The CLI will automatically find them if you're running from the monorepo. For Docker-based servers, ensure Docker is installed and the image is accessible.
+
+#### Serve Bike4Mind itself as an MCP server (`b4m mcp serve`)
+
+The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend to any MCP client (Claude Desktop, editors, other agents). It advertises seven tools (`list_notebooks`, `get_notebook`, `create_notebook`, `send_message`, `search_knowledge_base`, `list_files`, `get_file`) plus a `b4m://notebook/{id}` resource.
+
+```bash
+b4m mcp serve                        # stdio (default) - for local clients that spawn the process
+b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://localhost:7000/mcp
+```
+
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool *listing* needs no credentials; tool *calls* authenticate. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and per-tool scopes.
 
 ## Git-Aware Code Search
 
