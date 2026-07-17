@@ -13,8 +13,8 @@ interface AgentModeToggleButtonProps {
  * Rendered conditionally by `SessionToolbar` only when the Layer-1 gate
  * resolves true via `useFeatureEnabled('agentMode')` (admin `EnableAgentMode`
  * plus per-user pref / admin default). The button is the only client surface
- * that drives `agentMode.enabled` for non-classifier flows; the chip next to
- * the send button reflects the same state.
+ * that drives `agentMode.enabled` for non-classifier flows; its solid/primary
+ * variant is the sole in-composer indicator of the active state.
  *
  * Styling mirrors `RephraseButton` / `VoiceRecordButton` for visual parity
  * across the composer row.
