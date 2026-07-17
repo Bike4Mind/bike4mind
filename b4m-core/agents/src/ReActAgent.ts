@@ -420,12 +420,19 @@ export class ReActAgent extends EventEmitter {
 
               // Handle completion info (includes tool calls and token usage)
               if (completionInfo) {
-                // Update token usage
-                const inputTokens = completionInfo.inputTokens || 0;
-                const outputTokens = completionInfo.outputTokens || 0;
-                this.totalTokens += inputTokens + outputTokens;
-                this.totalInputTokens += inputTokens;
-                this.totalOutputTokens += outputTokens;
+                // ASSIGN-NOT-ADD: the callback fires per streamed chunk with the
+                // CUMULATIVE running total (see bedrockBackend/base.ts
+                // `buildCompletionInfo` and the contract in cliCompletions.ts), so
+                // fold as baseline + latest-cumulative rather than `+=` - the prior
+                // `+=` multiplied the count by the streamed-chunk count (#657). Guard
+                // on presence so a trailing token-less frame can't zero the total.
+                if (completionInfo.inputTokens) {
+                  this.totalInputTokens = preCallTotalInputTokens + completionInfo.inputTokens;
+                }
+                if (completionInfo.outputTokens) {
+                  this.totalOutputTokens = preCallTotalOutputTokens + completionInfo.outputTokens;
+                }
+                this.totalTokens = this.totalInputTokens + this.totalOutputTokens;
 
                 // Preserve the last non-null stop reason (see lastStopReason).
                 // Early streaming frames carry none; the final frame does.
@@ -435,15 +442,16 @@ export class ReActAgent extends EventEmitter {
 
                 // Accumulate cache stats if available
                 if (completionInfo.cacheStats) {
-                  this.totalCacheReadTokens += completionInfo.cacheStats.cacheReadTokens || 0;
-                  this.totalCacheWriteTokens += completionInfo.cacheStats.cacheWriteTokens || 0;
+                  this.totalCacheReadTokens = preCallCacheReadTokens + (completionInfo.cacheStats.cacheReadTokens || 0);
+                  this.totalCacheWriteTokens =
+                    preCallCacheWriteTokens + (completionInfo.cacheStats.cacheWriteTokens || 0);
                 }
 
                 // Update credit usage
                 // TODO: deprecate creditsUsed from complete callback as this is always empty
                 // Instead compute used credits base on input and output tokens or total tokens
                 if (completionInfo.creditsUsed) {
-                  this.totalCredits += completionInfo.creditsUsed;
+                  this.totalCredits = preCallTotalCredits + completionInfo.creditsUsed;
                 }
 
                 // Handle tool calls.
@@ -1121,6 +1129,10 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
       const iterStartInputTokens = this.totalInputTokens;
       const iterStartOutputTokens = this.totalOutputTokens;
+      // Pre-call baselines for the assign-not-add fold in the stream callback below.
+      const iterStartCacheReadTokens = this.totalCacheReadTokens;
+      const iterStartCacheWriteTokens = this.totalCacheWriteTokens;
+      const iterStartCredits = this.totalCredits;
 
       const cacheStrategy: ICacheStrategy | undefined = options.enableCaching
         ? {
@@ -1158,11 +1170,21 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
 
           if (completionInfo) {
-            const inputTokens = completionInfo.inputTokens || 0;
-            const outputTokens = completionInfo.outputTokens || 0;
-            this.totalTokens += inputTokens + outputTokens;
-            this.totalInputTokens += inputTokens;
-            this.totalOutputTokens += outputTokens;
+            // ASSIGN-NOT-ADD: backends emit CUMULATIVE running totals on every
+            // streamed callback (see the contract in cliCompletions.ts and
+            // bedrockBackend/base.ts `buildCompletionInfo`), so fold each field as
+            // baseline + latest-cumulative, not `+=`. The prior `+=` re-added the
+            // whole prompt-token count once per streamed chunk, inflating a single
+            // iteration's input tokens by the chunk count (~49M on long
+            // tool-observation runs) and over-charging COGS/credits (#657). Guard on
+            // presence so a trailing token-less frame can't zero the running total.
+            if (completionInfo.inputTokens) {
+              this.totalInputTokens = iterStartInputTokens + completionInfo.inputTokens;
+            }
+            if (completionInfo.outputTokens) {
+              this.totalOutputTokens = iterStartOutputTokens + completionInfo.outputTokens;
+            }
+            this.totalTokens = this.totalInputTokens + this.totalOutputTokens;
 
             // Preserve the last non-null stop reason (see lastStopReason).
             // A prior tool_use turn is overwritten by the final completion.
@@ -1171,12 +1193,13 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
             }
 
             if (completionInfo.cacheStats) {
-              this.totalCacheReadTokens += completionInfo.cacheStats.cacheReadTokens || 0;
-              this.totalCacheWriteTokens += completionInfo.cacheStats.cacheWriteTokens || 0;
+              this.totalCacheReadTokens = iterStartCacheReadTokens + (completionInfo.cacheStats.cacheReadTokens || 0);
+              this.totalCacheWriteTokens =
+                iterStartCacheWriteTokens + (completionInfo.cacheStats.cacheWriteTokens || 0);
             }
 
             if (completionInfo.creditsUsed) {
-              this.totalCredits += completionInfo.creditsUsed;
+              this.totalCredits = iterStartCredits + completionInfo.creditsUsed;
             }
 
             // Handle tool calls.

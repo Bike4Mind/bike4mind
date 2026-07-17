@@ -1520,6 +1520,31 @@ async function processExecution(
       const outputTokensDelta = checkpoint.totalOutputTokens - counters.outputTokens;
       const cacheReadTokensDelta = checkpoint.totalCacheReadTokens - counters.cacheReadTokens;
       const cacheWriteTokensDelta = checkpoint.totalCacheWriteTokens - counters.cacheWriteTokens;
+      // Sanity backstop (#657): one iteration is one completion call, so its input
+      // tokens can never exceed the model's context window (totalInputTokens excludes
+      // cache-read/write, so this compares like-for-like). A larger delta means an
+      // upstream token-count corruption - a live agent run reported ~49M input tokens
+      // on a ~72K-token prompt, which billed ~$148. Fail safe: alarm and skip this
+      // iteration's charge rather than deduct a bogus amount. Counters still advance to
+      // the checkpoint so later iterations settle cleanly from here.
+      if (modelInfo.contextWindow > 0 && inputTokensDelta > modelInfo.contextWindow) {
+        logger.error(
+          '[agentExecutor] iteration input tokens exceed model context window; skipping charge to avoid over-billing (#657)',
+          {
+            executionId,
+            sessionId: execution.sessionId,
+            model: execution.model,
+            inputTokensDelta,
+            contextWindow: modelInfo.contextWindow,
+          }
+        );
+        counters.cumulativeCost = cumulativeCost;
+        counters.inputTokens = checkpoint.totalInputTokens;
+        counters.outputTokens = checkpoint.totalOutputTokens;
+        counters.cacheReadTokens = checkpoint.totalCacheReadTokens;
+        counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
+        return;
+      }
       counters.cumulativeCost = cumulativeCost;
       counters.inputTokens = checkpoint.totalInputTokens;
       counters.outputTokens = checkpoint.totalOutputTokens;
