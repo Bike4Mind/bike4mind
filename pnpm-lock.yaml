@@ -1690,9 +1690,6 @@ importers:
       diff:
         specifier: ^9.0.0
         version: 9.0.0
-      disposable-email-domains:
-        specifier: ^1.0.62
-        version: 1.0.62
       dotenv:
         specifier: ^17.4.2
         version: 17.4.2

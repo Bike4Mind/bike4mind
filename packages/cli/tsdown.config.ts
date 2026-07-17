@@ -104,8 +104,17 @@ export default defineConfig({
   // Keep all npm packages external (will be installed via package.json dependencies)
   // Bundle @bike4mind/* workspace packages into the CLI
   deps: {
+    // Force-bundle disposable-email-domains: it ships its blocklist as index.json
+    // (its package `main`). Left external, the emitted bundle does a bare ESM JSON
+    // import that Node 24 rejects without `with { type: 'json' }`, crashing the CLI
+    // at startup with ERR_IMPORT_ATTRIBUTE_MISSING. Inlining it sidesteps the
+    // runtime import-attribute requirement (so it is not a runtime dependency).
+    alwaysBundle: ['disposable-email-domains'],
     neverBundle: [
-      /^(?![\.\/])[^@]/, // Non-scoped packages (not file paths): axios, uuid, etc.
+      // Non-scoped packages (not file paths): axios, uuid, etc. The negative
+      // lookahead carves out disposable-email-domains so it is bundled (see above);
+      // an explicit neverBundle match otherwise wins over alwaysBundle.
+      /^(?!disposable-email-domains(?:\/|$))(?![\.\/])[^@]/,
       /^@(?!bike4mind\/)/, // Scoped packages except @bike4mind/*: @aws-sdk/*, etc.
     ],
   },
