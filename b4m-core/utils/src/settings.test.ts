@@ -38,6 +38,14 @@ describe('getSettingsValue - blank string reverts to a provided default', () => 
     // No third arg: a cleared FormatPromptTemplate stays '' (its empty default is meaningful).
     expect(getSettingsValue('FormatPromptTemplate', { FormatPromptTemplate: '' })).toBe('');
   });
+
+  it('does NOT apply blank->default to a non-string setting - a stored boolean false still wins', () => {
+    // The fix is guarded by a strict `parsed.data === ''`, which only a string schema can produce.
+    // A stored boolean `false` must be returned as-is, not collapsed to the default. This pins that
+    // guard: a future `!parsed.data` simplification would re-open the fail-open bug (false -> default).
+    expect(getSettingsValue('EnableArtifacts', { EnableArtifacts: false }, true)).toBe(false);
+    expect(getSettingsValue('EnableArtifacts', {}, true)).toBe(true);
+  });
 });
 
 // Regression: a setting stored as boolean `false` (e.g. an admin-disabled defaultValue:true
