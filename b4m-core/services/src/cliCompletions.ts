@@ -534,11 +534,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     }
   }
 
-  // Embed metering fallback: the embed path must record org usage even on a stage
-  // with enforceCredits off (or in the rare enforced-but-settlement-missed case),
-  // where the settlement block above never ran. Guarded by `usageRecorded` so an
-  // enforced run that already recorded on success never double-writes; creditsCharged
-  // is 0 when nothing settled, so the event never implies a charge that didn't happen.
+  // Embed metering fallback: the embed path must record org usage even when the
+  // settlement block above did not (enforceCredits off - the normal embed case - or
+  // the rare enforced run whose settlement threw before recording). Guarded by
+  // `usageRecorded` so an enforced run that already recorded on success never
+  // double-writes. creditsCharged is 0 when enforcement is off (no charge occurred);
+  // in the enforced-but-settlement-missed case it records finalCredits, and a
+  // `[CLI_CREDITS] CRITICAL` reconciliation alert has already fired for that path.
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
     recordUsageEvent(enforceCredits ? finalCredits : 0);
