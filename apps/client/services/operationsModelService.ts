@@ -11,6 +11,19 @@ import {
   getApiKeyTypeFromBackend,
 } from '../server/utils/modelResolvers';
 
+/** System-level key table shape passed to getAvailableModels/getLlmByModel. */
+type OperationsApiKeyTable = {
+  openai?: string;
+  anthropic?: string;
+  gemini?: string;
+  bfl?: string;
+  ollama?: string;
+  xai?: string;
+};
+
+/** Text-only operations result: no image/speech resolution. */
+export type OperationsTextModelResult = Pick<OperationsModelResult, 'modelId' | 'llm' | 'modelInfo'>;
+
 /**
  * Get effective API key directly from ModelBackend without needing to convert to ApiKeyType first
  * Returns null for backends that don't use API keys (like Bedrock)
@@ -57,13 +70,81 @@ export class OperationsModelService {
   }
 
   /** True when a cloud text-model API key is available; gates the self-host Ollama default. */
-  private static hasCloudTextKey(apiKeyTable: {
-    openai?: string;
-    anthropic?: string;
-    gemini?: string;
-    xai?: string;
-  }): boolean {
+  private static hasCloudTextKey(apiKeyTable: OperationsApiKeyTable): boolean {
     return !!(apiKeyTable.openai || apiKeyTable.anthropic || apiKeyTable.gemini || apiKeyTable.xai);
+  }
+
+  /**
+   * Shared operations text-model selection chain (no LLM init, no image/speech).
+   * Order: self-host local Ollama (only when self-host and no cloud key) ->
+   * the preferred model id (admin config or hardcoded default) -> gpt-3.5-turbo ->
+   * any available text model. Throws only when no text model exists at all.
+   */
+  private static pickOperationsTextModelInfo(
+    apiKeyTable: OperationsApiKeyTable,
+    models: ModelInfo[],
+    preferredModelId?: string
+  ): ModelInfo {
+    let modelInfo = OperationsModelService.hasCloudTextKey(apiKeyTable)
+      ? undefined
+      : OperationsModelService.resolveSelfHostDefaultTextModel(models);
+
+    if (!modelInfo && preferredModelId) {
+      modelInfo = models.find(m => m.id === preferredModelId);
+    }
+    if (!modelInfo) {
+      // Fall back to gpt-3.5-turbo
+      modelInfo = models.find(m => m.id === ('gpt-3.5-turbo' as any));
+    }
+    if (!modelInfo) {
+      // Last resort: any available text model
+      modelInfo = models.find(m => m.type === 'text');
+    }
+    if (!modelInfo) {
+      throw new Error('No text models available for operations');
+    }
+    return modelInfo;
+  }
+
+  /**
+   * Resolve ONLY the operations text model and its LLM - never image or speech.
+   *
+   * Background tasks (research, summaries) need a text model and must not fail when
+   * no image/speech model is configured or available, unlike getOperationsModel which
+   * resolves all three. Uses the same text-selection chain (self-host Ollama default
+   * -> admin-configured model -> cloud fallbacks).
+   */
+  static async getOperationsTextModel(): Promise<OperationsTextModelResult> {
+    const dbAdapters = {
+      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+      getSettingsByNames,
+    };
+    const coreKeys = await apiKeyService.getEffectiveLLMApiKeys('system', dbAdapters);
+    const apiKeyTable: OperationsApiKeyTable = {
+      openai: coreKeys.openai || undefined,
+      anthropic: coreKeys.anthropic || undefined,
+      gemini: coreKeys.gemini || undefined,
+      bfl: coreKeys.bfl || undefined,
+      ollama: coreKeys.ollama || undefined,
+      xai: coreKeys.xai || undefined,
+    };
+    const models = await getAvailableModels(apiKeyTable);
+
+    // Prefer the admin-configured operations model; else the hardcoded default id.
+    const config = await this.getOperationsModelConfig();
+    const modelInfo = OperationsModelService.pickOperationsTextModelInfo(
+      apiKeyTable,
+      models,
+      config?.modelId ?? 'gpt-4o-mini'
+    );
+
+    const llm = getLlmByModel(apiKeyTable, { modelInfo, logger: this.logger });
+    if (!llm) {
+      throw new Error(`Failed to initialize operations text model ${modelInfo.id}`);
+    }
+
+    this.logger.info(`Using operations text model: ${modelInfo.id} (${modelInfo.backend})`);
+    return { modelId: modelInfo.id, llm, modelInfo };
   }
 
   /**
@@ -212,27 +293,7 @@ export class OperationsModelService {
     };
     const models = await getAvailableModels(apiKeyTable);
 
-    // Self-host with no cloud key: prefer a local Ollama text model before the cloud chain.
-    let modelInfo = OperationsModelService.hasCloudTextKey(apiKeyTable)
-      ? undefined
-      : OperationsModelService.resolveSelfHostDefaultTextModel(models);
-
-    if (!modelInfo) {
-      modelInfo = models.find(m => m.id === defaultConfig.modelId);
-    }
-
-    if (!modelInfo) {
-      // Fall back to gpt-3.5-turbo
-      modelInfo = models.find(m => m.id === ('gpt-3.5-turbo' as any));
-    }
-
-    if (!modelInfo) {
-      // Last resort: any available text model
-      modelInfo = models.find(m => m.type === 'text');
-      if (!modelInfo) {
-        throw new Error('No text models available for operations');
-      }
-    }
+    const modelInfo = OperationsModelService.pickOperationsTextModelInfo(apiKeyTable, models, defaultConfig.modelId);
 
     const llm = getLlmByModel(apiKeyTable, {
       modelInfo,
@@ -348,27 +409,7 @@ export class OperationsModelService {
     };
     const models = await getAvailableModels(apiKeyTable);
 
-    // Self-host with no cloud key: prefer a local Ollama text model before the cloud chain.
-    let modelInfo = OperationsModelService.hasCloudTextKey(apiKeyTable)
-      ? undefined
-      : OperationsModelService.resolveSelfHostDefaultTextModel(models);
-
-    if (!modelInfo) {
-      modelInfo = models.find(m => m.id === defaultConfig.modelId);
-    }
-
-    if (!modelInfo) {
-      // Fall back to gpt-3.5-turbo
-      modelInfo = models.find(m => m.id === ('gpt-3.5-turbo' as any));
-    }
-
-    if (!modelInfo) {
-      // Last resort: any available text model
-      modelInfo = models.find(m => m.type === 'text');
-      if (!modelInfo) {
-        throw new Error('No text models available for operations');
-      }
-    }
+    const modelInfo = OperationsModelService.pickOperationsTextModelInfo(apiKeyTable, models, defaultConfig.modelId);
 
     const llm = getLlmByModel(apiKeyTable, {
       modelInfo,
