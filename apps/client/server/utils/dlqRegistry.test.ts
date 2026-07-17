@@ -29,6 +29,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'overwatch-analytics': 'https://sqs.us-east-2.amazonaws.com/123456789/overwatchAnalyticsQueueDLQ',
   'agent-continuation': 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueueDLQ',
   'optihashi-run-completion': 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueueDLQ',
+  'data-lake-cleanup': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueueDLQ',
 }));
 
 const mockSourceQueueUrls = vi.hoisted(() => ({
@@ -59,6 +60,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   overwatchAnalyticsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/overwatchAnalyticsQueue',
   agentContinuationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueue',
   optihashiRunCompletionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueue',
+  dataLakeCleanupQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueue',
 }));
 
 // Mock SST Resource bindings: both DLQ and source queue URLs via Linkables
@@ -73,9 +75,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 27 DLQ entries', () => {
+    it('returns all 28 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(27);
+      expect(registry).toHaveLength(28);
     });
 
     it('each entry has required fields', () => {
