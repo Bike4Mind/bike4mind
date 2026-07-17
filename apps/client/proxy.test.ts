@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 
 vi.mock('next/server', () => {
   class MockNextResponse {
@@ -190,5 +190,41 @@ describe('proxy CSP script-src — dev-only unsafe-eval boundary', () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe('proxy CSP - optional PYODIDE_BASE_URL mirror', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  const directive = (csp: string, name: string): string =>
+    csp
+      .split(';')
+      .map(d => d.trim())
+      .find(d => d.startsWith(`${name} `)) ?? '';
+
+  it('adds a valid mirror origin (no path) to both script-src and connect-src', () => {
+    vi.stubEnv('PYODIDE_BASE_URL', 'http://mirror.local:8080/pyodide/v0.25.1/full/');
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    expect(directive(csp, 'script-src')).toContain('http://mirror.local:8080');
+    expect(directive(csp, 'connect-src')).toContain('http://mirror.local:8080');
+    expect(csp).not.toContain('/pyodide/v0.25.1/full/');
+  });
+
+  it('warns and omits an invalid mirror value rather than injecting extra directives', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('PYODIDE_BASE_URL', 'http://evil ; script-src none');
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    expect(csp).not.toContain('evil');
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('leaves the default CDN allow-listed when unset', () => {
+    vi.stubEnv('PYODIDE_BASE_URL', '');
+    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
+    expect(directive(csp, 'script-src')).toContain('https://cdn.jsdelivr.net');
+    expect(directive(csp, 'connect-src')).toContain('https://cdn.jsdelivr.net');
   });
 });

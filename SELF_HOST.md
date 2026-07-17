@@ -296,5 +296,10 @@ Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Que
 
 - **Background enrichment** - features that ride the hosted event bus (notebook auto-naming, summaries, tagging) are inert in self-host for now.
 - **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary).
+- **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
+
+### Python artifacts offline
+
+Python artifacts execute in the browser via Pyodide (WebAssembly), fetched by default from the public jsDelivr CDN - so a fully air-gapped box cannot run them out of the box. To run them offline, mirror the Pyodide v0.25.1 "full" distribution on a server you control and set `PYODIDE_BASE_URL` in `.env.selfhost` to that base (trailing slash required). A cross-origin mirror must send permissive CORS headers; its origin is added to the app CSP automatically. See the `PYODIDE_BASE_URL` block in `.env.selfhost.example` for what to mirror. Leave it unset to use the CDN.
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).

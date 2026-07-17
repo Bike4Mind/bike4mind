@@ -9,7 +9,11 @@
 
 import type { PyodideWorkerMessage, PyodideWorkerResponse, ExecutionResult } from './types';
 
-const PYODIDE_CDN_URL = 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/';
+// Default Pyodide distribution (public CDN). The initialize message may override this with a
+// self-hosted mirror (PYODIDE_BASE_URL) so Python artifacts work offline / air-gapped.
+const DEFAULT_PYODIDE_BASE_URL = 'https://cdn.jsdelivr.net/pyodide/v0.25.1/full/';
+
+let pyodideBaseUrl = DEFAULT_PYODIDE_BASE_URL;
 
 // Supported packages (pre-built in Pyodide)
 const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'scikit-learn'];
@@ -38,7 +42,7 @@ interface PyodideInterface {
 }
 
 async function loadPyodideScript(): Promise<void> {
-  const scriptUrl = `${PYODIDE_CDN_URL}pyodide.js`;
+  const scriptUrl = `${pyodideBaseUrl}pyodide.js`;
 
   const response: PyodideWorkerResponse = {
     type: 'initializing',
@@ -75,7 +79,7 @@ async function initializePyodide(): Promise<void> {
     ).loadPyodide;
 
     pyodide = await loadPyodide({
-      indexURL: PYODIDE_CDN_URL,
+      indexURL: pyodideBaseUrl,
     });
 
     const micropipResponse: PyodideWorkerResponse = {
@@ -324,6 +328,11 @@ self.onmessage = async (e: MessageEvent<PyodideWorkerMessage>) => {
 
   switch (msg.type) {
     case 'initialize':
+      // A configured mirror overrides the default CDN. Normalize the trailing slash so
+      // both `${base}pyodide.js` and the loadPyodide indexURL resolve correctly.
+      if (msg.baseUrl) {
+        pyodideBaseUrl = msg.baseUrl.endsWith('/') ? msg.baseUrl : `${msg.baseUrl}/`;
+      }
       await initializePyodide();
       break;
 

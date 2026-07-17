@@ -20,6 +20,7 @@ vi.mock('@client/app/utils/pyodideManager', () => {
         listeners.add(listener);
         return () => listeners.delete(listener);
       }),
+      configure: vi.fn(),
       initialize: vi.fn().mockResolvedValue(undefined),
       execute: vi.fn().mockResolvedValue({
         success: true,
@@ -48,6 +49,12 @@ vi.mock('@client/app/utils/pyodideManager', () => {
 
 vi.mock('@client/app/workers/pyodide/types', () => ({
   ExecutionResult: {},
+}));
+
+// usePyodide reads the public config to pick up an optional Pyodide mirror; stub it so the
+// hook renders without a react-query provider.
+vi.mock('@client/app/hooks/data/settings', () => ({
+  usePublicConfig: () => ({ data: undefined }),
 }));
 
 describe('usePyodide', () => {

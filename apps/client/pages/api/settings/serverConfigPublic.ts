@@ -8,6 +8,8 @@ export type ServerConfigPublic = {
   defaultTheme: string;
   /** When true, the registration form makes the invite code optional (self-serve signup). */
   allowOpenRegistration: boolean;
+  /** Optional Pyodide mirror for offline Python artifacts; empty string uses the default CDN. */
+  pyodideBaseUrl: string;
 };
 
 // Public pre-login config - minimal fields only.
@@ -37,6 +39,7 @@ const handler = baseApi({ auth: false }).get(
         : process.env.APP_URL || '',
       defaultTheme: 'bike4mind',
       allowOpenRegistration,
+      pyodideBaseUrl: process.env.PYODIDE_BASE_URL || '',
     };
 
     return res.json(config);
