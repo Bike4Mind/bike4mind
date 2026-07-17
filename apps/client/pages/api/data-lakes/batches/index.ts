@@ -15,7 +15,8 @@ const handler = baseApi()
     const active = await dataLakeBatchRepository.findActiveByUserId(userId);
 
     // Read-time reconciliation: force non-terminal batches idle past the timeout to a
-    // terminal state (guarded), and recompute lake stats from source. No watchdog cron.
+    // terminal state (guarded), and recompute lake stats from source. The daily
+    // dataLakeBatchReconcile cron is the fallback for batches nobody ever opens the list for.
     await dataLakeService.reconcileStuckBatches(active, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
       db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
       logger: console,

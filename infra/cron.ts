@@ -557,13 +557,12 @@ const attackSimulationCron = new sst.aws.Cron('attackSimulationCron', {
 });
 
 /**
- * Agent Execution Abandoned Sweep
- * Releases agent-execution slots that the reactive in-Lambda sweep cannot
- * reach because the owning user never returns to start another execution.
- * Transitions stale active executions to `failed` / `failureReason:
- * 'abandoned'`.
+ * Data Lake Batch Reconcile (daily fallback)
+ * Global watchdog: forces batches stuck non-terminal past the timeout to terminal via the same
+ * guarded reconciler as the read-time path, so a batch that goes stuck while nobody opens their
+ * batch list still terminalizes.
  *
- * Schedule: hourly
+ * Schedule: daily (5am UTC)
  * Enabled: production + dev
  */
 const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
@@ -590,6 +589,16 @@ const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
   enabled: ['production', 'dev'].includes($app.stage),
 });
 
+/**
+ * Agent Execution Abandoned Sweep
+ * Releases agent-execution slots that the reactive in-Lambda sweep cannot
+ * reach because the owning user never returns to start another execution.
+ * Transitions stale active executions to `failed` / `failureReason:
+ * 'abandoned'`.
+ *
+ * Schedule: hourly
+ * Enabled: production + dev
+ */
 const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandonedSweep', {
   schedule: 'rate(1 hour)',
   function: {
