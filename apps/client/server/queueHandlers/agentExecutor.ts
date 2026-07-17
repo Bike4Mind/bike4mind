@@ -82,6 +82,7 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
+import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -2118,18 +2119,23 @@ async function processExecution(
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
+    // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
+    // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
+    // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
+    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
 
     await agentExecutionRepository.markComplete(executionId, {
-      answer: finalAnswer,
+      answer: displayAnswer,
       steps: finalCheckpoint.steps,
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
-      reachedMaxIterations: iterationResult?.reachedMaxIterations ?? false,
+      reachedMaxIterations,
     });
 
     await sendWs('completed', {
       executionId,
-      answer: finalAnswer,
+      answer: displayAnswer,
       totalIterations: finalCheckpoint.iteration,
       totalCreditsUsed: updatedExecution?.totalCreditsUsed ?? 0,
       // Surface memento IDs in the WS event so the client can populate the
@@ -2141,7 +2147,7 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    let replyText = finalAnswer ?? 'Agent execution completed without a final answer.';
+    let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
 
     // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
     // child report and may drop the raw `<artifact>` blocks the workers emitted,
