@@ -4,10 +4,18 @@ import { TestImageService } from './TestImageService';
 import { BFLImageService } from './BFLImageService';
 import { XAIImageService } from './XAIImageService';
 import { GeminiImageService } from './GeminiImageService';
+import { LocalImageService } from './LocalImageService';
 import { Logger } from '@bike4mind/observability';
 
 // Export the individual classes
-export { OpenAIImageService, TestImageService, BFLImageService, XAIImageService, GeminiImageService };
+export {
+  OpenAIImageService,
+  TestImageService,
+  BFLImageService,
+  XAIImageService,
+  GeminiImageService,
+  LocalImageService,
+};
 
 // Export types
 export type { ImageEditResponse } from './AIImageService';

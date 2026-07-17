@@ -19,6 +19,7 @@ import TitanBedrockBackend from './bedrockBackend/titan';
 import { UndifferentiatedBedrockBackend } from './bedrockBackend/undifferentiated';
 import { BFLBackend } from './bflBackend';
 import { GeminiBackend } from './geminiBackend';
+import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
@@ -183,6 +184,10 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     return _modelCache.models;
   }
 
+  // Local self-hosted image backend: callers key the table by ModelBackend, but
+  // most don't map it, so fall back to the env gate the tool itself reads.
+  const localImageBaseUrl = apiKeys?.[ModelBackend.LocalImage] || process.env.IMAGE_GEN_BASE_URL;
+
   const backends = {
     [ModelBackend.OpenAI]: apiKeys?.openai ? new OpenAIBackend(apiKeys.openai) : null,
     [ModelBackend.Anthropic]: apiKeys?.anthropic ? new AnthropicBackend(apiKeys.anthropic) : null,
@@ -192,6 +197,9 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     [ModelBackend.BFL]: apiKeys?.bfl ? new BFLBackend(apiKeys.bfl) : new BFLBackend('demo-key'),
     [ModelBackend.XAI]: apiKeys?.xai ? new XAIBackend(apiKeys.xai) : null,
     [ModelBackend.AWS]: new AWSBackend(),
+    [ModelBackend.LocalImage]: localImageBaseUrl
+      ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
+      : null,
   } as const;
 
   const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {
@@ -262,6 +270,7 @@ export * from './bedrockBackend/base';
 export * from './bedrockBackend/undifferentiated';
 export * from './bflBackend';
 export * from './geminiBackend';
+export * from './localImageBackend';
 export * from './ollamaBackend';
 export * from './openaiBackend';
 export * from './xaiBackend';

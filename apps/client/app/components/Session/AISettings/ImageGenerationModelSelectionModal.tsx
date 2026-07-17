@@ -52,11 +52,6 @@ interface ImageGenerationModelSelectionModalProps {
   onClose: () => void;
 }
 
-// Type guard to validate string is a valid ModelName
-const isValidModelName = (model: string): model is ModelName => {
-  return IMAGE_MODELS.some(imageModel => imageModel === model);
-};
-
 // Models that support image editing
 // FLUX-PRO-FILL now auto-generates masks server-side for chat-based editing.
 // All Gemini image models support editing, so derive that portion from
@@ -126,6 +121,13 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
   const { data: modelInfoRepo } = useModelInfo();
   const { data: stats } = useModelStats();
 
+  // Valid = a static image model OR a runtime-discovered image model (e.g. a
+  // self-hosted `local-image/<checkpoint>` id, which is not in the static enum).
+  const isValidModelName = (model: string): model is ModelName => {
+    if (IMAGE_MODELS.some(imageModel => imageModel === model)) return true;
+    return !!modelInfoRepo?.some(m => m.id === model && m.type === 'image');
+  };
+
   // Initialize with validated model or fallback to first image model
   const [selectedModel, setSelectedModel] = useState<ModelName>(() => {
     // Prefer imageModel from context if valid, otherwise fall back to current model, else first available
@@ -168,7 +170,9 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     if (isValidModelName(contextImageEditModel)) {
       setSelectedEditModel(contextImageEditModel);
     }
-  }, [open, contextModel, contextImageModel, contextImageEditModel]);
+    // modelInfoRepo: a local-image context model only validates once the repo
+    // has loaded, so re-run when it arrives.
+  }, [open, contextModel, contextImageModel, contextImageEditModel, modelInfoRepo]);
 
   const handleModelChange = useCallback(
     (newModel: ModelName) => {
