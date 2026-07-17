@@ -1233,6 +1233,10 @@ async function processExecution(
     // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
     // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
     const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+    // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
+    // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
+    // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
+    // reverts to the same built-in prompt on both paths.
     const artifactEmissionPrompt =
       isNewExecution && enableArtifacts
         ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
