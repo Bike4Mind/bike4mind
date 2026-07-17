@@ -32,10 +32,11 @@ async function inChunks<T>(items: T[], size: number, fn: (item: T) => Promise<un
 
 /**
  * Phase 2 of permanent delete: the retry-safe hard-delete sweep over chunks, files,
- * batches, and the lake record. Triggered by an explicit user/admin action (not a
- * cron). Idempotent - a partially-failed run leaves the lake in 'deleted' and can be
- * re-run without error or double-deletion (delete-by-id and deleteMany are no-ops on
- * already-purged data). Owner or admin only.
+ * batches, and the lake record. Runs in the background cleanup queue consumer (enqueued by an
+ * explicit user/admin action), which is why it's idempotent - a partially-failed run leaves the
+ * lake in 'deleted' and a DLQ retry re-runs it without error or double-deletion (delete-by-id and
+ * deleteMany are no-ops on already-purged data). Fan-outs are chunked (chunkSize) so a large lake
+ * stays inside the Lambda timeout. Owner or admin only.
  */
 export const cleanupDeletedDataLake = async (
   actor: { userId: string; isAdmin: boolean },
