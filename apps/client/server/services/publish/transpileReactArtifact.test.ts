@@ -8,7 +8,7 @@ import {
 } from './transpileReactArtifact';
 import { validateBundle, __testing } from './validateBundle';
 import { PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
-import { OPTIONAL_DEP_CDN } from '@client/app/utils/reactArtifactDeps';
+import { OPTIONAL_DEP_CDN, LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 
 const COUNTER = `import { useState } from 'react';
 function Counter() {
@@ -343,5 +343,34 @@ describe('rewriteImportsToRequire', () => {
     const out = rewriteImportsToRequire(`import * as d3 from 'd3';`);
     expect(out).toContain(`const d3 = require('d3');`);
     expect(out).not.toContain('* as'); // no leftover invalid `const * as d3 = require('d3')`
+  });
+
+  it('rewrites an aliased named import to valid destructuring rename (import { X as y })', () => {
+    const out = rewriteImportsToRequire(`import { debounce as db, throttle } from 'lodash';`);
+    expect(out).toContain(`require('lodash')`);
+    expect(out).toContain('debounce: db'); // valid rename; NOT the invalid `debounce as db`
+    expect(out).toContain('throttle');
+    expect(out).not.toContain('debounce as db'); // `const { debounce as db } = require()` is a syntax error
+  });
+
+  it('rewrites an aliased named import off a mixed default+named import (import Foo, { bar as baz })', () => {
+    const out = rewriteImportsToRequire(`import _, { debounce as db } from 'lodash';`);
+    expect(out).toContain(`const _ = require('lodash');`);
+    expect(out).toContain('debounce: db');
+    expect(out).not.toContain('debounce as db');
+  });
+});
+
+describe('LUCIDE_WRAPPER_FN single-source identity', () => {
+  it('is embedded verbatim in a published lucide bundle (shared with the in-app sandbox)', async () => {
+    const src = `import { Home } from 'lucide-react';\nexport default function C(){ return <Home/>; }`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: src, title: 'x' });
+    expect(indexHtml).toContain(LUCIDE_WRAPPER_FN);
+  });
+
+  it('is safe to embed in an inline <script> (no backtick, no closing-script sequence, no regex backslash)', () => {
+    expect(LUCIDE_WRAPPER_FN).not.toContain('`');
+    expect(LUCIDE_WRAPPER_FN.includes('</scr' + 'ipt')).toBe(false);
+    expect(LUCIDE_WRAPPER_FN).not.toContain('\\'); // no regex backslash -> no escape-doubling in the sandbox template
   });
 });
