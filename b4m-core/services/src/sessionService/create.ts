@@ -1,5 +1,9 @@
 import { secureParameters } from '@bike4mind/utils';
 import {
+  RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
+  RETRIEVAL_EXCLUDE_MARKERS_MAX,
+} from '@bike4mind/utils/retrievalExclusion';
+import {
   IFabFileRepository,
   IProjectRepository,
   ISessionDocument,
@@ -23,7 +27,10 @@ const createSessionParametersSchema = z.object({
   retrievalTags: z.array(z.string()).optional(),
   // secureParameters strips unknown keys, so these MUST be declared here or a surface's
   // retrieval-exclusion opt-in is silently dropped at create time.
-  retrievalExcludeFilenameMarkers: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  retrievalExcludeFilenameMarkers: z
+    .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
+    .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)
+    .optional(),
   retrievalVectorizedOnly: z.boolean().optional(),
   citationStyle: z.enum(['named', 'indexed']).optional(),
   temperature: z.number().optional(),

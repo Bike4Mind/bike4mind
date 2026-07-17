@@ -612,6 +612,16 @@ describe('buildFabFileSearchQuery', () => {
       expect(hasVectorizedClause(result)).toBe(true);
     });
 
+    it('does NOT clobber a plain-search fileName filter (markers push to $and, not baseFilter)', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ search: 'report', options: { excludeFilenameMarkers: ['MARK'] } })
+      );
+      // The plain-search path sets baseFilter.fileName; the marker clause must live in $and so
+      // both survive (the anti-Object.assign invariant the builder comment warns about).
+      expect(result.filter.fileName).toEqual({ $regex: 'report', $options: 'i' });
+      expect(findMarkerClause(result)).toBeDefined();
+    });
+
     // Byte-identical no-op guard: unset / empty / whitespace-only markers must not change
     // the query at all (prevents an `^`-matches-everything blackout AND regressing all callers).
     it('is a byte-identical no-op when markers are unset', () => {

@@ -159,6 +159,10 @@ export const generateTools = (
   userId: string,
   user: import('@bike4mind/common').IUserDocument,
   logger: Logger,
+  // retrievalFilter rides in this object arg rather than as a new positional (like
+  // entitlementKeys below) on purpose: this function already takes 18 positionals across 4
+  // call sites, and adding a 19th is the fragile pattern the deps-object avoids. New optional
+  // inputs should keep going here.
   { db, retrievalFilter }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter'] },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,

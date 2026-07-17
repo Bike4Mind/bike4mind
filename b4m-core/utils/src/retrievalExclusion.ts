@@ -20,6 +20,28 @@ export interface RetrievalExclusionOptions {
   vectorizedOnly?: boolean;
 }
 
+/** Max characters per exclusion marker - shared by every schema that validates the session field. */
+export const RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH = 128;
+/** Max number of exclusion markers per session - shared by every schema that validates the field. */
+export const RETRIEVAL_EXCLUDE_MARKERS_MAX = 20;
+
+/**
+ * Map the raw session fields (`retrievalExcludeFilenameMarkers` / `retrievalVectorizedOnly`)
+ * to a `RetrievalExclusionOptions`. Single mapping shared by every tool-build path
+ * (chat completion, agent execution, delegated subagents) so the session -> filter
+ * translation can't drift between them. Accepts a structural shape to avoid importing
+ * the `ISession` type into `@bike4mind/utils`.
+ */
+export function toRetrievalFilter(source: {
+  retrievalExcludeFilenameMarkers?: string[] | null;
+  retrievalVectorizedOnly?: boolean | null;
+}): RetrievalExclusionOptions {
+  return {
+    excludeFilenameMarkers: source.retrievalExcludeFilenameMarkers ?? undefined,
+    vectorizedOnly: source.retrievalVectorizedOnly ?? undefined,
+  };
+}
+
 /** Trim, lowercase, and drop empty/whitespace markers. Empty result == no filtering. */
 export function normalizeExclusionMarkers(markers?: string[]): string[] {
   return (markers ?? []).map(m => m.trim().toLowerCase()).filter(Boolean);

@@ -349,6 +349,81 @@ describe('KnowledgeRetrievalFeature citation styles', () => {
   });
 });
 
+describe('KnowledgeRetrievalFeature retrieval exclusion (4th ctor arg)', () => {
+  // fileB's name starts with the marker "Cortes"; fileA does not. The exclusion must drop
+  // fileB from forced grounding AND from the emitted citables, and forward the options to
+  // the DB pre-filter. Guards the ctor's positional 4th param (zero coverage before).
+  const makeCtx = () => {
+    const files = [
+      { id: 'fileA', fileName: 'NCCN NSCLC v3.2026.pdf', tags: [], vectorized: true },
+      { id: 'fileB', fileName: 'Cortes NEJM 2024.pdf', tags: [], vectorized: true },
+    ];
+    const chunksByFile: Record<string, unknown[]> = {
+      fileA: [{ fabFileId: 'fileA', text: 'chunk A1', vector: [1, 0] }],
+      fileB: [{ fabFileId: 'fileB', text: 'chunk B1', vector: [0.9, 0.1] }],
+    };
+    return {
+      logger: { log: vi.fn(), warn: vi.fn(), error: vi.fn() } as unknown as Logger,
+      user: { id: 'u1', tags: [], groups: [] },
+      db: {
+        fabfiles: { search: vi.fn().mockResolvedValue({ data: files }) },
+        fabfilechunks: { findByFabFileId: vi.fn((id: string) => Promise.resolve(chunksByFile[id] ?? [])) },
+      },
+      resolveEntitlementKeys: vi.fn().mockResolvedValue([]),
+      sendStatusUpdate: vi.fn().mockResolvedValue(undefined),
+    };
+  };
+  const embeddingFactory = {
+    createEmbeddingService: () => ({ generateEmbedding: vi.fn().mockResolvedValue([1, 0]) }),
+  };
+
+  it('drops a marked file from forced retrieval content + citables, and forwards the DB pre-filter', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0],
+      undefined,
+      'named',
+      { excludeFilenameMarkers: ['Cortes'] }
+    );
+    const quest = makeQuest();
+    const messages = await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    const content = messages[0]?.content ?? '';
+    expect(content).toContain('### NCCN NSCLC v3.2026.pdf (ID: fileA)'); // kept
+    expect(content).not.toContain('fileB'); // marked file dropped
+    expect(content).not.toContain('Cortes');
+    const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
+    expect(citables.map(c => c.id)).toEqual(['fileA']);
+    // Options also reach the DB pre-filter (best-effort), not just the in-memory pass.
+    expect(ctx.db.fabfiles.search).toHaveBeenCalledWith(
+      'u1',
+      '',
+      expect.anything(),
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ excludeFilenameMarkers: ['Cortes'] })
+    );
+  });
+
+  it('no filter (default): both files are retrieved (opt-in only)', async () => {
+    const ctx = makeCtx();
+    const feature = new KnowledgeRetrievalFeature(
+      ctx as unknown as ConstructorParameters<typeof KnowledgeRetrievalFeature>[0]
+    );
+    const quest = makeQuest();
+    await feature.getContextMessages(
+      quest,
+      embeddingFactory as unknown as Parameters<typeof feature.getContextMessages>[1],
+      'stage III NSCLC treatment'
+    );
+    const citables = (quest.promptMeta as { citables?: Array<{ id: string }> }).citables ?? [];
+    expect(citables.map(c => c.id).sort()).toEqual(['fileA', 'fileB']);
+  });
+});
+
 /**
  * Server-path regression lock: the client-facing redaction of `systemPromptText` happens
  * only at the response boundary (on copies). The completion engine still consumes the

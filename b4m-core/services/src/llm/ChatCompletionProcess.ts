@@ -56,6 +56,7 @@ import {
   getLastBuildDebugInfo,
   getSettingsByNames,
 } from '@bike4mind/utils';
+import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import {
   getAvailableModels,
   getLlmByModel,
@@ -1027,8 +1028,7 @@ export class ChatCompletionProcess {
         session.forceKnowledgeRetrieval,
         session.retrievalTags,
         session.citationStyle,
-        session.retrievalExcludeFilenameMarkers,
-        session.retrievalVectorizedOnly
+        toRetrievalFilter(session)
       );
       logger.info(
         `⏱️ [${Date.now() - processStartTime}ms] Optimized features built (${optimizedFeatureList.join(', ')}) in ${
@@ -1428,10 +1428,7 @@ export class ChatCompletionProcess {
         entitlementKeys,
         // Generic retrieval exclusion (opt-in per session) - keeps excluded/unvectorized lake files
         // out of the knowledge tools' search + retrieve arms, matching the surface's listing predicate.
-        retrievalFilter: {
-          excludeFilenameMarkers: session.retrievalExcludeFilenameMarkers,
-          vectorizedOnly: session.retrievalVectorizedOnly,
-        },
+        retrievalFilter: toRetrievalFilter(session),
         logger: this.logger,
         storage: this.storage,
         imageGenerateStorage: this.imageGenerateStorage,
@@ -4203,8 +4200,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
     forceKnowledgeRetrieval?: boolean,
     retrievalTags?: string[],
     citationStyle?: 'named' | 'indexed',
-    retrievalExcludeFilenameMarkers?: string[],
-    retrievalVectorizedOnly?: boolean
+    retrievalFilter?: RetrievalExclusionOptions
   ) {
     const adminSettingsEnableMementos = getSettingsValue('EnableMementos', adminSettings);
     const adminSettingsEnableQuestMaster = getSettingsValue('EnableQuestMaster', adminSettings);
@@ -4287,10 +4283,7 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.logger.log('  - Enabling KnowledgeRetrieval (forced) feature');
       this.features.set(
         'knowledgeRetrieval',
-        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, {
-          excludeFilenameMarkers: retrievalExcludeFilenameMarkers,
-          vectorizedOnly: retrievalVectorizedOnly,
-        })
+        new KnowledgeRetrievalFeature(this, retrievalTags, citationStyle, retrievalFilter)
       );
     }
 

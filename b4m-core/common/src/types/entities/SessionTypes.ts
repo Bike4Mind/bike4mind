@@ -514,17 +514,21 @@ export interface ISession {
   retrievalTags?: string[];
   /**
    * Generic retrieval exclusion: filename markers (case-insensitive, matched as a LEADING
-   * marker at a WORD BOUNDARY - `^(marker)\b`, not a bare prefix) whose files are kept OUT
-   * of every tutor/RAG retrieval arm, so retrieval agrees with the surface's document-listing
-   * predicate. Host core carries no product-specific marker literals; a surface supplies them
-   * at session-create time. MUST stay in sync with that surface's listing predicate (e.g. the
-   * LibreOncology overlay's `isListableLakeDoc`). Neutral default (unset/empty) = no exclusion.
+   * marker at a word boundary - the marker must start the name and be followed by end-of-string
+   * or a non-word character, so `MARK - x.pdf` matches while `MARKdown.pdf` does not; NOT a bare
+   * prefix) whose files are kept OUT of session-scoped knowledge retrieval, so retrieval agrees
+   * with the surface's document-listing predicate. Coverage: the chat-completion path and agent
+   * execution (parent toolbelt + delegated subagents). Owner-scoped charter/deep-agent tools run
+   * without a session and honor it only when a caller passes it explicitly. Host core carries no
+   * product-specific marker literals; a consumer supplies them at session-create time and MUST
+   * keep them in sync with its own listing predicate. Neutral default (unset/empty) = no exclusion.
    */
   retrievalExcludeFilenameMarkers?: string[];
   /**
-   * When true, only vectorized lake files are retrievable in tutor/RAG arms (unvectorized files
-   * are excluded), matching a listing predicate that hides not-yet-vectorized documents.
-   * Generic capability; neutral default (unset) = vectorized and unvectorized both retrievable.
+   * When true, only vectorized lake files are retrievable in the session-scoped retrieval arms
+   * (unvectorized files are excluded), matching a listing predicate that hides not-yet-vectorized
+   * documents. Generic capability; neutral default (unset) = vectorized and unvectorized both
+   * retrievable.
    */
   retrievalVectorizedOnly?: boolean;
   /**

@@ -1,5 +1,9 @@
 import { z } from 'zod';
 import { CurationType, CurationTypeSchema, CurationArtifactTypeSchema, ExportFormatSchema } from '@bike4mind/common';
+import {
+  RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH,
+  RETRIEVAL_EXCLUDE_MARKERS_MAX,
+} from '@bike4mind/utils/retrievalExclusion';
 
 export const ApiErrorSchema = z.object({
   status: z.number(),
@@ -43,7 +47,10 @@ export const CreateSessionRequestSchema = z.object({
   disabledTools: z.array(z.string()).optional(),
   forceKnowledgeRetrieval: z.boolean().optional(),
   retrievalTags: z.array(z.string()).optional(),
-  retrievalExcludeFilenameMarkers: z.array(z.string().trim().min(1).max(128)).max(20).optional(),
+  retrievalExcludeFilenameMarkers: z
+    .array(z.string().trim().min(1).max(RETRIEVAL_EXCLUDE_MARKER_MAX_LENGTH))
+    .max(RETRIEVAL_EXCLUDE_MARKERS_MAX)
+    .optional(),
   retrievalVectorizedOnly: z.boolean().optional(),
   temperature: z.number().optional(),
 });

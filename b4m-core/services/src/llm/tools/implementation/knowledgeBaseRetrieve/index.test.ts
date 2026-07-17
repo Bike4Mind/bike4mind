@@ -45,6 +45,7 @@ function makeContext(overrides: Partial<ToolContext> = {}): ToolContext {
       fabfiles: {
         findByIdAndUserId: vi.fn(),
         findById: vi.fn(),
+        search: vi.fn(),
       },
       fabfilechunks: {
         findByFabFileId: vi.fn().mockResolvedValue([{ id: 'c1', text: 'chunk body', vector: [0.1] }]),
@@ -127,5 +128,19 @@ describe('retrieve_knowledge_content — by-id (Path A) retrieval exclusion', ()
 
     const out = await runById(ctx);
     expect(out).toContain('Retrieved content from');
+  });
+
+  it('QUERY/TAG path (Path B): a marked file from search results is excluded, clean file kept', async () => {
+    const ctx = makeContext();
+    (ctx.db.fabfiles!.search as ReturnType<typeof vi.fn>).mockResolvedValue({
+      data: [makeFile({ id: 'm', fileName: 'MARK - retired.pdf' }), makeFile({ id: 'c', fileName: 'Clean Guide.pdf' })],
+    });
+
+    // No file_id -> Path B (tag/query search). getDynamicDataLakeAccess is stubbed above.
+    const tool = knowledgeBaseRetrieveTool.implementation(ctx, undefined);
+    const out = (await tool.toolFn({ query: 'retired guide' })) as string;
+
+    expect(out).toContain('Clean Guide.pdf');
+    expect(out).not.toContain('MARK - retired.pdf');
   });
 });

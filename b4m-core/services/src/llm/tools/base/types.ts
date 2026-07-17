@@ -76,8 +76,10 @@ export interface ToolContext {
   /**
    * Generic retrieval-exclusion filter for the knowledge tools (search + retrieve arms),
    * resolved from the session and threaded down via the tool-builder deps (mirrors
-   * entitlementKeys). Keeps excluded/unvectorized lake files out of tutor retrieval AND citations
-   * so the tools agree with the surface's listing predicate. Absent = no exclusion (default).
+   * entitlementKeys). Keeps excluded/unvectorized lake files out of retrieval AND citations so
+   * the tools agree with the surface's listing predicate. Every tool-build path that serves a
+   * session (chat completion, agent execution, delegated subagents) must populate this from the
+   * session or the knowledge tools fail OPEN. Absent = no exclusion (default).
    */
   retrievalFilter?: RetrievalExclusionOptions;
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
