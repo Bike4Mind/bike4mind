@@ -14,7 +14,7 @@
  * still receive the markers (otherwise we silently regress caching).
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { ChatModels, type ICacheStrategy } from '@bike4mind/common';
 import AnthropicBedrockBackend from './anthropic';
 import type { IMessage } from '@bike4mind/common';
@@ -86,6 +86,12 @@ describe('AnthropicBedrockBackend prompt caching guard (#8322)', () => {
  * output, plus the malformed-input paths that must not throw.
  */
 describe('translateStreamChunk', () => {
+  // Fresh instance per test - the backend carries stateful `isInThinkingBlock`, so a
+  // shared instance would leak thinking-block state across cases.
+  let backend: AnthropicBedrockBackend;
+  beforeEach(() => {
+    backend = new AnthropicBedrockBackend();
+  });
   const first = (chunk: unknown) => backend.translateStreamChunk('claude', chunk).chunk?.choices[0];
 
   it('message_start surfaces input/cache usage', () => {
