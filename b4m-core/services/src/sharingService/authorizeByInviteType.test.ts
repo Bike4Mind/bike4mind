@@ -25,16 +25,15 @@ describe('sharingService - authorizeByInviteType', () => {
     };
   });
 
-  it('authorizes FabFile / Session / Project via their share access', async () => {
+  it('authorizes FabFile / Session / Project via their share access (resolves without throwing)', async () => {
     for (const [type, repo] of [
       [InviteType.FabFile, db.fabFiles],
       [InviteType.Session, db.sessions],
       [InviteType.Project, db.projects],
     ] as const) {
       repo.shareable.findShareAccessById.mockResolvedValue({ id: 'doc' });
-      const got = await authorizeByInviteType(user, type, 'doc', db as any);
+      await expect(authorizeByInviteType(user, type, 'doc', db as any)).resolves.toBeUndefined();
       expect(repo.shareable.findShareAccessById).toHaveBeenCalledWith(user, 'doc');
-      expect(got).toEqual({ id: 'doc' });
     }
   });
 

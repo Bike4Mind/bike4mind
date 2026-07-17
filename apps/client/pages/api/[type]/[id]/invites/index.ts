@@ -67,7 +67,8 @@ const handler = baseApi()
       }
 
       // Share-scoped: the service authorizes via the document's share access
-      // (owner or a users[]-with-share grant), replacing the app-level CASL check.
+      // (owner, a users[]-with-share grant, or a groups[]-with-share grant),
+      // replacing the app-level CASL check.
       const shares = await sharingService.listInvitesForDocument(
         req.user,
         { documentId: id, type: inviteType },

@@ -30,10 +30,26 @@ describe('sharingService - updateDocumentSharing', () => {
       { db } as any
     );
 
-    expect(db.sessions.update).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 's1', isGlobalRead: true, isGlobalWrite: false })
-    );
+    // exact payload: only the two flags are written (never the whole doc)
+    expect(db.sessions.update).toHaveBeenCalledWith({ id: 's1', isGlobalRead: true, isGlobalWrite: false });
     expect(result).toMatchObject({ isGlobalRead: true, isGlobalWrite: false });
+  });
+
+  it('falls back to the pre-write doc but still returns the written flags when the re-read races to null', async () => {
+    // pre-write read (auth) returns the stale doc; the post-write re-read returns null
+    db.sessions.shareable.findUpdateAccessById
+      .mockResolvedValueOnce({ id: 's1', isGlobalRead: false, isGlobalWrite: false })
+      .mockResolvedValueOnce(null);
+
+    const result: any = await updateDocumentSharing(
+      user,
+      { id: 's1', type: 'sessions', isGlobalRead: true, isGlobalWrite: true },
+      { db } as any
+    );
+
+    // the param override wins over the stale fallback doc, so the response is accurate
+    expect(result.isGlobalRead).toBe(true);
+    expect(result.isGlobalWrite).toBe(true);
   });
 
   it('keeps fileUrl for an image-serveable file', async () => {
