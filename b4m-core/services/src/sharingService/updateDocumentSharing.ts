@@ -46,12 +46,15 @@ export const updateDocumentSharing = async (
       : document
   ) as Record<string, unknown>;
 
+  // Targeted write: persist only the two sharing flags this endpoint owns, so the
+  // stored fileUrl / updatedAt / any read-to-write drift are left untouched.
+  await dbModel.update({ id, isGlobalRead, isGlobalWrite } as never);
+
   plain.isGlobalRead = isGlobalRead;
   plain.isGlobalWrite = isGlobalWrite;
 
-  await dbModel.update(plain as never);
-
-  // Strip on a copy so the persisted write keeps the real URL; only the response hides it.
+  // FabFile leak-gate: withhold the signed URL from the RESPONSE for a non-image-serveable
+  // file (response-only - the stored URL was never in the write above).
   if (type === 'files' && !isImageServeable(plain)) {
     return { ...plain, fileUrl: undefined, fileUrlExpireAt: undefined };
   }

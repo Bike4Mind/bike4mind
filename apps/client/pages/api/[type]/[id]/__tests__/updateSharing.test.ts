@@ -50,6 +50,24 @@ describe('PUT /api/[type]/[id]/updateSharing', () => {
     expect(res._getJSONData()).toEqual({ id: 'f1', isGlobalRead: true });
   });
 
+  it('delegates to updateDocumentSharing for a sessions request', async () => {
+    updateDocumentSharing.mockResolvedValue({ id: 's1', isGlobalRead: false });
+    const { req, res } = createMocks({
+      method: 'PUT',
+      query: { type: 'sessions', id: 's1' },
+      body: { isGlobalRead: false, isGlobalWrite: true },
+    });
+    (req as any).user = { id: 'u1' };
+    await mockRefs.putHandler!(req, res);
+
+    expect(updateDocumentSharing).toHaveBeenCalledWith(
+      req.user,
+      { id: 's1', type: 'sessions', isGlobalRead: false, isGlobalWrite: true },
+      expect.objectContaining({ db: expect.any(Object) })
+    );
+    expect(res._getStatusCode()).toBe(200);
+  });
+
   it('rejects an unrecognized type before calling the service', async () => {
     const { req, res } = createMocks({
       method: 'PUT',

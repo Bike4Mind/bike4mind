@@ -55,7 +55,7 @@ describe('sharingService - updateDocumentSharing', () => {
     expect(result.fileUrl).toBe('https://signed');
   });
 
-  it('strips fileUrl from the response (not the persisted write) for a non-serveable file', async () => {
+  it('strips fileUrl from the response for a non-serveable file (targeted write never touches it)', async () => {
     db.fabFiles.shareable.findUpdateAccessById.mockResolvedValue({
       id: 'f1',
       mimeType: 'image/png',
@@ -73,8 +73,10 @@ describe('sharingService - updateDocumentSharing', () => {
     // response is stripped
     expect(result.fileUrl).toBeUndefined();
     expect(result.fileUrlExpireAt).toBeUndefined();
-    // but the persisted write still carried the real URL (strip is response-only)
-    expect(db.fabFiles.update).toHaveBeenCalledWith(expect.objectContaining({ fileUrl: 'https://signed' }));
+    // the persisted write is targeted to the two flags only - it never carries fileUrl,
+    // so the stored URL is left intact.
+    const writeArg = db.fabFiles.update.mock.calls[0][0];
+    expect(writeArg).toEqual({ id: 'f1', isGlobalRead: true, isGlobalWrite: true });
   });
 
   it('throws NotFoundError when the caller lacks write access', async () => {
