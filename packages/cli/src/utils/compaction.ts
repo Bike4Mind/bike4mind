@@ -1,5 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import type { Message, Session } from '../storage/types.js';
+import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 import { buildHandoffSystemMessage } from './handoff.js';
 
 export interface CompactionOptions {
@@ -108,7 +109,7 @@ export function createCompactedSession(
   const summaryMessage: Message = {
     id: uuidv4(),
     role: 'user',
-    content: `[Previous conversation summary]\n\n${summary}`,
+    content: `${COMPACTION_SUMMARY_MARKER}\n\n${summary}`,
     timestamp: new Date().toISOString(),
   };
 

@@ -11,6 +11,7 @@ import type {
   WorkflowState,
 } from '../storage/types.js';
 import type { TodoItem } from '../tools/writeTodosTool.js';
+import { COMPACTION_SUMMARY_MARKER } from '../config/constants.js';
 
 /**
  * Sessions with fewer messages than this skip handoff generation.
@@ -25,14 +26,20 @@ export const SHORT_SESSION_THRESHOLD = 4;
  */
 export const HANDOFF_MARKER = '[Session handoff from previous session]';
 
-const MAX_MESSAGE_CHARS = 2000;
+export const MAX_MESSAGE_CHARS = 2000;
 /**
- * Cap on the number of conversation messages included in the handoff prompt.
- * Prevents unbounded prompt growth on long sessions; the most recent messages
- * are kept since they best reflect the session's current state. Decisions and
- * blockers from workflow state are still included in full above the excerpt.
+ * The handoff prompt includes both ends of the conversation: the first
+ * HEAD messages (original goal framing / foundational decisions) and the last
+ * TAIL messages (current state). On sessions longer than HEAD + TAIL the middle
+ * is elided, so prompt size stays bounded regardless of session length while
+ * neither end of the conversation is lost. Decisions and blockers from workflow
+ * state are still included in full above the excerpt.
+ *
+ * When a compaction summary sits before the tail window it is pinned as the head
+ * instead of the raw first messages - it already distills everything before it.
  */
-const MAX_CONVERSATION_MESSAGES = 50;
+export const HEAD_CONVERSATION_MESSAGES = 15;
+export const TAIL_CONVERSATION_MESSAGES = 50;
 const ROLE_LABELS: Record<string, string> = {
   user: 'User',
   assistant: 'Assistant',
@@ -56,8 +63,7 @@ export function buildHandoffPrompt(session: Session): string {
   }
 
   const filtered = session.messages.filter(m => !isInjectedHandoff(m));
-  const conversation =
-    filtered.length > MAX_CONVERSATION_MESSAGES ? filtered.slice(-MAX_CONVERSATION_MESSAGES) : filtered;
+  const { head, tail, elidedCount } = selectHandoffExcerpt(filtered);
 
   let prompt = `You are generating a structured session handoff so the next session (or another agent) can pick up seamlessly without re-reading the full chat history.
 
@@ -82,16 +88,79 @@ Rules:
   prompt += appendWorkflowContext(session.metadata.workflow);
   prompt += `CONVERSATION:\n\n`;
 
-  for (const msg of conversation) {
-    const role = ROLE_LABELS[msg.role] || 'System';
-    const content =
-      msg.content.length > MAX_MESSAGE_CHARS ? msg.content.slice(0, MAX_MESSAGE_CHARS) + '...[truncated]' : msg.content;
-    prompt += `**${role}:** ${content}\n\n`;
+  for (const msg of head) {
+    prompt += renderExcerptMessage(msg);
+  }
+  if (elidedCount > 0) {
+    prompt += `_[${elidedCount} earlier messages omitted]_\n\n`;
+  }
+  for (const msg of tail) {
+    prompt += renderExcerptMessage(msg);
   }
 
   prompt += `\nReturn only the JSON object.`;
 
   return prompt;
+}
+
+function renderExcerptMessage(msg: Message): string {
+  const role = ROLE_LABELS[msg.role] || 'System';
+  const content =
+    msg.content.length > MAX_MESSAGE_CHARS ? msg.content.slice(0, MAX_MESSAGE_CHARS) + '...[truncated]' : msg.content;
+  return `**${role}:** ${content}\n\n`;
+}
+
+/**
+ * Select the conversation excerpt for the handoff prompt: a head block plus the
+ * TAIL most recent messages, with the middle elided so prompt size stays bounded
+ * regardless of session length. `filtered` must already have prior handoffs
+ * stripped; message order is chronological (index 0 = oldest).
+ *
+ * When the whole conversation fits within HEAD + TAIL, everything is returned as
+ * the head with no tail and no elision (behavior matches the pre-window code).
+ * Otherwise the head is either the most recent compaction summary that lies
+ * before the tail window (it already distills everything before it), or - when
+ * no such summary exists - the first HEAD raw messages (original goal framing).
+ * If a summary exists only inside the tail window it is already shown, so no
+ * head is emitted. Head is always strictly before the tail window, so head and
+ * tail never overlap.
+ */
+function selectHandoffExcerpt(filtered: Message[]): {
+  head: Message[];
+  tail: Message[];
+  elidedCount: number;
+} {
+  const n = filtered.length;
+  if (n <= HEAD_CONVERSATION_MESSAGES + TAIL_CONVERSATION_MESSAGES) {
+    return { head: filtered, tail: [], elidedCount: 0 };
+  }
+
+  const tailStart = n - TAIL_CONVERSATION_MESSAGES;
+  const tail = filtered.slice(tailStart);
+
+  let summaryIdx = -1;
+  for (let i = tailStart - 1; i >= 0; i--) {
+    if (filtered[i].content.startsWith(COMPACTION_SUMMARY_MARKER)) {
+      summaryIdx = i;
+      break;
+    }
+  }
+
+  let head: Message[];
+  let headEndExclusive: number;
+  if (summaryIdx !== -1) {
+    head = [filtered[summaryIdx]];
+    headEndExclusive = summaryIdx + 1;
+  } else if (filtered.some(m => m.content.startsWith(COMPACTION_SUMMARY_MARKER))) {
+    // A summary exists only inside the tail window - already shown, so no head.
+    head = [];
+    headEndExclusive = 0;
+  } else {
+    head = filtered.slice(0, HEAD_CONVERSATION_MESSAGES);
+    headEndExclusive = HEAD_CONVERSATION_MESSAGES;
+  }
+
+  return { head, tail, elidedCount: tailStart - headEndExclusive };
 }
 
 function appendWorkflowContext(workflow: WorkflowState | undefined): string {
