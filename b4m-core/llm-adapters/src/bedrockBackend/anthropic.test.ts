@@ -118,6 +118,18 @@ describe('translateStreamChunk', () => {
     );
   });
 
+  it('content_block_stop closes an open <think> block and resets thinking state', () => {
+    // Same backend instance (isInThinkingBlock is stateful): open thinking, then stop.
+    first({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } });
+    expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('</think>');
+    // Flag reset - a subsequent stop with no open thinking block emits no close tag.
+    expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('');
+  });
+
+  it('content_block_stop with no open thinking block emits no close tag', () => {
+    expect(first({ type: 'content_block_stop', index: 0 })?.chunkText).toBe('');
+  });
+
   it('text_delta / input_json_delta / thinking_delta surface their payloads', () => {
     expect(first({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hi' } })?.chunkText).toBe(
       'Hi'
