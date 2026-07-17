@@ -52,6 +52,7 @@ const TOOL_RUNNING_COPY: Record<string, string> = {
   optihashi_formulate: 'Formulating the optimization model…',
   optihashi_edit_problem: 'Refining the model…',
   optihashi_schedule: 'Racing solvers…',
+  optihashi_solve: 'Racing solvers…',
 };
 
 export function copyForRunningTool(toolName: string | undefined): string {
