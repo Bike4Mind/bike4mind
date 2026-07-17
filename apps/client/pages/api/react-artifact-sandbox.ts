@@ -4,6 +4,7 @@ import {
   OPTIONAL_DEP_CDN,
   BASE_SANDBOX_SCRIPTS,
   SANDBOX_SCRIPT_HOSTS,
+  LUCIDE_WRAPPER_FN,
 } from '@client/app/utils/reactArtifactDeps';
 
 /**
@@ -128,36 +129,9 @@ const SANDBOX_HTML = `<!DOCTYPE html>
       });
     }
 
-    function setupLucideWrapper() {
-      if (window.LucideReactWrapper) return;
-      var toKebabCase = function (str) { return str.replace(/([a-z0-9])([A-Z])/g, '$1-$2').toLowerCase(); };
-      window.LucideReactWrapper = new Proxy({}, {
-        get: function (target, iconName) {
-          return function (props) {
-            props = props || {};
-            var size = props.size || 24;
-            var color = props.color || 'currentColor';
-            var strokeWidth = props.strokeWidth || 2;
-            var className = props.className || '';
-            // Preserve pass-through props (onClick, aria-*, data-*, style, ...) like lucide-react.
-            var rest = Object.assign({}, props);
-            delete rest.size; delete rest.color; delete rest.strokeWidth; delete rest.className;
-            var kebab = toKebabCase(iconName);
-            // lucide's UMD stores each icon as a node array ([tag, attrs][]), NOT an HTML string -
-            // build real SVG children from it (injecting the array as innerHTML renders nothing).
-            var node = (window.lucide && lucide.icons && (lucide.icons[iconName] || lucide.icons[kebab])) || null;
-            var children = Array.isArray(node)
-              ? node.map(function (entry, i) { return React.createElement(entry[0], Object.assign({ key: i }, entry[1])); })
-              : null;
-            return React.createElement('svg', Object.assign({
-              xmlns: 'http://www.w3.org/2000/svg', width: size, height: size, viewBox: '0 0 24 24',
-              fill: 'none', stroke: color, strokeWidth: strokeWidth, strokeLinecap: 'round', strokeLinejoin: 'round',
-              className: className
-            }, rest), children);
-          };
-        }
-      });
-    }
+    // window.LucideReactWrapper factory - shared source with the publish assembler (see
+    // LUCIDE_WRAPPER_FN in reactArtifactDeps.ts) so preview and published output stay identical.
+    ${LUCIDE_WRAPPER_FN}
 
     function renderArtifact(code, dependencies, mode) {
       // Multi-file artifacts aren't supported yet (#9403 follow-up): the require() shim below
@@ -193,6 +167,9 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           throw new Error('Module "' + module + '" is not available');
         };
 
+        // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
+        // const-destructure is a syntax error). Kept in sync with the publish transpiler.
+        var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
         var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
@@ -203,8 +180,8 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
           // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
           var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
-          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + mixed[2] + ' = ' + mixed[1] + ';';
-          return 'const ' + imports + " = require('" + module + "');";
+          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + renameNamed(mixed[2]) + ' = ' + mixed[1] + ';';
+          return 'const ' + renameNamed(imports) + " = require('" + module + "');";
         });
 
         var R = React;

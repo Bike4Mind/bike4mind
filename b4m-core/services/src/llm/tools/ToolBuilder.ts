@@ -646,7 +646,7 @@ export class ToolBuilder {
     if (hasContentTransform) {
       sections.push(`# MANDATORY BLOG WORKFLOW
 
-**CRITICAL RULE**: When user says "publish to my blog" or "draft a blog post" or similar, you MUST use blog_draft tool.
+**CRITICAL RULE**: This workflow applies ONLY to BLOG posts - when the user explicitly asks to blog about something (e.g. "publish to my blog", "draft a blog post", "turn this into a blog post"). It does NOT apply to sharing or publishing an artifact/app/page to a public link - that is done with the artifact's own in-app Share action, NEVER with blog_draft. When (and only when) the user wants a blog post, you MUST use the blog_draft tool.
 
 ## Step 1: YOU CALL blog_draft (REQUIRED)
 When user wants to blog about conversation/content:
