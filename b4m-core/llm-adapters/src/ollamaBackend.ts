@@ -385,17 +385,21 @@ export class OllamaBackend implements ICompletionBackend {
    * none match, the content is a normal answer.
    *
    * Guards against false positives: reasoning traces (<think>...</think>) are
-   * stripped first, and we only treat content as a call when the model emits it
-   * as its response (starts with a JSON object or a code fence). JSON merely
-   * quoted inside prose ("the math_evaluate tool takes {...}") is left alone.
+   * stripped first. When the model fences its output, only the fenced bodies are
+   * searched - this lets a call preceded by preamble prose ("Let me use the
+   * calculator: ```json {...}```") through while still ignoring JSON merely
+   * quoted in prose. With no fence, the reply must START with a JSON object, so
+   * "the math_evaluate tool takes {...}" is left alone.
    */
   private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-    if (!withoutThink.startsWith('{') && !withoutThink.startsWith('```')) return [];
+    const fenced = this.extractFencedBlocks(withoutThink);
+    if (fenced.length === 0 && !withoutThink.startsWith('{')) return [];
+    const source = fenced.length > 0 ? fenced.join('\n') : withoutThink;
 
     const calls: NormalizedToolCall[] = [];
     const seen = new Set<string>();
-    for (const candidate of this.extractJsonObjects(withoutThink)) {
+    for (const candidate of this.extractJsonObjects(source)) {
       const call = this.tryParseToolCallJson(candidate, tools);
       if (!call) continue;
       const key = `${call.name}:${call.arguments}`;
@@ -404,6 +408,20 @@ export class OllamaBackend implements ICompletionBackend {
       calls.push({ ...call, id: `ollama-content-tool-${calls.length}-${call.name}` });
     }
     return calls;
+  }
+
+  /**
+   * Return the body of every ```-fenced block, so a tool call the model wrapped
+   * in a fence after preamble prose can be isolated from the surrounding text.
+   */
+  private extractFencedBlocks(content: string): string[] {
+    const blocks: string[] = [];
+    const fenceRegex = /```[^\n]*\n?([\s\S]*?)```/g;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRegex.exec(content)) !== null) {
+      blocks.push(match[1]);
+    }
+    return blocks;
   }
 
   /**

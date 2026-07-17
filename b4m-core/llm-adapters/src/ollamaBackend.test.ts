@@ -96,6 +96,31 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
   });
 
+  it('recovers a fenced tool call preceded by preamble prose', async () => {
+    const toolFn = vi.fn(async () => '4');
+    const { backend, chat } = makeBackend([
+      {
+        // A real, offered tool wrapped in a fence after explanatory prose - the
+        // old startsWith guard dropped this because it did not start with { or ```.
+        message: {
+          content:
+            'Let me use the calculator:\n```json\n{"name":"math_evaluate","arguments":{"expression":"2+2"}}\n```',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 10,
+      },
+      { message: { content: 'The answer is 4.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 4 },
+    ]);
+
+    const { text, toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolFn).toHaveBeenCalledWith({ expression: '2+2' });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(text).toContain('The answer is 4.');
+    expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
+  });
+
   it('recovers multiple content tool calls run together and skips unknown tools', async () => {
     const toolFn = vi.fn(async () => '1554453600');
     const { backend, chat } = makeBackend([
