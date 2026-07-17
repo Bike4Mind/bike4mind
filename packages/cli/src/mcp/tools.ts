@@ -131,7 +131,11 @@ export async function sendMessage(
     }
   }
 
-  return { notebookId, questId, reply: res.response ?? '', model: res.model };
+  // The completed quest carries the assistant reply in `responses` (a string
+  // array); the scalar `response` is null on the wait path, so prefer `responses`.
+  const reply = res.responses && res.responses.length > 0 ? res.responses.join('\n\n') : (res.response ?? '');
+
+  return { notebookId, questId, reply, model: res.model };
 }
 
 export async function searchKnowledgeBase(

@@ -39,10 +39,13 @@ describe('tool handlers', () => {
     });
   });
 
-  it('send_message returns the supplied notebookId without resolving the quest', async () => {
+  it('send_message extracts the reply from responses and returns the supplied notebookId', async () => {
     const getQuest = vi.fn();
+    // The real wait:true response carries the reply in `responses`; `response` is null.
     const client = mockClient({
-      sendChat: vi.fn().mockResolvedValue({ id: 'q1', status: 'complete', response: 'hello', model: 'gpt' }),
+      sendChat: vi
+        .fn()
+        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
       getQuest,
     });
 
@@ -52,10 +55,25 @@ describe('tool handlers', () => {
     expect(getQuest).not.toHaveBeenCalled();
   });
 
+  it('send_message joins multiple responses with a blank line', async () => {
+    const client = mockClient({
+      sendChat: vi
+        .fn()
+        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['a', 'b'], model: 'gpt' }),
+      getQuest: vi.fn(),
+    });
+
+    const result = await sendMessage(client, { message: 'hi', notebookId: 'nb1' });
+
+    expect(result.reply).toBe('a\n\nb');
+  });
+
   it('send_message resolves the notebookId from the quest when none was supplied', async () => {
     const client = mockClient({
-      sendChat: vi.fn().mockResolvedValue({ id: 'q1', status: 'complete', response: 'hello', model: 'gpt' }),
-      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'complete', sessionId: 'resolved-nb' }),
+      sendChat: vi
+        .fn()
+        .mockResolvedValue({ id: 'q1', status: 'done', response: null, responses: ['hello'], model: 'gpt' }),
+      getQuest: vi.fn().mockResolvedValue({ id: 'q1', status: 'done', sessionId: 'resolved-nb' }),
     });
 
     const result = await sendMessage(client, { message: 'hi' });

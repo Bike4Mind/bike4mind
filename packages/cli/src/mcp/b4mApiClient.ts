@@ -28,7 +28,8 @@ export interface ChatWaitResponse {
   id: string;
   status: string;
   model?: string;
-  response?: string;
+  // The wait path returns the reply in `responses`; the scalar `response` is null.
+  response?: string | null;
   responses?: string[];
   [key: string]: unknown;
 }
