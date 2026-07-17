@@ -31,6 +31,7 @@ const ALWAYS_SAFE_TOOLS = new Set([
   'optihashi_formulate',
   'optihashi_edit_problem',
   'optihashi_schedule',
+  'optihashi_solve',
 ]);
 
 // Tools with side effects that always require first-time approval
