@@ -1,7 +1,7 @@
 import { getSettingsByNames } from '@bike4mind/utils';
 import { getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { ModelBackend } from '@bike4mind/common';
+import { ModelBackend, type ModelInfo } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository, AdminSettings } from '@bike4mind/database';
 import { apiKeyService } from '@bike4mind/services';
 import {
@@ -29,6 +29,42 @@ export const getEffectiveApiKeyByBackend = async (userId: string, backend: Model
 
 export class OperationsModelService {
   private static logger = new Logger({ metadata: { service: 'OperationsModelService' } });
+
+  /**
+   * Self-host operations fallback: pick a local Ollama text model.
+   *
+   * Background tasks (auto-naming, summaries, research) need a text model even
+   * when no cloud key is set. The generic "any text model" fallback would pick a
+   * Bedrock model first (getAvailableModels always enumerates Bedrock, ahead of
+   * Ollama) which then fails at inference with no AWS credentials. Prefer the
+   * operator's primary pull (first token of OLLAMA_PULL_MODELS) so the chat model
+   * is chosen over the embedder, else the first available Ollama text model.
+   *
+   * Returns undefined unless B4M_SELF_HOST is set and a local text model exists,
+   * so callers fall through to the unchanged cloud chain.
+   */
+  private static resolveSelfHostDefaultTextModel(models: ModelInfo[]): ModelInfo | undefined {
+    if (process.env.B4M_SELF_HOST !== 'true') return undefined;
+
+    const ollamaTextModels = models.filter(m => m.backend === ModelBackend.Ollama && m.type === 'text');
+    if (ollamaTextModels.length === 0) return undefined;
+
+    const firstPull = process.env.OLLAMA_PULL_MODELS?.trim().split(/\s+/)[0];
+    const chosen = (firstPull && ollamaTextModels.find(m => m.id === firstPull)) || ollamaTextModels[0];
+
+    this.logger.info(`Self-host: defaulting operations text model to ${chosen.id} (${chosen.backend})`);
+    return chosen;
+  }
+
+  /** True when a cloud text-model API key is available; gates the self-host Ollama default. */
+  private static hasCloudTextKey(apiKeyTable: {
+    openai?: string;
+    anthropic?: string;
+    gemini?: string;
+    xai?: string;
+  }): boolean {
+    return !!(apiKeyTable.openai || apiKeyTable.anthropic || apiKeyTable.gemini || apiKeyTable.xai);
+  }
 
   /**
    * Get the configured operations model and initialize LLM
@@ -176,7 +212,14 @@ export class OperationsModelService {
     };
     const models = await getAvailableModels(apiKeyTable);
 
-    let modelInfo = models.find(m => m.id === defaultConfig.modelId);
+    // Self-host with no cloud key: prefer a local Ollama text model before the cloud chain.
+    let modelInfo = OperationsModelService.hasCloudTextKey(apiKeyTable)
+      ? undefined
+      : OperationsModelService.resolveSelfHostDefaultTextModel(models);
+
+    if (!modelInfo) {
+      modelInfo = models.find(m => m.id === defaultConfig.modelId);
+    }
 
     if (!modelInfo) {
       // Fall back to gpt-3.5-turbo
@@ -305,7 +348,14 @@ export class OperationsModelService {
     };
     const models = await getAvailableModels(apiKeyTable);
 
-    let modelInfo = models.find(m => m.id === defaultConfig.modelId);
+    // Self-host with no cloud key: prefer a local Ollama text model before the cloud chain.
+    let modelInfo = OperationsModelService.hasCloudTextKey(apiKeyTable)
+      ? undefined
+      : OperationsModelService.resolveSelfHostDefaultTextModel(models);
+
+    if (!modelInfo) {
+      modelInfo = models.find(m => m.id === defaultConfig.modelId);
+    }
 
     if (!modelInfo) {
       // Fall back to gpt-3.5-turbo
