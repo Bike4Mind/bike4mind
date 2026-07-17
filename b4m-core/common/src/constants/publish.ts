@@ -44,6 +44,13 @@ export interface PublishReactDepScript {
  * `lucide` UMD (raw global `lucide`), which the publish assembler wraps as `LucideReactWrapper`
  * (the require() target recorded here), exactly like the in-app sandbox.
  * MUST stay in sync with OPTIONAL_DEP_CDN's globalVar values.
+ *
+ * MAINTENANCE: these UMDs are static blobs committed under `apps/client/public/static/lib/`, so
+ * they are invisible to `npm audit` / Dependabot and never bump automatically. Review the pinned
+ * versions on a periodic cadence (and when a published advisory affects one) and refresh the blob +
+ * this pin together. Their code executes only inside the artifact's isolated opaque origin (no app
+ * cookies/tokens, connect-src locked down), which bounds the blast radius but is not a reason to
+ * skip the refresh.
  */
 export const PUBLISH_REACT_DEP_SCRIPTS: Readonly<Record<string, PublishReactDepScript>> = {
   recharts: { path: '/static/lib/recharts@2.x.js', global: 'Recharts' },

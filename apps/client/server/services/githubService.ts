@@ -27,7 +27,8 @@ import {
 } from '@bike4mind/common';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
-import { decryptSecret, encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { decryptToken } from '@server/security/tokenEncryption';
 
 const USER_AGENT = 'bike4mind-github-service/1.0';
 const GITHUB_REQUEST_TIMEOUT_MS = 10000; // 10s — fail fast on hung connections (GitHub gateway timeout is ~11s)
@@ -334,7 +335,7 @@ export class GitHubService {
       if (connection.connectionType === 'github_app') {
         octokit = await GitHubService.createOctokitForApp(connection, encryptionKey, logger);
       } else {
-        octokit = GitHubService.createOctokitForPAT(connection, encryptionKey, logger);
+        octokit = GitHubService.createOctokitForPAT(connection, logger);
       }
     } catch (error) {
       // Log a coarse reason plus a safe detail so operators can distinguish a misconfigured
@@ -378,11 +379,14 @@ export class GitHubService {
       throw new GitHubAuthInitError('GitHub App connection missing required fields', 'missing-fields');
     }
 
-    // Decrypt the private key with sanitized error handling
+    // Decrypt the private key with sanitized error handling. Route through decryptToken()
+    // for key-rotation fallback: it tries SECRET_ENCRYPTION_KEY, then
+    // SECRET_ENCRYPTION_KEY_PREVIOUS. This mirrors the GitHub webhook decrypt paths so a
+    // credential encrypted under a pre-rotation key still authenticates.
     let privateKey = connection.privateKey;
     if (isEncrypted(privateKey)) {
       try {
-        privateKey = decryptSecret(privateKey, encryptionKey);
+        privateKey = decryptToken(privateKey) ?? privateKey;
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
         throw new GitHubAuthInitError('Failed to decrypt credentials. Key may need rotation.', 'decrypt-failed');
@@ -414,20 +418,17 @@ export class GitHubService {
    *
    * @throws Error if decryption fails (sanitized message)
    */
-  private static createOctokitForPAT(
-    connection: IOrgGitHubConnectionDocument,
-    encryptionKey: string,
-    _logger: Logger
-  ): Octokit {
+  private static createOctokitForPAT(connection: IOrgGitHubConnectionDocument, _logger: Logger): Octokit {
     if (!connection.accessToken) {
       throw new GitHubAuthInitError('Service account connection missing credentials', 'missing-fields');
     }
 
-    // Decrypt the token with sanitized error handling
+    // Decrypt the token with sanitized error handling. Route through decryptToken() for
+    // key-rotation fallback (current key, then SECRET_ENCRYPTION_KEY_PREVIOUS).
     let token = connection.accessToken;
     if (isEncrypted(token)) {
       try {
-        token = decryptSecret(token, encryptionKey);
+        token = decryptToken(token) ?? token;
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
         throw new GitHubAuthInitError('Failed to decrypt credentials. Token may need rotation.', 'decrypt-failed');
@@ -465,7 +466,8 @@ export class GitHubService {
               let token = conn.cachedAccessToken;
               if (isEncrypted(token)) {
                 try {
-                  token = decryptSecret(token, encryptionKey);
+                  // Key-rotation fallback: current key, then SECRET_ENCRYPTION_KEY_PREVIOUS.
+                  token = decryptToken(token) ?? token;
                 } catch {
                   // Sanitize decryption errors
                   logger.warn('[GitHubService] Cached token decryption failed, will regenerate');

@@ -110,3 +110,118 @@ describe('createUserApiKey — overwatch ingest scope', () => {
     expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ status: ApiKeyStatus.ACTIVE }));
   });
 });
+
+describe('createUserApiKey — embed keys (epic #41)', () => {
+  let repo: ReturnType<typeof makeRepo>;
+  const adapters = () => ({ db: { userApiKeys: repo as any } });
+  const embedParams = {
+    name: 'Embed key',
+    scopes: [ApiKeyScope.EMBED_CHAT],
+    metadata: { createdFrom: 'dashboard' as const },
+    agentId: 'agent-1',
+  };
+
+  beforeEach(() => {
+    repo = makeRepo();
+  });
+
+  it('persists agentId, normalized origins, and branding', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      {
+        ...embedParams,
+        allowedOrigins: ['https://example.com', 'https://example.com', 'https://Widgets.example.org'],
+        branding: { displayName: 'Acme Assistant', hideBranding: true },
+      },
+      adapters()
+    );
+    expect(result.agentId).toBe('agent-1');
+    // EmbedOriginsSchema lowercases + dedupes.
+    expect(result.allowedOrigins).toEqual(['https://example.com', 'https://widgets.example.org']);
+    expect(result.branding).toEqual({ displayName: 'Acme Assistant', hideBranding: true });
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        allowedOrigins: ['https://example.com', 'https://widgets.example.org'],
+      })
+    );
+  });
+
+  it('requires an agentId when the embed:chat scope is present', async () => {
+    const { agentId: _omit, ...noAgent } = embedParams;
+    await expect(createUserApiKey('user1', noAgent, adapters())).rejects.toThrow(
+      /agentId is required for embed:chat scope/
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty-string agentId (never a meaningful binding)', async () => {
+    await expect(createUserApiKey('user1', { ...embedParams, agentId: '' }, adapters())).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects agentId without the embed:chat scope', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        { ...baseParams, productId: undefined, scopes: [ApiKeyScope.AI_CHAT], agentId: 'agent-1' },
+        adapters()
+      )
+    ).rejects.toThrow(/require the embed:chat scope/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects allowedOrigins without the embed:chat scope (including an explicit empty array)', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          name: 'x',
+          scopes: [ApiKeyScope.AI_CHAT],
+          metadata: { createdFrom: 'dashboard' as const },
+          allowedOrigins: [],
+        },
+        adapters()
+      )
+    ).rejects.toThrow(/require the embed:chat scope/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects branding without the embed:chat scope', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          name: 'x',
+          scopes: [ApiKeyScope.AI_CHAT],
+          metadata: { createdFrom: 'dashboard' as const },
+          branding: { displayName: 'x' },
+        },
+        adapters()
+      )
+    ).rejects.toThrow(/require the embed:chat scope/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-https (or otherwise malformed) origin', async () => {
+    await expect(
+      createUserApiKey('user1', { ...embedParams, allowedOrigins: ['http://example.com'] }, adapters())
+    ).rejects.toThrow(/normalized https origin/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects more than EMBED_ORIGINS_MAX origins', async () => {
+    const tooMany = Array.from({ length: 6 }, (_, i) => `https://site${i}.example.com`);
+    await expect(createUserApiKey('user1', { ...embedParams, allowedOrigins: tooMany }, adapters())).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('allows an embed:chat key with no origins, and with an explicit empty array', async () => {
+    const noOrigins = await createUserApiKey('user1', embedParams, adapters());
+    expect(noOrigins.agentId).toBe('agent-1');
+    expect(noOrigins.allowedOrigins).toBeUndefined();
+
+    const emptyArray = await createUserApiKey('user1', { ...embedParams, allowedOrigins: [] }, adapters());
+    expect(emptyArray.allowedOrigins).toEqual([]);
+  });
+});

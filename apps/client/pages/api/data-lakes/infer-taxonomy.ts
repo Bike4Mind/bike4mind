@@ -1,11 +1,26 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
-import { InferTaxonomyRequestInput, InferTaxonomyResponse } from '@bike4mind/common';
+import { rateLimit } from '@server/middlewares/rateLimit';
+import { isDevelopment } from '@server/utils/config';
+import { InferTaxonomyRequestInput, InferTaxonomyResponse, hasDeveloperUserTag } from '@bike4mind/common';
 import { apiKeyService } from '@bike4mind/services';
 import { ApiKeyType } from '@bike4mind/common';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import OpenAI from 'openai';
 import { Request } from 'express';
+
+// Per-user/day cap on taxonomy inference. The endpoint is tag-gated (admin / opti /
+// developer), but a tagged user could otherwise burn OpenAI spend unbounded. Admins and
+// developer-tagged users stay uncapped; every other caller who reaches here gets the daily
+// cap. The limit trips in middleware, before any OpenAI call, so a rejected request is free.
+export const TAXONOMY_INFERENCE_DAILY_CAP = 50;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export const resolveTaxonomyDailyLimit = (req: Request): number => {
+  if (isDevelopment()) return Infinity;
+  if (req.user?.isAdmin || hasDeveloperUserTag(req.user?.tags)) return Infinity;
+  return TAXONOMY_INFERENCE_DAILY_CAP;
+};
 
 /**
  * Taxonomy inference is OPTIONAL and non-blocking: on any failure (no key, no/blank
@@ -58,6 +73,7 @@ Guidelines:
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
+  .use(rateLimit({ limit: resolveTaxonomyDailyLimit, windowMs: DAY_MS, bucket: 'data-lakes/infer-taxonomy' }))
   .post(async (req: Request, res) => {
     // Access is the EnableDataLakes feature flag alone (applied above) - the same gate the
     // create/manage endpoints use. This step runs INSIDE the create wizard, so the old

@@ -21,11 +21,17 @@ const ALWAYS_SAFE_TOOLS = new Set([
   'recharts',
   'mermaid_chart',
   'chess_engine',
-  // optihashi_formulate + optihashi_edit_problem share a risk surface (both invoke an
-  // LLM and emit an /opti-gated __uiSideEffect) - keep them paired so agent mode
-  // doesn't auto-run one while pausing the other for approval.
+  // All five OptiHashi tools share one risk surface: each invokes an LLM/solver and emits
+  // only an /opti-gated __uiSideEffect the user can Undo - none mutates stored user data or
+  // calls out externally (durable/hardware compute submission is separately flag-gated). They
+  // must stay grouped so agent mode doesn't auto-run one while pausing its twin for approval,
+  // AND so the autonomous decompose -> formulate -> schedule -> advance loop isn't interrupted
+  // by an approval prompt at every step.
+  'optihashi_decompose',
   'optihashi_formulate',
   'optihashi_edit_problem',
+  'optihashi_schedule',
+  'optihashi_solve',
 ]);
 
 // Tools with side effects that always require first-time approval

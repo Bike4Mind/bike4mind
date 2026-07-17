@@ -15,7 +15,7 @@ import { ChatModels } from '@bike4mind/common';
 import { ReActAgent } from '@bike4mind/agents';
 import type { SessionStore, Session, Message } from '../storage';
 import type { CheckpointStore } from '../storage/CheckpointStore.js';
-import type { DecisionStore, BlockerStore, ReviewGateStore } from '../tools';
+import type { DecisionStore, BlockerStore, ReviewGateStore, TodoStore } from '../tools';
 import { useCliStore } from '../store';
 import { logger } from '../utils/Logger';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
@@ -41,6 +41,7 @@ export interface SessionLifecycleContext {
   decisionStore: DecisionStore;
   blockerStore: BlockerStore;
   reviewGateStore: ReviewGateStore;
+  todoStore: TodoStore;
   /** Invalidate memoised /usage data so the next read reflects the new session. */
   onSessionReplaced: () => void;
   /** Drain any in-flight review-gate prompt from the UI queue (create only). */
@@ -115,9 +116,12 @@ export async function createFreshSession(ctx: SessionLifecycleContext): Promise<
   await logger.initialize(newSession.id);
   logger.debug('=== New Session Started via /clear ===');
 
-  // Reset workflow stores so old decisions/blockers don't leak into new session
+  // Reset workflow stores so old decisions/blockers/todos don't leak into the new
+  // session. Todos are never persisted, and /clear+/new does not run init(), so
+  // this reset is the only thing that clears the todo list on a session switch.
   ctx.decisionStore.decisions = [];
   ctx.blockerStore.blockers = [];
+  ctx.todoStore.todos = [];
 
   ctx.checkpointStore?.setSessionId(newSession.id);
 

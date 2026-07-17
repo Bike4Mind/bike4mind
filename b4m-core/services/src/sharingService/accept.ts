@@ -177,7 +177,7 @@ const acceptOrganization = async (
   // Establish full membership on the user document. Without this, the accepting
   // user's `organizationId` stays null and every org-scoped feature that reads
   // `user.organizationId` (e.g. data-lake AccessContext) treats them as org-less.
-  // Mirrors the InviteType.Group path above and organizationManager.addUserToOrganization,
+  // Mirrors the InviteType.Group path above and organizationService.addMember,
   // which set the selected organization as a required side effect of joining.
   user.organizationId = organizationId;
   await db.users.update(user);

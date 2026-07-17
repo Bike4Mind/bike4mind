@@ -173,6 +173,21 @@ describe('AppHomeDataService', () => {
       expect(result).toEqual({ totalNotebooks: 0, messagesThisWeek: 0, activeProjects: 0 });
       expect(mockLogger.error).toHaveBeenCalled();
     });
+
+    // Regression guard for #610: membership rows store userId, so the active-project
+    // count must query users.userId, not the nonexistent users.id.
+    it('counts active projects via the stored users.userId membership path, never users.id (#610)', async () => {
+      mockSessionCountDocuments.mockResolvedValue(0);
+      mockSessionFind.mockReturnValue(createMockQuery([]));
+      mockProjectFind.mockReturnValue(createMockQuery([{ _id: 'project1' }]));
+      mockQuestCountDocuments.mockResolvedValue(0);
+
+      await service.fetchUserStats(mockUserId);
+
+      const [query] = mockProjectFind.mock.calls[0] as [{ $or: Array<Record<string, unknown>> }];
+      expect(query.$or).toEqual(expect.arrayContaining([{ userId: mockUserId }, { 'users.userId': mockUserId }]));
+      expect(query.$or.flatMap(clause => Object.keys(clause))).not.toContain('users.id');
+    });
   });
 });
 

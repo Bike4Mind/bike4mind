@@ -20,6 +20,10 @@ export enum ApiKeyScope {
   MARKETING_REPORTS_WRITE = 'marketing-reports:write',
   /** Server-to-server ingest scope for Overwatch analytics. Admin-provisioned only - never shown in user-facing key creation UI. */
   OVERWATCH_INGEST_WRITE = 'overwatch-ingest:write',
+  /** Authorizes only embedded-widget chat against the single agent the key is
+   *  bound to (`agentId`). Like CC_BRIDGE, a leaked embed key has a narrow blast
+   *  radius: it can talk to one agent from allow-listed origins, nothing else. */
+  EMBED_CHAT = 'embed:chat',
 }
 
 export enum ApiKeyStatus {
@@ -77,6 +81,17 @@ export interface IUserApiKeyRateLimit {
   requestsPerDay: number;
 }
 
+/**
+ * White-label config for an embed key (epic #41). Phase A stores it; the theming
+ * that consumes these fields is Phase D. `hideBranding` is plan-gated there.
+ */
+export interface IEmbedBranding {
+  primaryColor?: string;
+  logoUrl?: string;
+  displayName?: string;
+  hideBranding?: boolean;
+}
+
 export interface IUserApiKey {
   id: string;
   userId: string;
@@ -104,6 +119,12 @@ export interface IUserApiKey {
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */
   organizationId?: string;
+  /** Agent this embed key is bound to. Required when scopes includes EMBED_CHAT. */
+  agentId?: string;
+  /** https origin allow-list for an embed key (normalized, deduped, capped at EMBED_ORIGINS_MAX). */
+  allowedOrigins?: string[];
+  /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
+  branding?: IEmbedBranding;
 }
 
 /**

@@ -14,6 +14,13 @@ export interface ApiKeyScopeOption {
  * Intentionally excludes the privileged `ApiKeyScope.ADMIN` (`admin:*`) and the
  * bridge-only `ApiKeyScope.CC_BRIDGE` (`cc-bridge:connect`), which are granted
  * through dedicated flows, not user-facing key creation.
+ *
+ * `embed:chat` is a member of this catalog (the source of truth for the scope) but
+ * is a dedicated-flow scope: it is filtered out of the generic New-Key modals AND
+ * the Scopes docs tab (via GENERIC_MODAL_API_KEY_SCOPES) until its mint flow ships,
+ * because an embed key needs an agentId + origin allow-list those surfaces do not
+ * collect and its endpoint lands in Phase B. Embed keys are minted through the
+ * dedicated embed flow (epic #41 Phase E), not here.
  */
 export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
   {
@@ -76,10 +83,28 @@ export const USER_API_KEY_SCOPES: ApiKeyScopeOption[] = [
     description: 'Create and update marketing reports',
     endpoints: ['POST /api/overwatch/marketing-reports', 'PUT /api/overwatch/marketing-reports/:id'],
   },
+  {
+    value: ApiKeyScope.EMBED_CHAT,
+    label: 'Embedded Agent Chat',
+    description: 'Chat with a single bound agent from an embedded widget on an allow-listed site',
+    endpoints: ['POST /api/embed/chat'],
+  },
 ];
 
 /** All user-selectable scope values, e.g. for a "Select All" action. */
 export const USER_API_KEY_SCOPE_VALUES: ApiKeyScope[] = USER_API_KEY_SCOPES.map(s => s.value);
+
+/**
+ * Scopes that are minted only through a dedicated flow (not the generic New-Key
+ * modals), because they require extra binding the modals do not collect. Embed
+ * keys need an agentId + origin allow-list (epic #41 Phase E).
+ */
+export const DEDICATED_FLOW_SCOPES: ReadonlySet<ApiKeyScope> = new Set([ApiKeyScope.EMBED_CHAT]);
+
+/** Scopes offered in the generic profile/admin New-Key modals (excludes dedicated-flow scopes). */
+export const GENERIC_MODAL_API_KEY_SCOPES: ApiKeyScopeOption[] = USER_API_KEY_SCOPES.filter(
+  s => !DEDICATED_FLOW_SCOPES.has(s.value)
+);
 
 /**
  * Scopes that are provisioned by admins only and must never appear in the user-facing

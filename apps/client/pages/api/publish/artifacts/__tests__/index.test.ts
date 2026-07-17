@@ -138,6 +138,13 @@ describe('GET /api/publish/artifacts — ?mine and default visibility', () => {
     expect(projectFind).toHaveBeenCalledTimes(1);
     expect(buildListVisibilityFilter).toHaveBeenCalledTimes(1);
   });
+
+  it('resolves accessible projects via the stored users.userId path, never users.id (#610)', async () => {
+    await run({});
+    const [query] = projectFind.mock.calls[0] as [{ $or: Array<Record<string, unknown>> }];
+    expect(query.$or).toEqual(expect.arrayContaining([{ userId: USER }, { 'users.userId': USER }]));
+    expect(query.$or.flatMap(clause => Object.keys(clause))).not.toContain('users.id');
+  });
 });
 
 describe('GET /api/publish/artifacts — projection', () => {

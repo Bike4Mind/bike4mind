@@ -51,6 +51,11 @@ function flattenContent(content: IMessage['content']): string {
  *   previousMessages + current query) passed into the matching `agent.run()`
  *   call. Must match exactly - it is the boundary below which messages are
  *   never touched, so the turn's own query is never summarized away.
+ *
+ * Workflow state (decisions/blockers) needs no flush here: this handler only
+ * rewrites the in-flight `IMessage[]` working history and discards the
+ * compacted session's metadata, leaving the stores and `session.metadata`
+ * untouched. The turn's own post-run save syncs the stores afterwards.
  */
 export function createReactiveCompactionHandler(
   agent: ReActAgent,

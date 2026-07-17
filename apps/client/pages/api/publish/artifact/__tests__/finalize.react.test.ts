@@ -82,6 +82,14 @@ export default function C() {
   return <div>{typeof THREE}</div>;
 }`;
 
+// No default export -> ReactArtifactTranspileError (a DIFFERENT 422 arm than the unsupported-dep
+// UnsupportedReactDependencyError above). Guards the transpile-error branch at the handler level.
+const NO_DEFAULT_EXPORT_JSX = `import { useState } from 'react';
+function C() {
+  const [n] = useState(0);
+  return <div>{n}</div>;
+}`;
+
 const reactManifest = (rawSource: string) => ({
   draftId: DRAFT_ID,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -162,6 +170,17 @@ describe('finalize - React artifact transpile branch', () => {
     expect(res._getStatusCode()).toBe(422);
     const body = res._getJSONData() as { violations?: Array<{ message: string }> };
     expect(body.violations?.[0]?.message ?? '').toMatch(/not publishable yet|three/i);
+    expect(mockFindOneAndUpdate).not.toHaveBeenCalled(); // no upsert - nothing published
+  });
+
+  it('rejects a React draft with no default export via the transpile-error arm (clean 422, nothing promoted)', async () => {
+    setDraft(reactManifest(NO_DEFAULT_EXPORT_JSX), NO_DEFAULT_EXPORT_JSX);
+    const { res, promise } = run({ draftId: DRAFT_ID });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    const body = res._getJSONData() as { violations?: Array<{ message: string }> };
+    expect(body.violations?.[0]?.message ?? '').toMatch(/default export/i);
     expect(mockFindOneAndUpdate).not.toHaveBeenCalled(); // no upsert - nothing published
   });
 });

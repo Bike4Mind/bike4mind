@@ -579,10 +579,11 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     db = makeDb();
   });
 
-  it('forces a stuck non-terminal batch terminal and recomputes stats', async () => {
+  it('forces a stuck non-terminal batch terminal (marked reconciler) and recomputes stats', async () => {
     const now = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
     const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
-    expect(db.batches.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+    // The completionReason 'reconciler' is what distinguishes a forced terminal from normal completion.
+    expect(db.batches.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors', 'reconciler');
     expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
     expect(forced).toEqual(['b1']);
   });

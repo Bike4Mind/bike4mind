@@ -13,6 +13,13 @@ async function loadValidator(serverDomain?: string) {
   return (await import('./embedOrigins')).validateEmbedOrigins;
 }
 
+async function loadKeyValidator(serverDomain?: string) {
+  vi.resetModules();
+  if (serverDomain === undefined) delete process.env.SERVER_DOMAIN;
+  else process.env.SERVER_DOMAIN = serverDomain;
+  return (await import('./embedOrigins')).validateEmbedKeyOrigins;
+}
+
 afterEach(() => {
   if (ORIGINAL_SERVER_DOMAIN === undefined) delete process.env.SERVER_DOMAIN;
   else process.env.SERVER_DOMAIN = ORIGINAL_SERVER_DOMAIN;
@@ -72,5 +79,33 @@ describe('validateEmbedOrigins', () => {
       ok: true,
       value: ['https://example.com'],
     });
+  });
+});
+
+describe('validateEmbedKeyOrigins', () => {
+  it('normalizes, dedupes, and accepts a valid list (no open-public gate)', async () => {
+    const validate = await loadKeyValidator('bike4mind.com');
+    expect(validate(['https://Example.com/', 'https://example.com', 'https://b.io'])).toEqual({
+      ok: true,
+      value: ['https://example.com', 'https://b.io'],
+    });
+  });
+
+  it('applies the same host rules as artifact validation (malformed, self-host, limit)', async () => {
+    const validate = await loadKeyValidator('bike4mind.com');
+    expect(validate(['http://example.com'])).toEqual(
+      expect.objectContaining({ ok: false, code: 'EMBED_ORIGIN_INVALID' })
+    );
+    expect(validate(['https://app.bike4mind.com'])).toEqual(
+      expect.objectContaining({ ok: false, code: 'EMBED_ORIGIN_SELF' })
+    );
+    const many = Array.from({ length: 6 }, (_, i) => `https://s${i}.example.com`);
+    expect(validate(many)).toEqual(expect.objectContaining({ ok: false, code: 'EMBED_ORIGIN_LIMIT' }));
+  });
+
+  it('returns an empty list for undefined or empty input (no open-public requirement)', async () => {
+    const validate = await loadKeyValidator('bike4mind.com');
+    expect(validate(undefined)).toEqual({ ok: true, value: [] });
+    expect(validate([])).toEqual({ ok: true, value: [] });
   });
 });

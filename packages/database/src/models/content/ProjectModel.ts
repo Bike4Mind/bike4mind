@@ -51,7 +51,8 @@ export class ProjectRepository extends BaseRepository<IProjectDocument> implemen
     const queryConditions: Record<string, unknown> = {
       $or: [
         { userId }, // User is the owner
-        { 'users.id': userId }, // User is a member
+        // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+        { 'users.userId': userId }, // User is a member
       ],
       ...filters.scope,
       deletedAt: { $exists: false },

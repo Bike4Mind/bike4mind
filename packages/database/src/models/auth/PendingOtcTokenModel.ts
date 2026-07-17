@@ -78,56 +78,86 @@ export class PendingOtcTokenRepository {
   /**
    * Atomically enforce a per-recipient send cooldown before the OTC email is sent.
    *
-   * Returns `{ allowed: true }` when the slot was reserved (caller may proceed to
-   * generate and send the OTC); returns `{ allowed: false, retryAfterSeconds }` when
-   * the cooldown is still active.
+   * Returns `{ allowed: true, reservedAt }` when the slot was reserved (caller may
+   * proceed to generate and send the OTC, then MUST call `confirmReservation` with
+   * this same `reservedAt` to persist the real nonce - see that method for why the
+   * reservation alone isn't enough). Returns `{ allowed: false, retryAfterSeconds }`
+   * when the cooldown is still active or a concurrent request already claimed this
+   * slot.
    *
-   * Implementation (three steps):
-   * 1. Try to update an existing record whose createdAt is old enough (no upsert).
-   *    Only one concurrent request can match and update the same document - the
-   *    subsequent requests will find a recent createdAt and fall through to step 2.
-   * 2. If no old-enough record was updated, check whether a recent one exists.
-   *    If yes -> throttled.
-   * 3. If no record exists at all, create one. A plain insert (not upsert) lets the
-   *    unique-email index raise E11000 when two concurrent requests race, so exactly
-   *    one wins and the rest are treated as throttled.
-   *
-   * Callers MUST call `storeNonce` after OTC generation to replace the placeholder
-   * nonce written here with the real one.
+   * Implementation:
+   * 1. No existing record for this email - try to create one. A plain insert (not
+   *    upsert) lets the unique-email index raise E11000 when concurrent first-time
+   *    requests race, so exactly one wins and the rest are throttled.
+   * 2. Existing record younger than the cooldown window - throttled.
+   * 3. Existing record old enough - reclaim it via compare-and-swap on the
+   *    `createdAt` just read. This CAS is what actually enforces "only one
+   *    concurrent request wins" - a bare `createdAt < now` filter would let every
+   *    racing request re-match a document a sibling had *just* written (this is
+   *    what broke down when cooldownMs collapses to 0 for E2E: any prior write is
+   *    always "in the past" relative to a `now` evaluated moments later, so nothing
+   *    stopped every racer from re-claiming and silently clobbering the last
+   *    winner's nonce). The CAS fails deterministically for a loser instead.
    */
-  async tryReserveSlot(email: string, cooldownMs: number): Promise<{ allowed: boolean; retryAfterSeconds?: number }> {
+  async tryReserveSlot(
+    email: string,
+    cooldownMs: number
+  ): Promise<{ allowed: true; reservedAt: Date } | { allowed: false; retryAfterSeconds: number }> {
     const now = Date.now();
     const threshold = new Date(now - cooldownMs);
+    const reservedAt = new Date(now);
 
-    // Step 1: update an existing record that is past the cooldown window.
-    // No upsert - only matches documents that already exist and are old enough.
-    const updated = await PendingOtcTokenModel.findOneAndUpdate(
-      { email, createdAt: { $lt: threshold } },
-      { $set: { nonce: randomUUID(), createdAt: new Date(now), debugCode: null } },
-      { new: true }
-    );
-    if (updated) return { allowed: true };
-
-    // Step 2: no old-enough record was updated. Check if a recent record exists.
     const existing = await PendingOtcTokenModel.findOne({ email }).select('createdAt');
-    if (existing) {
-      const elapsed = Date.now() - existing.createdAt.getTime();
+
+    if (!existing) {
+      // No record for this email - try to create one.
+      // If concurrent requests race here, exactly one create wins; the rest hit E11000.
+      try {
+        await PendingOtcTokenModel.create({ email, nonce: randomUUID(), createdAt: reservedAt });
+        return { allowed: true, reservedAt };
+      } catch (err: unknown) {
+        if ((err as { code?: number }).code === 11000) {
+          const doc = await PendingOtcTokenModel.findOne({ email }).select('createdAt');
+          const elapsed = doc ? now - doc.createdAt.getTime() : cooldownMs;
+          return { allowed: false, retryAfterSeconds: Math.ceil(Math.max(0, cooldownMs - elapsed) / 1000) };
+        }
+        throw err;
+      }
+    }
+
+    if (existing.createdAt >= threshold) {
+      const elapsed = now - existing.createdAt.getTime();
       return { allowed: false, retryAfterSeconds: Math.ceil(Math.max(0, cooldownMs - elapsed) / 1000) };
     }
 
-    // Step 3: no record for this email - try to create one.
-    // If concurrent requests race here, exactly one create wins; the rest hit E11000.
-    try {
-      await PendingOtcTokenModel.create({ email, nonce: randomUUID(), createdAt: new Date(now) });
-      return { allowed: true };
-    } catch (err: unknown) {
-      if ((err as { code?: number }).code === 11000) {
-        const doc = await PendingOtcTokenModel.findOne({ email }).select('createdAt');
-        const elapsed = doc ? Date.now() - doc.createdAt.getTime() : cooldownMs;
-        return { allowed: false, retryAfterSeconds: Math.ceil(Math.max(0, cooldownMs - elapsed) / 1000) };
-      }
-      throw err;
+    const claimed = await PendingOtcTokenModel.findOneAndUpdate(
+      { email, createdAt: existing.createdAt },
+      { $set: { createdAt: reservedAt } },
+      { new: true }
+    );
+    if (!claimed) {
+      // A concurrent request claimed this same stale record between our read and write.
+      return { allowed: false, retryAfterSeconds: 0 };
     }
+    return { allowed: true, reservedAt };
+  }
+
+  /**
+   * Persist the real nonce for a reservation made by `tryReserveSlot`, guarded by a
+   * compare-and-swap on `reservedAt`. OTC generation runs between the reservation and
+   * this call (and may await IO); if a *newer* reservation for the same email lands
+   * in that window - e.g. a genuinely concurrent resend - this CAS fails and returns
+   * `false`. The caller MUST treat that as a failure, not a success: the nonce it's
+   * holding would never verify, since another request has already superseded this
+   * record.
+   */
+  async confirmReservation(email: string, reservedAt: Date, nonce: string, debugCode?: string): Promise<boolean> {
+    const result = await PendingOtcTokenModel.findOneAndUpdate(
+      { email, createdAt: reservedAt },
+      { $set: { nonce, debugCode: debugCode ?? null } },
+      { new: true }
+    );
+    return result !== null;
   }
 
   /**

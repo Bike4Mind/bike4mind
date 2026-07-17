@@ -46,6 +46,15 @@ export function getSettingsValue<K extends SettingKey>(
   const parsed = settingConfig.schema.safeParse(rawValue);
 
   if (parsed.success) {
+    // A cleared string setting is stored as '' which passes `z.string()`, so without this a blank
+    // value would be returned verbatim instead of the default - stripping e.g. the artifact/help
+    // prompts from completions and contradicting each setting's "clearing reverts to the built-in
+    // default" contract. Only when the caller PASSED a default (defaultValue !== undefined) do we
+    // treat '' as "use the default"; callers that omit it keep '' as a legitimate value (e.g.
+    // FormatPromptTemplate, whose empty default is meaningful).
+    if (parsed.data === '' && defaultValue !== undefined) {
+      return defaultValue;
+    }
     return parsed.data as z.output<(typeof settingsMap)[K]['schema']>;
   } else {
     return defaultValue !== undefined
@@ -108,7 +117,8 @@ export async function getSettingByName(
   // Allow bypassing cache for testing
   if (options?.skipCache) {
     const setting = await db.adminSettings.findBySettingName(settingName);
-    return setting?.settingValue || null;
+    // `?? null` (not `|| null`) so a stored boolean `false` survives - see AdminSettingsCache.
+    return setting?.settingValue ?? null;
   }
 
   // Use cached version

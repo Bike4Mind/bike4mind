@@ -2,9 +2,16 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { validateEmbedKeyOrigins } from '@server/services/publish';
 import { logEvent } from '@server/utils/analyticsLog';
-import { CreditHolderType, IUserApiKeyDocument, UserApiKeyEvents } from '@bike4mind/common';
-import { ForbiddenError } from '@server/utils/errors';
+import {
+  ApiKeyScope,
+  CreditHolderType,
+  IEmbedBranding,
+  IUserApiKeyDocument,
+  UserApiKeyEvents,
+} from '@bike4mind/common';
+import { BadRequestError, ForbiddenError } from '@server/utils/errors';
 import { Request } from 'express';
 
 interface CreateApiKeyRequest {
@@ -21,6 +28,10 @@ interface CreateApiKeyRequest {
    * (and platform admins) - enforced below.
    */
   organizationId?: string;
+  /** Embed key (epic #41): the agent to bind, its https origin allow-list, and optional branding. */
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
 }
 
 /** Deduplicate keys by id, preserving first occurrence (newest-first order). */
@@ -50,7 +61,7 @@ const handler = baseApi()
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
-    const { name, scopes, expiresAt, rateLimit, organizationId } = req.body;
+    const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding } = req.body;
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.
@@ -60,6 +71,20 @@ const handler = baseApi()
       if (!mayBillOrg) {
         throw new ForbiddenError('You do not have permission to mint API keys billed to this organization');
       }
+    }
+
+    // Embed keys: apply the host-aware origin screen here (needs the runtime app
+    // host). The service re-validates format/dedup/cap and enforces the agentId
+    // binding. Pass the normalized list downstream.
+    const isEmbedKey = Array.isArray(scopes) && scopes.includes(ApiKeyScope.EMBED_CHAT);
+    const hasEmbedFields = agentId !== undefined || allowedOrigins !== undefined || branding !== undefined;
+    let embedOrigins = allowedOrigins;
+    if (isEmbedKey) {
+      const originsCheck = validateEmbedKeyOrigins(allowedOrigins);
+      if (!originsCheck.ok) {
+        throw new BadRequestError(originsCheck.error);
+      }
+      embedOrigins = originsCheck.value;
     }
 
     const newApiKey = await userApiKeyService.createUserApiKey(
@@ -74,6 +99,10 @@ const handler = baseApi()
           userAgent: req.headers['user-agent'],
           createdFrom: 'dashboard' as const,
         },
+        // Forward embed fields whenever present - not only for embed keys - so the
+        // service's coherence invariant rejects a non-embed key that carries them
+        // (fail loud) instead of silently dropping them.
+        ...(isEmbedKey || hasEmbedFields ? { agentId, allowedOrigins: embedOrigins, branding } : {}),
         ...(organizationId
           ? { organizationId, billingOwnerType: CreditHolderType.Organization }
           : { billingOwnerType: CreditHolderType.User }),
