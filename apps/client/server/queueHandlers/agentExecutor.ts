@@ -82,6 +82,8 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
+import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
+import { guardPlanCompletion, type PlanProgressState } from './agentExecutorUtils/planCompletionGuard';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1235,8 +1237,18 @@ async function processExecution(
     // the guard turns any repeat into a no-op redirect that steers the agent back to
     // advancing its existing plan. Only affects opti runs (decompose isn't offered elsewhere).
     const decomposeGuard = { used: false };
-    const guardedPremiumTools = guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
-      logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
+    // Two complementary opti-loop guards: #666 stops re-PLANNING (decompose at most once); the
+    // plan-completion guard stops re-SOLVING (once every planned step has a solver result, further
+    // formulate/solve calls redirect to "write the final summary"). Without the latter the agent
+    // -- which has no reliable memory of which steps it finished -- re-does solved families until
+    // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
+    const planProgress: PlanProgressState = { needed: null, solved: {} };
+    const guardedPremiumTools = guardPlanCompletion(
+      guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+        logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
+      ),
+      planProgress,
+      () => logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
     );
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
@@ -2118,18 +2130,23 @@ async function processExecution(
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
+    // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
+    // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
+    // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
+    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
 
     await agentExecutionRepository.markComplete(executionId, {
-      answer: finalAnswer,
+      answer: displayAnswer,
       steps: finalCheckpoint.steps,
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
-      reachedMaxIterations: iterationResult?.reachedMaxIterations ?? false,
+      reachedMaxIterations,
     });
 
     await sendWs('completed', {
       executionId,
-      answer: finalAnswer,
+      answer: displayAnswer,
       totalIterations: finalCheckpoint.iteration,
       totalCreditsUsed: updatedExecution?.totalCreditsUsed ?? 0,
       // Surface memento IDs in the WS event so the client can populate the
@@ -2141,7 +2158,7 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    let replyText = finalAnswer ?? 'Agent execution completed without a final answer.';
+    let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
 
     // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
     // child report and may drop the raw `<artifact>` blocks the workers emitted,
