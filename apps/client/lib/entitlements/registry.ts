@@ -120,7 +120,7 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // `optihashi:hardware`, the entitlement the server checks in the hardware submit gate
   // (`requestHasHardwareComputeAccess`) before spending real external-provider money.
   // Deliberately its own tag, NOT implied by `optihashi:compute` (classical/simulator) or
-  // `optihashi:pro` (local) — a compute-tier user must not silently reach real-money spend.
+  // `optihashi:pro` (local) -- a compute-tier user must not silently reach real-money spend.
   // Granted-only (no Stripe price yet) and intentionally absent from DOMAIN_GRANT_ROWS /
   // INTERNAL_STAFF_ENTITLEMENTS / SIGNUP_CREDIT_ROWS: admins reach it via bypass, and it is
   // granted per-account (e.g. specific external partner users) rather than by domain/signup.
