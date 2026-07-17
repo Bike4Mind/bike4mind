@@ -1,35 +1,31 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock state via vi.hoisted so it is initialized before the hoisted vi.mock factories run.
-const { createSessionMock, sideEffects, updateSharing, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(
-  () => ({
-    createSessionMock: vi.fn(),
-    sideEffects: {
-      publishSummarizeSession: vi.fn().mockResolvedValue(undefined),
-      publishContextSummarizeSession: vi.fn().mockResolvedValue(undefined),
-    },
-    updateSharing: vi.fn().mockReturnValue('sharing-result'),
-    QuestMock: {
-      find: vi.fn(),
-      findById: vi.fn(),
-      findOne: vi.fn(),
-      create: vi.fn(),
-      findOneAndUpdate: vi.fn(),
-    },
-    SessionMock: {
-      findById: vi.fn(),
-      findOne: vi.fn(),
-      updateOne: vi.fn().mockResolvedValue(undefined),
-      where: vi.fn(),
-    },
-    findAccessibleById: vi.fn(),
-  })
-);
+const { createSessionMock, sideEffects, QuestMock, SessionMock, findAccessibleById } = vi.hoisted(() => ({
+  createSessionMock: vi.fn(),
+  sideEffects: {
+    publishSummarizeSession: vi.fn().mockResolvedValue(undefined),
+    publishContextSummarizeSession: vi.fn().mockResolvedValue(undefined),
+  },
+  QuestMock: {
+    find: vi.fn(),
+    findById: vi.fn(),
+    findOne: vi.fn(),
+    create: vi.fn(),
+    findOneAndUpdate: vi.fn(),
+  },
+  SessionMock: {
+    findById: vi.fn(),
+    findOne: vi.fn(),
+    updateOne: vi.fn().mockResolvedValue(undefined),
+    where: vi.fn(),
+  },
+  findAccessibleById: vi.fn(),
+}));
 
 // ---- cross-module + side-effect boundaries ----
 vi.mock('./sessionCrud', () => ({ createSession: createSessionMock }));
 vi.mock('./sessionSideEffects', () => sideEffects);
-vi.mock('@server/managers/sharingManager', () => ({ updateSharing }));
 
 vi.mock('@bike4mind/database', () => ({
   Quest: QuestMock,
@@ -60,7 +56,6 @@ import {
   addMessageToSession,
   deleteMessageFromSession,
   stopReply,
-  updateSessionSharingState,
   forkSession,
   snipSession,
   cloneSession,
@@ -69,7 +64,7 @@ import {
 } from './sessionOperations';
 import { publishSummarizeSession, publishContextSummarizeSession } from './sessionSideEffects';
 import type { Ability } from '@server/auth/ability';
-import type { IChatHistoryItem, IShareableDocument } from '@bike4mind/common';
+import type { IChatHistoryItem } from '@bike4mind/common';
 
 // Typed casts keep the intended types visible (and catch drift) without real Mongoose docs.
 const mockAbility = (canResult: boolean): Ability =>
@@ -155,15 +150,6 @@ describe('sessionOperations', () => {
       QuestMock.findOne.mockReturnValueOnce({ sort: vi.fn().mockResolvedValue(null) });
       SessionMock.findOne.mockResolvedValueOnce({ id: 's1' });
       await expect(stopReply('s1', ability)).rejects.toThrow('No active quest found');
-    });
-  });
-
-  describe('updateSessionSharingState', () => {
-    it('delegates to the shared updateSharing implementation', () => {
-      const sharingData: Partial<IShareableDocument> = { isGlobalRead: true };
-      const result = updateSessionSharingState('s1', sharingData, ability);
-      expect(updateSharing).toHaveBeenCalledWith(SessionMock, 's1', sharingData, ability);
-      expect(result).toBe('sharing-result');
     });
   });
 

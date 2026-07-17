@@ -1,27 +1,25 @@
 // Refuse an invitation
 // POST /api/invites/[id]/refuse
 
-import { refuseInvite } from '@server/managers/sharingManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sendToClient } from '@server/websocket/utils';
-import * as z from 'zod';
+import { sharingService } from '@bike4mind/services';
+import { inviteRepository } from '@bike4mind/database';
 import { Resource } from 'sst';
-
-const isPublicSchema = z.object({
-  public: z.boolean().optional(),
-});
 
 const handler = baseApi().post(
   asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
     const id = req.query.id;
-    const params = isPublicSchema.parse(req.body);
 
     if (!id) {
       return res.status(400).json({ message: 'Invalid refuse invite request' });
     }
 
-    const invite = await refuseInvite(id, req.user, req.ability!, !!params.public);
+    // Public-ness (link vs email invite) is derived from invite state in the service;
+    // no client-supplied flag is trusted for the recipient check.
+    const invite = await sharingService.refuseWholeInvite(req.user, { id }, { db: { invites: inviteRepository } });
+
     if (!invite) {
       return res.status(404).json({ message: 'Invite not found' });
     }
