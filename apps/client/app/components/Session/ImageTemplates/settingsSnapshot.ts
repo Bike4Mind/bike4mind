@@ -1,5 +1,7 @@
 import {
   canonicalizeTemplateSettings,
+  isBflImageModel,
+  ImageModels,
   type ImageTemplateSettingsType,
   type IImageGenerationTemplateDocument,
 } from '@bike4mind/common';
@@ -22,23 +24,35 @@ export type ImageSettingsSource = Pick<
 >;
 
 /**
- * Build the settings blob from current LLMContext state. Shared by Save (what we
- * persist) and the controls indicator (what we match against saved templates), so
- * the two always produce the same shape. KEEP IN SYNC with ImageTemplateSettingsSchema.
+ * Build the settings blob for a template from current LLMContext state, MODEL-AWARE:
+ * only the fields the given model actually uses are included. This is load-bearing
+ * for the derived indicator and dedup: LLMContext always carries BFL-only fields
+ * with defaults (width:1024, height:768, prompt_upsampling:false) even on a GPT
+ * model, and those are non-null so canonicalization keeps them - so a GPT template
+ * (which correctly omits them) would never match a GPT snapshot. Gating the fields
+ * by model family keeps both sides the same shape.
+ *
+ * KEEP IN SYNC with the per-model settings gating in AdvancedAIModal:
+ *  - width/height/safety_tolerance/prompt_upsampling: BFL only
+ *  - style: not GPT-Image-1, not BFL
+ *  - size: not Kontext
  */
-export function imageTemplateSettingsSnapshot(s: ImageSettingsSource): ImageTemplateSettingsType {
+export function imageTemplateSettingsSnapshot(model: string, s: ImageSettingsSource): ImageTemplateSettingsType {
+  const isBfl = isBflImageModel(model);
+  const isKontext = model === ImageModels.FLUX_KONTEXT_PRO || model === ImageModels.FLUX_KONTEXT_MAX;
+  const isGpt1 = model === ImageModels.GPT_IMAGE_1;
   return {
-    size: s.size,
+    size: isKontext ? undefined : s.size,
     quality: s.quality,
-    style: s.style,
+    style: isGpt1 || isBfl ? undefined : s.style,
     seed: s.seed,
     n: s.n,
-    width: s.width,
-    height: s.height,
+    width: isBfl && !isKontext ? s.width : undefined,
+    height: isBfl && !isKontext ? s.height : undefined,
     aspect_ratio: s.aspect_ratio,
     output_format: s.output_format ?? undefined,
-    safety_tolerance: s.safety_tolerance,
-    prompt_upsampling: s.prompt_upsampling,
+    safety_tolerance: isBfl ? s.safety_tolerance : undefined,
+    prompt_upsampling: isBfl ? s.prompt_upsampling : undefined,
   };
 }
 

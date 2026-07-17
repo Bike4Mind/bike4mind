@@ -37,7 +37,7 @@ export function useRecordImageTemplateUse() {
     // Read fresh settings: the send happens after the user may have tweaked them.
     const s = useLLM.getState();
     if (!isImageModel(s.model)) return;
-    const match = findMatchingTemplate(templates ?? [], s.model, imageTemplateSettingsSnapshot(s));
+    const match = findMatchingTemplate(templates ?? [], s.model, imageTemplateSettingsSnapshot(s.model, s));
     if (match) mutate(match.id);
   }, [enabled, templates, mutate]);
 }

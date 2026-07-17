@@ -54,7 +54,7 @@ describe('ImageTemplatePanel', () => {
         userId: 'u1',
         name: 'Applied One',
         model: 'flux-pro-1.1',
-        settings: imageTemplateSettingsSnapshot(useLLM.getState()),
+        settings: imageTemplateSettingsSnapshot(useLLM.getState().model, useLLM.getState()),
         usageCount: 0,
       },
       { id: 't2', userId: 'u1', name: 'GPT One', model: 'gpt-image-1', settings: { quality: 'hd' }, usageCount: 0 },

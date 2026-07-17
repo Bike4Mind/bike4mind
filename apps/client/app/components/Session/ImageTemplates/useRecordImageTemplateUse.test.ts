@@ -25,7 +25,7 @@ const matchingTemplate = () => ({
   userId: 'u1',
   name: 'Match',
   model: 'flux-pro-1.1',
-  settings: imageTemplateSettingsSnapshot(useLLM.getState()),
+  settings: imageTemplateSettingsSnapshot(useLLM.getState().model, useLLM.getState()),
   usageCount: 0,
 });
 

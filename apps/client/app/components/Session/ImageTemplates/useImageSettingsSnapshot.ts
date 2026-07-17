@@ -43,7 +43,7 @@ export function useImageSettingsSnapshot() {
 
   const snapshot = useMemo(
     () =>
-      imageTemplateSettingsSnapshot({
+      imageTemplateSettingsSnapshot(model, {
         size,
         quality,
         style,
@@ -56,7 +56,20 @@ export function useImageSettingsSnapshot() {
         safety_tolerance,
         prompt_upsampling,
       }),
-    [size, quality, style, seed, n, width, height, aspect_ratio, output_format, safety_tolerance, prompt_upsampling]
+    [
+      model,
+      size,
+      quality,
+      style,
+      seed,
+      n,
+      width,
+      height,
+      aspect_ratio,
+      output_format,
+      safety_tolerance,
+      prompt_upsampling,
+    ]
   );
 
   return { model, snapshot };

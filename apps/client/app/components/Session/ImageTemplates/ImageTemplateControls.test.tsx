@@ -22,7 +22,7 @@ import { imageTemplateSettingsSnapshot } from './settingsSnapshot';
 
 const TestWrapper = ({ children }: { children: React.ReactNode }) => <CssVarsProvider>{children}</CssVarsProvider>;
 
-const currentSnapshot = () => imageTemplateSettingsSnapshot(useLLM.getState());
+const currentSnapshot = () => imageTemplateSettingsSnapshot(useLLM.getState().model, useLLM.getState());
 
 describe('ImageTemplateControls (settings bar)', () => {
   beforeEach(() => {
