@@ -512,6 +512,49 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
     expect(forced).toEqual([]);
   });
+
+  const late = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+
+  it('emits the forced-terminal metric and the stuck gauge when a batch is forced', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith('b1', 'lake1');
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+  });
+
+  it('gauges the stuck count but does NOT emit forced-terminal when the guard is lost', async () => {
+    db.batches.markTerminalIfActive = vi.fn().mockResolvedValue(null);
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('gauges zero when nothing is stuck', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches(
+      [batch({ updatedAt: new Date(1000) })],
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      { db, metrics },
+      2000
+    );
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(0);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles when a metric hook throws (metrics must never break reconcile)', async () => {
+    const metrics = {
+      emitForcedTerminal: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+      emitStuckGauge: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+    };
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(forced).toEqual(['b1']);
+    expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
+  });
 });
 
 describe('removeFileFromDataLake — single-file removal', () => {

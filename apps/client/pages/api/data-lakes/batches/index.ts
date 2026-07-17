@@ -5,6 +5,7 @@ import { dataLakeService } from '@bike4mind/services';
 import { CreateBatchRequestInput } from '@bike4mind/common';
 import { Request } from 'express';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { recordReconcilerForcedTerminal } from '@server/utils/cloudwatch';
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
@@ -18,6 +19,9 @@ const handler = baseApi()
     await dataLakeService.reconcileStuckBatches(active, dataLakeService.DEFAULT_STUCK_BATCH_TIMEOUT_MS, {
       db: { dataLakes: dataLakeRepository, batches: dataLakeBatchRepository, fabFiles: fabFileRepository },
       logger: console,
+      // Forced-terminal is rare, so the awaited emit only costs latency on the exceptional path; the
+      // stuck gauge is deliberately omitted here (it belongs on the cron's fixed cadence, not per read).
+      metrics: { emitForcedTerminal: () => recordReconcilerForcedTerminal().catch(() => {}) },
     });
 
     const batches = await dataLakeBatchRepository.findActiveByUserId(userId);

@@ -41,6 +41,12 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
       },
+      // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+      // which runs in this handler; without this grant the emit silently AccessDenies.
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
     concurrency: ['production', 'dev'].includes($app.stage)
@@ -88,6 +94,14 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+    // which runs in this handler; without this grant the emit silently AccessDenies.
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
     copyFiles: [
       {
         from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
