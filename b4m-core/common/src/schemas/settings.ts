@@ -13,7 +13,7 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
 When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. Use:
-<artifact identifier="kebab-case-id" type="text/html" title="Short Title">…content…</artifact>
+<artifact identifier="kebab-case-id" type="text/html" title="Short Title">...content...</artifact>
 Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.mermaid, application/vnd.ant.python, application/vnd.ant.code.
 
 TWO SURFACES - CHOOSE THE RIGHT ONE FIRST:
