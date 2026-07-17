@@ -134,16 +134,35 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     ${LUCIDE_WRAPPER_FN}
 
     function renderArtifact(code, dependencies, mode) {
+      // Strip TS type-only import syntax FIRST, before any check or rewrite below sees it: whole
+      // \`import type ...\` statements and inline \`{ type X, y }\` specifiers carry no runtime
+      // binding. This must precede the relative-import guard so a type-only relative import
+      // (\`import type Foo from './x'\`) is not misread as a multi-file artifact - matches the
+      // publish transpiler, which strips before findRelativeImport (transpileReactArtifact.ts).
+      // A binding named \`type\` (\`type as T\`) is kept. Mirrors stripTypeOnlyImports there.
+      var withoutTypeImports = code
+        .replace(/import\\s+type\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?/g, '')
+        .replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"][^'"]+['"]\\s*;?/g, function (stmt, clause) {
+          var brace = clause.match(/\\{([\\s\\S]*?)\\}/);
+          if (!brace) return stmt;
+          var kept = brace[1].split(',').map(function (s) { return s.trim(); })
+            .filter(Boolean).filter(function (s) { return !/^type\\s+(?!as\\b)\\w/.test(s); });
+          var beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\\s*$/, '').trim();
+          if (!kept.length && !beforeBrace) return '';
+          return stmt.replace(/\\{[\\s\\S]*?\\}/, '{ ' + kept.join(', ') + ' }');
+        });
+
       // Multi-file artifacts aren't supported yet (#9403 follow-up): the require() shim below
       // resolves only npm packages, not sibling artifact files. Detect a relative import up
       // front and show a clear message instead of a cryptic "Cannot use import statement" /
       // "Module not available" further down.
       // Catch every relative-reference form: import-from, export-from, side-effect import,
       // and require() of a "./" or "../" path — all unresolvable by the npm-only shim below.
+      // Run on the type-stripped view so a type-only relative import is already gone.
       var relImport =
-        code.match(/(?:import|export)\\b[^;'"]*\\bfrom\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        code.match(/\\bimport\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        code.match(/\\brequire\\(\\s*['"](\\.\\.?\\/[^'"]+)['"]\\s*\\)/);
+        withoutTypeImports.match(/(?:import|export)\\b[^;'"]*\\bfrom\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
+        withoutTypeImports.match(/\\bimport\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
+        withoutTypeImports.match(/\\brequire\\(\\s*['"](\\.\\.?\\/[^'"]+)['"]\\s*\\)/);
       if (relImport) {
         var msg = 'Multi-file artifacts are not supported yet — this one references "' + relImport[1] +
           '" from a separate file. Ask for a single, self-contained component (one file, one default export).';
@@ -166,22 +185,6 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           if (Object.prototype.hasOwnProperty.call(moduleMap, module)) return moduleMap[module];
           throw new Error('Module "' + module + '" is not available');
         };
-
-        // Strip TS type-only import syntax before rewriting to require(): whole \`import type ...\`
-        // statements and inline \`{ type X, y }\` specifiers carry no runtime binding, and this
-        // rewrite runs BEFORE Babel's typescript preset. A binding named \`type\` (\`type as T\`) is
-        // kept. Mirrors stripTypeOnlyImports in the publish transpiler (transpileReactArtifact.ts).
-        var withoutTypeImports = code
-          .replace(/import\\s+type\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?/g, '')
-          .replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"][^'"]+['"]\\s*;?/g, function (stmt, clause) {
-            var brace = clause.match(/\\{([\\s\\S]*?)\\}/);
-            if (!brace) return stmt;
-            var kept = brace[1].split(',').map(function (s) { return s.trim(); })
-              .filter(Boolean).filter(function (s) { return !/^type\\s+(?!as\\b)\\w/.test(s); });
-            var beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\\s*$/, '').trim();
-            if (!kept.length && !beforeBrace) return '';
-            return stmt.replace(/\\{[\\s\\S]*?\\}/, '{ ' + kept.join(', ') + ' }');
-          });
 
         // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
         // const-destructure is a syntax error). Kept in sync with the publish transpiler.
