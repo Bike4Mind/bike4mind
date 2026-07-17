@@ -11,6 +11,7 @@ import type {
   WorkflowState,
 } from '../storage/types.js';
 import type { TodoItem } from '../tools/writeTodosTool.js';
+import { renderWorkflowReminder } from './workflowReminder.js';
 
 /**
  * Sessions with fewer messages than this skip handoff generation.
@@ -24,6 +25,15 @@ export const SHORT_SESSION_THRESHOLD = 4;
  * builder cannot drift out of sync.
  */
 export const HANDOFF_MARKER = '[Session handoff from previous session]';
+
+/**
+ * Prefix tag marking an injected workflow-state message (issue #593). The
+ * resume path surfaces persisted decisions/blockers into the first turn when no
+ * handoff exists; this marker lets repeated resumes dedup it, and lets the two
+ * continuity injections (handoff vs. raw workflow state) be told apart so they
+ * never stack.
+ */
+export const WORKFLOW_STATE_MARKER = '[Workflow state from previous session]';
 
 const MAX_MESSAGE_CHARS = 2000;
 /**
@@ -55,7 +65,7 @@ export function buildHandoffPrompt(session: Session): string {
     return '';
   }
 
-  const filtered = session.messages.filter(m => !isInjectedHandoff(m));
+  const filtered = session.messages.filter(m => !isInjectedContinuity(m));
   const conversation =
     filtered.length > MAX_CONVERSATION_MESSAGES ? filtered.slice(-MAX_CONVERSATION_MESSAGES) : filtered;
 
@@ -249,11 +259,32 @@ export function isInjectedHandoff(message: Message): boolean {
 }
 
 /**
+ * True when a message is a previously-injected workflow-state message (issue
+ * #593). Stored as `user` for the same reason as the handoff marker: to survive
+ * the user/assistant filter applied before each agent.run().
+ */
+export function isInjectedWorkflowState(message: Message): boolean {
+  return message.role === 'user' && message.content.startsWith(WORKFLOW_STATE_MARKER);
+}
+
+/**
+ * True for either continuity injection (handoff or raw workflow state). Used
+ * wherever injected scaffolding must be excluded from the real conversation -
+ * dedup on resume, the handoff prompt excerpt, and the local handoff markdown -
+ * so the two injections never stack and are never echoed back as chat history.
+ */
+export function isInjectedContinuity(message: Message): boolean {
+  return isInjectedHandoff(message) || isInjectedWorkflowState(message);
+}
+
+/**
  * Return a new message list with the handoff prepended as a user message.
- * Any previously-injected handoff anywhere in the list is removed so the
- * message list stays stable across repeated save/resume cycles. We scan the
- * whole list rather than just index 0 because compaction can prepend a
- * summary message, pushing the prior handoff to a later index.
+ * Any previously-injected continuity message (handoff OR workflow state)
+ * anywhere in the list is removed so the message list stays stable across
+ * repeated save/resume cycles and a handoff never co-exists with a raw
+ * workflow-state injection. We scan the whole list rather than just index 0
+ * because compaction can prepend a summary message, pushing the prior
+ * injection to a later index.
  */
 export function injectHandoffMessage(messages: Message[], handoff: SessionHandoff): Message[] {
   const handoffMessage: Message = {
@@ -263,8 +294,42 @@ export function injectHandoffMessage(messages: Message[], handoff: SessionHandof
     timestamp: new Date().toISOString(),
   };
 
-  const withoutPriorHandoffs = messages.filter(m => !isInjectedHandoff(m));
-  return [handoffMessage, ...withoutPriorHandoffs];
+  const withoutPriorInjections = messages.filter(m => !isInjectedContinuity(m));
+  return [handoffMessage, ...withoutPriorInjections];
+}
+
+/**
+ * Return a new message list surfacing the session's persisted workflow state as
+ * a leading user message, so a resumed session's open decisions/blockers reach
+ * the model on the first turn even when no handoff was generated (issue #593).
+ *
+ * Reuses the compact per-turn reminder renderer (issue #592) as the single
+ * source of workflow-state formatting. Todos are never persisted to the session,
+ * so only decisions and blockers are surfaced here.
+ *
+ * Any previously-injected continuity message (handoff or workflow state) is
+ * removed first, mirroring `injectHandoffMessage`, so nothing stacks across
+ * repeated resumes. When there is no open state to show, no message is
+ * prepended - the list is still returned with any stale injection stripped.
+ */
+export function injectWorkflowStateMessage(messages: Message[], workflow: WorkflowState | undefined): Message[] {
+  const withoutPriorInjections = messages.filter(m => !isInjectedContinuity(m));
+  if (!workflow) return withoutPriorInjections;
+
+  const { text } = renderWorkflowReminder({
+    todos: [],
+    decisions: workflow.decisions,
+    blockers: workflow.blockers,
+  });
+  if (!text) return withoutPriorInjections;
+
+  const stateMessage: Message = {
+    id: uuidv4(),
+    role: 'user',
+    content: `${WORKFLOW_STATE_MARKER}\n\n${text}`,
+    timestamp: new Date().toISOString(),
+  };
+  return [stateMessage, ...withoutPriorInjections];
 }
 
 /**
@@ -348,7 +413,7 @@ export function renderLocalHandoffMarkdown(session: Session, sessionJsonPath?: s
   const decisions = workflow?.decisions ?? [];
   const openBlockers = (workflow?.blockers ?? []).filter(b => b.status === 'open');
   const resolvedBlockers = (workflow?.blockers ?? []).filter(b => b.status === 'resolved');
-  const tail = session.messages.filter(m => !isInjectedHandoff(m)).slice(-LOCAL_HANDOFF_MESSAGE_TAIL);
+  const tail = session.messages.filter(m => !isInjectedContinuity(m)).slice(-LOCAL_HANDOFF_MESSAGE_TAIL);
   const handoff = workflow?.handoff;
 
   const lines: string[] = [];
