@@ -436,3 +436,52 @@ export async function recordCircuitBreakerRejection(integration: string): Promis
     StandardUnit.Count
   );
 }
+
+// Data Lake Batch Metrics - Namespace: Lumina5/DataLakeBatch
+// ReconcilerForcedTerminal (a stuck batch the reconciler forced terminal - work lost),
+// BatchCompleted (normal pipeline completion, split by outcome), StuckBatches (gauge sampled by
+// the reconciler cron), ReconcileRuns (cron heartbeat, emitted even on zero work for alarm-on-silence).
+// Dimensions stay low-cardinality on purpose - batchId/dataLakeId live in logs, never in metrics.
+
+const DATA_LAKE_BATCH_NAMESPACE = 'Lumina5/DataLakeBatch';
+
+export const DataLakeBatchMetrics = {
+  RECONCILER_FORCED_TERMINAL: 'ReconcilerForcedTerminal',
+  BATCH_COMPLETED: 'BatchCompleted',
+  STUCK_BATCHES: 'StuckBatches',
+  RECONCILE_RUNS: 'ReconcileRuns',
+} as const;
+
+export async function emitDataLakeBatchMetric(
+  metricName: string,
+  value: number,
+  dimensions: MetricDimensions = {},
+  unit: StandardUnit = StandardUnit.None
+): Promise<void> {
+  return emitMetric(DATA_LAKE_BATCH_NAMESPACE, metricName, value, dimensions, unit);
+}
+
+/** A stuck batch was forced terminal by the reconciler (always completed_with_errors; work lost). */
+export async function recordReconcilerForcedTerminal(): Promise<void> {
+  return emitDataLakeBatchMetric(
+    DataLakeBatchMetrics.RECONCILER_FORCED_TERMINAL,
+    1,
+    { actor: 'reconciler' },
+    StandardUnit.Count
+  );
+}
+
+/** Normal (non-reconciler) batch completion, split by outcome for clean-vs-error visibility. */
+export async function recordBatchCompletion(outcome: 'completed' | 'completed_with_errors'): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.BATCH_COMPLETED, 1, { outcome }, StandardUnit.Count);
+}
+
+/** Gauge: count of currently-stuck batches, sampled on a fixed cadence by the reconciler cron. */
+export async function recordStuckBatchGauge(count: number): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.STUCK_BATCHES, count, {}, StandardUnit.Count);
+}
+
+/** Heartbeat: the reconciler cron ran. Emit even on zero work so absence-of-data can alarm. */
+export async function recordReconcileRun(): Promise<void> {
+  return emitDataLakeBatchMetric(DataLakeBatchMetrics.RECONCILE_RUNS, 1, {}, StandardUnit.Count);
+}

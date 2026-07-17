@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import mongoose from 'mongoose';
 import type { AccessContext, IDataLake } from '@bike4mind/common';
 import { lakeMatchesAccess, normalizeEntitlementKey } from '@bike4mind/common';
 import { dataLakeRepository, dataLakeBatchRepository, DataLakeModel } from './DataLakeModel';
@@ -314,5 +315,36 @@ describe('DataLakeBatchRepository.markTerminalIfActive — completionReason', ()
     const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, 'completed');
     expect(finalized?.status).toBe('completed');
     expect(finalized?.completionReason).toBeUndefined();
+  });
+});
+
+describe('DataLakeBatchRepository.findStuck — global cross-user stale scan', () => {
+  setupMongoTest();
+
+  const CUTOFF = new Date('2021-01-01T00:00:00Z');
+
+  // `timestamps: true` auto-stamps updatedAt to now on create, so backdate it directly
+  // (timestamps:false) to seed a genuinely-stale doc.
+  const seedBatch = async (status: string, updatedAt?: Date) => {
+    const b = await dataLakeBatchRepository.create({ dataLakeId: 'lake1', userId: 'u1', status } as never);
+    if (updatedAt) {
+      await mongoose.models.DataLakeBatch.updateOne({ _id: b.id }, { $set: { updatedAt } }, { timestamps: false });
+    }
+    return b;
+  };
+
+  it('returns only stale non-terminal batches (excludes fresh and terminal)', async () => {
+    const stale = await seedBatch('processing', new Date('2020-01-01T00:00:00Z'));
+    await seedBatch('processing'); // fresh (updatedAt ~ now) -> excluded
+    await seedBatch('completed', new Date('2020-01-01T00:00:00Z')); // stale but terminal -> excluded
+    const stuck = await dataLakeBatchRepository.findStuck(CUTOFF);
+    expect(stuck.map(b => b.id)).toEqual([stale.id]);
+  });
+
+  it('orders oldest-first and honors the limit', async () => {
+    const older = await seedBatch('processing', new Date('2019-01-01T00:00:00Z'));
+    const newer = await seedBatch('uploading', new Date('2020-06-01T00:00:00Z'));
+    expect((await dataLakeBatchRepository.findStuck(CUTOFF)).map(b => b.id)).toEqual([older.id, newer.id]);
+    expect((await dataLakeBatchRepository.findStuck(CUTOFF, 1)).map(b => b.id)).toEqual([older.id]);
   });
 });

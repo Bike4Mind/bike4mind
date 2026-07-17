@@ -41,6 +41,12 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
         actions: ['bedrock:InvokeModel'],
         resources: ['*'],
       },
+      // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+      // which runs in this handler; without this grant the emit silently AccessDenies.
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
     ],
     // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
     concurrency: ['production', 'dev'].includes($app.stage)
@@ -88,6 +94,14 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+    // which runs in this handler; without this grant the emit silently AccessDenies.
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
     copyFiles: [
       {
         from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
@@ -593,6 +607,34 @@ const questExportQueueSubscription = questExportQueue.subscribe(
         resources: ['*'],
       },
     ],
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Data Lake Cleanup Queue
+// Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
+// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
+const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: dataLakeCleanupQueueDLQ.arn,
+    retry: 3,
+  },
+});
+const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeCleanup.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
   },
   SINGLE_RECORD_BATCH
 );
@@ -1148,6 +1190,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  dataLakeCleanupQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1172,6 +1215,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  dataLakeCleanupQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1198,6 +1242,7 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  dataLakeCleanupQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

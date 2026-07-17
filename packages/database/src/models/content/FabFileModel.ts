@@ -705,10 +705,9 @@ FabFileSchema.index({ deletedAt: 1, 'groups.groupId': 1, 'groups.permissions': 1
 // Optimized index for searchCollections query - fabfiles collection
 FabFileSchema.index({ userId: 1, deletedAt: 1, fileName: 'text', updatedAt: -1 });
 
-// Data lake tag-based access queries
-FabFileSchema.index({ 'tags.name': 1 });
-
-// Data lake lifecycle queries (archive/delete/stat-recompute scoped by meta-tag)
+// Data lake tag-based access + lifecycle queries (archive/delete/stat-recompute scoped by
+// meta-tag). The leading `tags.name` prefix also serves the plain tag-access lookups, so no
+// separate single-field `{ 'tags.name': 1 }` index is needed (dropped in a migration).
 FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups
