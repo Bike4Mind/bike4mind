@@ -226,6 +226,37 @@ describe('runTurn', () => {
     expect(useCliStore.getState().pendingMessages).toHaveLength(0);
   });
 
+  it('flushes durable workflow state onto the session when the turn is aborted (regression: #595)', async () => {
+    seedSession([]);
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const run = vi.fn(async () => {
+      throw abortError;
+    });
+    const save = vi.fn(async (_session: Session) => undefined);
+    // A decision logged before the user hit ESC lives only in the store; the
+    // abort save must flush it or it is lost if the process exits mid-turn.
+    const decision = { id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' };
+    const ctx = makeCtx({
+      agent: { run } as unknown as ReActAgent,
+      sessionStore: { save } as unknown as SessionStore,
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('do it', ctx);
+
+    // The cancel path performs a single save. Reverting the withFlushedWorkflowState
+    // wrap there leaves this saved session's metadata.workflow undefined.
+    expect(save).toHaveBeenCalledOnce();
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
+    // The flush rides alongside the cancellation message, not instead of it.
+    expect(useCliStore.getState().session!.messages[1]).toMatchObject({ metadata: { cancelled: true } });
+  });
+
   it('surfaces a transient network drop without recording an assistant message', async () => {
     seedSession([]);
     const run = vi.fn(async () => {
@@ -288,6 +319,52 @@ describe('runTurn', () => {
     // fired; the main-turn call follows it.
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
+  });
+
+  it('flushes durable workflow state onto the session before auto-compaction (regression: #595)', async () => {
+    // Same trigger as the estimate test above: a tool-heavy agent over a tiny
+    // context window forces the 80% auto-compaction branch.
+    seedSession(
+      Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'hi',
+        timestamp: ISO,
+      }))
+    );
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
+      makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
+    );
+    const save = vi.fn(async (_session: Session) => undefined);
+    // A decision logged in a prior turn that only lives in the in-memory store;
+    // the seeded session's metadata.workflow is still unset when compaction fires.
+    const decision = { id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' };
+    const ctx = makeCtx({
+      agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+      sessionStore: { save } as unknown as SessionStore,
+      config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+      availableModels: [{ id: 'claude-sonnet-4-6', contextWindow: 500 } as unknown as ModelInfo],
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('next message', ctx);
+
+    // The pre-compaction flush is the first save. It must carry the store's
+    // decision so createCompactedSession copies live workflow state forward
+    // rather than the stale (empty) metadata snapshot - the exact #595 bug.
+    // Reverting withFlushedWorkflowState leaves this save's workflow undefined.
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
   });
 
   it('drains queued messages into a follow-up turn after the current one settles', async () => {

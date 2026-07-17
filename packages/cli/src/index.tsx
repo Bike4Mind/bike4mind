@@ -1758,12 +1758,19 @@ function CliApp() {
    * cannot drift apart on which fields land on `session.metadata.workflow`.
    */
   const applyHandoffToWorkflow = (session: Session, handoff: SessionHandoff): void => {
-    session.metadata.workflow = {
-      decisions: decisionStoreRef.current.decisions,
-      blockers: blockerStoreRef.current.blockers,
-      handoff,
-      reviewGates: reviewGateStoreRef.current.reviewGates,
-    };
+    // Route through buildWorkflowState so this third assembly site cannot drift
+    // from the save/compaction paths and, like them, snapshots the stores rather
+    // than aliasing their live mutable arrays. buildWorkflowState returns
+    // undefined only when every store is empty; here we still want the handoff
+    // recorded, so fall back to an empty-store workflow that carries it.
+    session.metadata.workflow = buildWorkflowState(
+      {
+        decisionStore: decisionStoreRef.current,
+        blockerStore: blockerStoreRef.current,
+        reviewGateStore: reviewGateStoreRef.current,
+      },
+      handoff
+    ) ?? { decisions: [], blockers: [], handoff, reviewGates: [] };
   };
 
   /**
