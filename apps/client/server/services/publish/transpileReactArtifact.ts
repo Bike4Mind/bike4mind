@@ -105,6 +105,18 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  * not conflated into one broken match. Exported for unit tests.
  */
 export function rewriteImportsToRequire(source: string): string {
+  // Convert ESM `X as Y` renames in a named-imports clause to valid destructuring `X: Y`
+  // (a raw `const { X as Y } = ...` is a syntax error that would blank the published page).
+  const renameNamedBindings = (named: string): string =>
+    named
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(spec => {
+        const m = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+        return m ? `${m[1]}: ${m[2]}` : spec;
+      })
+      .join(', ');
   return source.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g, (_match, clauseRaw: string, mod: string) => {
     const clause = clauseRaw.trim();
     const namedMatch = clause.match(/\{([\s\S]*)\}/);
@@ -130,9 +142,9 @@ export function rewriteImportsToRequire(source: string): string {
     if (nsMatch) return `const ${nsMatch[1]} = require('${mod}');`;
     if (hasDefault && namedRaw) {
       // mixed default + named: bind the default to the module, then destructure the named off it.
-      return `const ${defMatch![1]} = require('${mod}'); const { ${namedRaw} } = ${defMatch![1]};`;
+      return `const ${defMatch![1]} = require('${mod}'); const { ${renameNamedBindings(namedRaw)} } = ${defMatch![1]};`;
     }
-    if (namedRaw) return `const { ${namedRaw} } = require('${mod}');`;
+    if (namedRaw) return `const { ${renameNamedBindings(namedRaw)} } = require('${mod}');`;
     if (hasDefault) return `const ${defMatch![1]} = require('${mod}');`;
     return `const ${clause} = require('${mod}');`;
   });

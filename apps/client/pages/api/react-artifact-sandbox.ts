@@ -168,6 +168,9 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         };
 
         var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
+          // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
+          // const-destructure is a syntax error). Kept in sync with the publish transpiler.
+          var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
           // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
@@ -177,8 +180,8 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           // Mixed default + named (import Foo, { bar } from 'mod') -> bind default, then destructure
           // the named off it; otherwise the fallback emits invalid \`const Foo, { bar } = require()\`.
           var mixed = imports.trim().match(/^(\\w+)\\s*,\\s*(\\{[\\s\\S]*\\})$/);
-          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + mixed[2] + ' = ' + mixed[1] + ';';
-          return 'const ' + imports + " = require('" + module + "');";
+          if (mixed) return 'const ' + mixed[1] + " = require('" + module + "'); const " + renameNamed(mixed[2]) + ' = ' + mixed[1] + ';';
+          return 'const ' + renameNamed(imports) + " = require('" + module + "');";
         });
 
         var R = React;
