@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { BedrockEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from '@bike4mind/common';
+import {
+  BedrockEmbeddingModel,
+  OllamaEmbeddingModel,
+  OpenAIEmbeddingModel,
+  VoyageAIEmbeddingModel,
+} from '@bike4mind/common';
 
 vi.mock('./providers/BedrockEmbeddingService', () => ({
   BedrockEmbeddingService: vi.fn(function (this: { model: string }, model: string) {
@@ -45,11 +50,27 @@ vi.mock('./providers/VoyageAIEmbeddingService', () => ({
   },
 }));
 
+vi.mock('./providers/OllamaEmbeddingService', () => ({
+  OllamaEmbeddingService: vi.fn(function (this: { baseUrl: string; model: string }, baseUrl: string, model: string) {
+    this.baseUrl = baseUrl;
+    this.model = model;
+  }),
+  OLLAMA_EMBEDDING_MODEL_MAP: {
+    [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: {
+      provider: 'Ollama',
+      model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT,
+      contextWindow: 2048,
+      dimensions: [768],
+    },
+  },
+}));
+
 // Import after mocks are established
 const { EmbeddingFactory } = await import('./EmbeddingFactory');
 const { BedrockEmbeddingService } = await import('./providers/BedrockEmbeddingService');
 const { OpenAIEmbeddingService } = await import('./providers/OpenAIEmbeddingService');
 const { VoyageAIEmbeddingProvider } = await import('./providers/VoyageAIEmbeddingService');
+const { OllamaEmbeddingService } = await import('./providers/OllamaEmbeddingService');
 
 describe('EmbeddingFactory', () => {
   beforeEach(() => {
@@ -92,5 +113,34 @@ describe('EmbeddingFactory', () => {
     vi.clearAllMocks();
     factory.configure({ openaiApiKey: 'sk-new' });
     expect(OpenAIEmbeddingService).toHaveBeenCalledWith('sk-new', OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('initializes Ollama provider when ollamaBaseUrl is provided', () => {
+    new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
+    expect(OllamaEmbeddingService).toHaveBeenCalledWith(
+      'http://localhost:11434',
+      OllamaEmbeddingModel.NOMIC_EMBED_TEXT
+    );
+  });
+
+  it('createEmbeddingService returns Ollama service for an Ollama model', () => {
+    const factory = new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
+    vi.clearAllMocks();
+    const service = factory.createEmbeddingService(OllamaEmbeddingModel.NOMIC_EMBED_TEXT);
+    expect(OllamaEmbeddingService).toHaveBeenCalledWith(
+      'http://localhost:11434',
+      OllamaEmbeddingModel.NOMIC_EMBED_TEXT
+    );
+    expect(service).toBeDefined();
+  });
+
+  it('createEmbeddingService throws for an Ollama model without a base URL', () => {
+    const factory = new EmbeddingFactory({});
+    expect(() => factory.createEmbeddingService(OllamaEmbeddingModel.NOMIC_EMBED_TEXT)).toThrow(/Ollama base URL/);
+  });
+
+  it('getDefaultEmbeddingModel prefers nomic-embed-text when only Ollama is configured', () => {
+    const factory = new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
+    expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.NOMIC_EMBED_TEXT);
   });
 });

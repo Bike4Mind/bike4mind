@@ -1,5 +1,6 @@
 import {
   BedrockEmbeddingModel,
+  OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   VoyageAIEmbeddingModel,
@@ -8,6 +9,7 @@ import { EmbeddingModelProvider, EmbeddingService } from './EmbeddingService';
 import { BEDROCK_EMBEDDING_MODEL_MAP, BedrockEmbeddingService } from './providers/BedrockEmbeddingService';
 import { OPENAI_EMBEDDING_MODEL_MAP, OpenAIEmbeddingService } from './providers/OpenAIEmbeddingService';
 import { VOYAGEAI_EMBEDDING_MODEL_MAP, VoyageAIEmbeddingProvider } from './providers/VoyageAIEmbeddingService';
+import { OLLAMA_EMBEDDING_MODEL_MAP, OllamaEmbeddingService } from './providers/OllamaEmbeddingService';
 
 /**
  * Configuration for embedding services
@@ -15,6 +17,8 @@ import { VOYAGEAI_EMBEDDING_MODEL_MAP, VoyageAIEmbeddingProvider } from './provi
 export type EmbeddingConfig = {
   openaiApiKey?: string | null;
   voyageApiKey?: string | null; // Match database naming
+  // Base URL of a local Ollama server for offline embeddings; enables the Ollama provider.
+  ollamaBaseUrl?: string | null;
 };
 
 /**
@@ -70,6 +74,14 @@ export class EmbeddingFactory {
       );
     } else if (provider === EmbeddingModelProvider.BEDROCK) {
       this.providers.set(provider, new BedrockEmbeddingService(modelName as BedrockEmbeddingModel));
+    } else if (provider === EmbeddingModelProvider.OLLAMA) {
+      if (!this.config.ollamaBaseUrl) {
+        throw new Error('Ollama base URL is required but not provided');
+      }
+      this.providers.set(
+        provider,
+        new OllamaEmbeddingService(this.config.ollamaBaseUrl, modelName as OllamaEmbeddingModel)
+      );
     } else {
       if (!this.config.voyageApiKey) {
         throw new Error('VoyageAI API key is required but not provided');
@@ -114,6 +126,10 @@ export class EmbeddingFactory {
       models.push(...Object.keys(VOYAGEAI_EMBEDDING_MODEL_MAP));
     }
 
+    if (this.config.ollamaBaseUrl) {
+      models.push(...Object.keys(OLLAMA_EMBEDDING_MODEL_MAP));
+    }
+
     models.push(...Object.keys(BEDROCK_EMBEDDING_MODEL_MAP));
 
     return models;
@@ -135,7 +151,12 @@ export class EmbeddingFactory {
       return VoyageAIEmbeddingModel.VOYAGE_3;
     }
 
-    // Priority 3: Bedrock (always available - uses AWS credentials)
+    // Priority 3: Ollama (offline self-host) when a base URL is configured
+    if (this.config.ollamaBaseUrl) {
+      return OllamaEmbeddingModel.NOMIC_EMBED_TEXT;
+    }
+
+    // Priority 4: Bedrock (always available - uses AWS credentials)
     return BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2;
   }
 
@@ -171,6 +192,14 @@ export class EmbeddingFactory {
       );
     }
 
+    // Initialize Ollama provider with default model if a base URL is configured
+    if (this.config.ollamaBaseUrl) {
+      this.providers.set(
+        EmbeddingModelProvider.OLLAMA,
+        new OllamaEmbeddingService(this.config.ollamaBaseUrl, OllamaEmbeddingModel.NOMIC_EMBED_TEXT)
+      );
+    }
+
     // Initialize Bedrock provider with default model if credentials are available
     this.providers.set(
       EmbeddingModelProvider.BEDROCK,
@@ -196,6 +225,10 @@ export class EmbeddingFactory {
 
     if (Object.values(BedrockEmbeddingModel).includes(modelName as BedrockEmbeddingModel)) {
       return EmbeddingModelProvider.BEDROCK;
+    }
+
+    if (Object.values(OllamaEmbeddingModel).includes(modelName as OllamaEmbeddingModel)) {
+      return EmbeddingModelProvider.OLLAMA;
     }
 
     throw new Error(`Unknown model: ${modelName}`);
