@@ -161,6 +161,47 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('rejects a personal agent owned by a different user (cross-user isolation)', async () => {
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', userId: 'user-OTHER', deletedAt: undefined });
+    const res = await post(CHAT);
+    expect(res.status).toBe(403);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('allows a personal agent owned by the key owner (matching userId)', async () => {
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', userId: 'user-1', deletedAt: undefined });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 404 for a missing bound agent', async () => {
+    mockAgentFindById.mockResolvedValue(null);
+    const res = await post(CHAT);
+    expect(res.status).toBe(404);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for a soft-deleted bound agent', async () => {
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', organizationId: 'org-1', deletedAt: new Date() });
+    const res = await post(CHAT);
+    expect(res.status).toBe(404);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 422 when the bound agent has no configured model', async () => {
+    mockHydrate.mockReturnValue({ model: '', systemPrompt: 'p', allowedTools: [], deniedTools: [] });
+    const res = await post(CHAT);
+    expect(res.status).toBe(422);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('treats Origin: null (sandboxed iframe) as absent rather than 403', async () => {
+    const res = await post(CHAT, { origin: 'null' });
+    expect(res.status).toBe(200);
+    expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects a disallowed browser Origin with 403', async () => {
     const res = await post(CHAT, { origin: 'https://evil.com' });
     expect(res.status).toBe(403);
@@ -240,6 +281,20 @@ describe('POST /api/embed/chat', () => {
     mockVerifyEmbedKeyById.mockResolvedValue({ ...VALID_INFO, agentId: 'agent-REBOUND' });
     const res = await postToken();
     expect(res.status).toBe(401);
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('returns 429 when the per-session rate limit is exceeded (token path)', async () => {
+    mockVerifyEmbedSessionToken.mockReturnValue({
+      keyId: 'key-1',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      sessionId: 'sess-1',
+    });
+    mockVerifyEmbedKeyById.mockResolvedValue(VALID_INFO);
+    mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: false, retryAfter: 20, error: 'session limit' });
+    const res = await postToken();
+    expect(res.status).toBe(429);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 

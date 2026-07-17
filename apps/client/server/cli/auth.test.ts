@@ -13,7 +13,7 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
-  userApiKeyService: { validateUserApiKey: vi.fn() },
+  userApiKeyService: { validateUserApiKey: vi.fn(), validateUserApiKeyById: vi.fn() },
   cacheService: {
     get: vi.fn(async ({ key }: { key: string }) => {
       const entry = cacheStore.get(key);
@@ -44,9 +44,9 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 import jwt from 'jsonwebtoken';
 import { checkRateLimit, verifyJwtToken, verifyEmbedApiKey, verifyEmbedKeyById } from './auth';
 import { cacheService, userApiKeyService } from '@bike4mind/services';
-import { User, userApiKeyRepository } from '@bike4mind/database';
+import { User } from '@bike4mind/database';
 import { extractApiKeyFromHeaders } from '@server/utils/apiKeyRateLimitCheck';
-import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 
 const userId = 'user-abc';
 const key = `rate-limit:ws-auth:${userId}`;
@@ -265,11 +265,14 @@ describe('verifyEmbedApiKey (embed credential-class gates)', () => {
 });
 
 describe('verifyEmbedKeyById (session-token path re-validation)', () => {
-  const activeKeyDoc = {
-    id: 'key-1',
+  // verifyEmbedKeyById delegates the status/expiry/last-used gates to the shared
+  // validateUserApiKeyById; these cases drive that service result, then assert the
+  // embed-specific scope + credential-class checks layered on top.
+  const validResult = {
+    isValid: true,
     userId: 'u1',
+    keyId: 'key-1',
     scopes: [ApiKeyScope.EMBED_CHAT],
-    status: ApiKeyStatus.ACTIVE,
     rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
     billingOwnerType: CreditHolderType.Organization,
     organizationId: 'org-1',
@@ -277,49 +280,43 @@ describe('verifyEmbedKeyById (session-token path re-validation)', () => {
     allowedOrigins: ['https://example.com'],
   };
 
-  beforeEach(() => vi.mocked(userApiKeyRepository.findById).mockReset());
+  beforeEach(() => vi.mocked(userApiKeyService.validateUserApiKeyById).mockReset());
 
   it('resolves an active org-owned embed key by id', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue(activeKeyDoc as never);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue(validResult);
     const info = await verifyEmbedKeyById('key-1');
     expect(info).toMatchObject({ keyId: 'key-1', agentId: 'agent-1', organizationId: 'org-1' });
   });
 
   it('rejects a revoked/disabled key (revocation caught within the token TTL)', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue({
-      ...activeKeyDoc,
-      status: ApiKeyStatus.DISABLED,
-    } as never);
-    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not active/);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'disabled' });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/disabled/);
   });
 
-  it('rejects an expired-but-still-active key (matches the raw-key path)', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue({
-      ...activeKeyDoc,
-      expiresAt: new Date(Date.now() - 1000),
-    } as never);
+  it('rejects an expired key (shared gate with the raw-key path)', async () => {
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'expired' });
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/expired/);
   });
 
   it('rejects a missing key', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue(null as never);
-    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not active/);
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({ isValid: false, reason: 'not_found' });
+    await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/not_found/);
   });
 
   it('rejects a key lacking the embed:chat scope', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue({
-      ...activeKeyDoc,
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({
+      ...validResult,
       scopes: [ApiKeyScope.AI_CHAT],
-    } as never);
+    });
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/embed:chat/);
   });
 
   it('rejects a non-org embed key by id', async () => {
-    vi.mocked(userApiKeyRepository.findById).mockResolvedValue({
-      ...activeKeyDoc,
+    vi.mocked(userApiKeyService.validateUserApiKeyById).mockResolvedValue({
+      ...validResult,
       billingOwnerType: CreditHolderType.User,
       organizationId: undefined,
-    } as never);
+    });
     await expect(verifyEmbedKeyById('key-1')).rejects.toThrow(/organization-owned/);
   });
 });

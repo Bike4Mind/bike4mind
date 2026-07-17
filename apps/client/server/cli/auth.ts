@@ -3,7 +3,6 @@ import { Config } from '@server/utils/config';
 import {
   IUserDocument,
   ApiKeyScope,
-  ApiKeyStatus,
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
@@ -192,28 +191,29 @@ export async function verifyEmbedApiKey(headers: Record<string, string | undefin
  * @throws Error if the key is missing, not active, or not a valid embed key.
  */
 export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
-  const key = await userApiKeyRepository.findById(keyId);
-  if (!key || key.status !== ApiKeyStatus.ACTIVE) {
-    throw new Error('Embed key is not active');
+  // Share the exact post-lookup gates (status, expiry, last-used, projection) with
+  // the raw-key path via validateUserApiKeyById, so a future gate added to key
+  // validation propagates to the session-token path automatically.
+  const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
+    db: { userApiKeys: userApiKeyRepository },
+  });
+
+  if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
+    throw new Error(validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key');
   }
-  // Mirror the raw-key path (validateUserApiKey): a key can be past expiry while
-  // still ACTIVE, so the session-token path must reject it too - otherwise a token
-  // minted just before expiry would outlive the key for its whole TTL.
-  if (key.expiresAt && key.expiresAt < new Date()) {
-    throw new Error('Embed key is expired');
-  }
-  if (!key.scopes?.includes(ApiKeyScope.EMBED_CHAT)) {
+  if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
     throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
   }
+
   const info: ApiKeyInfo = {
-    keyId: key.id,
-    userId: key.userId,
-    scopes: key.scopes,
-    rateLimit: key.rateLimit,
-    billingOwnerType: key.billingOwnerType,
-    organizationId: key.organizationId,
-    agentId: key.agentId,
-    allowedOrigins: key.allowedOrigins,
+    keyId: validation.keyId,
+    userId: validation.userId,
+    scopes: validation.scopes,
+    rateLimit: validation.rateLimit,
+    billingOwnerType: validation.billingOwnerType,
+    organizationId: validation.organizationId,
+    agentId: validation.agentId,
+    allowedOrigins: validation.allowedOrigins,
   };
   assertEmbedCredential(info);
   return info;

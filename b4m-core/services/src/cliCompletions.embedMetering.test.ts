@@ -111,4 +111,16 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
 
     expect(usageEvents.record).not.toHaveBeenCalled();
   });
+
+  it('records no usage event when the model cannot be priced (modelInfo undefined), even with alwaysRecordUsage', async () => {
+    enforceCredits = false;
+    const { db, usageEvents } = buildDb();
+
+    // A model absent from getAvailableModels yields modelInfo === undefined; both the
+    // settlement and the embed metering fallback are guarded on modelInfo, so nothing
+    // is recorded (no cost basis to record).
+    await executeCompletion({ ...baseParams, model: 'model-not-in-catalog', db, alwaysRecordUsage: true });
+
+    expect(usageEvents.record).not.toHaveBeenCalled();
+  });
 });

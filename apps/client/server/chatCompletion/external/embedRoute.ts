@@ -63,7 +63,8 @@ const EmbedChatRequestSchema = z.object({
   messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).min(1),
   /** Optional echo of the bound agent id; if present it MUST match the key's agent. */
   agentId: z.string().optional(),
-  stream: z.boolean().optional(),
+  // No `stream` field: this surface is SSE-only, so advertising a toggle it ignores
+  // would be misleading. Add a non-streaming mode here if a client ever needs one.
 });
 
 interface EmbedContext {
@@ -158,7 +159,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       // Origin gate (defense-in-depth for browsers; the credential is the boundary).
-      if (headers.origin && !isOriginPermitted(headers.origin, ctx.allowedOrigins)) {
+      // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
+      // treat that like an absent Origin (let the credential decide) rather than a
+      // hard 403 that would break a legitimate embed without stopping a real attacker
+      // (who can just omit the header anyway).
+      const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
+      if (requestOrigin && !isOriginPermitted(requestOrigin, ctx.allowedOrigins)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 
