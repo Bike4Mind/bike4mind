@@ -78,6 +78,7 @@
     "csv-parse": "^6.2.1",
     "dayjs": "^1.11.21",
     "diff": "^9.0.0",
+    "disposable-email-domains": "^1.0.62",
     "dotenv": "^17.4.2",
     "eventsource-parser": "^3.1.0",
     "fdir": "^6.5.0",
