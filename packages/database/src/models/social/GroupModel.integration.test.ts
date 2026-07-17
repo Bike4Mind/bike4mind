@@ -35,6 +35,10 @@ describe('GroupModel', () => {
   });
 
   it('requires organizationId', async () => {
-    await expect(Group.create({ name: 'Eng', description: 'engineering' } as never)).rejects.toThrow();
+    // intentionally omit the now-required organizationId to prove the schema rejects it;
+    // cast through unknown because the typed create() would flag the missing field at compile time
+    await expect(
+      Group.create({ name: 'Eng', description: 'engineering' } as unknown as Parameters<typeof Group.create>[0])
+    ).rejects.toThrow();
   });
 });

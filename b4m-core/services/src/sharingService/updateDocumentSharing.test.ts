@@ -94,6 +94,32 @@ describe('sharingService - updateDocumentSharing', () => {
     expect(writeArg).toEqual({ id: 'f1', isGlobalRead: true, isGlobalWrite: true });
   });
 
+  it('normalizes a hydrated (toJSON) doc and strips fileUrl for a non-serveable file', async () => {
+    // a real repo returns a hydrated Mongoose doc with a toJSON() method - the plain-object
+    // mocks above never exercise that branch, so drive it explicitly here.
+    const hydrated = {
+      toJSON: () => ({
+        id: 'f1',
+        mimeType: 'image/png',
+        moderationStatus: 'blocked',
+        fileUrl: 'https://signed',
+        fileUrlExpireAt: 123,
+      }),
+    };
+    db.fabFiles.shareable.findUpdateAccessById.mockResolvedValue(hydrated);
+
+    const result: any = await updateDocumentSharing(
+      user,
+      { id: 'f1', type: 'files', isGlobalRead: true, isGlobalWrite: false },
+      { db } as any
+    );
+
+    // toJSON branch ran (flags applied to the normalized object) and the leak-gate stripped the URL
+    expect(result.isGlobalRead).toBe(true);
+    expect(result.fileUrl).toBeUndefined();
+    expect(result.fileUrlExpireAt).toBeUndefined();
+  });
+
   it('throws NotFoundError when the caller lacks write access', async () => {
     db.sessions.shareable.findUpdateAccessById.mockResolvedValue(null);
     await expect(
