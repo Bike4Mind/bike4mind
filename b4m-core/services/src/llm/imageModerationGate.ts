@@ -40,6 +40,10 @@ export interface ModerateImageOrThrowParams {
  * testable implementation instead of two copies that can silently drift.
  *
  * Behavior:
+ * - Self-host (`B4M_SELF_HOST === 'true'`): skip the check and return. The gate is
+ *   backed by AWS Rekognition, which a self-host install has no credentials for (its
+ *   AWS_* vars are the local MinIO dummies), so the fail-closed path would otherwise
+ *   throw on every image after 3 retries and mark the generation failed.
  * - `service` undefined (moderation never wired up for this caller): log a warning
  *   so a future caller that forgets DI is visible in logs, then no-op. This preserves
  *   the existing optional/backwards-compatible behavior (moderation is opt-in via DI)
@@ -55,6 +59,11 @@ export interface ModerateImageOrThrowParams {
  */
 export async function moderateImageOrThrow(params: ModerateImageOrThrowParams): Promise<void> {
   const { service, enabled, incidents, buffer, mimeType, incidentMeta, logger } = params;
+
+  if (process.env.B4M_SELF_HOST === 'true') {
+    logger.info('[ImageModeration] self-host: Rekognition-based moderation skipped (no AWS Rekognition in self-host).');
+    return;
+  }
 
   if (!service) {
     logger.warn(
