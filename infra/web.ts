@@ -32,6 +32,7 @@ import {
   githubWebhookQueue,
   questExportQueue,
   dataLakeCleanupQueue,
+  dataLakeCleanupQueueDLQ,
   whatsNewGenerationQueue,
   whatsNewHighlightsQueue,
   notebookCurationQueue,
@@ -111,6 +112,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'overwatch-analytics': overwatchAnalyticsQueueDLQ.url,
     'agent-continuation': agentContinuationQueueDLQ.url,
     'optihashi-run-completion': optihashiRunCompletionQueueDLQ.url,
+    'data-lake-cleanup': dataLakeCleanupQueueDLQ.url,
   },
 });
 

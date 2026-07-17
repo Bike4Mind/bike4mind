@@ -82,4 +82,26 @@ describe('dataLakeBatchReconcile cron handler', () => {
     expect(h.recordRun).toHaveBeenCalledTimes(1);
     expect(JSON.parse(res.body)).toEqual({ candidates: 0, forced: 0 });
   });
+
+  it('wires metric hooks that route to the CloudWatch helpers and swallow a rejecting helper', async () => {
+    h.findStuck.mockResolvedValue([]);
+    h.reconcile.mockResolvedValue([]);
+    await handler();
+
+    // The hooks are passed to reconcile but only invoked BY the reconciler, so capture and drive
+    // them here to prove they route to the right helper and don't escape on a rejected emit.
+    const { metrics } = (h.reconcile.mock.calls[0] as unknown[])[2] as {
+      metrics: {
+        emitForcedTerminal: (b: string, l: string) => Promise<void>;
+        emitStuckGauge: (n: number) => Promise<void>;
+      };
+    };
+    await metrics.emitForcedTerminal('b1', 'lake1');
+    await metrics.emitStuckGauge(3);
+    expect(h.recordForced).toHaveBeenCalledTimes(1);
+    expect(h.recordGauge).toHaveBeenCalledWith(3);
+
+    h.recordForced.mockRejectedValueOnce(new Error('cloudwatch down'));
+    await expect(metrics.emitForcedTerminal('b2', 'lake2')).resolves.toBeUndefined();
+  });
 });

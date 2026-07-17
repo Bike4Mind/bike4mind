@@ -47,4 +47,11 @@ describe('dataLakeCleanup consumer', () => {
     h.cleanup.mockRejectedValue(new Error('mongo down'));
     await expect(dispatch(makeEvent(payload), {} as never, logger)).rejects.toThrow('mongo down');
   });
+
+  it('swallows a malformed message (bad shape) instead of retrying it to the DLQ', async () => {
+    // Parse happens inside the try, so a permanently-invalid payload is swallowed, not rethrown.
+    await expect(dispatch(makeEvent({ actor: { userId: 'u1' } }), {} as never, logger)).resolves.toBeUndefined();
+    expect(h.cleanup).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalled();
+  });
 });

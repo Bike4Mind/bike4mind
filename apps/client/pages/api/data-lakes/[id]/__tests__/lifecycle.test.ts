@@ -53,8 +53,8 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     h.sendToQueue.mockResolvedValue(undefined);
   });
 
-  it('enqueues the cleanup and returns 202 without running the sweep inline', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted' });
+  it('enqueues the cleanup and returns 202 for the owner without running the sweep inline', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'u1' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
@@ -66,8 +66,17 @@ describe('POST /api/data-lakes/[id]/lifecycle - cleanup action (enqueue offload)
     expect(res.status).toHaveBeenCalledWith(202);
   });
 
+  it('rejects with 403 and does not enqueue when a non-owner requests cleanup', async () => {
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'deleted', createdByUserId: 'someone-else' });
+    const { res } = makeRes();
+    await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
+
+    expect(res.status).toHaveBeenCalledWith(403);
+    expect(h.sendToQueue).not.toHaveBeenCalled();
+  });
+
   it('rejects with 400 and does not enqueue when the lake is not soft-deleted', async () => {
-    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active' });
+    h.assertLakeAccess.mockResolvedValue({ id: 'lake1', status: 'active', createdByUserId: 'u1' });
     const { res } = makeRes();
     await (handler as (req: unknown, res: unknown) => Promise<void>)(req({ action: 'cleanup' }), res);
 
