@@ -278,7 +278,10 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                       const nestedChildId = stepToChildId.get(stepKey);
                       return (
                         <Box key={stepKey}>
-                          <IterationStep step={s.step} />
+                          {/* A tool-error observation is "recovered" unless the run
+                              actually failed - the stream knows the run status, the
+                              step doesn't. */}
+                          <IterationStep step={s.step} recovered={execution.status !== 'failed'} />
                           {/* Inline child render for `delegate_to_agent` actions
                               that dispatched a foreground subagent. Background
                               subagents surface in the header badge instead. */}

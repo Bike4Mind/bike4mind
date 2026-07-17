@@ -124,7 +124,7 @@ const SubagentStepNest: FC<SubagentStepNestProps> = ({ topLevelExecutionId, chil
               const grandchild = grandchildId ? child.childExecutions[grandchildId] : undefined;
               return (
                 <Box key={stepKey}>
-                  <IterationStep step={s.step} />
+                  <IterationStep step={s.step} recovered={child.status !== 'failed'} />
                   {grandchild && depth < MAX_INLINE_DEPTH && (
                     <SubagentStepNest topLevelExecutionId={topLevelExecutionId} child={grandchild} depth={depth + 1} />
                   )}
