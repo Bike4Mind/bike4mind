@@ -81,6 +81,7 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
+import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1229,11 +1230,20 @@ async function processExecution(
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
     const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
 
+    // Let optihashi_decompose run only ONCE per run (#666). The loop occasionally re-plans
+    // mid-run, which reloads step 1 (a console yank), burns an iteration, and re-sources;
+    // the guard turns any repeat into a no-op redirect that steers the agent back to
+    // advancing its existing plan. Only affects opti runs (decompose isn't offered elsewhere).
+    const decomposeGuard = { used: false };
+    const guardedPremiumTools = guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+      logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
+    );
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       // Dedupe: a caller may already have enabled create_mission/mission_status;
       // a raw append would make buildSharedTools wrap the same tool twice.
       enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
-      externalTools: { ...premiumLlmTools, ...missionChatTools, ...latticeExternalTools },
+      externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
       mcpToolsByServer,
       agentOnlyMcpServers,
