@@ -37,3 +37,4 @@ export {
   type ContextLoadResult,
 } from './contextLoader';
 export { formatStep } from './formatStep';
+export { matchModel, type ModelMatch } from './matchModel';

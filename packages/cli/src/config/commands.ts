@@ -54,6 +54,11 @@ export const COMMANDS: CommandDefinition[] = [
     description: 'Open interactive configuration editor',
   },
   {
+    name: 'model',
+    description: 'Switch the active model (opens a picker, or matches an id/name argument)',
+    args: '[id-or-name]',
+  },
+  {
     name: 'set-api',
     description: 'Connect to self-hosted Bike4Mind instance',
     args: '<url>',

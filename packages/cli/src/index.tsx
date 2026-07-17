@@ -18,7 +18,14 @@ import { existsSync, promises as fs } from 'fs';
 import { homedir } from 'os';
 import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
-import { App, TrustLocationSelector, RewindSelector, SessionSelector, EnvironmentPicker } from './components';
+import {
+  App,
+  TrustLocationSelector,
+  RewindSelector,
+  SessionSelector,
+  EnvironmentPicker,
+  ModelPicker,
+} from './components';
 import type { PermissionResponse, EnvChoice } from './components';
 import type { UserQuestionPayload, UserQuestionResponse } from '@bike4mind/services';
 import { getShellSessionManager } from '@bike4mind/services/llm/tools/cliTools';
@@ -44,6 +51,7 @@ import {
   parseApiUrl,
   processFileReferences,
   formatStep,
+  matchModel,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
@@ -221,6 +229,7 @@ interface CliState {
   sessionSelector: SessionSelectorState | null;
   showLoginFlow?: boolean;
   showEnvironmentPicker?: boolean; // First-run backend picker when no endpoint is configured
+  showModelPicker?: boolean; // Interactive model picker opened by /model with no argument
   config?: CliConfig; // Cached config for synchronous access
   availableModels?: ModelInfo[]; // Models fetched from API at startup
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
@@ -3443,6 +3452,44 @@ function CliApp() {
         break;
       }
 
+      case 'model': {
+        const models = state.availableModels ?? [];
+        if (models.length === 0) {
+          console.log('No models available. Check your API connection and try again.');
+          break;
+        }
+
+        const currentModel = useCliStore.getState().session?.model ?? state.config?.defaultModel;
+
+        // No argument: open the interactive picker.
+        if (args.length === 0) {
+          setState(prev => ({ ...prev, showModelPicker: true }));
+          break;
+        }
+
+        // Argument: match against id/name and switch if unambiguous.
+        const arg = args.join(' ');
+        const match = matchModel(models, arg);
+        if (match.kind === 'none') {
+          console.log(`No model matches "${arg}". Run /model to browse available models.`);
+          break;
+        }
+        if (match.kind === 'multiple') {
+          console.log(`"${arg}" matches ${match.models.length} models - be more specific:`);
+          match.models.forEach(m => console.log(`  ${m.name} (${m.id})`));
+          break;
+        }
+
+        const target = match.model;
+        if (target.id === currentModel) {
+          console.log(`Already using ${target.name} (${target.id}).`);
+          break;
+        }
+        await handleSaveConfig({ ...(state.config as CliConfig), defaultModel: target.id });
+        console.log(`✅ Switched to ${target.name} (${target.id})`);
+        break;
+      }
+
       default: {
         // Delegate to feature module commands before showing unknown
         if (state.featureRegistry?.executeCommand(command, args)) {
@@ -3650,6 +3697,29 @@ function CliApp() {
             state.sessionSelector.resolve(null);
           }
         }}
+      />
+    );
+  }
+
+  // Show the model picker when /model is invoked without an argument.
+  if (state.showModelPicker) {
+    const models = state.availableModels ?? [];
+    const currentModelId = useCliStore.getState().session?.model ?? state.config?.defaultModel ?? '';
+    return (
+      <ModelPicker
+        models={models}
+        currentModelId={currentModelId}
+        onSelect={model => {
+          setState(prev => ({ ...prev, showModelPicker: false }));
+          if (model.id === currentModelId) {
+            console.log(`Already using ${model.name} (${model.id}).`);
+            return;
+          }
+          void handleSaveConfig({ ...(state.config as CliConfig), defaultModel: model.id }).then(() => {
+            console.log(`✅ Switched to ${model.name} (${model.id})`);
+          });
+        }}
+        onCancel={() => setState(prev => ({ ...prev, showModelPicker: false }))}
       />
     );
   }
