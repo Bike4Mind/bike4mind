@@ -7,6 +7,8 @@ import { Resource } from 'sst';
 import { Config } from '@server/utils/config';
 import { sendToQueue } from '@server/utils/sqs';
 import { dispatch as researchEngineDispatch } from '@server/queueHandlers/researchEngineQueue';
+import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileChunk';
+import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
 
@@ -26,6 +28,8 @@ const bootLogger = new Logger({ metadata: { service: 'selfHostWorker' } });
 
 /** Research generations can run for minutes; keep the message invisible while in flight. */
 const RESEARCH_VISIBILITY_TIMEOUT_SEC = 900;
+/** Chunking/embedding a file (esp. local Ollama embeddings on CPU) can take minutes. */
+const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 
@@ -44,6 +48,16 @@ async function main() {
 
   worker.registerQueueHandler('researchEngineQueue', Resource.researchEngineQueue.url, researchEngineDispatch, {
     visibilityTimeoutSec: RESEARCH_VISIBILITY_TIMEOUT_SEC,
+  });
+
+  // RAG ingestion pipeline: chunk a fab file, then vectorize its chunks in batches.
+  // The webhook / scan (server/... object-created, scheduler scan) enqueues fabFileChunkQueue;
+  // fabFileChunk fans out to fabFileVectorizeQueue. Same dispatch handlers as hosted.
+  worker.registerQueueHandler('fabFileChunkQueue', Resource.fabFileChunkQueue.url, fabFileChunkDispatch, {
+    visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
+  });
+  worker.registerQueueHandler('fabFileVectorizeQueue', Resource.fabFileVectorizeQueue.url, fabFileVectorizeDispatch, {
+    visibilityTimeoutSec: FAB_FILE_VISIBILITY_TIMEOUT_SEC,
   });
 
   // Enrichment events (naming, summaries, tags, memento embedding) arrive here from
