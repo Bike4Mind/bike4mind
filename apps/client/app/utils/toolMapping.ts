@@ -74,7 +74,7 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
   bob_panel_read: {
     name: 'bob_panel_read',
     displayName: 'Bob Panel',
-    description: 'Five synthetic personas read a site and report where visitors get lost',
+    description: 'A panel of synthetic personas read a site and report where visitors get lost',
     icon: BobPanelIcon,
     color: '#00897b',
   },
