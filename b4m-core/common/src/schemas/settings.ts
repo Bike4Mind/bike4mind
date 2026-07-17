@@ -265,6 +265,8 @@ export const SettingKeySchema = z.enum([
   'EnableHardwareCompute',
   'HardwareComputeCreditsPerUsd',
   'HardwareComputeMaxUsdPerRun',
+  'HardwareComputeMaxConcurrentRunsPerUser',
+  'HardwareComputeMaxUsdPerUserPerDay',
   'optiMaxToolCalls',
 
   // LIBREONCOLOGY SETTINGS
@@ -1346,8 +1348,10 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableHardwareCompute', order: 87 },
       { key: 'HardwareComputeCreditsPerUsd', order: 88 },
       { key: 'HardwareComputeMaxUsdPerRun', order: 89 },
-      { key: 'EnableQuestMaster', order: 90 },
-      { key: 'EnableQuestMasterDefault', order: 91 },
+      { key: 'HardwareComputeMaxConcurrentRunsPerUser', order: 90 },
+      { key: 'HardwareComputeMaxUsdPerUserPerDay', order: 91 },
+      { key: 'EnableQuestMaster', order: 92 },
+      { key: 'EnableQuestMasterDefault', order: 93 },
       { key: 'EnableRapidReply', order: 100 },
       { key: 'EnableRapidReplyDefault', order: 101 },
       { key: 'EnableResearchEngine', order: 110 },
@@ -3220,6 +3224,38 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  HardwareComputeMaxConcurrentRunsPerUser: makeNumberSetting({
+    key: 'HardwareComputeMaxConcurrentRunsPerUser',
+    name: 'Hardware Compute: Max concurrent runs per user',
+    defaultValue: 2,
+    min: 1,
+    max: 50,
+    description:
+      'Per-user cap on simultaneously in-flight (submitting/running) eligible hybrid compute jobs on real ' +
+      'external compute hardware (see EnableHardwareCompute). A brake against one user (or a client retry ' +
+      'bug) draining shared credits by firing many concurrent hardware runs faster than any single-run ' +
+      'ceiling or reconciliation pass can react. Raise it here without a deploy as real usage patterns emerge.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 88,
+    dependsOn: 'EnableComputeSubmission',
+  }),
+  HardwareComputeMaxUsdPerUserPerDay: makeNumberSetting({
+    key: 'HardwareComputeMaxUsdPerUserPerDay',
+    name: 'Hardware Compute: Max USD per user per day',
+    defaultValue: 200,
+    min: 1,
+    max: 100_000,
+    description:
+      "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
+      'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
+      'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
+      'and the concurrent-run cap. Raise it here without a deploy as real usage patterns emerge.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 89,
     dependsOn: 'EnableComputeSubmission',
   }),
   optiMaxToolCalls: makeNumberSetting({
