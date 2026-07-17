@@ -116,74 +116,44 @@ export function resolveModelInfo(models: ModelInfo[], defaultModel: string): Mod
 }
 
 /**
- * Build the LLM backend: WebSocket transport first (bypasses CloudFront 20s
- * timeout), SSE fallback, optional Ollama multiplexing. Resolves the default
- * model and pins it on the backend.
+ * Build the LLM backend: HTTP+SSE transport (ServerLlmBackend), optional Ollama
+ * multiplexing. Resolves the default model and pins it on the backend.
  *
- * Pure bootstrap seam: no React hooks, no Zustand state. The WS path registers
- * the Keep command handler inline (inside the same try-block) so a registration
- * throw still triggers the SSE fallback, exactly as before. The tool-executor
- * install/clear ordering (set on connect, cleared on fallback) is preserved.
+ * The WebSocket transport was removed - the CLI always uses SSE. `sseCompletionsUrl`
+ * is read from server config; when empty the backend falls back to its default
+ * same-origin `/api/ai/v1/completions` path. `wsManager` is always null so callers
+ * that still branch on it transparently take their no-socket path.
+ *
+ * Pure bootstrap seam: no React hooks, no Zustand state.
  */
 export async function buildLlmBackend(
   input: BuildLlmBackendInput,
   deps: BuildLlmBackendDeps = defaultLlmBackendDeps
 ): Promise<BuildLlmBackendResult> {
-  const { config, apiClient, tokenGetter, startupLog } = input;
+  const { config, apiClient, startupLog } = input;
 
-  // Try WebSocket transport first (bypasses CloudFront 20s timeout)
-  // Falls back to SSE if WebSocket is unavailable
-  let wsManager: WebSocketConnectionManager | null = null;
-  let llm: CliLlmBackend;
+  const wsManager: WebSocketConnectionManager | null = null;
+
   let sseCompletionsUrl: string | undefined;
-
   try {
-    const serverConfig = await apiClient.get<{
-      websocketUrl?: string;
-      wsCompletionUrl?: string;
-      sseCompletionsUrl?: string;
-    }>('/api/settings/serverConfig');
-    const wsUrl = serverConfig?.websocketUrl;
-    const wsCompletionUrl = serverConfig?.wsCompletionUrl;
+    const serverConfig = await apiClient.get<{ sseCompletionsUrl?: string }>('/api/settings/serverConfig');
     sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
-
-    if (wsUrl && wsCompletionUrl) {
-      wsManager = await deps.connectWebSocket(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
-
-      // Set up WebSocket tool executor for server-side tools
-      deps.installWebSocketToolExecutor(wsManager, tokenGetter);
-
-      llm = deps.createWebSocketBackend({
-        wsManager,
-        apiClient,
-        model: config.defaultModel,
-        tokenGetter,
-        wsCompletionUrl,
-      });
-
-      // Register Keep command handler - allows the web HUD to execute
-      // commands on this machine via the B4M cloud relay.
-      deps.registerKeepHandlers(wsManager);
-
-      logger.debug('🔌 Using WebSocket transport (bypasses CloudFront timeout)');
-    } else {
-      throw new Error('No websocketUrl or wsCompletionUrl in server config');
-    }
-  } catch (wsError) {
-    // Fall back to SSE transport - clean one-liner for users, full stack in debug logs
-    logger.debug('⚠️  WebSocket unavailable, using SSE fallback');
-    logger.debug(`[WebSocket] Fallback reason: ${wsError instanceof Error ? wsError.message : String(wsError)}`);
-    if (wsError instanceof Error && wsError.stack) {
-      logger.debug(`[WebSocket] Stack: ${wsError.stack}`);
-    }
-    wsManager = null;
-    deps.clearWebSocketToolExecutor();
-    llm = deps.createServerBackend({
-      apiClient,
-      model: config.defaultModel,
-      sseCompletionsUrl,
-    });
+  } catch (err) {
+    logger.debug(
+      `[SSE] serverConfig fetch failed; using default completions endpoint: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
+
+  // No WebSocket relay: ensure any previously-installed server-tool executor is
+  // cleared so tools resolve to the local (CLI-side) executor.
+  deps.clearWebSocketToolExecutor();
+
+  let llm: CliLlmBackend = deps.createServerBackend({
+    apiClient,
+    model: config.defaultModel,
+    sseCompletionsUrl,
+  });
+  logger.debug('Using SSE transport');
 
   // Optionally wrap with Ollama backend if --ollama-host was provided
   const ollamaHost = input.ollamaHost ?? process.env.B4M_OLLAMA_HOST;

@@ -21,10 +21,7 @@ import { generateCliTools, PermissionManager, type AgentContext, requireApiUrl, 
 import { McpManager } from '../utils/mcpAdapter';
 import type { ICompletionBackend } from '@bike4mind/llm-adapters';
 import { ServerLlmBackend } from '../llm/ServerLlmBackend';
-import { WebSocketLlmBackend } from '../llm/WebSocketLlmBackend';
 import { FallbackLlmBackend } from '../llm/FallbackLlmBackend';
-import { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager';
-import { WebSocketToolExecutor } from '../ws/WebSocketToolExecutor';
 import { setWebSocketToolExecutor } from '../llm/ToolRouter';
 import { ApiClient } from '../auth/ApiClient';
 import { logger } from '../utils/Logger';
@@ -202,54 +199,22 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
       }
     }
 
-    const tokenGetter = async (): Promise<string | null> => {
-      const tokens = await configStore.getAuthTokens();
-      return tokens?.accessToken ?? null;
-    };
-
-    let wsManager: WebSocketConnectionManager | null = null;
-    let llm: ICompletionBackend & { currentModel: string; getModelInfo: () => Promise<{ id: string }[]> };
+    // SSE-only transport. The WebSocket path was removed; the CLI always uses the
+    // HTTP+SSE ServerLlmBackend. sseCompletionsUrl comes from server config (empty
+    // -> ServerLlmBackend uses its default same-origin completions path).
     let sseCompletionsUrl: string | undefined;
 
     try {
-      const serverConfig = await apiClient.get<{
-        websocketUrl?: string;
-        wsCompletionUrl?: string;
-        sseCompletionsUrl?: string;
-      }>('/api/settings/serverConfig');
-      const wsUrl = serverConfig?.websocketUrl;
-      const wsCompletionUrl = serverConfig?.wsCompletionUrl;
+      const serverConfig = await apiClient.get<{ sseCompletionsUrl?: string }>('/api/settings/serverConfig');
       sseCompletionsUrl = serverConfig?.sseCompletionsUrl;
-
-      if (wsUrl && wsCompletionUrl) {
-        wsManager = new WebSocketConnectionManager(wsUrl, tokenGetter, () => apiClient.checkSessionValid());
-        wsManager.onRevoked(() => {
-          logger.warn('[headless] Session revoked - run `b4m login` again. WebSocket reconnect stopped.');
-        });
-        await wsManager.connect();
-        const wsToolExecutor = new WebSocketToolExecutor(wsManager, tokenGetter);
-        setWebSocketToolExecutor(wsToolExecutor);
-        llm = new WebSocketLlmBackend({
-          wsManager,
-          apiClient,
-          model: config.defaultModel,
-          tokenGetter,
-          wsCompletionUrl,
-        });
-        logger.debug('[headless] Using WebSocket transport');
-      } else {
-        throw new Error('No websocketUrl or wsCompletionUrl in server config');
-      }
     } catch {
-      // A failed connect() still schedules a verify/reconnect via onclose. Falling back to
-      // SSE without tearing that down would leave an orphaned reconnect loop running with
-      // no owner, so disconnect before dropping the reference.
-      wsManager?.disconnect();
-      wsManager = null;
-      setWebSocketToolExecutor(null);
-      llm = new ServerLlmBackend({ apiClient, model: config.defaultModel, sseCompletionsUrl });
-      logger.debug('[headless] Using SSE transport fallback');
+      // Headless prefers silent degradation - fall through to the default completions path.
     }
+
+    setWebSocketToolExecutor(null);
+    const llm: ICompletionBackend & { currentModel: string; getModelInfo: () => Promise<{ id: string }[]> } =
+      new ServerLlmBackend({ apiClient, model: config.defaultModel, sseCompletionsUrl });
+    logger.debug('[headless] Using SSE transport');
 
     // Resolve model
     const models = await llm.getModelInfo();
@@ -588,7 +553,6 @@ export async function handleHeadlessCommand(options: HeadlessOptions): Promise<v
 
     // Cleanup
     await mcpManager.disconnect().catch(() => {});
-    if (wsManager) wsManager.disconnect();
     setWebSocketToolExecutor(null);
     agent.removeAllListeners();
 
