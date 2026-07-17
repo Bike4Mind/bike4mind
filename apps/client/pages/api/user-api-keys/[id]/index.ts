@@ -14,6 +14,9 @@ interface UpdateEmbedKeyRequest {
   branding?: IEmbedBranding;
 }
 
+// Not admin-gated: this is ownership-scoped self-service (same posture as the
+// profile API-keys tab). `updateEmbedKey` resolves the key via
+// `findByUserIdAndId`, so a caller can only ever configure their own keys.
 const handler = baseApi().patch(
   asyncHandler<{}, unknown, UpdateEmbedKeyRequest, { id: string }>(async (req, res) => {
     const userId = req.user?.id;

@@ -54,6 +54,15 @@ export interface UpdateEmbedKeyRequest {
   branding?: IEmbedBranding;
 }
 
+/** What the PATCH route returns - mirrors the service's `UpdateEmbedKeyResult`, not the full key document. */
+export interface UpdateEmbedKeyResponse {
+  id: string;
+  name: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+  branding?: IEmbedBranding;
+}
+
 /** An organization the current user may bill API-key usage to. */
 export interface BillingOrganization {
   id: string;
@@ -121,13 +130,16 @@ export function useRotateUserApiKey({ onSuccess }: { onSuccess?: (result: Rotate
       queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
       if (onSuccess) onSuccess(result);
     },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
   });
 }
 
 export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}) {
   const queryClient = useQueryClient();
 
-  return useMutation<IUserApiKeyDocument, Error, UpdateEmbedKeyRequest>({
+  return useMutation<UpdateEmbedKeyResponse, Error, UpdateEmbedKeyRequest>({
     mutationFn: async ({ keyId, ...data }) => {
       const response = await api.patch(`/api/user-api-keys/${keyId}`, data);
       return response.data;
@@ -167,6 +179,9 @@ export function useRevokeUserApiKey({ onSuccess }: { onSuccess?: () => void } = 
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['user-api-keys'] });
       if (onSuccess) onSuccess();
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
     },
   });
 }

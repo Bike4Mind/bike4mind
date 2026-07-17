@@ -4,6 +4,7 @@ import {
   useRotateUserApiKey,
   useRevokeUserApiKey,
   useUpdateEmbedKey,
+  UpdateEmbedKeyRequest,
 } from '@client/app/hooks/data/userApiKeys';
 import {
   Alert,
@@ -46,7 +47,7 @@ import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEdit
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -137,14 +138,28 @@ interface EmbedKeyFormState {
   branding: IEmbedBranding;
 }
 
-/** Trim branding to undefined when every field is blank, so we never persist an empty object. */
+/**
+ * Trim branding to undefined when every field is blank, so we never persist an
+ * empty object. `hideBranding` is preserved verbatim: the form doesn't expose it
+ * (plan-gated, Phase D #572), but it can already be set on a stored key, and a
+ * full-replace save must not silently drop it.
+ */
 function normalizeBranding(branding: IEmbedBranding): IEmbedBranding | undefined {
   const displayName = branding.displayName?.trim() || undefined;
   const primaryColor = branding.primaryColor?.trim() || undefined;
   const logoUrl = branding.logoUrl?.trim() || undefined;
-  if (!displayName && !primaryColor && !logoUrl) return undefined;
-  return { displayName, primaryColor, logoUrl };
+  const hideBranding = branding.hideBranding || undefined;
+  if (!displayName && !primaryColor && !logoUrl && !hideBranding) return undefined;
+  return { displayName, primaryColor, logoUrl, hideBranding };
 }
+
+const sameOrigins = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i]);
+
+const sameBranding = (a?: IEmbedBranding, b?: IEmbedBranding) =>
+  (a?.displayName ?? '') === (b?.displayName ?? '') &&
+  (a?.primaryColor ?? '') === (b?.primaryColor ?? '') &&
+  (a?.logoUrl ?? '') === (b?.logoUrl ?? '') &&
+  (a?.hideBranding ?? false) === (b?.hideBranding ?? false);
 
 /** Agent select + origin allow-list + branding fields, shared by create and configure. */
 function EmbedKeyFormFields({
@@ -320,13 +335,24 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
 
   if (!embedKey) return null;
 
-  const handleSubmit = () =>
-    updateMutation.mutate({
-      keyId: embedKey.id,
-      agentId: form.agentId,
-      allowedOrigins: form.allowedOrigins,
-      branding: normalizeBranding(form.branding) ?? {},
-    });
+  // Send only the fields the admin actually changed, so the update stays a true
+  // partial (untouched branding - including a plan-gated `hideBranding` - is left
+  // alone server-side) and the UPDATED analytics event reports the real diff.
+  const handleSubmit = () => {
+    const request: UpdateEmbedKeyRequest = { keyId: embedKey.id };
+    if (form.agentId !== (embedKey.agentId ?? '')) request.agentId = form.agentId;
+    if (!sameOrigins(form.allowedOrigins, embedKey.allowedOrigins ?? [])) {
+      request.allowedOrigins = form.allowedOrigins;
+    }
+    const nextBranding = normalizeBranding(form.branding);
+    if (!sameBranding(nextBranding, embedKey.branding)) request.branding = nextBranding ?? {};
+
+    if (request.agentId === undefined && request.allowedOrigins === undefined && request.branding === undefined) {
+      onClose();
+      return;
+    }
+    updateMutation.mutate(request);
+  };
 
   return (
     <Modal open onClose={onClose}>
@@ -405,7 +431,7 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
 export default function EmbedKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: agents } = useGetAgents();
-  const agentNameById = new Map((agents ?? []).map(agent => [agent.id, agent.name]));
+  const agentNameById = useMemo(() => new Map((agents ?? []).map(agent => [agent.id, agent.name])), [agents]);
 
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');

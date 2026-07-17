@@ -64,6 +64,11 @@ export const updateEmbedKey = async (
     throw new BadRequestError('Only embed:chat keys can be configured with embed settings');
   }
 
+  // Agent-ownership/access enforcement (does the caller own/can reach this
+  // agentId?) is deferred to the Phase C runtime endpoint (#571), where the
+  // binding is first consumed - it is enforced there, not at bind time. The
+  // admin UI only offers owned agents; the create path applies the same
+  // deferral. Do not treat this rebind as an access boundary.
   if (params.agentId !== undefined) apiKey.agentId = params.agentId;
   if (params.allowedOrigins !== undefined) apiKey.allowedOrigins = params.allowedOrigins;
   if (params.branding !== undefined) apiKey.branding = params.branding;

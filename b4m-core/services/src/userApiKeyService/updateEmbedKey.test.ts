@@ -91,7 +91,7 @@ describe('userApiKeyService - updateEmbedKey', () => {
 
     await expect(
       updateEmbedKey('user1', { keyId: 'key-1', allowedOrigins: ['http://example.com'] }, { db: { userApiKeys: repo } })
-    ).rejects.toThrow();
+    ).rejects.toThrow(/normalized https origin/);
     expect(repo.update).not.toHaveBeenCalled();
   });
 });
