@@ -100,6 +100,15 @@ function C() { return <div>ok</div>; }
 export default C;`;
     await expect(transpileReactSource(src)).resolves.toContain('React.createElement');
   });
+
+  it('does not misread a type-only RELATIVE import as a multi-file artifact', async () => {
+    // The type-only import has no runtime reference, so it must be stripped BEFORE the
+    // relative-import (multi-file) guard runs - not rejected as a sibling-file reference.
+    const src = `import type Foo from './types';
+function C() { return <div>ok</div>; }
+export default C;`;
+    await expect(transpileReactSource(src)).resolves.toContain('React.createElement');
+  });
 });
 
 describe('buildReactArtifactBundle', () => {
