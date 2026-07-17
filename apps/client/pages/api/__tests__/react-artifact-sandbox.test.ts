@@ -180,12 +180,20 @@ describe('GET /api/react-artifact-sandbox', () => {
   // binding and must be stripped BEFORE the regex require-rewrite, else they emit invalid
   // `const { type X } = ...`. Structural guard (in-browser transform has no unit seam); mirrors
   // stripTypeOnlyImports in the publish transpiler (transpileReactArtifact.ts).
-  it('strips TS type-only imports before rewriting to require()', () => {
+  it('strips TS type-only imports BEFORE the multi-file (relative-import) guard runs', () => {
+    // Regression: a type-only relative import (`import type Foo from './x'`) carries no runtime
+    // reference and must be stripped before the relative-import guard, or the preview wrongly
+    // aborts with "Multi-file artifacts are not supported" while publish handles it fine. The
+    // strip must (a) exist, (b) run before the guard, and (c) feed the guard its stripped view.
     const { res, getBody } = makeRes();
     handler(makeReq('GET'), res);
     const body = getBody();
-    expect(body).toContain('withoutTypeImports'); // the strip pass is wired ahead of the rewrite
+    expect(body).toContain('var withoutTypeImports'); // the strip pass is wired
     expect(body).toContain('import\\s+type\\s+'); // whole-clause type-only import removal
+    // strip is computed before the relative-import guard...
+    expect(body.indexOf('var withoutTypeImports')).toBeLessThan(body.indexOf('var relImport'));
+    // ...and the guard checks the stripped view, not the raw code.
+    expect(body).toContain('withoutTypeImports.match(');
   });
 
   // Regression guard: a literal `</script>` inside a JS comment in the
