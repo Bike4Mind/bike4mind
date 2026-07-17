@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   sanitizeRenderedHtml,
   resolveDocOrigin,
@@ -191,5 +191,75 @@ describe('isAppWrapperHost / isUsercontentHost — host classification', () => {
     expect(isAppWrapperHost('evil.bike4mind.com')).toBe(false);
     expect(isAppWrapperHost('bike4mind.com')).toBe(false);
     expect(isAppWrapperHost(undefined)).toBe(false);
+  });
+});
+
+describe('self-host CSP (B4M_SELF_HOST=true, SERVER_DOMAIN unset -> PUBLISH_HOST empty)', () => {
+  const P0 = BLESSED_SCRIPT_PATHS[0];
+
+  // PUBLISH_HOST is resolved at module-load from SERVER_DOMAIN, so re-import the
+  // modules with the self-host env stubbed to exercise the empty-PUBLISH_HOST path.
+  async function loadSelfHost() {
+    vi.stubEnv('SERVER_DOMAIN', '');
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.resetModules();
+    return import('./viewerSecurity');
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('emits no scheme-only https:/// token when PUBLISH_HOST is unset', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('localhost:3000');
+    expect(src).not.toContain('https:///');
+    expect(src).not.toContain('https://'); // localhost self-host resolves to http
+    expect(src).toContain(`http://localhost:3000${P0}`);
+  });
+
+  it('serves blessed libs same-origin over http for a localhost self-host viewer', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('localhost:3000');
+    for (const p of BLESSED_SCRIPT_PATHS) {
+      expect(src).toContain(`http://localhost:3000${p}`);
+    }
+  });
+
+  it('trusts a LAN/tailnet Host and resolves it over http', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('host.lan:3000')).toBe('http://host.lan:3000');
+    expect(buildBundleScriptSrc('host.lan:3000')).toContain(`http://host.lan:3000${P0}`);
+  });
+
+  it('upgrades the scheme to https when a TLS reverse proxy sets X-Forwarded-Proto', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('artifacts.example.internal', 'https')).toBe('https://artifacts.example.internal');
+    expect(buildBundleScriptSrc('artifacts.example.internal', 'https')).toContain(
+      `https://artifacts.example.internal${P0}`
+    );
+  });
+
+  it('never lets a hostile Host inject a CSP directive even in self-host', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('evil.test/ ; script-src *');
+    expect(src).not.toContain(';');
+    expect(src).not.toContain('*');
+  });
+});
+
+describe('buildBundleScriptSrc hosted regression (byte-identical, B4M_SELF_HOST unset)', () => {
+  it('produces the exact deduped doc-origin + app-host token set', () => {
+    // Mirrors the original algorithm exactly: doc-origin tokens then the
+    // canonical app-host tokens, deduplicated and space-joined.
+    const host = 'app.pr5.preview.bike4mind.com';
+    const expected = Array.from(
+      new Set([
+        ...BLESSED_SCRIPT_PATHS.map(p => `https://${host}${p}`),
+        ...BLESSED_SCRIPT_PATHS.map(p => `https://${PUBLISH_HOST}${p}`),
+      ])
+    ).join(' ');
+    expect(buildBundleScriptSrc(host, 'https')).toBe(expected);
   });
 });

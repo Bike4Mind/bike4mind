@@ -65,10 +65,13 @@ const B4M_HOST = PUBLISH_HOST;
  */
 export { BLESSED_SCRIPT_PATHS };
 
-/** Allowed `<script src>` URLs - strict exact-match. Relative + absolute forms of the blessed libs. */
+/** Allowed `<script src>` URLs - strict exact-match. Relative + absolute forms of the blessed
+ *  libs; the absolute form is added only when B4M_HOST is configured (self-host with
+ *  SERVER_DOMAIN unset would otherwise allowlist a scheme-only `https:///static/...`). The
+ *  relative blessed paths still validate either way, which is the self-host reference form. */
 const ALLOWED_SCRIPT_SRC: readonly string[] = [
   ...BLESSED_SCRIPT_PATHS,
-  ...BLESSED_SCRIPT_PATHS.map(p => `https://${B4M_HOST}${p}`),
+  ...(B4M_HOST ? BLESSED_SCRIPT_PATHS.map(p => `https://${B4M_HOST}${p}`) : []),
 ];
 
 /** Exact-match stylesheet allowlist (empty; reserved for stable blessed URLs). */
