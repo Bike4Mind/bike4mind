@@ -7,9 +7,12 @@ import {
   IMongoDocument,
   ICreditTransactionRepository,
   IApiKeyUsage,
+  ISourceUsage,
   ILedgerPage,
   ILedgerQueryOptions,
   COMPLETION_SOURCES,
+  AI_USAGE_TRANSACTION_TYPES,
+  UNCLASSIFIED_SOURCE,
 } from '@bike4mind/common';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
@@ -241,6 +244,46 @@ export class CreditTransactionRepository
       },
       { $project: { _id: 0, apiKeyId: '$_id', requests: 1, creditsSpent: 1, inputTokens: 1, outputTokens: 1 } },
       { $sort: { creditsSpent: -1 } },
+    ]);
+  }
+
+  async sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ISourceUsage[]> {
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    return this.model.aggregate<ISourceUsage>([
+      // Filter by type rather than by `source` existence: purchases and refunds
+      // carry no source, but so do pre-tracking usage rows, and those must still
+      // be counted or the buckets stop summing to the owner's ledger spend.
+      {
+        $match: {
+          ownerId,
+          ownerType,
+          createdAt: { $gte: from },
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ['$source', UNCLASSIFIED_SOURCE] },
+          requests: { $sum: 1 },
+          // Usage is stored negative; report the spend magnitude.
+          creditsSpent: { $sum: { $abs: '$credits' } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          source: '$_id',
+          requests: 1,
+          creditsSpent: 1,
+          residual: { $cond: [{ $eq: ['$_id', UNCLASSIFIED_SOURCE] }, 1, 0] },
+        },
+      },
+      // Unclassified is a residual, not a peer surface: keep it last whatever it
+      // spent. `source` breaks ties so equal-spend buckets don't swap places
+      // between identical requests.
+      { $sort: { residual: 1, creditsSpent: -1, source: 1 } },
+      { $unset: 'residual' },
     ]);
   }
 }
