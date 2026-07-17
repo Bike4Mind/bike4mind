@@ -1,5 +1,27 @@
 import { describe, it, expect } from 'vitest';
-import { getPackageName, isExternalPackage, findUndeclaredBundleDeps } from './verifyBundleExternals';
+import {
+  getPackageName,
+  isExternalPackage,
+  findUndeclaredBundleDeps,
+  collectGraphSpecifiers,
+  type ModuleGraph,
+} from './verifyBundleExternals';
+
+/** Build a fake rolldown module graph from an id -> {static, dynamic} map. */
+function fakeGraph(
+  modules: Record<string, { importedIds?: string[]; dynamicallyImportedIds?: string[] }>
+): ModuleGraph {
+  return {
+    getModuleIds: () => Object.keys(modules),
+    getModuleInfo: id =>
+      modules[id]
+        ? {
+            importedIds: modules[id].importedIds ?? [],
+            dynamicallyImportedIds: modules[id].dynamicallyImportedIds ?? [],
+          }
+        : null,
+  };
+}
 
 describe('getPackageName', () => {
   it('returns unscoped package names, stripping subpaths', () => {
@@ -40,6 +62,35 @@ describe('isExternalPackage', () => {
   it('rejects the inline-bundled @bike4mind/* scope', () => {
     expect(isExternalPackage('@bike4mind/utils')).toBe(false);
     expect(isExternalPackage('@bike4mind/services')).toBe(false);
+  });
+});
+
+describe('collectGraphSpecifiers', () => {
+  it('collects both static and dynamic import ids across all modules', () => {
+    const graph = fakeGraph({
+      '/abs/entry.mjs': { importedIds: ['tldts', '/abs/internal.mjs'], dynamicallyImportedIds: ['jimp'] },
+      '/abs/internal.mjs': { importedIds: ['axios'] },
+    });
+    expect([...collectGraphSpecifiers(graph)].sort()).toEqual(['/abs/internal.mjs', 'axios', 'jimp', 'tldts']);
+  });
+
+  it('skips modules whose info is null', () => {
+    const graph: ModuleGraph = {
+      getModuleIds: () => ['/abs/a.mjs', '/abs/missing.mjs'],
+      getModuleInfo: id => (id === '/abs/a.mjs' ? { importedIds: ['tldts'], dynamicallyImportedIds: [] } : null),
+    };
+    expect([...collectGraphSpecifiers(graph)]).toEqual(['tldts']);
+  });
+
+  it('feeds findUndeclaredBundleDeps end-to-end (the plugin path)', () => {
+    const graph = fakeGraph({
+      '/abs/entry.mjs': {
+        importedIds: ['tldts', 'node:fs', '@bike4mind/utils', '/abs/x.mjs'],
+        dynamicallyImportedIds: ['jimp'],
+      },
+    });
+    const missing = findUndeclaredBundleDeps(collectGraphSpecifiers(graph), new Set(['tldts']));
+    expect(missing).toEqual(['jimp']);
   });
 });
 

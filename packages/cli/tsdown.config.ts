@@ -2,17 +2,10 @@ import { defineConfig } from 'tsdown';
 import { cpSync, readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
+import { collectGraphSpecifiers, findUndeclaredBundleDeps } from './src/verifyBundleExternals.ts';
+import type { ModuleGraph } from './src/verifyBundleExternals.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// Minimal structural view of rolldown's module graph - avoids a deep type import
-// from a transitive dep that the config loader can't resolve from packages/cli.
-type ModuleInfoLike = { importedIds: string[]; dynamicallyImportedIds: string[] };
-type PluginContextLike = {
-  getModuleIds(): IterableIterator<string>;
-  getModuleInfo(id: string): ModuleInfoLike | null;
-};
 
 /**
  * Build-time guard against the "bundled workspace package pulled in an npm dep
@@ -35,7 +28,7 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
     // user plugins' output hooks, and generateBundle's PluginContext still
     // exposes the full module graph via getModuleIds()/getModuleInfo().
     generateBundle() {
-      const ctx = this as unknown as PluginContextLike;
+      const ctx = this as unknown as ModuleGraph;
       const pkg = JSON.parse(readFileSync(resolve(pkgDir, 'package.json'), 'utf8')) as {
         dependencies?: Record<string, string>;
         optionalDependencies?: Record<string, string>;
@@ -45,16 +38,16 @@ function verifyBundleExternalsPlugin(pkgDir: string) {
         ...Object.keys(pkg.optionalDependencies ?? {}),
       ]);
 
-      // rolldown keeps external imports (static + dynamic) as bare-specifier ids
-      // in the module graph; internal modules are absolute paths (filtered out by
-      // findUndeclaredBundleDeps). This captures dynamic imports that never
-      // surface in OutputChunk.imports (e.g. jimp's `await import('jimp')`).
-      const specifiers = new Set<string>();
-      for (const id of ctx.getModuleIds()) {
-        const info = ctx.getModuleInfo(id);
-        if (!info) continue;
-        for (const dep of info.importedIds) specifiers.add(dep);
-        for (const dep of info.dynamicallyImportedIds) specifiers.add(dep);
+      const specifiers = collectGraphSpecifiers(ctx);
+
+      // Fail loud if the graph walk found nothing: the guard would silently pass
+      // (and stop guarding) if rolldown's plugin-context shape ever drifts and the
+      // `this as ModuleGraph` cast starts resolving to an empty/incompatible object.
+      if (specifiers.size === 0) {
+        throw new Error(
+          'tsdown: verify-bundle-externals found an empty module graph - the ' +
+            'generateBundle PluginContext API may have changed. The guard is not running.'
+        );
       }
 
       const missing = findUndeclaredBundleDeps(specifiers, declaredDeps);

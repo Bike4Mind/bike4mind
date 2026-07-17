@@ -22,9 +22,19 @@ describe('isDisposableEmail', () => {
     expect(isDisposableEmail('notanemail')).toBe(false);
   });
 
-  it('lazily loads the list on repeated calls without error', () => {
-    // Second call reuses the cached Set (the lazy loader's memoized branch).
-    expect(isDisposableEmail('a@gmail.com')).toBe(false);
-    expect(isDisposableEmail('b@mailinator.com')).toBe(true);
+  it('matches the domain after the last @ when the local part contains one', () => {
+    expect(isDisposableEmail('a@b@mailinator.com')).toBe(true);
+  });
+
+  it('trims surrounding whitespace on the domain before matching', () => {
+    expect(isDisposableEmail('x@  mailinator.com  ')).toBe(true);
+  });
+
+  it('returns false for an empty domain', () => {
+    expect(isDisposableEmail('user@')).toBe(false);
+  });
+
+  it('is case-insensitive on the domain', () => {
+    expect(isDisposableEmail('x@MAILINATOR.COM')).toBe(true);
   });
 });

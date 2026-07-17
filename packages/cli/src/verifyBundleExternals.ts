@@ -16,6 +16,33 @@ const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map(m => `no
 // @bike4mind/* packages are bundled inline (tsdown deps.neverBundle), never installed.
 const BUNDLED_SCOPES = ['@bike4mind/'];
 
+/** The slice of rolldown's plugin context this guard reads from the module graph. */
+export type ModuleGraph = {
+  getModuleIds(): Iterable<string>;
+  getModuleInfo(id: string): { importedIds: string[]; dynamicallyImportedIds: string[] } | null;
+};
+
+/**
+ * Collect every module specifier the bundle imports (static + dynamic) by walking
+ * rolldown's module graph. External packages keep their bare-specifier id; internal
+ * modules are absolute paths (filtered out downstream by isExternalPackage).
+ *
+ * Blind spot: this only sees import / dynamic-import edges the bundler tracks.
+ * Runtime resolution via `require.resolve(...)` / `createRequire(...)` is invisible
+ * both to the bundler and to this walk, so a dep reached only that way will NOT be
+ * flagged here - it must be kept a real (bundler-visible) import or declared by hand.
+ */
+export function collectGraphSpecifiers(graph: ModuleGraph): Set<string> {
+  const specifiers = new Set<string>();
+  for (const id of graph.getModuleIds()) {
+    const info = graph.getModuleInfo(id);
+    if (!info) continue;
+    for (const dep of info.importedIds) specifiers.add(dep);
+    for (const dep of info.dynamicallyImportedIds) specifiers.add(dep);
+  }
+  return specifiers;
+}
+
 export function getPackageName(specifier: string): string {
   if (specifier.startsWith('@')) {
     return specifier.split('/').slice(0, 2).join('/');
