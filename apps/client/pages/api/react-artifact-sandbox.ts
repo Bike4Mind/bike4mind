@@ -167,10 +167,10 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           throw new Error('Module "' + module + '" is not available');
         };
 
+        // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
+        // const-destructure is a syntax error). Kept in sync with the publish transpiler.
+        var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
         var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
-          // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
-          // const-destructure is a syntax error). Kept in sync with the publish transpiler.
-          var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
           // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
