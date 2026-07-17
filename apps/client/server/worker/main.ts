@@ -1,6 +1,6 @@
 import type { SQSEvent } from 'aws-lambda';
 import { taskSchedulerService } from '@bike4mind/services';
-import { taskScheduleRepository, connectDB } from '@bike4mind/database';
+import { taskScheduleRepository, connectDB, FabFile, adminSettingsRepository } from '@bike4mind/database';
 import { TaskScheduleHandler } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Resource } from 'sst';
@@ -32,6 +32,12 @@ const RESEARCH_VISIBILITY_TIMEOUT_SEC = 900;
 const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 /** Scheduler cadence (hosted cron runs on a schedule; self-host polls the schedule table). */
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
+/** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
+const CHUNK_SCAN_INTERVAL_MS = 60_000;
+/** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
+const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
+/** Cap files enqueued per scan pass so a large backlog is drained gradually. */
+const CHUNK_SCAN_BATCH = 50;
 
 async function main() {
   // This process only makes sense in self-host: it uses the env-backed Resource shim and
@@ -86,6 +92,35 @@ async function main() {
         [TaskScheduleHandler.CUSTOM_TASK_PROCESS]: async () => {},
       },
     });
+  });
+
+  // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
+  // notification is missed, sweep un-chunked files and enqueue them. isChunking / chunkCount
+  // exclude in-progress and done files; the age filter avoids racing an in-flight webhook.
+  worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
+    if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
+
+    const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
+    const candidates = await FabFile.find({
+      chunkCount: 0,
+      isChunking: { $ne: true },
+      createdAt: { $lt: cutoff },
+      deletedAt: null,
+    })
+      .select('_id userId')
+      .limit(CHUNK_SCAN_BATCH)
+      .lean();
+
+    for (const file of candidates) {
+      await sendToQueue(Resource.fabFileChunkQueue.url, {
+        fabFileId: String(file._id),
+        userId: file.userId,
+        chunkSize: '1000',
+      });
+    }
+    if (candidates.length > 0) {
+      bootLogger.info(`[fabFileChunkScan] enqueued ${candidates.length} un-chunked file(s)`);
+    }
   });
 
   worker.start();
