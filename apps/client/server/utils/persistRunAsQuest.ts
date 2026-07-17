@@ -72,6 +72,10 @@ export async function persistRunAsQuest(
           replies: [replyText],
           status: 'done',
           updatedAt: new Date(),
+          // Persist the run's authoritative total so the chat-history bubble can
+          // render the final credit cost after the live CreditCounter unmounts -
+          // parity with chat_completion, which sets creditsUsed on its Quest.
+          creditsUsed: execution.totalCreditsUsed ?? 0,
           ...(execution.usedMementoIds?.length ? { 'promptMeta.context.mementoIds': execution.usedMementoIds } : {}),
           // Dotted key coexists with `promptMeta.context.mementoIds` above - no clobber.
           ...(finishReason ? { 'promptMeta.finishReason': finishReason } : {}),
@@ -93,6 +97,7 @@ export async function persistRunAsQuest(
         replies: [replyText],
         timestamp: new Date(),
         status: 'done',
+        creditsUsed: execution.totalCreditsUsed ?? 0,
         ...(images ? { images } : {}),
         ...(sideEffects ? { uiSideEffects: sideEffects } : {}),
         // Link back to the AgentExecution so the client can lazy-load the
