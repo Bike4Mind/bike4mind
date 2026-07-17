@@ -896,6 +896,32 @@ export async function processFabFilesServer(
 
             break;
 
+          case ModelBackend.Ollama: {
+            // Vision-capable local models take the image inline. We build the same
+            // Anthropic-style base64 block the Anthropic path uses; the Ollama
+            // backend later maps it into Ollama's images[] field. Enforce the
+            // dimension cap so a large upload does not blow the local context.
+            const rawImageBuffer = await storage.download(file.filePath!);
+            const imageBuffer = await ensureImageWithinDimensionLimit(rawImageBuffer, MAX_IMAGE_DIMENSION_PX, logger);
+            const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
+            const ollamaBase64 = imageBuffer.toString('base64');
+
+            imageContent.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: ollamaMimeType,
+                data: ollamaBase64,
+              },
+            });
+            // Add filename and fabFileId as text context to prevent hallucinated filenames.
+            imageContent.push({
+              type: 'text',
+              text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
+            });
+            break;
+          }
+
           default:
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);
             break;

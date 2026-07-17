@@ -1,4 +1,10 @@
-import { IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
+import {
+  IMessage,
+  ModelBackend,
+  PermissionDeniedError,
+  type MessageContentObject,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -564,10 +570,35 @@ export class OllamaBackend implements ICompletionBackend {
     const converted = convertMessagesToOpenAIFormat(messages);
     return converted.map(msg => {
       const raw = msg as unknown as Record<string, unknown>;
-      const mapped: OllamaMessage = {
-        role: msg.role,
-        content: msg.content != null ? String(msg.content) : '',
-      };
+      const mapped: OllamaMessage = { role: msg.role, content: '' };
+
+      if (Array.isArray(msg.content)) {
+        // Ollama has no multimodal content-block array: text goes in `content`
+        // and images in `images` as RAW base64 (no data: prefix). Non-image
+        // blocks (tool_use/tool_result) are handled via tool_calls/tool_name below.
+        const texts: string[] = [];
+        const images: string[] = [];
+        for (const block of msg.content as MessageContentObject[]) {
+          if (block.type === 'text' && typeof block.text === 'string') {
+            texts.push(block.text);
+          } else if (block.type === 'image' && block.source.type === 'base64') {
+            images.push(block.source.data);
+          } else if (block.type === 'image_url') {
+            const dataUrl = block.image_url.url.match(/^data:[^;]+;base64,(.+)$/s);
+            if (dataUrl) {
+              images.push(dataUrl[1]);
+            } else {
+              // Ollama can't fetch a remote URL; it needs inline base64.
+              this._logger.debug('[OllamaBackend] Dropping non-data image_url; Ollama requires inline base64.');
+            }
+          }
+        }
+        mapped.content = texts.join('\n');
+        if (images.length > 0) mapped.images = images;
+      } else {
+        mapped.content = msg.content != null ? String(msg.content) : '';
+      }
+
       // Carry through tool_calls and tool_name so the conversation history is intact
       if (Array.isArray(raw.tool_calls)) {
         mapped.tool_calls = raw.tool_calls as ToolCall[];

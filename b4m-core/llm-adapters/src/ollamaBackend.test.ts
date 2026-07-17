@@ -289,3 +289,43 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(text).toContain('The math_evaluate tool takes');
   });
 });
+
+// Vision-capable local models receive images via Ollama's images[] field (raw
+// base64), not the multimodal content-block array other providers use.
+describe('OllamaBackend.buildMessages image handling', () => {
+  const answer = [{ message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 }];
+
+  // Drive a plain completion and return the message the api chat call received.
+  async function sentMessage(content: unknown) {
+    const { backend, chat } = makeBackend(answer);
+    await backend.complete('moondream', [{ role: 'user', content } as any], { stream: false } as any, async () => {});
+    return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
+  }
+
+  it('maps an inline base64 image block to images[] and keeps text in content', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'What is this?' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+    ]);
+    expect(msg.content).toBe('What is this?');
+    expect(msg.images).toEqual(['AAA']);
+  });
+
+  it('strips the data: URL prefix from an image_url block', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'describe' },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBB' } },
+    ]);
+    expect(msg.content).toBe('describe');
+    expect(msg.images).toEqual(['BBB']);
+  });
+
+  it('drops a non-data image_url since Ollama needs inline base64', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'hi' },
+      { type: 'image_url', image_url: { url: 'https://example.com/cat.png' } },
+    ]);
+    expect(msg.content).toBe('hi');
+    expect(msg.images).toBeUndefined();
+  });
+});
