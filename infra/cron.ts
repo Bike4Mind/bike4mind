@@ -566,6 +566,30 @@ const attackSimulationCron = new sst.aws.Cron('attackSimulationCron', {
  * Schedule: hourly
  * Enabled: production + dev
  */
+const dataLakeBatchReconcileCron = new sst.aws.Cron('dataLakeBatchReconcile', {
+  schedule: 'cron(0 5 * * ? *)', // Daily at 5am UTC (after telemetry 3am / creditLot 4am)
+  function: {
+    vpc: lambdaVpc,
+    handler: 'apps/client/server/cron/dataLakeBatchReconcile.handler',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    link: [...allSecrets],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    logging: {
+      retention: '1 week',
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  enabled: ['production', 'dev'].includes($app.stage),
+});
+
 const agentExecutionAbandonedSweepCron = new sst.aws.Cron('agentExecutionAbandonedSweep', {
   schedule: 'rate(1 hour)',
   function: {
@@ -613,4 +637,5 @@ export {
   attackSimulationFunction,
   attackSimulationCron,
   agentExecutionAbandonedSweepCron,
+  dataLakeBatchReconcileCron,
 };

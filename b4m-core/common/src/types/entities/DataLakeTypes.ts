@@ -188,6 +188,13 @@ export type BatchCounterField = 'uploadedFiles' | 'chunkedFiles' | 'vectorizedFi
 export interface IDataLakeBatchRepository extends IBaseRepository<IDataLakeBatchDocument> {
   findActiveByUserId(userId: string): Promise<IDataLakeBatchDocument[]>;
   findActiveByDataLakeId(dataLakeId: string): Promise<IDataLakeBatchDocument[]>;
+  /**
+   * Global cross-user scan for the reconciler cron: non-terminal batches whose `updatedAt` is
+   * older than `cutoff`, oldest-first. `limit` caps a huge backlog per run so the cron stays
+   * inside its Lambda timeout; the sweep is idempotent so any residue is picked up next run.
+   * Served by the `{ status: 1, updatedAt: 1 }` index.
+   */
+  findStuck(cutoff: Date, limit?: number): Promise<IDataLakeBatchDocument[]>;
   updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void>;
   /**
    * Append manifest entries to a batch atomically ($push). Called as files are
