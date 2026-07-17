@@ -20,7 +20,7 @@ import { useCliStore } from '../store';
 import { logger } from '../utils/Logger';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
 import { extractCompactInstructions } from '../utils';
-import { injectHandoffMessage, formatHandoffOutput } from '../utils/handoff.js';
+import { injectHandoffMessage, injectWorkflowStateMessage, formatHandoffOutput } from '../utils/handoff.js';
 
 /**
  * Collaborators the lifecycle transitions need. React-free by design: stores and
@@ -172,12 +172,17 @@ export async function resumeSession(ctx: SessionLifecycleContext, selected: Sess
 
   ctx.checkpointStore?.setSessionId(loadedSession.id);
 
-  // injectHandoffMessage replaces any prior injected handoff to avoid stacking
-  // on repeated save/resume cycles.
+  // Surface prior-session continuity into the first-turn context. A handoff, when
+  // present, is the richer synthesis and wins; otherwise fall back to the raw
+  // persisted workflow state (issue #593) so open decisions/blockers aren't
+  // silently dropped when no handoff was generated. Both injectors strip any
+  // prior injected continuity message, so the two never stack across repeated
+  // save/resume cycles.
   const handoff = loadedSession.metadata.workflow?.handoff;
-  const sessionForState: Session = handoff
-    ? { ...loadedSession, messages: injectHandoffMessage(loadedSession.messages, handoff) }
-    : loadedSession;
+  const messagesForState = handoff
+    ? injectHandoffMessage(loadedSession.messages, handoff)
+    : injectWorkflowStateMessage(loadedSession.messages, loadedSession.metadata.workflow);
+  const sessionForState: Session = { ...loadedSession, messages: messagesForState };
 
   useCliStore.getState().setSession(sessionForState);
   useCliStore.getState().clearPendingMessages();
