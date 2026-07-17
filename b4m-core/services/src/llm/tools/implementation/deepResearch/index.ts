@@ -6,6 +6,17 @@ import { getFirecrawlConfig } from '../../../../apiKeyService';
 import { createFirecrawlApp } from '../webfetch/firecrawlApp';
 import { plainFetchScrape } from '../webfetch/plainFetch';
 import { resolveWebSearchProvider } from '../websearch';
+import { parseTolerantJson } from './parseJson';
+
+// Shape the planner prompt asks the model to return (inside an `analysis` envelope).
+interface AnalysisResult {
+  summary: string;
+  gaps: string[];
+  nextSteps: string[];
+  shouldContinue: boolean;
+  nextSearchTopic?: string;
+  urlToSearch?: string;
+}
 
 interface DeepResearchParams {
   topic: string;
@@ -319,8 +330,10 @@ export async function performDeepResearch(
 
       const result = await generateText(prompt);
       log(`🔬 Deep Research: Analysis result ${timeRemainingMinutes} minutes remaining`);
-      const parsed = JSON.parse(result);
-      return parsed.analysis;
+      // Local/smaller models often wrap the JSON in prose or ```json fences; tolerate that
+      // instead of throwing, which would count as a failed attempt and stall the research loop.
+      const parsed = parseTolerantJson<{ analysis?: AnalysisResult }>(result);
+      return parsed?.analysis ?? null;
     } catch (error) {
       log(`🔬 Deep Research: Error in analyzeAndPlan:`, error);
       return null;
