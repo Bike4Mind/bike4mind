@@ -4,7 +4,7 @@ import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { InviteType } from '@bike4mind/common';
 import { UnauthorizedError } from '@bike4mind/utils';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
-import { createMongoServer } from '../../../../../../../../packages/database/src/__test__/createMongoServer';
+import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import {
   Group,
   Organization,
