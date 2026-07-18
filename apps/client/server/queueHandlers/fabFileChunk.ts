@@ -155,10 +155,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
       // parser-unfriendly .docx). Flag it on the fabFile so it's visible/queryable
       // instead of silently completing. We still close the batch below so it
       // doesn't hang.
-      logger.log(`⚠️ fabFile ${fabFileId} produced 0 chunks — no extractable text`);
+      logger.log(`fabFile ${fabFileId} produced 0 chunks - no extractable text`);
       await FabFile.updateOne(
         { _id: fabFileId },
-        { $set: { notes: 'No extractable text — re-process or re-upload (e.g. image-only or unsupported content).' } }
+        { $set: { notes: 'No extractable text - re-process or re-upload (e.g. image-only or unsupported content).' } }
       ).catch(err => logger.error(`Failed to flag zero-chunk fabFile ${fabFileId}: ${err}`));
       // A zero-chunk file (empty / unparseable) produces no vectorize message, so it
       // would never reach a terminal batch counter and the batch would hang until the

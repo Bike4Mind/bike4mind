@@ -33,6 +33,7 @@ interface ScheduledTaskRegistration {
   name: string;
   intervalMs: number;
   fn: () => Promise<void>;
+  inFlight?: boolean;
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
@@ -106,12 +107,21 @@ export class SelfHostWorker {
   }
 
   private async runScheduledTask(task: ScheduledTaskRegistration): Promise<void> {
+    // Non-reentrant: setInterval fires on a fixed cadence regardless of run duration, so a run
+    // that outlasts its interval would otherwise overlap the next tick and double-enqueue work.
+    if (task.inFlight) {
+      this.logger.warn(`[selfHostWorker] scheduled task "${task.name}" still running; skipping this tick`);
+      return;
+    }
+    task.inFlight = true;
     try {
       await task.fn();
     } catch (err) {
       this.logger.error(`[selfHostWorker] scheduled task "${task.name}" failed`, {
         error: err instanceof Error ? err.message : String(err),
       });
+    } finally {
+      task.inFlight = false;
     }
   }
 

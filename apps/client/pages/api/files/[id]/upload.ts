@@ -10,8 +10,9 @@ import type { Request, Response } from 'express';
  *
  * In AWS the browser PUTs directly to S3 via a presigned URL. Self-host has no reachable S3:
  * the presign would target the internal MinIO host (unreachable from a browser and blocked by
- * CSP), so createFabFile hands the browser this same-origin route instead. It streams the body
- * to storage under the FabFile's own key, so the MinIO ObjectCreated webhook and the rest of the
+ * CSP), so createFabFile hands the browser this same-origin route instead. It reads the request
+ * body as a size-capped stream, buffers it, then writes it to storage under the FabFile's own key
+ * (the storage upload takes a Buffer), so the MinIO ObjectCreated webhook and the rest of the
  * ingestion pipeline fire exactly as the hosted presign path would.
  *
  * Auth is normal baseApi (the caller is the logged-in user / API key), so no capability token is

@@ -119,4 +119,27 @@ describe('SelfHostWorker', () => {
     expect(fn).toHaveBeenCalledTimes(2);
     worker.stop();
   });
+
+  it('does not start a scheduled task again while its previous run is still in flight', async () => {
+    vi.useFakeTimers();
+    const worker = new SelfHostWorker(mockLogger);
+    let resolveRun: (() => void) | undefined;
+    const fn = vi.fn(() => new Promise<void>(resolve => (resolveRun = resolve)));
+    worker.registerScheduledTask('scheduler', 60_000, fn);
+
+    worker.start();
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+    // A second tick fires while the first run is still pending -> skipped, not overlapped.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    // Once the first run finishes, a later tick runs the task again.
+    resolveRun?.();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(fn).toHaveBeenCalledTimes(2);
+    worker.stop();
+  });
 });
