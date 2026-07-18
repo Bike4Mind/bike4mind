@@ -6,7 +6,6 @@ import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { sendToQueue } from '@server/utils/sqs';
 import { sendToClient } from '@server/websocket/utils';
 import { Request } from 'express';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { Resource } from 'sst';
 
 const handler = baseApi().post(
@@ -27,7 +26,9 @@ const handler = baseApi().post(
       chunkStatus: 'ongoing',
     });
 
-    const queueUrl = getSourceQueueUrl('fabFileChunkQueue');
+    // Resource.fabFileChunkQueue.url resolves under both hosted (identical to the
+    // sourceQueueUrls Linkable, built from this .url) and the self-host shim.
+    const queueUrl = Resource.fabFileChunkQueue.url;
     if (!queueUrl) throw new Error('Chunk queue URL not found');
 
     const messageId = await sendToQueue(queueUrl, {

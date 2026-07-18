@@ -1,13 +1,17 @@
 import { IResearchTask, IResearchTaskJobs } from '@bike4mind/common';
 import { sendToQueue } from '@server/utils/sqs';
-import { getSourceQueueUrl } from '@server/utils/dlqRegistry';
 import { sendToClient } from '@server/websocket/utils';
 import { Resource } from 'sst';
+
+// Resource.researchEngineQueue.url (not getSourceQueueUrl): the hosted sourceQueueUrls
+// Linkable is populated from this same queue's .url, so hosted resolves identically, and
+// it also resolves under the self-host Resource shim (getSourceQueueUrl reads a record the
+// shim doesn't provide, and would throw). Keep in sync with the worker consumer.
 
 class ResearchTaskJobs implements IResearchTaskJobs {
   async process(id: string, userId: string): Promise<void> {
     try {
-      await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+      await sendToQueue(Resource.researchEngineQueue.url, {
         action: 'process',
         payload: {
           id,
@@ -21,7 +25,7 @@ class ResearchTaskJobs implements IResearchTaskJobs {
     }
   }
   async processDiscoveredLinks(id: string, userId: string): Promise<void> {
-    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+    await sendToQueue(Resource.researchEngineQueue.url, {
       action: 'processDiscoveredLinks',
       payload: {
         id,
@@ -31,7 +35,7 @@ class ResearchTaskJobs implements IResearchTaskJobs {
   }
 
   async downloadRelevantLinks(id: string, userId: string): Promise<void> {
-    await sendToQueue(getSourceQueueUrl('researchEngineQueue'), {
+    await sendToQueue(Resource.researchEngineQueue.url, {
       action: 'downloadRelevantLinks',
       payload: {
         id,

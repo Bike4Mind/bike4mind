@@ -104,4 +104,18 @@ describe('DEFAULT_MANIFEST — the self-host manifest contract', () => {
     // @ts-expect-error - not a real resource, must not typecheck nor resolve
     expect(() => Resource.totallyMadeUpResource.value).toThrow(/not registered/);
   });
+
+  test('the research + RAG queues resolve from env for the self-host enqueue path', () => {
+    // These are the queues the self-host worker consumes; the app enqueues to them via
+    // Resource.<queue>.url. getSourceQueueUrl would throw here (its sourceQueueUrls record
+    // is not in the shim), so the enqueue sites must use Resource directly.
+    const Resource = createResource({
+      RESEARCH_ENGINE_QUEUE: 'http://mq:9324/q/research',
+      FAB_FILE_CHUNK_QUEUE: 'http://mq:9324/q/chunk',
+      FAB_FILE_VECTORIZE_QUEUE: 'http://mq:9324/q/vectorize',
+    });
+    expect(Resource.researchEngineQueue.url).toBe('http://mq:9324/q/research');
+    expect(Resource.fabFileChunkQueue.url).toBe('http://mq:9324/q/chunk');
+    expect(Resource.fabFileVectorizeQueue.url).toBe('http://mq:9324/q/vectorize');
+  });
 });
