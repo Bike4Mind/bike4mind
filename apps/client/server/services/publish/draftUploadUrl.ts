@@ -33,19 +33,31 @@ const DraftUploadClaimsSchema = z.object({
 
 export type DraftUploadClaims = z.infer<typeof DraftUploadClaimsSchema>;
 
-export function signDraftUploadToken(claims: DraftUploadClaims): string {
+/** Sign a proxy-upload token. `expiresInSeconds` is threaded so the token TTL is
+ *  the single source of truth with the presigned-URL expiry / advertised
+ *  `expiresAt` (mintDraftUploadUrl passes the same value it uses everywhere). The
+ *  HS256 algorithm is pinned to foreclose alg-confusion on verify. */
+export function signDraftUploadToken(
+  claims: DraftUploadClaims,
+  expiresInSeconds: number = DRAFT_UPLOAD_EXPIRY_SECONDS
+): string {
   const payload = DraftUploadClaimsSchema.parse(claims);
   return jwt.sign(payload, Config.JWT_SECRET, {
+    algorithm: 'HS256',
     audience: DRAFT_UPLOAD_TOKEN_AUDIENCE,
-    expiresIn: DRAFT_UPLOAD_EXPIRY_SECONDS,
+    expiresIn: expiresInSeconds,
   });
 }
 
 /** Verify a proxy-upload token; returns the pinned claims or null (an invalid,
- *  expired, or wrong-audience token simply means the upload is rejected). */
+ *  expired, or wrong-audience token simply means the upload is rejected). The
+ *  accepted algorithm is pinned to HS256 (no alg confusion). */
 export function verifyDraftUploadToken(token: string): DraftUploadClaims | null {
   try {
-    const decoded = jwt.verify(token, Config.JWT_SECRET, { audience: DRAFT_UPLOAD_TOKEN_AUDIENCE });
+    const decoded = jwt.verify(token, Config.JWT_SECRET, {
+      algorithms: ['HS256'],
+      audience: DRAFT_UPLOAD_TOKEN_AUDIENCE,
+    });
     return DraftUploadClaimsSchema.parse(decoded);
   } catch {
     return null;
@@ -76,7 +88,7 @@ export interface MintDraftUploadUrlInput {
  */
 export async function mintDraftUploadUrl(input: MintDraftUploadUrlInput): Promise<string> {
   if (process.env.B4M_SELF_HOST === 'true') {
-    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path });
+    const token = signDraftUploadToken({ draftId: input.draftId, path: input.path }, input.expiresIn);
     const params = new URLSearchParams({ draftId: input.draftId, path: input.path, token });
     return `/api/publish/artifact/draft-upload?${params.toString()}`;
   }

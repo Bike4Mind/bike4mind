@@ -25,6 +25,10 @@ import { verifyDraftUploadToken } from '@server/services/publish';
  *  Content-Length guard; the streaming cap below still enforces the byte limit. */
 const UPLOAD_BODY_MARGIN_BYTES = 64 * 1024;
 
+/** Draft ids are uuid v4 (see upload-url.ts); keep this in sync with finalize.ts's
+ *  validation so the same namespace is enforced on both sides of the flow. */
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes + UPLOAD_BODY_MARGIN_BYTES }).put(
   async (req, res) => {
     if (process.env.B4M_SELF_HOST !== 'true') {
@@ -47,6 +51,11 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
     // traversal, no absolute/backslash paths, no control chars, and never the
     // reserved server-written draft manifest.
     const { draftId, path } = claims;
+    // Validate the draftId claim before interpolating it into the storage key
+    // (mirrors finalize.ts), so a malformed id can never widen the key namespace.
+    if (!UUID_V4.test(draftId)) {
+      return res.status(400).json({ error: 'Invalid draftId' });
+    }
     if (
       path.includes('..') ||
       path.startsWith('/') ||

@@ -34,6 +34,9 @@ vi.mock('@server/services/publish', () => ({
 
 import handler from '../draft-upload';
 
+/** A valid uuid v4, matching the draftId namespace the route now enforces. */
+const DRAFT_ID = '11111111-1111-4111-8111-111111111111';
+
 interface RunArgs {
   method?: string;
   query?: Record<string, string>;
@@ -89,8 +92,16 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
     expect(mocks.upload).not.toHaveBeenCalled();
   });
 
+  it('400s on a non-uuid draftId claim before touching storage', async () => {
+    mocks.verify.mockReturnValue({ draftId: 'not-a-uuid', path: 'index.html' });
+    const { res, promise } = run({ query: { token: 'good' } });
+    await promise;
+    expect(res._getStatusCode()).toBe(400);
+    expect(mocks.upload).not.toHaveBeenCalled();
+  });
+
   it('400s on a traversal path even with a valid token (defense in depth)', async () => {
-    mocks.verify.mockReturnValue({ draftId: 'd1', path: '../secret' });
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: '../secret' });
     const { res, promise } = run({ query: { token: 'good' } });
     await promise;
     expect(res._getStatusCode()).toBe(400);
@@ -98,7 +109,7 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
   });
 
   it('streams the body to storage under the pinned draft key on a valid token', async () => {
-    mocks.verify.mockReturnValue({ draftId: 'd1', path: 'index.html' });
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'index.html' });
     const { res, promise } = run({
       query: { token: 'good' },
       headers: { 'content-type': 'text/html; charset=utf-8' },
@@ -110,12 +121,12 @@ describe('PUT /api/publish/artifact/draft-upload', () => {
     const [buf, key, opts] = mocks.upload.mock.calls[0] as [Buffer, string, { ContentType?: string }];
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.toString('utf-8')).toBe('<!doctype html><h1>hi</h1>');
-    expect(key).toBe('drafts/d1/index.html');
+    expect(key).toBe(`drafts/${DRAFT_ID}/index.html`);
     expect(opts).toEqual({ ContentType: 'text/html' });
   });
 
   it('413s and skips storage when the body exceeds the per-file cap', async () => {
-    mocks.verify.mockReturnValue({ draftId: 'd1', path: 'big.bin' });
+    mocks.verify.mockReturnValue({ draftId: DRAFT_ID, path: 'big.bin' });
     const { res, promise } = run({
       query: { token: 'good' },
       body: Buffer.alloc(PUBLISH_LIMITS.maxFileBytes + 1),

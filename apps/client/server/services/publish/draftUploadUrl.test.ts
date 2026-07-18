@@ -43,6 +43,26 @@ describe('signDraftUploadToken / verifyDraftUploadToken', () => {
     });
     expect(verifyDraftUploadToken(wrongAud)).toBeNull();
   });
+
+  it('rejects an unsigned "alg: none" token (algorithm pinned to HS256)', () => {
+    const b64 = (o: object) => Buffer.from(JSON.stringify(o)).toString('base64url');
+    const noneToken = `${b64({ alg: 'none', typ: 'JWT' })}.${b64({
+      draftId: 'd1',
+      path: 'index.html',
+      aud: AUDIENCE,
+      exp: Math.floor(Date.now() / 1000) + DRAFT_UPLOAD_EXPIRY_SECONDS,
+    })}.`;
+    expect(verifyDraftUploadToken(noneToken)).toBeNull();
+  });
+
+  it('threads a custom TTL into the token, defaulting to DRAFT_UPLOAD_EXPIRY_SECONDS', () => {
+    const ttlOf = (token: string) => {
+      const decoded = jwt.decode(token) as { iat: number; exp: number };
+      return decoded.exp - decoded.iat;
+    };
+    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html' }))).toBe(DRAFT_UPLOAD_EXPIRY_SECONDS);
+    expect(ttlOf(signDraftUploadToken({ draftId: 'd1', path: 'index.html' }, 120))).toBe(120);
+  });
 });
 
 describe('mintDraftUploadUrl', () => {
@@ -87,5 +107,20 @@ describe('mintDraftUploadUrl', () => {
     expect(params.get('draftId')).toBe('d1');
     expect(params.get('path')).toBe('assets/app.js');
     expect(verifyDraftUploadToken(params.get('token') ?? '')).toEqual({ draftId: 'd1', path: 'assets/app.js' });
+  });
+
+  it('self-host: the proxy token TTL matches the expiresIn threaded through mint', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    const url = await mintDraftUploadUrl({
+      storage: makeStorage('unused'),
+      key: 'drafts/d1/index.html',
+      draftId: 'd1',
+      path: 'index.html',
+      mimeType: 'text/html',
+      expiresIn: 300,
+    });
+    const token = new URLSearchParams(url.split('?')[1]).get('token') ?? '';
+    const decoded = jwt.decode(token) as { iat: number; exp: number };
+    expect(decoded.exp - decoded.iat).toBe(300);
   });
 });
