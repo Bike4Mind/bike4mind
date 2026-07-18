@@ -125,6 +125,14 @@ describe('resolveDocOrigin (untrusted Host / X-Forwarded-Proto)', () => {
     expect(resolveDocOrigin('app.staging.bike4mind.com')).toBe('https://app.staging.bike4mind.com');
   });
 
+  it('rejects a bracketed IPv6 literal on hosted (IPv6 is a self-host-only origin)', () => {
+    // The format gate now admits IPv6 literals, but the hosted allowlist below it
+    // never matches one, so hosted still falls back to PUBLISH_HOST - unchanged.
+    expect(resolveDocOrigin('[::1]:3000')).toBe(`https://${PUBLISH_HOST}`);
+    // a bracket with an injection payload inside must still fail the format gate.
+    expect(resolveDocOrigin('[::1] ; script-src *')).toBe(`https://${PUBLISH_HOST}`);
+  });
+
   it('respects a valid X-Forwarded-Proto and ignores an invalid one', () => {
     expect(resolveDocOrigin('app.bike4mind.com', 'http')).toBe('http://app.bike4mind.com');
     expect(resolveDocOrigin('app.bike4mind.com', 'https')).toBe('https://app.bike4mind.com');
@@ -231,6 +239,16 @@ describe('self-host CSP (B4M_SELF_HOST=true, SERVER_DOMAIN unset -> PUBLISH_HOST
     const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
     expect(resolveDocOrigin('host.lan:3000')).toBe('http://host.lan:3000');
     expect(buildBundleScriptSrc('host.lan:3000')).toContain(`http://host.lan:3000${P0}`);
+  });
+
+  it('trusts a bracketed IPv6 literal Host and resolves it over http', async () => {
+    // Regression guard: the format gate must admit `[::1]:3000` (and other IPv6
+    // literals) BEFORE the self-host bypass, else it degrades to the localhost
+    // fallback and mints CSP tokens that don't match the actual document origin.
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('[::1]:3000')).toBe('http://[::1]:3000');
+    expect(resolveDocOrigin('[2001:db8::1]')).toBe('http://[2001:db8::1]');
+    expect(buildBundleScriptSrc('[::1]:3000')).toContain(`http://[::1]:3000${P0}`);
   });
 
   it('upgrades the scheme to https when a TLS reverse proxy sets X-Forwarded-Proto', async () => {

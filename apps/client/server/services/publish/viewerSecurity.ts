@@ -157,7 +157,14 @@ export function resolveDocOrigin(hostHeader?: string, forwardedProtoHeader?: str
  * (`evilexample.com`).
  */
 function isAllowedDocHost(host: string): boolean {
-  if (!/^[a-zA-Z0-9.-]+(:\d+)?$/.test(host)) return false;
+  // Accept a DNS/IPv4 name OR a bracketed IPv6 literal (e.g. `[::1]:3000`), each
+  // with an optional port. A self-host viewer reached over an IPv6 loopback/LAN
+  // literal must pass this gate BEFORE the self-host bypass below, or it degrades
+  // to the `localhost` fallback and mints CSP tokens that don't match its origin.
+  // Both shapes exclude spaces/quotes/semicolons, so a crafted Host still can't
+  // inject extra CSP directives.
+  const wellFormed = /^[a-zA-Z0-9.-]+(:\d+)?$/.test(host) || /^\[[0-9a-fA-F:.]+\](:\d+)?$/.test(host);
+  if (!wellFormed) return false;
   // Self-host serves the app + viewer from an operator-chosen origin (localhost,
   // a LAN/tailnet host, or a reverse-proxied domain) that SERVER_DOMAIN doesn't
   // enumerate. The format gate above already blocks CSP-directive injection, so

@@ -78,7 +78,7 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
       }
       chunks.push(buf);
     }
-    const body = Buffer.concat(chunks);
+    const body = Buffer.concat(chunks, total);
 
     const headerContentType = req.headers['content-type'];
     const contentType = typeof headerContentType === 'string' ? headerContentType.split(';')[0].trim() : undefined;
