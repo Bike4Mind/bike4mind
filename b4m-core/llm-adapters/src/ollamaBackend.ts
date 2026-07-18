@@ -391,17 +391,18 @@ export class OllamaBackend implements ICompletionBackend {
    * none match, the content is a normal answer.
    *
    * Guards against false positives: reasoning traces (<think>...</think>) are
-   * stripped first. When the model fences its output, only the fenced bodies are
-   * searched - this lets a call preceded by preamble prose ("Let me use the
-   * calculator: ```json {...}```") through while still ignoring JSON merely
-   * quoted in prose. With no fence, the reply must START with a JSON object, so
-   * "the math_evaluate tool takes {...}" is left alone.
+   * stripped first. The search source is a leading bare object (only when the
+   * reply STARTS with one) plus every fenced body - so a call wrapped in a fence
+   * after preamble prose is recovered, a bare call is not lost just because the
+   * reply also contains an unrelated fence, and JSON merely quoted mid-prose
+   * ("the math_evaluate tool takes {...}") is ignored. The seen-set dedupes any
+   * overlap between the two sources.
    */
   private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
     const fenced = this.extractFencedBlocks(withoutThink);
-    if (fenced.length === 0 && !withoutThink.startsWith('{')) return [];
-    const source = fenced.length > 0 ? fenced.join('\n') : withoutThink;
+    const source = [withoutThink.startsWith('{') ? withoutThink : '', ...fenced].join('\n');
+    if (!source.trim()) return [];
 
     const calls: NormalizedToolCall[] = [];
     const seen = new Set<string>();
@@ -574,8 +575,9 @@ export class OllamaBackend implements ICompletionBackend {
 
       if (Array.isArray(msg.content)) {
         // Ollama has no multimodal content-block array: text goes in `content`
-        // and images in `images` as RAW base64 (no data: prefix). Non-image
-        // blocks (tool_use/tool_result) are handled via tool_calls/tool_name below.
+        // and images in `images` as RAW base64 (no data: prefix). Only text/image
+        // blocks reach here - convertMessagesToOpenAIFormat already flattened any
+        // tool_use/tool_result blocks into tool_calls/tool_name above.
         const texts: string[] = [];
         const images: string[] = [];
         for (const block of msg.content as MessageContentObject[]) {
@@ -584,7 +586,7 @@ export class OllamaBackend implements ICompletionBackend {
           } else if (block.type === 'image' && block.source.type === 'base64') {
             images.push(block.source.data);
           } else if (block.type === 'image_url') {
-            const dataUrl = block.image_url.url.match(/^data:[^;]+;base64,(.+)$/s);
+            const dataUrl = block.image_url.url.match(/^data:[^,]*;base64,(.+)$/s);
             if (dataUrl) {
               images.push(dataUrl[1]);
             } else {

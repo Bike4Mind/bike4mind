@@ -121,6 +121,30 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
   });
 
+  it('recovers a leading bare tool call even when the reply also contains an unrelated fence', async () => {
+    const toolFn = vi.fn(async () => '4');
+    const { backend, chat } = makeBackend([
+      {
+        // Bare call first, then a fenced example block. The fence must not become
+        // the ONLY search source, or the real leading call would be dropped.
+        message: {
+          content: '{"name":"math_evaluate","arguments":{"expression":"2+2"}}\n```\nexample output\n```',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 10,
+      },
+      { message: { content: 'The answer is 4.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 4 },
+    ]);
+
+    const { text, toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolFn).toHaveBeenCalledWith({ expression: '2+2' });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(text).toContain('The answer is 4.');
+    expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
+  });
+
   it('recovers multiple content tool calls run together and skips unknown tools', async () => {
     const toolFn = vi.fn(async () => '1554453600');
     const { backend, chat } = makeBackend([
@@ -327,5 +351,13 @@ describe('OllamaBackend.buildMessages image handling', () => {
     ]);
     expect(msg.content).toBe('hi');
     expect(msg.images).toBeUndefined();
+  });
+
+  it('strips the prefix from a parameterized data: URL (e.g. charset)', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'x' },
+      { type: 'image_url', image_url: { url: 'data:image/png;charset=utf-8;base64,CCC' } },
+    ]);
+    expect(msg.images).toEqual(['CCC']);
   });
 });
