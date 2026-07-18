@@ -63,6 +63,11 @@ vi.mock('@server/utils/userRateTier', () => ({
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
+  // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
+  resolveDefaultChatModel: async ({ configuredModel }: { configuredModel?: string | null }) => ({
+    model: configuredModel || 'test-default-model',
+  }),
+  isChatModelUsable: () => true,
 }));
 
 // Only the data dependencies of the real apiKeyAuth middleware and the chat
