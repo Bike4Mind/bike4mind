@@ -36,6 +36,10 @@ RUN pnpm turbo:build
 # Build the Next.js client in standalone mode; B4M_SELF_HOST (base ENV) turns on
 # both the sst→shim turbopack alias and `output: 'standalone'`.
 RUN NODE_OPTIONS='--max-old-space-size=12288' pnpm --filter @bike4mind/client build
+# Strip compiled test routes: pages/__tests__ files build into routable entries
+# and the standalone server preloads them at boot, running test-only module
+# side effects in production (see the script header for the S3 stub failure).
+RUN node apps/client/scripts/pruneTestRoutes.mjs apps/client/.next/standalone/apps/client/.next
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
