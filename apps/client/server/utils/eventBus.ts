@@ -187,6 +187,15 @@ export const LLMEvents = {
       userId: z.string(),
       prompt: z.string(),
       model: z.string(),
+      // Which memory pipelines should capture this turn. Resolved by the publisher, which is the only
+      // place that knows both the user's opt-ins AND the admin override, and carried here so the
+      // subscriber does not have to re-derive them (and cannot derive them differently).
+      //
+      // Optional for in-flight compatibility: an event published before this field existed can only
+      // have come from the V1-gated publisher, so the subscriber reads a missing `enableMementos` as
+      // true. See createMemento.
+      enableMementos: z.boolean().optional(),
+      enableMementosV2: z.boolean().optional(),
     })
   ),
 };

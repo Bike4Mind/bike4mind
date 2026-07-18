@@ -47,6 +47,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
@@ -140,15 +141,26 @@ const getStaticOptions = () => {
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId: string, sessionId: string, userId: string, prompt: string, model: string) => {
+    invokeCreateMemento: async (
+      questId: string,
+      sessionId: string,
+      userId: string,
+      prompt: string,
+      model: string,
+      flags: { enableMementos: boolean; enableMementosV2: boolean }
+    ) => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,

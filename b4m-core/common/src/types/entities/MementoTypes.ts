@@ -26,6 +26,8 @@ export interface IMemento {
   summary: string;
   fullContent: string;
   embedding?: number[];
+  /** The embedding model that produced `embedding`. Absent on mementos written before it was recorded. */
+  embeddingModel?: string;
   metadata?: Record<string, unknown>;
   lastAccessedAt: Date;
   isArchived: boolean;
@@ -47,4 +49,11 @@ export interface IMementoRepository extends IBaseRepository<IMementoDocument> {
       select?: string;
     }
   ): Promise<IMementoDocument[]>;
+  /**
+   * Hard-delete every memento belonging to a user. This is the "delete my data" path: a memento
+   * holds the summary, the full original prompt and a plaintext embedding, none of which is
+   * encrypted, so it cannot be crypto-shredded like a ledger fact - it has to actually go.
+   * Returns the number deleted.
+   */
+  deleteAllByUserId(userId: string): Promise<number>;
 }
