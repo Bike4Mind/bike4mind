@@ -377,24 +377,35 @@ services:
       IMAGE_GEN_PULL_MODELS: ${IMAGE_GEN_PULL_MODELS:-https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors}
     volumes:
       - imagegen-models:/mnt/models
+    # Literal block scalar (|), not folded (>): the script has inline `# ...`
+    # shell comments, and folding would join them onto the following code line
+    # so the comment swallows real statements. `|` keeps every line intact.
     entrypoint:
       - /bin/sh
       - -c
-      - >
-        set -e;
-        mkdir -p /mnt/models/Stable-diffusion;
-        echo "Pulling: $$IMAGE_GEN_PULL_MODELS";
+      - |
+        set -e
+        mkdir -p /mnt/models/Stable-diffusion
+        echo "Pulling: $$IMAGE_GEN_PULL_MODELS"
         for url in $$IMAGE_GEN_PULL_MODELS; do
-          name=$$(basename "$${url%%\?*}");
-          dest="/mnt/models/Stable-diffusion/$$name";
+          name=$$(basename "$${url%%\?*}")
+          dest="/mnt/models/Stable-diffusion/$$name"
           if [ -f "$$dest" ]; then
-            echo "==> $$name already present, skipping";
+            echo "==> $$name already present, skipping"
           else
             # Download to a .part file and rename only on success, so an
             # interrupted pull never leaves a corrupt file the guard above skips.
-            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest.part" "$$url" && mv "$$dest.part" "$$dest" || { echo "WARN: failed to download $$url"; rm -f "$$dest.part"; };
-          fi;
-        done;
+            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest.part" "$$url" && mv "$$dest.part" "$$dest" || { echo "WARN: failed to download $$url"; rm -f "$$dest.part"; }
+          fi
+        done
+        # SD.Next scanned the (empty) models dir at boot, before the download finished,
+        # so poke it to rescan - otherwise /sdapi/v1/sd-models stays [] until a manual
+        # refresh and the checkpoint never reaches the picker. Best-effort with a short
+        # retry in case the server is still warming.
+        echo "Refreshing SD.Next checkpoint list..."
+        for i in 1 2 3 4 5; do
+          curl -fsS -X POST http://imagegen:7860/sdapi/v1/refresh-checkpoints && break || sleep 3
+        done || true
         echo "Done. Pulled checkpoints are now available in the app model picker."
     restart: 'no'
 
