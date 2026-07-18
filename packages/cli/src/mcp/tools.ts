@@ -58,6 +58,7 @@ export const TOOL_NAMES = TOOL_META.map(t => t.name);
 const listNotebooksShape = {
   search: z.string().optional().describe('Filter notebooks by name/content'),
   limit: z.number().int().min(1).max(100).default(25).describe('Maximum notebooks to return'),
+  page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
 };
 
 const getNotebookShape = {
@@ -84,6 +85,7 @@ const searchKnowledgeBaseShape = {
 const listFilesShape = {
   search: z.string().optional().describe('Filter files by name/content'),
   limit: z.number().int().min(1).max(100).default(25).describe('Maximum files to return'),
+  page: z.number().int().min(1).default(1).describe('1-based page number; request the next page when hasMore is true'),
 };
 
 const getFileShape = {
@@ -100,7 +102,7 @@ function notebookSummary(n: RawNotebook) {
   };
 }
 
-export async function listNotebooks(client: B4mApiClient, args: { search?: string; limit: number }) {
+export async function listNotebooks(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
   const { data, hasMore } = await client.listNotebooks(args);
   return { notebooks: data.map(notebookSummary), hasMore };
 }
@@ -149,7 +151,7 @@ export async function searchKnowledgeBase(
   return { results };
 }
 
-export async function listFiles(client: B4mApiClient, args: { search?: string; limit: number }) {
+export async function listFiles(client: B4mApiClient, args: { search?: string; limit: number; page?: number }) {
   const { data, hasMore } = await client.listFiles(args);
   return { files: data, hasMore };
 }

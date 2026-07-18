@@ -40,6 +40,16 @@ describe('B4mApiClient', () => {
     expect(result).toEqual({ data: [{ id: 'n1' }], hasMore: true });
   });
 
+  it('threads an explicit page through session pagination so hasMore is reachable', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'n3' }], hasMore: false });
+
+    await client.listNotebooks({ limit: 10, page: 2 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/sessions', {
+      params: { pagination: { page: 2, limit: 10 } },
+    });
+  });
+
   it('normalizes a bare-array session response to { data, hasMore:false }', async () => {
     mockGet.mockResolvedValue([{ id: 'n1' }, { id: 'n2' }]);
 
@@ -96,6 +106,16 @@ describe('B4mApiClient', () => {
     });
   });
 
+  it('threads an explicit page through file pagination so hasMore is reachable', async () => {
+    mockGet.mockResolvedValue({ data: [{ id: 'f2' }], hasMore: false });
+
+    await client.listFiles({ search: 'doc', limit: 25, page: 3 });
+
+    expect(mockGet).toHaveBeenCalledWith('/api/files/search', {
+      params: { search: 'doc', pagination: { page: 3, limit: 25 } },
+    });
+  });
+
   it('gets a file by id', async () => {
     mockGet.mockResolvedValue({ id: 'f1' });
     await client.getFile('f1');
@@ -148,6 +168,18 @@ describe('mapApiError', () => {
   it('omits the retry hint when retry-after is unparseable', () => {
     const msg = mapApiError(axiosError(429, { headers: { 'retry-after': 'soon' } }), 'http://x');
     expect(msg).toBe('rate limit exceeded');
+  });
+
+  it('maps an axios request timeout (ECONNABORTED) to a friendly timed-out message', () => {
+    expect(mapApiError(axiosError(0, { code: 'ECONNABORTED' }), 'http://localhost:3000')).toBe(
+      'request to Bike4Mind at http://localhost:3000 timed out'
+    );
+  });
+
+  it('maps a connect timeout (ETIMEDOUT) to the same timed-out message', () => {
+    expect(mapApiError(axiosError(0, { code: 'ETIMEDOUT' }), 'http://localhost:3000')).toBe(
+      'request to Bike4Mind at http://localhost:3000 timed out'
+    );
   });
 
   it('maps ECONNREFUSED to an unreachable-endpoint message with the base URL', () => {

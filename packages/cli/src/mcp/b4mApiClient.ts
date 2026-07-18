@@ -85,11 +85,15 @@ export class B4mApiClient {
     return { data: result.data ?? [], hasMore: result.hasMore ?? false };
   }
 
-  async listNotebooks(args: { search?: string; limit: number }): Promise<{ data: RawNotebook[]; hasMore: boolean }> {
+  async listNotebooks(args: {
+    search?: string;
+    limit: number;
+    page?: number;
+  }): Promise<{ data: RawNotebook[]; hasMore: boolean }> {
     const result = await this.client.get<RawNotebook[] | ListEnvelope<RawNotebook>>('/api/sessions', {
       params: {
         ...(args.search ? { search: args.search } : {}),
-        pagination: { page: 1, limit: args.limit },
+        pagination: { page: args.page ?? 1, limit: args.limit },
       },
     });
     return this.toList(result);
@@ -128,11 +132,15 @@ export class B4mApiClient {
     return result.scores ?? [];
   }
 
-  async listFiles(args: { search?: string; limit: number }): Promise<{ data: RawFile[]; hasMore: boolean }> {
+  async listFiles(args: {
+    search?: string;
+    limit: number;
+    page?: number;
+  }): Promise<{ data: RawFile[]; hasMore: boolean }> {
     const result = await this.client.get<RawFile[] | ListEnvelope<RawFile>>('/api/files/search', {
       params: {
         ...(args.search ? { search: args.search } : {}),
-        pagination: { page: 1, limit: args.limit },
+        pagination: { page: args.page ?? 1, limit: args.limit },
       },
     });
     return this.toList(result);
@@ -165,6 +173,11 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       const serverMsg = extractServerMessage(error.response?.data);
       const base = serverMsg || 'rate limit exceeded';
       return retryAfterSeconds !== undefined ? `${base} (retry after ${retryAfterSeconds}s)` : base;
+    }
+    // A request timeout (axios aborts with ECONNABORTED; a connect timeout is ETIMEDOUT)
+    // carries no response, so map it before the response-body fallbacks below.
+    if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT' || /timeout/i.test(error.message)) {
+      return `request to Bike4Mind at ${baseURL} timed out`;
     }
     if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
       return `cannot reach Bike4Mind at ${baseURL}`;

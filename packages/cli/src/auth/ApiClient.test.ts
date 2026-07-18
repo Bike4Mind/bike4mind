@@ -20,7 +20,7 @@ vi.mock('./OAuthClient', () => ({
   },
 }));
 
-import { ApiClient } from './ApiClient';
+import { ApiClient, DEFAULT_API_TIMEOUT_MS } from './ApiClient';
 
 const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
   new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
@@ -157,6 +157,23 @@ describe('ApiClient API key auth', () => {
 
     await expect(client.get('/api/sessions')).rejects.toBeInstanceOf(AxiosError);
     expect(mockRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('applies the generous default request timeout so a hung backend cannot wedge a caller forever', () => {
+    const client = new ApiClient('http://localhost:3000');
+    expect(client.getAxiosInstance().defaults.timeout).toBe(DEFAULT_API_TIMEOUT_MS);
+  });
+
+  it('honors a B4M_API_TIMEOUT_MS override', () => {
+    const prev = process.env.B4M_API_TIMEOUT_MS;
+    process.env.B4M_API_TIMEOUT_MS = '1234';
+    try {
+      const client = new ApiClient('http://localhost:3000');
+      expect(client.getAxiosInstance().defaults.timeout).toBe(1234);
+    } finally {
+      if (prev === undefined) delete process.env.B4M_API_TIMEOUT_MS;
+      else process.env.B4M_API_TIMEOUT_MS = prev;
+    }
   });
 
   it('still injects a Bearer token when no API key is set (unchanged JWT path)', async () => {

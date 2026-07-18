@@ -113,6 +113,9 @@ async function handleHttpRequest(
     enableJsonResponse: true,
     enableDnsRebindingProtection: true,
     allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`],
+    // Reject cross-origin browser posts as well as spoofed Host headers - defense in
+    // depth per the MCP streamable-HTTP guidance, since we bind loopback only.
+    allowedOrigins: [`http://127.0.0.1:${port}`, `http://localhost:${port}`],
   });
 
   // Release the per-request server/transport once the response is done. 'finish'
@@ -164,8 +167,13 @@ async function serveHttp(buildOptions: BuildServerOptions, port: number): Promis
   // stderr, not stdout: keep parity with stdio mode and any log-scraping wrapper.
   process.stderr.write(`Bike4Mind MCP server listening on http://127.0.0.1:${port}${HTTP_PATH}\n`);
 
-  // Run until the process is killed.
-  await new Promise<void>(() => {});
+  // Run until a termination signal, then stop accepting connections and let in-flight
+  // requests drain so the process exits cleanly instead of being hard-killed.
+  await new Promise<void>(resolve => {
+    const shutdown = () => httpServer.close(() => resolve());
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
+  });
 }
 
 export async function handleMcpServeCommand(options: ServeOptions): Promise<void> {

@@ -7,6 +7,21 @@ import packageJson from '../../package.json';
 const USER_AGENT = `b4m-cli/${packageJson.version}`;
 
 /**
+ * Per-request timeout. Generous by design: a waited chat (POST /api/chat with wait:true)
+ * runs a full server-side quest, so the bound only exists to stop a hung backend from
+ * wedging a caller forever, not to cap a normal long quest. Override with B4M_API_TIMEOUT_MS
+ * (0 disables the timeout entirely).
+ */
+export const DEFAULT_API_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+function resolveTimeoutMs(): number {
+  const raw = process.env.B4M_API_TIMEOUT_MS;
+  if (raw === undefined || raw.trim() === '') return DEFAULT_API_TIMEOUT_MS;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_API_TIMEOUT_MS;
+}
+
+/**
  * Thrown by the response interceptor only when the session is DEFINITIVELY revoked - the
  * refresh token was rejected (400/401 invalid_grant), or a request still 401s after a
  * successful refresh. A transient refresh outage (5xx / network / timeout) throws a plain
@@ -44,6 +59,7 @@ export class ApiClient {
 
     this.client = axios.create({
       baseURL,
+      timeout: resolveTimeoutMs(),
       headers: {
         'Content-Type': 'application/json',
         'User-Agent': USER_AGENT,

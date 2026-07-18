@@ -3,7 +3,15 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { B4mApiClient } from './b4mApiClient';
-import { TOOL_NAMES, registerTools, listNotebooks, createNotebook, sendMessage, searchKnowledgeBase } from './tools';
+import {
+  TOOL_NAMES,
+  registerTools,
+  listNotebooks,
+  listFiles,
+  createNotebook,
+  sendMessage,
+  searchKnowledgeBase,
+} from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -37,6 +45,24 @@ describe('tool handlers', () => {
       notebooks: [{ id: 'n1', name: 'NB', model: 'gpt', createdAt: 'c', updatedAt: 'u' }],
       hasMore: false,
     });
+  });
+
+  it('list_notebooks forwards the requested page so a client can page past hasMore', async () => {
+    const list = vi.fn().mockResolvedValue({ data: [], hasMore: false });
+    const client = mockClient({ listNotebooks: list });
+
+    await listNotebooks(client, { limit: 25, page: 2 });
+
+    expect(list).toHaveBeenCalledWith({ limit: 25, page: 2 });
+  });
+
+  it('list_files forwards the requested page so a client can page past hasMore', async () => {
+    const list = vi.fn().mockResolvedValue({ data: [], hasMore: false });
+    const client = mockClient({ listFiles: list });
+
+    await listFiles(client, { limit: 25, page: 3 });
+
+    expect(list).toHaveBeenCalledWith({ limit: 25, page: 3 });
   });
 
   it('create_notebook defaults the name to "New Notebook" when omitted', async () => {
