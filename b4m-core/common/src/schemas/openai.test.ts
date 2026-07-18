@@ -61,4 +61,9 @@ describe('OpenAIImageGenerationInput local-image model ids', () => {
     expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image' })).toThrow();
     expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'totally-made-up' })).toThrow();
   });
+
+  it('rejects a whitespace-only suffix (no non-whitespace checkpoint name)', () => {
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/   ' })).toThrow();
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/ ' })).toThrow();
+  });
 });

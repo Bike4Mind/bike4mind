@@ -317,10 +317,18 @@ export const imageGenerationTool: ToolDefinition = {
         // by IMAGE_GEN_BASE_URL. The env var is honored ONLY under B4M_SELF_HOST
         // (mirrors the getAvailableModels enumeration gate) so a hosted deploy
         // that happens to set it can't dispatch free local generations.
-        // requireApiKey doubles as the env presence guard.
         const selfHostBaseUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
-        const baseUrl = requireApiKey(selfHostBaseUrl, 'Local image generation', context.logger);
-        const service = new LocalImageService(baseUrl, context.logger);
+        if (!selfHostBaseUrl) {
+          // This is a base URL, not an API key, so guard/log it explicitly here
+          // instead of via requireApiKey (whose log line says "API key is not
+          // configured"); keep the user-facing message identical so tool
+          // observations stay uniform across providers.
+          context.logger.error(
+            '[image_generation] Local image generation base URL (IMAGE_GEN_BASE_URL) is not configured under B4M_SELF_HOST; refusing to dispatch'
+          );
+          throw new Error('Image generation is currently unavailable. Please try again later.');
+        }
+        const service = new LocalImageService(selfHostBaseUrl, context.logger);
 
         // The local backend takes discrete width/height; derive them from the
         // size string (e.g. '512x512') when explicit dimensions aren't set.

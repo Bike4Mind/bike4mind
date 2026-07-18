@@ -61,7 +61,9 @@ export async function moderateImageOrThrow(params: ModerateImageOrThrowParams): 
   const { service, enabled, incidents, buffer, mimeType, incidentMeta, logger } = params;
 
   if (process.env.B4M_SELF_HOST === 'true') {
-    logger.info('[ImageModeration] self-host: Rekognition-based moderation skipped (no AWS Rekognition in self-host).');
+    logger.debug(
+      '[ImageModeration] self-host: Rekognition-based moderation skipped (no AWS Rekognition in self-host).'
+    );
     return;
   }
 

@@ -127,8 +127,10 @@ export const OpenAIImageGenerationInput = z.object({
     // from the local backend), so accept them via a pattern - same approach as
     // ImageSizeSchema above. The suffix allows spaces and forward slashes because
     // A1111/SD.Next checkpoint names can contain both (e.g. "Deliberate v2",
-    // "anime/foo.safetensors"); the `local-image/` prefix stays anchored.
-    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/[\w.:/ -]+$/)])
+    // "anime/foo.safetensors"); the `local-image/` prefix stays anchored. The
+    // leading (?=.*\S) lookahead requires at least one non-whitespace character
+    // so an all-blank suffix (e.g. "local-image/   ") is rejected.
+    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/)])
   ),
   n: z.number().min(1).max(10).optional(),
   quality: OpenAIImageQualitySchema.optional(),
