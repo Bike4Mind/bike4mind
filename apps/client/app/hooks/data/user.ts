@@ -540,17 +540,13 @@ export function useReturnTokenValidation() {
 }
 
 export function useGetOrganizationUsers(organizationId: string | null | undefined) {
-  const queryClient = useQueryClient();
-
   return useQuery({
     queryKey: ['users', 'organization', organizationId],
     queryFn: async () => {
+      // Do NOT seed ['users', id] from this response: the members endpoint returns the
+      // minimal same-org shape (toSafeUsers), so seeding would shrink the full-profile
+      // cache useGetUser reads and leave it stale for the query's staleTime.
       const { data } = await api.get<IUserDocument[]>(`/api/organizations/${organizationId}/members`);
-
-      data.forEach(user => {
-        queryClient.setQueryData(['users', user.id], user);
-      });
-
       return data;
     },
     enabled: !!organizationId,

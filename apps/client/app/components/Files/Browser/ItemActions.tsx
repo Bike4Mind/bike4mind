@@ -55,7 +55,7 @@ import KnowledgeChunkControls from '../../Knowledge/KnowledgeChunkControls';
 import { useKnowledgeModal } from '../../Knowledge/KnowledgeModal';
 import { useShallow } from 'zustand/react/shallow';
 import { ProjectAddToModal } from '../../Project/ProjectAddToModal';
-import { useFileBrowser } from '../Browser';
+import { useFileBrowserInstance } from './instanceContext';
 import { useUser } from '@client/app/contexts/UserContext';
 
 const FileBrowserItemActions: FC<{
@@ -72,7 +72,7 @@ const FileBrowserItemActions: FC<{
   const deleteFile = useDeleteFile();
   const confirm = useConfirmation();
   const { mutateAsync: getPresignedUrl } = useGetPresignedUrl();
-  const setFileToShare = useFileBrowser(s => s.setFileToShare);
+  const { setFileToShare, config } = useFileBrowserInstance();
   const autoRename = useAutoRenameFabFile();
   const applyAutoRename = useApplyAutoRenameFabFile();
   const { currentUser } = useUser();
@@ -322,7 +322,21 @@ const FileBrowserItemActions: FC<{
           <MenuItem
             onClick={(e: MouseEvent) => {
               e.stopPropagation();
-              if (isSharedToMe) {
+              // Embedded pickers override delete to remove-from-list (for owned AND shared
+              // files) so the picker never destroys a file or drops a share; matches the
+              // bulk delete path in Content.
+              if (config.onDelete) {
+                const onDelete = config.onDelete;
+                confirm({
+                  title: `Remove ${file.fileName || 'file'}`,
+                  description: 'Remove this file from the list? The file itself is not deleted.',
+                  type: 'warning',
+                  okLabel: 'Remove',
+                  onOk: async () => {
+                    onDelete([file.id]);
+                  },
+                });
+              } else if (isSharedToMe) {
                 confirm({
                   title: `Remove ${file.fileName || 'file'}`,
                   description:
@@ -346,11 +360,17 @@ const FileBrowserItemActions: FC<{
               }
             }}
             disabled={deleteFile.isPending}
-            color={isSharedToMe ? 'warning' : 'danger'}
+            color={config.onDelete || isSharedToMe ? 'warning' : 'danger'}
             sx={{ py: 1, mb: 0.125 }}
           >
-            {deleteFile.isPending ? <CircularProgress size="sm" /> : isSharedToMe ? <LinkOffIcon /> : <DeleteOutline />}
-            {isSharedToMe ? 'Remove from my files' : 'Delete'}
+            {deleteFile.isPending ? (
+              <CircularProgress size="sm" />
+            ) : config.onDelete || isSharedToMe ? (
+              <LinkOffIcon />
+            ) : (
+              <DeleteOutline />
+            )}
+            {config.onDelete ? 'Remove from list' : isSharedToMe ? 'Remove from my files' : 'Delete'}
           </MenuItem>
         </Menu>
       </Dropdown>

@@ -1,7 +1,7 @@
 /**
  * DLQ Health Monitoring - Alarms and Dashboard
  *
- * Unified monitoring for all 27 Dead Letter Queues across the application.
+ * Unified monitoring for all 28 Dead Letter Queues across the application.
  * Uses a single shared SNS topic for all DLQ alarm notifications.
  *
  * Default alarm thresholds (per-queue overrides available via DlqDescriptor):
@@ -31,6 +31,7 @@ import {
   webhookDeliveryQueueDLQ,
   slackExportQueueDLQ,
   questExportQueueDLQ,
+  dataLakeCleanupQueueDLQ,
   videoGenerationDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
@@ -42,26 +43,18 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
 } from './queues';
+import { telemetryAlertRuleDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
 import { emailBatchQueueDLQ, emailJobQueueDLQ } from './emailMarketing';
-import { isMonitoredStage as _isMonitoredStage } from '@bike4mind/infra';
+import { isMonitoredStage as _isMonitoredStage, buildDlqAlarmSpecs } from '@bike4mind/infra';
 import type { DlqDescriptor } from '@bike4mind/infra';
-
-const DEFAULTS = {
-  messageThreshold: 0,
-  messageEvalPeriods: 3, // Sustained: must breach 3 consecutive 60s periods (3 min)
-  messagePeriod: 60,
-  ageThreshold: 3600,
-  ageEvalPeriods: 1, // Age alarms keep eval=1 (already delayed by 1hr threshold)
-  agePeriod: 300,
-} as const;
 
 const MONITORED_STAGES = ['dev', 'production'] as const;
 const isMonitoredStage = _isMonitoredStage($app.stage, MONITORED_STAGES, process.env.ENABLE_MONITORING);
 
 /**
  * Shared SNS topic for all DLQ alarm notifications.
- * Subscribe once to receive alerts from all 27 DLQs.
+ * Subscribe once to receive alerts from all 28 DLQs.
  */
 export const dlqAlarmTopic = isMonitoredStage ? new sst.aws.SnsTopic('DlqAlarmTopic') : undefined;
 
@@ -220,6 +213,13 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     queue: questExportQueueDLQ,
   },
   {
+    label: 'data-lake-cleanup',
+    displayName: 'Data Lake Cleanup',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeCleanupQueue',
+    queue: dataLakeCleanupQueueDLQ,
+  },
+  {
     label: 'video-generation',
     displayName: 'Video Generation',
     application: 'VideoGeneration',
@@ -337,55 +337,16 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
  * `sourceQueue` is omitted: this function only alarms on the DLQ itself and never needs it.
  */
 function createDlqAlarms(dlq: Omit<InfraDlqDescriptor, 'sourceQueue'>) {
-  /**
-   * Message count alarm: fires when messages appear in the DLQ (metric > 0).
-   * Must breach for 3 consecutive 60s periods before triggering.
-   */
-  new aws.cloudwatch.MetricAlarm(`dlq-${dlq.label}-messages`, {
-    name: `${$app.name}-${$app.stage}-dlq-${dlq.label}-messages`,
-    alarmDescription: `${dlq.displayName} DLQ has messages - processing failures detected`,
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: dlq.messageEvalPeriods ?? DEFAULTS.messageEvalPeriods,
-    metricName: 'ApproximateNumberOfMessagesVisible',
-    namespace: 'AWS/SQS',
-    period: DEFAULTS.messagePeriod,
-    statistic: 'Maximum',
-    threshold: dlq.messageThreshold ?? DEFAULTS.messageThreshold,
-    treatMissingData: 'notBreaching',
-    dimensions: { QueueName: dlq.queue.nodes.queue.name },
-    alarmActions: [dlqAlarmTopic!.arn],
-    okActions: [dlqAlarmTopic!.arn],
-    tags: {
-      Application: dlq.application,
-      Severity: 'Critical',
-      MonitoringType: 'DLQ',
-    },
-  });
-
-  /**
-   * Message age alarm: triggers when oldest message exceeds 1 hour.
-   * Checked every 5 minutes - detects stuck messages requiring intervention.
-   */
-  new aws.cloudwatch.MetricAlarm(`dlq-${dlq.label}-age`, {
-    name: `${$app.name}-${$app.stage}-dlq-${dlq.label}-age`,
-    alarmDescription: `${dlq.displayName} DLQ has message stuck for >1 hour`,
-    comparisonOperator: 'GreaterThanThreshold',
-    evaluationPeriods: DEFAULTS.ageEvalPeriods,
-    metricName: 'ApproximateAgeOfOldestMessage',
-    namespace: 'AWS/SQS',
-    period: DEFAULTS.agePeriod,
-    statistic: 'Maximum',
-    threshold: dlq.ageThreshold ?? DEFAULTS.ageThreshold,
-    treatMissingData: 'notBreaching',
-    dimensions: { QueueName: dlq.queue.nodes.queue.name },
-    alarmActions: [dlqAlarmTopic!.arn],
-    okActions: [dlqAlarmTopic!.arn],
-    tags: {
-      Application: dlq.application,
-      Severity: 'High',
-      MonitoringType: 'DLQ',
-    },
-  });
+  // Alarm names, thresholds, and tags come from the shared spec builder; only the
+  // resource-bound pieces (queue dimensions, SNS actions) are wired here.
+  for (const spec of buildDlqAlarmSpecs(dlq, { appName: $app.name, stage: $app.stage })) {
+    new aws.cloudwatch.MetricAlarm(spec.resourceName, {
+      ...spec.args,
+      dimensions: { QueueName: dlq.queue.nodes.queue.name },
+      alarmActions: [dlqAlarmTopic!.arn],
+      okActions: [dlqAlarmTopic!.arn],
+    });
+  }
 }
 
 if (isMonitoredStage) {
@@ -408,6 +369,17 @@ if (isMonitoredStage) {
     displayName: 'FabFile Moderation',
     application: 'FabFileProcessing',
     queue: fabFileModerationDLQ,
+  });
+
+  // Telemetry Alert rule DLQ - alarm-only for the same reason as fabFileModerationDLQ:
+  // it backs the EventBridge telemetry-alert rule target (see infra/eventBus.ts), not an
+  // sst.aws.Queue `.subscribe()` consumer, so there is no source queue for the admin
+  // "replay" UI to re-enqueue into (recovery is re-emitting the event onto the bus).
+  createDlqAlarms({
+    label: 'telemetry-alert-rule',
+    displayName: 'Telemetry Alert Rule',
+    application: 'TelemetryAlerts',
+    queue: telemetryAlertRuleDLQ,
   });
 }
 

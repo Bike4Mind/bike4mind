@@ -1160,6 +1160,33 @@ export const IterationStepAction = z.object({
   iteration: z.number(),
   step: AgentStepSchema,
   isComplete: z.boolean(),
+  // UI side-effects a tool emitted during this iteration (same envelope the chat
+  // path collects on quest.uiSideEffects). Carried here - NOT on AgentStepSchema,
+  // which is persisted into the checkpoint - so they stream live to the console
+  // without bloating checkpoints. Optional => backward-compatible with in-flight
+  // frames. Client dispatches them through the shared uiSideEffectDispatcher.
+  uiSideEffects: z
+    .array(
+      z.object({
+        type: z.string(),
+        payload: z.unknown(),
+      })
+    )
+    .optional(),
+});
+
+/**
+ * Incremental token delta emitted while the TOP-LEVEL agent's LLM call is streaming
+ * mid-iteration - the top-level analogue of `subagent_text_delta`. Lets the UI render the
+ * agent's reasoning/narration and final answer live instead of waiting for the whole step
+ * (a decompose turn can be ~40s). The client appends `delta` to a per-iteration buffer and
+ * clears it when the iteration's terminal step arrives via `iteration_step`.
+ */
+export const AgentTextDeltaAction = z.object({
+  action: z.literal('agent_text_delta'),
+  executionId: z.string(),
+  iteration: z.number(),
+  delta: z.string(),
 });
 
 /**
@@ -1469,6 +1496,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   AgentErrorAction,
   AbortAcknowledgedAction,
   SubagentStartedAction,
+  AgentTextDeltaAction,
   SubagentIterationStepAction,
   SubagentTextDeltaAction,
   SubagentCompletedAction,

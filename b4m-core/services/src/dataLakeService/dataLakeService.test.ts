@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { AccessContext, IDataLakeDocument, IDataLakeBatchDocument } from '@bike4mind/common';
-import { canAccessLake, assertLakeAccess } from './assertLakeAccess';
+import { canAccessLake, assertLakeAccess, assertLakeWritable, isFallbackLake } from './assertLakeAccess';
 import { canManageLake, assertLakeWriteAccess, assertCanWriteDataLakeTags } from './authorizeLakeWrite';
 import { createDataLake } from './createDataLake';
 import { unarchiveDataLake } from './unarchiveDataLake';
@@ -139,6 +139,77 @@ describe('assertLakeAccess — not-found-style denial', () => {
   });
 });
 
+describe('assertLakeAccess — hardcoded fallback lakes (no backing document)', () => {
+  // The DB knows nothing: both lookups miss, as they do for the seeded opti-knowledge lake.
+  const emptyDb = () => ({
+    dataLakes: {
+      findById: vi.fn().mockRejectedValue(new Error('bad id')),
+      findBySlug: vi.fn().mockResolvedValue(null),
+    },
+  });
+
+  it('resolves opti-knowledge for a tag-holder as a synthetic read-only lake', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'] }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+    expect(resolved.datalakeTag).toBe('datalake:opti-knowledge');
+    expect(resolved.fileTagPrefix).toBe('opti:');
+    expect(resolved.status).toBe('active');
+    expect(resolved.createdByUserId).toBe('');
+  });
+
+  it('resolves opti-knowledge for a tag-less entitlement holder (any-of parity with the list path)', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ entitlementKeys: ['optihashi:pro'] }), {
+      db: emptyDb(),
+    });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('resolves opti-knowledge for an admin without the tag or entitlement', async () => {
+    const resolved = await assertLakeAccess('opti-knowledge', ctx({ isAdmin: true }), { db: emptyDb() });
+    expect(resolved.id).toBe('opti-knowledge');
+  });
+
+  it('still denies (not-found-style) a caller who satisfies neither gate', async () => {
+    await expect(assertLakeAccess('opti-knowledge', ctx(), { db: emptyDb() })).rejects.toThrow(/not found/i);
+  });
+
+  it('a DB lake shadowing a fallback slug takes precedence over the fallback', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+      },
+    };
+    await expect(assertLakeAccess('opti-knowledge', ctx({ userId: 'owner' }), { db })).resolves.toBe(dbLake);
+  });
+
+  it('a denied DB lake shadowing a fallback slug is FINAL — no fallback retry around the denial', async () => {
+    const dbLake = lake({ id: 'real-id', slug: 'opti-knowledge', createdByUserId: 'owner', organizationId: 'orgA' });
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(dbLake),
+      },
+    };
+    await expect(
+      assertLakeAccess('opti-knowledge', ctx({ userTags: ['opti'], organizationId: 'orgB' }), { db })
+    ).rejects.toThrow(/not found/i);
+  });
+});
+
+describe('assertLakeWritable / isFallbackLake — fallback lakes are read-only', () => {
+  it('identifies a fallback lake by config id and refuses the write with a clear read-only error', () => {
+    expect(isFallbackLake({ id: 'opti-knowledge' })).toBe(true);
+    expect(() => assertLakeWritable({ id: 'opti-knowledge' })).toThrow(/read-only/i);
+  });
+
+  it('passes a persisted (ObjectId-style) lake through untouched', () => {
+    expect(isFallbackLake({ id: '507f1f77bcf86cd799439011' })).toBe(false);
+    expect(() => assertLakeWritable({ id: '507f1f77bcf86cd799439011' })).not.toThrow();
+  });
+});
+
 describe('canManageLake — the single write/manage rule (creator or admin)', () => {
   it('grants the creator', () => {
     expect(canManageLake(lake({ createdByUserId: 'owner' }), { userId: 'owner', isAdmin: false })).toBe(true);
@@ -177,6 +248,16 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     await expect(
       assertLakeWriteAccess('lake1', ctx({ userId: 'reader', organizationId: 'orgA', userTags: ['opti'] }), { db })
     ).rejects.toThrow(/creator/i);
+  });
+
+  it('refuses a fallback lake as read-only even for an admin (no document to write into)', async () => {
+    const db = {
+      dataLakes: {
+        findById: vi.fn().mockRejectedValue(new Error('bad id')),
+        findBySlug: vi.fn().mockResolvedValue(null),
+      },
+    };
+    await expect(assertLakeWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db })).rejects.toThrow(/read-only/i);
   });
 });
 
@@ -385,6 +466,27 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     ).resolves.toBeUndefined();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
+
+  it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['f1', 'f2', 'f3']);
+    adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });
+
+    // Every file's chunks and every batch are still deleted, despite the chunk size < count.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(3);
+    expect(adapters.db.batches.delete).toHaveBeenCalledTimes(3);
+
+    // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
+    const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
+    const hardDelete = adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0];
+    const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
+    const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
+    expect(lastChunk).toBeLessThan(hardDelete);
+    expect(hardDelete).toBeLessThan(firstBatch);
+    expect(firstBatch).toBeLessThan(lakeDelete);
+  });
 });
 
 describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
@@ -407,10 +509,11 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     db = makeDb();
   });
 
-  it('forces a stuck non-terminal batch terminal and recomputes stats', async () => {
+  it('forces a stuck non-terminal batch terminal (marked reconciler) and recomputes stats', async () => {
     const now = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
     const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
-    expect(db.batches.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors');
+    // The completionReason 'reconciler' is what distinguishes a forced terminal from normal completion.
+    expect(db.batches.markTerminalIfActive).toHaveBeenCalledWith('b1', 'completed_with_errors', 'reconciler');
     expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
     expect(forced).toEqual(['b1']);
   });
@@ -429,6 +532,49 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
     expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
     expect(forced).toEqual([]);
+  });
+
+  const late = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+
+  it('emits the forced-terminal metric and the stuck gauge when a batch is forced', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith('b1', 'lake1');
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+  });
+
+  it('gauges the stuck count but does NOT emit forced-terminal when the guard is lost', async () => {
+    db.batches.markTerminalIfActive = vi.fn().mockResolvedValue(null);
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('gauges zero when nothing is stuck', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches(
+      [batch({ updatedAt: new Date(1000) })],
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      { db, metrics },
+      2000
+    );
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(0);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles when a metric hook throws (metrics must never break reconcile)', async () => {
+    const metrics = {
+      emitForcedTerminal: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+      emitStuckGauge: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+    };
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(forced).toEqual(['b1']);
+    expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
   });
 });
 

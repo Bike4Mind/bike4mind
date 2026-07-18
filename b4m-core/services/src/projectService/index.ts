@@ -12,7 +12,7 @@ export * from './addFiles';
 export * from './listInvites';
 export * from './addSystemPrompts';
 export * from './toggleSystemPrompt';
-export * from './removeSystemPrompt';
+export * from './removeSystemPrompts';
 export * from './addFavorite';
 export * from './deleteFavorite';
 export * from './removeNonExistentFiles';

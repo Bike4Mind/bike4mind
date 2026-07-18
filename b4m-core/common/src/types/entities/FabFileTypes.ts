@@ -53,6 +53,21 @@ export interface IFabFileChunk {
   vector?: number[];
 }
 
+/**
+ * One entry in a FabFile's non-destructive AI-edit history. Each version's bytes live at a
+ * distinct S3 key so a prior version is never overwritten. The document's own `filePath`
+ * always points at the latest version's bytes.
+ */
+export interface IFabFileVersion {
+  /** 1-based version number, incremented per AI edit. */
+  version: number;
+  /** S3 key holding this version's bytes. */
+  filePath: string;
+  fileSize: number;
+  mimeType: string;
+  createdAt: Date;
+}
+
 export interface IFabFileChunkDocument extends IFabFileChunk, IMongoDocument {}
 
 export interface IFabFile {
@@ -173,6 +188,13 @@ export interface IFabFile {
 
   /** Soft-archive marker set when the file's data lake is archived (reversible). */
   archivedAt?: Date;
+
+  /**
+   * Non-destructive AI-edit history for binary Office documents (docx/xlsx). Absent for
+   * files never AI-edited. Each edit appends an entry and repoints `filePath` at the new
+   * version's bytes without deleting the prior key.
+   */
+  versions?: IFabFileVersion[];
 
   deletedAt?: Date;
 }

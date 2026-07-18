@@ -1,6 +1,6 @@
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
-import { DEFAULT_LAMBDA_ENVIRONMENT } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, SINGLE_RECORD_BATCH } from './constants';
 import { lambdaVpc } from './vpc';
 import { eventBus } from './bus';
 import { router } from './router';
@@ -26,21 +26,28 @@ export const emailBatchQueue = new sst.aws.Queue('emailBatchQueue', {
 });
 
 // Subscribe Lambda to process email batches
-export const emailBatchQueueSubscription = emailBatchQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/emailBatch.dispatch',
-  timeout: '2 minutes',
-  memory: '512 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, eventBus],
-  logging: {
-    retention: '1 week',
+export const emailBatchQueueSubscription = emailBatchQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/emailBatch.dispatch',
+    timeout: '2 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, eventBus],
+    logging: {
+      retention: '1 week',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      // APP_URL is needed for tracking links in emails
+      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-    // APP_URL is needed for tracking links in emails
-    APP_URL: $dev ? 'http://localhost:3000' : router.url,
-  },
-});
+  {
+    // Handler already loops event.Records; report per-record failures instead of
+    // swallowing them so a transient failure is retried/DLQ'd instead of silently acked.
+    batch: { partialResponses: true },
+  }
+);
 
 // Dead Letter Queue for failed job orchestration
 const emailJobQueueDLQ = new sst.aws.Queue('emailJobQueueDLQ', {});
@@ -54,17 +61,20 @@ export const emailJobQueue = new sst.aws.Queue('emailJobQueue', {
   },
 });
 
-export const emailJobQueueSubscription = emailJobQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/emailJobOrchestrator.dispatch',
-  timeout: '5 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
-  logging: {
-    retention: '1 week',
+export const emailJobQueueSubscription = emailJobQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/emailJobOrchestrator.dispatch',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, emailBatchQueue, eventBus],
+    logging: {
+      retention: '1 week',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-});
+  SINGLE_RECORD_BATCH
+);
 
 export { emailBatchQueueDLQ, emailJobQueueDLQ };

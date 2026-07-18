@@ -1,101 +1,78 @@
 import React from 'react';
-import { Box, Stack, Chip, Typography } from '@mui/joy';
-import { Terminal as PythonIcon } from '@mui/icons-material';
+import { Box, Typography } from '@mui/joy';
 import type { PythonArtifact } from '@bike4mind/common';
-import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
+import ArtifactPreviewCard from '@client/app/components/GenAI/ArtifactPreviewCard';
 import { registerArtifactType, type ArtifactPreviewProps } from '../registry';
 
+const SUPPORTED_PACKAGES = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'sklearn'];
+
+const detectPackages = (code: string): string[] => {
+  const patterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
+  const detected: string[] = [];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(code)) !== null) {
+      if (SUPPORTED_PACKAGES.includes(match[1])) detected.push(match[1]);
+    }
+  }
+  return detected;
+};
+
 const PythonPreviewCard: React.FC<ArtifactPreviewProps> = ({ artifact, artifactId, index }) => {
+  const packages = detectPackages(artifact.content);
+  const title = artifact.title || 'Python Script';
+
   const pythonArtifact: PythonArtifact = {
     id: artifactId,
     type: 'python',
-    title: artifact.title || 'Python Script',
+    title,
     content: artifact.content,
     metadata: {
-      packages: [],
+      packages,
       hasOutput: false,
     },
     createdAt: new Date(),
     updatedAt: new Date(),
   };
 
-  // Extract detected packages from import statements
-  const importPatterns = [/^import\s+(\w+)/gm, /^from\s+(\w+)\s+import/gm];
-  const supportedPackages = ['numpy', 'pandas', 'matplotlib', 'scipy', 'seaborn', 'sklearn'];
-  const detectedPackages: string[] = [];
-
-  for (const pattern of importPatterns) {
-    let match;
-    while ((match = pattern.exec(artifact.content)) !== null) {
-      if (supportedPackages.includes(match[1])) {
-        detectedPackages.push(match[1]);
-      }
-    }
-  }
-  pythonArtifact.metadata.packages = detectedPackages;
-
   const lineCount = artifact.content.split('\n').length;
 
   return (
-    <Box
-      key={index}
-      data-testid={`artifact-preview-python-${artifactId}`}
-      sx={{
-        my: 2,
-        cursor: 'pointer',
-        border: '1px solid',
-        borderColor: 'divider',
-        borderRadius: 'sm',
-        p: 2,
-        '&:hover': {
-          bgcolor: 'background.level1',
-        },
-      }}
-      onClick={() => {
-        console.log('[PromptReplies] Python artifact clicked:', {
-          type: 'python',
-          id: pythonArtifact.id,
-          title: pythonArtifact.title,
-        });
-        setSessionLayout({
-          layout: 'vertical',
-          artifactData: {
-            type: 'python',
-            content: pythonArtifact,
-            mimeType: 'application/vnd.ant.python',
-            id: pythonArtifact.id,
-          },
-        });
-      }}
-    >
-      <Stack direction="row" spacing={1} alignItems="center" mb={1}>
-        <PythonIcon sx={{ color: 'danger.500', fontSize: '1.25rem' }} />
-        <Typography level="body-sm">{pythonArtifact.title}</Typography>
-        <Chip size="sm" variant="solid" color="danger">
-          🐍 Python Playground
-        </Chip>
-      </Stack>
-      <Typography level="body-xs" color="neutral">
-        {lineCount} lines{detectedPackages.length > 0 ? ` • ${detectedPackages.join(', ')}` : ''}
-      </Typography>
-      <Box
-        component="pre"
-        sx={{
-          mt: 1,
-          p: 1.5,
-          borderRadius: 'sm',
-          bgcolor: 'background.level1',
-          overflow: 'hidden',
-          fontSize: '0.75rem',
-          fontFamily: 'monospace',
-          whiteSpace: 'pre-wrap',
-          maxHeight: '80px',
-          textOverflow: 'ellipsis',
-        }}
-      >
-        {artifact.content.slice(0, 200)}
-        {artifact.content.length > 200 ? '...' : ''}
-      </Box>
+    <Box key={index} data-testid={`artifact-preview-python-${artifactId}`}>
+      <ArtifactPreviewCard
+        artifactId={pythonArtifact.id}
+        artifactType="python"
+        mimeType="application/vnd.ant.python"
+        artifactContent={pythonArtifact}
+        contentKey={artifact.content}
+        title={title}
+        chipLabel="Python"
+        testIdPrefix="python"
+        source={artifact.content}
+        copyTooltip="Copy code to clipboard"
+        copyMessage="Python code copied to clipboard"
+        saveTooltip="Save as Python file"
+        saveFile={() => ({
+          fileName: `${title.toLowerCase().replace(/\s+/g, '_')}_${Date.now()}.py`,
+          mimeType: 'text/x-python',
+          successMessage: 'Saved Python script as file',
+        })}
+        actions={{ copy: true, save: true }}
+        // No inline render: running Python means the Pyodide playground, which lives in
+        // the side panel. The card shows source; "open in full viewer" runs it.
+        stats={
+          <>
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {lineCount} lines
+            </Typography>
+            {packages.length > 0 && (
+              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                {packages.join(', ')}
+              </Typography>
+            )}
+          </>
+        }
+      />
     </Box>
   );
 };

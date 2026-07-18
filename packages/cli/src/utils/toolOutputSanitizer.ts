@@ -88,9 +88,14 @@ const SECRET_PATTERNS: Array<{ pattern: RegExp; replacement: string }> = [
   },
   // Generic secret-ish assignments (KEY=value / "key": "value") - keep the key,
   // redact the value. Anchored on names that denote a credential.
+  //
+  // The lookahead exempts a purely-numeric value. `TOKEN` matches LLM-accounting
+  // fields this agent reasons over (`totalTokens: 1523`, `promptTokens=900`), and
+  // redacting those loses real information. No credential shape we redact is a bare
+  // integer, so the exemption costs no coverage.
   {
     pattern:
-      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(["']?\s*[=:]\s*["']?)([^\s"',}]+)/gi,
+      /\b([A-Za-z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API[_-]?KEY|ACCESS[_-]?KEY|PRIVATE[_-]?KEY|CREDENTIALS?)[A-Za-z0-9_]*)(["']?\s*[=:]\s*["']?)(?!\d+(?![^\s"',}]))([^\s"',}]+)/gi,
     replacement: `$1$2${REDACTED}`,
   },
 ];

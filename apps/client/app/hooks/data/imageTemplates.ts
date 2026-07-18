@@ -1,0 +1,70 @@
+import { api } from '@client/app/contexts/ApiContext';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type {
+  IImageGenerationTemplateDocument,
+  ImageGenerationTemplateInputType,
+  ImageGenerationTemplateUpdateInputType,
+} from '@bike4mind/common';
+
+const LIST_KEY = 'image-templates';
+
+/** The caller's templates (usageCount desc, then newest). Server returns only owned rows. */
+export function useImageTemplates(enabled = true) {
+  return useQuery({
+    queryKey: [LIST_KEY],
+    queryFn: async () => {
+      const { data } = await api.get<{ templates: IImageGenerationTemplateDocument[] }>('/api/image-templates');
+      return data.templates;
+    },
+    enabled,
+  });
+}
+
+export function useCreateImageTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: ImageGenerationTemplateInputType) => {
+      const { data } = await api.post<{ template: IImageGenerationTemplateDocument }>('/api/image-templates', input);
+      return data.template;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [LIST_KEY] }),
+  });
+}
+
+export function useUpdateImageTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ id, ...patch }: ImageGenerationTemplateUpdateInputType & { id: string }) => {
+      const { data } = await api.put<{ template: IImageGenerationTemplateDocument }>(
+        `/api/image-templates/${id}`,
+        patch
+      );
+      return data.template;
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [LIST_KEY] }),
+  });
+}
+
+export function useDeleteImageTemplate() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.delete(`/api/image-templates/${id}`);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: [LIST_KEY] }),
+  });
+}
+
+/**
+ * Record a use: increments usageCount when a prompt is sent with a template's
+ * settings (matched client-side). Fire-and-forget - deliberately does NOT
+ * invalidate the list, so it doesn't trigger a refetch on every send; the fresh
+ * count is picked up the next time the list is fetched (reopening the templates panel).
+ */
+export function useRecordTemplateUse() {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await api.post(`/api/image-templates/${id}/use`);
+    },
+  });
+}

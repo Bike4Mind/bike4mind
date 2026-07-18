@@ -19,6 +19,8 @@ const SlackChannelConfigSchema = new Schema<ISlackChannelConfigDocument>(
     temperature: { type: Number, min: 0, max: 2 },
     maxTokens: { type: Number, min: 1, max: 200000 },
     configuredBy: { type: String, required: true },
+    githubOwner: { type: String },
+    githubRepo: { type: String },
   },
   {
     timestamps: true,

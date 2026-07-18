@@ -23,6 +23,7 @@ import {
   CreditHolderType,
   ICreditHolder,
   ICreditHolderMethods,
+  isExperimentalFeatureEnabled,
   isImageServeable,
   QuestErrorCode,
   getQuestErrorCode,
@@ -101,7 +102,13 @@ import { buildContextOverflowMessage } from './contextOverflowMessage';
 import { buildInsufficientCreditsMessage } from './insufficientCreditsMessage';
 import { ResearchModeService } from './ResearchModeService';
 import { deductCreditsWithOrgSupport, subtractCredits } from '../creditService';
-import { TelemetryBuilder, mapBackendToProvider, categorizeToolError, AnomalyAlertService } from '../telemetry';
+import {
+  TelemetryBuilder,
+  mapBackendToProvider,
+  categorizeToolError,
+  AnomalyAlertService,
+  aggregateWebFetchContentTelemetry,
+} from '../telemetry';
 import type { ToolTelemetry, ToolErrorCategory } from '@bike4mind/common';
 import {
   ContextTelemetryAlertsSchema,
@@ -274,6 +281,13 @@ export class InsufficientCreditsError extends Error {
   }
 }
 
+/**
+ * Prompt marker that, on preview/E2E deploys only (never production), forces the primary
+ * model to simulate a sustained outage so the provider/model fallback path can be exercised
+ * end-to-end by QA. See the gated check in the completion loop and the Guide for Testers.
+ */
+export const FORCE_FALLBACK_TEST_MARKER = '[[force-provider-fallback]]';
+
 function isToolPairingError(error: Error): boolean {
   const msg = error.message.toLowerCase();
   // Match known Anthropic tool-pairing failure patterns:
@@ -371,6 +385,7 @@ export function computeSettlementDelta(
 export class ChatCompletionProcess {
   public db: IChatCompletionServiceOptions['db'];
   public invokeCreateMemento: IChatCompletionServiceOptions['invokeCreateMemento'];
+  public recallMementosV2: IChatCompletionServiceOptions['recallMementosV2'];
   public logger: Logger;
   public user: IUserDocument;
   public logEvent: IChatCompletionServiceOptions['logEvent'];
@@ -423,6 +438,7 @@ export class ChatCompletionProcess {
   constructor(options: IChatCompletionServiceOptions) {
     this.db = options.db;
     this.invokeCreateMemento = options.invokeCreateMemento;
+    this.recallMementosV2 = options.recallMementosV2;
     this.storage = options.storage;
     this.imageGenerateStorage = options.imageGenerateStorage;
     this.imageProcessorLambdaName = options.imageProcessorLambdaName;
@@ -2317,12 +2333,20 @@ export class ChatCompletionProcess {
       timer.phase('llm_completion');
       logger.info(`⏱️ [${Date.now() - processStartTime}ms] === LLM STREAMING PHASE START ===`);
 
+      // Bounded multi-hop fallback: a provider-wide outage walks the preference chain one
+      // model per hop, so the cap must cover the longest chain (the flagship Opus chain has
+      // 4 Anthropic entries before its cross-provider tail) to actually cross providers.
+      const MAX_FALLBACK_HOPS = 5;
+
       // Initialize fallback variables in proper scope
       let completionSuccess = false;
       let lastError: Error | null = null;
       let currentModel = modelInfo;
       let currentLlm = llm;
       let fallbackAttempt = 0;
+      // Models already tried this request, seeded with the primary. Passed to getLlmWithFallback
+      // so no hop re-selects a model that just failed.
+      const triedModelIds = new Set<string>([modelInfo.id]);
       let overloadRetryCount = 0;
       let overloadRetriesExhausted = false;
       let toolPairingRetried = false;
@@ -2337,8 +2361,9 @@ export class ChatCompletionProcess {
       try {
         const modelInferenceStartTime = Date.now();
 
-        // Max iterations: up to 3 overload retries + 1 fallback attempt + 1 initial = 5
-        while (!completionSuccess && fallbackAttempt <= 1) {
+        // Loop covers the primary attempt plus up to MAX_FALLBACK_HOPS cross-model hops
+        // (same-model overload/timeout retries below re-enter without advancing fallbackAttempt).
+        while (!completionSuccess && fallbackAttempt <= MAX_FALLBACK_HOPS) {
           try {
             const isInitialAttempt = fallbackAttempt === 0;
 
@@ -2414,6 +2439,32 @@ export class ChatCompletionProcess {
               backend: currentModel.backend,
               cacheTTL: cacheStrategy.cacheTTL,
             });
+
+            // Preview/E2E-only test affordance: provider/model fallback is a sustained-
+            // outage safety net that can't be exercised without a real 5xx/throttle, so
+            // there is no way for QA to verify it on a preview otherwise. When E2E
+            // endpoints are enabled (production forces E2E off - see isE2EEnabled) AND the
+            // prompt contains FORCE_FALLBACK_TEST_MARKER, simulate a provider-wide Anthropic
+            // outage: fail every Bedrock- and Anthropic-backed hop so the real loop multi-hops
+            // off the Anthropic path entirely and degrades to a cross-provider model (OpenAI/
+            // Gemini), rendering the "Fallback Model Used" badge with the provider-path switch.
+            // Double-gated (E2E-only, never production) and confined to the Anthropic family, so
+            // a normal request can never trigger it and the surviving cross-provider hop runs for
+            // real. The error mimics a Bedrock capacity outage (ServiceUnavailableException) so it
+            // takes the real overloaded-error path: same-model overload retries on the primary,
+            // then forceSwitch through the fallback chain - matching how a genuine sustained
+            // outage degrades. See the Guide for Testers.
+            if (
+              process.env.E2E_ENDPOINTS_ENABLED === 'true' &&
+              (currentModel.backend === ModelBackend.Bedrock || currentModel.backend === ModelBackend.Anthropic) &&
+              JSON.stringify(messages).includes(FORCE_FALLBACK_TEST_MARKER)
+            ) {
+              const forced = new Error(
+                `ServiceUnavailableException: simulated ${currentModel.backend} outage for fallback testing (preview only)`
+              );
+              forced.name = 'ServiceUnavailableException';
+              throw forced;
+            }
 
             await currentLlm.complete(
               currentModel.id,
@@ -2720,9 +2771,9 @@ export class ChatCompletionProcess {
               continue;
             }
 
-            // If we've already tried fallback, throw the last error
-            if (fallbackAttempt >= 1) {
-              logger.warn(`🚫 [Fallback] Fallback attempt already tried, no more attempts`);
+            // If we've exhausted the bounded multi-hop traversal, throw the last error
+            if (fallbackAttempt >= MAX_FALLBACK_HOPS) {
+              logger.warn(`🚫 [Fallback] Multi-hop budget exhausted (${MAX_FALLBACK_HOPS} hops), no more attempts`);
               throw lastError;
             }
 
@@ -2731,14 +2782,22 @@ export class ChatCompletionProcess {
               // Extract fallback model ID from request
               const fallbackModelId = body.fallbackModel;
 
-              const originalModel = currentModel; // Store original model before fallback
+              const failedModel = currentModel; // the model that just failed this hop
+              // On the final allowed hop, guarantee the traversal crosses to a different provider:
+              // a provider-wide outage would otherwise burn the whole budget on same-provider
+              // models and hard-fail before ever reaching the cross-provider tail.
+              const isFinalHop = fallbackAttempt >= MAX_FALLBACK_HOPS - 1;
               const fallbackResult = await getLlmWithFallback(
                 currentModel,
                 fallbackModelId,
                 models,
                 apiKeyTable,
                 logger,
-                { forceSwitch: overloadRetriesExhausted }
+                {
+                  forceSwitch: overloadRetriesExhausted,
+                  excludeModelIds: triedModelIds,
+                  preferUntriedBackend: isFinalHop,
+                }
               );
 
               if (!fallbackResult || fallbackResult.attempt === 0) {
@@ -2751,14 +2810,17 @@ export class ChatCompletionProcess {
               currentModel = fallbackResult.model;
               currentLlm = fallbackResult.backend;
               fallbackAttempt++;
+              triedModelIds.add(currentModel.id);
 
               logger.info(`🔄 [Fallback] Switching to fallback model: ${currentModel.id} (attempt ${fallbackAttempt})`);
 
-              // Store fallback info in quest data for consistent streaming delivery
+              // Store fallback info in quest data for consistent streaming delivery. primaryModel is
+              // the originally-requested model (modelInfo), not the immediately-preceding hop, so
+              // the badge always contrasts the final model against what the user actually asked for.
               const fallbackInfo = {
                 sessionId,
-                primaryModel: originalModel.id,
-                primaryModelName: originalModel.name,
+                primaryModel: modelInfo.id,
+                primaryModelName: modelInfo.name,
                 fallbackModel: currentModel.id,
                 fallbackModelName: currentModel.name,
                 timestamp: Date.now(),
@@ -2773,7 +2835,7 @@ export class ChatCompletionProcess {
                   const fallbackReasonText = lastError instanceof Error ? lastError.message : 'Unknown error';
                   telemetryBuilder.setFallback(true, fallbackReasonText);
                   telemetryBuilder.setActualModel(currentModel.id);
-                  logger.info(`📊 [Telemetry] Recorded fallback: ${originalModel.id} → ${currentModel.id}`);
+                  logger.info(`📊 [Telemetry] Recorded fallback: ${failedModel.id} → ${currentModel.id}`);
                 } catch (telemetryError) {
                   logger.warn(`📊 [Telemetry] Failed to record fallback:`, telemetryError);
                 }
@@ -3009,9 +3071,11 @@ export class ChatCompletionProcess {
         // exactly the pre-provider-basis behavior. The bases never blend.
         //
         // Disjoint-fields assumption: cacheReadInputTokens is only forwarded by
-        // Anthropic-family adapters, whose input_tokens EXCLUDE cached tokens.
-        // OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache and must not
-        // forward cache counts here without also subtracting them from input.
+        // Anthropic-family adapters - the direct Anthropic adapter and
+        // Claude-on-Bedrock (bedrockBackend/base.ts) - whose input_tokens EXCLUDE
+        // cached tokens. OpenAI/Gemini/xAI report prompt tokens INCLUSIVE of cache
+        // and must not forward cache counts here without also subtracting them
+        // from input.
         //
         // NOTE: the provider input (uncached tail) drives getTextModelCost's
         // pricing-tier selection. Every model today publishes a single tier, so
@@ -3482,6 +3546,16 @@ export class ChatCompletionProcess {
                     errorCategories: errorCategories.length > 0 ? errorCategories : undefined,
                   });
                 }
+              }
+
+              // Enrich web_fetch with content-size + truncation metrics aggregated from the
+              // citables it emitted. Silent truncation is invisible in invocation/success counts alone.
+              const webFetchEntry = toolTelemetryMap.get('web_fetch');
+              if (webFetchEntry) {
+                const sizes = aggregateWebFetchContentTelemetry(quest.promptMeta?.citables);
+                webFetchEntry.truncatedInvocationCount = sizes.truncatedInvocationCount;
+                webFetchEntry.totalExtractedChars = sizes.totalExtractedChars;
+                webFetchEntry.maxExtractedChars = sizes.maxExtractedChars;
               }
 
               // Set tools on telemetry builder
@@ -4146,10 +4220,31 @@ When using tools that require file IDs (like edit_image), use the ID shown above
       this.features.set('contextSummarization', new ContextSummarizationFeature(this));
     }
 
-    // Conditional features - only build if requested AND enabled
-    if (optimizedFeatureList.includes('mementos') && enableMementos && adminSettingsEnableMementos) {
-      this.logger.log('  - Enabling Mementos feature');
-      this.features.set('mementos', new MementoFeature(this));
+    // Conditional features - only build if requested AND enabled. Mementos runs when V1 is on
+    // (admin + request flag) OR when the user has opted into V2, so V2 works independently of V1
+    // (the two are mutually exclusive at inject time - MementoFeature picks which).
+    //
+    // MUST go through isExperimentalFeatureEnabled: `preferences.experimentalFeatures` is a Mongoose
+    // Map at runtime, so reading it with dot access silently yields undefined and the feature never
+    // runs. That is exactly the bug this line used to have - V2 memory was never injected into a
+    // prompt even for a user who had opted in.
+    const enableMementosV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
+    if (
+      optimizedFeatureList.includes('mementos') &&
+      ((enableMementos && adminSettingsEnableMementos) || enableMementosV2)
+    ) {
+      this.logger.log(`  - Enabling Mementos feature${enableMementosV2 ? ' (V2 opt-in)' : ''}`);
+      // Resolve the WRITE gates here, where both the admin setting and the per-user opt-in are in
+      // scope, and hand them to the feature. V1 writes only when it is fully on (request flag AND admin
+      // setting); V2 writes on the opt-in. Without this, the completion event carried no flags and the
+      // subscriber defaulted V1 on - so chat kept writing V1 mementos for a V2 user even with V1 off.
+      this.features.set(
+        'mementos',
+        new MementoFeature(this, {
+          writeV1: Boolean(enableMementos && adminSettingsEnableMementos),
+          writeV2: enableMementosV2,
+        })
+      );
     }
 
     if (optimizedFeatureList.includes('autoNameSession') && adminSettingsAutoNameNotebook) {

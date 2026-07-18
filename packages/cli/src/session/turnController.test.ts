@@ -5,6 +5,8 @@ import type { Session, Message, CliConfig, SessionStore, ConfigStore, CommandHis
 import type { CustomCommandStore } from '../storage/CustomCommandStore.js';
 import type { ReActAgent } from '@bike4mind/agents';
 import type { AgentResult, AgentStep } from '@bike4mind/agents';
+import type { TodoItem } from '../tools/writeTodosTool.js';
+import type { ModelInfo } from '@bike4mind/common';
 
 /**
  * Boundary tests for the extracted turn lifecycle (issue #228, phase 2). They
@@ -62,6 +64,14 @@ function makeCtx(overrides: Partial<TurnContext> = {}): TurnContext {
     additionalDirectories: [],
     featureRegistry: null,
     backgroundManager: null,
+    todoStore: null,
+    decisionStore: null,
+    blockerStore: null,
+    workflowStores: {
+      decisionStore: { decisions: [] },
+      blockerStore: { blockers: [] },
+      reviewGateStore: { reviewGates: [] },
+    },
     setCommandHistory: vi.fn(),
     setAbortController: vi.fn(),
   };
@@ -136,6 +146,41 @@ describe('runTurn', () => {
     expect(save.mock.calls[0][0]).toMatchObject({ id: 'sess-1', metadata: { totalTokens: 110 } });
   });
 
+  it('persists durable workflow state logged during the turn onto the saved session', async () => {
+    seedSession([]);
+    const save = vi.fn(async (_session: Session) => undefined);
+    // Simulate a decision logged into the store mid-turn (as log_decision would).
+    const decision = {
+      id: 'd1',
+      timestamp: ISO,
+      summary: 'adopt discriminated unions',
+      rationale: 'model state safely',
+    };
+    const ctx = makeCtx({
+      sessionStore: { save } as unknown as SessionStore,
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('hello', ctx);
+
+    // Without the sync, workflow state would live only in the in-memory store
+    // and be lost to a later auto-compaction that reads session.metadata.
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
+    expect(useCliStore.getState().session!.metadata.workflow?.decisions).toEqual([decision]);
+  });
+
+  it('leaves workflow metadata unset when no durable state was logged', async () => {
+    seedSession([]);
+    const save = vi.fn(async (_session: Session) => undefined);
+    await runTurn('hello', makeCtx({ sessionStore: { save } as unknown as SessionStore }));
+
+    expect(save.mock.calls[0][0].metadata.workflow).toBeUndefined();
+  });
+
   it('publishes an abort controller for the turn and clears it when the turn settles', async () => {
     seedSession([]);
     const setAbortController = vi.fn((_controller: AbortController | null) => {});
@@ -181,6 +226,37 @@ describe('runTurn', () => {
     expect(useCliStore.getState().pendingMessages).toHaveLength(0);
   });
 
+  it('flushes durable workflow state onto the session when the turn is aborted (regression: #595)', async () => {
+    seedSession([]);
+    const abortError = new Error('The operation was aborted');
+    abortError.name = 'AbortError';
+    const run = vi.fn(async () => {
+      throw abortError;
+    });
+    const save = vi.fn(async (_session: Session) => undefined);
+    // A decision logged before the user hit ESC lives only in the store; the
+    // abort save must flush it or it is lost if the process exits mid-turn.
+    const decision = { id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' };
+    const ctx = makeCtx({
+      agent: { run } as unknown as ReActAgent,
+      sessionStore: { save } as unknown as SessionStore,
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('do it', ctx);
+
+    // The cancel path performs a single save. Reverting the withFlushedWorkflowState
+    // wrap there leaves this saved session's metadata.workflow undefined.
+    expect(save).toHaveBeenCalledOnce();
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
+    // The flush rides alongside the cancellation message, not instead of it.
+    expect(useCliStore.getState().session!.messages[1]).toMatchObject({ metadata: { cancelled: true } });
+  });
+
   it('surfaces a transient network drop without recording an assistant message', async () => {
     seedSession([]);
     const run = vi.fn(async () => {
@@ -210,6 +286,87 @@ describe('runTurn', () => {
     expect(useCliStore.getState().isThinking).toBe(false);
   });
 
+  it('counts tool-definition tokens in the proactive auto-compact estimate', async () => {
+    // Tiny messages/system prompt alone stay well under 80% of a 500-token
+    // window; a tool-heavy agent should push the estimate over regardless.
+    seedSession(
+      Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'hi',
+        timestamp: ISO,
+      }))
+    );
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
+      makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
+    );
+    const ctx = makeCtx({
+      agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+      config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+      availableModels: [{ id: 'claude-sonnet-4-6', contextWindow: 500 } as unknown as ModelInfo],
+    });
+
+    await runTurn('next message', ctx);
+
+    // The compaction call (maxIterations: 1) only happens when shouldCompact
+    // fired; the main-turn call follows it.
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[0][1]).toMatchObject({ maxIterations: 1 });
+  });
+
+  it('flushes durable workflow state onto the session before auto-compaction (regression: #595)', async () => {
+    // Same trigger as the estimate test above: a tool-heavy agent over a tiny
+    // context window forces the 80% auto-compaction branch.
+    seedSession(
+      Array.from({ length: 6 }, (_, i) => ({
+        id: `m${i}`,
+        role: i % 2 === 0 ? 'user' : 'assistant',
+        content: 'hi',
+        timestamp: ISO,
+      }))
+    );
+    const bigTools = Array.from({ length: 20 }, (_, i) => ({
+      toolSchema: {
+        name: `tool_${i}`,
+        description: 'x '.repeat(200),
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    }));
+    const run = vi.fn(async (_query: unknown, options?: { maxIterations?: number }) =>
+      makeResult(options?.maxIterations === 1 ? { finalAnswer: 'a summary' } : {})
+    );
+    const save = vi.fn(async (_session: Session) => undefined);
+    // A decision logged in a prior turn that only lives in the in-memory store;
+    // the seeded session's metadata.workflow is still unset when compaction fires.
+    const decision = { id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' };
+    const ctx = makeCtx({
+      agent: { run, getTools: () => bigTools } as unknown as ReActAgent,
+      sessionStore: { save } as unknown as SessionStore,
+      config: { preferences: { autoCompact: true } } as unknown as CliConfig,
+      availableModels: [{ id: 'claude-sonnet-4-6', contextWindow: 500 } as unknown as ModelInfo],
+      workflowStores: {
+        decisionStore: { decisions: [decision] },
+        blockerStore: { blockers: [] },
+        reviewGateStore: { reviewGates: [] },
+      },
+    });
+
+    await runTurn('next message', ctx);
+
+    // The pre-compaction flush is the first save. It must carry the store's
+    // decision so createCompactedSession copies live workflow state forward
+    // rather than the stale (empty) metadata snapshot - the exact #595 bug.
+    // Reverting withFlushedWorkflowState leaves this save's workflow undefined.
+    expect(save.mock.calls[0][0].metadata.workflow?.decisions).toEqual([decision]);
+  });
+
   it('drains queued messages into a follow-up turn after the current one settles', async () => {
     seedSession([]);
     const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
@@ -223,5 +380,77 @@ describe('runTurn', () => {
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
     expect(run.mock.calls[0][0]).toBe('first');
     expect(run.mock.calls[1][0]).toBe('second');
+  });
+
+  describe('workflow reminder wiring', () => {
+    const stores = () => ({
+      todoStore: { todos: [{ description: 'fix the bug', status: 'in_progress' }] as TodoItem[] },
+      decisionStore: {
+        decisions: [{ id: 'd1', timestamp: ISO, summary: 'use vitest', rationale: 'repo standard' }],
+      },
+      blockerStore: {
+        blockers: [{ id: 'b1', createdAt: ISO, description: 'waiting on API key', status: 'open' as const }],
+      },
+    });
+
+    it('passes a workflowReminder provider that renders the live store state', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, ...stores() });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeTypeOf('function');
+      const rendered = options.workflowReminder!();
+      expect(rendered).toContain('1. [in_progress] fix the bug');
+      expect(rendered).toContain('- waiting on API key');
+      expect(rendered).toContain('- use vitest (rationale: repo standard)');
+    });
+
+    it('re-renders current state on each call (live, not a snapshot)', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const liveStores = stores();
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent, ...liveStores });
+
+      await runTurn('hello', ctx);
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+
+      liveStores.blockerStore.blockers[0].status = 'resolved' as never;
+      liveStores.todoStore.todos.push({ description: 'update docs', status: 'pending' });
+
+      const rendered = options.workflowReminder!();
+      expect(rendered).not.toContain('waiting on API key');
+      expect(rendered).toContain('2. [pending] update docs');
+    });
+
+    it('omits the provider when the workflowReminders preference is off', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({
+        agent: { run } as unknown as ReActAgent,
+        configStore: {
+          get: vi.fn(async () => ({ preferences: { workflowReminders: false } })),
+        } as unknown as TurnContext['configStore'],
+        ...stores(),
+      });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeUndefined();
+    });
+
+    it('omits the provider when no workflow stores are wired', async () => {
+      seedSession([]);
+      const run = vi.fn(async (_query: unknown, _options?: unknown) => makeResult());
+      const ctx = makeCtx({ agent: { run } as unknown as ReActAgent });
+
+      await runTurn('hello', ctx);
+
+      const options = run.mock.calls[0][1] as { workflowReminder?: () => string | null };
+      expect(options.workflowReminder).toBeUndefined();
+    });
   });
 });

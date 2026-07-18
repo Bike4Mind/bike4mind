@@ -5,7 +5,7 @@ import {
   slackExportBucket,
   whatsNewDistributionBucket,
 } from './buckets';
-import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES } from './constants';
+import { DEFAULT_LAMBDA_ENVIRONMENT, PRODUCTION_STAGES, SINGLE_RECORD_BATCH } from './constants';
 import { imageProcessor } from './imageProcessor';
 import { allSecrets } from './secrets';
 import { websocketApi } from './websocket';
@@ -39,6 +39,12 @@ const fabFileVectorizeQueueSubscription = fabFileVectorizeQueue.subscribe(
     permissions: [
       {
         actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+      // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+      // which runs in this handler; without this grant the emit silently AccessDenies.
+      {
+        actions: ['cloudwatch:PutMetricData'],
         resources: ['*'],
       },
     ],
@@ -88,6 +94,14 @@ const fabFileChunkQueueSubscription = fabFileChunkQueue.subscribe(
     environment: {
       ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
+    // Batch-completion metric (Lumina5/DataLakeBatch) is emitted from finalizeBatchIfComplete,
+    // which runs in this handler; without this grant the emit silently AccessDenies.
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
     copyFiles: [
       {
         from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
@@ -157,35 +171,38 @@ const imageGenerationQueue = new sst.aws.Queue('imageGenerationQueue', {
     retry: 3,
   },
 });
-const imageGenerationQueueSubscription = imageGenerationQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/imageGeneration.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor, eventBus],
-  logging: {
-    retention: '3 days',
+const imageGenerationQueueSubscription = imageGenerationQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/imageGeneration.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor, eventBus],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      {
+        actions: ['rekognition:DetectModerationLabels'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:*'],
-      resources: ['*'],
-    },
-    {
-      actions: ['rekognition:DetectModerationLabels'],
-      resources: ['*'],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 // Image Edit Queue
 const imageEditDLQ = new sst.aws.Queue('imageEditDLQ', {});
@@ -196,35 +213,38 @@ const imageEditQueue = new sst.aws.Queue('imageEditQueue', {
     retry: 3,
   },
 });
-const imageEditQueueSubscription = imageEditQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/imageEdit.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor],
-  logging: {
-    retention: '3 days',
+const imageEditQueueSubscription = imageEditQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/imageEdit.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, imageProcessor],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      {
+        actions: ['rekognition:DetectModerationLabels'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:*'],
-      resources: ['*'],
-    },
-    {
-      actions: ['rekognition:DetectModerationLabels'],
-      resources: ['*'],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 const researchEngineQueueDLQ = new sst.aws.Queue('researchEngineQueueDLQ', {});
 const researchEngineQueue = new sst.aws.Queue('researchEngineQueue', {
@@ -235,31 +255,34 @@ const researchEngineQueue = new sst.aws.Queue('researchEngineQueue', {
   },
 });
 
-const researchEngineQueueSubscription = researchEngineQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/researchEngineQueue.dispatch',
-  runtime: 'nodejs24.x',
-  vpc: lambdaVpc,
-  timeout: '15 minutes',
-  link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:*'],
-      resources: ['*'],
+const researchEngineQueueSubscription = researchEngineQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/researchEngineQueue.dispatch',
+    runtime: 'nodejs24.x',
+    vpc: lambdaVpc,
+    timeout: '15 minutes',
+    link: [...allSecrets, fabFileBucket, websocketApi, generatedImagesBucket, researchEngineQueue],
+    logging: {
+      retention: '3 days',
     },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
     },
-  ],
-});
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // What's New Modal Generation Queue
 const whatsNewGenerationQueueDLQ = new sst.aws.Queue('whatsNewGenerationQueueDLQ', {
@@ -282,52 +305,55 @@ const whatsNewGenerationQueue = new sst.aws.Queue('whatsNewGenerationQueue', {
     },
   },
 });
-const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
-  timeout: '5 minutes',
-  vpc: lambdaVpc,
-  link: [
-    ...allSecrets,
-    websocketApi,
-    ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
-    ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
-  ],
-  logging: {
-    retention: '3 days',
+const whatsNewGenerationQueueSubscription = whatsNewGenerationQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/whatsNewGeneration.dispatch',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [
+      ...allSecrets,
+      websocketApi,
+      ...(whatsNewDistributionBucket ? [whatsNewDistributionBucket] : []),
+      ...(whatsNewDistributionId ? [whatsNewDistributionId] : []),
+    ],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [
+          'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
+          'arn:aws:bedrock:*:*:foundation-model/amazon.*',
+          'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
+        ],
+      },
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+      {
+        // CloudFront cache invalidation for What's New modal distribution
+        actions: ['cloudfront:CreateInvalidation'],
+        resources: [
+          $interpolate`arn:aws:cloudfront::${aws.getCallerIdentityOutput().accountId}:distribution/${router.distributionID}`,
+        ],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: [
-        'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
-        'arn:aws:bedrock:*:*:foundation-model/amazon.*',
-        'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
-        'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
-        'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
-      ],
-    },
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
-    },
-    {
-      // CloudFront cache invalidation for What's New modal distribution
-      actions: ['cloudfront:CreateInvalidation'],
-      resources: [
-        $interpolate`arn:aws:cloudfront::${aws.getCallerIdentityOutput().accountId}:distribution/${router.distributionID}`,
-      ],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 // Notebook Curation Queue
 const notebookCurationQueueDLQ = new sst.aws.Queue('notebookCurationQueueDLQ', {});
@@ -338,25 +364,28 @@ const notebookCurationQueue = new sst.aws.Queue('notebookCurationQueue', {
     retry: 3,
   },
 });
-const notebookCurationQueueSubscription = notebookCurationQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/notebookCuration.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:*'],
-      resources: ['*'],
+const notebookCurationQueueSubscription = notebookCurationQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/notebookCuration.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, eventBus, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    logging: {
+      retention: '3 days',
     },
-  ],
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // Agent Proactive Message Queue
 const agentProactiveMessageQueueDLQ = new sst.aws.Queue('agentProactiveMessageQueueDLQ', {});
@@ -367,37 +396,40 @@ const agentProactiveMessageQueue = new sst.aws.Queue('agentProactiveMessageQueue
     retry: 3,
   },
 });
-const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/agentProactiveMessage.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
-  logging: {
-    retention: '3 days',
+const agentProactiveMessageQueueSubscription = agentProactiveMessageQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/agentProactiveMessage.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:*'],
+        resources: ['*'],
+      },
+      // This handler wires imageGenerateStorage and runs image_generation/edit_image tools
+      // (closes an agent-tool moderation bypass).
+      {
+        actions: ['rekognition:DetectModerationLabels'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:*'],
-      resources: ['*'],
-    },
-    // This handler wires imageGenerateStorage and runs image_generation/edit_image tools
-    // (closes an agent-tool moderation bypass).
-    {
-      actions: ['rekognition:DetectModerationLabels'],
-      resources: ['*'],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 // GitHub Webhook Processing Queue
 // Handles async processing of GitHub webhook events
@@ -421,33 +453,36 @@ const githubWebhookQueue = new sst.aws.Queue('githubWebhookQueue', {
     },
   },
 });
-const githubWebhookQueueSubscription = githubWebhookQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/githubWebhook.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '1 minute', // Fast processing for webhooks
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, mcpHandler],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'],
-      resources: [githubWebhookQueue.arn],
+const githubWebhookQueueSubscription = githubWebhookQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/githubWebhook.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '1 minute', // Fast processing for webhooks
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, mcpHandler],
+    logging: {
+      retention: '3 days',
     },
-  ],
-  // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        // Limit concurrency to prevent unbounded executions during webhook storms
-        // Max 10 concurrent Lambda executions - queue will buffer excess load
-        reserved: 10,
-      }
-    : undefined,
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'],
+        resources: [githubWebhookQueue.arn],
+      },
+    ],
+    // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          // Limit concurrency to prevent unbounded executions during webhook storms
+          // Max 10 concurrent Lambda executions - queue will buffer excess load
+          reserved: 10,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // Webhook Delivery Queue
 // Handles async HTTP delivery of webhooks to subscriber endpoints with retry logic
@@ -471,31 +506,34 @@ const webhookDeliveryQueue = new sst.aws.Queue('webhookDeliveryQueue', {
     },
   },
 });
-const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/webhookDelivery.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
-  logging: {
-    retention: '1 week', // Extended retention for delivery debugging
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
+const webhookDeliveryQueueSubscription = webhookDeliveryQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/webhookDelivery.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '30 seconds', // HTTP delivery timeout (10s per attempt + overhead)
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '1 week', // Extended retention for delivery debugging
     },
-  ],
-  // Higher throughput for webhook delivery - 20 concurrent Lambda executions
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        reserved: 20,
-      }
-    : undefined,
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    // Higher throughput for webhook delivery - 20 concurrent Lambda executions
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          reserved: 20,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // Slack Export Queue
 // Handles async export of large Slack channels to S3
@@ -513,28 +551,31 @@ const slackExportQueue = new sst.aws.Queue('slackExportQueue', {
     retry: 2, // Only retry twice - exports are expensive
   },
 });
-const slackExportQueueSubscription = slackExportQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/slackExport.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '15 minutes', // Maximum Lambda timeout for large exports
-  memory: '1024 MB', // More memory for processing large message sets
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, slackExportBucket],
-  logging: {
-    retention: '1 week', // Longer retention for export debugging
+const slackExportQueueSubscription = slackExportQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/slackExport.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes', // Maximum Lambda timeout for large exports
+    memory: '1024 MB', // More memory for processing large message sets
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, slackExportBucket],
+    logging: {
+      retention: '1 week', // Longer retention for export debugging
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          // Limit concurrency to prevent Slack rate limit issues
+          // Max 5 concurrent exports = manageable API load
+          reserved: 5,
+        }
+      : undefined,
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  // Only set reserved concurrency on production/dev to avoid exhausting account limits on PR stages
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        // Limit concurrency to prevent Slack rate limit issues
-        // Max 5 concurrent exports = manageable API load
-        reserved: 5,
-      }
-    : undefined,
-});
+  SINGLE_RECORD_BATCH
+);
 
 // Quest Export Queue
 // Handles async export of QuestMaster plans to ZIP (markdown + images)
@@ -546,26 +587,57 @@ const questExportQueue = new sst.aws.Queue('questExportQueue', {
     retry: 2,
   },
 });
-const questExportQueueSubscription = questExportQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/questExport.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  memory: '1024 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
-  logging: {
-    retention: '3 days',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel'],
-      resources: ['*'],
+const questExportQueueSubscription = questExportQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/questExport.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket],
+    logging: {
+      retention: '3 days',
     },
-  ],
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
+
+// Data Lake Cleanup Queue
+// Background phase-2 hard-delete sweep for a soft-deleted lake, offloaded off the request path.
+// Pure Mongo (no buckets/websocket), so DB secrets are all it needs.
+const dataLakeCleanupQueueDLQ = new sst.aws.Queue('dataLakeCleanupQueueDLQ', {});
+const dataLakeCleanupQueue = new sst.aws.Queue('dataLakeCleanupQueue', {
+  visibilityTimeout: '12 minutes', // > the 10-minute handler timeout + margin
+  dlq: {
+    queue: dataLakeCleanupQueueDLQ.arn,
+    retry: 3,
+  },
 });
+const dataLakeCleanupQueueSubscription = dataLakeCleanupQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/dataLakeCleanup.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // What's New Highlights Queue
 // Generates weekly highlights summary from What's New modals and posts to Slack
@@ -589,40 +661,43 @@ const whatsNewHighlightsQueue = new sst.aws.Queue('whatsNewHighlightsQueue', {
     },
   },
 });
-const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/whatsNewHighlights.dispatch',
-  timeout: '5 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
-  logging: {
-    retention: '3 days',
+const whatsNewHighlightsQueueSubscription = whatsNewHighlightsQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/whatsNewHighlights.dispatch',
+    timeout: '5 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
+        resources: [
+          'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
+          'arn:aws:bedrock:*:*:foundation-model/amazon.*',
+          'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
+          'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
+          'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
+        ],
+      },
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel', 'bedrock:InvokeModelWithResponseStream'],
-      resources: [
-        'arn:aws:bedrock:*:*:foundation-model/anthropic.claude-*',
-        'arn:aws:bedrock:*:*:foundation-model/amazon.*',
-        'arn:aws:bedrock:*:*:inference-profile/anthropic.claude-*',
-        'arn:aws:bedrock:*:*:inference-profile/us.anthropic.claude-*',
-        'arn:aws:bedrock:*:*:inference-profile/global.anthropic.claude-*',
-      ],
-    },
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 // Video Generation Queue
 // Handles async OpenAI Sora video generation (longer processing times)
@@ -637,23 +712,26 @@ const videoGenerationQueue = new sst.aws.Queue('videoGenerationQueue', {
     retry: 2, // Fewer retries - video generation is expensive
   },
 });
-const videoGenerationQueueSubscription = videoGenerationQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/videoGeneration.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '15 minutes', // Max Lambda timeout (900 seconds)
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, eventBus],
-  logging: {
-    retention: '3 days',
+const videoGenerationQueueSubscription = videoGenerationQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/videoGeneration.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '15 minutes', // Max Lambda timeout (900 seconds)
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, generatedImagesBucket, fabFileBucket, appFilesBucket, eventBus],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    concurrency: {
+      // Limit concurrency - video generation is resource-intensive
+      reserved: 5,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  concurrency: {
-    // Limit concurrency - video generation is resource-intensive
-    reserved: 5,
-  },
-});
+  SINGLE_RECORD_BATCH
+);
 
 // LiveOps Triage Queue (Multi-Config)
 // Handles triage jobs dispatched by liveopsTriageDispatcher.
@@ -673,26 +751,29 @@ const liveOpsTriageQueue = new sst.aws.Queue('liveOpsTriageQueue', {
     retry: 2, // Retry twice to handle transient failures
   },
 });
-const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe({
-  handler: 'apps/client/server/cron/liveopsTriageWorker.handler',
-  runtime: 'nodejs24.x',
-  timeout: '5 minutes',
-  memory: '512 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
-  logging: {
-    retention: '1 week', // Extended retention for debugging
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
+const liveOpsTriageQueueSubscription = liveOpsTriageQueue.subscribe(
+  {
+    handler: 'apps/client/server/cron/liveopsTriageWorker.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi, fabFileBucket, generatedImagesBucket, appFilesBucket, eventBus, mcpHandler],
+    logging: {
+      retention: '1 week', // Extended retention for debugging
     },
-  ],
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // SecOps Triage Queue
 // Receives full ZAP scan payloads (including instances/URLs/evidence) fanned out
@@ -719,32 +800,35 @@ const secopsTriageQueue = new sst.aws.Queue('secopsTriageQueue', {
   },
 });
 
-const secopsTriageQueueSubscription = secopsTriageQueue.subscribe({
-  handler: 'apps/client/server/cron/secopsTriageWorker.handler',
-  runtime: 'nodejs24.x',
-  timeout: '5 minutes',
-  memory: '512 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets, websocketApi],
-  logging: {
-    retention: '1 week',
-  },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['cloudwatch:PutMetricData'],
-      resources: ['*'],
+const secopsTriageQueueSubscription = secopsTriageQueue.subscribe(
+  {
+    handler: 'apps/client/server/cron/secopsTriageWorker.handler',
+    runtime: 'nodejs24.x',
+    timeout: '5 minutes',
+    memory: '512 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '1 week',
     },
-  ],
-  // Only set reserved concurrency on production/dev — ZAP scans are weekly, low volume
-  concurrency: ['production', 'dev'].includes($app.stage)
-    ? {
-        reserved: 2,
-      }
-    : undefined,
-});
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['cloudwatch:PutMetricData'],
+        resources: ['*'],
+      },
+    ],
+    // Only set reserved concurrency on production/dev — ZAP scans are weekly, low volume
+    concurrency: ['production', 'dev'].includes($app.stage)
+      ? {
+          reserved: 2,
+        }
+      : undefined,
+  },
+  SINGLE_RECORD_BATCH
+);
 
 // Tavern Heartbeat Queue + DLQ
 // These stay in core so that infra/web.ts Linkables and infra/dlqAlarms.ts can import
@@ -771,37 +855,40 @@ const deepAgentWakeQueue = new sst.aws.Queue('deepAgentWakeQueue', {
     retry: 2,
   },
 });
-const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe({
-  handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '10 minutes',
-  vpc: lambdaVpc,
-  link: [...allSecrets],
-  logging: {
-    retention: '3 days',
+const deepAgentWakeQueueSubscription = deepAgentWakeQueue.subscribe(
+  {
+    handler: 'apps/client/server/deepAgent/wakeHandler.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '10 minutes',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    permissions: [
+      {
+        actions: ['bedrock:InvokeModel'],
+        resources: ['*'],
+      },
+      // deepAgent/toolMaterializer.ts wires imageGenerateStorage and runs image_generation/
+      // edit_image tools (closes an agent-tool moderation bypass).
+      {
+        actions: ['rekognition:DetectModerationLabels'],
+        resources: ['*'],
+      },
+    ],
+    copyFiles: [
+      {
+        from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
+        to: 'tiktoken_bg.wasm',
+      },
+    ],
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-  },
-  permissions: [
-    {
-      actions: ['bedrock:InvokeModel'],
-      resources: ['*'],
-    },
-    // deepAgent/toolMaterializer.ts wires imageGenerateStorage and runs image_generation/
-    // edit_image tools (closes an agent-tool moderation bypass).
-    {
-      actions: ['rekognition:DetectModerationLabels'],
-      resources: ['*'],
-    },
-  ],
-  copyFiles: [
-    {
-      from: 'apps/client/node_modules/tiktoken/tiktoken_bg.wasm',
-      to: 'tiktoken_bg.wasm',
-    },
-  ],
-});
+  SINGLE_RECORD_BATCH
+);
 
 // SRE Fix Queue (defined before the SRE Job Queue because the Diagnostician dispatches to it)
 // Dispatches repository_dispatch events to trigger GitHub Actions autofix workflow.
@@ -815,21 +902,24 @@ const sreFixQueue = new sst.aws.Queue('sreFixQueue', {
     retry: 2,
   },
 });
-const sreFixQueueSubscription = sreFixQueue.subscribe({
-  handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
-  runtime: 'nodejs24.x',
-  timeout: '2 minutes',
-  memory: '256 MB',
-  vpc: lambdaVpc,
-  link: [...allSecrets],
-  logging: {
-    retention: '1 week',
+const sreFixQueueSubscription = sreFixQueue.subscribe(
+  {
+    handler: 'apps/client/server/queueHandlers/sreFix.dispatch',
+    runtime: 'nodejs24.x',
+    timeout: '2 minutes',
+    memory: '256 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets],
+    logging: {
+      retention: '1 week',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+      APP_URL: $dev ? 'http://localhost:3000' : router.url,
+    },
   },
-  environment: {
-    ...DEFAULT_LAMBDA_ENVIRONMENT,
-    APP_URL: $dev ? 'http://localhost:3000' : router.url,
-  },
-});
+  SINGLE_RECORD_BATCH
+);
 
 // SRE Job Queue (merged Analysis + Revision — #8657)
 // Single queue for both analysis and revision jobs, discriminated by a `jobType`
@@ -1100,6 +1190,7 @@ export {
   githubWebhookQueue,
   webhookDeliveryQueue,
   questExportQueue,
+  dataLakeCleanupQueue,
   liveOpsTriageQueue,
   tavernHeartbeatQueue,
   deepAgentWakeQueue,
@@ -1124,6 +1215,7 @@ export {
   githubWebhookQueueDLQ,
   webhookDeliveryQueueDLQ,
   questExportQueueDLQ,
+  dataLakeCleanupQueueDLQ,
   liveOpsTriageQueueDLQ,
   tavernHeartbeatQueueDLQ,
   deepAgentWakeQueueDLQ,
@@ -1150,6 +1242,7 @@ export {
   githubWebhookQueueSubscription,
   webhookDeliveryQueueSubscription,
   questExportQueueSubscription,
+  dataLakeCleanupQueueSubscription,
   liveOpsTriageQueueSubscription,
   deepAgentWakeQueueSubscription,
   sreFixQueueSubscription,

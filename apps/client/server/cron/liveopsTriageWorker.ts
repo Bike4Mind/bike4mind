@@ -20,20 +20,18 @@ import {
   connectDB,
   liveopsTriageConfigRepository,
   liveopsTriageRunRepository,
-  slackDevWorkspaceRepository,
-  ILiveopsTriageConfigDocument,
   ILiveopsTriageDryRunResult,
 } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
 import { createLiveopsTriageService, sanitizeErrorMessage } from '@server/services/liveopsTriageService';
 import { createIssueTracker } from '@server/services/issueTrackers';
+import { resolveSlackBotToken } from '@server/services/liveopsConnectionResolver';
 import { emitMetric } from '@server/utils/cloudwatch';
 import { StandardUnit } from '@aws-sdk/client-cloudwatch';
 import { dispatchWithLogger } from '../queueHandlers/utils';
 import { Resource } from 'sst';
 import { z } from 'zod';
 import type { LiveOpsTriageJobMessage } from './liveopsTriageDispatcher';
-import { decryptToken } from '@server/security/tokenEncryption';
 
 // Register global handlers to absorb transient network errors (TypeError: terminated)
 // that escape try/catch via orphaned undici promises.
@@ -53,45 +51,6 @@ const LiveOpsTriageJobMessageSchema = z.object({
   dryRun: z.boolean().optional(),
   lookbackHours: z.number().int().min(1).max(168).optional(),
 });
-
-async function getSlackBotToken(config: ILiveopsTriageConfigDocument, logger: Logger): Promise<string | null> {
-  let slackBotToken: string | null = null;
-
-  if (config.slackWorkspaceId) {
-    const workspace = await slackDevWorkspaceRepository.findByIdWithToken(String(config.slackWorkspaceId));
-    if (workspace) {
-      slackBotToken = decryptToken(workspace.slackBotToken) ?? null;
-      logger.info('[LIVEOPS-WORKER] Using configured Slack workspace', {
-        workspaceId: config.slackWorkspaceId,
-        configName: config.name,
-      });
-    } else {
-      logger.warn('[LIVEOPS-WORKER] Configured workspace not found, falling back to first active', {
-        configuredWorkspaceId: config.slackWorkspaceId,
-        configName: config.name,
-      });
-    }
-  }
-
-  // Fallback to first active workspace
-  if (!slackBotToken) {
-    const activeWorkspaces = await slackDevWorkspaceRepository.findAllActive();
-    if (activeWorkspaces.length > 0 && activeWorkspaces[0].slackTeamId) {
-      const workspaceWithToken = await slackDevWorkspaceRepository.findBySlackTeamIdWithToken(
-        activeWorkspaces[0].slackTeamId
-      );
-      slackBotToken = decryptToken(workspaceWithToken?.slackBotToken) ?? null;
-      if (slackBotToken) {
-        logger.warn('[LIVEOPS-WORKER] Using first active workspace as fallback', {
-          workspaceId: activeWorkspaces[0].id,
-          configName: config.name,
-        });
-      }
-    }
-  }
-
-  return slackBotToken;
-}
 
 export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Context, logger: Logger) => {
   const stage = Resource.App.stage;
@@ -178,9 +137,13 @@ export const handler = dispatchWithLogger(async (event: SQSEvent, _context: Cont
   try {
     await updateProgress(5);
 
-    const slackBotToken = await getSlackBotToken(config, logger);
+    const slackBotToken = await resolveSlackBotToken(config, logger);
     if (!slackBotToken) {
-      throw new Error('No active Slack workspace with bot token found');
+      throw new Error(
+        config.organizationId
+          ? 'No enabled Slack workspace with bot token found for organization'
+          : 'No active Slack workspace with bot token found'
+      );
     }
 
     await updateProgress(10);

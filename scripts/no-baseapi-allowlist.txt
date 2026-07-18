@@ -16,6 +16,7 @@ apps/client/pages/api/__tests__/artifact-sandbox.test.ts # Test file for the han
 apps/client/pages/api/react-artifact-sandbox.ts          # Static React iframe target for client-rendered artifacts; no user data, no DB (#9403)
 apps/client/pages/api/__tests__/react-artifact-sandbox.test.ts # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/__tests__/sessionRedactionGuard.test.ts # Static-analysis guard test (#9405); reads route source via fs, not an API route
+apps/client/pages/api/feedback/[id]/__tests__/update.ability.test.ts # Pure CASL unit test (class-vs-instance); no HTTP route, no baseApi
 apps/client/pages/api/publish/widget.ts                 # Static first-party comment-overlay JS; intentionally public, no user data, no DB
 
 # Slack — authenticated via HMAC-SHA256 signature (Slack signing secret)

@@ -37,6 +37,7 @@ import {
 } from '@client/app/stores/useAgentExecutionStore';
 import type { IAgentStep, GenerateImageToolCall } from '@bike4mind/common';
 import { appendReplyToLatestOptimisticBubble, swapOptimisticPromptBubbleId } from '@client/app/utils/llm';
+import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher';
 
 // Mirror the shape the server validates in
 // `apps/client/server/websocket/agentExecute.ts`. Kept inline because the
@@ -114,10 +115,7 @@ interface AgentExecuteReconnect {
 }
 
 export type AgentExecuteCommand =
-  | AgentExecuteStart
-  | AgentExecuteAbort
-  | AgentExecutePermissionResponse
-  | AgentExecuteReconnect;
+  AgentExecuteStart | AgentExecuteAbort | AgentExecutePermissionResponse | AgentExecuteReconnect;
 
 /** Length cap for the background-completion toast preview. The spec asks for
  * 200 chars; server-side truncation on subagent steps is 2KB, so the final
@@ -213,6 +211,24 @@ export function useAgentExecutionSubscriptions(): void {
           isComplete: msg.isComplete,
           receivedAt: Date.now(),
         });
+        // Apply any UI side-effects the tool emitted this iteration (e.g. optimizer
+        // console populate) through the shared bus - the same one the chat path uses.
+        // dedupeKey is executionId:iteration so a redelivered frame applies once, and
+        // is distinct from the completion Quest id used on reload replay (SessionMiddle),
+        // so live-apply and replay never collide.
+        if (msg.uiSideEffects?.length) {
+          dispatchUiSideEffects(msg.uiSideEffects, {
+            live: true,
+            dedupeKey: `${msg.executionId}:${msg.iteration}`,
+          });
+        }
+      })
+    );
+
+    unsubscribers.push(
+      subscribeToAction('agent_text_delta', async (msg: IMessageDataToClient) => {
+        if (msg.action !== 'agent_text_delta') return;
+        store().appendTextDelta(msg.executionId, msg.iteration, msg.delta);
       })
     );
 

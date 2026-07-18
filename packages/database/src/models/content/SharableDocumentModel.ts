@@ -133,7 +133,14 @@ export class ShareableDocumentRepository<T> implements IShareableStaticMethods<T
   async findShareAccessById(user: Pick<IUserDocument, 'id' | 'groups'>, id: string): Promise<T | null> {
     return this.model.findOne({
       _id: id,
-      $or: [{ userId: user.id }, { users: { $elemMatch: { userId: user.id, permissions: { $in: ['share'] } } } }],
+      // Own / users-share / groups-share, mirroring the CASL `Permission.share` arms
+      // in ability.ts (own, users[].share, groups[].share) and matching the sibling
+      // findAccessById / findUpdateAccessById statics, which both include the groups arm.
+      $or: [
+        { userId: user.id },
+        { users: { $elemMatch: { userId: user.id, permissions: { $in: ['share'] } } } },
+        { groups: { $elemMatch: { groupId: { $in: user.groups }, permissions: { $in: ['share'] } } } },
+      ],
     });
   }
 }

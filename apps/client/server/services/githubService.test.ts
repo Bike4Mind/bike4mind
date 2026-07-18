@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock the dependencies using vi.hoisted
-const { mockOctokit, mockRepository, mockConfig, mockDecryptSecret, mockEncryptSecret, mockIsEncrypted, mockLogger } =
+const { mockOctokit, mockRepository, mockConfig, mockDecryptToken, mockEncryptSecret, mockIsEncrypted, mockLogger } =
   vi.hoisted(() => ({
     mockOctokit: {
       paginate: vi.fn(),
@@ -48,7 +48,7 @@ const { mockOctokit, mockRepository, mockConfig, mockDecryptSecret, mockEncryptS
     mockConfig: {
       SECRET_ENCRYPTION_KEY: 'a'.repeat(64), // Valid 64 hex char key
     },
-    mockDecryptSecret: vi.fn((val: string) => val),
+    mockDecryptToken: vi.fn((val: string) => val),
     mockEncryptSecret: vi.fn((val: string) => `encrypted:${val}`),
     mockIsEncrypted: vi.fn(() => false),
     mockLogger: {
@@ -83,9 +83,13 @@ vi.mock('@server/utils/config', () => ({
 
 // Mock secret encryption
 vi.mock('@server/security/secretEncryption', () => ({
-  decryptSecret: mockDecryptSecret,
   encryptSecret: mockEncryptSecret,
   isEncrypted: mockIsEncrypted,
+}));
+
+// Mock token encryption (rotation-aware decrypt: current key, then previous)
+vi.mock('@server/security/tokenEncryption', () => ({
+  decryptToken: mockDecryptToken,
 }));
 
 // Mock @bike4mind/common
@@ -281,16 +285,101 @@ describe('GitHubService', () => {
           ...mockConnection,
           isSystemDefault: true,
         });
-        // Mark the token as encrypted so decryptSecret is actually called,
+        // Mark the token as encrypted so decryptToken is actually called,
         // then make decryption blow up to simulate an auth init failure.
         mockIsEncrypted.mockReturnValueOnce(true);
-        mockDecryptSecret.mockImplementationOnce(() => {
+        mockDecryptToken.mockImplementationOnce(() => {
           throw new Error('decryption failed');
         });
 
         await expect(GitHubService.forSystem(logger)).rejects.toThrow(
           '[GitHubService] Failed to initialize GitHub authentication'
         );
+      });
+
+      // Regression: the auth-init catch used to discard the underlying error, making
+      // github_app failures undebuggable. It must now log a coarse, non-sensitive reason
+      // that distinguishes a misconfigured record from a decryption/key-rotation failure -
+      // without leaking key material or ciphertext structure.
+      it('should log reason "decrypt-failed" when decryption throws', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockConnection,
+          isSystemDefault: true,
+        });
+        mockIsEncrypted.mockReturnValueOnce(true);
+        mockDecryptToken.mockImplementationOnce(() => {
+          throw new Error('decryption failed');
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow(
+          '[GitHubService] Failed to initialize GitHub authentication'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          '[GitHubService] Failed to initialize authentication',
+          expect.objectContaining({
+            reason: 'decrypt-failed',
+            detail: 'Failed to decrypt credentials. Token may need rotation.',
+          })
+        );
+      });
+
+      // Regression (LiveOps/SRE outage): a github_app private key encrypted under a
+      // pre-rotation key must still authenticate. The auth-init path must decrypt via
+      // decryptToken (current key, then SECRET_ENCRYPTION_KEY_PREVIOUS), mirroring the
+      // GitHub webhook paths - not raw decryptSecret with the current key only.
+      it('should recover a github_app credential via the key-rotation fallback', async () => {
+        const encryptedPrivateKey = 'aa'.repeat(16) + ':' + 'bb'.repeat(16) + ':deadbeef';
+        const decryptedPem = '-----BEGIN RSA PRIVATE KEY-----\nrecovered\n-----END RSA PRIVATE KEY-----';
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockAppConnection,
+          isSystemDefault: true,
+          privateKey: encryptedPrivateKey,
+        });
+        // Ciphertext looks encrypted; decryptToken succeeds (as it would using the previous key).
+        mockIsEncrypted.mockReturnValue(true);
+        mockDecryptToken.mockReturnValue(decryptedPem);
+
+        const service = await GitHubService.forSystem(logger);
+
+        expect(service).not.toBeNull();
+        expect(mockDecryptToken).toHaveBeenCalledWith(encryptedPrivateKey);
+      });
+
+      it('should log reason "missing-fields" when a github_app connection is missing required fields', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockAppConnection,
+          isSystemDefault: true,
+          privateKey: undefined,
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow(
+          '[GitHubService] Failed to initialize GitHub authentication'
+        );
+        expect(mockLogger.error).toHaveBeenCalledWith(
+          '[GitHubService] Failed to initialize authentication',
+          expect.objectContaining({
+            reason: 'missing-fields',
+            detail: 'GitHub App connection missing required fields',
+          })
+        );
+      });
+
+      it('should not leak the decrypted key material or ciphertext into the auth-init log', async () => {
+        mockRepository.findSystemDefaultWithCredentials.mockResolvedValue({
+          ...mockConnection,
+          isSystemDefault: true,
+        });
+        mockIsEncrypted.mockReturnValueOnce(true);
+        mockDecryptToken.mockImplementationOnce(() => {
+          throw new Error('cipher gcm tag mismatch: 0xDEADBEEF iv=abcdef');
+        });
+
+        await expect(GitHubService.forSystem(logger)).rejects.toThrow();
+        const authInitCall = mockLogger.error.mock.calls.find(
+          ([msg]) => msg === '[GitHubService] Failed to initialize authentication'
+        );
+        expect(authInitCall).toBeDefined();
+        expect(JSON.stringify(authInitCall![1])).not.toContain('DEADBEEF');
       });
     });
   });

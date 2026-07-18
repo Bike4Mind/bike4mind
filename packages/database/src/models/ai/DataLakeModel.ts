@@ -8,6 +8,7 @@ import type {
   IDataLakeBatchFile,
   BatchFileStatus,
   BatchStatus,
+  BatchCompletionReason,
   BatchCounterField,
   AccessContext,
   DataLakeStatus,
@@ -304,6 +305,8 @@ const DataLakeBatchSchema = new mongoose.Schema(
     ],
     startedAt: { type: Date },
     completedAt: { type: Date },
+    // Set only on a non-normal terminal transition (e.g. 'reconciler'); absent on normal completion.
+    completionReason: { type: String, enum: ['reconciler'] },
   },
   {
     timestamps: true,
@@ -340,6 +343,15 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
       dataLakeId,
       status: { $in: BATCH_NON_TERMINAL_STATUSES },
     });
+    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
+  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+    // status equality prefix + updatedAt range -> served by the { status:1, updatedAt:1 } index.
+    const results = await this.batchModel
+      .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit);
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
@@ -390,11 +402,14 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
    */
   async markTerminalIfActive(
     batchId: string,
-    status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>
+    status: Extract<BatchStatus, 'completed' | 'completed_with_errors' | 'failed' | 'cancelled'>,
+    completionReason?: BatchCompletionReason
   ): Promise<IDataLakeBatchDocument | null> {
+    const set: Record<string, unknown> = { status, completedAt: new Date() };
+    if (completionReason) set.completionReason = completionReason;
     const doc = await this.batchModel.findOneAndUpdate(
       { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
-      { $set: { status, completedAt: new Date() } },
+      { $set: set },
       { new: true }
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;

@@ -26,6 +26,49 @@ const querySchema = z.object({
     .transform(val => val === 'true'),
 });
 
+// Admin users-list projection: an inclusion allowlist, so a newly-added secret
+// field on the User schema can never silently appear here. Aggregation ignores
+// Mongoose select:false, so this projection is the only guard. MFA is narrowed to
+// enrollment status -- totpSecret / backupCodes must never reach the client, even
+// an admin's browser. (The joined `organization` object is admin-scoped org data;
+// its own field-level exposure is tracked separately, not here.)
+const ADMIN_USER_PROJECTION: Record<string, 1> = {
+  _id: 1,
+  name: 1,
+  username: 1,
+  email: 1,
+  isAdmin: 1,
+  level: 1,
+  tags: 1,
+  isBanned: 1,
+  isModerated: 1,
+  photoUrl: 1,
+  phone: 1,
+  role: 1,
+  team: 1,
+  isOnline: 1,
+  preferences: 1,
+  'mfa.totpEnabled': 1,
+  'mfa.setupAt': 1,
+  'mfa.lastUsedAt': 1,
+  storageLimit: 1,
+  currentStorageSize: 1,
+  createdAt: 1,
+  updatedAt: 1,
+  lastActiveAt: 1,
+  // loginRecords is admin-only PII (IPs/userAgents): it is in USER_SECRET_FIELDS so the
+  // toSafeUser/redactUserSecretsForSelf serializers drop it, but the admin activity view
+  // reads it here. Intentional admin-only exposure, not a serialize-everywhere field.
+  loginRecords: 1,
+  subscribedUntil: 1,
+  numReferralsAvailable: 1,
+  currentCredits: 1,
+  organizationId: 1,
+  organization: 1,
+  pendingEmail: 1,
+  emailVerified: 1,
+};
+
 const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async (req, res) => {
   try {
     const { page, limit, search, publicView, sortField, sortOrder, orgSearch, tags, downloadAll, projectId } =
@@ -157,7 +200,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
         },
         {
           $project: {
-            ...(publicView ? { _id: 1, username: 1, name: 1, email: 1 } : { password: 0 }),
+            ...(publicView ? { _id: 1, username: 1, name: 1, email: 1 } : ADMIN_USER_PROJECTION),
             score: 1,
           },
         },
@@ -185,7 +228,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
           },
         },
         { $sort: { [sortField]: sortOrder === 'asc' ? 1 : -1 } },
-        { $project: publicView ? { _id: 1, username: 1, name: 1, email: 1 } : { password: 0 } },
+        { $project: publicView ? { _id: 1, username: 1, name: 1, email: 1 } : ADMIN_USER_PROJECTION },
       ];
     }
 

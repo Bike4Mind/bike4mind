@@ -37,6 +37,8 @@ export * from './apikey';
 export * from './llm';
 export * from './errors';
 export * from './extractErrorMessage';
+// Also available via the lightweight `@bike4mind/utils/registrableDomain` subpath.
+export * from './registrableDomain';
 // Also available via the lightweight `@bike4mind/utils/escapeRegex` subpath -
 // prefer that in server modules covered by client vitest suites.
 export * from './escapeRegex';
@@ -62,6 +64,7 @@ export * from './user';
 export * from './pricing';
 export * from './functionQueueRunner';
 export * from './fabfile';
+export * from './office/officeEdit';
 export * from './artifactParser';
 export * from './adminSettings';
 export * from './notificationDeduplicator';

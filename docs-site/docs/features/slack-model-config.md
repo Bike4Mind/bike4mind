@@ -57,6 +57,17 @@ Click **Edit** next to the channel override you want to change. The modal opens 
 
 Click **Remove** next to the channel override. The channel immediately reverts to organization defaults (or system defaults if no org defaults are set).
 
+### Default GitHub Repository per Channel
+
+The channel config modal also accepts a **Default GitHub Owner** and **Default GitHub Repository**. When set, GitHub issues created from that channel without an explicitly named repository (for example, `@dev create an issue for the login bug`) are routed to `owner/repo` automatically.
+
+- Enter the owner (user or organization) and the repo name separately -- e.g. owner `my-org`, repository `my-app`.
+- Both fields must be set together; a value in only one of them is rejected on save.
+- An explicitly named repository in the user's message always overrides the channel default.
+- Clear both fields and save to remove the default; issue creation then falls back to asking the user or inferring from context, as before.
+
+Configured defaults are shown in the channel overrides list on the App Home tab (e.g. ``Repo: `my-org/my-app` ``).
+
 ## Agent Model Configuration
 
 **Custom agents** you create in the web app can have their own model preferences. This is useful when a specific agent should always use a particular model regardless of org settings.

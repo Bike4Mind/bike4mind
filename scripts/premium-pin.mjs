@@ -2,9 +2,8 @@
 // Manage premium-overlay.lock.json entries for branch-based preview testing.
 //
 // The lock file already supports pinning an overlay to a branch instead of a
-// SHA (bootstrap-premium.sh and _deploy-env.yml both accept either), and
-// deploy.yml's merge-queue gate + _deploy-env.yml's post-merge backstop
-// already refuse to let a branch pin reach main. This CLI is a thin,
+// SHA (bootstrap-premium.sh accepts either), and ci.yml's merge-queue gate
+// already refuses to let a branch pin reach main. This CLI is a thin,
 // deterministic wrapper over that existing mechanism, not a replacement for
 // it - it never touches CI, only this file.
 //
@@ -27,7 +26,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const LOCK_FILE = path.join(REPO_ROOT, 'premium-overlay.lock.json');
-// Mirrors deploy.yml's merge-queue gate regex exactly (re.fullmatch(r'[0-9a-f]{40}', ...)).
+// Mirrors ci.yml's merge-queue gate regex exactly (re.fullmatch(r'[0-9a-f]{40}', ...)).
 const SHA_RE = /^[0-9a-f]{40}$/;
 // Mirrors bootstrap-premium.sh's ref guard: alphanumeric/underscore start, repo-safe chars, no '..'.
 const REF_RE = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
@@ -96,9 +95,15 @@ function cmdMerged(pins, name) {
   const owner = process.env.PREMIUM_OVERLAY_OWNER || 'Bike4Mind';
   const repo = `${owner}/${key}`;
   console.log(`Resolving ${repo}@${ref} to its latest commit SHA...`);
-  const sha = execFileSync('gh', ['api', `repos/${repo}/commits/${ref}`, '--jq', '.sha'], {
-    encoding: 'utf8',
-  }).trim();
+  let sha;
+  try {
+    sha = execFileSync('gh', ['api', `repos/${repo}/commits/${ref}`, '--jq', '.sha'], {
+      encoding: 'utf8',
+    }).trim();
+  } catch (err) {
+    console.error(`Error: 'gh api' failed to resolve ${repo}@${ref}: ${(err.stderr || err.message).trim()}`);
+    process.exit(1);
+  }
   if (!SHA_RE.test(sha)) {
     console.error(`Error: unexpected response from gh api (not a 40-char SHA): '${sha}'`);
     process.exit(1);

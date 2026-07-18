@@ -3,8 +3,7 @@ import { accessibleBy } from '@casl/mongoose';
 import { mongoose, Quest, Session } from '@bike4mind/database';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
 import { NotFoundError } from '@server/utils/errors';
-import { updateSharing } from '@server/managers/sharingManager';
-import { IShareableDocument, Permission, ISessionDocument, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
+import { Permission, ISessionDocument, IChatHistoryItem, IUserDocument } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { Session as SessionModel, sessionRepository } from '@bike4mind/database/auth';
 import { createSession } from './sessionCrud';
@@ -151,12 +150,6 @@ export const stopReply = async (sessionId: string, ability: Ability) => {
 
   return latestQuest;
 };
-
-export const updateSessionSharingState = (
-  sessionId: string,
-  sharingData: Partial<IShareableDocument>,
-  ability: Ability
-) => updateSharing(Session, sessionId, sharingData, ability);
 
 export const forkSession = async (sessionId: string, messageId: string, ability: Ability) => {
   const session = await Session.findById(sessionId);

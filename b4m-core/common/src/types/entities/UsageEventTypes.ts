@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
+import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -116,6 +117,7 @@ export interface IProviderMonthCogs {
   inputTokens: number;
   outputTokens: number;
   cachedInputTokens: number;
+  cacheWriteTokens: number;
 }
 
 /**
@@ -136,6 +138,136 @@ export interface ISettlementBreakdown {
   deltaSampleSize: number;
 }
 
+/** Shared spend totals for any owner-scoped usage aggregation bucket. */
+export interface IUsageSpendBucket {
+  requests: number;
+  /** True provider COGS in USD over the bucket. */
+  cogsUsd: number;
+  /** Credits debited from the owner over the bucket. */
+  creditsCharged: number;
+}
+
+/** Owner spend for one UTC day (burn chart point). */
+export interface IOwnerSpendDay extends IUsageSpendBucket {
+  day: string; // YYYY-MM-DD (UTC)
+}
+
+/** Owner spend attributed to one member (the user who ran the call). */
+export interface IOwnerSpendMember extends IUsageSpendBucket {
+  userId: string;
+}
+
+/** Owner spend for one provider/model pair. */
+export interface IOwnerSpendModel extends IUsageSpendBucket {
+  provider: string;
+  model: string;
+}
+
+/** Owner spend for one product surface (chat, agent_execution, operations, embedding, ...). */
+export interface IOwnerSpendFeature extends IUsageSpendBucket {
+  feature: UsageEventFeature;
+}
+
+/**
+ * One owner's usage rolled up every way the dashboard needs it, computed in a
+ * single pass so the cuts always reconcile against the same event set.
+ * `overTime` is ascending by day (chart order); the breakdowns are descending
+ * by creditsCharged (biggest spenders first).
+ */
+export interface IOwnerUsageSummary {
+  overTime: IOwnerSpendDay[];
+  byMember: IOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  totals: IUsageSpendBucket;
+}
+
+/** A member spend bucket with the user id resolved to a display name by the API. */
+export type NamedOwnerSpendMember = IOwnerSpendMember & { userName?: string };
+
+/**
+ * Wire shape of GET /api/admin/org-usage: an owner usage summary with member
+ * ids resolved to names, plus the echo of the query that produced it.
+ */
+export interface IOrgUsageDashboardResponse {
+  organizationId: string;
+  /** Trailing window the summary covers. */
+  days: number;
+  overTime: IOwnerSpendDay[];
+  byMember: NamedOwnerSpendMember[];
+  byModel: IOwnerSpendModel[];
+  byFeature: IOwnerSpendFeature[];
+  /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
+  byApiKey: NamedApiKeyUsage[];
+  /**
+   * Spend grouped by originating surface (from the ledger, the only source
+   * carrying `source`; credits only, no COGS). Sums to the org's ledger AI
+   * spend, which can drift from `totals` - that comes from UsageEvent.
+   */
+  bySource: ISourceUsage[];
+  totals: IUsageSpendBucket;
+}
+
+/** A spend bucket that also carries token quantities, for session-level detail. */
+export interface IUsageSpendWithTokens extends IUsageSpendBucket {
+  inputTokens: number;
+  outputTokens: number;
+  cachedInputTokens: number;
+}
+
+/** Session spend for one quest (requestId is the questId for chat/image/video). */
+export interface ISessionQuestUsage extends IUsageSpendWithTokens {
+  requestId: string;
+}
+
+/** Session spend for one provider/model pair. */
+export interface ISessionModelUsage extends IUsageSpendWithTokens {
+  provider: string;
+  model: string;
+}
+
+/**
+ * One session's usage rolled up by quest and by model in a single pass, plus
+ * totals. Powers the per-session usage-detail drill-down.
+ */
+export interface ISessionUsageSummary {
+  totals: IUsageSpendWithTokens;
+  byQuest: ISessionQuestUsage[];
+  byModel: ISessionModelUsage[];
+}
+
+/** One model's slice of an agent execution's iteration billing. */
+export interface ISessionAgentModelUsage {
+  model: string;
+  iterations: number;
+  credits: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
+
+/**
+ * An agent execution that ran in a session, with its iteration billing rolled
+ * up by model. `totalCreditsUsed` is the execution's own atomic total (includes
+ * children rolled up on completion); `parentExecutionId` marks subagent runs.
+ */
+export interface ISessionAgentExecution {
+  executionId: string;
+  status?: string;
+  parentExecutionId?: string;
+  totalCreditsUsed: number;
+  iterationCount: number;
+  byModel: ISessionAgentModelUsage[];
+}
+
+/** Wire shape of GET /api/admin/session-usage. */
+export interface ISessionUsageResponse {
+  sessionId: string;
+  usage: ISessionUsageSummary;
+  executions: ISessionAgentExecution[];
+}
+
 export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocument> {
   /** Append one event. Must never throw into the billing path; callers fire-and-forget. */
   record(event: IUsageEventInput): Promise<IUsageEventDocument | null>;
@@ -151,4 +283,14 @@ export interface IUsageEventRepository extends IBaseRepository<IUsageEventDocume
 
   /** Settlement-basis rollup over the trailing N days (default 30): provider-vs-local token delta and written-off credits. */
   settlementBreakdown(days?: number): Promise<ISettlementBreakdown[]>;
+
+  /**
+   * All spend for one credit holder (org/user/agent) over the trailing N days
+   * (default 30), rolled up by day, member, model, and feature in a single
+   * aggregation. Powers the per-org usage dashboard.
+   */
+  ownerUsageSummary(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IOwnerUsageSummary>;
+
+  /** One session's usage rolled up by quest and by model (all events for the session). */
+  sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary>;
 }

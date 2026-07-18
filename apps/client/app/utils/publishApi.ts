@@ -187,9 +187,7 @@ export async function updatePublishedCommentPolicy(publicId: string, commentPoli
 
 /** Access gate on top of `visibility: 'public'` - see issue #383. */
 export type PublishAccessGateInput =
-  | { kind: 'passphrase'; passphrase: string }
-  | { kind: 'domain'; allowedDomains: string[] }
-  | null;
+  { kind: 'passphrase'; passphrase: string } | { kind: 'domain'; allowedDomains: string[] } | null;
 
 /**
  * Set, rotate, or clear (null) a public item's access gate (owner/admin).
@@ -198,6 +196,49 @@ export type PublishAccessGateInput =
  */
 export async function updatePublishedAccessGate(publicId: string, accessGate: PublishAccessGateInput): Promise<void> {
   await api.patch(`/api/publish/artifacts/${publicId}`, { accessGate });
+}
+
+/**
+ * Set or clear the embed allowlist - the external https origins allowed to frame
+ * this artifact (owner/admin). Only honored while the item is open-public (no
+ * gate); `[]` clears it. The server normalizes and re-validates each origin.
+ */
+export async function updatePublishedEmbedOrigins(publicId: string, embedOrigins: string[]): Promise<void> {
+  await api.patch(`/api/publish/artifacts/${publicId}`, { embedOrigins });
+}
+
+/**
+ * Current embed-allowlist state for seeding the editor: the allowlisted origins
+ * plus whether a gate is live (embedding is open-public only, so the editor hides
+ * when `gated`).
+ */
+export async function getPublishedEmbedState(publicId: string): Promise<{ embedOrigins: string[]; gated: boolean }> {
+  const { data } = await api.get<{ artifact?: { embedOrigins?: string[]; accessGate?: unknown } }>(
+    `/api/publish/artifacts/${publicId}`
+  );
+  return { embedOrigins: data.artifact?.embedOrigins ?? [], gated: !!data.artifact?.accessGate };
+}
+
+/** Read shape of a live access gate (the passphrase hash is stripped server-side). */
+export type PublishAccessGateRead = { kind: 'passphrase' } | { kind: 'domain'; allowedDomains: string[] } | null;
+
+/** Everything the per-artifact manage panel needs to seed its editors (owner/admin). */
+export interface PublishedManageState {
+  visibility: PublishVisibility;
+  accessGate: PublishAccessGateRead;
+  embedOrigins: string[];
+  commentPolicy: CommentPolicy;
+}
+
+export async function getPublishedManageState(publicId: string): Promise<PublishedManageState> {
+  const { data } = await api.get<{ artifact?: Partial<PublishedManageState> }>(`/api/publish/artifacts/${publicId}`);
+  const a = data.artifact ?? {};
+  return {
+    visibility: a.visibility ?? 'private',
+    accessGate: a.accessGate ?? null,
+    embedOrigins: a.embedOrigins ?? [],
+    commentPolicy: a.commentPolicy ?? 'none',
+  };
 }
 
 /**
@@ -253,7 +294,11 @@ export async function publishArtifactBundle(input: {
   const content = (input.content ?? '').trim();
   if (!content) throw new Error('This artifact has no content to publish');
 
-  const indexHtml = buildArtifactIndexHtml(input.type, input.content, input.title);
+  // React artifacts upload their RAW JSX as index.html; the server transpiles it into a
+  // self-contained inert HTML bundle at finalize (issue #21). Every other type renders to static
+  // HTML here. The `artifactType` signal on `source` tells finalize which path to take.
+  const isReact = input.type === 'react';
+  const indexHtml = isReact ? input.content : buildArtifactIndexHtml(input.type, input.content, input.title);
   const size = new TextEncoder().encode(indexHtml).length;
   let slug = input.slug ?? `${slugify(input.title) || 'artifact'}-${input.artifactId.slice(0, 6)}`;
   // "Publish as new" must land a SEPARATE page. finalize upserts on tier+scopeId+slug, so a
@@ -274,7 +319,7 @@ export async function publishArtifactBundle(input: {
     title: input.title || 'Shared artifact',
     visibility: input.visibility ?? DEFAULT_SHARE_VISIBILITY,
     ...(input.commentPolicy ? { commentPolicy: input.commentPolicy } : {}),
-    source: { kind: 'bundle', artifactId: input.artifactId },
+    source: { kind: 'bundle', artifactId: input.artifactId, ...(isReact ? { artifactType: 'react' as const } : {}) },
     files: [{ path: 'index.html', size, mimeType: 'text/html' }],
   });
 

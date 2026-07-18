@@ -12,6 +12,19 @@ describe('ModelPriceRepository', () => {
     await ModelPrice.deleteMany({});
   });
 
+  it('round-trips audio tier fields (undeclared sub-schema fields get silently stripped)', async () => {
+    await modelPriceRepository.append({
+      modelId: 'gpt-realtime-x',
+      unit: 'per_token',
+      pricing: { '0': { ...tier, audio_input: 32e-6, audio_cache_read: 0.4e-6, audio_output: 64e-6 } },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      note: SEED_NOTE,
+    });
+
+    const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
+    expect(row.pricing['0']).toMatchObject({ audio_input: 32e-6, audio_cache_read: 0.4e-6, audio_output: 64e-6 });
+  });
+
   it('round-trips a row including the pricing tier map', async () => {
     await modelPriceRepository.append({
       modelId: 'gpt-x',
@@ -24,6 +37,20 @@ describe('ModelPriceRepository', () => {
     const [row] = await modelPriceRepository.rowsInForce(new Date('2026-07-15T00:00:00Z'));
     expect(row.modelId).toBe('gpt-x');
     expect(row.pricing['200000']).toMatchObject({ input: 2e-6, output: 8e-6, cache_read: 1e-6, cache_write: 3e-6 });
+  });
+
+  it('round-trips repricedBy and returns it in history', async () => {
+    await modelPriceRepository.append({
+      modelId: 'gpt-x',
+      unit: 'per_token',
+      pricing: { '0': tier },
+      effectiveFrom: new Date('2026-07-01T00:00:00Z'),
+      note: 'invoice X',
+      repricedBy: 'admin-1',
+    });
+
+    const [row] = await modelPriceRepository.historyForModel('gpt-x');
+    expect(row.repricedBy).toBe('admin-1');
   });
 
   it('rowsInForce returns the newest effective row per model and unit, ignoring future rows', async () => {

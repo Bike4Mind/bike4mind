@@ -51,10 +51,8 @@ import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage
 import { logEvent } from '@server/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { accessibleBy } from '@casl/mongoose';
-import { IMcpServerDocument, IUserDocument, Permission } from '@bike4mind/common';
-import { MCPClient } from '@bike4mind/mcp';
-import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { IUserDocument, Permission } from '@bike4mind/common';
+import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { withEventContext } from '@server/events/utils';
 import {
@@ -68,6 +66,7 @@ import {
 } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { decryptToken } from '@server/security/tokenEncryption';
 
 // Cache static ChatCompletion options that don't change between invocations
@@ -155,15 +154,26 @@ const getStaticOptions = () => {
     // Entitlement-aware lake retrieval parity with questProcessor (see note there).
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId: string, sessionId: string, userId: string, prompt: string, model: string) => {
+    invokeCreateMemento: async (
+      questId: string,
+      sessionId: string,
+      userId: string,
+      prompt: string,
+      model: string,
+      flags: { enableMementos: boolean; enableMementosV2: boolean }
+    ) => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
@@ -173,37 +183,6 @@ const getStaticOptions = () => {
   };
 
   return cachedStaticOptions;
-};
-
-const getMcpClientAdapter = async (
-  mcpServer: IMcpServerDocument
-): Promise<{
-  serverName: string;
-  getTools: () => Promise<MCPClient['tools']>;
-  // any: MCP tool args and return values are schema-defined at runtime, not statically typed
-  callTool: (toolName: string, toolArgs: any) => Promise<any>;
-}> => {
-  const buildPayload = async (action: string, toolName?: string, toolArgs?: unknown) => ({
-    id: mcpServer.id,
-    envVariables: await buildMcpEnvVariables(mcpServer),
-    name: mcpServer.name,
-    action,
-    toolName,
-    toolArgs,
-  });
-
-  return {
-    serverName: mcpServer.name,
-    getTools: async () => {
-      const payload = await buildPayload('getTools');
-      return invokeMcpHandler<MCPClient['tools']>(payload);
-    },
-    callTool: async (toolName: string, toolArgs: any) => {
-      // any: MCP tool args are schema-defined at runtime
-      const payload = await buildPayload('callTool', toolName, toolArgs);
-      return invokeMcpHandler(payload);
-    },
-  };
 };
 
 const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promise<string | null> => {

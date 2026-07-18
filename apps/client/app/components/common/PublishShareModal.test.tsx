@@ -282,6 +282,36 @@ describe('PublishShareModal — Team (organization) visibility option', () => {
   });
 });
 
+describe('PublishShareModal - domain access gate', () => {
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  it('sends the domain gate entries AS ENTERED on publish (subdomain not reduced)', async () => {
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(radio('domain')!);
+    fireEvent.change(screen.getByTestId('publish-share-gate-domains'), { target: { value: 'mail.acme.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        accessGate: { kind: 'domain', allowedDomains: ['mail.acme.com'] },
+      })
+    );
+  });
+});
+
 describe('PublishShareModal - no-sign-in (/a) share link', () => {
   const publishResult: PublishResult = {
     publicId: 'pub-1',
@@ -339,5 +369,79 @@ describe('PublishShareModal - no-sign-in (/a) share link', () => {
     await waitFor(() => expect(apiDelete).toHaveBeenCalledWith('/api/publish/pub-1/share-token'));
     await waitFor(() => expect(screen.queryByTestId('publish-share-token-url')).toBeNull());
     expect(screen.getByTestId('publish-share-token-create')).not.toBeNull();
+  });
+});
+
+describe('PublishShareModal - embed allowlist', () => {
+  const apiGet = api.get as unknown as ReturnType<typeof vi.fn>;
+  const publishResult: PublishResult = {
+    publicId: 'pub-1',
+    url: '/p/u/u1/s',
+    tier: 'user',
+    scopeId: 'u1',
+    slug: 's',
+    visibility: 'public',
+    publishedAt: '2026-01-01T00:00:00.000Z',
+  };
+
+  const renderShared = async (seed: { embedOrigins?: string[]; accessGate?: unknown } = {}) => {
+    apiGet.mockClear().mockResolvedValue({
+      data: { artifact: { embedOrigins: seed.embedOrigins ?? [], accessGate: seed.accessGate ?? null } },
+    });
+    apiPatch.mockClear().mockResolvedValue({ data: {} });
+    const publish = vi.fn().mockResolvedValue(publishResult);
+    render(
+      <Wrapper>
+        <PublishShareModal open onClose={() => {}} publish={publish} title="My artifact" defaultVisibility="public" />
+      </Wrapper>
+    );
+    fireEvent.click(screen.getByTestId('publish-share-create'));
+    await screen.findByTestId('publish-share-url'); // shared phase
+  };
+
+  it('adds a valid origin, PATCHing the allowlist and showing a chip', async () => {
+    await renderShared();
+    await screen.findByTestId('publish-share-embed-section');
+
+    const input = screen.getByTestId('publish-share-embed-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'https://erikbethke.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+
+    await waitFor(() =>
+      expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', {
+        embedOrigins: ['https://erikbethke.com'],
+      })
+    );
+    await screen.findByTestId('publish-share-embed-chip-https://erikbethke.com');
+    // The copy-paste iframe snippet appears once an origin is allowed.
+    expect((screen.getByTestId('publish-share-embed-snippet') as HTMLTextAreaElement).value).toContain(
+      '/p/u/u1/s?embed=1'
+    );
+  });
+
+  it('seeds existing origins and removes one (PATCHing the reduced list)', async () => {
+    await renderShared({ embedOrigins: ['https://erikbethke.com'] });
+    await screen.findByTestId('publish-share-embed-chip-https://erikbethke.com');
+
+    fireEvent.click(screen.getByTestId('publish-share-embed-remove-https://erikbethke.com'));
+    await waitFor(() => expect(apiPatch).toHaveBeenCalledWith('/api/publish/artifacts/pub-1', { embedOrigins: [] }));
+  });
+
+  it('rejects a non-https origin client-side (no PATCH)', async () => {
+    await renderShared();
+    await screen.findByTestId('publish-share-embed-section');
+
+    const input = screen.getByTestId('publish-share-embed-input') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: 'http://insecure.com' } });
+    fireEvent.click(screen.getByTestId('publish-share-embed-add'));
+
+    // No embedOrigins PATCH (other unrelated PATCHes may fire on entering shared phase).
+    expect(apiPatch.mock.calls.some(([, body]) => body && 'embedOrigins' in body)).toBe(false);
+  });
+
+  it('hides the embed section while a gate is live', async () => {
+    await renderShared({ accessGate: { kind: 'domain', allowedDomains: ['milliononmars.com'] } });
+    await waitFor(() => expect(apiGet).toHaveBeenCalled());
+    expect(screen.queryByTestId('publish-share-embed-section')).toBeNull();
   });
 });

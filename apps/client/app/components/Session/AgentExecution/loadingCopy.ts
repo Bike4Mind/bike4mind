@@ -45,6 +45,14 @@ const TOOL_RUNNING_COPY: Record<string, string> = {
   chess_engine: 'Calculating the next move…',
   recharts: 'Drawing the chart…',
   thinking: 'Working through it…',
+  // OptiHashi autonomous-optimizer loop: name the current rung of the walk so a
+  // multi-minute decompose -> formulate -> solve -> advance run reads as purposeful
+  // progress rather than a generic spinner.
+  optihashi_decompose: 'Breaking the scenario into sub-problems…',
+  optihashi_formulate: 'Formulating the optimization model…',
+  optihashi_edit_problem: 'Refining the model…',
+  optihashi_schedule: 'Racing solvers…',
+  optihashi_solve: 'Racing solvers…',
 };
 
 export function copyForRunningTool(toolName: string | undefined): string {

@@ -43,6 +43,7 @@ describe('checkShareGrant - domain gate on a token link', () => {
     expect(await checkShareGrant(gated, {})).toMatchObject({ ok: false, status: 401, reason: 'domain' });
   });
   it('logged-in verified allowlisted domain unlocks', async () => {
-    expect(await checkShareGrant(gated, { user: { id: 'viewer1' } })).toEqual({ ok: true });
+    // Domain-gate success also reports the viewer's registrable domain for auditing.
+    expect(await checkShareGrant(gated, { user: { id: 'viewer1' } })).toMatchObject({ ok: true });
   });
 });

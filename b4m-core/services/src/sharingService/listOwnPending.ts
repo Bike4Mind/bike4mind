@@ -1,8 +1,10 @@
 import { IInviteDocument, IInviteRepository, IUserDocument } from '@bike4mind/common';
 import { z } from 'zod';
 
+// Ceiling matches what the service actually accepts (and what the GET /api/invites
+// route validates): the caller's full pending set, up to the 1000 the count fetch uses.
 export const listOwnPendingInvitesSchema = z.object({
-  limit: z.number().min(1).max(100).prefault(20),
+  limit: z.number().min(1).max(1000).prefault(1000),
   page: z.number().min(1).prefault(1),
 });
 

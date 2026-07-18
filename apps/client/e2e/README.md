@@ -288,14 +288,67 @@ test.afterAll(async ({ request }) => {
 });
 ```
 
+## Core gate
+
+The E2E suite is split into two signals so a heavy, environment-sensitive spec can't
+block the "is the app fundamentally alive" check:
+
+| Signal | Workflow | Commit status | Role |
+|--------|----------|---------------|------|
+| **Core** | `.github/workflows/e2e-core.yml` | `e2e/core` | Curated, fast, deterministic subset - the gate we can require |
+| **Full suite** | `.github/workflows/e2e-manual.yml` | `e2e/smoke` | Everything, including AI-latency-dependent specs - advisory, for triage |
+
+> **Never make `e2e/core` a branch-protection required check.** This workflow is
+> `workflow_dispatch`-only and stamps the status onto the tested *staging* SHA - it can
+> never report on a merge-queue SHA, so a required-check rule would deadlock the queue.
+> `e2e/core` is consumed by the prod-promotion console (which reads it per-commit), not by
+> GitHub branch protection.
+
+The **Core** run executes a fixed set of whole Playwright projects in a single invocation
+(one run, one report, one status). The current set is defined by `CORE_PROJECTS` in
+`e2e-core.yml`:
+
+- `unauthenticated` - auth + signup
+- `notebook` - load a notebook
+- `prompts` - basic prompt flow
+
+Deliberately excluded: AI-latency-dependent and known-unstable specs (`image-gen`,
+`agents`, etc.). Those still run in the advisory full suite.
+
+> **Gotcha - whole projects only.** The Core set uses `--project=` flags with **no**
+> positional spec-file filter. A positional filter (e.g. `e2e/auth.spec.ts`, as the
+> full suite's single-test `Auth`/`Signup` selections use) applies globally to *every*
+> project in the run, so mixing one in would wrongly filter the other projects down to
+> files matching that path and break them. `--project=unauthenticated` alone runs both
+> auth + signup, which is what we want for Core.
+
+### Graduating a spec into Core
+
+The Core set is meant to grow as specs prove themselves. A project qualifies to be added
+to `CORE_PROJECTS` when it is:
+
+1. **Green over N consecutive runs** - at least the last 5, drawing on the deployer-
+   triggered `e2e-core` runs and the full suite's daily `e2e-manual` schedule, with no
+   real-test failures. Setup/infra flakes that leave the status *missing* don't reset the
+   count; a real red does.
+2. **Deterministic** - no dependence on AI latency, model output wording, or other
+   non-deterministic timing. If it needs `AI_RESPONSE`-tier waits or asserts on generated
+   content, it stays out.
+3. **Fast** - its contribution keeps the whole Core run comfortably under the job's
+   25-minute cap.
+
+To add one: append `--project=<name>` to `CORE_PROJECTS` in `e2e-core.yml` and update the
+list above. Removing a project that starts flaking is the same edit in reverse - prefer
+demoting a spec back to advisory over letting a red Core gate get ignored.
+
 ## CI Integration
 
-E2E tests run automatically on **pull request preview deployments** via GitHub Actions (`.github/workflows/deploy.yml`):
+Preview deploys are created on demand by maintainers via the internal deployer (not by PR events). To run the suite against a PR preview, a maintainer adds the **`run-e2e`** label, which triggers `.github/workflows/e2e-on-label.yml`:
 
-1. After the preview deploys, CI waits for the URL to become healthy
-2. Tests run headless with 3 workers against the preview URL
+1. CI waits for the preview URL to become healthy
+2. Tests run headless (1 worker) against the preview URL
 3. Results are posted as a **comment on the PR** with pass/fail counts
-4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>`)
+4. The **HTML report** is uploaded as a build artifact (`playwright-report-pr<N>-label`)
 
 In CI, `API_URL` points at the deployment under test. `E2E_CLEANUP_SECRET` is **not** a GitHub secret — it lives only in SST: each `pr{n}` preview self-provisions a fresh random value at deploy time, and every Playwright step runs inside `pnpm sst shell`, so the test client reads `Resource.E2E_CLEANUP_SECRET.value` (the same value the cleanup/create-user API validates against). See issue #251.
 

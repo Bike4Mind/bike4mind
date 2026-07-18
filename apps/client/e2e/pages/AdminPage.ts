@@ -164,6 +164,29 @@ export class AdminPage extends BasePage {
     await expect(this.page.getByTestId('admin-profile-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
   }
 
+  // --- Login as User (FullUsersView) ---
+
+  /** Open the target user's full view, then click "Login as User". */
+  async clickLoginAs(name: string) {
+    await this.clickUserAdminButton(name);
+    await this.page.getByTestId('login-as-user-btn').click();
+  }
+
+  /** Assert the TOTP-token modal opened (proves the acting admin's mfa.totpEnabled was projected into currentUser). */
+  async expectLoginAsMfaModal() {
+    await expect(this.page.getByTestId('login-as-mfa-modal')).toBeVisible({ timeout: TIMEOUTS.MODAL });
+  }
+
+  async fillLoginAsMfa(code: string) {
+    await this.fillMuiInput(this.page.getByTestId('login-as-mfa-input').locator('input'), code);
+  }
+
+  async confirmLoginAs() {
+    const confirmBtn = this.page.getByTestId('login-as-mfa-confirm-btn');
+    await expect(confirmBtn).toBeEnabled({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await confirmBtn.click();
+  }
+
   // --- Edit User Profile (AdminProfileModal) ---
 
   async fillProfileField(label: string, value: string) {

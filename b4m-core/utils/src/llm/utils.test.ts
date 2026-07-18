@@ -4,7 +4,6 @@ import {
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
-  includeArtifactSystemMessage,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
@@ -1536,33 +1535,5 @@ describe('Context Management Tests', () => {
       expect(messages).toEqual([]);
       expect(getMostRecentChatHistory).not.toHaveBeenCalled();
     });
-  });
-});
-
-describe('includeArtifactSystemMessage', () => {
-  const baseMessages: IMessage[] = [{ role: 'user', content: 'hi' } as IMessage];
-
-  const hasArtifactSystemMessage = (messages: IMessage[]) =>
-    messages.some(m => m.role === 'system' && typeof m.content === 'string' && m.content.includes('artifact syntax'));
-
-  it('prepends the artifact system message for long-form content requests', () => {
-    const result = includeArtifactSystemMessage(
-      baseMessages,
-      'Create an article about the 3 most popular night markets in Taipei and add images for each market'
-    );
-    expect(hasArtifactSystemMessage(result)).toBe(true);
-    // Original messages are preserved after the injected system message.
-    expect(result[result.length - 1]).toEqual(baseMessages[0]);
-  });
-
-  it('triggers on other long-form keywords (blog, newsletter, landing page)', () => {
-    for (const prompt of ['write a blog post', 'draft a newsletter', 'build a landing page']) {
-      expect(hasArtifactSystemMessage(includeArtifactSystemMessage(baseMessages, prompt))).toBe(true);
-    }
-  });
-
-  it('leaves plain prose requests untouched', () => {
-    const result = includeArtifactSystemMessage(baseMessages, 'What is the capital of France?');
-    expect(result).toEqual(baseMessages);
   });
 });

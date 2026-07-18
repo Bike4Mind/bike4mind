@@ -1,6 +1,6 @@
 import { User } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserDocument } from '@bike4mind/common';
+import { IUserDocument, redactUserSecretsForSelf } from '@bike4mind/common';
 import { Request } from 'express';
 
 /**
@@ -47,7 +47,10 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
   const isAdmin = req.user.isAdmin;
 
   if (isSelf || isAdmin) {
-    return res.json(user);
+    // Self/admin-gated profile view. Strip credentials, but keep securityQuestions +
+    // userNotes: the profile-edit form (ProfileDataForm) loads and round-trips them,
+    // so dropping them here would blank the admin notes on save.
+    return res.json(redactUserSecretsForSelf(user, { keep: ['securityQuestions', 'userNotes'] }));
   }
 
   return res.json(toPublicProfile(user));

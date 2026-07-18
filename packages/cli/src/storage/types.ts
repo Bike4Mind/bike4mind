@@ -130,10 +130,13 @@ export interface Session {
     totalCost: number;
     totalCredits?: number; // Total B4M credits used in this session
     toolCallCount: number;
-    // Subagent execution tracking
+    // Subagent execution tracking (spawned agents: agent_delegate, skills, background jobs)
     subagentCalls?: number;
     subagentTokens?: number;
+    /** Total B4M credits consumed by spawned agents (same unit as totalCredits) */
     subagentCost?: number;
+    /** Per-agent usage breakdown, keyed by agent name (for /usage) */
+    subagentUsage?: Record<string, { calls: number; tokens: number; credits: number }>;
     // Compaction tracking
     compactedFrom?: string; // Original session ID if this is a compacted session
     // Durable workflow state (Q-inspired agentic patterns)
@@ -211,6 +214,16 @@ export interface CliConfig {
     promptVariant?: 'current' | 'minimal';
     /** Show the agent's thought steps in the chat trace. Default true. */
     showThoughts?: boolean;
+    /**
+     * Re-inject live workflow state (open todos, blockers, recent decisions)
+     * as a compact reminder before each agent iteration. Default true.
+     */
+    workflowReminders?: boolean;
+    /**
+     * Approximate token cap for the per-iteration workflow reminder.
+     * Default DEFAULT_REMINDER_MAX_TOKENS (see utils/workflowReminder.ts).
+     */
+    workflowReminderMaxTokens?: number;
     /**
      * How long a completed sub-agent's conversation history is retained for
      * resume_agent, in ms. Defaults to DEFAULT_SUBAGENT_HISTORY_TTL_MS.

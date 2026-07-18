@@ -6,7 +6,13 @@ import {
   ICreditTransaction,
   IMongoDocument,
   ICreditTransactionRepository,
+  IApiKeyUsage,
+  ISourceUsage,
+  ILedgerPage,
+  ILedgerQueryOptions,
   COMPLETION_SOURCES,
+  AI_USAGE_TRANSACTION_TYPES,
+  UNCLASSIFIED_SOURCE,
 } from '@bike4mind/common';
 
 export type ICreditTransactionDocument = ICreditTransaction & IMongoDocument;
@@ -185,6 +191,100 @@ export class CreditTransactionRepository
     }
 
     return this.model.find(query).sort({ createdAt: -1 }).exec();
+  }
+
+  async queryLedgerPage(
+    ownerId: string,
+    ownerType: CreditHolderType,
+    options: ILedgerQueryOptions
+  ): Promise<ILedgerPage> {
+    const query: Record<string, unknown> = { ownerId, ownerType };
+
+    if (options.days !== undefined) {
+      const from = new Date();
+      from.setDate(from.getDate() - options.days);
+      query.createdAt = { $gte: from };
+    }
+    if (options.transactionTypes && options.transactionTypes.length > 0) {
+      query.type = { $in: options.transactionTypes };
+    }
+    if (options.source) {
+      query.source = options.source;
+    }
+    if (options.model) {
+      query.model = options.model;
+    }
+
+    // count + page share the {ownerId, ownerType, createdAt} index; run them
+    // together since a busy org can have tens of thousands of rows. Not a single
+    // transaction: a concurrent write between the two can make total differ from
+    // the page by one - acceptable for a read-only admin view.
+    const [data, total] = await Promise.all([
+      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
+      this.model.countDocuments(query),
+    ]);
+
+    return { data, total };
+  }
+
+  async apiKeyUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<IApiKeyUsage[]> {
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    return this.model.aggregate<IApiKeyUsage>([
+      { $match: { ownerId, ownerType, createdAt: { $gte: from }, apiKeyId: { $exists: true, $ne: null } } },
+      {
+        $group: {
+          _id: '$apiKeyId',
+          requests: { $sum: 1 },
+          // Usage is stored negative; report the spend magnitude.
+          creditsSpent: { $sum: { $abs: '$credits' } },
+          inputTokens: { $sum: { $ifNull: ['$inputTokens', 0] } },
+          outputTokens: { $sum: { $ifNull: ['$outputTokens', 0] } },
+        },
+      },
+      { $project: { _id: 0, apiKeyId: '$_id', requests: 1, creditsSpent: 1, inputTokens: 1, outputTokens: 1 } },
+      { $sort: { creditsSpent: -1 } },
+    ]);
+  }
+
+  async sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days: number = 30): Promise<ISourceUsage[]> {
+    const from = new Date();
+    from.setDate(from.getDate() - days);
+    return this.model.aggregate<ISourceUsage>([
+      // Filter by type rather than by `source` existence: purchases and refunds
+      // carry no source, but so do pre-tracking usage rows, and those must still
+      // be counted or the buckets stop summing to the owner's ledger spend.
+      {
+        $match: {
+          ownerId,
+          ownerType,
+          createdAt: { $gte: from },
+          type: { $in: [...AI_USAGE_TRANSACTION_TYPES] },
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ['$source', UNCLASSIFIED_SOURCE] },
+          requests: { $sum: 1 },
+          // Usage is stored negative; report the spend magnitude.
+          creditsSpent: { $sum: { $abs: '$credits' } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          source: '$_id',
+          requests: 1,
+          creditsSpent: 1,
+          residual: { $cond: [{ $eq: ['$_id', UNCLASSIFIED_SOURCE] }, 1, 0] },
+        },
+      },
+      // Unclassified is a residual, not a peer surface: keep it last whatever it
+      // spent. `source` breaks ties so equal-spend buckets don't swap places
+      // between identical requests.
+      { $sort: { residual: 1, creditsSpent: -1, source: 1 } },
+      { $unset: 'residual' },
+    ]);
   }
 }
 

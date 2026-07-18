@@ -37,7 +37,7 @@ import ImageDisplay from './ImageDisplay';
 import { InsufficientCreditsNotice } from './InsufficientCreditsNotice';
 import MementoIndicator from './MementoIndicator';
 import { agentAvatarFallbackSx } from '@client/app/components/Agent/AgentAvatar';
-import { remarkGfmNoSingleTilde } from '@client/app/utils/remarkPlugins';
+import { remarkGfmNoSingleTilde, promoteInlineLatexDollars } from '@client/app/utils/remarkPlugins';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import type { ChessArtifact, MermaidArtifact } from '@bike4mind/common';
@@ -1242,39 +1242,44 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   );
 
   const tableComponents = {
+    // Wide tables scroll horizontally inside their own wrapper. The reply body is
+    // no longer a scroll container (that caused Android to snap text selection to
+    // whole-block boundaries), so each element that can exceed the width owns its
+    // own overflow.
     table: ({ node, children, ref, ...props }: ComponentProps<'table'> & ExtraProps) => (
-      <Box
-        component="table"
-        sx={{
-          width: '100%',
-          borderCollapse: 'collapse',
-          margin: '1rem 0',
-          border: '1px solid',
-          borderColor: 'neutral.300',
-          borderRadius: '8px',
-          overflow: 'hidden',
-          color: 'text.primary',
-          '& th, & td': {
-            padding: '0.75rem',
+      <Box sx={{ overflowX: 'auto', maxWidth: '100%', margin: '1rem 0' }}>
+        <Box
+          component="table"
+          sx={{
+            width: '100%',
+            borderCollapse: 'collapse',
             border: '1px solid',
-            borderColor: 'divider',
+            borderColor: 'neutral.300',
+            borderRadius: '8px',
+            overflow: 'hidden',
             color: 'text.primary',
-          },
-          '& th': {
-            backgroundColor: 'background.level1',
-            fontWeight: 'bold',
-            borderBottom: '2px solid',
-            borderBottomColor: 'divider',
-            color: 'text.primary',
-          },
-          '& tr:nth-of-type(even)': {
-            backgroundColor: 'background.level1',
-            color: 'text.primary',
-          },
-        }}
-        {...props}
-      >
-        {children}
+            '& th, & td': {
+              padding: '0.75rem',
+              border: '1px solid',
+              borderColor: 'divider',
+              color: 'text.primary',
+            },
+            '& th': {
+              backgroundColor: 'background.level1',
+              fontWeight: 'bold',
+              borderBottom: '2px solid',
+              borderBottomColor: 'divider',
+              color: 'text.primary',
+            },
+            '& tr:nth-of-type(even)': {
+              backgroundColor: 'background.level1',
+              color: 'text.primary',
+            },
+          }}
+          {...props}
+        >
+          {children}
+        </Box>
       </Box>
     ),
     thead: ({ node, children, ref, ...props }: ComponentProps<'thead'> & ExtraProps) => (
@@ -1402,6 +1407,45 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
   const chessArtifacts = useMemo(() => artifacts.filter(a => a.type === 'chess'), [artifacts]);
   const nonChessArtifacts = useMemo(() => artifacts.filter(a => a.type !== 'chess'), [artifacts]);
 
+  // Resolved ahead of render so an unparseable board yields null rather than an empty
+  // artifact Stack (which would still contribute its margins as a phantom gap).
+  const chessBoard = useMemo(() => {
+    if (chessArtifacts.length === 0) return null;
+    const artifact = chessArtifacts[chessArtifacts.length - 1];
+    try {
+      const toolChessArtifact = promptMeta?.artifacts?.find(
+        (a: { metadata?: Record<string, unknown> }) =>
+          a.metadata?.source === 'tool_result' && a.metadata?.artifactType === 'application/vnd.ant.chess'
+      );
+
+      const jsonStr = toolChessArtifact ? toolChessArtifact.content : extractChessJson(artifact.content);
+      if (!jsonStr) return null;
+      const chessData = JSON.parse(jsonStr);
+      const rawFen = chessData.fen || chessData.resultingFen;
+      if (!rawFen) return null;
+
+      let fenResult: ChessFenResult;
+      if (toolChessArtifact) {
+        fenResult = { fen: rawFen };
+      } else if (currentSessionId) {
+        fenResult = validateChessFen(currentSessionId, rawFen, chessData);
+      } else {
+        fenResult = { fen: rawFen };
+      }
+
+      return (
+        <InlineChessBoard
+          fen={fenResult.fen}
+          chessData={chessData}
+          fenResult={fenResult}
+          onOpenPanel={() => openChessInSidePanel(fenResult.fen, jsonStr, chessData, currentSessionId ?? undefined)}
+        />
+      );
+    } catch {
+      return null;
+    }
+  }, [chessArtifacts, promptMeta?.artifacts, currentSessionId]);
+
   // Track latest chess state per session AND auto-update side panel
   useEffect(() => {
     if (chessArtifacts.length === 0 || !currentSessionId) return;
@@ -1441,6 +1485,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
     isEnabled: isExpandable,
   });
 
+  // Reruns a full-content regex pass, so memoize like the other whole-reply
+  // transforms above (cleanReply, processedContent) - this component re-renders on
+  // every streamed token.
+  const mathReadyContent = useMemo(() => promoteInlineLatexDollars(displayContent), [displayContent]);
+
   if (questMasterPlanId) {
     return <QuestMasterPreviewCard questMasterPlanId={questMasterPlanId} />;
   }
@@ -1467,7 +1516,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
 
       {/* Truncated-artifact recovery banner: the response hit the output-token
           limit before the artifact closed. The partial is best-effort recovered into a
-          card above; never leak the raw HTML into the bubble. */}
+          card below the reply; never leak the raw HTML into the bubble. */}
       {isTruncatedArtifact && (
         <Alert
           data-testid="artifact-truncated-warning"
@@ -1481,63 +1530,6 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
             be incomplete — ask me to regenerate it (or to continue or shorten it) for a complete version.
           </Typography>
         </Alert>
-      )}
-
-      {/* Chess board — rendered directly, bypasses artifact registry */}
-      {chessArtifacts.length > 0 &&
-        (() => {
-          const artifact = chessArtifacts[chessArtifacts.length - 1];
-          try {
-            const toolChessArtifact = promptMeta?.artifacts?.find(
-              (a: { metadata?: Record<string, unknown> }) =>
-                a.metadata?.source === 'tool_result' && a.metadata?.artifactType === 'application/vnd.ant.chess'
-            );
-
-            const jsonStr = toolChessArtifact ? toolChessArtifact.content : extractChessJson(artifact.content);
-            if (!jsonStr) return null;
-            const chessData = JSON.parse(jsonStr);
-            const rawFen = chessData.fen || chessData.resultingFen;
-            if (!rawFen) return null;
-
-            let fenResult: ChessFenResult;
-            if (toolChessArtifact) {
-              fenResult = { fen: rawFen };
-            } else if (currentSessionId) {
-              fenResult = validateChessFen(currentSessionId, rawFen, chessData);
-            } else {
-              fenResult = { fen: rawFen };
-            }
-
-            return (
-              <InlineChessBoard
-                fen={fenResult.fen}
-                chessData={chessData}
-                fenResult={fenResult}
-                onOpenPanel={() =>
-                  openChessInSidePanel(fenResult.fen, jsonStr, chessData, currentSessionId ?? undefined)
-                }
-              />
-            );
-          } catch {
-            return null;
-          }
-        })()}
-
-      {/* Other artifacts — rendered via registry */}
-      {nonChessArtifacts.length > 0 && (
-        <Box sx={{ mb: 2 }}>
-          <Stack spacing={2}>
-            {nonChessArtifacts.map((artifact, index) => (
-              <ArtifactRenderer
-                key={`${artifact.type}_${artifact.identifier}_${index}`}
-                artifact={artifact}
-                index={index}
-                messageId={messageId ?? 'unknown'}
-                sessionId={currentSessionId ?? undefined}
-              />
-            ))}
-          </Stack>
-        </Box>
       )}
 
       {showSyntaxHighlight ? (
@@ -1589,7 +1581,11 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                       backgroundColor: 'chatbox.replyBg',
                       borderRadius: '8px',
                       color: 'text.primary',
-                      overflowX: 'auto',
+                      // Not a horizontal scroll container: wide children (tables,
+                      // code blocks) own their own overflow. Making the whole reply
+                      // scrollable made Android snap partial-copy selections to whole
+                      // block boundaries. Long unbroken tokens wrap instead.
+                      overflowWrap: 'anywhere',
                       position: 'relative',
                       scrollBehavior: 'smooth',
                       '& p:last-child': { mb: '0 !important' },
@@ -1778,7 +1774,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
                             rehypePlugins={[rehypeKatex]}
                             remarkRehypeOptions={{ clobberPrefix: `fn-${messageId ?? 'reply'}-` }}
                           >
-                            {displayContent}
+                            {mathReadyContent}
                           </ReactMarkdown>
                         )}
                       </>
@@ -1792,6 +1788,25 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       )}
 
       <ExpandCollapseButton needsTruncation={needsTruncation} isExpanded={isExpanded} onToggle={toggleExpanded} />
+
+      {/* Artifacts sit between the reply and the footer. This Stack owns ALL of their
+          spacing - 24px above, 8px below, 16px between cards - so individual artifact
+          handlers must not carry outer margins of their own. Chess is rendered directly
+          (it bypasses the artifact registry) but shares the same rhythm. */}
+      {(chessBoard || nonChessArtifacts.length > 0) && (
+        <Stack spacing={2} sx={{ mt: 3, mb: 1 }}>
+          {chessBoard}
+          {nonChessArtifacts.map((artifact, index) => (
+            <ArtifactRenderer
+              key={`${artifact.type}_${artifact.identifier}_${index}`}
+              artifact={artifact}
+              index={index}
+              messageId={messageId ?? 'unknown'}
+              sessionId={currentSessionId ?? undefined}
+            />
+          ))}
+        </Stack>
+      )}
 
       {pendingAction && completed && (
         <PendingActionButtons

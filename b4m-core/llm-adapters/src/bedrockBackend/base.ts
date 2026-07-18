@@ -234,7 +234,8 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         // Cache counts here come from Anthropic-native fields (input_tokens EXCLUDES
         // cache), so forwarding them is billing-safe. A Bedrock model reporting cache
         // with cache-INCLUSIVE input must not forward without subtracting (see the
-        // warnings in openaiBackend/geminiBackend).
+        // warnings in openaiBackend/geminiBackend). This is one of the two adapters
+        // covered by the disjoint-fields assumption in ChatCompletionProcess.ts.
         ...(cacheReadTokens > 0 ? { cacheReadInputTokens: cacheReadTokens } : {}),
         ...(cacheWriteTokens > 0 ? { cacheCreationInputTokens: cacheWriteTokens } : {}),
         ...(bestEffortFormat ? { responseFormatMode: 'best-effort' as const } : {}),
@@ -304,6 +305,11 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
         if (!response.body) throw new Error('No response body');
 
         const func: { name?: string; id?: string; parameters?: string }[] = [];
+        // Did this stream actually produce anything? A "global." cross-region inference profile invoked
+        // from a region that does not serve it comes back as an EMPTY stream - no chunks, no error - and
+        // the old code returned silently, so the chat had nothing to render and hung until the client
+        // timed out (~2 min). Track real output so we can fail LOUD instead. See the guard after the loop.
+        let emittedTextChars = 0;
 
         for await (const streamEvent of response.body) {
           if (streamEvent.chunk?.bytes) {
@@ -333,10 +339,26 @@ export abstract class BaseBedrockBackend implements ICompletionBackend {
             chunk?.choices.forEach(choice => {
               streamedText[choice.index] = choice.chunkText || '';
             });
+            emittedTextChars += streamedText.reduce((n, t) => n + (t?.length ?? 0), 0);
 
             // Send streamed text from chunk text data
             await callback(streamedText, buildCompletionInfo());
           }
+        }
+
+        // FAIL LOUD on an empty completion. No text AND no tool call means the model produced nothing a
+        // user or the pipeline can use - almost always a misrouted inference profile (a "global." model
+        // served from a region that does not host it) or an unavailable model. Returning silently makes
+        // the chat hang with no output and no error; throwing surfaces a clear, actionable message. Token
+        // count is deliberately NOT part of the condition: an empty response can still report phantom
+        // usage, and a real assistant turn ALWAYS has text or a tool call, so this cannot false-positive.
+        if (emittedTextChars === 0 && !func.some(f => f.name)) {
+          throw new Error(
+            `[BaseBedrockBackend] model "${model}" returned an EMPTY response in region ${this._options.region} ` +
+              `(no text, no tool call, no output tokens). A "global." cross-region inference profile served ` +
+              `from a region that does not host it does exactly this - try the "us." variant, or confirm the ` +
+              `model/profile is granted in ${this._options.region}.`
+          );
         }
 
         // If there is a tool being used, then

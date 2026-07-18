@@ -19,6 +19,10 @@ import {
   buildPublishUrlPath,
   invalidatePublishCdn,
   toCacheTarget,
+  validateEmbedOrigins,
+  buildReactArtifactBundle,
+  UnsupportedReactDependencyError,
+  ReactArtifactTranspileError,
   type PublishUser,
 } from '@server/services/publish';
 
@@ -44,12 +48,15 @@ const DraftManifestSchema = z.object({
   visibility: z.enum(['private', 'project', 'organization', 'public']),
   gatedToGroupId: z.string().optional(),
   commentPolicy: z.enum(['none', 'open', 'restricted']).optional(),
+  embedOrigins: z.array(z.string()).optional(),
   source: z.object({
     kind: z.enum(['bundle', 'reply', 'fabfile']),
     artifactId: z.string().optional(),
     sessionId: z.string().optional(),
     messageId: z.string().optional(),
     fabFileId: z.string().optional(),
+    // Raw JSX uploaded as index.html; transpiled to an inert bundle below (issue #21).
+    artifactType: z.literal('react').optional(),
   }),
   files: z.array(z.object({ path: z.string(), size: z.number(), mimeType: z.string() })),
 });
@@ -142,15 +149,7 @@ const handler = baseApi().post(async (req, res) => {
     return res.status(422).json({ error: 'Validation failed', violations });
   }
 
-  const totalBytes = filesWithMeta.reduce((sum, f) => sum + f.size, 0);
-  if (totalBytes > PUBLISH_LIMITS.maxBundleBytes) {
-    return res.status(422).json({
-      error: 'Validation failed',
-      violations: [{ type: 'size_exceeded', message: `Bundle total ${totalBytes}B exceeds cap` }],
-    });
-  }
-
-  // 4. Validate index.html
+  // 4. Locate index.html (required)
   const indexEntry = filesWithMeta.find(f => f.path === 'index.html');
   if (!indexEntry) {
     return res.status(422).json({
@@ -158,16 +157,63 @@ const handler = baseApi().post(async (req, res) => {
       violations: [{ type: 'missing_index', message: 'Bundle must contain an index.html at root' }],
     });
   }
-  const indexHtml = bufferCache.get('index.html')!.toString('utf-8');
+
+  // 4a. React artifacts upload raw JSX as index.html; transpile it into a self-contained inert
+  // HTML bundle here (issue #21) so the size caps, validateBundle, and promote below all operate
+  // on the FINAL served bytes. Rejectable input (unsupported dep / bad JSX / multi-file) becomes
+  // a clean 422 violation rather than a broken published page.
+  if (manifest.source.artifactType === 'react') {
+    try {
+      const { indexHtml: bundled } = await buildReactArtifactBundle({
+        source: bufferCache.get('index.html')!.toString('utf-8'),
+        title: manifest.title,
+      });
+      const buf = Buffer.from(bundled, 'utf-8');
+      bufferCache.set('index.html', buf);
+      indexEntry.size = buf.length;
+      indexEntry.sha256 = createHash('sha256').update(buf).digest('hex');
+    } catch (err) {
+      if (err instanceof UnsupportedReactDependencyError || err instanceof ReactArtifactTranspileError) {
+        return res.status(422).json({
+          error: 'Validation failed',
+          violations: [{ type: 'forbidden_pattern', message: err.message, file: 'index.html' }],
+        });
+      }
+      throw err;
+    }
+  }
+
+  // 4b. Size caps (post-transpile, so a React bundle's FINAL size is what's enforced)
+  const totalBytes = filesWithMeta.reduce((sum, f) => sum + f.size, 0);
+  if (indexEntry.size > PUBLISH_LIMITS.maxFileBytes) {
+    return res.status(422).json({
+      error: 'Validation failed',
+      violations: [
+        {
+          type: 'size_exceeded',
+          message: `index.html (${indexEntry.size}B) exceeds per-file limit`,
+          file: 'index.html',
+        },
+      ],
+    });
+  }
+  if (totalBytes > PUBLISH_LIMITS.maxBundleBytes) {
+    return res.status(422).json({
+      error: 'Validation failed',
+      violations: [{ type: 'size_exceeded', message: `Bundle total ${totalBytes}B exceeds cap` }],
+    });
+  }
+
+  // 4c. Validate the (possibly transpiled) index.html
   const validation = validateBundle({
-    indexHtml,
+    indexHtml: bufferCache.get('index.html')!.toString('utf-8'),
     manifest: filesWithMeta.map(f => ({ path: f.path, mimeType: f.mimeType })),
   });
   if (!validation.valid) {
     return res.status(422).json({ error: 'Validation failed', violations: validation.violations });
   }
 
-  // 4b. Cumulative per-owner quota re-check (defense in depth - the draft may
+  // 4d. Cumulative per-owner quota re-check (defense in depth - the draft may
   // have been issued before other publishes consumed the allowance). Excludes
   // the {tier,scopeId,slug} being overwritten so a re-publish isn't double-counted.
   const quota = await checkPublishQuota({
@@ -188,7 +234,7 @@ const handler = baseApi().post(async (req, res) => {
     slug: manifest.slug,
     deletedAt: null,
   })
-    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions')
+    .select('publicId publishedAt ownerId lastPublishedBy size sha256Index versions accessGate')
     .lean<{
       publicId: string;
       publishedAt: Date;
@@ -197,7 +243,20 @@ const handler = baseApi().post(async (req, res) => {
       size: { totalBytes: number; fileCount: number };
       sha256Index?: string;
       versions?: Array<{ sha256Index: string }>;
+      accessGate?: unknown;
     } | null>();
+
+  // Validate the embed allowlist against the artifact's FINAL open-public state. A
+  // re-publish PRESERVES the previous access gate (it is not in the $set below), so
+  // open-public means visibility public AND no preserved gate - matching the PATCH
+  // path. Keeps validateEmbedOrigins' "fail loud" contract even for an API caller
+  // that sends embedOrigins on the upload-url path against a gated artifact.
+  const embed = validateEmbedOrigins(manifest.embedOrigins, {
+    isOpenPublic: manifest.visibility === 'public' && !previous?.accessGate,
+  });
+  if (!embed.ok) {
+    return res.status(400).json({ error: embed.error, code: embed.code });
+  }
 
   // 6. Promote draft -> canonical prefix
   const canonicalPrefix = buildPublishS3KeyPrefix(manifest.tier, manifest.scopeId, manifest.slug);
@@ -260,6 +319,12 @@ const handler = baseApi().post(async (req, res) => {
         visibility: manifest.visibility,
         gatedToGroupId: manifest.gatedToGroupId,
         commentPolicy: manifest.commentPolicy ?? 'none',
+        // Like accessGate, the embed allowlist is managed post-publish via PATCH and
+        // is NOT part of the normal publish payload. Only write a NON-EMPTY validated
+        // list, so a plain re-publish (or an older client that defaults embedOrigins to
+        // []) can only ADD grants here, never clobber an existing allowlist to [].
+        // Clearing is done through the PATCH path.
+        ...(embed.value.length > 0 ? { embedOrigins: embed.value } : {}),
         ownerId: previous ? previous.ownerId : String(req.user.id),
         lastPublishedBy: String(req.user.id),
         source: manifest.source,

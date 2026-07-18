@@ -50,6 +50,23 @@ export type BeforeRunCallback = (agent: ReActAgent, agentName: string) => void;
 export type AfterRunCallback = (agent: ReActAgent, agentName: string) => void;
 
 /**
+ * Usage totals reported for a single delegateToAgent() run, fired on every
+ * return path (normal completion and HookBlockedError) so callers can roll
+ * subagent token/credit usage up into session metadata regardless of which
+ * spawn path (inline, background, coordinator, dynamic, skill) triggered it.
+ */
+export interface SubagentUsage {
+  agentName: string;
+  totalTokens: number;
+  totalCredits?: number;
+}
+
+/**
+ * Callback invoked once per delegateToAgent() call with that run's usage totals
+ */
+export type SubagentUsageCallback = (usage: SubagentUsage) => void;
+
+/**
  * Options for spawning an agent
  */
 export interface SpawnAgentOptions {
@@ -150,6 +167,8 @@ export interface OrchestratorDependencies {
   showUserQuestion?: (payload: UserQuestionPayload) => Promise<UserQuestionResponse>;
   /** Optional: Checkpoint store for file change recovery */
   checkpointStore?: CheckpointStore | null;
+  /** Optional: fired with usage totals after every delegateToAgent() run, for session rollup */
+  onSubagentUsage?: SubagentUsageCallback;
   /** Optional: retains completed sub-agent conversations for resume_agent. */
   historyStore?: AgentHistoryStore | null;
 }
@@ -403,10 +422,9 @@ export class SubagentOrchestrator {
       result = agentResult;
     } catch (error) {
       if (error instanceof HookBlockedError) {
-        // Agent blocked by hook - return gracefully
-        if (this.afterRunCallback) {
-          this.afterRunCallback(agent, agentName);
-        }
+        // Agent blocked by hook - return gracefully (afterRunCallback fires in
+        // the finally below)
+        this.deps.onSubagentUsage?.({ agentName, totalTokens: 0, totalCredits: 0 });
         return {
           agentName,
           thoroughness: effectiveThoroughness,
@@ -425,7 +443,22 @@ export class SubagentOrchestrator {
           },
         };
       }
+      // Roll in whatever the agent burned before failing or being cancelled so
+      // the session rollup doesn't under-count. (Optional-chained: test mocks
+      // stub only run().)
+      this.deps.onSubagentUsage?.({
+        agentName,
+        totalTokens: agent.getTokenUsage?.() ?? 0,
+        totalCredits: agent.getCreditsUsage?.() ?? 0,
+      });
       throw error;
+    } finally {
+      // Runs on every exit path (success, hook block, failure, cancel) so
+      // callers can always unsubscribe and fold in whatever usage the agent
+      // accumulated before dying - otherwise live-usage entries leak.
+      if (this.afterRunCallback) {
+        this.afterRunCallback(agent, agentName);
+      }
     }
     const duration = Date.now() - startTime;
 
@@ -445,11 +478,6 @@ export class SubagentOrchestrator {
       }
     }
 
-    // Invoke afterRunCallback to allow caller to unsubscribe from events
-    if (this.afterRunCallback) {
-      this.afterRunCallback(agent, agentName);
-    }
-
     this.deps.logger.debug(
       `Agent "${agentName}" completed in ${duration}ms, ` +
         `${result.completionInfo.iterations} iterations, ${result.completionInfo.totalTokens} tokens`
@@ -457,6 +485,12 @@ export class SubagentOrchestrator {
 
     // Generate summary
     const summary = this.summarizeResult(result, agentDef);
+
+    this.deps.onSubagentUsage?.({
+      agentName,
+      totalTokens: result.completionInfo.totalTokens,
+      totalCredits: result.completionInfo.totalCredits,
+    });
 
     // Persist the finished conversation so resume_agent can continue it.
     if (this.deps.historyStore) {
@@ -621,10 +655,14 @@ export class SubagentOrchestrator {
 
     // Build concise summary
     const capitalizedName = agentDef.name.charAt(0).toUpperCase() + agentDef.name.slice(1);
+    const usage =
+      completionInfo.totalCredits !== undefined
+        ? `${completionInfo.totalTokens.toLocaleString()} tokens (${completionInfo.totalCredits.toLocaleString()} credits)`
+        : `${completionInfo.totalTokens.toLocaleString()} tokens`;
     const lines = [
       `**${capitalizedName} Agent Results**\n`,
       `*${agentDef.description}*`,
-      `*Execution: ${completionInfo.iterations} iterations, ${completionInfo.toolCalls} tool calls*\n`,
+      `*Execution: ${completionInfo.iterations} iterations, ${completionInfo.toolCalls} tool calls, ${usage}*\n`,
     ];
 
     // Add exploration stats if the agent used exploration tools

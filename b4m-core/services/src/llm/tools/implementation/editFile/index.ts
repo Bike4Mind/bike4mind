@@ -1,7 +1,9 @@
 import { ToolDefinition } from '../../base/types';
+import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { z } from 'zod';
 import { NotFoundError } from '@bike4mind/utils';
 import { isImageServeable } from '@bike4mind/common';
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { diffLines, type Change } from 'diff';
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- consumed via z.infer<typeof editFileSchema> at the type level; schema name is API contract
@@ -165,17 +167,25 @@ Return only the edited content without any markdown code blocks or explanations.
         context.logger.info(`📝 Edit File Tool: Calling LLM for edit generation`);
 
         let editedContent = '';
+        let completionInfo: CompletionInfo | undefined;
+        // The backend uses whatever model id is passed here (the interface's `model` arg
+        // is authoritative), so record this same id for the usage event.
+        const editModel = 'gpt-4';
+        const startTime = Date.now();
         await context.llm.complete(
-          'gpt-4', // Use a default model, this will be overridden by the actual selected model
+          editModel,
           [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: userPrompt },
           ],
           { temperature: 0.3, stream: false }, // Lower temperature for more consistent edits
-          async texts => {
+          async (texts, info) => {
             editedContent = texts.filter(t => t !== null && t !== undefined).join('');
+            if (info) completionInfo = info;
           }
         );
+
+        await recordToolOperationalUsage(context, { model: editModel, completionInfo, startTime });
 
         // Clean up the response (remove any markdown code blocks if present)
         let cleanedContent = (editedContent || '').trim();

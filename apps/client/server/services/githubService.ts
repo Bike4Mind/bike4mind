@@ -27,7 +27,8 @@ import {
 } from '@bike4mind/common';
 import { orgGitHubConnectionRepository } from '@bike4mind/database';
 import { Config } from '@server/utils/config';
-import { decryptSecret, encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { encryptSecret, isEncrypted } from '@server/security/secretEncryption';
+import { decryptToken } from '@server/security/tokenEncryption';
 
 const USER_AGENT = 'bike4mind-github-service/1.0';
 const GITHUB_REQUEST_TIMEOUT_MS = 10000; // 10s — fail fast on hung connections (GitHub gateway timeout is ~11s)
@@ -187,6 +188,26 @@ export class GitHubRateLimitError extends Error {
   }
 }
 
+/**
+ * Coarse, non-sensitive classification of an auth-init failure, logged alongside a
+ * human-readable detail so operators can tell a misconfigured connection record
+ * ('missing-fields') apart from a decryption / key-rotation failure ('decrypt-failed').
+ * The message strings carried here are a bounded, sanitized set - safe to log because
+ * decryption internals are stripped in createOctokitFor{App,PAT} before this is thrown -
+ * so the catch surfaces them.
+ */
+export type GitHubAuthInitReason = 'missing-fields' | 'decrypt-failed';
+
+export class GitHubAuthInitError extends Error {
+  constructor(
+    message: string,
+    readonly reason: GitHubAuthInitReason
+  ) {
+    super(message);
+    this.name = 'GitHubAuthInitError';
+  }
+}
+
 export class GitHubService {
   private octokit: Octokit;
   private logger: Logger;
@@ -314,15 +335,21 @@ export class GitHubService {
       if (connection.connectionType === 'github_app') {
         octokit = await GitHubService.createOctokitForApp(connection, encryptionKey, logger);
       } else {
-        octokit = GitHubService.createOctokitForPAT(connection, encryptionKey, logger);
+        octokit = GitHubService.createOctokitForPAT(connection, logger);
       }
     } catch (error) {
-      // Never expose decryption details in logs or error messages.
+      // Log a coarse reason plus a safe detail so operators can distinguish a misconfigured
+      // connection record from a decryption/key-rotation failure. For our typed error the
+      // message is one of a bounded set of sanitized strings (crypto internals are stripped
+      // in createOctokitFor{App,PAT} before it is thrown); for any other error we log only
+      // the class name, never its message, which could carry decryption internals.
       // Throw rather than return null: init failures are transient (network) or config
       // errors that callers should retry/escalate, not silently discard.
       logger.error('[GitHubService] Failed to initialize authentication', {
         connectionId: connection.id,
         connectionType: connection.connectionType,
+        reason: error instanceof GitHubAuthInitError ? error.reason : 'unknown',
+        detail: error instanceof GitHubAuthInitError ? error.message : error instanceof Error ? error.name : 'unknown',
       });
       throw new Error('[GitHubService] Failed to initialize GitHub authentication');
     }
@@ -349,17 +376,20 @@ export class GitHubService {
     logger: Logger
   ): Promise<Octokit> {
     if (!connection.appId || !connection.installationId || !connection.privateKey) {
-      throw new Error('GitHub App connection missing required fields');
+      throw new GitHubAuthInitError('GitHub App connection missing required fields', 'missing-fields');
     }
 
-    // Decrypt the private key with sanitized error handling
+    // Decrypt the private key with sanitized error handling. Route through decryptToken()
+    // for key-rotation fallback: it tries SECRET_ENCRYPTION_KEY, then
+    // SECRET_ENCRYPTION_KEY_PREVIOUS. This mirrors the GitHub webhook decrypt paths so a
+    // credential encrypted under a pre-rotation key still authenticates.
     let privateKey = connection.privateKey;
     if (isEncrypted(privateKey)) {
       try {
-        privateKey = decryptSecret(privateKey, encryptionKey);
+        privateKey = decryptToken(privateKey) ?? privateKey;
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
-        throw new Error('Failed to decrypt credentials. Key may need rotation.');
+        throw new GitHubAuthInitError('Failed to decrypt credentials. Key may need rotation.', 'decrypt-failed');
       }
     }
 
@@ -388,23 +418,20 @@ export class GitHubService {
    *
    * @throws Error if decryption fails (sanitized message)
    */
-  private static createOctokitForPAT(
-    connection: IOrgGitHubConnectionDocument,
-    encryptionKey: string,
-    _logger: Logger
-  ): Octokit {
+  private static createOctokitForPAT(connection: IOrgGitHubConnectionDocument, _logger: Logger): Octokit {
     if (!connection.accessToken) {
-      throw new Error('Service account connection missing credentials');
+      throw new GitHubAuthInitError('Service account connection missing credentials', 'missing-fields');
     }
 
-    // Decrypt the token with sanitized error handling
+    // Decrypt the token with sanitized error handling. Route through decryptToken() for
+    // key-rotation fallback (current key, then SECRET_ENCRYPTION_KEY_PREVIOUS).
     let token = connection.accessToken;
     if (isEncrypted(token)) {
       try {
-        token = decryptSecret(token, encryptionKey);
+        token = decryptToken(token) ?? token;
       } catch {
         // Never expose decryption errors - they may reveal encryption structure
-        throw new Error('Failed to decrypt credentials. Token may need rotation.');
+        throw new GitHubAuthInitError('Failed to decrypt credentials. Token may need rotation.', 'decrypt-failed');
       }
     }
 
@@ -439,7 +466,8 @@ export class GitHubService {
               let token = conn.cachedAccessToken;
               if (isEncrypted(token)) {
                 try {
-                  token = decryptSecret(token, encryptionKey);
+                  // Key-rotation fallback: current key, then SECRET_ENCRYPTION_KEY_PREVIOUS.
+                  token = decryptToken(token) ?? token;
                 } catch {
                   // Sanitize decryption errors
                   logger.warn('[GitHubService] Cached token decryption failed, will regenerate');

@@ -21,6 +21,7 @@ import {
   DataObject as JupyterIcon,
   TableChart as TableChartIcon,
   ShowChart as FinanceIcon,
+  Groups as BobPanelIcon,
 } from '@mui/icons-material';
 import { B4MLLMTools, OrchestrationDefaultsSchema } from '@bike4mind/common';
 import type { SlackLlmTools } from '@bike4mind/services';
@@ -69,6 +70,13 @@ export const TOOL_MAPPING: Record<PublicTools, ToolInfo> = {
     description: 'Stock quotes, company profiles, financial statements, and price history',
     icon: FinanceIcon,
     color: '#4caf50',
+  },
+  bob_panel_read: {
+    name: 'bob_panel_read',
+    displayName: 'Bob Panel',
+    description: 'A panel of synthetic personas read a site and report where visitors get lost',
+    icon: BobPanelIcon,
+    color: '#00897b',
   },
   prompt_enhancement: {
     name: 'prompt_enhancement',
@@ -350,6 +358,8 @@ export const TOOL_CATEGORIES: Record<string, string> = {
   // OptiHashi optimization
   optihashi_schedule: 'Optimization',
   optihashi_formulate: 'Optimization',
+  // Bob synthetic-persona panel
+  bob_panel_read: 'Feedback',
   // Navigation
   navigate_view: 'Navigation',
   // Jupyter notebook

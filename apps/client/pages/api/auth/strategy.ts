@@ -1,7 +1,9 @@
+import { AuthStrategy } from '@bike4mind/common';
 import { userRepository, identityProviderRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
 import { rateLimit } from '@server/middlewares/rateLimit';
+import { isE2EEnabled } from '@server/utils/config';
 
 // This endpoint's response necessarily varies by account existence (it routes
 // SSO users to their provider), so it can't be made fully enumeration-proof
@@ -9,7 +11,15 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 // per-IP rate limit instead.
 const handler = baseApi({ auth: false })
   .use(checkBlockedIP())
-  .use(rateLimit({ limit: 10, windowMs: 60 * 1000 }))
+  .use(
+    rateLimit({
+      // E2E (non-prod only - isE2EEnabled is hard-false on production) hammers this
+      // endpoint from a single shared CI IP alongside otc/send; lift the cap there
+      // so specs never race a 429 on the email step.
+      limit: () => (isE2EEnabled() ? Infinity : 10),
+      windowMs: 60 * 1000,
+    })
+  )
   .get(async (req, res) => {
     const { email } = req.query;
 
@@ -35,21 +45,21 @@ const handler = baseApi({ auth: false })
 
         if (hasSocialOnly) {
           const provider = authProviders[0];
-          if (provider.strategy === 'google') {
+          if (provider.strategy === AuthStrategy.Google) {
             return res.json({
               strategy: 'google',
               requiresRedirect: true,
               redirectUrl: `/api/auth/google`,
             });
           }
-          if (provider.strategy === 'github') {
+          if (provider.strategy === AuthStrategy.Github) {
             return res.json({
               strategy: 'github',
               requiresRedirect: true,
               redirectUrl: `/api/auth/github`,
             });
           }
-          if (provider.strategy === 'okta') {
+          if (provider.strategy === AuthStrategy.Okta) {
             // Check if there's a database IDP for this user's domain
             const oktaIdp = await identityProviderRepository.findActiveByEmailDomain(emailDomain);
             const hasIdp = oktaIdp && oktaIdp.type === 'okta' && oktaIdp.oktaConfig;
@@ -63,7 +73,7 @@ const handler = baseApi({ auth: false })
         }
 
         const hasOkta =
-          authProviders?.some(provider => provider.strategy === 'okta') ||
+          authProviders?.some(provider => provider.strategy === AuthStrategy.Okta) ||
           (oauthCredentials && oauthCredentials.strategy === 'okta');
 
         if (hasOkta) {
@@ -79,7 +89,7 @@ const handler = baseApi({ auth: false })
         }
 
         // Check if user has SAML metadata (for future SAML users)
-        const hasSaml = authProviders?.some(provider => provider.strategy === 'saml');
+        const hasSaml = authProviders?.some(provider => provider.strategy === AuthStrategy.SAML);
 
         if (hasSaml) {
           const idp = await identityProviderRepository.findActiveByEmailDomain(emailDomain);

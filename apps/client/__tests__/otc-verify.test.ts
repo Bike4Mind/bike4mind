@@ -51,6 +51,10 @@ vi.mock('@bike4mind/common', () => ({
         .filter(Boolean)
     ),
   ],
+  // Pure serializer; mirror its toJSON normalization (secret-stripping shape is covered
+  // by toSafeUser.test.ts). These tests are about enumeration resistance, not the shape.
+  redactUserSecretsForSelf: (user: { toJSON?: () => unknown } | null | undefined) =>
+    user && typeof user.toJSON === 'function' ? user.toJSON() : user,
 }));
 
 vi.mock('@bike4mind/database', () => ({

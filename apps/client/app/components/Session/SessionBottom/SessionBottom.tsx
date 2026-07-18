@@ -29,7 +29,7 @@ import { setKnowledgeViewer } from '@client/app/components/Knowledge/KnowledgeVi
 import { useGetAgents, useGetSessionAgents } from '@client/app/hooks/data/agents';
 import { useGetSessionQuests } from '@client/app/hooks/data/sessions';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
-import { useChatInput } from '@client/app/hooks/useChatInput';
+import { useChatInput, NEW_NOTEBOOK_DRAFT_KEY } from '@client/app/hooks/useChatInput';
 import { useShallow } from 'zustand/react/shallow';
 import { useIsMobile } from '@client/app/hooks/useIsMobile';
 import { useIsPWA } from '@client/app/hooks/useIsPWA';
@@ -40,7 +40,7 @@ import useSessionLayout, {
   recordModerationStatus,
   hasBlockingPendingFiles,
 } from '@client/app/hooks/useSessionLayout';
-import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
 import { useAutoFocus } from '@client/app/hooks/useAutoFocus';
 import { useChatPaste } from '@client/app/hooks/useChatPaste';
 import { useTokenLimits } from '@client/app/hooks/useTokenLimits';
@@ -97,7 +97,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   // frozen display value - a genuine mid-turn exhaustion must still surface.
   const effectiveCredits = useEffectiveCredits({ live: true });
 
-  const { chatCompletion, setChatCompletion } = useSubscribeChatCompletion(currentSessionId);
+  const { chatCompletion, setChatCompletion } = useChatCompletionContext();
 
   const { readyState, subscribeToAction } = useWebsocket();
 
@@ -106,8 +106,8 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   const [, setAgentBenchCollapsed] = useState<boolean>(false);
   const [filesDropdownOpen, setFilesDropdownOpen] = useState<boolean>(false);
 
-  const [chatInputValue, setChatInputValue, setDraft, getDraft] = useChatInput(
-    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft])
+  const [chatInputValue, setChatInputValue, setDraft, getDraft, clearDraft] = useChatInput(
+    useShallow(s => [s.chatInputValue, s.setChatInputValue, s.setDraft, s.getDraft, s.clearDraft])
   );
   const [rephraseGlow, setRephraseGlow] = useState(false);
   const [showSlashSuggestions, setShowSlashSuggestions] = useState(false);
@@ -195,6 +195,12 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   );
 
   const isCompactLayout = useSessionLayout(s => s.layout === 'vertical' || s.layout === 'pip');
+  // Docked panels (dockRight/dockBottom) own their bottom edge; the outer pb
+  // would just add dead space under the input.
+  const isDockedLayout = useSessionLayout(s => s.layout === 'dockRight' || s.layout === 'dockBottom');
+  // The floating chat window frames the input itself, so like docked it drops the
+  // outer spacing and rounded card look; unlike docked it keeps a top separator.
+  const isFloatingLayout = useSessionLayout(s => s.layout === 'floatingChat');
 
   // Determine if the stop button should be shown
   const shouldShowStopButton = useMemo(() => {
@@ -262,7 +268,7 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
   useAutoFocus(lexicalInputRef as any, { enabled: true });
 
   // Persists draft per session and restores it on session switch
-  useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft);
+  useMessageDraft(currentSessionId, setChatInputValue, setDraft, getDraft, clearDraft);
 
   const canAttachFiles = enableFileAttachments;
 
@@ -347,7 +353,11 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
     <Box
       ref={ref}
       className="session-bottom"
-      sx={{ pb: isCompactLayout || isMobile ? '0' : '1.25rem', paddingTop: '20px', position: 'relative' }}
+      sx={{
+        pb: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? '0' : '1.25rem',
+        paddingTop: isDockedLayout || isFloatingLayout ? 0 : '20px',
+        position: 'relative',
+      }}
       display={'flex'}
       justifyContent={'center'}
     >
@@ -357,26 +367,30 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
         data-testid="session-bottom-container"
         sx={theme => ({
           width: isMobile ? '100vw' : '100%',
-          maxWidth: '950px',
+          // Docked/floating panels are already width-constrained; capping the input
+          // at 950px would leave visible panel-background gutters beside it.
+          maxWidth: isDockedLayout || isFloatingLayout ? 'none' : '950px',
           marginLeft: isCompactLayout ? '0px' : 'auto',
           marginRight: isCompactLayout ? '0px' : 'auto',
-          ...(isCompactLayout || isMobile
-            ? {
-                borderTop: '1px solid',
-                borderTopColor: 'border.solid',
-                borderLeft: 'none',
-                borderRight: 'none',
-                borderBottom: 'none',
-              }
-            : {
-                border: '1px solid',
-                borderColor: 'border.solid',
-              }),
+          ...(isDockedLayout
+            ? { border: 'none' }
+            : isCompactLayout || isMobile || isFloatingLayout
+              ? {
+                  borderTop: '1px solid',
+                  borderTopColor: 'border.solid',
+                  borderLeft: 'none',
+                  borderRight: 'none',
+                  borderBottom: 'none',
+                }
+              : {
+                  border: '1px solid',
+                  borderColor: 'border.solid',
+                }),
           backgroundColor: theme.palette.background.panel,
           boxShadow: theme.palette.session.boxShadow,
           paddingX: isPWA ? '24px' : '16px',
           pb: isPWA ? '20px' : isMobile ? '10px' : '0px',
-          borderRadius: isCompactLayout || isMobile ? 0 : '.625rem',
+          borderRadius: isCompactLayout || isMobile || isDockedLayout || isFloatingLayout ? 0 : '.625rem',
         })}
       >
         <Box>
@@ -461,10 +475,10 @@ const SessionBottom = forwardRef<HTMLDivElement, Props>(({ enableFileAttachments
                       onChange={newValue => {
                         setChatInputValue(newValue);
 
-                        // Save draft as user types
-                        if (currentSessionId) {
-                          setDraft(currentSessionId, newValue);
-                        }
+                        // Save draft as user types. A new notebook has no id yet, so
+                        // draft under the stable new-notebook key - it survives a
+                        // full-page reload and is restored by useMessageDraft.
+                        setDraft(currentSessionId ?? NEW_NOTEBOOK_DRAFT_KEY, newValue);
 
                         const shouldShowSlashSuggestions =
                           typeof newValue === 'string' &&

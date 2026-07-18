@@ -32,9 +32,17 @@ export async function persistRunAsQuest(
    * chat, which the client reads to tell a truncated artifact from a completed
    * reply that merely contains an unclosed `<artifact>` tag in prose.
    */
-  finishReason?: string
+  finishReason?: string,
+  /**
+   * UI side-effects tools emitted during the run (e.g. optimizer console populate).
+   * Written to `quest.uiSideEffects` so a reload replays them non-destructively via
+   * SessionMiddle - parity with chat, which accretes them live on the quest. The agent
+   * path applies them live during the run (iteration_step), so this is the replay copy.
+   */
+  uiSideEffects?: { type: string; payload: unknown }[]
 ): Promise<void> {
   const images = generatedImages?.length ? generatedImages : undefined;
+  const sideEffects = uiSideEffects?.length ? uiSideEffects : undefined;
   try {
     const execution = await agentExecutionRepository.findById(executionId);
     if (!execution) {
@@ -64,9 +72,16 @@ export async function persistRunAsQuest(
           replies: [replyText],
           status: 'done',
           updatedAt: new Date(),
+          // Persist the run's authoritative total so the chat-history bubble can
+          // render the final credit cost after the live CreditCounter unmounts -
+          // parity with chat_completion, which sets creditsUsed on its Quest.
+          creditsUsed: execution.totalCreditsUsed ?? 0,
           ...(execution.usedMementoIds?.length ? { 'promptMeta.context.mementoIds': execution.usedMementoIds } : {}),
           // Dotted key coexists with `promptMeta.context.mementoIds` above - no clobber.
           ...(finishReason ? { 'promptMeta.finishReason': finishReason } : {}),
+          // The agent Quest is authored once at completion (no subagent race like images),
+          // so a plain $set is safe here.
+          ...(sideEffects ? { uiSideEffects: sideEffects } : {}),
         },
         // $addToSet (not $set) so images contributed by subagents - which write to this same
         // Quest from their own Lambdas via addImagesByAgentExecutionId - aren't clobbered.
@@ -82,7 +97,9 @@ export async function persistRunAsQuest(
         replies: [replyText],
         timestamp: new Date(),
         status: 'done',
+        creditsUsed: execution.totalCreditsUsed ?? 0,
         ...(images ? { images } : {}),
+        ...(sideEffects ? { uiSideEffects: sideEffects } : {}),
         // Link back to the AgentExecution so the client can lazy-load the
         // iteration trace on a "Show reasoning" disclosure under the reply.
         agentExecutionId: executionId,

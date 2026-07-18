@@ -8,17 +8,9 @@ import type { DraggableEvent, DraggableData } from 'react-draggable';
 import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
 import CloseIcon from '@mui/icons-material/Close';
 import MinimizeIcon from '@mui/icons-material/Minimize';
-import OpenInFullIcon from '@mui/icons-material/OpenInFull';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
-import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import CheckIcon from '@mui/icons-material/Check';
-import VerticalSplitIcon from '@mui/icons-material/VerticalSplit';
-import HorizontalSplitIcon from '@mui/icons-material/HorizontalSplit';
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
-import { useSessions } from '@client/app/contexts/SessionsContext';
-import { useQueryClient, type InfiniteData } from '@tanstack/react-query';
-import type { IChatHistoryItemDocument } from '@bike4mind/common';
-import { convertSessionToMarkdown } from '@client/app/utils/sessionMarkdownExport';
+import ChatPanelControls from './ChatPanelControls';
 
 // react-draggable v4.7 types DraggableProps to cover nodeRef/handle/position/
 // bounds/onDrag/onStop directly, so no cast is needed.
@@ -92,9 +84,6 @@ const getCursorForHandle = (position: string): string => {
 const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, headerActions }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
   const [isResizing, setIsResizing] = useState(false);
-  const [copied, setCopied] = useState(false);
-  const { currentSessionId } = useSessions();
-  const queryClient = useQueryClient();
 
   // Get state from Zustand store
   const position = useSessionLayout(s => s.floatingChatPosition);
@@ -114,28 +103,6 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
     el.addEventListener('wheel', handleWheel, { passive: true });
     return () => el.removeEventListener('wheel', handleWheel);
   }, [isMinimized]);
-
-  // Copy entire chat history as markdown to clipboard
-  const handleCopyMarkdown = useCallback(async () => {
-    if (!currentSessionId) return;
-    try {
-      const queryData = queryClient.getQueryData<InfiniteData<{ data: IChatHistoryItemDocument[] }>>([
-        'quests',
-        'session',
-        currentSessionId,
-      ]);
-      if (!queryData?.pages) return;
-
-      const quests = queryData.pages.flatMap(p => p.data).reverse(); // chronological order
-      const markdown = convertSessionToMarkdown(quests);
-
-      await navigator.clipboard.writeText(markdown);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error('Failed to copy markdown:', err);
-    }
-  }, [currentSessionId, queryClient]);
 
   // Local state for drag/resize operations (for smooth updates)
   const [localPosition, setLocalPosition] = useState(position);
@@ -362,25 +329,24 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
           gap: 1,
           padding: '8px 16px',
           borderRadius: '24px',
-          backgroundColor: theme.palette.background.surface,
-          border: '1px solid',
-          borderColor: theme.palette.divider,
+          backgroundColor: theme.palette.primary.solidBg,
+          color: theme.palette.primary.solidColor,
+          '--Icon-color': theme.palette.primary.solidColor,
           boxShadow: theme.shadow.lg,
           cursor: 'pointer',
-          transition: 'all 0.2s ease',
+          transition: 'transform 0.2s ease, background-color 0.2s ease',
           '&:hover': {
-            transform: 'scale(1.05)',
-            boxShadow: theme.shadow.xl,
+            backgroundColor: theme.palette.primary.solidHoverBg,
+            transform: 'translateY(-2px)',
           },
         })}
         onClick={handleMinimize}
         data-testid="floating-chat-minimized"
       >
-        <SmartToyIcon sx={{ fontSize: 20, color: 'primary.main' }} />
-        <Typography level="body-sm" fontWeight="md">
+        <SmartToyIcon sx={{ fontSize: 16 }} />
+        <Typography level="body-sm" fontWeight="md" sx={{ color: 'inherit' }}>
           AI Chat
         </Typography>
-        <OpenInFullIcon sx={{ fontSize: 16, color: 'text.secondary' }} />
       </Box>
     );
   }
@@ -435,7 +401,16 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             <DragIndicatorIcon sx={{ fontSize: 18, color: 'text.tertiary' }} />
-            <SmartToyIcon sx={{ fontSize: 18, color: 'primary.main' }} />
+            <Box
+              sx={theme => ({
+                display: 'flex',
+                '--Icon-color': theme.palette.sidenav?.navItemIcon,
+                color: theme.palette.sidenav?.navItemIcon,
+                opacity: theme.palette.mode === 'dark' ? 0.75 : 0.5,
+              })}
+            >
+              <SmartToyIcon sx={{ fontSize: 18 }} />
+            </Box>
             <Typography level="body-sm" fontWeight="md">
               AI Chat
             </Typography>
@@ -449,42 +424,7 @@ const FloatingChatWindow: React.FC<FloatingChatWindowProps> = ({ children, heade
             onPointerDown={e => e.stopPropagation()}
           >
             {headerActions}
-            <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
-              <IconButton
-                size="sm"
-                variant="plain"
-                color={copied ? 'success' : 'neutral'}
-                onClick={handleCopyMarkdown}
-                data-testid="floating-chat-copy-markdown"
-                sx={{ '--IconButton-size': '28px' }}
-              >
-                {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 14 }} />}
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Dock right" disableInteractive>
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={() => setSessionLayout({ layout: 'dockRight' })}
-                data-testid="floating-chat-dock-right"
-                sx={{ '--IconButton-size': '28px' }}
-              >
-                <VerticalSplitIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </Tooltip>
-            <Tooltip title="Dock bottom" disableInteractive>
-              <IconButton
-                size="sm"
-                variant="plain"
-                color="neutral"
-                onClick={() => setSessionLayout({ layout: 'dockBottom' })}
-                data-testid="floating-chat-dock-bottom"
-                sx={{ '--IconButton-size': '28px' }}
-              >
-                <HorizontalSplitIcon sx={{ fontSize: 16 }} />
-              </IconButton>
-            </Tooltip>
+            <ChatPanelControls testIdPrefix="floating-chat" />
             <Tooltip title="Minimize" disableInteractive>
               <IconButton
                 size="sm"

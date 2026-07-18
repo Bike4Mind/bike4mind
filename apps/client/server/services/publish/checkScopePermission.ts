@@ -61,11 +61,12 @@ export async function checkScopePermission(input: ScopePermissionInput): Promise
   }
 
   if (tier === 'project') {
-    // scopeId is a Project._id. Allow the owner (userId) or a member (users[].id).
+    // scopeId is a Project._id. Allow the owner (userId) or a member.
+    // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
     const { Project } = await import('@bike4mind/database');
     const project = await Project.findOne({
       _id: scopeId,
-      $or: [{ userId: String(user.id) }, { 'users.id': String(user.id) }],
+      $or: [{ userId: String(user.id) }, { 'users.userId': String(user.id) }],
     })
       .select('_id')
       .lean<{ _id: unknown } | null>();

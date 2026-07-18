@@ -3,6 +3,7 @@ import {
   IFabFileChunkRepository,
   IFabFileDocument,
   IFabFileRepository,
+  IFabFileVersion,
   KnowledgeType,
 } from '@bike4mind/common';
 import mongoose, { Model, Schema } from 'mongoose';
@@ -598,6 +599,19 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
   }
 }
 
+// Non-destructive AI-edit history for binary Office documents. `_id: false` keeps entries
+// as plain sub-objects (they are addressed by `version`, not ObjectId).
+const FabFileVersionSchema = new Schema<IFabFileVersion>(
+  {
+    version: { type: Number, required: true },
+    filePath: { type: String, required: true },
+    fileSize: { type: Number },
+    mimeType: { type: String },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
   {
     userId: { type: String, required: true },
@@ -644,6 +658,8 @@ const FabFileSchema = new Schema<IFabFileDocument, IFabFileModel>(
     batchId: { type: String },
     relativePath: { type: String },
     archivedAt: { type: Date },
+    // Absent until the first AI edit of a docx/xlsx; each edit appends an entry.
+    versions: { type: [FabFileVersionSchema], default: undefined },
 
     ...ShareableDocumentSchema,
   },
@@ -689,10 +705,9 @@ FabFileSchema.index({ deletedAt: 1, 'groups.groupId': 1, 'groups.permissions': 1
 // Optimized index for searchCollections query - fabfiles collection
 FabFileSchema.index({ userId: 1, deletedAt: 1, fileName: 'text', updatedAt: -1 });
 
-// Data lake tag-based access queries
-FabFileSchema.index({ 'tags.name': 1 });
-
-// Data lake lifecycle queries (archive/delete/stat-recompute scoped by meta-tag)
+// Data lake tag-based access + lifecycle queries (archive/delete/stat-recompute scoped by
+// meta-tag). The leading `tags.name` prefix also serves the plain tag-access lookups, so no
+// separate single-field `{ 'tags.name': 1 }` index is needed (dropped in a migration).
 FabFileSchema.index({ 'tags.name': 1, archivedAt: 1, deletedAt: 1 });
 
 // Content hash deduplication lookups

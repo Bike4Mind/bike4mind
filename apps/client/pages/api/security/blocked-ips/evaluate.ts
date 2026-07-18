@@ -1,9 +1,13 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { blockedIPRepository, authFailLogRepository } from '@bike4mind/database';
+import { ensureAdmin } from '@server/utils/errors';
 
 // POST /api/security/blocked-ips/evaluate
-// Evaluates last 10 minutes and auto-blocks IPs with >=10 attempts
+// Evaluates last 10 minutes and auto-blocks IPs with >=10 attempts.
+// Writes to the IP blocklist, so it is admin-only like the rest of that control.
+// If wired to an external scheduler, invoke it with an admin-scoped credential.
 const handler = baseApi().post(async (req, res) => {
+  ensureAdmin(req.user?.isAdmin);
   const since = new Date(Date.now() - 10 * 60 * 1000);
   const result = await authFailLogRepository.getIPsWithHighAttempts(since, 10);
   const blocked: string[] = [];

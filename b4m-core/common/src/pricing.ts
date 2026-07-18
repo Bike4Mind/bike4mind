@@ -31,6 +31,10 @@ const PRICE_MARGIN = envNumber(
   DEFAULT_PRICE_MARGIN
 );
 
+/** The resolved markup multiple (env override or default). Exported for
+ * read-side displays that need the break-even boundary (target / margin). */
+export const getPriceMargin = (): number => PRICE_MARGIN;
+
 /**
  * What a credit sells for. Every purchase route (credit packages and
  * subscriptions) grants credits at this same uniform rate, so every buyer
@@ -50,8 +54,12 @@ const USD_TO_CREDITS_RATE = envNumber(
  * naive ceil((usd * 3) / 0.0006) charges a phantom credit on exact multiples.
  * Guarded because individually valid env values can still derive 0
  * (margin/rate < 0.5), collapsing every charge to the 1-credit minimum.
+ *
+ * Exported so callers that need an admin-tunable rate anchored to the
+ * platform-wide default (e.g. an admin-settable per-provider override) can
+ * seed from this value instead of duplicating the markup math.
  */
-const CREDITS_PER_USD_COST = (() => {
+export const CREDITS_PER_USD_COST = (() => {
   const derived = Math.round(PRICE_MARGIN / USD_TO_CREDITS_RATE);
   if (Number.isFinite(derived) && derived >= 1) return derived;
   console.warn(`[pricing] Env-configured margin/rate derive ${derived} credits per USD cost; using defaults`);
@@ -70,9 +78,14 @@ const CREDITS_PER_USD_COST = (() => {
  * $1 USD = 2000 credits (1.2x markup at $0.0006/credit)
  * $0.001 USD = 2 credits
  * $0.0001 USD = 1 credit (minimum)
+ *
+ * @param rate - Credits per $1, defaults to the platform-wide CREDITS_PER_USD_COST.
+ *   Pass an override for a provider-specific admin-tunable rate (e.g. a
+ *   billing-sensitive external compute path priced independently of the
+ *   platform default).
  */
-export const usdToCredits = (usd: number): number => {
-  return Math.max(1, Math.ceil(usd * CREDITS_PER_USD_COST));
+export const usdToCredits = (usd: number, rate: number = CREDITS_PER_USD_COST): number => {
+  return Math.max(1, Math.ceil(usd * rate));
 };
 
 /**
@@ -113,9 +126,17 @@ const cryptoUniform = (): number => {
  *
  * @param usd - The raw provider cost in USD to convert
  * @param rng - Uniform [0,1) source, injectable for tests; defaults to CSPRNG
+ * @param rate - Credits per $1, defaults to the platform-wide CREDITS_PER_USD_COST.
+ *   Callers settling a provider-specific admin-tunable rate must pass the SAME
+ *   rate value that was used at reservation time (snapshot it, don't re-read
+ *   a live admin setting), or the settlement math mixes scales.
  */
-export const usdToCreditsStochastic = (usd: number, rng: () => number = cryptoUniform): number => {
-  const raw = usd * CREDITS_PER_USD_COST;
+export const usdToCreditsStochastic = (
+  usd: number,
+  rng: () => number = cryptoUniform,
+  rate: number = CREDITS_PER_USD_COST
+): number => {
+  const raw = usd * rate;
   if (!Number.isFinite(raw) || raw <= 0) return 0;
   const base = Math.floor(raw);
   const fraction = raw - base;

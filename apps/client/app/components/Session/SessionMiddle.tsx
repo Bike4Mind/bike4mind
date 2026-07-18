@@ -19,7 +19,7 @@ import { handleImageEditCommand, handleImageGenerationCommand } from '../command
 import { CommandHandlers, CommandKey, extractCommandAndParams, handleCommand } from '@client/app/utils/commands';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useSearch } from '@tanstack/react-router';
-import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
+import { useChatCompletionContext } from '@client/app/contexts/ChatCompletionContext';
 import { useDeleteQuest, useUpdateQuest } from '@client/app/hooks/data/quests';
 import { useQueryClient } from '@tanstack/react-query';
 import { SendMessageOptions } from '@client/app/utils/llm';
@@ -40,10 +40,14 @@ import { dispatchUiSideEffects } from '@client/app/utils/uiSideEffectDispatcher'
 import useSessionLayout, { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { useVirtuosoPagination } from './hooks/useVirtuosoPagination';
 import { useStreamingMessageMerge } from './hooks/useStreamingMessageMerge';
+import { shouldShowEmptySessionSplash } from './emptySessionSplashGate';
 
 interface IProps {
   isFullWidth?: boolean;
   sessionId: string;
+  /** Opt-in content shown when the session is loaded and has no messages
+   *  (nothing streaming/pending). Hosts like /opti pass a welcome splash. */
+  emptySessionSplash?: React.ReactNode;
 }
 
 // Separate component for scroll button to prevent parent re-renders.
@@ -103,7 +107,7 @@ const commandHandlers: CommandHandlers = {
   '/edit_image': handleImageEditCommand,
 };
 
-const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId }) => {
+const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId, emptySessionSplash }) => {
   const queryClient = useQueryClient();
   const deleteQuest = useDeleteQuest(queryClient);
   const updateQuest = useUpdateQuest(queryClient);
@@ -114,7 +118,7 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId }) => 
   const theme = useTheme();
   const mode = theme.palette.mode;
   const { settings } = useUserSettings();
-  const { chatCompletion, setChatCompletion } = useSubscribeChatCompletion(sessionId);
+  const { chatCompletion, setChatCompletion } = useChatCompletionContext();
   const { search, showPinnedOnly } = useNotebookSearch();
   const isMobile = useIsMobile();
   const { currentUser } = useUser();
@@ -464,6 +468,18 @@ const SessionMiddle: React.FC<IProps> = ({ isFullWidth = false, sessionId }) => 
           {/* Paint on read-gated /chat content without waiting on canRead's metadata fetch */}
           {!canShowConversation(canRead, flattenQuests.length > 0) ? (
             <NotebookSplash />
+          ) : shouldShowEmptySessionSplash({
+              hasSplash: Boolean(emptySessionSplash),
+              questCount: flattenQuests.length,
+              isFetching,
+              hasActiveQuest,
+            }) ? (
+            <Box
+              data-testid="session-middle-empty-splash"
+              sx={{ flex: 1, minHeight: 0, overflow: 'auto', display: 'flex', flexDirection: 'column' }}
+            >
+              {emptySessionSplash}
+            </Box>
           ) : (
             <ChatHistory
               filteredChatHistory={filteredChatHistory}

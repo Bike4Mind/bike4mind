@@ -8,6 +8,8 @@
  * of the email assertion being verified.
  */
 
+import { IAuthProviders } from '@bike4mind/common';
+
 /**
  * Error code returned to the OAuth callback strategy handler when auto-link
  * is refused. Surfaces to the user via /login?error=... so the UI can render a
@@ -113,6 +115,105 @@ export function decideAutoLink(input: AutoLinkInput): AutoLinkDecision {
   }
 
   return { action: 'link' };
+}
+
+/**
+ * Inputs to the account-link write. Each callback supplies its own account state
+ * after the shared gate (decideAutoLink) has approved the link.
+ */
+export interface ApplyAccountLinkInput {
+  /** The account's current providers (user.authProviders || []). Mutated in place. */
+  authProviders: IAuthProviders[];
+  /** The incoming provider credentials to link. */
+  oauthCredentials: IAuthProviders;
+  /** No existing entry for this strategy (existingProviderIndex === -1). */
+  isNewProvider: boolean;
+  /** decideAutoLink returned `promote-and-link`: also stamp the local email verified. */
+  promoteEmailVerified: boolean;
+  /** The account's current tokenVersion, used to compute the bumped value to reflect. */
+  currentTokenVersion: number | undefined;
+}
+
+/**
+ * The account-link write, split from its transport so callers just apply it:
+ *   - `update`  : the second argument to User.updateOne.
+ *   - `reflect` : the fields to mirror onto the in-memory user so the token minted
+ *                 for THIS login matches what was just persisted.
+ */
+export interface AccountLinkWrite {
+  update: Record<string, unknown>;
+  reflect: { tokenVersion?: number; emailVerified?: boolean; emailVerifiedAt?: Date };
+}
+
+/**
+ * Apply an approved account-link decision to the write layer. Shared by every
+ * callback (verifyCallback.ts for Google/GitHub/SAML, okta/callback.ts for Okta
+ * OIDC) so the security-relevant write - the tokenVersion bump on a new link and
+ * the emailVerified promotion - can never drift between the two paths. Callers own
+ * only their transport (session shape, audit event, HTTP response).
+ *
+ * Mutates `authProviders` in place (splice-or-push) exactly as the inline write
+ * did, so a caller that copies the user afterwards (passport's omit(user)) still
+ * observes the linked provider.
+ *
+ * Linking a NEW provider is security-relevant: the update nests the fields under
+ * `$set` and increments tokenVersion to revoke other active sessions; the current
+ * login stays valid because the caller reflects the bumped version onto the user
+ * it mints this token from. A refresh of an already-linked provider replaces the
+ * fields without a bump.
+ *
+ * A promotion write always rides the SAME updateOne as the link - no second
+ * round-trip, and neither can persist without the other. Promotion only fires on a
+ * real email match (see decideAutoLink), so the local email is always present - no
+ * backfill needed.
+ */
+export function applyAccountLink({
+  authProviders,
+  oauthCredentials,
+  isNewProvider,
+  promoteEmailVerified,
+  currentTokenVersion,
+}: ApplyAccountLinkInput): AccountLinkWrite {
+  const existingProviderIndex = authProviders.findIndex(p => p.strategy === oauthCredentials.strategy);
+  if (existingProviderIndex !== -1) {
+    authProviders[existingProviderIndex] = oauthCredentials;
+    // Collapse any LATER entries for the same strategy, not just replace the
+    // first: a doc that already carries duplicate rows for one provider (the
+    // concurrent first-login race - see the UserModel pre-save guard, which
+    // this updateOne path bypasses) self-heals on the next login instead of
+    // the duplicate surviving replace-at-first-index forever.
+    for (let i = authProviders.length - 1; i > existingProviderIndex; i--) {
+      if (authProviders[i].strategy === oauthCredentials.strategy) {
+        authProviders.splice(i, 1);
+      }
+    }
+  } else {
+    authProviders.push(oauthCredentials);
+  }
+
+  const emailVerifiedAt = new Date();
+  const emailVerifiedFields: { emailVerified?: true; emailVerifiedAt?: Date } = promoteEmailVerified
+    ? { emailVerified: true, emailVerifiedAt }
+    : {};
+
+  const reflect: AccountLinkWrite['reflect'] = {};
+  if (promoteEmailVerified) {
+    reflect.emailVerified = true;
+    reflect.emailVerifiedAt = emailVerifiedAt;
+  }
+
+  if (isNewProvider) {
+    reflect.tokenVersion = (currentTokenVersion ?? 0) + 1;
+    return {
+      update: { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } },
+      reflect,
+    };
+  }
+
+  return {
+    update: { oauthCredentials, authProviders, ...emailVerifiedFields },
+    reflect,
+  };
 }
 
 type EmailEntry = { value?: unknown; verified?: unknown; primary?: unknown };

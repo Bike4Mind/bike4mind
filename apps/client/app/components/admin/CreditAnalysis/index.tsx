@@ -1,10 +1,14 @@
 import React, { useState } from 'react';
 import { Box, Tabs, TabList, Tab, TabPanel } from '@mui/joy';
-import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import PeopleIcon from '@mui/icons-material/People';
 import InsightsIcon from '@mui/icons-material/Insights';
+import PriceChangeIcon from '@mui/icons-material/PriceChange';
+import BusinessIcon from '@mui/icons-material/Business';
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
 import { MarginDashboard } from './components/MarginDashboard';
-import { ModelCostSettings } from './components/ModelCostSettings';
+import { ModelPricingCatalog } from './components/ModelPricingCatalog';
+import { OrgUsageDashboard } from './components/OrgUsageDashboard';
+import { TransactionLedger } from './components/TransactionLedger';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -22,16 +26,28 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>User Credits</Box>
             </Box>
           </Tab>
-          <Tab value="models">
+          <Tab value="pricing" data-testid="credit-analysis-pricing-tab">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <PriceChangeIcon sx={{ fontSize: '18px' }} />
-              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Cost Settings</Box>
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Model Pricing</Box>
             </Box>
           </Tab>
           <Tab value="margins" data-testid="credit-analysis-margins-tab">
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <InsightsIcon sx={{ fontSize: '18px' }} />
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Margins</Box>
+            </Box>
+          </Tab>
+          <Tab value="org-usage" data-testid="credit-analysis-org-usage-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <BusinessIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Org Usage</Box>
+            </Box>
+          </Tab>
+          <Tab value="ledger" data-testid="credit-analysis-ledger-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <ReceiptLongIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Ledger</Box>
             </Box>
           </Tab>
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
@@ -41,12 +57,20 @@ export const CreditAnalyticsTab: React.FC = () => {
           <UserCreditsManager />
         </TabPanel>
 
-        <TabPanel value="models" sx={{ p: 0 }}>
-          <ModelCostSettings />
+        <TabPanel value="pricing" sx={{ p: 0 }}>
+          <ModelPricingCatalog />
         </TabPanel>
 
         <TabPanel value="margins" sx={{ p: 0 }}>
           <MarginDashboard />
+        </TabPanel>
+
+        <TabPanel value="org-usage" sx={{ p: 0 }}>
+          <OrgUsageDashboard />
+        </TabPanel>
+
+        <TabPanel value="ledger" sx={{ p: 0 }}>
+          <TransactionLedger />
         </TabPanel>
       </Tabs>
 

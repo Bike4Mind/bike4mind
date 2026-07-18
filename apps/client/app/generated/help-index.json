@@ -1030,7 +1030,7 @@
     {
       "slug": "admin/credit-analytics",
       "title": "Credit Analytics",
-      "description": "Manage user credit balances and configure per-model cost settings for the platform",
+      "description": "Manage user credit balances, model pricing, and margin analytics for the platform",
       "category": "admin",
       "sidebarPosition": 12,
       "tags": [
@@ -1077,28 +1077,23 @@
         },
         {
           "level": 2,
-          "text": "Model Cost Settings",
-          "anchor": "model-cost-settings"
+          "text": "Model Pricing",
+          "anchor": "model-pricing"
+        },
+        {
+          "level": 2,
+          "text": "Margins",
+          "anchor": "margins"
         },
         {
           "level": 3,
-          "text": "Model Type Tabs",
-          "anchor": "model-type-tabs"
+          "text": "Invoice reconciliation",
+          "anchor": "invoice-reconciliation"
         },
         {
-          "level": 3,
-          "text": "Text Model Table",
-          "anchor": "text-model-table"
-        },
-        {
-          "level": 3,
-          "text": "Image Model Table",
-          "anchor": "image-model-table"
-        },
-        {
-          "level": 3,
-          "text": "Saving and Reverting",
-          "anchor": "saving-and-reverting"
+          "level": 4,
+          "text": "Monthly runbook",
+          "anchor": "monthly-runbook"
         },
         {
           "level": 2,
@@ -7932,6 +7927,11 @@
           "anchor": "removing-a-channel-override"
         },
         {
+          "level": 3,
+          "text": "Default GitHub Repository per Channel",
+          "anchor": "default-github-repository-per-channel"
+        },
+        {
           "level": 2,
           "text": "Agent Model Configuration",
           "anchor": "agent-model-configuration"
@@ -10453,7 +10453,7 @@
         {
           "slug": "admin/credit-analytics",
           "title": "Credit Analytics",
-          "description": "Manage user credit balances and configure per-model cost settings for the platform",
+          "description": "Manage user credit balances, model pricing, and margin analytics for the platform",
           "category": "admin",
           "sidebarPosition": 12,
           "tags": [
@@ -10500,28 +10500,23 @@
             },
             {
               "level": 2,
-              "text": "Model Cost Settings",
-              "anchor": "model-cost-settings"
+              "text": "Model Pricing",
+              "anchor": "model-pricing"
+            },
+            {
+              "level": 2,
+              "text": "Margins",
+              "anchor": "margins"
             },
             {
               "level": 3,
-              "text": "Model Type Tabs",
-              "anchor": "model-type-tabs"
+              "text": "Invoice reconciliation",
+              "anchor": "invoice-reconciliation"
             },
             {
-              "level": 3,
-              "text": "Text Model Table",
-              "anchor": "text-model-table"
-            },
-            {
-              "level": 3,
-              "text": "Image Model Table",
-              "anchor": "image-model-table"
-            },
-            {
-              "level": 3,
-              "text": "Saving and Reverting",
-              "anchor": "saving-and-reverting"
+              "level": 4,
+              "text": "Monthly runbook",
+              "anchor": "monthly-runbook"
             },
             {
               "level": 2,
@@ -17364,6 +17359,11 @@
               "anchor": "removing-a-channel-override"
             },
             {
+              "level": 3,
+              "text": "Default GitHub Repository per Channel",
+              "anchor": "default-github-repository-per-channel"
+            },
+            {
               "level": 2,
               "text": "Agent Model Configuration",
               "anchor": "agent-model-configuration"
@@ -18855,5 +18855,5 @@
       "accessLevel": "public"
     }
   ],
-  "version": "2026-07-04T06:30:22.519Z"
+  "version": "2026-07-15T14:34:12.156Z"
 }

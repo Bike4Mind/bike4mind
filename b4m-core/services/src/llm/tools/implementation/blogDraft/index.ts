@@ -1,7 +1,9 @@
 import { Logger } from '@bike4mind/observability';
 import { randomUUID } from 'crypto';
+import type { CompletionInfo } from '@bike4mind/llm-adapters';
 import { ChatModels, ClaudeArtifactMimeTypes } from '@bike4mind/common';
 import { ToolDefinition } from '../../base/types';
+import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsage';
 import { sanitizeJsonString } from '../../utils/jsonSanitize';
 
 interface ContentTransformParams {
@@ -258,6 +260,8 @@ export const blogDraftTool: ToolDefinition = {
         logger.info('Using model for blog draft:', { model: modelToUse });
 
         let llmResponse = '';
+        let completionInfo: CompletionInfo | undefined;
+        const startTime = Date.now();
         await llm.complete(
           modelToUse,
           [
@@ -271,10 +275,13 @@ export const blogDraftTool: ToolDefinition = {
             temperature: 0.7,
             stream: false,
           },
-          async texts => {
+          async (texts, info) => {
             llmResponse = texts.filter(t => t !== null && t !== undefined).join('');
+            if (info) completionInfo = info;
           }
         );
+
+        await recordToolOperationalUsage(context, { model: modelToUse, completionInfo, startTime });
 
         logger.info('Blog draft complete', { responseLength: llmResponse.length });
 

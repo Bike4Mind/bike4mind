@@ -4,6 +4,7 @@ export * from './JiraWebhookConfigModel';
 export * from './JiraWebhookDeliveryModel';
 export * from './JiraWebhookSubscriptionModel';
 export * from './OrgGitHubConnectionModel';
+export * from './OrgJiraConnectionModel';
 export * from './OrgSlackWorkspaceModel';
 export * from './OrgWebhookConfigModel';
 export * from './SlackAuditLogModel';

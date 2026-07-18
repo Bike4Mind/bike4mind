@@ -37,6 +37,7 @@ export { renderBundleLoaderShell } from './renderBundleLoaderShell';
 export { prepareShareMeta, stripToText, type ShareMetaInput, type ShareMetaOutput } from './prepareShareMeta';
 export { generateShareToken } from './shareToken';
 export { checkShareGrant, type ShareGrantArtifact, type ShareGrantContext } from './checkShareGrant';
+export { recordGatedView, type RecordGatedViewInput } from './recordGatedView';
 export { renderPassphraseShell } from './renderPassphraseShell';
 export {
   checkVisibility,
@@ -61,3 +62,13 @@ export {
   GATE_TOKEN_TTL_SECONDS,
 } from './publishGateToken';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
+export { validateEmbedOrigins, validateEmbedKeyOrigins, type EmbedOriginsResult } from './embedOrigins';
+export {
+  buildReactArtifactBundle,
+  assembleReactBundleHtml,
+  transpileReactSource,
+  assertPublishableDependencies,
+  PUBLISH_SUPPORTED_DEPENDENCIES,
+  UnsupportedReactDependencyError,
+  ReactArtifactTranspileError,
+} from './transpileReactArtifact';

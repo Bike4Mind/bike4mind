@@ -45,4 +45,58 @@ describe('StatusBar', () => {
 
     expect(lastFrame()).not.toContain('BASH');
   });
+
+  it('should show the subagent token segment when subagentTokenUsage > 0', () => {
+    const { lastFrame } = render(
+      <StatusBar isBashMode={false} model="claude" tokenUsage={100} subagentTokenUsage={250} />
+    );
+
+    expect(lastFrame()).toContain('+250 agent tokens');
+  });
+
+  it('should hide the subagent token segment when subagentTokenUsage is 0 or undefined', () => {
+    const { lastFrame: zeroFrame } = render(
+      <StatusBar isBashMode={false} model="claude" tokenUsage={100} subagentTokenUsage={0} />
+    );
+    expect(zeroFrame()).not.toContain('agent tokens');
+
+    const { lastFrame: undefinedFrame } = render(<StatusBar isBashMode={false} model="claude" tokenUsage={100} />);
+    expect(undefinedFrame()).not.toContain('agent tokens');
+  });
+
+  it('should show the subagent credits segment when subagentCreditsUsage > 0', () => {
+    const { lastFrame } = render(
+      <StatusBar isBashMode={false} model="claude" tokenUsage={100} subagentCreditsUsage={4} />
+    );
+
+    expect(lastFrame()).toContain('+4 agent credits');
+  });
+
+  it('should hide the subagent credits segment when subagentCreditsUsage is 0 or undefined', () => {
+    const { lastFrame: zeroFrame } = render(
+      <StatusBar isBashMode={false} model="claude" tokenUsage={100} subagentCreditsUsage={0} />
+    );
+    expect(zeroFrame()).not.toContain('agent credits');
+
+    const { lastFrame: undefinedFrame } = render(<StatusBar isBashMode={false} model="claude" tokenUsage={100} />);
+    expect(undefinedFrame()).not.toContain('agent credits');
+  });
+
+  it('should not affect the main token/credit segments', () => {
+    const { lastFrame } = render(
+      <StatusBar
+        isBashMode={false}
+        model="claude"
+        tokenUsage={100}
+        creditsUsage={9}
+        subagentTokenUsage={250}
+        subagentCreditsUsage={4}
+      />
+    );
+
+    expect(lastFrame()).toContain('100 tokens');
+    expect(lastFrame()).toContain('9 credits');
+    expect(lastFrame()).toContain('+250 agent tokens');
+    expect(lastFrame()).toContain('+4 agent credits');
+  });
 });

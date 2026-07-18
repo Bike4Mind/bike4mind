@@ -24,7 +24,10 @@ export interface PublishedArtifactAccessGate {
   kind: 'passphrase' | 'domain';
   /** bcrypt hash; `select: false` in the schema so reads never leak it by default. */
   passphraseHash?: string | null;
-  /** Lowercased registrable domains, exact-match only (no substrings). */
+  /** Lowercased email-domain allowlist, stored AS ENTERED (never reduced to eTLD+1).
+   *  A viewer matches when their verified email host equals an entry or is a subdomain
+   *  of it: `acme.com` admits `mail.acme.com`, but `acme.onmicrosoft.com` does NOT
+   *  admit `evil.onmicrosoft.com`. Enforced in checkAccessGate. */
   allowedDomains?: string[];
 }
 
@@ -118,6 +121,12 @@ const PublishedArtifactSchema = new Schema(
      *  Applies to BOTH share surfaces: `visibility: 'public'` (/p/*) and
      *  share-token links (/a/<token>). */
     accessGate: { type: AccessGateSubSchema, default: null },
+
+    /** Embed allowlist: external https origins permitted to frame this artifact.
+     *  Appended to the served `frame-ancestors` CSP. Meaningful ONLY for an open
+     *  public artifact (a gated page is no-store and never framed). `undefined`
+     *  (not `[]`) when unset so the field is absent rather than an empty array. */
+    embedOrigins: { type: [String], default: undefined },
 
     /** Collaboration gate: who (among viewers) may annotate. Orthogonal to
      *  `visibility` (who may view). Defaults to `none` so existing artifacts

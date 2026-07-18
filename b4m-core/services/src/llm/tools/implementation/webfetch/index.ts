@@ -4,6 +4,7 @@ import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
 import { FirecrawlError } from '@mendable/firecrawl-js';
 import { FirecrawlApp } from './firecrawlApp';
+import { unsafeFetchUrlReason } from './ssrfGuard';
 
 // Re-exported so external construction sites (e.g. apps/client researchEngineQueue)
 // can use the interop-safe constructor instead of the raw default import.
@@ -11,15 +12,73 @@ export { FirecrawlApp, resolveFirecrawlApp } from './firecrawlApp';
 
 interface WebFetchParams {
   url: string;
+  /** Character offset into the extracted content to start reading from (continuation). */
+  offset?: number;
 }
 
 interface WebFetchResult {
+  /** One chunk of the extracted content: markdown.slice(offset, offset + WEB_FETCH_CONTENT_CAP). */
   markdown: string;
   title?: string;
+  /** Length of the returned chunk. */
+  extractedChars: number;
+  /** Total length Firecrawl extracted, before any offset/cap window was applied. */
+  originalChars: number;
+  /** Char offset this chunk started at (0 for the first read). */
+  offset: number;
+  /** True when content remains AFTER this chunk (offset + extractedChars < originalChars). */
+  truncated: boolean;
+  /** The per-chunk size cap that was applied (WEB_FETCH_CONTENT_CAP). */
+  cap: number;
+  /** Wall-clock duration of the Firecrawl scrape, in ms. */
+  durationMs: number;
+  /** When set, the origin advertises an llms.txt/llms-full.txt worth suggesting for long-form content. */
+  llmsTxtUrl?: string;
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 const PDF_TIMEOUT_MS = 90_000;
+
+// Max characters returned per fetch. Content past this is no longer dropped (the
+// silent-truncation incident, issue #452): the tail is surfaced via the in-band marker and
+// citable/telemetry fields, and the model can page through it with offset (issue #497).
+const WEB_FETCH_CONTENT_CAP = 50_000;
+
+/**
+ * ASCII-only in-band marker appended to a truncated tool result. Tells the model exactly how
+ * to continue (the next offset to pass) instead of hallucinating a full read, and suggests an
+ * llms.txt long-form source when the origin advertises one. Must stay in sync with the offset
+ * parameter the web_fetch schema exposes.
+ */
+export function truncationMarker(args: {
+  offset: number;
+  extractedChars: number;
+  originalChars: number;
+  llmsTxtUrl?: string;
+}): string {
+  const { offset, extractedChars, originalChars, llmsTxtUrl } = args;
+  const nextOffset = offset + extractedChars;
+  const hint = llmsTxtUrl
+    ? ` A curated long-form version may be available at ${llmsTxtUrl} - fetching it can be more efficient than paging.`
+    : '';
+  return (
+    `\n\n[web_fetch: showing chars ${offset}-${nextOffset} of ~${originalChars}. ` +
+    `More content remains - call web_fetch again with the same url and offset=${nextOffset} to continue.${hint}]`
+  );
+}
+
+/**
+ * Single source of truth for the model-facing string of a web_fetch result, shared by all three
+ * callers (tool, HTTP endpoint, CLI) so their truncation/continuation semantics cannot drift.
+ * Returns the chunk plus a continuation marker when more remains, a short note when the requested
+ * offset is at/past the end, or the plain chunk otherwise.
+ */
+export function webFetchBody(result: WebFetchResult): string {
+  if (result.extractedChars === 0 && result.offset > 0) {
+    return `[web_fetch: offset ${result.offset} is at or beyond the end of the content (~${result.originalChars} chars); nothing further to read.]`;
+  }
+  return result.truncated ? result.markdown + truncationMarker(result) : result.markdown;
+}
 
 function isPdfUrl(url: string): boolean {
   try {
@@ -30,10 +89,63 @@ function isPdfUrl(url: string): boolean {
   }
 }
 
+/** How long a single llms.txt HEAD/GET probe may take before we give up on it (ms). */
+const LLMS_TXT_PROBE_TIMEOUT_MS = 2_500;
+
+/**
+ * Best-effort probe for an advertised llms.txt on the page's origin, so a long-form fetch can
+ * suggest a curated source (issue #497). Prefers /llms-full.txt over /llms.txt. Never throws:
+ * any failure/timeout resolves to undefined so it can never break the primary fetch. A single
+ * byte is requested (Range) and the body is never read; a non-HTML content-type guards against
+ * SPA catch-all routes that answer 200 with index.html.
+ */
+async function probeLlmsTxt(pageUrl: string): Promise<string | undefined> {
+  let origin: string;
+  try {
+    origin = new URL(pageUrl).origin;
+  } catch {
+    return undefined;
+  }
+
+  const probe = async (candidate: string): Promise<string | undefined> => {
+    // SSRF guard: this is a direct server-side fetch against a user/model-supplied origin, so
+    // reject private/loopback/metadata targets and use redirect:'error' so a public origin cannot
+    // 302-pivot to an internal address after the check. See ssrfGuard.ts.
+    if (await unsafeFetchUrlReason(new URL(candidate))) return undefined;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), LLMS_TXT_PROBE_TIMEOUT_MS);
+    try {
+      const res = await fetch(candidate, {
+        method: 'GET',
+        headers: { Range: 'bytes=0-0' },
+        signal: controller.signal,
+        redirect: 'error',
+      });
+      const contentType = res.headers.get('content-type') ?? '';
+      const found = res.ok && !contentType.includes('text/html');
+      // Only headers are needed; cancel the body so undici releases the connection now
+      // rather than at GC (fire-and-forget - must not affect the probe result).
+      void res.body?.cancel().catch(() => {});
+      return found ? candidate : undefined;
+    } catch {
+      return undefined;
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  const [full, index] = await Promise.all([probe(`${origin}/llms-full.txt`), probe(`${origin}/llms.txt`)]);
+  return full ?? index;
+}
+
 type FirecrawlFetchOptions = {
   /** Maximum timeout in ms - callers with shorter Lambda lifetimes should cap this.
    *  Defaults to PDF_TIMEOUT_MS (90s) for PDFs, DEFAULT_TIMEOUT_MS (60s) otherwise. */
   maxTimeoutMs?: number;
+  /** Char offset into the extracted content to start the returned chunk at (continuation).
+   *  Firecrawl has no native paging, so the full page is re-scraped and re-sliced here. */
+  offset?: number;
 };
 
 /**
@@ -42,8 +154,9 @@ type FirecrawlFetchOptions = {
  *
  * @param adapters - Database adapters for fetching Firecrawl API key
  * @param url - URL to fetch
- * @param options - Optional configuration (e.g. maxTimeoutMs for Lambda-constrained callers)
- * @returns Markdown content and title
+ * @param options - Optional configuration (maxTimeoutMs for Lambda-constrained callers; offset to
+ *                  window into a long page for continuation)
+ * @returns One [offset, offset+cap) chunk of markdown, title, and size/truncation metrics (see WebFetchResult)
  */
 export async function firecrawlFetch(
   adapters: GetEffectiveApiKeyAdapters,
@@ -76,6 +189,7 @@ export async function firecrawlFetch(
   // PDF URLs skip the JS wait action - Firecrawl parses them directly
   const baseParams = { formats: ['markdown' as const], timeout: timeoutMs };
 
+  const startedAt = Date.now();
   let result;
   if (isPdf) {
     result = await app.scrapeUrl(url, baseParams);
@@ -100,6 +214,7 @@ export async function firecrawlFetch(
       }
     }
   }
+  const durationMs = Date.now() - startedAt;
 
   if (!result || result.error) {
     const errorMessage = result?.error || 'Unknown error';
@@ -112,13 +227,48 @@ export async function firecrawlFetch(
     throw new Error('No content could be extracted from the URL');
   }
 
-  // Limit content size (50KB max to prevent memory issues)
-  const markdown = result.markdown.slice(0, 50000);
-  Logger.globalInstance.log(`📄 WebFetch Tool: Extracted ${markdown.length} characters of content`);
+  // Return a single [offset, offset + cap) window of the extracted content. Firecrawl returns the
+  // whole document and has no native paging, so continuation is client-side: the model pages via
+  // the offset it reads from the truncation marker. Capturing originalChars lets callers surface
+  // that more remains instead of silently dropping the tail (issue #452, continuation in #497).
+  // The offsets are only valid against a STABLE page - each call re-scrapes, so if the source
+  // changes between calls the windows may not line up. Not worth tracking for these sizes.
+  //
+  // Coerce a non-finite offset (e.g. a model passing offset:"abc" on the unvalidated tool/CLI
+  // paths) to 0 rather than letting slice(NaN, NaN) return a silent empty string.
+  const rawOffset = options?.offset;
+  const offset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+  const originalChars = result.markdown.length;
+  // Avoid splitting a surrogate pair at the window's end - a lone high surrogate is rejected by
+  // some LLM APIs. Shrink the window by one so the split code unit starts the next chunk instead.
+  let end = offset + WEB_FETCH_CONTENT_CAP;
+  if (end < originalChars) {
+    const lastCode = result.markdown.charCodeAt(end - 1);
+    if (lastCode >= 0xd800 && lastCode <= 0xdbff) end -= 1;
+  }
+  const markdown = result.markdown.slice(offset, end);
+  const extractedChars = markdown.length;
+  const truncated = offset + extractedChars < originalChars;
+  Logger.globalInstance.log(
+    `📄 WebFetch Tool: Extracted ${extractedChars} chars from offset ${offset} of ${originalChars} total in ${durationMs}ms` +
+      (truncated ? ` (more remains past ${offset + extractedChars})` : '')
+  );
+
+  // Probe for an llms.txt hint only on the FIRST truncated read (offset 0): that is the
+  // long-form case where a curated source helps, and gating on offset avoids re-probing the
+  // same origin on every continuation call once the model is already paging.
+  const llmsTxtUrl = truncated && offset === 0 ? await probeLlmsTxt(url) : undefined;
 
   return {
     markdown,
     title: result.metadata?.title,
+    extractedChars,
+    originalChars,
+    offset,
+    truncated,
+    cap: WEB_FETCH_CONTENT_CAP,
+    durationMs,
+    llmsTxtUrl,
   };
 }
 
@@ -132,7 +282,7 @@ export const webFetchTool: ToolDefinition = {
       try {
         await context.statusUpdate({}, `Fetching content from ${params.url}...`);
 
-        const result = await firecrawlFetch({ db: context.db }, params.url);
+        const result = await firecrawlFetch({ db: context.db }, params.url, { offset: params.offset });
 
         // Create citable source for UI display
         const citable: CitableSource = {
@@ -145,7 +295,10 @@ export const webFetchTool: ToolDefinition = {
           status: 'complete' as const,
           metadata: {
             sourceSystem: 'web_fetch',
-            contentLength: result.markdown.length,
+            contentLength: result.extractedChars,
+            truncated: result.truncated,
+            originalContentLength: result.originalChars,
+            cap: result.cap,
           },
         };
 
@@ -160,7 +313,9 @@ export const webFetchTool: ToolDefinition = {
 
         Logger.globalInstance.log(`📚 WebFetch Tool: Stored citable source for ${params.url}`);
 
-        return result.markdown;
+        // Surface truncation in-band (with the next offset to continue) so the model reasons
+        // about incompleteness rather than assuming it received the whole page.
+        return webFetchBody(result);
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
 
@@ -241,7 +396,7 @@ export const webFetchTool: ToolDefinition = {
     toolSchema: {
       name: 'web_fetch',
       description:
-        'Fetches and reads the FULL CONTENT of a specific URL that the user provides. Use this when the user gives you a direct URL link (e.g., "fetch https://example.com", "read this article https://...", "summarize the content at https://..."). This tool downloads the entire page content and converts it to markdown for you to read. You can then answer questions, summarize, or extract information from the content yourself. DO NOT use web_search when the user provides a specific URL - always use web_fetch instead.',
+        'Fetches and reads the content of a specific URL that the user provides. Use this when the user gives you a direct URL link (e.g., "fetch https://example.com", "read this article https://...", "summarize the content at https://..."). This tool downloads the page content and converts it to markdown for you to read. Long pages are returned in chunks: if the result ends with a "[web_fetch: ... offset=N ...]" marker, more content remains - call web_fetch again with the same url and that offset to read the next chunk (repeat until there is no marker to read the whole page). You can then answer questions, summarize, or extract information from the content yourself. DO NOT use web_search when the user provides a specific URL - always use web_fetch instead.',
       parameters: {
         type: 'object',
         properties: {
@@ -249,6 +404,12 @@ export const webFetchTool: ToolDefinition = {
             type: 'string',
             format: 'uri',
             description: 'The URL to fetch content from (must be http or https)',
+          },
+          offset: {
+            type: 'integer',
+            minimum: 0,
+            description:
+              "Character offset to start reading from. Omit (or 0) for the start of the page; to continue a long page, pass the offset value from the previous result's [web_fetch: ... offset=N ...] continuation marker.",
           },
         },
         required: ['url'],

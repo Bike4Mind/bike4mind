@@ -44,14 +44,13 @@ import { logEvent } from '@server/utils/analyticsLog';
 import { summarizeSession, contextSummarizeSession } from '@server/managers/sessionManager';
 import { getUserEntitlements } from '@server/entitlements';
 import { accessibleBy } from '@casl/mongoose';
-import { IMcpServerDocument, IUserDocument, Permission } from '@bike4mind/common';
-import { MCPClient } from '@bike4mind/mcp';
-import { buildMcpEnvVariables } from '@server/utils/mcpEnv';
-import { invokeMcpHandler } from '@server/utils/invokeMcpHandler';
+import { IUserDocument, Permission } from '@bike4mind/common';
 import { LLMEvents, SessionEvents } from '@server/utils/eventBus';
 import { getSharedTokenizer, publishTelemetryAlertCallback } from '../utils/chatCompletionDefaults';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import { slackToolDefinitions, createPendingActionToolDefs } from '@bike4mind/slack';
 import { executePendingAction, cancelPendingActionOnQuest } from '@server/utils/pendingActionExecutor';
+import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
 
 // Cache static ChatCompletion options (DB repos, storage clients, config) across invocations;
 // dynamic per-request properties (user, sessionId, logger) are added below. Tokenizer is a
@@ -142,15 +141,26 @@ const getStaticOptions = () => {
     // per-request, per-user resolution happens inside ChatCompletionProcess.resolveEntitlementKeys.
     getEntitlements: getUserEntitlements,
     autoNameSession: autoNameSessionAdapter,
-    invokeCreateMemento: async (questId: string, sessionId: string, userId: string, prompt: string, model: string) => {
+    invokeCreateMemento: async (
+      questId: string,
+      sessionId: string,
+      userId: string,
+      prompt: string,
+      model: string,
+      flags: { enableMementos: boolean; enableMementosV2: boolean }
+    ) => {
       await LLMEvents.CompletionCompleted.publish({
         questId,
         sessionId,
         userId,
         prompt,
         model,
+        // Forward the resolved write gates so the memento subscriber does not re-default V1 on.
+        enableMementos: flags.enableMementos,
+        enableMementosV2: flags.enableMementosV2,
       });
     },
+    recallMementosV2,
     summarizeSession: summarizeSession,
     contextSummarizeSession: contextSummarizeSession,
     getMcpClient: getMcpClientAdapter,
@@ -161,36 +171,6 @@ const getStaticOptions = () => {
   };
 
   return cachedStaticOptions;
-};
-
-// MCP Client adapter - extracted to module level to be referenced in getStaticOptions
-const getMcpClientAdapter = async (
-  mcpServer: IMcpServerDocument
-): Promise<{
-  serverName: string;
-  getTools: () => Promise<MCPClient['tools']>;
-  callTool: (toolName: string, toolArgs: any) => Promise<any>;
-}> => {
-  const buildPayload = async (action: string, toolName?: string, toolArgs?: unknown) => ({
-    id: mcpServer.id,
-    envVariables: await buildMcpEnvVariables(mcpServer),
-    name: mcpServer.name,
-    action,
-    toolName,
-    toolArgs,
-  });
-
-  return {
-    serverName: mcpServer.name,
-    getTools: async () => {
-      const payload = await buildPayload('getTools');
-      return invokeMcpHandler<MCPClient['tools']>(payload);
-    },
-    callTool: async (toolName: string, toolArgs: any) => {
-      const payload = await buildPayload('callTool', toolName, toolArgs);
-      return invokeMcpHandler(payload);
-    },
-  };
 };
 
 const autoNameSessionAdapter = async (sessionId: string, logger: Logger): Promise<string | null> => {

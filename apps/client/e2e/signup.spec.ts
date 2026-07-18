@@ -66,33 +66,8 @@ test.describe('Signup', () => {
     await basePage.clearAllStorage();
     await loginPage.goto();
 
-    // Rate-limit escape hatch. The OTC send (5/15min per IP) and auth-strategy (10/min per IP)
-    // checks are rate limited server-side; on the shared CI egress IP a run can legitimately draw
-    // a 429, which leaves the form stuck on the email step. That's an infra limit, not a product
-    // regression - annotate + skip rather than fail red. We flag only an *observed* 429, so any
-    // other reason the OTC step fails to appear still fails the test.
-    let rateLimited = false;
-    page.on('response', resp => {
-      if (resp.status() === 429 && /\/api\/(otc\/send|auth\/strategy)/.test(resp.url())) {
-        rateLimited = true;
-      }
-    });
-
-    await loginPage.submitEmail(email); // clicks Continue; sends the code (no OTC-step wait yet)
-    try {
-      await loginPage.expectOtcStep();
-    } catch (err) {
-      if (rateLimited) {
-        test.info().annotations.push({
-          type: 'rate-limited',
-          description:
-            'OTC send / auth-strategy returned 429 on the shared CI IP (send 5/15min, strategy 10/min). ' +
-            'Infra rate limit, not a product failure — skipping.',
-        });
-        test.skip();
-      }
-      throw err; // not a 429 → a real failure, surface it
-    }
+    await loginPage.submitEmail(email);
+    await loginPage.expectOtcStep();
 
     const code = await apiGetOtcCode(request, email);
     await loginPage.fillOtc(code);

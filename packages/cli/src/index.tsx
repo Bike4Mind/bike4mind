@@ -44,17 +44,16 @@ import {
   parseApiUrl,
   processFileReferences,
   formatStep,
-  extractCompactInstructions,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
-import { buildCompactionPrompt, createCompactedSession } from './utils/compaction.js';
+import { createReactiveCompactionHandler } from './utils/reactiveCompaction.js';
+import { buildWorkflowState } from './utils/workflowState.js';
 import { getProcessHooks } from './utils/processHooks.js';
 import {
   buildHandoffPrompt,
   parseHandoffResponse,
   formatHandoffOutput,
-  injectHandoffMessage,
   SHORT_SESSION_THRESHOLD,
   buildLocalHandoff,
   writeLocalHandoffFile,
@@ -130,7 +129,7 @@ import { logger } from './utils/Logger';
 import { startPeonNotifier, emitPeonSessionEnd } from './utils/peonNotifier';
 import packageJson from '../package.json';
 import type { ICreditTransactionResponse, ModelInfo } from '@bike4mind/common';
-import { CREDIT_DEDUCT_TRANSACTION_TYPES, ChatModels } from '@bike4mind/common';
+import { CREDIT_DEDUCT_TRANSACTION_TYPES } from '@bike4mind/common';
 import { USAGE_DAYS, MODEL_NAME_COLUMN_WIDTH, USAGE_CACHE_TTL } from './config/constants';
 import { mergeCommands } from './config/commands.js';
 import { SubagentOrchestrator } from './agents/SubagentOrchestrator.js';
@@ -169,6 +168,13 @@ import { buildAgent } from './bootstrap/buildAgent.js';
 import { wireAgentEvents } from './bootstrap/wireAgentEvents.js';
 import { dispatch as dispatchCommand } from './commands/registry.js';
 import { runTurn } from './session/turnController.js';
+import {
+  createFreshSession,
+  resumeSession,
+  compactSession,
+  rewindSession,
+  type SessionLifecycleContext,
+} from './session/lifecycle.js';
 import { printDecisions, printBlockers, printReviewGates } from './commands/handlers/workflowViews.js';
 
 interface PermissionPromptState {
@@ -290,6 +296,7 @@ function CliApp() {
   const imageStoreInitPromise = useRef<Promise<ImageStore> | null>(null);
 
   // Durable workflow stores - refs so they're accessible across all callbacks
+  const todoStoreRef = useRef(createTodoStore());
   const decisionStoreRef = useRef(createDecisionStore());
   const blockerStoreRef = useRef(createBlockerStore());
   const reviewGateStoreRef = useRef(createReviewGateStore());
@@ -801,6 +808,13 @@ function CliApp() {
           // Always set the trigger - the useEffect will wait for isThinking to be false
           useCliStore.getState().setPendingBackgroundTrigger(true);
         },
+        onSubagentUsage: usage => {
+          useCliStore.getState().recordSubagentUsage({
+            agentName: usage.agentName,
+            tokens: usage.totalTokens,
+            credits: usage.totalCredits,
+          });
+        },
       });
 
       // Create agent_delegate tool (with background support)
@@ -830,7 +844,8 @@ function CliApp() {
       const notifyingLlm = new NotifyingLlmBackend(llmWithFallback, backgroundManager);
 
       // Create write_todos tool for task tracking
-      const todoStore = createTodoStore();
+      const todoStore = todoStoreRef.current;
+      todoStore.todos = [];
       const writeTodosTool = createWriteTodosTool(todoStore);
 
       // Create durable workflow tools (Q-inspired agentic patterns)
@@ -1275,6 +1290,10 @@ function CliApp() {
           signal: abortController.signal,
           parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
           isReadOnlyTool,
+          // Mid-loop recovery if a provider context-window error interrupts this
+          // turn: compact the in-flight history once and retry, instead of
+          // failing the turn and losing the user's work.
+          onContextLimit: createReactiveCompactionHandler(state.agent, session, 1 + previousMessages.length + 1),
         });
       } finally {
         state.backgroundManager?.setCurrentTurn(null);
@@ -1331,16 +1350,14 @@ function CliApp() {
           toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
           // Sync durable workflow state from in-memory stores
           workflow:
-            decisionStoreRef.current.decisions.length > 0 ||
-            blockerStoreRef.current.blockers.length > 0 ||
-            reviewGateStoreRef.current.reviewGates.length > 0
-              ? {
-                  decisions: decisionStoreRef.current.decisions,
-                  blockers: blockerStoreRef.current.blockers,
-                  handoff: currentSession.metadata.workflow?.handoff,
-                  reviewGates: reviewGateStoreRef.current.reviewGates,
-                }
-              : currentSession.metadata.workflow,
+            buildWorkflowState(
+              {
+                decisionStore: decisionStoreRef.current,
+                blockerStore: blockerStoreRef.current,
+                reviewGateStore: reviewGateStoreRef.current,
+              },
+              currentSession.metadata.workflow?.handoff
+            ) ?? currentSession.metadata.workflow,
         },
       };
 
@@ -1463,10 +1480,38 @@ function CliApp() {
       additionalDirectories: state.additionalDirectories,
       featureRegistry: state.featureRegistry,
       backgroundManager: state.backgroundManager,
+      todoStore: todoStoreRef.current,
+      decisionStore: decisionStoreRef.current,
+      blockerStore: blockerStoreRef.current,
+      workflowStores: {
+        decisionStore: decisionStoreRef.current,
+        blockerStore: blockerStoreRef.current,
+        reviewGateStore: reviewGateStoreRef.current,
+      },
       setCommandHistory,
       setAbortController: controller => setState(prev => ({ ...prev, abortController: controller })),
     });
   handleMessageRef.current = handleMessage;
+
+  // Builds a React-free SessionLifecycleContext from the current render state
+  // (issue #228, phase 3). The create/resume/compact/rewind command handlers are
+  // thin wrappers over session/lifecycle.ts; the UI-bound pieces (console.clear,
+  // renderBanner, the interactive selectors, rewind prefill) stay in those wrappers.
+  const buildLifecycleContext = (): SessionLifecycleContext => ({
+    agent: state.agent,
+    sessionStore: state.sessionStore,
+    checkpointStore: state.checkpointStore,
+    defaultModel: state.config?.defaultModel,
+    contextContent: state.contextContent,
+    decisionStore: decisionStoreRef.current,
+    blockerStore: blockerStoreRef.current,
+    reviewGateStore: reviewGateStoreRef.current,
+    todoStore: todoStoreRef.current,
+    onSessionReplaced: () => {
+      usageCache = null;
+    },
+    drainReviewGatePrompt: dequeueReviewGatePrompt,
+  });
 
   /**
    * Handle background agent completion - runs agent to process results silently
@@ -1679,36 +1724,6 @@ function CliApp() {
   /**
    * Recalculate session metadata from current messages
    */
-  const recalculateSessionMetadata = (messages: Message[]) => {
-    let totalTokens = 0;
-    let totalCost = 0;
-    let toolCallCount = 0;
-
-    for (const msg of messages) {
-      if (msg.metadata) {
-        if (msg.metadata.tokenUsage) {
-          totalTokens += msg.metadata.tokenUsage.total || 0;
-        }
-
-        if (msg.metadata.cost) {
-          totalCost += msg.metadata.cost;
-        }
-
-        // Count tool calls from steps (observations = completed tools)
-        if (msg.metadata.steps) {
-          const observations = msg.metadata.steps.filter(s => s.type === 'observation');
-          toolCallCount += observations.length;
-        }
-      }
-    }
-
-    return {
-      totalTokens,
-      totalCost,
-      toolCallCount,
-    };
-  };
-
   /**
    * Helper to display agents grouped by source
    */
@@ -1743,12 +1758,19 @@ function CliApp() {
    * cannot drift apart on which fields land on `session.metadata.workflow`.
    */
   const applyHandoffToWorkflow = (session: Session, handoff: SessionHandoff): void => {
-    session.metadata.workflow = {
-      decisions: decisionStoreRef.current.decisions,
-      blockers: blockerStoreRef.current.blockers,
-      handoff,
-      reviewGates: reviewGateStoreRef.current.reviewGates,
-    };
+    // Route through buildWorkflowState so this third assembly site cannot drift
+    // from the save/compaction paths and, like them, snapshots the stores rather
+    // than aliasing their live mutable arrays. buildWorkflowState returns
+    // undefined only when every store is empty; here we still want the handoff
+    // recorded, so fall back to an empty-store workflow that carries it.
+    session.metadata.workflow = buildWorkflowState(
+      {
+        decisionStore: decisionStoreRef.current,
+        blockerStore: blockerStoreRef.current,
+        reviewGateStore: reviewGateStoreRef.current,
+      },
+      handoff
+    ) ?? { decisions: [], blockers: [], handoff, reviewGates: [] };
   };
 
   /**
@@ -1788,6 +1810,7 @@ function CliApp() {
     const handoff = buildLocalHandoff(session, {
       decisions: decisionStoreRef.current.decisions,
       blockers: blockerStoreRef.current.blockers,
+      todos: todoStoreRef.current.todos,
     });
     applyHandoffToWorkflow(session, handoff);
     const filePath = await writeHandoffMarkdown(session);
@@ -2149,17 +2172,16 @@ function CliApp() {
         // even if handoff generation is skipped or fails. When generateHandoff
         // succeeds it will overwrite this with a fresh workflow object that
         // includes the new handoff.
-        if (
-          decisionStoreRef.current.decisions.length > 0 ||
-          blockerStoreRef.current.blockers.length > 0 ||
-          reviewGateStoreRef.current.reviewGates.length > 0
-        ) {
-          session.metadata.workflow = {
-            decisions: decisionStoreRef.current.decisions,
-            blockers: blockerStoreRef.current.blockers,
-            handoff: session.metadata.workflow?.handoff,
-            reviewGates: reviewGateStoreRef.current.reviewGates,
-          };
+        const syncedWorkflow = buildWorkflowState(
+          {
+            decisionStore: decisionStoreRef.current,
+            blockerStore: blockerStoreRef.current,
+            reviewGateStore: reviewGateStoreRef.current,
+          },
+          session.metadata.workflow?.handoff
+        );
+        if (syncedWorkflow) {
+          session.metadata.workflow = syncedWorkflow;
         }
         // Generate structured handoff so the next session can resume seamlessly.
         // Skipped silently for short sessions or when no agent is available.
@@ -2191,7 +2213,8 @@ function CliApp() {
           break;
         }
 
-        // Define handler for session selection
+        // Define handler for session selection; the load/handoff/install core
+        // lives in session/lifecycle.
         const handleSessionSelect = async (selectedSession: Session | null) => {
           setState(prev => ({ ...prev, sessionSelector: null }));
 
@@ -2199,49 +2222,7 @@ function CliApp() {
             return;
           }
 
-          // Load full session from disk
-          const loadedSession = await state.sessionStore.load(selectedSession.id);
-
-          if (!loadedSession) {
-            console.log(`❌ Failed to load session: ${selectedSession.name}`);
-            console.log('   The session file may be corrupted or deleted.');
-            return;
-          }
-
-          // Reinitialize logger for resumed session
-          await logger.initialize(loadedSession.id);
-          logger.debug('=== Session Resumed ===');
-
-          // Update checkpoint store for resumed session
-          if (state.checkpointStore) {
-            state.checkpointStore.setSessionId(loadedSession.id);
-          }
-
-          // Inject handoff as a system message so the AI picks up structured
-          // continuity context, not just raw chat history. injectHandoffMessage
-          // replaces any prior injected handoff to avoid stacking on repeated
-          // save/resume cycles.
-          const handoff = loadedSession.metadata.workflow?.handoff;
-          const sessionForState: Session = handoff
-            ? { ...loadedSession, messages: injectHandoffMessage(loadedSession.messages, handoff) }
-            : loadedSession;
-
-          // Update the session in the store (single source of truth)
-          setStoreSession(sessionForState);
-          useCliStore.getState().clearPendingMessages();
-
-          // Clear usage cache
-          usageCache = null;
-
-          console.log(`\n✅ Session resumed: "${sessionForState.name}"`);
-          console.log(
-            `📝 ${sessionForState.messages.length} messages | 🤖 ${sessionForState.model} | 📊 ${sessionForState.metadata.totalTokens.toLocaleString()} tokens\n`
-          );
-
-          if (handoff) {
-            console.log('🤝 Session handoff:\n');
-            console.log(formatHandoffOutput(handoff));
-          }
+          await resumeSession(buildLifecycleContext(), selectedSession);
         };
 
         // Show interactive selector
@@ -2479,67 +2460,7 @@ function CliApp() {
         console.clear();
         renderBanner();
 
-        // Create new session (preserving model from current session or config).
-        // Pinned-session mode (host board pane): keep the SAME uuid so the host's
-        // --resume still finds this conversation after a /clear.
-        const currentSession = useCliStore.getState().session;
-        const model = currentSession?.model || state.config?.defaultModel || ChatModels.CLAUDE_4_5_SONNET;
-        const clearPinnedId = process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID;
-        const newSession: Session = {
-          id: clearPinnedId ? (currentSession?.id ?? clearPinnedId) : uuidv4(),
-          name: `Session ${new Date().toLocaleString()}`,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          model,
-          messages: [],
-          metadata: {
-            totalTokens: 0,
-            totalCost: 0,
-            toolCallCount: 0,
-          },
-        };
-
-        // Reinitialize logger with new session ID
-        await logger.initialize(newSession.id);
-        logger.debug('=== New Session Started via /clear ===');
-
-        // Reset workflow stores so old decisions/blockers don't leak into new session
-        decisionStoreRef.current.decisions = [];
-        blockerStoreRef.current.blockers = [];
-
-        // Update checkpoint store for new session
-        if (state.checkpointStore) {
-          state.checkpointStore.setSessionId(newSession.id);
-        }
-
-        // Update the session in the store (single source of truth)
-        setStoreSession(newSession);
-
-        // Clear pending messages from Zustand store
-        useCliStore.getState().clearPendingMessages();
-
-        // Drain any stale review gate prompt from the UI queue. The agent
-        // shouldn't be running during /clear, but guard against an in-flight
-        // gate Promise leaking by resolving it as a rejection so the agent
-        // unwinds cleanly if it ever does.
-        const staleGate = useCliStore.getState().reviewGatePrompt;
-        if (staleGate) {
-          dequeueReviewGatePrompt();
-          staleGate.resolve({ decision: 'rejected', note: 'Session cleared.' });
-        }
-
-        // Reset reviewGates *after* the drained gate's toolFn continuation
-        // runs. The continuation is scheduled as a microtask by the resolve()
-        // above, and it pushes a rejection entry into store.reviewGates.
-        // Clearing synchronously here would let that push leak into the new
-        // session; deferring to the next microtask ensures we replace the
-        // array after the push, dropping the ghost entry with the old array.
-        queueMicrotask(() => {
-          reviewGateStoreRef.current.reviewGates = [];
-        });
-
-        // Clear usage cache for fresh data
-        usageCache = null;
+        const newSession = await createFreshSession(buildLifecycleContext());
 
         console.log('New session started.');
         console.log(`\n📝 Session: ${newSession.name}  |  🤖 Model: ${newSession.model}  |  📊 Tokens: 0\n`);
@@ -2573,7 +2494,7 @@ function CliApp() {
           return;
         }
 
-        // Show interactive selector
+        // Show interactive selector; the actual rewind lives in session/lifecycle.
         const handleRewindSelect = async (messageIndex: number | null) => {
           setState(prev => ({ ...prev, rewindSelector: null }));
 
@@ -2582,47 +2503,11 @@ function CliApp() {
             return;
           }
 
-          const activeSession = useCliStore.getState().session;
-          if (!activeSession) {
-            console.log('❌ No active session');
-            return;
+          const result = await rewindSession(buildLifecycleContext(), messageIndex);
+          if (result) {
+            // Prefill the input with the selected message so the user can edit and re-send.
+            setState((prev: CliState) => ({ ...prev, prefillInput: result.prefill }));
           }
-
-          // Get the selected message content to prefill the input
-          const selectedMessage = activeSession.messages[messageIndex];
-          const prefillContent = selectedMessage?.content || '';
-
-          // Remove the selected message and all messages after it
-          // The user will re-send the message (possibly edited) from the input
-          const rewindedMessages = activeSession.messages.slice(0, messageIndex);
-
-          // Recalculate metadata
-          const newMetadata = recalculateSessionMetadata(rewindedMessages);
-
-          // Create updated session
-          const rewindedSession: Session = {
-            ...activeSession,
-            messages: rewindedMessages,
-            updatedAt: new Date().toISOString(),
-            metadata: newMetadata,
-          };
-
-          // Prefill the input with the selected message
-          setState((prev: CliState) => ({
-            ...prev,
-            prefillInput: prefillContent,
-          }));
-
-          // Update the session in the store (single source of truth)
-          setStoreSession(rewindedSession);
-          useCliStore.getState().clearPendingMessages();
-
-          // Save session
-          await state.sessionStore.save(rewindedSession);
-
-          console.log('✅ Conversation rewound successfully');
-          console.log(`📊 Current state: ${rewindedMessages.length} messages, ${newMetadata.totalTokens} tokens`);
-          console.log(`📝 Your message has been placed in the input. Edit and send when ready.\n`);
         };
 
         setState(prev => ({
@@ -2872,6 +2757,28 @@ function CliApp() {
           console.log(`\nNo usage data available for the last ${USAGE_DAYS} days.`);
         }
 
+        // Per-agent breakdown of spawned-agent usage in the current session
+        const usageSession = useCliStore.getState().session;
+        const subagentUsage = usageSession?.metadata.subagentUsage;
+        if (subagentUsage && Object.keys(subagentUsage).length > 0) {
+          const meta = usageSession.metadata;
+          console.log('\nSpawned Agents (this session):');
+          const sortedAgents = Object.entries(subagentUsage).sort((a, b) => b[1].tokens - a[1].tokens);
+          for (const [agentName, agentUsage] of sortedAgents) {
+            const paddedAgent = agentName.padEnd(MODEL_NAME_COLUMN_WIDTH);
+            const creditsPart = agentUsage.credits > 0 ? `, ${agentUsage.credits.toLocaleString()} credits` : '';
+            console.log(
+              `  ${paddedAgent}${agentUsage.calls} call${agentUsage.calls === 1 ? '' : 's'}, ` +
+                `${agentUsage.tokens.toLocaleString()} tokens${creditsPart}`
+            );
+          }
+          const totalCreditsPart =
+            (meta.subagentCost || 0) > 0 ? `, ${(meta.subagentCost || 0).toLocaleString()} credits` : '';
+          console.log(
+            `  Total: ${meta.subagentCalls || 0} calls, ${(meta.subagentTokens || 0).toLocaleString()} tokens${totalCreditsPart}`
+          );
+        }
+
         break;
       }
 
@@ -2980,64 +2887,7 @@ function CliApp() {
       }
 
       case 'compact': {
-        const session = useCliStore.getState().session;
-        if (!session || !state.agent) {
-          console.log('No active session');
-          break;
-        }
-
-        if (session.messages.length < 6) {
-          console.log('Not enough messages to compact (need at least 6)');
-          break;
-        }
-
-        const userInstructions = args.join(' ') || undefined;
-
-        const { prompt: compactionPrompt, preservedMessages } = buildCompactionPrompt(session.messages, {
-          userInstructions,
-          claudeMdInstructions: extractCompactInstructions(state.contextContent || ''),
-        });
-
-        if (!compactionPrompt) {
-          console.log('Not enough messages to compact');
-          break;
-        }
-
-        console.log('\u{1F5DC}\uFE0F  Compacting conversation...\n');
-
-        // Set thinking state
-        useCliStore.getState().setIsThinking(true);
-
-        try {
-          // Use agent to generate summary (single iteration, no tools)
-          const result = await state.agent.run(compactionPrompt, { maxIterations: 1 });
-          const summary = result.finalAnswer;
-
-          // Save old session first
-          await state.sessionStore.save(session);
-          const oldSessionName = session.name;
-
-          // Create new compacted session
-          const newSession = createCompactedSession(
-            session,
-            summary,
-            preservedMessages,
-            !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
-          );
-
-          // Reinitialize logger with new session ID
-          await logger.initialize(newSession.id);
-
-          // Update the session in the store (single source of truth)
-          setStoreSession(newSession);
-          useCliStore.getState().clearPendingMessages();
-
-          console.log('\u2705 Conversation compacted');
-          console.log(`\u{1F4DD} New session: ${newSession.name}`);
-          console.log(`\u{1F4BE} Previous session preserved: ${oldSessionName}\n`);
-        } finally {
-          useCliStore.getState().setIsThinking(false);
-        }
+        await compactSession(buildLifecycleContext(), { userInstructions: args.join(' ') || undefined });
         break;
       }
 

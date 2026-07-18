@@ -15,6 +15,7 @@ import {
   ImageModerationIncident,
   IUsageEventRepository,
   IOrganizationRepository,
+  ModelInfo,
 } from '@bike4mind/common';
 
 /**
@@ -78,6 +79,13 @@ export interface ToolContext {
   onFinish?: (toolName: string, data: any) => Promise<void>;
   llm: Pick<ICompletionBackend, 'complete'>;
   model?: string; // User's selected model for the current quest
+  /**
+   * Model catalog for the current request, used to resolve provider + COGS pricing when a
+   * tool records its own operational llm.complete spend (see recordToolOperationalUsage).
+   * Present on the chat/agent path (from precomputed models); absent on lean harnesses,
+   * where cost degrades to 0 but the usage event is still written.
+   */
+  availableModels?: ModelInfo[];
   imageProcessorLambdaName?: string; // Lambda function name for image processing (edit_image, image_generation)
   /**
    * List of allowed directories for file operations.

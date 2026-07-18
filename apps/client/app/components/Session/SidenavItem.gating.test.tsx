@@ -28,6 +28,7 @@ vi.mock('@client/app/hooks/data/sessions', () => ({
   useDownloadSession: () => mutation(),
   useExportSessionToExcel: () => mutation(),
   useExportSessionToWord: () => mutation(),
+  useExportSessionToHtml: () => mutation(),
   useSendSessionToDataLake: () => mutation(),
   useSummarizeSession: () => mutation(),
   useToggleFavoriteSession: () => mutation(),
@@ -125,13 +126,14 @@ describe.each([
   // is no longer a slimmed-down variant - the former `disableExportOps` flag,
   // which the Favorites list set to hide Download/Copy/Export/Send, was removed
   // so all rows expose the full export action set.
-  it('shows the full export action set (download, copy-markdown, excel, word)', () => {
+  it('shows the full export action set (download, copy-markdown, excel, word, html)', () => {
     renderAndOpenMenu(location);
 
     expect(screen.getByText('notebooks.download')).toBeInTheDocument();
     expect(screen.getByText('Copy as Markdown')).toBeInTheDocument();
     expect(screen.getByTestId('sidenav-item-menuitem-export-excel')).toBeInTheDocument();
     expect(screen.getByTestId('sidenav-item-menuitem-export-word')).toBeInTheDocument();
+    expect(screen.getByTestId('sidenav-item-menuitem-export-html')).toBeInTheDocument();
     expect(screen.getByTestId('sidenav-item-menuitem-send-datalake')).toBeInTheDocument();
   });
 });

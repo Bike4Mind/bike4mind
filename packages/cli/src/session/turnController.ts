@@ -27,10 +27,16 @@ import { buildSystemPrompt } from '../core/prompts';
 import { deferredToolRegistry } from '../tools/deferredToolRegistry.js';
 import { ConversationContext, reconstructTurnBlocks } from '../context/ConversationContext.js';
 import { buildCompactionPrompt, createCompactedSession } from '../utils/compaction.js';
+import { createReactiveCompactionHandler } from '../utils/reactiveCompaction.js';
+import { buildWorkflowState, withFlushedWorkflowState, type WorkflowStores } from '../utils/workflowState.js';
 import { formatStep, extractCompactInstructions } from '../utils';
+import { renderWorkflowReminder } from '../utils/workflowReminder.js';
 import { logger } from '../utils/Logger';
 import { isTransientNetworkError } from '../llm/retryPolicy';
 import { isReadOnlyTool } from '../config/toolSafety.js';
+import type { TodoStore } from '../tools/writeTodosTool.js';
+import type { DecisionStore } from '../tools/decisionLogTool.js';
+import type { BlockerStore } from '../tools/blockerTool.js';
 
 /**
  * Collaborators a single turn needs. React-free by design: the two setters are
@@ -51,6 +57,20 @@ export interface TurnContext {
   additionalDirectories: string[];
   featureRegistry: FeatureModuleRegistry | null;
   backgroundManager: BackgroundAgentManager | null;
+  /**
+   * Live workflow stores (todos / decisions / blockers) backing the
+   * per-iteration workflow reminder (issue: re-inject live workflow state).
+   * Null when the host has no workflow tooling - the reminder is skipped.
+   */
+  todoStore: TodoStore | null;
+  decisionStore: DecisionStore | null;
+  blockerStore: BlockerStore | null;
+  /**
+   * In-memory durable-workflow stores. Flushed onto the session before
+   * compaction so decisions/blockers logged this turn are not dropped when a
+   * stale `metadata.workflow` snapshot is copied into the compacted session.
+   */
+  workflowStores: WorkflowStores;
   /** Mirror the persisted command history into the input's up-arrow recall. */
   setCommandHistory: (history: string[]) => void;
   /** Publish the turn's abort controller so the ESC handler / tavern can cancel it. */
@@ -77,6 +97,10 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     additionalDirectories,
     featureRegistry,
     backgroundManager,
+    todoStore,
+    decisionStore,
+    blockerStore,
+    workflowStores,
     setCommandHistory,
     setAbortController,
   } = ctx;
@@ -127,8 +151,12 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     // ConversationContext owns the compaction trigger: it measures the full
     // session as it would actually be replayed (bounded tool traces included)
     // plus the system prompt, so a session whose weight lives in tool traces
-    // still compacts at the 80% mark.
-    const systemPromptTokens = tokenCounter.countTokens(systemPrompt);
+    // still compacts at the 80% mark. Tool schemas ship with every completion
+    // request too (same accounting the /context meter uses), so a tool-heavy
+    // session is folded in here as well - otherwise it could slip past the
+    // 80% check on message text alone.
+    const systemPromptTokens =
+      tokenCounter.countTokens(systemPrompt) + tokenCounter.countToolSchemaTokens(agent.getTools());
     const shouldCompact = ConversationContext.fromSession(activeSession).needsCompaction(
       systemPromptTokens,
       { model: activeSession.model, contextWindow },
@@ -149,9 +177,13 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         if (compactionPrompt) {
           const result = await agent.run(compactionPrompt, { maxIterations: 1 });
 
-          await sessionStore.save(activeSession);
+          // Flush decisions/blockers logged in prior turns but not yet synced
+          // onto the session, so the compacted session carries current workflow
+          // state instead of a stale snapshot.
+          const sessionToCompact = withFlushedWorkflowState(activeSession, workflowStores);
+          await sessionStore.save(sessionToCompact);
           const newSession = createCompactedSession(
-            activeSession,
+            sessionToCompact,
             result.finalAnswer,
             preservedMessages,
             !!(process.env.B4M_SESSION_ID || process.env.B4M_RESUME_ID)
@@ -239,6 +271,29 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
     const turnId = `turn-${randomBytes(4).toString('hex')}`;
     backgroundManager?.setCurrentTurn(turnId);
 
+    // Per-iteration workflow reminder: re-render open todos/blockers/recent
+    // decisions from the live stores before every LLM call so recorded state
+    // doesn't decay as the turn grows (the agent replaces it in place, so the
+    // context cost is a fixed ceiling). Disabled via the workflowReminders
+    // preference or when the host wired no workflow stores.
+    const workflowReminder =
+      cliConfig.preferences.workflowReminders !== false && (todoStore || decisionStore || blockerStore)
+        ? () => {
+            const { text, elided } = renderWorkflowReminder(
+              {
+                todos: todoStore?.todos ?? [],
+                decisions: decisionStore?.decisions ?? [],
+                blockers: blockerStore?.blockers ?? [],
+              },
+              { maxTokens: cliConfig.preferences.workflowReminderMaxTokens }
+            );
+            if (elided > 0) {
+              logger.debug(`[workflowReminder] elided ${elided} item(s) to fit the token cap`);
+            }
+            return text;
+          }
+        : undefined;
+
     let result;
     try {
       result = await agent.run(messageContent, {
@@ -246,6 +301,11 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         signal: abortController.signal,
         parallelExecution: cliConfig.preferences.enableParallelToolExecution === true,
         isReadOnlyTool,
+        workflowReminder,
+        // Mid-loop recovery if a provider context-window error interrupts this
+        // turn: compact the in-flight history once and retry, instead of
+        // failing the turn and losing the user's work.
+        onContextLimit: createReactiveCompactionHandler(agent, activeSession, 1 + previousMessages.length + 1),
       });
     } finally {
       backgroundManager?.setCurrentTurn(null);
@@ -297,6 +357,12 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
         totalTokens: currentSession.metadata.totalTokens + result.completionInfo.totalTokens,
         totalCredits: (currentSession.metadata.totalCredits || 0) + (result.completionInfo.totalCredits || 0),
         toolCallCount: currentSession.metadata.toolCallCount + successfulToolCalls,
+        // Sync durable workflow state so decisions/blockers logged this turn are
+        // persisted (and current for the next turn's auto-compaction), not left
+        // only in the in-memory stores until a /save or handoff.
+        workflow:
+          buildWorkflowState(workflowStores, currentSession.metadata.workflow?.handoff) ??
+          currentSession.metadata.workflow,
       },
     };
 
@@ -325,11 +391,17 @@ export async function runTurn(message: string, ctx: TurnContext): Promise<void> 
           },
         };
 
-        const sessionWithCancel: Session = {
-          ...currentSession,
-          messages: [...currentSession.messages, cancelMessage],
-          updatedAt: new Date().toISOString(),
-        };
+        // Flush workflow state too: a decision/blocker logged before the user
+        // hit ESC would otherwise live only in the in-memory store and be lost
+        // if the process exits before the next successful turn's save.
+        const sessionWithCancel = withFlushedWorkflowState(
+          {
+            ...currentSession,
+            messages: [...currentSession.messages, cancelMessage],
+            updatedAt: new Date().toISOString(),
+          },
+          workflowStores
+        );
 
         useCliStore.getState().setSession(sessionWithCancel);
         await sessionStore.save(sessionWithCancel);

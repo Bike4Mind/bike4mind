@@ -38,11 +38,12 @@ import {
   skillRepository,
   usageEventRepository,
   imageModerationIncidentRepository,
+  mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
-import { Permission } from '@bike4mind/common';
+import { Permission, OPTI_SURFACE } from '@bike4mind/common';
 import { accessibleBy } from '@casl/mongoose';
 import defineAbilitiesFor from '@server/auth/ability';
 import { missionChatTools, MISSION_CHAT_TOOL_NAMES } from '@server/deepAgent/missionChatTools';
@@ -80,6 +81,9 @@ import { creditService, apiKeyService } from '@bike4mind/services';
 // continuation-fallback rationale.
 import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecutor.latticeTools';
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
+import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
+import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
+import { guardPlanCompletion, type PlanProgressState } from './agentExecutorUtils/planCompletionGuard';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -97,6 +101,7 @@ import {
   pickEffectiveEnabledTools,
   type ResolvedOrchestrationProfile,
 } from './agentExecutor.orchestrationProfile';
+import { buildOptiOrchestrationProfile } from './agentExecutor.optiProfile';
 // Wire schemas live in their own side-effect-free module so unit tests can
 // import them without dragging this file's Mongo/AWS/ReActAgent deps and the
 // `registerLambdaErrorHandlers()` call into the test sandbox. See
@@ -108,7 +113,7 @@ import {
   type StartExecutionPayload,
   type SubagentDispatchPayload,
 } from './agentExecutor.schemas';
-import { MAX_CHECKPOINT_DEPTH, classifyCheckpointDepth } from './agentExecutor.checkpointDepth';
+import { enforceCheckpointDepth } from './agentExecutor.checkpointDepth';
 import { Config } from '@server/utils/config';
 import { Resource } from 'sst';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -118,9 +123,11 @@ import { extractFinalAnswer } from '@server/utils/extractFinalAnswer';
 import { publishMementoCompletion } from '@server/utils/publishMementoCompletion';
 import { getFirstIterationMementosPreamble } from '@server/utils/getFirstIterationMementosPreamble';
 import { getFirstIterationSkillsPreamble } from '@server/utils/getFirstIterationSkillsPreamble';
+import { getMcpClientAdapter } from '@server/utils/getMcpClientAdapter';
+import { loadAgentMcpTools, type AgentMcpTools } from '@server/utils/loadAgentMcpTools';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
-import type { Context, SQSEvent } from 'aws-lambda';
+import type { Context, SQSBatchResponse, SQSEvent } from 'aws-lambda';
 
 registerLambdaErrorHandlers();
 
@@ -426,8 +433,11 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
   let startPayload: StartExecutionPayload | undefined;
 
   if (isSqsEvent) {
-    // Process all SQS records, not just the first
+    // Process all SQS records, not just the first. The queue is subscribed with
+    // batch.partialResponses: true, so a per-record failure is reported via
+    // batchItemFailures instead of swallowed, letting SQS retry/DLQ just that record.
     const sqsEvent = event as SQSEvent;
+    const batchItemFailures: SQSBatchResponse['batchItemFailures'] = [];
     for (const record of sqsEvent.Records) {
       // Per-record try/catch so a poison message (malformed JSON, schema
       // mismatch) doesn't take down the rest of the batch. SQS's own DLQ
@@ -483,12 +493,13 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
           messageId: record.messageId,
           error: recordErr instanceof Error ? recordErr.message : String(recordErr),
         });
-        // Don't rethrow - let the batch complete. The failed record will be
-        // retried via SQS's at-least-once delivery; persistently malformed
-        // messages eventually go to the DLQ.
+        // Report this record as failed so SQS retries/DLQs it; keep processing the
+        // rest. The continuation is CAS-guarded (processExecution claims the
+        // execution before mutating it), so a retry-driven redelivery is safe.
+        batchItemFailures.push({ itemIdentifier: record.messageId });
       }
     }
-    return;
+    return { batchItemFailures };
   } else if (isStartPayload(event as Record<string, unknown>)) {
     // Distinguish start vs continuation by payload shape
     startPayload = StartExecutionSchema.parse(event);
@@ -510,6 +521,29 @@ export const handler = async (event: Record<string, unknown> | SQSEvent, context
 // Core execution logic
 // ---------------------------------------------------------------------------
 
+/**
+ * Load the user's enabled MCP servers' tools, degrading to none on failure.
+ * Shared by the top-level and re-dispatch handlers (each runs in its own Lambda
+ * invocation). agent_executor never touched mcpServerRepository before this
+ * wiring, so a transient DB error here must not take down runs that use no MCP
+ * tools (mirrors the userAgents/orgAgents fallbacks in each caller).
+ */
+async function loadMcpToolsSafe(userId: string, logger: Logger): Promise<AgentMcpTools> {
+  const enableMCPServer = (await adminSettingsRepository.getSettingsValue('EnableMCPServer')) ?? false;
+  try {
+    return await loadAgentMcpTools(
+      { mcpServers: mcpServerRepository, getMcpClient: getMcpClientAdapter, logger },
+      { userId, enableMCPServer }
+    );
+  } catch (err) {
+    logger.warn('[AgentExecutor][MCP] Failed to load MCP tools; continuing without MCP overlay', {
+      userId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { mcpToolsByServer: {}, serverAgentConfig: {} };
+  }
+}
+
 async function processExecution(
   executionId: string,
   connectionId: string,
@@ -524,26 +558,17 @@ async function processExecution(
 
   // Depth guard: refuse to process if this execution has self-dispatched too many times.
   // A runaway agent (infinite tool loop, stuck abort signal) would otherwise chain Lambdas
-  // indefinitely. Hard limit at MAX_CHECKPOINT_DEPTH; warning metric at CHECKPOINT_DEPTH_WARNING.
-  // classifyCheckpointDepth is a pure helper (agentExecutor.checkpointDepth.ts) so the
-  // thresholds and boundary logic can be unit-tested independently.
-  const depthVerdict = classifyCheckpointDepth(checkpointDepth);
-  if (depthVerdict === 'warn' || depthVerdict === 'terminate') {
-    logger.warn('[CheckpointDepth] Self-dispatch depth approaching hard limit', { checkpointDepth, executionId });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthWarning', 1, { executionId });
-  }
-  if (depthVerdict === 'terminate') {
-    logger.error('[CheckpointDepth] Max self-dispatch depth exceeded — terminating execution', {
-      checkpointDepth,
-      executionId,
-    });
-    void emitMetric('Lumina5/AgentExecutor', 'CheckpointDepthExceeded', 1, { executionId });
-    await agentExecutionRepository.markFailed(executionId, {
-      message: `Execution exceeded maximum self-dispatch depth (${MAX_CHECKPOINT_DEPTH}) — possible runaway agent loop`,
-    });
-    await sendWs('failed', { executionId, reason: 'max_checkpoint_depth_exceeded' });
-    return;
-  }
+  // indefinitely. Must stay above the DB load below - terminating before any DB work is the
+  // point of the guard. The guard itself lives in agentExecutor.checkpointDepth.ts so its
+  // thresholds and side effects can be unit-tested without this module's Mongo/AWS/SST deps.
+  const terminated = await enforceCheckpointDepth(checkpointDepth, {
+    executionId,
+    logger,
+    emitMetric,
+    markFailed: agentExecutionRepository.markFailed.bind(agentExecutionRepository),
+    sendWs,
+  });
+  if (terminated) return;
 
   try {
     // Load execution document
@@ -703,7 +728,18 @@ async function processExecution(
     // Resolved only on new executions; continuations carry forward whatever the
     // first invocation set up (checkpoint replay restores agent state).
     let orchestrationProfile: ResolvedOrchestrationProfile | undefined;
-    if (isNewExecution) {
+    // Optimizer surface with no pinned `@agent`: use the opti-scoped profile (optimizer
+    // tools only, image-gen/delegation denied, higher iteration ceiling, ReAct loop
+    // prompt) instead of the generic synthetic default. Resolved on continuations too,
+    // NOT just new executions: it's a deterministic function of the persisted
+    // `session.surface`, and the tool list is rebuilt on every Lambda invocation, so a
+    // post-permission / post-timeout resume (isNewExecution=false, no startPayload) would
+    // otherwise collapse the toolbelt to mission-only and the loop could no longer
+    // formulate/schedule to advance the ladder. An explicit `@agent` mention still wins
+    // on the initial send (it sets `startPayload.agentId` -> the persisted-agent path).
+    if (!startPayload?.agentId && session.surface === OPTI_SURFACE) {
+      orchestrationProfile = buildOptiOrchestrationProfile();
+    } else if (isNewExecution) {
       // `getSettingsValue<K>` is generic-narrowed to `SettingValue<K>` -
       // `OrchestrationDefaults` here - so no cast is needed.
       const orchestrationDefaults = await adminSettingsRepository
@@ -741,12 +777,15 @@ async function processExecution(
         adminDefaults: orchestrationDefaults,
         model: execution.model,
       });
+    }
+    if (orchestrationProfile) {
       logger.info('[Orchestration] Resolved profile', {
         profileId: orchestrationProfile.id,
         profileName: orchestrationProfile.name,
         isSynthetic: orchestrationProfile.isSynthetic,
         allowedToolCount: orchestrationProfile.allowedTools.length,
         defaultThoroughness: orchestrationProfile.defaultThoroughness,
+        isContinuation: !isNewExecution,
       });
     }
 
@@ -777,7 +816,28 @@ async function processExecution(
         });
       }
     }
-    const agentStore = new ServerAgentStore({}, { userAgents, orgAgents });
+    // Load the user's enabled MCP servers' tools so delegated subagents
+    // (e.g. project_manager -> atlassian) actually receive them. Agent Mode had
+    // NO MCP wiring, so exclusive-MCP subagents spawned with 0 tools and the
+    // model fabricated results. Mirrors ChatCompletionProcess's buildMcpTools.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(execution.userId, logger);
+    const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
+    // MCP servers claimed exclusively by an agent (e.g. atlassian by
+    // project_manager). Withheld from the parent LLM's tool list; reach the
+    // delegated subagent via buildSharedTools' internal parentTools closure.
+    const agentOnlyMcpServers = agentStore.getExclusiveMcpServers();
+    // An agent that EXCLUSIVELY claims a server spawns with 0 tools if that server produced none
+    // (disabled / no cached schemas / load failed) - the exact failure this fix targets. Surface it
+    // by server name so it is not a silent fabrication again.
+    const missingExclusive = agentOnlyMcpServers.filter(s => !mcpToolsByServer[s]?.length);
+    if (missingExclusive.length > 0) {
+      logger.warn(
+        '[AgentExecutor][MCP] Exclusive MCP server(s) loaded 0 tools - dependent subagents will spawn empty-handed',
+        {
+          missingExclusive,
+        }
+      );
+    }
     logger.info(
       `[AgentStore] Loaded ${agentStore.getAllAgents().length} agents (user: ${userAgents.length}, org: ${orgAgents.length})`,
       {
@@ -1085,6 +1145,15 @@ async function processExecution(
     // "image 1 of N" grid renders just like classic chat after the run completes.
     const generatedImages: string[] = [];
 
+    // UI side-effects a tool emitted (e.g. optimizer console populate). The chat path
+    // collects these on quest.uiSideEffects via its onUiSideEffect callback; the agent
+    // path never supplied one, so they were silently dropped. `pendingSideEffects` buffers
+    // the current tool call's effects until the observation step streams (drain-on-observation
+    // in streamStep, 1:1 with the tool result); `allSideEffects` accumulates the whole run for
+    // persistRunAsQuest so a reload can replay them non-destructively.
+    let pendingSideEffects: { type: string; payload: unknown }[] = [];
+    const allSideEffects: { type: string; payload: unknown }[] = [];
+
     const toolCallbacks: ToolBuilderCallbacks = {
       onStatusUpdate: async (changes, status) => {
         if (changes?.images?.length) {
@@ -1101,6 +1170,13 @@ async function processExecution(
       },
       onToolFinish: async () => {
         // Tool finish side effects tracked via ReActAgent steps
+      },
+      onUiSideEffect: async sideEffect => {
+        // Fires inside the wrapped toolFn (sharedToolBuilder extraction), i.e. between the
+        // action and observation emits for this tool call. Buffer here; streamStep drains it
+        // onto the observation iteration_step so the effect streams live with its tool result.
+        pendingSideEffects.push(sideEffect);
+        allSideEffects.push(sideEffect);
       },
       sessionId: execution.sessionId,
       onSubagentCredits: credits => {
@@ -1156,12 +1232,33 @@ async function processExecution(
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
     const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
 
+    // Let optihashi_decompose run only ONCE per run (#666). The loop occasionally re-plans
+    // mid-run, which reloads step 1 (a console yank), burns an iteration, and re-sources;
+    // the guard turns any repeat into a no-op redirect that steers the agent back to
+    // advancing its existing plan. Only affects opti runs (decompose isn't offered elsewhere).
+    const decomposeGuard = { used: false };
+    // Two complementary opti-loop guards: #666 stops re-PLANNING (decompose at most once); the
+    // plan-completion guard stops re-SOLVING (once every planned step has a solver result, further
+    // formulate/solve calls redirect to "write the final summary"). Without the latter the agent
+    // -- which has no reliable memory of which steps it finished -- re-does solved families until
+    // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
+    const planProgress: PlanProgressState = { needed: null, solved: {} };
+    const guardedPremiumTools = guardPlanCompletion(
+      guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+        logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
+      ),
+      planProgress,
+      () => logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
+    );
+
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       // Dedupe: a caller may already have enabled create_mission/mission_status;
       // a raw append would make buildSharedTools wrap the same tool twice.
       enabledTools: [...new Set([...profileEnabledTools, ...MISSION_CHAT_TOOL_NAMES, ...latticeEnabledTools])],
-      externalTools: { ...premiumLlmTools, ...missionChatTools, ...latticeExternalTools },
+      externalTools: { ...guardedPremiumTools, ...missionChatTools, ...latticeExternalTools },
       config: subagentToolConfig,
+      mcpToolsByServer,
+      agentOnlyMcpServers,
     });
     if (!tools) throw new Error('Failed to build tools');
 
@@ -1174,6 +1271,7 @@ async function processExecution(
         toolNames: tools.map(t => t.toolSchema?.name).filter(Boolean),
         count: tools.length,
         hasCoordinateTask: tools.some(t => t.toolSchema?.name === 'coordinate_task'),
+        agentOnlyMcpServers,
       });
     }
 
@@ -1192,6 +1290,10 @@ async function processExecution(
     // `?? true` is defensive: `EnableArtifacts` .prefault's to true, so
     // getSettingsValue can't actually return undefined - kept as belt-and-suspenders.
     const enableArtifacts = (await adminSettingsRepository.getSettingsValue('EnableArtifacts')) ?? true;
+    // NOTE: this `|| ARTIFACT_EMISSION_PROMPT` fallback must resolve to the SAME default as the chat
+    // path, which uses the util getSettingsValue('ArtifactEmissionPrompt', settings, ARTIFACT_EMISSION_PROMPT)
+    // in ChatCompletionProcess. Two resolvers, one default - keep them in sync so an empty/unset value
+    // reverts to the same built-in prompt on both paths.
     const artifactEmissionPrompt =
       isNewExecution && enableArtifacts
         ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
@@ -1238,6 +1340,12 @@ async function processExecution(
     // is synchronous; fire-and-forget the WS send so a slow socket can't stall
     // the iteration loop.
     const streamStep = (step: AgentStep) => {
+      // Attach any UI side-effects the just-finished tool call emitted. Extraction
+      // fires between the action and observation emits, so at observation-emit time
+      // the buffer holds exactly this tool call's effects. Drain on observation to
+      // keep a 1:1 association and empty the buffer for the next call.
+      const drainedSideEffects = step.type === 'observation' ? pendingSideEffects : [];
+      if (drainedSideEffects.length) pendingSideEffects = [];
       void sendWs('iteration_step', {
         executionId,
         // `getIteration()` reflects the agent's internal counter, which is
@@ -1247,6 +1355,7 @@ async function processExecution(
         iteration: Math.max(0, agent.getIteration() - 1),
         step,
         isComplete: false,
+        ...(drainedSideEffects.length ? { uiSideEffects: drainedSideEffects } : {}),
       });
       // Persist in-flight steps so a mid-iteration refresh sees them on
       // reconnect. Without this, `checkpoint.steps` is only written when
@@ -1283,6 +1392,27 @@ async function processExecution(
     agent.on('action', streamStep);
     agent.on('observation', streamStep);
     agent.on('final_answer', streamStep);
+    // Forward the top-level agent's streaming token deltas so the console renders the
+    // agent's reasoning/narration and final answer live within each iteration, instead of
+    // the whole step landing at once after a long generation (a decompose turn is ~40s).
+    // Mirrors the subagent `onTextDelta` path. Chunk to stay under the API Gateway frame
+    // limit; fire-and-forget so a slow WS send can't stall the loop. The emitted
+    // `iteration` matches the `iteration_step` wire index, so the client clears its
+    // per-iteration buffer when the terminal step lands.
+    // Serialize the delta sends through a promise chain. `sendWs` -> API Gateway
+    // postToConnection is a separate async call per frame; firing them concurrently
+    // (fire-and-forget) lets frames arrive out of order and scramble the live text.
+    // Chaining makes each frame await the previous, preserving token order, while the
+    // listener stays non-blocking to the agent loop (we never await the chain here).
+    let textDeltaSendChain: Promise<unknown> = Promise.resolve();
+    agent.on('text_delta', ({ delta, iteration }: { delta: string; iteration: number }) => {
+      for (let offset = 0; offset < delta.length; offset += MAX_STEP_CONTENT) {
+        const chunk = delta.slice(offset, offset + MAX_STEP_CONTENT);
+        textDeltaSendChain = textDeltaSendChain
+          .then(() => sendWs('agent_text_delta', { executionId, iteration, delta: chunk }))
+          .catch(() => {});
+      }
+    });
 
     // Set up timeout watchdog
     const deadlineMs = context.getRemainingTimeInMillis() - TIMEOUT_BUFFER_MS;
@@ -1324,7 +1454,13 @@ async function processExecution(
         counters.cacheWriteTokens += billing.cacheWriteTokens;
       }
       if (modelInfo) {
-        counters.cumulativeCost = getTextModelCost(modelInfo, counters.inputTokens, counters.outputTokens);
+        counters.cumulativeCost = getTextModelCost(
+          modelInfo,
+          counters.inputTokens,
+          counters.outputTokens,
+          counters.cacheReadTokens,
+          counters.cacheWriteTokens
+        );
       }
     }
 
@@ -1356,7 +1492,16 @@ async function processExecution(
       }
     ) => {
       if (!modelInfo) return;
-      const cumulativeCost = getTextModelCost(modelInfo, checkpoint.totalInputTokens, checkpoint.totalOutputTokens);
+      // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
+      // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
+      // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
+      const cumulativeCost = getTextModelCost(
+        modelInfo,
+        checkpoint.totalInputTokens,
+        checkpoint.totalOutputTokens,
+        checkpoint.totalCacheReadTokens,
+        checkpoint.totalCacheWriteTokens
+      );
       const costDelta = cumulativeCost - counters.cumulativeCost;
       if (costDelta <= 0) return;
       const inputTokensDelta = checkpoint.totalInputTokens - counters.inputTokens;
@@ -1589,7 +1734,9 @@ async function processExecution(
           executionId,
           partialAnswer ? `Stopped by user. Partial response:\n\n${partialAnswer}` : 'Stopped by user.',
           logger,
-          generatedImages
+          generatedImages,
+          undefined,
+          allSideEffects
         );
         return;
       }
@@ -1704,6 +1851,13 @@ async function processExecution(
         maxIterations,
         confidenceGate,
         previousMessages,
+        // Cache the (large, static) system prompt + tool schemas across iterations. An
+        // agent run is always multi-iteration, and previously this was omitted - so the
+        // full system prompt + tools were re-sent at full input price EVERY iteration
+        // (the chat path already caches via ChatCompletionProcess). Enabling it is the
+        // single biggest cost reduction for multi-iteration runs; cache-read tokens are
+        // priced at ~0.1x (see billIterationIfNeeded passing the cache-token counts).
+        enableCaching: true,
       });
 
       iterationIndex = iterationResult.checkpoint.iteration;
@@ -1911,11 +2065,14 @@ async function processExecution(
         // a real pause. Baseline observability before touching signal quality.
         await agentExecutionRepository.recordIterationConfidence(executionId, gate.confidence);
       }
+      // Per-profile override wins over the global default; a profile threshold of 0
+      // disables the gate entirely (confidence is never < 0) for unattended loops.
+      const confidenceGateThreshold = orchestrationProfile?.confidenceGateThreshold ?? CONFIDENCE_GATE_THRESHOLD;
       if (
         gate !== null &&
         !iterationResult.isComplete &&
         !iterationResult.reachedMaxIterations &&
-        gate.confidence < CONFIDENCE_GATE_THRESHOLD
+        gate.confidence < confidenceGateThreshold
       ) {
         // 0-indexed wire convention: the agent reports 1-indexed
         // `this.iterations`, but the client's `IterationStream` and
@@ -1924,7 +2081,7 @@ async function processExecution(
         // consistent so the eventual gate UI doesn't render an off-by-one
         // iteration label relative to the permission card.
         const wireIteration = Math.max(0, gate.iteration - 1);
-        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(CONFIDENCE_GATE_THRESHOLD * 100).toFixed(0)}%`;
+        const reason = `Iteration confidence ${(gate.confidence * 100).toFixed(0)}% below threshold ${(confidenceGateThreshold * 100).toFixed(0)}%`;
         const gatePayload = { iteration: wireIteration, confidence: gate.confidence, reason };
         logger.info('[ConfidenceGate] Pausing execution for human review', { executionId, ...gatePayload });
         // `updateCheckpoint` above already persisted the current iteration's
@@ -1973,18 +2130,23 @@ async function processExecution(
     const updatedExecution = await agentExecutionRepository.findById(executionId);
     const finalCheckpoint = agent.toCheckpoint();
     const finalAnswer = extractFinalAnswer(finalCheckpoint.steps);
+    // A run that stopped on the iteration ceiling (not model completion) leaves `finalAnswer` as
+    // a mid-sentence fragment; wrap it in a deterministic truncation notice so the user sees an
+    // honest "partial, hit the limit" reply instead of a trailed-off thought. See #674.
+    const reachedMaxIterations = iterationResult?.reachedMaxIterations ?? false;
+    const displayAnswer = reachedMaxIterations ? buildTruncatedRunReply(maxIterations, finalAnswer) : finalAnswer;
 
     await agentExecutionRepository.markComplete(executionId, {
-      answer: finalAnswer,
+      answer: displayAnswer,
       steps: finalCheckpoint.steps,
       totalTokens: finalCheckpoint.totalTokens,
       totalIterations: finalCheckpoint.iteration,
-      reachedMaxIterations: iterationResult?.reachedMaxIterations ?? false,
+      reachedMaxIterations,
     });
 
     await sendWs('completed', {
       executionId,
-      answer: finalAnswer,
+      answer: displayAnswer,
       totalIterations: finalCheckpoint.iteration,
       totalCreditsUsed: updatedExecution?.totalCreditsUsed ?? 0,
       // Surface memento IDs in the WS event so the client can populate the
@@ -1996,7 +2158,7 @@ async function processExecution(
 
     // Persist a Quest so the run survives page refresh - see persistRunAsQuest
     // docstring. Best-effort; failures are logged but don't fail the run.
-    let replyText = finalAnswer ?? 'Agent execution completed without a final answer.';
+    let replyText = displayAnswer ?? 'Agent execution completed without a final answer.';
 
     // DAG subagent artifact bubble-up. The parent re-summarizes the aggregated
     // child report and may drop the raw `<artifact>` blocks the workers emitted,
@@ -2027,7 +2189,14 @@ async function processExecution(
       }
     }
 
-    await persistRunAsQuest(executionId, replyText, logger, generatedImages, finalCheckpoint.finishReason);
+    await persistRunAsQuest(
+      executionId,
+      replyText,
+      logger,
+      generatedImages,
+      finalCheckpoint.finishReason,
+      allSideEffects
+    );
 
     // Memento parity with chat_completion. Fires only when the user
     // (or admin default) opted into mementos for this run; skipped for
@@ -2216,7 +2385,10 @@ async function processSubagentDispatch(
         });
       }
     }
-    const agentStore = new ServerAgentStore({}, { userAgents, orgAgents });
+    // Rebuild MCP tools on THIS invocation - a re-dispatched subagent runs in its
+    // own Lambda, so the top-level path's load does not carry over. See Task 3.
+    const { mcpToolsByServer, serverAgentConfig } = await loadMcpToolsSafe(child.userId, logger);
+    const agentStore = new ServerAgentStore(serverAgentConfig, { userAgents, orgAgents });
     const agentDef = agentStore.getAgent(agentName);
     if (!agentDef) {
       await agentExecutionRepository.markFailed(childExecutionId, {
@@ -2309,6 +2481,14 @@ async function processSubagentDispatch(
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       config: subagentToolConfig,
+      mcpToolsByServer,
+      // Empty on purpose: buildSharedTools RETURNS only `tools` (agent-only MCP
+      // tools are excluded from the return), and that return is passed as the
+      // orchestrator's parentTools below. So MCP tools must land in `tools`
+      // here; the dispatched agent's allowedTools (e.g. atlassian__*) scopes
+      // them. Marking them agent-only here would hide them and reproduce the
+      // 0-tools bug.
+      agentOnlyMcpServers: [],
     });
     if (!tools) throw new Error('Failed to build tools for dispatched subagent');
 
@@ -2413,6 +2593,12 @@ async function processSubagentDispatch(
     const childArtifactEmissionPrompt = childArtifactsEnabled
       ? (await adminSettingsRepository.getSettingsValue('ArtifactEmissionPrompt')) || ARTIFACT_EMISSION_PROMPT
       : undefined;
+
+    logger.info('[AgentExecutor][MCP] dispatched subagent tool pool', {
+      agentName,
+      poolSize: tools.length,
+      mcpToolNames: tools.map(t => t.toolSchema?.name).filter((n): n is string => !!n && n.includes('__')),
+    });
 
     const orchestrator = new ServerSubagentOrchestrator({
       userId: child.userId,

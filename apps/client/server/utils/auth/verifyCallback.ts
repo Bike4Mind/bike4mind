@@ -6,7 +6,7 @@ import { omit } from 'lodash';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { ForbiddenError } from '@server/utils/errors';
-import { isProviderEmailVerified, selectProviderEmail, decideAutoLink } from './oauthAccountLink';
+import { isProviderEmailVerified, selectProviderEmail, decideAutoLink, applyAccountLink } from './oauthAccountLink';
 import { OAuthFailureReason } from './oauthFailureReason';
 
 // Bounded retries for the username-collision dedupe below. Not a tunable -
@@ -181,8 +181,9 @@ const authenticateUser = async (
       const incomingId = oauthCredentials.id;
       // NOTE: existingProviderIndex is the FIRST entry for this strategy. If an
       // account ever holds multiple entries for one strategy with different ids,
-      // a stage-1 hit on a later entry could be mis-evaluated here. The upsert
-      // path prevents creating such duplicates today; may need further hardening.
+      // a stage-1 hit on a later entry could be mis-evaluated here. Duplicates
+      // are now collapsed on write (applyAccountLink) and on save (UserModel
+      // pre-save guard), so such rows self-heal on the next login.
       const existingSameIdentity =
         existingProviderIndex !== -1 && !!incomingId && authProviders[existingProviderIndex].id === incomingId;
 
@@ -207,43 +208,28 @@ const authenticateUser = async (
         promoteEmailVerified = decision.action === 'promote-and-link';
       }
 
-      if (existingProviderIndex !== -1) {
-        authProviders[existingProviderIndex] = oauthCredentials;
-      } else {
-        authProviders.push(oauthCredentials);
-      }
+      // Shared account-link write (see applyAccountLink): the tokenVersion bump on
+      // a new link and the emailVerified promotion stay in lockstep with
+      // okta/callback.ts. Mutates authProviders in place, so it must run BEFORE the
+      // omit(user) below for linkedUser to observe the linked provider.
+      const { update, reflect } = applyAccountLink({
+        authProviders,
+        oauthCredentials,
+        isNewProvider,
+        promoteEmailVerified,
+        currentTokenVersion: user.tokenVersion,
+      });
+      await User.updateOne({ _id: user._id }, update);
 
-      // Linking a NEW auth provider to an existing account is a security-relevant
-      // change: bump tokenVersion to invalidate any other active sessions. The
-      // session being established here is kept valid by reflecting the new
-      // version on the returned user, so the token minted for this login matches.
       const linkedUser = omit(user, ['password']) as typeof user & {
         tokenVersion?: number;
         isNewOAuthLink?: boolean;
         emailVerified?: boolean;
         emailVerifiedAt?: Date;
       };
-      // Promotion write rides the SAME updateOne as the provider link - no second
-      // round-trip, and it can never persist without the link (or vice versa).
-      // Promotion only fires on a real email match (see above), so the local email
-      // is always present here - no backfill needed.
-      const emailVerifiedAt = new Date();
-      const emailVerifiedFields: { emailVerified?: boolean; emailVerifiedAt?: Date } = promoteEmailVerified
-        ? { emailVerified: true, emailVerifiedAt }
-        : {};
-      if (isNewProvider) {
-        await User.updateOne(
-          { _id: user._id },
-          { $set: { oauthCredentials, authProviders, ...emailVerifiedFields }, $inc: { tokenVersion: 1 } }
-        );
-        linkedUser.tokenVersion = (user.tokenVersion ?? 0) + 1;
-      } else {
-        await User.updateOne({ _id: user._id }, { oauthCredentials, authProviders, ...emailVerifiedFields });
-      }
-      if (promoteEmailVerified) {
-        linkedUser.emailVerified = true;
-        linkedUser.emailVerifiedAt = emailVerifiedAt;
-      }
+      // Reflect the persisted tokenVersion/emailVerified onto the returned user so
+      // the token minted for this login matches what was just written.
+      Object.assign(linkedUser, reflect);
       // Transient flag (not persisted) so the callback endpoint can distinguish
       // a genuine new account-link from a routine re-login and audit accordingly.
       linkedUser.isNewOAuthLink = isNewProvider;

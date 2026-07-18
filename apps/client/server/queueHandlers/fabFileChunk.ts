@@ -51,6 +51,10 @@ export const dispatch = dispatchWithLogger(async (event, context, logger) => {
     return;
   }
 
+  // Tag data-lake chunk logs with the batch id for incident triage (the lake is derivable
+  // from the batch). dataLakeId isn't on the FabFile and isn't worth an extra read here.
+  if (fabFile.batchId) logger.updateMetadata({ batchId: fabFile.batchId });
+
   const fabFileChunks = await withTransaction(async () =>
     fabFilesService.chunkFabfile(
       user,

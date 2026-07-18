@@ -12,12 +12,14 @@ import {
   checkVisibility,
   collectInlineAssets,
   prepareShareMeta,
+  recordGatedView,
   renderBundleLoaderShell,
   renderSandboxedBundle,
   stripToText,
   type PublishUser,
   type SandboxAsset,
 } from '@server/services/publish';
+import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
@@ -32,6 +34,8 @@ import {
   isAppWrapperHost,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
+import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
 
 /**
@@ -326,6 +330,16 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     return res.status(access.status).json({ error: access.error });
   }
 
+  // #408: audit an authenticated view of a DOMAIN-gated artifact. Access is granted
+  // here, so bumpViewCount below records both the aggregate count and (for domain
+  // gates) the per-account audit row. Computed once so whichever view-serving branch
+  // runs records it exactly once (assets of gated bundles are inlined, so no
+  // sub-request double-counts). Fire-and-forget inside bumpViewCount.
+  const gateViewAudit =
+    gateArtifact.accessGate?.kind === 'domain'
+      ? { gateKind: 'domain' as const, sourceIp: getClientIp(req), viewerEmailDomain: access.viewerEmailDomain }
+      : undefined;
+
   if (isShare) {
     // No-sign-in links are unlisted capabilities: keep them out of search indexes,
     // and stop the token leaking to third parties via the Referer header on any
@@ -368,7 +382,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     );
     res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
     return res.status(200).send(page);
   }
 
@@ -518,7 +532,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, no-store');
     res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
-    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+    bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
     return res.status(200).send(srcdoc);
   }
 
@@ -538,6 +552,15 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
   // Share links stay on the same-origin sandboxed-srcdoc model (Approach A): never the
   // per-artifact isolated origin, so the token can't leak into a `*.usercontent` Host.
   const artifactHost = !isShare && isOpenPublic ? usercontentHostFor(artifact.publicId) : '';
+  // Embed allowlist applies ONLY to an open-public artifact (a gated page is
+  // no-store and never framed). Appended to frame-ancestors on both the wrapper
+  // and, for the ancestor chain, the isolated bundle.
+  const embedGrants = isOpenPublic ? (artifact.embedOrigins ?? []) : [];
+  // Chrome-less render for an allowlisted embed (`?embed=1`): drop the version bar
+  // and comment overlay so the widget is just the content (the canonical link back
+  // to the real page still ships via shareMeta). Open-public, non-share only - the
+  // query flag can't relax any gate.
+  const isEmbed = !isShare && isOpenPublic && req.query.embed === '1';
 
   // -- Approach B: serve the bundle AS the page on its isolated origin. --
   // Reached via the `/uc/*` rewrite on `{publicId}.usercontent.app.<domain>`. The bundle runs
@@ -549,7 +572,7 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       return res.status(404).json({ error: 'Not found' });
     }
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req));
+    res.setHeader('Content-Security-Policy', buildIsolatedBundleCsp(req, embedGrants));
     res.setHeader('Cache-Control', bundleCacheControl);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     // No bumpViewCount here: the isolated bundle is loaded as a sub-resource of the
@@ -588,15 +611,57 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
           siteName: process.env.APP_NAME || '',
         })
       : null;
-  const wrapperPage = renderBundleWrapper(artifact, srcdoc, requestedVersion, isolatedSrc, shareMeta, isShare);
+  // Lead-gen targets, both runtime-derived (no hardcoded brand host): the marketing
+  // site with UTM attribution when configured, else a branded fallback. The embed
+  // pill falls back to the artifact's canonical page; the own-tab bar falls back to
+  // the app root (the viewer is already on the canonical page). The bar only renders
+  // for an own-tab open-public artifact.
+  const marketing = (medium: string) =>
+    WEBSITE_URL
+      ? `${WEBSITE_URL.replace(/\/+$/, '')}/?utm_source=shared-artifact&utm_medium=${medium}&utm_campaign=publish`
+      : '';
+  const pillHref = isEmbed ? marketing('embed-badge') || `${docOrigin}${canonicalPath}` : '';
+  const barHref = !isEmbed && isOpenPublic ? marketing('share-bar') || `${docOrigin}/` : '';
+  const wrapperPage = renderBundleWrapper(
+    artifact,
+    srcdoc,
+    requestedVersion,
+    isolatedSrc,
+    shareMeta,
+    isShare,
+    isEmbed,
+    pillHref,
+    barHref,
+    pillHref || barHref ? getBrandName() : ''
+  );
 
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : ''));
+  res.setHeader('Content-Security-Policy', buildWrapperCsp(req, isolatedSrc ? artifactHost : '', embedGrants));
   res.setHeader('Cache-Control', bundleCacheControl);
   res.setHeader('X-Content-Type-Options', 'nosniff');
-  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent']);
+  bumpViewCount(artifact, req.user as { id?: string } | undefined, req.headers['user-agent'], gateViewAudit);
   return res.status(200).send(wrapperPage);
 });
+
+// Lead-gen livery palette. Reuses the SAME env knobs as the baked share footer
+// (buildShareFooterHtml), so a fork rebrands the footer and the wrapper pill/bar
+// with one set of vars; defaults are the project palette.
+const LIVERY_NAVY = process.env.NEXT_PUBLIC_SHARE_BRAND_NAVY || '#0d1830';
+const LIVERY_ORANGE = process.env.NEXT_PUBLIC_SHARE_BRAND_ORANGE || '#F26C1F';
+// Whether to ship the project's OWN brand artwork (the bicycle-spoke wordmark) and
+// registered mark on the livery. Same opt-in as the baked share footer: a fork does
+// NOT ship the upstream logo, and its brand name is not the registered mark, so both
+// are gated on this flag (fork -> text wordmark, no (R)).
+const LIVERY_BUILTIN_LOGO = process.env.NEXT_PUBLIC_SHARE_BUILTIN_LOGO === 'true';
+const LIVERY_REG = LIVERY_BUILTIN_LOGO ? '<span class="b4m-reg">&reg;</span>' : '';
+
+/** Brand mark for the navy bar: the inlined spoke-wheel logo (built-in) or a text
+ *  wordmark of the brand name (fork). The logo's white artwork suits the navy bar. */
+function liveryBarMark(brandName: string): string {
+  return LIVERY_BUILTIN_LOGO
+    ? `<span class="b4m-bar-logo">${B4M_HORIZONTAL_LOGO_SVG}</span>`
+    : `<strong>${escapeHtml(brandName)}</strong>`;
+}
 
 /**
  * Minimal trusted wrapper page hosting the bundle in an iframe. Runs no script of
@@ -614,7 +679,11 @@ function renderBundleWrapper(
   requestedVersion: string,
   isolatedSrc: string,
   shareMeta: { metaTags: string; noscriptBody: string; alternateLink: string } | null,
-  noindex: boolean
+  noindex: boolean,
+  embed = false,
+  pillHref = '',
+  barHref = '',
+  brandName = ''
 ): string {
   const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
   // HTML attribute escape: inside a double-quoted attribute value only `&` and `"` are
@@ -642,27 +711,75 @@ function renderBundleWrapper(
   const metaHead = shareMeta ? `\n${shareMeta.metaTags}\n${shareMeta.alternateLink}` : '';
   const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
   const noscriptBody = shareMeta ? `\n${shareMeta.noscriptBody}` : '';
+  // Embedded render drops the interactive chrome (version switcher + comment
+  // overlay) so the widget is just the content. The canonical link back to the
+  // real page is already emitted for open-public renders via shareMeta.
+  const chromeBody = embed ? '' : `\n${overlay}\n${versionBar}`;
+
+  // Lead-gen livery. The bundle's own "powered-by" footer is baked into the CONTENT
+  // and absent from externally-built bundles, so the wrapper carries brand itself:
+  //   - embed (chrome-less): a small floating "Built with {brand}" pill.
+  //   - own-tab open-public: a persistent bottom bar with a "Try {brand}" CTA
+  //     (Anthropic-style); the iframe is shortened so the bar covers nothing.
+  // Both are top-level links (CSP-safe, no JS). barPresent also relocates the Report
+  // affordance INTO the bar and lifts the version switcher above it.
+  const brandBadge =
+    embed && pillHref && brandName
+      ? `\n<a class="b4m-brand" href="${escapeHtml(pillHref)}" rel="noopener" target="_top">Built with ${escapeHtml(
+          brandName
+        )}${LIVERY_REG}</a>`
+      : '';
+  const barPresent = !embed && !!barHref && !!brandName;
+  const bar = barPresent
+    ? `\n<div class="b4m-bar">
+  <span class="b4m-bar-l">Built with ${liveryBarMark(brandName)}${LIVERY_REG}</span>
+  <span class="b4m-bar-r">
+    <a class="b4m-bar-report" href="${reportHref}" rel="nofollow" target="_top">Report</a>
+    <a class="b4m-bar-cta" href="${escapeHtml(
+      barHref
+    )}" target="_blank" rel="noopener noreferrer">Try ${escapeHtml(brandName)}${LIVERY_REG} &rarr;</a>
+  </span>
+</div>`
+    : '';
+  const floatingReport = barPresent
+    ? ''
+    : `\n<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">&#9873; Report</a>`;
+  const iframeHeight = barPresent ? 'calc(100vh - 52px)' : '100vh';
+
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">${noindexHead}
 <title>${titleHtml}</title>${metaHead}
-<style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:100vh}
+<style>html,body{margin:0;padding:0;height:100%}iframe{border:0;display:block;width:100%;height:${iframeHeight}}
 .b4m-report{position:fixed;bottom:10px;right:10px;z-index:2147483647;font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
   color:#cbd5e1;background:rgba(13,24,48,.78);padding:5px 9px;border-radius:8px;text-decoration:none;backdrop-filter:blur(4px)}
 .b4m-report:hover{color:#fff;background:rgba(13,24,48,.95)}
-.b4m-ver{position:fixed;bottom:10px;left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
+.b4m-brand{position:fixed;bottom:10px;left:10px;z-index:2147483647;font:600 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;
+  color:#fff;background:${LIVERY_ORANGE};padding:6px 11px;border-radius:8px;text-decoration:none;box-shadow:0 2px 10px rgba(0,0,0,.28)}
+.b4m-brand:hover{filter:brightness(1.07)}
+.b4m-bar{position:fixed;left:0;right:0;bottom:0;height:52px;box-sizing:border-box;z-index:2147483647;display:flex;
+  align-items:center;justify-content:space-between;gap:12px;padding:0 16px;background:${LIVERY_NAVY};color:#e2e8f0;
+  border-top:1px solid rgba(255,255,255,.12);font:600 13px/1 ui-sans-serif,system-ui,-apple-system,sans-serif}
+.b4m-bar strong{color:#fff}
+.b4m-bar-l{display:flex;align-items:center;gap:7px}
+.b4m-bar-logo{display:inline-flex;align-items:center}
+.b4m-bar-logo svg{height:22px;width:auto;display:block}
+.b4m-reg{font-size:.62em;vertical-align:super;font-weight:400;margin-left:1px}
+.b4m-bar-r{display:flex;align-items:center;gap:14px}
+.b4m-bar-report{color:#94a3b8;text-decoration:none;font-weight:500;font-size:12px}
+.b4m-bar-report:hover{color:#cbd5e1}
+.b4m-bar-cta{padding:8px 14px;border-radius:9px;background:${LIVERY_ORANGE};color:#fff;font-weight:700;text-decoration:none;white-space:nowrap}
+.b4m-bar-cta:hover{filter:brightness(1.07)}
+.b4m-ver{position:fixed;bottom:${barPresent ? '62px' : '10px'};left:10px;z-index:2147483647;display:flex;align-items:center;gap:8px;
   font:500 11px/1 ui-sans-serif,system-ui,-apple-system,sans-serif;color:#cbd5e1;background:rgba(13,24,48,.78);
   padding:5px 9px;border-radius:8px;backdrop-filter:blur(4px)}
 .b4m-ver a{color:#8ab4ff;text-decoration:none;font-weight:600}
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}
-${overlay}
-${versionBar}
-<a class="b4m-report" href="${reportHref}" rel="nofollow" target="_top">⚑ Report</a>
+${iframeTag}${chromeBody}${brandBadge}${floatingReport}${bar}
 ${noscriptBody}
 </body>
 </html>`;
@@ -730,10 +847,25 @@ function buildVersionSwitcherHtml(artifact: PublishedArtifactLean, requestedVers
  * bundle can never frame another. If a deployment ever serves the wrapper from additional
  * hosts, enumerate them here explicitly rather than reintroducing a wildcard.
  */
-function buildIsolatedBundleCsp(req: Request): string {
+/**
+ * frame-ancestors suffix for an open-public artifact's embed allowlist. Each
+ * entry is already a normalized exact https origin (validateEmbedOrigins), never
+ * a wildcard, so appending them preserves the no-wildcard property that keeps one
+ * bundle from framing another. Empty string when there are no grants.
+ */
+function embedGrantsSuffix(embedOrigins: string[]): string {
+  return embedOrigins.length ? ` ${embedOrigins.join(' ')}` : '';
+}
+
+function buildIsolatedBundleCsp(req: Request, embedOrigins: string[] = []): string {
   const appHost = PUBLISH_HOST ? `https://${PUBLISH_HOST}` : '';
   const appHostSrc = appHost ? ` ${appHost}` : '';
   const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  // frame-ancestors is evaluated against EVERY ancestor in the chain, not just the
+  // direct parent. When an external site embeds the wrapper, the embedder is an
+  // ancestor of THIS isolated bundle too, so its origin must be listed here as well
+  // as on the wrapper - otherwise the browser blocks the nested bundle frame.
+  const grants = embedGrantsSuffix(embedOrigins);
   return [
     "default-src 'none'",
     `script-src 'unsafe-inline' 'self' ${blessedScriptSrc}`,
@@ -744,11 +876,11 @@ function buildIsolatedBundleCsp(req: Request): string {
     "connect-src 'self'",
     "base-uri 'self'",
     "form-action 'none'",
-    appHost ? `frame-ancestors ${appHost}` : "frame-ancestors 'self'",
+    appHost ? `frame-ancestors ${appHost}${grants}` : `frame-ancestors 'self'${grants}`,
   ].join('; ');
 }
 
-function buildWrapperCsp(req: Request, artifactHost?: string): string {
+function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: string[] = []): string {
   const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
   // Approach B: the wrapper embeds the bundle via a cross-origin iframe to the artifact's
   // isolated host, so frame-src must permit it. Only the exact per-artifact host is added.
@@ -781,8 +913,12 @@ function buildWrapperCsp(req: Request, artifactHost?: string): string {
     `connect-src ${docOrigin}${appHostSrc}`,
     `base-uri ${docOrigin}${appHostSrc}`,
     "form-action 'none'",
-    // App host derived from PUBLISH_HOST; 'self' alone when unconfigured.
-    PUBLISH_HOST ? `frame-ancestors 'self' ${appHost}` : "frame-ancestors 'self'",
+    // App host derived from PUBLISH_HOST; 'self' alone when unconfigured. Embed
+    // grants (open-public only) are appended so an allowlisted external site can
+    // frame the wrapper - the isolated bundle CSP lists them too (ancestor chain).
+    PUBLISH_HOST
+      ? `frame-ancestors 'self' ${appHost}${embedGrantsSuffix(embedOrigins)}`
+      : `frame-ancestors 'self'${embedGrantsSuffix(embedOrigins)}`,
   ].join('; ');
 }
 
@@ -798,6 +934,9 @@ interface PublishedArtifactLean {
   /** Optional gate on top of `public` (issue #383). passphraseHash is select:false
    *  on the schema, so it never appears in this lean read. */
   accessGate?: { kind: 'passphrase' | 'domain'; allowedDomains?: string[] } | null;
+  /** External https origins allowed to frame this artifact (open-public only).
+   *  Appended to frame-ancestors on both the wrapper and the isolated bundle. */
+  embedOrigins?: string[];
   commentPolicy?: 'none' | 'open' | 'restricted';
   ownerId: string;
   storageKeyPrefix: string;
@@ -861,7 +1000,10 @@ const CRAWLER_UA_RE =
 function bumpViewCount(
   artifact: { publicId: string; ownerId: string },
   viewer: { id?: string } | undefined,
-  userAgent?: string
+  userAgent?: string,
+  // #408: when the served view passed a gate, record per-account attribution
+  // alongside the aggregate counter. Only set for authenticated gate views.
+  gateView?: { gateKind: 'domain'; sourceIp?: string; viewerEmailDomain?: string }
 ): void {
   const isAuthed = !!viewer?.id;
   const isOwner = isAuthed && String(viewer!.id) === String(artifact.ownerId);
@@ -869,6 +1011,18 @@ function bumpViewCount(
   const countsAsExternal = isAuthed && !isOwner && !isCrawler;
   const inc = countsAsExternal ? { viewCount: 1, externalViewCount: 1 } : { viewCount: 1 };
   void PublishedArtifact.updateOne({ publicId: artifact.publicId }, { $inc: inc }).catch(() => undefined);
+  // Audit non-owner authenticated gate views only: the point is who OTHER than the
+  // owner reached a gated artifact, and the owner bypasses their own gate anyway.
+  if (gateView && viewer?.id && !isOwner) {
+    void recordGatedView({
+      publicId: artifact.publicId,
+      viewerId: String(viewer.id),
+      gateKind: gateView.gateKind,
+      viewerEmailDomain: gateView.viewerEmailDomain,
+      sourceIp: gateView.sourceIp,
+      userAgent,
+    });
+  }
 }
 
 /**

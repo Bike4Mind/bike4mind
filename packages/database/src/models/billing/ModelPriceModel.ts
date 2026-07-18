@@ -31,6 +31,11 @@ const ModelPriceSchema = new Schema<IModelPriceDocument>(
           output: { type: Number, required: true },
           cache_read: { type: Number, required: false },
           cache_write: { type: Number, required: false },
+          // Realtime voice audio rates; strict mode strips undeclared fields,
+          // so these MUST be listed or audio pricing silently round-trips away.
+          audio_input: { type: Number, required: false },
+          audio_cache_read: { type: Number, required: false },
+          audio_output: { type: Number, required: false },
         },
         { _id: false }
       ),
@@ -38,6 +43,7 @@ const ModelPriceSchema = new Schema<IModelPriceDocument>(
     },
     effectiveFrom: { type: Date, required: true },
     note: { type: String, required: false },
+    repricedBy: { type: String, required: false },
   },
   {
     timestamps: true,

@@ -4,7 +4,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mockCreateUser = vi.fn();
 const mockFindByEmail = vi.fn();
 const mockUpdate = vi.fn();
-const mockAddUserToOrganization = vi.fn();
+const mockAddMember = vi.fn();
 const mockLogEvent = vi.fn();
 const mockPublish = vi.fn();
 
@@ -12,13 +12,24 @@ vi.mock('@bike4mind/services', () => ({
   userService: {
     createUser: (...args: unknown[]) => mockCreateUser(...args),
   },
+  organizationService: {
+    addMember: (...args: unknown[]) => mockAddMember(...args),
+  },
 }));
 
 vi.mock('@bike4mind/database', () => ({
+  withTransaction: (fn: (...args: unknown[]) => unknown) => fn(),
+}));
+
+vi.mock('@bike4mind/database/auth', () => ({
   userRepository: {
     findByEmail: (...args: unknown[]) => mockFindByEmail(...args),
     update: (...args: unknown[]) => mockUpdate(...args),
   },
+}));
+
+vi.mock('@bike4mind/database/infra', () => ({
+  organizationRepository: {},
 }));
 
 vi.mock('@server/utils/analyticsLog', () => ({
@@ -61,10 +72,6 @@ vi.mock('@server/utils/mailer/emailHelpers', () => ({
   getLogoUrl: () => mockLogo.url,
   buildEmailLogoImg: (brand: string, logoUrl = mockLogo.url) =>
     logoUrl ? `<img src="${logoUrl}" alt="${brand} Logo" class="logo" />` : '',
-}));
-
-vi.mock('@server/managers/organizationManager', () => ({
-  addUserToOrganization: (...args: unknown[]) => mockAddUserToOrganization(...args),
 }));
 
 vi.mock('@bike4mind/common', () => ({
@@ -261,15 +268,12 @@ describe('/api/reg-invites/migrate', () => {
 
     await handler(mockReq, mockRes);
 
-    expect(mockAddUserToOrganization).toHaveBeenCalledWith({
-      organizationId: 'org-456',
-      userId: 'new-user-4',
-      force: true,
-    });
-    expect(mockUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        organizationId: 'org-456',
-      })
+    // Org assignment now goes through organizationService.addMember (which sets
+    // the user's organizationId itself), not a separate userRepository.update.
+    expect(mockAddMember).toHaveBeenCalledWith(
+      mockReq.user,
+      { organizationId: 'org-456', userId: 'new-user-4', force: true },
+      expect.objectContaining({ db: expect.any(Object) })
     );
   });
 
@@ -289,7 +293,29 @@ describe('/api/reg-invites/migrate', () => {
 
     await handler(mockReq, mockRes);
 
-    expect(mockAddUserToOrganization).not.toHaveBeenCalled();
+    expect(mockAddMember).not.toHaveBeenCalled();
+  });
+
+  it('reports a user as failed (account already created) when org assignment throws', async () => {
+    mockFindByEmail.mockResolvedValue(null);
+    mockCreateUser.mockResolvedValue({ id: 'new-user-x', name: 'Xavier', email: 'xavier@example.com' });
+    // Bad/deleted orgId: addMember throws (NotFoundError), caught by the per-user handler.
+    // The old addUserToOrganization silently no-op'd on a missing org; addMember reports it
+    // as a failure instead - but the account was already persisted by createUser, which runs
+    // before the org step and outside withTransaction.
+    mockAddMember.mockRejectedValue(new Error('Organization not found'));
+
+    mockReq.body = {
+      usersData: [{ email: 'xavier@example.com', name: 'Xavier' }],
+      sendEmail: false,
+      orgId: 'deleted-org',
+    };
+
+    // Sole user fails org assignment -> nothing reported as migrated -> handler throws.
+    await expect(handler(mockReq, mockRes)).rejects.toThrow('No users were migrated');
+    // Account creation still happened despite the org-assignment failure.
+    expect(mockCreateUser).toHaveBeenCalledTimes(1);
+    expect(mockAddMember).toHaveBeenCalled();
   });
 
   it('logs migration event for each user', async () => {

@@ -45,19 +45,29 @@ export class GitHubIssueTracker implements IssueTrackerService {
   constructor(
     private readonly owner: string,
     private readonly repo: string,
-    private readonly logger: IssueTrackerLogger
+    private readonly logger: IssueTrackerLogger,
+    private readonly organizationId?: string | null
   ) {
     this.repoFullName = `${owner}/${repo}`;
   }
 
   /**
-   * Initialize the GitHub service connection
+   * Initialize the GitHub service connection.
+   * Org-scoped configs use the org's own connection with no system fallback,
+   * so one org's triage can never touch another org's GitHub.
    */
   private async ensureInitialized(): Promise<GitHubService> {
     if (!this.githubService) {
-      this.githubService = await GitHubService.forSystem(this.logger);
-      if (!this.githubService) {
-        throw new Error('Failed to initialize GitHub service - no system connection available');
+      if (this.organizationId) {
+        this.githubService = await GitHubService.forOrganization(this.organizationId, this.logger);
+        if (!this.githubService) {
+          throw new Error('Failed to initialize GitHub service - no connection available for organization');
+        }
+      } else {
+        this.githubService = await GitHubService.forSystem(this.logger);
+        if (!this.githubService) {
+          throw new Error('Failed to initialize GitHub service - no system connection available');
+        }
       }
     }
     return this.githubService;

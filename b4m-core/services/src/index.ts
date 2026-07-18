@@ -26,6 +26,7 @@ export * as notebookImportService from './notebookImportService';
 export * as notebookCurationService from './notebookCurationService';
 export * as dataLakeService from './dataLakeService';
 export * as briefcaseService from './briefcaseService';
+export * as imageTemplateService from './imageTemplateService';
 export * as cheerioService from './lib/cheerio';
 export * as turndownService from './lib/turndown';
 export * as speechToTextService from './speech';

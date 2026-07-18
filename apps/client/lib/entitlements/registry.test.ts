@@ -129,6 +129,18 @@ describe('entitlementsForTags', () => {
   it('ignores empty/whitespace tags', () => {
     expect(entitlementsForTags(['', '   '])).toEqual(new Set());
   });
+
+  it('grants optihashi:hardware ONLY via opti-hardware, never via a cheaper tier', () => {
+    // Pins the exact grant path an operator uses to authorize a partner account for
+    // external-provider hardware spend: tagging `opti-hardware` must confer `optihashi:hardware`,
+    // the key the overlay's hardware submit gate reads. A rename/removal here silently locks
+    // everyone (incl. non-admins) out of hardware compute, so lock it by name.
+    expect(entitlementsForTags(['opti-hardware']).has('optihashi:hardware')).toBe(true);
+    // The invariant that actually matters: cheaper tiers must NOT confer real-money hardware.
+    // Fails loudly if someone later widens a cheaper row into hardware.
+    expect(entitlementsForTags(['opti-compute']).has('optihashi:hardware')).toBe(false);
+    expect(entitlementsForTags(['opti']).has('optihashi:hardware')).toBe(false);
+  });
 });
 
 describe('entitlementsForPriceIds', () => {

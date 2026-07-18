@@ -1,6 +1,6 @@
 import { GetEffectiveApiKeyAdapters } from '../apiKeyService';
 import { ToolExecutionRequest, ToolExecutionResult, ToolErrorType } from './types';
-import { firecrawlFetch } from '../llm/tools/implementation/webfetch';
+import { firecrawlFetch, webFetchBody } from '../llm/tools/implementation/webfetch';
 import { performWebSearch, WebSearchParams } from '../llm/tools/implementation/websearch';
 import { fetchWeatherData, WeatherParams } from '../llm/tools/implementation/weather';
 
@@ -75,8 +75,12 @@ export async function executeServerTool(
       }
 
       case 'web_fetch': {
-        const result = await firecrawlFetch({ db: adapters.db }, request.input.url);
-        content = result.markdown;
+        const result = await firecrawlFetch({ db: adapters.db }, request.input.url, {
+          offset: request.input.offset,
+        });
+        // Shared formatter keeps truncation/continuation in-band and consistent with the
+        // web_fetch tool and HTTP endpoint.
+        content = webFetchBody(result);
         break;
       }
 

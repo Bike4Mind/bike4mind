@@ -8,8 +8,12 @@ import {
   formatHandoffOutput,
   buildHandoffSystemMessage,
   injectHandoffMessage,
+  injectWorkflowStateMessage,
   isInjectedHandoff,
+  isInjectedWorkflowState,
+  isInjectedContinuity,
   HANDOFF_MARKER,
+  WORKFLOW_STATE_MARKER,
   SHORT_SESSION_THRESHOLD,
   buildLocalHandoff,
   renderLocalHandoffMarkdown,
@@ -18,6 +22,7 @@ import {
   LOCAL_HANDOFF_MESSAGE_TAIL,
 } from './handoff.js';
 import type { Message, Session, SessionHandoff, WorkflowState } from '../storage/types.js';
+import type { TodoItem } from '../tools/writeTodosTool.js';
 
 function createHandoff(overrides: Partial<SessionHandoff> = {}): SessionHandoff {
   return {
@@ -394,6 +399,123 @@ describe('handoff', () => {
       expect(result.some(m => m.id === 'old-handoff')).toBe(false);
       expect(result.some(m => m.id === 'sum')).toBe(true);
     });
+
+    it('strips a prior injected workflow-state message so the two never co-exist', () => {
+      const priorState: Message = {
+        id: 'state',
+        role: 'user',
+        content: `${WORKFLOW_STATE_MARKER}\n\nRecent decisions:\n- something`,
+        timestamp: 'old',
+      };
+      const messages: Message[] = [priorState, createMessage('user', 'hi', 0)];
+
+      const result = injectHandoffMessage(messages, createHandoff({ summary: 'NEW' }));
+
+      expect(result).toHaveLength(2);
+      expect(result[0].content).toContain('NEW');
+      expect(result.some(m => m.id === 'state')).toBe(false);
+    });
+  });
+
+  describe('isInjectedWorkflowState / isInjectedContinuity', () => {
+    const stateMsg = (content: string, role: Message['role'] = 'user'): Message => ({
+      id: '1',
+      role,
+      content,
+      timestamp: 'now',
+    });
+
+    it('recognizes a workflow-state message only when marked and role=user', () => {
+      expect(isInjectedWorkflowState(stateMsg(`${WORKFLOW_STATE_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedWorkflowState(stateMsg(`${WORKFLOW_STATE_MARKER}`, 'assistant'))).toBe(false);
+      expect(isInjectedWorkflowState(stateMsg('plain message'))).toBe(false);
+    });
+
+    it('isInjectedContinuity covers both handoff and workflow-state markers', () => {
+      expect(isInjectedContinuity(stateMsg(`${HANDOFF_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedContinuity(stateMsg(`${WORKFLOW_STATE_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedContinuity(stateMsg('plain'))).toBe(false);
+    });
+  });
+
+  describe('injectWorkflowStateMessage', () => {
+    const workflow = (overrides: Partial<WorkflowState> = {}): WorkflowState => ({
+      decisions: [{ id: 'd1', timestamp: 'now', summary: 'chose SSE', rationale: 'simplest' }],
+      blockers: [{ id: 'b1', createdAt: 'now', description: 'need API key', status: 'open' }],
+      ...overrides,
+    });
+
+    it('prepends a marked workflow-state user message rendering open decisions and blockers', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].role).toBe('user');
+      expect(result[0].content.startsWith(WORKFLOW_STATE_MARKER)).toBe(true);
+      expect(result[0].content).toContain('chose SSE');
+      expect(result[0].content).toContain('need API key');
+      expect(result[1]).toBe(messages[0]);
+    });
+
+    it('injects nothing when there is no open state (returns the list unchanged in content)', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+
+      expect(injectWorkflowStateMessage(messages, { decisions: [], blockers: [] })).toEqual(messages);
+      expect(injectWorkflowStateMessage(messages, undefined)).toEqual(messages);
+    });
+
+    it('does not render resolved blockers', () => {
+      const result = injectWorkflowStateMessage([createMessage('user', 'hi', 0)], {
+        decisions: [],
+        blockers: [{ id: 'b1', createdAt: 'now', description: 'was blocked', status: 'resolved' }],
+      });
+
+      // Only a resolved blocker and no decisions => nothing to surface.
+      expect(result).toHaveLength(1);
+    });
+
+    it('replaces a prior workflow-state injection instead of stacking', () => {
+      const prior: Message = {
+        id: 'prev-state',
+        role: 'user',
+        content: `${WORKFLOW_STATE_MARKER}\n\nRecent decisions:\n- old`,
+        timestamp: 'old',
+      };
+      const messages: Message[] = [prior, createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].id).not.toBe('prev-state');
+      expect(result[0].content).toContain('chose SSE');
+      expect(result.some(m => m.id === 'prev-state')).toBe(false);
+    });
+
+    it('strips a prior injected handoff so the two never co-exist', () => {
+      const priorHandoff: Message = {
+        id: 'handoff',
+        role: 'user',
+        content: buildHandoffSystemMessage(createHandoff({ summary: 'OLD HANDOFF' })),
+        timestamp: 'old',
+      };
+      const messages: Message[] = [priorHandoff, createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].content.startsWith(WORKFLOW_STATE_MARKER)).toBe(true);
+      expect(result.some(m => m.id === 'handoff')).toBe(false);
+    });
+
+    it('does not mutate the input array', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+      const original = [...messages];
+
+      injectWorkflowStateMessage(messages, workflow());
+
+      expect(messages).toEqual(original);
+    });
   });
 
   describe('buildHandoffPrompt message cap', () => {
@@ -435,9 +557,9 @@ describe('handoff', () => {
 
       expect(handoff.summary).toContain('Local handoff');
       expect(handoff.summary).toContain('Test Session');
-      expect(handoff.keyFindings).toEqual([]);
-      expect(handoff.nextSteps).toEqual([]);
-      expect(handoff.pendingDecisions).toEqual(['Use Postgres (rationale: JSONB support)']);
+      expect(handoff.keyFindings).toEqual(['Use Postgres (rationale: JSONB support)']);
+      expect(handoff.nextSteps).toEqual(['Resolve blocker: Missing API key']);
+      expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual(['Missing API key']);
       expect(handoff.generatedAt).toBeTruthy();
     });
@@ -448,6 +570,8 @@ describe('handoff', () => {
       const handoff = buildLocalHandoff(session);
 
       expect(handoff.summary).toContain('Local handoff');
+      expect(handoff.keyFindings).toEqual([]);
+      expect(handoff.nextSteps).toEqual([]);
       expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual([]);
     });
@@ -470,10 +594,53 @@ describe('handoff', () => {
         ],
       });
 
-      expect(handoff.pendingDecisions).toEqual(['Fresh (rationale: fresh)']);
+      expect(handoff.keyFindings).toEqual(['Fresh (rationale: fresh)']);
+      expect(handoff.pendingDecisions).toEqual([]);
       expect(handoff.blockers).toEqual(['Fresh blocker']);
-      expect(handoff.pendingDecisions).not.toContain('Stale');
+      expect(handoff.keyFindings).not.toContain('Stale (rationale: stale)');
       expect(handoff.blockers).not.toContain('Stale blocker');
+    });
+
+    it('enriches from decisions, open todos, and open blockers, dropping done/cancelled', () => {
+      const workflow: WorkflowState = {
+        decisions: [
+          { id: 'd1', timestamp: '2026-01-01T00:00:00.000Z', summary: 'Use Postgres', rationale: 'JSONB support' },
+          { id: 'd2', timestamp: '2026-01-02T00:00:00.000Z', summary: 'Adopt Vitest', rationale: 'Faster' },
+        ],
+        blockers: [
+          { id: 'b1', createdAt: 'now', description: 'Missing API key', status: 'open' },
+          { id: 'b2', createdAt: 'now', description: 'Already fixed', status: 'resolved' },
+        ],
+      };
+      const session = createSession([createMessage('user', 'hi', 0)], workflow);
+      const todos: TodoItem[] = [
+        { description: 'Write migration', status: 'in_progress' },
+        { description: 'Add tests', status: 'pending' },
+        { description: 'Ship it', status: 'completed' },
+        { description: 'Old idea', status: 'cancelled' },
+      ];
+
+      const handoff = buildLocalHandoff(session, {
+        decisions: workflow.decisions,
+        blockers: workflow.blockers,
+        todos,
+      });
+
+      expect(handoff.keyFindings).toEqual([
+        'Use Postgres (rationale: JSONB support)',
+        'Adopt Vitest (rationale: Faster)',
+      ]);
+      expect(handoff.nextSteps).toEqual(['Write migration', 'Add tests', 'Resolve blocker: Missing API key']);
+      expect(handoff.pendingDecisions).toEqual([]);
+      expect(handoff.blockers).toEqual(['Missing API key']);
+
+      expect(handoff.summary).toContain('Test Session');
+      expect(handoff.summary).toContain('model claude-sonnet');
+      expect(handoff.summary).toContain('2 decisions');
+      expect(handoff.summary).toContain('1 open blockers');
+      expect(handoff.summary).toContain('2 open todos');
+      expect(handoff.summary).toContain('Current task: Write migration');
+      expect(handoff.summary).toContain('Latest decision: Adopt Vitest');
     });
   });
 
