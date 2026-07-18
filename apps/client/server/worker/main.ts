@@ -38,6 +38,8 @@ const CHUNK_SCAN_INTERVAL_MS = 60_000;
 const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
 /** Cap files enqueued per scan pass so a large backlog is drained gradually. */
 const CHUNK_SCAN_BATCH = 50;
+/** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
+const DRAIN_GRACE_MS = 20_000;
 
 async function main() {
   // This process only makes sense in self-host: it uses the env-backed Resource shim and
@@ -72,10 +74,17 @@ async function main() {
   // Optional - unset means enrichment simply doesn't run.
   const eventQueueUrl = process.env.SELF_HOST_EVENT_QUEUE;
   if (eventQueueUrl) {
-    worker.registerQueueHandler('selfHostEventQueue', eventQueueUrl, async (event: SQSEvent) => {
-      const { detailType, detail } = JSON.parse(event.Records[0].body) as { detailType: string; detail: unknown };
-      await dispatchSelfHostEvent(detailType, detail, bootLogger);
-    });
+    worker.registerQueueHandler(
+      'selfHostEventQueue',
+      eventQueueUrl,
+      async (event: SQSEvent) => {
+        const { detailType, detail } = JSON.parse(event.Records[0].body) as { detailType: string; detail: unknown };
+        await dispatchSelfHostEvent(detailType, detail, bootLogger);
+      },
+      // Enrichment handlers make local-LLM calls (naming, summaries) that can run minutes on
+      // CPU: keep the message invisible long enough to avoid mid-run redelivery + duplicate work.
+      { visibilityTimeoutSec: 300, maxReceiveCount: 5 }
+    );
   } else {
     bootLogger.warn('SELF_HOST_EVENT_QUEUE not set; enrichment events will not be consumed');
   }
@@ -125,13 +134,14 @@ async function main() {
 
   worker.start();
 
-  const shutdown = (signal: string) => {
-    bootLogger.info(`${signal} received - draining selfHostWorker`);
-    worker.stop();
+  const shutdown = async (signal: string) => {
+    bootLogger.info(`${signal} received - draining selfHostWorker (up to ${DRAIN_GRACE_MS}ms)`);
+    await worker.stop(DRAIN_GRACE_MS);
+    bootLogger.info('selfHostWorker drained; exiting');
     process.exit(0);
   };
-  process.on('SIGTERM', () => shutdown('SIGTERM'));
-  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 // Boot except under test (vitest sets VITEST) - importing this module for unit tests must

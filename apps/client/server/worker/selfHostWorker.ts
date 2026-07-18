@@ -49,6 +49,7 @@ export class SelfHostWorker {
   private readonly queues: QueueHandlerRegistration[] = [];
   private readonly scheduled: ScheduledTaskRegistration[] = [];
   private readonly timers: ReturnType<typeof setInterval>[] = [];
+  private pollers: Promise<void>[] = [];
   private running = false;
   private readonly logger: Logger;
 
@@ -79,9 +80,7 @@ export class SelfHostWorker {
   start(): void {
     if (this.running) return;
     this.running = true;
-    for (const q of this.queues) {
-      void this.runPoller(q);
-    }
+    this.pollers = this.queues.map(q => this.runPoller(q));
     for (const t of this.scheduled) {
       this.timers.push(setInterval(() => void this.runScheduledTask(t), t.intervalMs));
     }
@@ -90,11 +89,20 @@ export class SelfHostWorker {
     );
   }
 
-  /** Stop polling and disarm scheduled tasks. In-flight message handling is not interrupted. */
-  stop(): void {
+  /**
+   * Stop polling and disarm scheduled tasks. Sets running=false immediately, then waits up to
+   * `graceMs` for each poller to finish its current iteration (in-flight message handling) so
+   * shutdown doesn't cut a handler mid-run. A busy handler past the grace is abandoned by the
+   * caller's process.exit; the message stays in-flight and is redelivered.
+   */
+  async stop(graceMs = 0): Promise<void> {
     this.running = false;
     for (const timer of this.timers) clearInterval(timer);
     this.timers.length = 0;
+    if (graceMs > 0 && this.pollers.length > 0) {
+      await Promise.race([Promise.allSettled(this.pollers), sleep(graceMs)]);
+    }
+    this.pollers = [];
   }
 
   private async runScheduledTask(task: ScheduledTaskRegistration): Promise<void> {
