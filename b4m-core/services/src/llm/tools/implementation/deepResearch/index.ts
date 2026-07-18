@@ -175,13 +175,13 @@ export async function performDeepResearch(
     };
   }
 
-  const search: Searcher['search'] = provider
+  // Discovery precedence: prefer Firecrawl whenever it is configured (keeps hosted byte-identical -
+  // hosted normally has Firecrawl, and switching discovery to a Serper/SearXNG provider would change
+  // results and burn separate search quota on a billable path). Use the web-search provider for
+  // discovery ONLY when Firecrawl is absent (self-host). Extraction below mirrors this: Firecrawl
+  // scrape when configured, else the keyless plain fetch.
+  const search: Searcher['search'] = firecrawlApp
     ? async (query: string) => {
-        const results = await provider.search(query);
-        return results.map(r => ({ url: r.url, title: r.title, description: r.snippet, type: 'web_url' }));
-      }
-    : async (query: string) => {
-        if (!firecrawlApp) return []; // unreachable: guarded above, but narrows the type
         try {
           const searchResults = await firecrawlApp.search(query);
           return searchResults.data.map(result => ({
@@ -195,6 +195,11 @@ export async function performDeepResearch(
           // Return empty array so research can continue with other searchers
           return [];
         }
+      }
+    : async (query: string) => {
+        if (!provider) return []; // unreachable: guarded above, but narrows the type
+        const results = await provider.search(query);
+        return results.map(r => ({ url: r.url, title: r.title, description: r.snippet, type: 'web_url' }));
       };
 
   const extractContent: Searcher['extractContent'] = async (urls: string[]) => {
@@ -246,7 +251,11 @@ export async function performDeepResearch(
     return results.flat();
   };
 
-  const primarySearcher: Searcher = { name: provider ? provider.name : 'Firecrawl', search, extractContent };
+  // Name the primary searcher after its DISCOVERY backend; extraction can differ (Firecrawl scrape
+  // vs plain fetch), so log both accurately rather than implying one backend does everything.
+  const discoveryName = firecrawlApp ? 'Firecrawl' : (provider?.name ?? 'web search');
+  const extractionName = firecrawlApp ? 'Firecrawl' : 'plain-fetch';
+  const primarySearcher: Searcher = { name: discoveryName, search, extractContent };
 
   // Primary searcher first, then any caller-provided searchers.
   const searchers: Searcher[] = [primarySearcher];
@@ -255,7 +264,7 @@ export async function performDeepResearch(
     searchers.push(...config.searchers);
     log(`🔬 Deep Research: Using ${searchers.length} searcher(s): ${searchers.map(s => s.name).join(', ')}`);
   } else {
-    log(`🔬 Deep Research: Using ${primarySearcher.name} searcher only`);
+    log(`🔬 Deep Research: discovery via ${discoveryName}, extraction via ${extractionName}`);
   }
 
   const generateText = async (prompt: string) => {
