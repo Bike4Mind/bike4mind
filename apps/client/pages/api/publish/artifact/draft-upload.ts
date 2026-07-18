@@ -8,17 +8,19 @@ import { verifyDraftUploadToken } from '@server/services/publish';
  * 3-step publish flow. Hosted deployments PUT bundle bytes straight to S3 via a
  * presigned URL; self-host has no browser-reachable object store, so the app
  * proxies the upload: the browser PUTs the raw file bytes here and the server
- * streams them into storage under the same `drafts/{draftId}/{path}` key that
- * finalize.ts reads. Mint decides which URL the browser gets (draftUploadUrl.ts).
+ * buffers them under a hard per-file size cap, then writes them into storage
+ * under the same `drafts/{draftId}/{path}` key that finalize.ts reads. Mint
+ * decides which URL the browser gets (draftUploadUrl.ts).
  *
  * Anonymous by design - the signed capability token IS the auth (same posture as
  * the presigned URL it replaces). The token pins {draftId, path}; we upload only
  * to the claim's key, so a tampered query string cannot redirect the write.
  * Inert (404) unless B4M_SELF_HOST is set, so it adds no surface to hosted stages.
  *
- * bodyParser is disabled so the raw file bytes reach us unparsed; we cap the
- * stream at the per-file limit (defense in depth over the Content-Length guard
- * in baseApi, which a lying header could understate).
+ * bodyParser is disabled so the raw file bytes reach us unparsed; we read the
+ * body while enforcing a hard per-file byte cap (defense in depth over the
+ * Content-Length guard in baseApi, which a lying header could understate). This
+ * is a buffered upload with a streaming size-guard, not a streamed write to storage.
  */
 
 /** Headroom over the raw per-file cap for request framing/overhead in the
@@ -67,7 +69,7 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
       return res.status(400).json({ error: 'Invalid file path' });
     }
 
-    // Stream the raw body, enforcing the per-file byte cap as we go.
+    // Buffer the raw body, enforcing a hard per-file byte cap as chunks arrive.
     const chunks: Buffer[] = [];
     let total = 0;
     for await (const chunk of req) {
@@ -80,6 +82,9 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
     }
     const body = Buffer.concat(chunks, total);
 
+    // The stored draft-object Content-Type is NOT authoritative: finalize.ts
+    // re-uploads each promoted file with the manifest-validated file.mimeType, so
+    // the served object type never derives from this proxied request.
     const headerContentType = req.headers['content-type'];
     const contentType = typeof headerContentType === 'string' ? headerContentType.split(';')[0].trim() : undefined;
 
@@ -94,7 +99,7 @@ const handler = baseApi({ auth: false, maxBodySize: PUBLISH_LIMITS.maxFileBytes 
 export const config = {
   api: {
     externalResolver: true,
-    bodyParser: false, // raw bytes streamed to storage; see the streaming cap above
+    bodyParser: false, // raw bytes buffered under a per-file byte cap; see above
   },
 };
 
