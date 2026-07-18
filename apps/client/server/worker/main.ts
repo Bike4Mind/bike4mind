@@ -11,6 +11,7 @@ import { dispatch as fabFileChunkDispatch } from '@server/queueHandlers/fabFileC
 import { dispatch as fabFileVectorizeDispatch } from '@server/queueHandlers/fabFileVectorize';
 import { SelfHostWorker } from './selfHostWorker';
 import { dispatchSelfHostEvent } from './eventDispatch';
+import { buildFabFileChunkScanFilter, CHUNK_SCAN_BATCH, CHUNK_SCAN_MIN_AGE_MS } from './chunkScan';
 
 /**
  * Self-host background worker entrypoint.
@@ -34,10 +35,6 @@ const FAB_FILE_VISIBILITY_TIMEOUT_SEC = 300;
 const SCHEDULER_INTERVAL_MS = 5 * 60_000;
 /** Safety-net scan cadence: catches uploads whose MinIO webhook never arrived. */
 const CHUNK_SCAN_INTERVAL_MS = 60_000;
-/** Only rescue files older than this, to avoid racing a webhook that is about to arrive. */
-const CHUNK_SCAN_MIN_AGE_MS = 2 * 60_000;
-/** Cap files enqueued per scan pass so a large backlog is drained gradually. */
-const CHUNK_SCAN_BATCH = 50;
 /** Grace period on SIGTERM/SIGINT for in-flight message handling to finish before exit. */
 const DRAIN_GRACE_MS = 20_000;
 
@@ -104,18 +101,13 @@ async function main() {
   });
 
   // Safety net for the MinIO webhook (pages/api/internal/s3/object-created.ts): if a
-  // notification is missed, sweep un-chunked files and enqueue them. isChunking / chunkCount
-  // exclude in-progress and done files; the age filter avoids racing an in-flight webhook.
+  // notification is missed, sweep un-chunked files and enqueue them. The selection filter
+  // (buildFabFileChunkScanFilter) skips uploads that never completed so the scan can't churn.
   worker.registerScheduledTask('fabFileChunkScan', CHUNK_SCAN_INTERVAL_MS, async () => {
     if (!(await adminSettingsRepository.getSettingsValue('enableAutoChunk'))) return;
 
     const cutoff = new Date(Date.now() - CHUNK_SCAN_MIN_AGE_MS);
-    const candidates = await FabFile.find({
-      chunkCount: 0,
-      isChunking: { $ne: true },
-      createdAt: { $lt: cutoff },
-      deletedAt: null,
-    })
+    const candidates = await FabFile.find(buildFabFileChunkScanFilter(cutoff))
       .select('_id userId')
       .limit(CHUNK_SCAN_BATCH)
       .lean();
