@@ -125,8 +125,10 @@ export const OpenAIImageGenerationInput = z.object({
     // Self-hosted image models are namespaced `local-image/<checkpoint>` and are
     // not part of the static enum (the checkpoint set is discovered at runtime
     // from the local backend), so accept them via a pattern - same approach as
-    // ImageSizeSchema above.
-    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/[\w.:-]+$/)])
+    // ImageSizeSchema above. The suffix allows spaces and forward slashes because
+    // A1111/SD.Next checkpoint names can contain both (e.g. "Deliberate v2",
+    // "anime/foo.safetensors"); the `local-image/` prefix stays anchored.
+    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/[\w.:/ -]+$/)])
   ),
   n: z.number().min(1).max(10).optional(),
   quality: OpenAIImageQualitySchema.optional(),

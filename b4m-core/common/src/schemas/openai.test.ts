@@ -39,3 +39,26 @@ describe('OpenAIImageGenerationInput legacy model remapping', () => {
     }
   });
 });
+
+describe('OpenAIImageGenerationInput local-image model ids', () => {
+  it('accepts a plain namespaced checkpoint id', () => {
+    const result = OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/v1-5-pruned-emaonly' });
+    expect(result.model).toBe('local-image/v1-5-pruned-emaonly');
+  });
+
+  it('accepts a checkpoint name containing spaces (e.g. "Deliberate v2")', () => {
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/Deliberate v2' })).not.toThrow();
+  });
+
+  it('accepts a subfoldered checkpoint name (forward slash in the suffix)', () => {
+    expect(() =>
+      OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/anime/foo.safetensors' })
+    ).not.toThrow();
+  });
+
+  it('rejects an empty suffix and non-namespaced junk', () => {
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image/' })).toThrow();
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'local-image' })).toThrow();
+    expect(() => OpenAIImageGenerationInput.parse({ prompt: 'x', model: 'totally-made-up' })).toThrow();
+  });
+});
