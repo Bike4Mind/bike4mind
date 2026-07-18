@@ -145,8 +145,10 @@ export class B4mApiClient {
 
 /**
  * Turn an API failure into an actionable, transport-agnostic message. `scope` is
- * the API-key scope the failing tool needs, named in the 403 message so a caller
- * can see exactly which permission to grant.
+ * the recommended API-key scope for the failing tool. A 403 can come from a
+ * missing scope OR from a route-level authorization check (CASL forbidden,
+ * suspended account), so the message stays broad rather than asserting a scope
+ * gap that may not be the cause.
  */
 export function mapApiError(error: unknown, baseURL: string, scope?: string): string {
   if (isAxiosError(error)) {
@@ -155,7 +157,8 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       return 'authentication failed (run `b4m login` or set B4M_API_KEY)';
     }
     if (status === 403) {
-      return scope ? `API key missing required scope: ${scope}` : 'API key missing a required scope';
+      const base = "API key forbidden: check the key's scopes and account access";
+      return scope ? `${base} (recommended scope: ${scope})` : base;
     }
     if (status === 429) {
       const retryAfter = error.response?.headers?.['retry-after'];

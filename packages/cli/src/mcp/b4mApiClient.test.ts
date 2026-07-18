@@ -108,8 +108,10 @@ describe('mapApiError', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
   });
 
-  it('names the missing scope on 403', () => {
-    expect(mapApiError(axiosError(403), 'http://x', 'files:read')).toBe('API key missing required scope: files:read');
+  it('gives a broad forbidden message on 403 with the recommended scope', () => {
+    expect(mapApiError(axiosError(403), 'http://x', 'files:read')).toBe(
+      "API key forbidden: check the key's scopes and account access (recommended scope: files:read)"
+    );
   });
 
   it('surfaces a retry-after on 429', () => {

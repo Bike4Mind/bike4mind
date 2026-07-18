@@ -14,14 +14,18 @@ export function registerResources(server: McpServer, client: B4mApiClient): void
     'notebook',
     new ResourceTemplate(NOTEBOOK_URI_TEMPLATE, {
       list: async () => {
-        const { data } = await client.listNotebooks({ limit: 100 });
-        return {
-          resources: data.map(n => ({
-            uri: `b4m://notebook/${n.id}`,
-            name: n.name ?? n.id,
-            mimeType: 'application/json',
-          })),
-        };
+        try {
+          const { data } = await client.listNotebooks({ limit: 100 });
+          return {
+            resources: data.map(n => ({
+              uri: `b4m://notebook/${n.id}`,
+              name: n.name ?? n.id,
+              mimeType: 'application/json',
+            })),
+          };
+        } catch (err) {
+          throw new Error(mapApiError(err, client.baseURL, 'notebooks:read'));
+        }
       },
     }),
     { title: 'Notebook', description: 'A Bike4Mind notebook (session)', mimeType: 'application/json' },

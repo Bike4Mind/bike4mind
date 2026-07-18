@@ -28,7 +28,8 @@ export const TOOL_META: ToolMeta[] = [
   {
     name: 'create_notebook',
     title: 'Create notebook',
-    description: 'Create a new notebook, optionally inside a project.',
+    description:
+      'Create a new notebook, optionally inside a project. Defaults the name to "New Notebook" when omitted.',
     scope: 'notebooks:write',
   },
   {
@@ -109,7 +110,9 @@ export async function getNotebook(client: B4mApiClient, args: { notebookId: stri
 }
 
 export async function createNotebook(client: B4mApiClient, args: { name?: string; projectId?: string }) {
-  return client.createNotebook(args);
+  // POST /api/sessions/create hard-requires a name; default to the web app's
+  // convention when the caller omits one so a nameless create still succeeds.
+  return client.createNotebook({ ...args, name: args.name ?? 'New Notebook' });
 }
 
 export async function sendMessage(

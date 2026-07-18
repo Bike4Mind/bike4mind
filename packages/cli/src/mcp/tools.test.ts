@@ -3,7 +3,7 @@ import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { B4mApiClient } from './b4mApiClient';
-import { TOOL_NAMES, registerTools, listNotebooks, sendMessage, searchKnowledgeBase } from './tools';
+import { TOOL_NAMES, registerTools, listNotebooks, createNotebook, sendMessage, searchKnowledgeBase } from './tools';
 
 const mockClient = (overrides: Partial<Record<keyof B4mApiClient, unknown>>): B4mApiClient =>
   ({ baseURL: 'http://localhost:3000', ...overrides }) as unknown as B4mApiClient;
@@ -37,6 +37,24 @@ describe('tool handlers', () => {
       notebooks: [{ id: 'n1', name: 'NB', model: 'gpt', createdAt: 'c', updatedAt: 'u' }],
       hasMore: false,
     });
+  });
+
+  it('create_notebook defaults the name to "New Notebook" when omitted', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'nb1' });
+    const client = mockClient({ createNotebook: create });
+
+    await createNotebook(client, {});
+
+    expect(create).toHaveBeenCalledWith({ name: 'New Notebook' });
+  });
+
+  it('create_notebook passes an explicit name through unchanged', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'nb1' });
+    const client = mockClient({ createNotebook: create });
+
+    await createNotebook(client, { name: 'My NB', projectId: 'p1' });
+
+    expect(create).toHaveBeenCalledWith({ name: 'My NB', projectId: 'p1' });
   });
 
   it('send_message extracts the reply from responses and returns the supplied notebookId', async () => {
@@ -130,6 +148,9 @@ describe('registerTools', () => {
     const result = await tools.get('get_file')!({ fileId: 'f1' });
 
     expect(result.isError).toBe(true);
-    expect(result.content[0]).toMatchObject({ type: 'text', text: 'API key missing required scope: files:read' });
+    expect(result.content[0]).toMatchObject({
+      type: 'text',
+      text: "API key forbidden: check the key's scopes and account access (recommended scope: files:read)",
+    });
   });
 });
