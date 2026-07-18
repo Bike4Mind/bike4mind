@@ -211,7 +211,7 @@ const argv = await yargs(hideBin(process.argv))
           })
           .option('api-key', {
             type: 'string',
-            description: 'Bike4Mind API key (overrides B4M_API_KEY and the stored login)',
+            description: 'Bike4Mind API key (overrides B4M_API_KEY and the stored login). Visible in process listings; prefer B4M_API_KEY',
           })
           .option('api-url', {
             type: 'string',

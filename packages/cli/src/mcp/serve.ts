@@ -7,8 +7,13 @@
  * `B4M_API_URL` > `--api-url` > the CLI's configured backend.
  *
  * Transport contract for stdio: stdout carries the JSON-RPC frame stream and
- * NOTHING else, so all diagnostics are forced to stderr before the server boots
- * (mirrors the acp command's captureStdout - see src/commands/acpCommand.ts).
+ * NOTHING else, so all diagnostics are forced to stderr before ANY other work
+ * runs (mirrors the acp command's captureStdout - see src/commands/acpCommand.ts).
+ *
+ * HTTP mode is deliberately loopback-only (binds 127.0.0.1) with no per-request
+ * auth of its own - it trusts anything that can reach the socket, so it must not
+ * be exposed on a routable interface. DNS-rebinding protection is on as defense
+ * in depth against a browser being tricked into posting to the local port.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
@@ -19,6 +24,8 @@ import { ConfigStore } from '../storage/ConfigStore.js';
 import { parseApiUrl, requireApiUrl } from '../utils/apiUrl.js';
 import { buildMcpServer, type BuildServerOptions } from './server.js';
 import { logger } from '../utils/Logger.js';
+
+const HTTP_PATH = '/mcp';
 
 export interface ServeOptions {
   http?: boolean;
@@ -68,8 +75,7 @@ function resolveBaseURL(options: ServeOptions, configStore: ConfigStore): Promis
   return configStore.getApiConfig().then(apiConfig => requireApiUrl(apiConfig));
 }
 
-async function serveStdio(buildOptions: BuildServerOptions): Promise<void> {
-  const writeFrame = captureStdout();
+async function serveStdio(buildOptions: BuildServerOptions, writeFrame: FrameWriter): Promise<void> {
   const server = buildMcpServer(buildOptions);
 
   const stdout = new Writable({
@@ -95,12 +101,19 @@ async function serveStdio(buildOptions: BuildServerOptions): Promise<void> {
 async function handleHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
-  buildOptions: BuildServerOptions
+  buildOptions: BuildServerOptions,
+  port: number
 ): Promise<void> {
   // Stateless: a fresh server + transport per request so concurrent clients can
-  // never observe each other's in-flight request state.
+  // never observe each other's in-flight request state. DNS-rebinding protection
+  // rejects requests whose Host header is not our loopback origin.
   const server = buildMcpServer(buildOptions);
-  const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+    enableDnsRebindingProtection: true,
+    allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`],
+  });
 
   res.on('close', () => {
     void transport.close();
@@ -113,7 +126,15 @@ async function handleHttpRequest(
 
 async function serveHttp(buildOptions: BuildServerOptions, port: number): Promise<void> {
   const httpServer = createServer((req, res) => {
-    handleHttpRequest(req, res, buildOptions).catch(err => {
+    // Only the documented endpoint is served; everything else is a 404.
+    const pathname = new URL(req.url ?? '/', `http://localhost:${port}`).pathname;
+    if (pathname !== HTTP_PATH) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: `Not found. The MCP endpoint is ${HTTP_PATH}.` }));
+      return;
+    }
+
+    handleHttpRequest(req, res, buildOptions, port).catch(err => {
       logger.error('MCP HTTP request failed', err);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -124,28 +145,35 @@ async function serveHttp(buildOptions: BuildServerOptions, port: number): Promis
     });
   });
 
+  // Bind loopback only: this transport has no per-request auth, so it must never
+  // be reachable off the local host.
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);
-    httpServer.listen(port, () => resolve());
+    httpServer.listen(port, '127.0.0.1', () => resolve());
   });
 
   // stderr, not stdout: keep parity with stdio mode and any log-scraping wrapper.
-  process.stderr.write(`Bike4Mind MCP server listening on http://localhost:${port}/mcp\n`);
+  process.stderr.write(`Bike4Mind MCP server listening on http://127.0.0.1:${port}${HTTP_PATH}\n`);
 
   // Run until the process is killed.
   await new Promise<void>(() => {});
 }
 
 export async function handleMcpServeCommand(options: ServeOptions): Promise<void> {
+  // stdio mode: seize stdout for the frame stream BEFORE anything else can print
+  // to it (ConfigStore load, endpoint resolution, ...). HTTP mode leaves stdout
+  // alone since its frames travel over the socket.
+  const writeFrame = options.http ? undefined : captureStdout();
+
   const configStore = new ConfigStore();
   const baseURL = await resolveBaseURL(options, configStore);
   const apiKey = options.apiKey ?? process.env.B4M_API_KEY;
 
   const buildOptions: BuildServerOptions = { baseURL, apiKey, configStore, version: options.version };
 
-  if (options.http) {
-    await serveHttp(buildOptions, options.port ?? 7000);
+  if (writeFrame) {
+    await serveStdio(buildOptions, writeFrame);
   } else {
-    await serveStdio(buildOptions);
+    await serveHttp(buildOptions, options.port ?? 7000);
   }
 }
