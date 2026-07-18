@@ -174,4 +174,81 @@ describe('resolveDefaultChatModel', () => {
     const result = await resolveDefaultChatModel({ configuredModel: ChatModels.GPT5, userId: 'u1' });
     expect(result.model).toBe(ChatModels.GPT5);
   }, 20000);
+
+  it('hosted: passes a non-default configured model through untouched with zero probing', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'false');
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.GPT5, userId: 'u1' });
+    expect(result.model).toBe(ChatModels.GPT5);
+    expect(result.apiKeys).toBeUndefined();
+    expect(result.models).toBeUndefined();
+    expect(getEffectiveLLMApiKeysMock).not.toHaveBeenCalled();
+    expect(getAvailableModelsMock).not.toHaveBeenCalled();
+  }, 20000);
+
+  it('self-host, expired cloud key + local Ollama model: treats expired as unusable and falls back', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'expired', ollama: 'http://ollama:11434' });
+    getAvailableModelsMock.mockResolvedValue([
+      makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic),
+      makeModel('qwen2.5-coder:7b', ModelBackend.Ollama),
+    ]);
+    // getLlmByModel throws for an expired key; the resolver must swallow it, not surface a 500.
+    getLlmByModelMock.mockImplementation(() => {
+      throw new Error('Anthropic API key is expired');
+    });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+    expect(result.model).toBe('qwen2.5-coder:7b');
+  }, 20000);
+
+  it('self-host, expired cloud key + no local model: returns the unusable default (no throw)', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: 'expired' });
+    getAvailableModelsMock.mockResolvedValue([makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic)]);
+    getLlmByModelMock.mockImplementation(() => {
+      throw new Error('Anthropic API key is expired');
+    });
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+    // The chat.ts guard re-checks usability via isChatModelUsable (also throw-safe) and raises the 400.
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
+    expect(result.apiKeys).toBeDefined();
+    expect(result.models).toBeDefined();
+  }, 20000);
+});
+
+describe('isChatModelUsable', () => {
+  const makeLogger = () =>
+    ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }) as unknown as import('@bike4mind/observability').Logger;
+  const modelInfo = makeModel(ChatModels.CLAUDE_5_SONNET, ModelBackend.Anthropic);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns false for an undefined model', async () => {
+    const { isChatModelUsable } = await import('./chatCompletionDefaults');
+    expect(isChatModelUsable({}, undefined, makeLogger())).toBe(false);
+  }, 20000);
+
+  it('returns false when getLlmByModel returns null (no usable key)', async () => {
+    getLlmByModelMock.mockReturnValue(null);
+    const { isChatModelUsable } = await import('./chatCompletionDefaults');
+    expect(isChatModelUsable({ anthropic: null }, modelInfo, makeLogger())).toBe(false);
+  }, 20000);
+
+  it('returns false (not a throw) when getLlmByModel throws for an expired key', async () => {
+    getLlmByModelMock.mockImplementation(() => {
+      throw new Error('Anthropic API key is expired');
+    });
+    const { isChatModelUsable } = await import('./chatCompletionDefaults');
+    expect(isChatModelUsable({ anthropic: 'expired' }, modelInfo, makeLogger())).toBe(false);
+  }, 20000);
+
+  it('returns true when getLlmByModel resolves a backend', async () => {
+    getLlmByModelMock.mockReturnValue({ backend: 'anthropic' });
+    const { isChatModelUsable } = await import('./chatCompletionDefaults');
+    expect(isChatModelUsable({ anthropic: 'sk-ant' }, modelInfo, makeLogger())).toBe(true);
+  }, 20000);
 });

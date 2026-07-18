@@ -285,6 +285,22 @@ export function getSharedTokenizer(logger?: ILogger): ITokenizer {
   return sharedTokenizer;
 }
 
+/**
+ * Whether `modelInfo` can actually serve a completion with these keys. `getLlmByModel`
+ * returns null when the provider key is absent AND throws ('<provider> API key is expired')
+ * when a stored key is past its expiry - both mean "not usable" here, so the throw is
+ * swallowed rather than surfaced as a 500. Shared by the resolver's fallback decision and
+ * chat.ts's no-usable-model guard so they agree on what "usable" means.
+ */
+export function isChatModelUsable(apiKeys: ApiKeyTable, modelInfo: ModelInfo | undefined, logger: Logger): boolean {
+  if (!modelInfo) return false;
+  try {
+    return getLlmByModel(apiKeys, { modelInfo, logger }) !== null;
+  } catch {
+    return false;
+  }
+}
+
 export interface ResolvedDefaultChatModel {
   /** The model id to use when a request omits one. */
   model: string;
@@ -334,7 +350,7 @@ export async function resolveDefaultChatModel(params: {
   const models = await getAvailableModels(apiKeys);
 
   const configuredInfo = models.find(m => m.id === configuredDefault);
-  if (configuredInfo && getLlmByModel(apiKeys, { modelInfo: configuredInfo, logger })) {
+  if (isChatModelUsable(apiKeys, configuredInfo, logger)) {
     return { model: configuredDefault, apiKeys, models };
   }
 

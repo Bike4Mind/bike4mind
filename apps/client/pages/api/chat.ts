@@ -1,12 +1,13 @@
 import { ChatCompletionFeature, ChatCompletionInvoke, ChatCompletionProcess, featureNames } from '@bike4mind/services';
 import { BadRequestError, getSettingsMap, getSettingsValue, NotFoundError, SQSService } from '@bike4mind/utils';
-import { getLlmByModel, PipelineTimer } from '@bike4mind/llm-adapters';
+import { PipelineTimer } from '@bike4mind/llm-adapters';
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { resolveUserRateLimitPerMin } from '@server/utils/userRateTier';
 import {
   getDefaultChatCompletionOptions,
   getSharedTokenizer,
+  isChatModelUsable,
   resolveDefaultChatModel,
 } from '@server/utils/chatCompletionDefaults';
 import { adminSettingsRepository, User, Session } from '@bike4mind/database';
@@ -85,7 +86,7 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_G
       // fast with actionable guidance instead of a cryptic backend error deep in the pipeline.
       if (resolved.apiKeys && resolved.models) {
         const info = resolved.models.find(m => m.id === model);
-        if (!info || !getLlmByModel(resolved.apiKeys, { modelInfo: info, logger: req.logger })) {
+        if (!isChatModelUsable(resolved.apiKeys, info, req.logger)) {
           throw new BadRequestError(
             'No usable default chat model is configured. Set a provider key (e.g. ANTHROPIC_API_KEY) in ' +
               '.env.selfhost, enable local models via OLLAMA_BASE_URL, or pass an explicit "model" from GET /api/models.'
