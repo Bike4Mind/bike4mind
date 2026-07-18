@@ -216,6 +216,56 @@ describe('resolveDefaultChatModel', () => {
     expect(result.apiKeys).toBeDefined();
     expect(result.models).toBeDefined();
   }, 20000);
+
+  it.each([
+    ['embedding listed first', ['nomic-embed-text:latest', 'qwen2.5-coder:7b']],
+    ['embedding listed last', ['qwen2.5-coder:7b', 'nomic-embed-text:latest']],
+  ])(
+    'self-host: skips Ollama embedding models and picks the chat model (%s)',
+    async (_label, ids) => {
+      vi.stubEnv('B4M_SELF_HOST', 'true');
+      getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: null, ollama: 'http://ollama:11434' });
+      getAvailableModelsMock.mockResolvedValue(ids.map(id => makeModel(id, ModelBackend.Ollama)));
+      getLlmByModelMock.mockReturnValue(null); // no usable cloud key for the configured default
+      const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+      const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+      expect(result.model).toBe('qwen2.5-coder:7b');
+    },
+    20000
+  );
+
+  it('self-host: an Ollama-only stack with just an embedding model falls through to the unusable default', async () => {
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    getEffectiveLLMApiKeysMock.mockResolvedValue({ anthropic: null, ollama: 'http://ollama:11434' });
+    getAvailableModelsMock.mockResolvedValue([makeModel('nomic-embed-text:latest', ModelBackend.Ollama)]);
+    getLlmByModelMock.mockReturnValue(null);
+    const { resolveDefaultChatModel } = await import('./chatCompletionDefaults');
+    const result = await resolveDefaultChatModel({ configuredModel: ChatModels.CLAUDE_5_SONNET, userId: 'u1' });
+    // No non-embedding local model -> the (unusable) cloud default is returned so chat.ts raises the 400.
+    expect(result.model).toBe(ChatModels.CLAUDE_5_SONNET);
+    expect(result.model).not.toBe('nomic-embed-text:latest');
+    expect(result.models).toBeDefined();
+  }, 20000);
+});
+
+describe('isLikelyEmbeddingModel', () => {
+  it.each(['nomic-embed-text:latest', 'bge-m3', 'all-minilm'])(
+    'flags embedding model %s',
+    async id => {
+      const { isLikelyEmbeddingModel } = await import('./chatCompletionDefaults');
+      expect(isLikelyEmbeddingModel(id)).toBe(true);
+    },
+    20000
+  );
+
+  it.each(['qwen2.5-coder:7b', 'llama3.2:3b', 'gemma3:4b'])(
+    'does not flag chat model %s',
+    async id => {
+      const { isLikelyEmbeddingModel } = await import('./chatCompletionDefaults');
+      expect(isLikelyEmbeddingModel(id)).toBe(false);
+    },
+    20000
+  );
 });
 
 describe('isChatModelUsable', () => {

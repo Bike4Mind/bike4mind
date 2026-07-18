@@ -301,6 +301,17 @@ export function isChatModelUsable(apiKeys: ApiKeyTable, modelInfo: ModelInfo | u
   }
 }
 
+/**
+ * Heuristic name match for an Ollama embedding model. The Ollama backend enumerates every
+ * pulled model as type 'text', so an embedding model (e.g. nomic-embed-text) would otherwise
+ * be a valid chat fallback and answer with empty replies. Matched by id against known
+ * embedding families; kept deliberately narrow so a general model like gemma3 does NOT trip
+ * the `embeddinggemma` term. Self-contained on purpose - do not couple to ollamaBackend.
+ */
+export function isLikelyEmbeddingModel(id: string): boolean {
+  return /embed|bge-|bge:|minilm|arctic-embed|embeddinggemma/i.test(id);
+}
+
 export interface ResolvedDefaultChatModel {
   /** The model id to use when a request omits one. */
   model: string;
@@ -322,10 +333,10 @@ export interface ResolvedDefaultChatModel {
  * Self-host: Bedrock never works, so the schema default maps to its direct-API
  * Anthropic twin - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
  * the effective keys and the live model list, then keep the configured default when
- * its provider key is usable, else fall back to the first local Ollama text model
- * (needs no key), else return the (unusable) default so the caller can raise a clear
- * error. The live Ollama /api/tags list is the source of truth for local models, not
- * OLLAMA_PULL_MODELS.
+ * its provider key is usable, else fall back to the first local Ollama chat model
+ * (needs no key; embedding models are skipped), else return the (unusable) default so
+ * the caller can raise a clear error. The live Ollama /api/tags list is the source of
+ * truth for local models, not OLLAMA_PULL_MODELS.
  */
 export async function resolveDefaultChatModel(params: {
   configuredModel: string | null | undefined;
@@ -350,11 +361,15 @@ export async function resolveDefaultChatModel(params: {
   const models = await getAvailableModels(apiKeys);
 
   const configuredInfo = models.find(m => m.id === configuredDefault);
-  if (isChatModelUsable(apiKeys, configuredInfo, logger)) {
+  if (isChatModelUsable(apiKeys, configuredInfo, logger) && !isLikelyEmbeddingModel(configuredDefault)) {
     return { model: configuredDefault, apiKeys, models };
   }
 
-  const localModel = models.find(m => m.backend === ModelBackend.Ollama && m.type === 'text');
+  // First local Ollama text model that is not an embedding model (those enumerate as 'text'
+  // but produce no chat reply, e.g. nomic-embed-text pulled alongside a coder model).
+  const localModel = models.find(
+    m => m.backend === ModelBackend.Ollama && m.type === 'text' && !isLikelyEmbeddingModel(m.id)
+  );
   if (localModel) {
     return { model: localModel.id, apiKeys, models };
   }
