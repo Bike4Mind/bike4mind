@@ -5,18 +5,24 @@ import { LOCAL_FILE_PROXY_BASE, resolveProxyTarget } from '@server/utils/appFile
 import { Resource } from 'sst';
 import { Readable } from 'stream';
 
-const s3 = new S3Client({});
+// A custom S3 endpoint (self-host MinIO) must be addressed path-style: the default
+// virtual-hosted style (bucket.endpoint-host) has no DNS there and fails with
+// ENOTFOUND bucket.host. The SDK auto-reads AWS_ENDPOINT_URL_S3 for the endpoint; we
+// set it explicitly and force path-style. Hosted sets no custom endpoint, so the
+// client stays on default virtual-hosted addressing.
+const s3Endpoint = process.env.AWS_ENDPOINT_URL_S3;
+const s3 = new S3Client(s3Endpoint ? { endpoint: s3Endpoint, forcePathStyle: true } : {});
 
-// DEV-ONLY proxy. In personal `sst dev` stages NEXT_PUBLIC_CDN_URL is set to
-// `/api/app-files/serve` (infra/web.ts), so all file URLs resolve here instead
-// of through the shared CloudFront router. auth:false matches today's
-// unauthenticated CloudFront serving and permits the pre-auth public-settings
-// fetch. Deployed stages never hit this route (their CDN URL is the real
-// distribution).
+// Local file proxy for stages with no CloudFront distribution. Personal `sst dev`
+// stages (infra/web.ts) AND self-host both point NEXT_PUBLIC_CDN_URL at
+// `/api/app-files/serve`, so file URLs resolve here instead of the shared CloudFront
+// router. auth:false matches the unauthenticated CloudFront serving it replaces and
+// permits the pre-auth public-settings fetch. Hosted deploys set NEXT_PUBLIC_CDN_URL
+// to the real distribution and never reach this route.
 const handler = baseApi({ auth: false }).get(
   asyncHandler(async (req, res) => {
-    // Deployed stages set NEXT_PUBLIC_CDN_URL to the real distribution URL, not
-    // this path - so this route only serves requests on personal `sst dev` stages.
+    // Hosted deploys set NEXT_PUBLIC_CDN_URL to the real distribution URL, not this
+    // path, so this route serves only on `sst dev` and self-host stages.
     if (process.env.NEXT_PUBLIC_CDN_URL !== LOCAL_FILE_PROXY_BASE) {
       res.status(404).end();
       return;
