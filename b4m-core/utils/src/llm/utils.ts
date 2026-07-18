@@ -906,6 +906,18 @@ export async function processFabFilesServer(
             const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
             const ollamaBase64 = imageBuffer.toString('base64');
 
+            // Soft byte guard paralleling the Anthropic/Gemini path above: even after
+            // the dimension cap, a heavy image inflates the prompt and can overflow a
+            // small local model's context window. Warn (do not drop) so the operator
+            // can shrink the upload if the model then misbehaves.
+            const OLLAMA_IMAGE_WARN_MB = 3.5;
+            const ollamaImageSizeMB = imageBuffer.byteLength / (1024 * 1024);
+            if (ollamaImageSizeMB > OLLAMA_IMAGE_WARN_MB) {
+              const warnMsg = `Image "${file.fileName}" (${ollamaImageSizeMB.toFixed(1)}MB) is large for a local model and may exceed its context window.`;
+              logger.warn(`[processFabFilesServer] ${warnMsg}`);
+              await sendStatusUpdate(warnMsg);
+            }
+
             imageContent.push({
               type: 'image',
               source: {

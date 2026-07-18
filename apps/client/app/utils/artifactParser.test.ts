@@ -113,6 +113,14 @@ describe('parseArtifactsWithFallback - tool-call JSON promotion', () => {
     expect(result.artifacts).toHaveLength(0);
   });
 
+  it('strips quotes from a model-controlled title so the artifact attribute is not truncated', () => {
+    const html = '<!DOCTYPE html><html><head><title>Fish "Nemo" Tank</title></head><body><h1>Hi</h1></body></html>';
+    const result = parseArtifactsWithFallback('```json\n' + buildHtmlCall(html) + '\n```');
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].type).toBe('html');
+    expect(result.artifacts[0].title).toBe('Fish Nemo Tank');
+  });
+
   it('promotes a bare tool-call object that is the entire reply', () => {
     const result = parseArtifactsWithFallback(buildHtmlCall('<html><body>bare</body></html>'));
     expect(result.artifacts).toHaveLength(1);

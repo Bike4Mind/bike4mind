@@ -397,6 +397,11 @@ export class OllamaBackend implements ICompletionBackend {
    * reply also contains an unrelated fence, and JSON merely quoted mid-prose
    * ("the math_evaluate tool takes {...}") is ignored. The seen-set dedupes any
    * overlap between the two sources.
+   *
+   * Because any fenced block is a search source, a fenced EXAMPLE of a real
+   * (authorized) tool is also recovered and executed. This stays bounded to
+   * authorized tools (tryParseToolCallJson requires a name present in `tools`),
+   * so there is no privilege escalation - only a wider trigger surface.
    */
   private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
@@ -583,8 +588,13 @@ export class OllamaBackend implements ICompletionBackend {
         for (const block of msg.content as MessageContentObject[]) {
           if (block.type === 'text' && typeof block.text === 'string') {
             texts.push(block.text);
-          } else if (block.type === 'image' && block.source.type === 'base64') {
-            images.push(block.source.data);
+          } else if (block.type === 'image') {
+            if (block.source.type === 'base64') {
+              images.push(block.source.data);
+            } else {
+              // Symmetric with the image_url drop below: Ollama needs inline base64.
+              this._logger.debug('[OllamaBackend] Dropping non-base64 image block; Ollama requires inline base64.');
+            }
           } else if (block.type === 'image_url') {
             const dataUrl = block.image_url.url.match(/^data:[^,]*;base64,(.+)$/s);
             if (dataUrl) {

@@ -119,6 +119,14 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
     expect(converted).toContain('send_email');
   });
 
+  it('strips quotes from a model-controlled title so the artifact attribute is not truncated', () => {
+    const html = '<!DOCTYPE html><html><head><title>Fish "Nemo" Tank</title></head><body><h1>Hi</h1></body></html>';
+    const { artifacts } = promote('```json\n' + buildHtmlCall(html) + '\n```');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('html');
+    expect(artifacts[0].title).toBe('Fish Nemo Tank');
+  });
+
   it('promotes a bare tool-call object that is the entire reply', () => {
     const { artifacts } = promote(buildHtmlCall('<html><body>bare</body></html>'));
     expect(artifacts).toHaveLength(1);

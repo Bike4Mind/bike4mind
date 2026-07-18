@@ -242,6 +242,12 @@ ${codeContent.trim()}
  * code block. Recognized strictly (tool-call shape AND an HTML-string argument)
  * so ordinary JSON is left alone.
  *
+ * NOTE: this runs inside convertCodeBlocksToArtifacts, which EVERY backend (cloud
+ * included) flows through, not just local/Ollama. The strict recognition - an
+ * invented builder-tool name AND an HTML-string argument - is what keeps a cloud
+ * model that merely SHOWS such tool-call JSON as an example from having it
+ * swallowed and re-rendered as an artifact.
+ *
  * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
  * so client render and server persistence never diverge.
  */
@@ -305,7 +311,10 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  const title = extractHTMLTitle(html) || 'HTML Page';
+  // Strip quotes from the model-controlled title before interpolating it into
+  // title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no escape
+  // mechanism, so an embedded quote would silently truncate the attribute.
+  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/["']/g, '') || 'HTML Page';
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}
