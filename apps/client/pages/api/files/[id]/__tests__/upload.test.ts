@@ -43,13 +43,16 @@ const makeReq = (opts: { id?: string; userId?: string; body?: Buffer[] }) => {
   } as unknown as Request;
 };
 
-const PENDING_FILE = {
+const makePendingFile = () => ({
   id: 'ff1',
   userId: 'u1',
-  status: 'pending',
+  status: 'pending' as string,
   filePath: 'uploads/abc.txt',
   mimeType: 'text/plain',
-};
+  save: vi.fn(async function (this: { status: string }) {
+    return this;
+  }),
+});
 
 describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
   beforeEach(() => {
@@ -57,7 +60,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     process.env.B4M_SELF_HOST = 'true';
     getSettingsValueMock.mockReturnValue(20); // 20 MB
     uploadMock.mockResolvedValue(undefined);
-    findByIdMock.mockResolvedValue({ ...PENDING_FILE });
+    findByIdMock.mockResolvedValue(makePendingFile());
   });
   afterEach(() => {
     delete process.env.B4M_SELF_HOST;
@@ -80,7 +83,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
   });
 
   it('returns 404 when the file belongs to another user', async () => {
-    findByIdMock.mockResolvedValue({ ...PENDING_FILE, userId: 'someone-else' });
+    findByIdMock.mockResolvedValue({ ...makePendingFile(), userId: 'someone-else' });
     const res = makeRes();
     await handler(makeReq({ userId: 'u1' }), res);
     expect(res.status).toHaveBeenCalledWith(404);
@@ -88,7 +91,7 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
   });
 
   it('returns 400 when the file is not awaiting upload (already complete)', async () => {
-    findByIdMock.mockResolvedValue({ ...PENDING_FILE, status: 'complete' });
+    findByIdMock.mockResolvedValue({ ...makePendingFile(), status: 'complete' });
     const res = makeRes();
     await handler(makeReq({}), res);
     expect(res.status).toHaveBeenCalledWith(400);
@@ -116,5 +119,27 @@ describe('PUT /api/files/[id]/upload (self-host proxy)', () => {
     expect(key).toBe('uploads/abc.txt');
     expect(options).toMatchObject({ ContentType: 'text/plain', ContentLength: 11 });
     expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('marks the FabFile complete on a successful write so a lost webhook cannot strand it', async () => {
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    const res = makeRes();
+    await handler(makeReq({}), res);
+
+    expect(fabFile.status).toBe('complete');
+    expect(fabFile.save).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+  });
+
+  it('does not mark complete when the write fails', async () => {
+    const fabFile = makePendingFile();
+    findByIdMock.mockResolvedValue(fabFile);
+    uploadMock.mockRejectedValue(new Error('storage down'));
+    const res = makeRes();
+    await expect(handler(makeReq({}), res)).rejects.toThrow('storage down');
+
+    expect(fabFile.status).toBe('pending');
+    expect(fabFile.save).not.toHaveBeenCalled();
   });
 });

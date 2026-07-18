@@ -251,6 +251,8 @@ docker compose -f compose.selfhost.yaml --env-file .env.selfhost logs -f worker
 
 The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, MinIO, and (for embedding) Ollama using the same `.env.selfhost` values as the other services.
 
+> **Run a single `worker` replica.** The scheduler and safety-net scan are not leader-guarded, so scaling `worker` to multiple replicas would double-run them (duplicate scheduled tasks and duplicate chunk enqueues). Queue consumers are safe to scale, but the bundled compose runs one `worker`; keep it that way.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.

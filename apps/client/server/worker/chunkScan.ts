@@ -15,11 +15,14 @@ export const CHUNK_SCAN_BATCH = 50;
 /**
  * Mongo filter selecting files the scan should re-enqueue for chunking.
  *
- * status:'complete' is the critical guard: it is set only once the object actually landed
- * (webhook / hosted upload flow). A failed or not-yet-finished upload stays 'pending', so it is
- * skipped here - otherwise the scan would re-enqueue a never-uploaded record every cycle onto a
- * chunk handler that can only fail (its bytes never arrived), poison out, and churn forever.
- * chunkCount / isChunking exclude already-chunked and in-progress files.
+ * status:'complete' is the critical guard: it is set only once the object actually landed - by
+ * the self-host upload proxy on a successful PUT (pages/api/files/[id]/upload.ts), by the MinIO
+ * webhook, or by the hosted upload flow. Because the proxy marks complete independently of the
+ * webhook, a lost webhook leaves a complete-but-unchunked file this scan can rescue. A failed or
+ * not-yet-finished upload stays 'pending', so it is skipped here - otherwise the scan would
+ * re-enqueue a never-uploaded record every cycle onto a chunk handler that can only fail (its
+ * bytes never arrived), poison out, and churn forever. chunkCount / isChunking exclude
+ * already-chunked and in-progress files.
  */
 export const buildFabFileChunkScanFilter = (cutoff: Date) => ({
   status: 'complete' as const,

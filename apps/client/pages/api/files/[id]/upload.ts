@@ -12,8 +12,11 @@ import type { Request, Response } from 'express';
  * the presign would target the internal MinIO host (unreachable from a browser and blocked by
  * CSP), so createFabFile hands the browser this same-origin route instead. It reads the request
  * body as a size-capped stream, buffers it, then writes it to storage under the FabFile's own key
- * (the storage upload takes a Buffer), so the MinIO ObjectCreated webhook and the rest of the
- * ingestion pipeline fire exactly as the hosted presign path would.
+ * (the storage upload takes a Buffer) and marks the FabFile complete - the PUT completing proves
+ * the object landed. The MinIO ObjectCreated webhook still fires to enqueue chunking; marking
+ * complete here (not only in the webhook) is what lets the safety-net scan
+ * (server/worker/chunkScan.ts) recover a truly-lost webhook, since that scan only rescues
+ * status:'complete' files.
  *
  * Auth is normal baseApi (the caller is the logged-in user / API key), so no capability token is
  * needed - but the target FabFile must exist, belong to the caller, and still be awaiting upload.
@@ -74,6 +77,12 @@ const handler = baseApi({ maxBodySize: BODY_CEILING_BYTES }).put(
       ContentType: fabFile.mimeType || (req.headers['content-type'] as string) || 'application/octet-stream',
       ContentLength: body.length,
     });
+
+    // A successful write proves the object landed, so mark complete here rather than depending on
+    // the webhook. A lost webhook then only skips the chunk enqueue, which the safety-net scan
+    // recovers; the webhook's own status write (when it arrives) is an idempotent no-op.
+    fabFile.status = 'complete';
+    await fabFile.save();
 
     return res.status(200).json({ ok: true, fabFileId: fabFile.id });
   })
