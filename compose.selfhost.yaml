@@ -328,6 +328,13 @@ services:
   imagegen:
     image: ${IMAGEGEN_IMAGE:-vladmandic/sdnext-cuda:latest}
     profiles: ['imagegen']
+    # Pin the data/models dirs explicitly so the checkpoint the puller writes to
+    # /mnt/models/Stable-diffusion is always the dir SD.Next scans - never rely on
+    # an image default that could drift and silently no-op the feature. Must stay
+    # in sync with the volume targets below and the puller's download path.
+    environment:
+      SD_DATADIR: /mnt/data
+      SD_MODELSDIR: /mnt/models
     # SD.Next serves the REST API by default. --use-cpu all forces CPU so the
     # nVidia-base image still runs on a host with no GPU; the GPU override file
     # replaces this command to drop --use-cpu all. --quick skips the per-boot
@@ -383,7 +390,9 @@ services:
           if [ -f "$$dest" ]; then
             echo "==> $$name already present, skipping";
           else
-            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest" "$$url" || echo "WARN: failed to download $$url";
+            # Download to a .part file and rename only on success, so an
+            # interrupted pull never leaves a corrupt file the guard above skips.
+            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest.part" "$$url" && mv "$$dest.part" "$$dest" || { echo "WARN: failed to download $$url"; rm -f "$$dest.part"; };
           fi;
         done;
         echo "Done. Pulled checkpoints are now available in the app model picker."
