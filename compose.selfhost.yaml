@@ -330,8 +330,11 @@ services:
     volumes:
       - ./selfhost/searxng/settings.yml:/etc/searxng/settings.yml:ro
     environment:
-      # SearXNG reads its secret_key from this env var (no secret is committed to the
-      # settings file). Override in .env.selfhost for anything but local eval.
+      # SearXNG's settings loader maps this env var onto server.secret_key at load time
+      # (searx/settings_defaults.py: secret_key has environ_name='SEARXNG_SECRET'), so it applies
+      # even with the read-only settings.yml above - no file mutation, no secret committed to the
+      # repo. Verified in-container: get_setting('server.secret_key') returns this value.
+      # Override in .env.selfhost for anything but local eval.
       SEARXNG_SECRET: ${SEARXNG_SECRET:-selfhost-local-dev}
     # Loopback-only, like the other backing services. The app reaches it over the
     # compose network as http://searxng:8080. Override SEARXNG_HOST_PORT if 8080 is taken.
