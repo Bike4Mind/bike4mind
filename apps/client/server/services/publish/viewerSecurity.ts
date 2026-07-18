@@ -125,7 +125,11 @@ export function sanitizeRenderedHtml(html: string): string {
  */
 export function resolveDocOrigin(hostHeader?: string, forwardedProtoHeader?: string | string[]): string {
   const rawHost = hostHeader ?? PUBLISH_HOST;
-  const reqHost = isAllowedDocHost(rawHost) ? rawHost : PUBLISH_HOST;
+  // Fall back to the canonical app host for a disallowed/malformed Host; when
+  // PUBLISH_HOST is unset (self-host, no SERVER_DOMAIN) use the literal
+  // `localhost` so the origin can never degrade to a bare scheme (`http://`),
+  // which would emit scheme-only `http:///static/...` CSP tokens.
+  const reqHost = isAllowedDocHost(rawHost) ? rawHost : PUBLISH_HOST || 'localhost';
 
   const fwdRaw = Array.isArray(forwardedProtoHeader) ? forwardedProtoHeader[0] : forwardedProtoHeader;
   const fwdProto = fwdRaw?.split(',')[0]?.trim().toLowerCase();

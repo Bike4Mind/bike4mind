@@ -247,19 +247,26 @@ describe('self-host CSP (B4M_SELF_HOST=true, SERVER_DOMAIN unset -> PUBLISH_HOST
     expect(src).not.toContain(';');
     expect(src).not.toContain('*');
   });
+
+  it('falls back to a safe localhost origin (never a bare scheme) for a malformed Host', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    // A malformed-but-non-injecting Host fails the format gate; with PUBLISH_HOST
+    // unset the fallback must be `localhost`, never '' (which would yield http:///).
+    expect(resolveDocOrigin('has space.test')).toBe('http://localhost');
+    const src = buildBundleScriptSrc('has space.test');
+    expect(src).not.toContain('http:///');
+    expect(src).not.toContain('https:///');
+    expect(src).toContain(`http://localhost${P0}`);
+  });
 });
 
 describe('buildBundleScriptSrc hosted regression (byte-identical, B4M_SELF_HOST unset)', () => {
-  it('produces the exact deduped doc-origin + app-host token set', () => {
-    // Mirrors the original algorithm exactly: doc-origin tokens then the
-    // canonical app-host tokens, deduplicated and space-joined.
-    const host = 'app.pr5.preview.bike4mind.com';
-    const expected = Array.from(
-      new Set([
-        ...BLESSED_SCRIPT_PATHS.map(p => `https://${host}${p}`),
-        ...BLESSED_SCRIPT_PATHS.map(p => `https://${PUBLISH_HOST}${p}`),
-      ])
-    ).join(' ');
-    expect(buildBundleScriptSrc(host, 'https')).toBe(expected);
+  it('produces the exact deduped doc-origin + app-host token string', () => {
+    // Hardcoded expected (NOT re-derived with the implementation's own Set/join),
+    // so an identical bug on both sides can't pass. Regenerate this literal if
+    // BLESSED_SCRIPT_PATHS or PUBLISH_HOST (SERVER_DOMAIN=bike4mind.com in setup) changes.
+    const expected =
+      'https://app.pr5.preview.bike4mind.com/static/lib/chart.js@4.x.js https://app.pr5.preview.bike4mind.com/static/b4m-client.js@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/react@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/react-dom@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/prop-types@15.x.js https://app.pr5.preview.bike4mind.com/static/lib/recharts@2.x.js https://app.pr5.preview.bike4mind.com/static/lib/lucide@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/d3@7.x.js https://app.pr5.preview.bike4mind.com/static/lib/lodash@4.x.js https://app.pr5.preview.bike4mind.com/static/lib/mathjs@11.x.js https://app.pr5.preview.bike4mind.com/static/lib/papaparse@5.x.js https://app.pr5.preview.bike4mind.com/static/lib/xlsx@0.18.x.js https://app.bike4mind.com/static/lib/chart.js@4.x.js https://app.bike4mind.com/static/b4m-client.js@1.x.js https://app.bike4mind.com/static/lib/react@18.x.js https://app.bike4mind.com/static/lib/react-dom@18.x.js https://app.bike4mind.com/static/lib/prop-types@15.x.js https://app.bike4mind.com/static/lib/recharts@2.x.js https://app.bike4mind.com/static/lib/lucide@1.x.js https://app.bike4mind.com/static/lib/d3@7.x.js https://app.bike4mind.com/static/lib/lodash@4.x.js https://app.bike4mind.com/static/lib/mathjs@11.x.js https://app.bike4mind.com/static/lib/papaparse@5.x.js https://app.bike4mind.com/static/lib/xlsx@0.18.x.js';
+    expect(buildBundleScriptSrc('app.pr5.preview.bike4mind.com', 'https')).toBe(expected);
   });
 });
