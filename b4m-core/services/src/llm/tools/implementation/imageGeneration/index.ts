@@ -314,8 +314,12 @@ export const imageGenerationTool: ToolDefinition = {
         return updateQuestAndReturnMarkdown(storedImageUrls, context);
       } else if (isLocalImageModel) {
         // Self-hosted Stable-Diffusion server (A1111-compatible REST API), gated
-        // by IMAGE_GEN_BASE_URL. requireApiKey doubles as the env presence guard.
-        const baseUrl = requireApiKey(process.env.IMAGE_GEN_BASE_URL, 'Local image generation', context.logger);
+        // by IMAGE_GEN_BASE_URL. The env var is honored ONLY under B4M_SELF_HOST
+        // (mirrors the getAvailableModels enumeration gate) so a hosted deploy
+        // that happens to set it can't dispatch free local generations.
+        // requireApiKey doubles as the env presence guard.
+        const selfHostBaseUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
+        const baseUrl = requireApiKey(selfHostBaseUrl, 'Local image generation', context.logger);
         const service = new LocalImageService(baseUrl, context.logger);
 
         // The local backend takes discrete width/height; derive them from the

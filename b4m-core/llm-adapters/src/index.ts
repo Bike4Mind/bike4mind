@@ -185,8 +185,12 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
   }
 
   // Local self-hosted image backend: callers key the table by ModelBackend, but
-  // most don't map it, so fall back to the env gate the tool itself reads.
-  const localImageBaseUrl = apiKeys?.[ModelBackend.LocalImage] || process.env.IMAGE_GEN_BASE_URL;
+  // most don't map it, so fall back to the env gate the tool itself reads. The
+  // env fallback is honored ONLY under B4M_SELF_HOST (mirroring the envKey()
+  // convention in getEffective) so a hosted deploy that happens to set
+  // IMAGE_GEN_BASE_URL can never silently enumerate free local image models.
+  const selfHostImageGenUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
+  const localImageBaseUrl = apiKeys?.[ModelBackend.LocalImage] || selfHostImageGenUrl;
 
   const backends = {
     [ModelBackend.OpenAI]: apiKeys?.openai ? new OpenAIBackend(apiKeys.openai) : null,
