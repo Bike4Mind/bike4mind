@@ -113,6 +113,49 @@ describe('LocalImageService.generate', () => {
     expect(result).toEqual(['data:image/png;base64,QUJD']);
   });
 
+  it('does not treat a prefix-colliding checkpoint as already loaded (dreamshaper vs dreamshaper-xl)', async () => {
+    mockApi({
+      sdModels: [
+        { title: 'dreamshaper.safetensors [aaa]', model_name: 'dreamshaper' },
+        { title: 'dreamshaper-xl.safetensors [bbb]', model_name: 'dreamshaper-xl' },
+      ],
+      // dreamshaper-xl is loaded; a substring match on "dreamshaper" would wrongly
+      // early-return and generate with the WRONG checkpoint. Exact-title matching
+      // must instead trigger a real load, then see the target become loaded.
+      optionsSeq: [
+        { sd_model_checkpoint: 'dreamshaper-xl.safetensors [bbb]' },
+        { sd_model_checkpoint: 'dreamshaper.safetensors [aaa]' },
+      ],
+    });
+    const svc = makeService();
+
+    await svc.generate('a portrait', { model: 'local-image/dreamshaper' });
+
+    expect(optionsPosts()).toHaveLength(1);
+    expect(optionsPosts()[0][1]).toEqual({ sd_model_checkpoint: 'dreamshaper.safetensors [aaa]' });
+    expect(txt2imgBody()).toMatchObject({
+      override_settings: { sd_model_checkpoint: 'dreamshaper.safetensors [aaa]' },
+    });
+  });
+
+  it('clamps batch_size to the local ceiling when n exceeds it (n=10 -> 4)', async () => {
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }] });
+    const svc = makeService();
+
+    await svc.generate('a crowd', { model: 'local-image/sd15', n: 10 });
+
+    expect(txt2imgBody()).toMatchObject({ batch_size: 4 });
+  });
+
+  it('floors batch_size at 1 when n is zero or negative', async () => {
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }] });
+    const svc = makeService();
+
+    await svc.generate('a bike', { model: 'local-image/sd15', n: 0 });
+
+    expect(txt2imgBody()).toMatchObject({ batch_size: 1 });
+  });
+
   it('throws a clear error when the model never finishes loading (poll timeout), without calling txt2img', async () => {
     mockApi({
       sdModels: [{ title: 'target.safetensors [t]', model_name: 'target' }],

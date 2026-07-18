@@ -273,6 +273,16 @@ Already run an A1111 / SD.Next server on the host? Skip the `imagegen` profile e
 IMAGE_GEN_BASE_URL=http://host.docker.internal:7860
 ```
 
+### Pinning the image versions (reproducibility)
+
+The bundled `imagegen` (`vladmandic/sdnext-cuda`) and `imagegen-pull` (`curlimages/curl`) services ship with floating `:latest` tags for convenience. `:latest` is not reproducible - a later upstream push can change the image under you between deploys. For a stable stack, pin a concrete version yourself. The `imagegen` image is env-overridable; set a specific tag or (best) an immutable digest in `.env.selfhost`:
+
+```bash
+IMAGEGEN_IMAGE=vladmandic/sdnext-cuda@sha256:<digest>
+```
+
+Resolve a digest for a tag you have pulled with `docker image inspect <image> --format '{{index .RepoDigests 0}}'`. The `imagegen-pull` image is not env-overridable; edit `compose.selfhost.yaml` directly if you need to pin it too. We intentionally do not ship a hard-coded pin here because the right tag/digest depends on your platform (CPU vs GPU) and drifts over time - and a wrong pin would break the stack.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.

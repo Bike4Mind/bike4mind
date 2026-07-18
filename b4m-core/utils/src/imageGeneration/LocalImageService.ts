@@ -35,6 +35,10 @@ const OPTIONS_GET_TIMEOUT_MS = 30_000;
 
 const DEFAULT_STEPS = 20;
 const DEFAULT_DIMENSION = 512;
+// CPU generation cost scales ~linearly with batch_size; a batch of 10 at
+// 512x512 can run tens of minutes and risks OOM on a self-host box, so cap it
+// here regardless of the larger `n` the (cloud-oriented) tool schema allows.
+const MAX_LOCAL_BATCH_SIZE = 4;
 // CPU generation on a self-host box can take minutes per image; keep the client
 // from aborting mid-render (Stable Diffusion at 512x512/20 steps is ~1-3 min on CPU).
 const REQUEST_TIMEOUT_MS = 15 * 60_000;
@@ -82,18 +86,18 @@ export class LocalImageService extends AIImageService {
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
     const { width, height } = this.resolveDimensions(options);
     const bareName = (options.model ?? '').replace(/^local-image\//, '');
-    const { checkpoint, aliases } = await this.resolveCheckpoint(bareName);
+    const { checkpoint, loadedTitle } = await this.resolveCheckpoint(bareName);
 
     // Make sure the requested checkpoint is actually loaded before generating -
     // override_settings alone won't load it from a cold start (see class doc).
-    await this.ensureCheckpointLoaded(checkpoint, aliases);
+    await this.ensureCheckpointLoaded(checkpoint, loadedTitle);
 
     const request: Txt2ImgRequest = {
       prompt,
       steps: options.steps ?? DEFAULT_STEPS,
       width,
       height,
-      batch_size: options.n ?? 1,
+      batch_size: Math.min(Math.max(1, options.n ?? 1), MAX_LOCAL_BATCH_SIZE),
       override_settings: { sd_model_checkpoint: checkpoint },
     };
 
@@ -122,26 +126,27 @@ export class LocalImageService extends AIImageService {
   }
 
   /**
-   * Resolve the value to send as `sd_model_checkpoint` and the set of strings that
-   * count as "this checkpoint is loaded". Stock A1111 matches on the full title
-   * (`name [hash]`), so prefer the title from `/sdapi/v1/sd-models`; fall back to
-   * the bare name if the lookup fails or finds no match. `aliases` holds both the
-   * title and the bare model_name so a loaded-checkpoint match works either way.
+   * Resolve the value to send as `sd_model_checkpoint`. Stock A1111 matches on the
+   * full title (`name [hash]`), so prefer the title from `/sdapi/v1/sd-models`;
+   * fall back to the bare name if the lookup fails or finds no match. When a title
+   * is resolved it is returned as `loadedTitle` - the server reports exactly that
+   * string as the loaded checkpoint, so the caller can match it EXACTLY instead of
+   * by substring (avoids a prefix collision, e.g. `dreamshaper` vs `dreamshaper-xl`).
    */
-  private async resolveCheckpoint(bareName: string): Promise<{ checkpoint: string; aliases: string[] }> {
+  private async resolveCheckpoint(bareName: string): Promise<{ checkpoint: string; loadedTitle?: string }> {
     try {
       const { data } = await axios.get<SdModel[]>(`${this.baseUrl}/sdapi/v1/sd-models`, {
         timeout: SD_MODELS_TIMEOUT_MS,
       });
       const match = (data ?? []).find(m => m.model_name === bareName);
       if (match) {
-        return { checkpoint: match.title, aliases: [match.title, match.model_name] };
+        return { checkpoint: match.title, loadedTitle: match.title };
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       this.logger.debug(`[LocalImageService] sd-models lookup failed at ${this.baseUrl}: ${message}`);
     }
-    return { checkpoint: bareName, aliases: [bareName] };
+    return { checkpoint: bareName };
   }
 
   /**
@@ -151,8 +156,8 @@ export class LocalImageService extends AIImageService {
    * the target (bounded by `modelLoadTimeoutMs`). Throws a clear error on timeout
    * so a never-loaded model surfaces as an actionable failure, not an empty image.
    */
-  private async ensureCheckpointLoaded(checkpoint: string, aliases: string[]): Promise<void> {
-    if (this.checkpointMatches(await this.getLoadedCheckpoint(), aliases)) {
+  private async ensureCheckpointLoaded(checkpoint: string, loadedTitle?: string): Promise<void> {
+    if (this.checkpointMatches(await this.getLoadedCheckpoint(), checkpoint, loadedTitle)) {
       return;
     }
 
@@ -166,7 +171,7 @@ export class LocalImageService extends AIImageService {
 
     const deadline = Date.now() + this.modelLoadTimeoutMs;
     while (Date.now() < deadline) {
-      if (this.checkpointMatches(await this.getLoadedCheckpoint(), aliases)) {
+      if (this.checkpointMatches(await this.getLoadedCheckpoint(), checkpoint, loadedTitle)) {
         return;
       }
       await this.sleep(this.modelLoadPollMs);
@@ -189,13 +194,20 @@ export class LocalImageService extends AIImageService {
   }
 
   /**
-   * A loaded checkpoint counts as a match if it equals, or contains, any alias -
-   * the bare `model_name` (e.g. `v1-5-pruned-emaonly`) is a substring of the full
-   * title the server reports (`v1-5-pruned-emaonly.safetensors [hash]`).
+   * Decide whether the currently-loaded checkpoint (`current`, as the server
+   * reports it) is the one we resolved. When we have the full title from
+   * `/sdapi/v1/sd-models`, match it EXACTLY - the server echoes that title
+   * verbatim, so an exact compare avoids a prefix collision (e.g. requesting
+   * `dreamshaper` while `dreamshaper-xl` is loaded). Only the bare-name fallback
+   * (sd-models lookup failed/empty) has no title to compare, so there we accept
+   * the bare name itself or the `<name>.<ext> [hash]` / `<name> [hash]` form the
+   * server derives from the file - still anchored at the start so a prefix can't
+   * false-positive.
    */
-  private checkpointMatches(current: string | undefined, aliases: string[]): boolean {
+  private checkpointMatches(current: string | undefined, checkpoint: string, loadedTitle?: string): boolean {
     if (!current) return false;
-    return aliases.some(a => !!a && (current === a || current.includes(a)));
+    if (loadedTitle) return current === loadedTitle;
+    return current === checkpoint || current.startsWith(`${checkpoint}.`) || current.startsWith(`${checkpoint} `);
   }
 
   private sleep(ms: number): Promise<void> {

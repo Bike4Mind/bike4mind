@@ -326,6 +326,10 @@ services:
   # CPU-only by default so it runs on any host (slow: ~1-3 min/image); for NVIDIA
   # GPU acceleration add the override file: `-f compose.imagegen-gpu.yaml`.
   imagegen:
+    # Floating :latest is convenient but NOT reproducible - a later upstream push can
+    # change the SD backend under you. For a stable stack, override IMAGEGEN_IMAGE in
+    # .env.selfhost with a specific tag or (better) a digest, e.g.
+    # IMAGEGEN_IMAGE=vladmandic/sdnext-cuda@sha256:<digest>. See SELF_HOST.md.
     image: ${IMAGEGEN_IMAGE:-vladmandic/sdnext-cuda:latest}
     profiles: ['imagegen']
     # Pin the data/models dirs explicitly so the checkpoint the puller writes to
@@ -366,6 +370,9 @@ services:
   # model picker. Safe to re-run; an already-present file is skipped. Pick your
   # checkpoint in .env.selfhost (menu + disk/VRAM specs there).
   imagegen-pull:
+    # Floating :latest, same reproducibility caveat as `imagegen` above. This one is
+    # not env-overridable - pin a specific curlimages/curl digest here if you need a
+    # reproducible pull step.
     image: curlimages/curl:latest
     profiles: ['imagegen']
     # Write into the same volume SD.Next created as root.
