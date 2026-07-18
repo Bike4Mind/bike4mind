@@ -253,7 +253,11 @@ Set one or more (space-separated) `.safetensors` URLs from a public host in `IMA
 
 ### Performance (CPU vs GPU)
 
-The bundled `imagegen` service runs **CPU-only by default** so it works on any host - but Stable Diffusion is compute-heavy, so expect roughly **1-3 minutes per image** at 512x512 / 20 steps on CPU. On a GPU with ~4 GB+ free VRAM the same image is about **5-15 seconds**, so a **GPU is strongly recommended for interactive use** - CPU is fine for the occasional image but too slow to sit and wait on in a chat. For NVIDIA GPU acceleration, install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) (see the same steps under "GPU acceleration (NVIDIA)" above), then add the GPU override file as a second `-f`:
+The bundled `imagegen` service runs **CPU-only by default** so it works on any host - but Stable Diffusion is compute-heavy, so expect roughly **1-3 minutes per image** at 512x512 / 20 steps on CPU. On a GPU with ~4 GB+ free VRAM the same image is about **5-15 seconds**, so a **GPU is strongly recommended for interactive use** - CPU is fine for the occasional image but too slow to sit and wait on in a chat.
+
+The **first generation after a fresh bring-up is slower still**: the checkpoint has to be loaded into memory before any image can render, which itself takes minutes on CPU. The puller preloads the first checkpoint right after downloading it, so by the time you generate it is usually already loaded; if it isn't (or you switch checkpoints), the app loads it on demand and the first request pays that one-time load cost on top of the render.
+
+For NVIDIA GPU acceleration, install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) (see the same steps under "GPU acceleration (NVIDIA)" above), then add the GPU override file as a second `-f`:
 
 ```bash
 docker compose -f compose.selfhost.yaml -f compose.imagegen-gpu.yaml --env-file .env.selfhost --profile imagegen up -d
