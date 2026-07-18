@@ -434,4 +434,24 @@ describe('firecrawlFetch keyless plain-fetch fallback', () => {
     expect(res.extractedChars).toBe(CAP);
     expect(res.truncated).toBe(true);
   });
+
+  // A blocked redirect (redirect:'error') surfaces as TypeError('fetch failed') whose cause names
+  // the redirect - the tool must match the cause and degrade to the friendly web_search hint rather
+  // than rethrowing a hard error the agent cannot recover from.
+  it('degrades a blocked-redirect fetch to the friendly web_search message', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    const redirectError = new TypeError('fetch failed');
+    (redirectError as { cause?: unknown }).cause = new Error('unexpected redirect');
+    mockPlainFetch.mockRejectedValueOnce(redirectError);
+
+    const { result } = await runTool('https://example.com/doc');
+    expect(result).toContain('web_search');
+  });
+
+  it('still rethrows an unexpected keyless error with no matching pattern/cause', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockRejectedValueOnce(new Error('totally unexpected parse failure'));
+
+    await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
+  });
 });

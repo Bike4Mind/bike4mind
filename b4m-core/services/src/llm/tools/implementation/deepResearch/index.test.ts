@@ -13,6 +13,7 @@ vi.mock('../websearch', () => ({
 const plainFetchScrape = vi.fn(async () => ({ markdown: 'plain content' }));
 vi.mock('../webfetch/plainFetch', () => ({
   plainFetchScrape: (...a: unknown[]) => plainFetchScrape(...a),
+  isPdfUrl: (url: string) => url.toLowerCase().endsWith('.pdf'),
 }));
 
 // getFirecrawlConfig runs for real but reads only context.db (mocked to return no settings);
@@ -93,6 +94,25 @@ describe('performDeepResearch discovery precedence', () => {
     expect(provider.search).toHaveBeenCalled();
     // Extraction falls back to the keyless plain-fetch reader when Firecrawl is absent.
     expect(plainFetchScrape).toHaveBeenCalled();
+  });
+
+  it('skips PDF URLs in keyless extraction instead of feeding a "cannot extract" notice to the planner', async () => {
+    const provider = {
+      name: 'searxng' as const,
+      search: vi.fn(async () => [{ url: 'https://sx.example/paper.pdf', title: 'PDF', snippet: 's' }]),
+    };
+    createFirecrawlApp.mockReturnValue(null);
+    resolveWebSearchProvider.mockResolvedValue(provider);
+
+    const result = await performDeepResearch(
+      makeContext(),
+      { topic: 'quantum computing' },
+      { maxDepth: 1, duration: 1 }
+    );
+
+    expect(result.success).toBe(true);
+    expect(provider.search).toHaveBeenCalled();
+    expect(plainFetchScrape).not.toHaveBeenCalled(); // keyless reader cannot parse PDFs
   });
 
   it('fails when neither a provider nor Firecrawl is configured', async () => {

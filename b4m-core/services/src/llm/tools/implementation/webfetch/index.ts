@@ -386,8 +386,14 @@ export const webFetchTool: ToolDefinition = {
           return `This PDF is too large to process via URL. Please download the file and upload it directly instead.`;
         }
 
-        // Network-level errors - no response received, connection refused, etc.
-        // Return user-friendly message so the agent can continue
+        // Network-level errors (no response, connection reset, blocked redirect, ...) - return a
+        // user-friendly message so the agent can continue. The keyless plain-fetch path uses native
+        // fetch, which puts the real reason on error.cause and only 'fetch failed' on error.message,
+        // so match against both. Hosted Firecrawl throws FirecrawlError with no Error cause, making
+        // the cause match a no-op there. 'redirect' covers plainFetchScrape's redirect:'error' policy,
+        // which hard-fails the apex->www / http->https 301s that Firecrawl follows server-side.
+        const causeMessage = error instanceof Error && error.cause instanceof Error ? error.cause.message : '';
+        const networkErrorText = `${errorMessage} ${causeMessage}`.toLowerCase();
         const networkPatterns = [
           'no response received',
           'econnrefused',
@@ -395,8 +401,9 @@ export const webFetchTool: ToolDefinition = {
           'network error',
           'socket hang up',
           'abort',
+          'redirect',
         ];
-        if (networkPatterns.some(p => errorMessage.toLowerCase().includes(p))) {
+        if (networkPatterns.some(p => networkErrorText.includes(p))) {
           context.logger.warn('WebFetch network error', {
             url: params.url,
             error: errorMessage,

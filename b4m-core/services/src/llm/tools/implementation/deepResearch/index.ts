@@ -4,7 +4,7 @@ import { recordToolOperationalUsage } from '../../base/recordToolOperationalUsag
 import { OpenAIBackend, toProviderEndUserId, type CompletionInfo } from '@bike4mind/llm-adapters';
 import { getFirecrawlConfig } from '../../../../apiKeyService';
 import { createFirecrawlApp } from '../webfetch/firecrawlApp';
-import { plainFetchScrape } from '../webfetch/plainFetch';
+import { plainFetchScrape, isPdfUrl } from '../webfetch/plainFetch';
 import { resolveWebSearchProvider } from '../websearch';
 import { parseTolerantJson } from './parseJson';
 
@@ -221,6 +221,16 @@ export async function performDeepResearch(
           if (result && !result.error && 'markdown' in result && result.markdown) {
             text = result.markdown.slice(0, 10_000); // Limit to 10000 characters
           }
+        } else if (isPdfUrl(url)) {
+          // The keyless reader cannot parse PDFs - plainFetchScrape returns a "cannot extract" notice,
+          // not content. Skip so the planner is never fed that notice as if it were real page text.
+          addActivity({
+            type: 'extract',
+            status: 'error',
+            message: `Skipped PDF (no keyless PDF parser): ${url}`,
+            depth: state.depth,
+          });
+          return [];
         } else {
           // Keyless fallback: SSRF-guarded direct fetch + HTML->markdown (self-host, no Firecrawl).
           const { markdown } = await plainFetchScrape(url);

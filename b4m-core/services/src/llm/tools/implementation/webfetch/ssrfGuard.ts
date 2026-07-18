@@ -24,6 +24,7 @@ function isPrivateIpv4(ip: string): boolean {
     a === 10 ||
     a === 127 ||
     a === 0 ||
+    (a === 100 && b >= 64 && b <= 127) || // carrier-grade NAT (RFC 6598) 100.64.0.0/10
     (a === 169 && b === 254) || // link-local + AWS metadata 169.254.169.254
     (a === 172 && b >= 16 && b <= 31) ||
     (a === 192 && b === 168) ||

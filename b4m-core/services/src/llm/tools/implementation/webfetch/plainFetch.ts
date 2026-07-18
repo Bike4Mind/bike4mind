@@ -16,7 +16,7 @@ export interface PlainFetchResult {
   title?: string;
 }
 
-function isPdfUrl(url: string): boolean {
+export function isPdfUrl(url: string): boolean {
   try {
     return new URL(url).pathname.toLowerCase().endsWith('.pdf');
   } catch {
@@ -101,6 +101,10 @@ export async function plainFetchScrape(url: string, options?: { timeoutMs?: numb
       throw new Error(`Failed to fetch content from URL: HTTP ${res.status} ${res.statusText}`);
     }
 
+    // A present content-type that is not a readable text type is rejected before the body is read.
+    // A MISSING content-type is deliberately allowed through - many legitimate text/HTML origins omit
+    // it, so we optimistically attempt extraction, bounded by the 5MB streamed read cap below; a
+    // non-text body that yields no markdown still throws 'No content could be extracted' at the end.
     const contentType = (res.headers.get('content-type') ?? '').toLowerCase();
     if (contentType && !READABLE_CONTENT_TYPES.some(t => contentType.includes(t))) {
       await res.body?.cancel().catch(() => {}); // don't buffer a binary / non-text payload
