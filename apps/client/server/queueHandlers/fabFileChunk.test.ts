@@ -19,6 +19,7 @@ const h = vi.hoisted(() => ({
   sendToClient: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
   isBatchComplete: vi.fn(),
+  fabFileUpdateOne: vi.fn(() => ({ catch: vi.fn() })),
 }));
 
 vi.mock('@bike4mind/database', () => ({
@@ -33,7 +34,7 @@ vi.mock('@bike4mind/database', () => ({
     shareable: { findAccessibleById: h.findAccessibleById },
     markFailedIfNotAlready: h.markFailedIfNotAlready,
   },
-  FabFile: { updateOne: vi.fn(() => ({ catch: vi.fn() })) },
+  FabFile: { updateOne: h.fabFileUpdateOne },
   User: { findById: vi.fn(async () => ({ id: 'u1' })) },
   // Run the callback so chunkFabfile actually executes (and rejects) under test.
   withTransaction: vi.fn((fn: () => unknown) => fn()),
@@ -97,5 +98,13 @@ describe('fabFileChunk handler - chunk-failure surfacing', () => {
     expect(h.incrementCounter).not.toHaveBeenCalled();
     // No batch -> no batchId in log metadata.
     expect(mockLogger.updateMetadata).not.toHaveBeenCalledWith({ batchId: 'batch-1' });
+  });
+
+  it('marks isChunking true at start and clears it to false even when chunking fails', async () => {
+    // The self-host safety-net scan uses isChunking to avoid re-enqueuing a file mid-run;
+    // it must be cleared on the failure path so the file can be retried/reprocessed.
+    await expect(dispatch(makeEvent(payload), {} as never, mockLogger)).rejects.toThrow(CHUNK_ERR);
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: true } });
+    expect(h.fabFileUpdateOne).toHaveBeenCalledWith({ _id: 'ff1' }, { $set: { isChunking: false } });
   });
 });
