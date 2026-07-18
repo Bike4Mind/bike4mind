@@ -387,8 +387,10 @@ services:
         set -e
         mkdir -p /mnt/models/Stable-diffusion
         echo "Pulling: $$IMAGE_GEN_PULL_MODELS"
+        first=""
         for url in $$IMAGE_GEN_PULL_MODELS; do
           name=$$(basename "$${url%%\?*}")
+          [ -z "$$first" ] && first="$$name"
           dest="/mnt/models/Stable-diffusion/$$name"
           if [ -f "$$dest" ]; then
             echo "==> $$name already present, skipping"
@@ -406,6 +408,17 @@ services:
         for i in 1 2 3 4 5; do
           curl -fsS -X POST http://imagegen:7860/sdapi/v1/refresh-checkpoints && break || sleep 3
         done || true
+        # Preload the first checkpoint (model_name = filename without extension) via
+        # POST /sdapi/v1/options, because override_settings alone won't load a model
+        # from a cold start - so the first chat generation isn't stuck on a never-loaded
+        # model. Best-effort and generously capped; the load can take minutes on CPU.
+        if [ -n "$$first" ]; then
+          model="$${first%.*}"
+          echo "Preloading active checkpoint: $$model (can take minutes on CPU)..."
+          curl -fsS --max-time 900 -X POST -H "Content-Type: application/json" \
+            -d "{\"sd_model_checkpoint\": \"$$model\"}" http://imagegen:7860/sdapi/v1/options || \
+            echo "WARN: could not preload $$model; it will load on first use"
+        fi
         echo "Done. Pulled checkpoints are now available in the app model picker."
     restart: 'no'
 
