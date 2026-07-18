@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractReactDependencies, parseArtifactsWithFallback } from './artifactParser';
+import { extractReactDependencies, parseArtifactsWithFallback, isSvgGraphicallyEmpty } from './artifactParser';
 
 describe('extractReactDependencies', () => {
   it('detects packages imported via multi-line named imports', () => {
@@ -134,5 +134,68 @@ describe('parseArtifactsWithFallback - tool-call JSON promotion', () => {
   it('leaves a legitimate JSON API example untouched', () => {
     const result = parseArtifactsWithFallback('```json\n{"name":"Ada","parameters":{"age":36,"city":"Paris"}}\n```');
     expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+/**
+ * A small local model stubs out an image as an empty <svg> placeholder alongside a
+ * real generated image; it renders as a blank canvas and must be suppressed.
+ * Mirrors the twin suite in b4m-core/utils/src/artifactParser.test.ts.
+ */
+describe('parseArtifactsWithFallback - graphically-empty SVG suppression', () => {
+  // The exact stub observed from qwen2.5-coder:7b on "generate fish image please".
+  const placeholder = [
+    '<artifact identifier="fish-image" type="image/svg+xml" title="Tropical Fish Illustration">',
+    '  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600">',
+    '    <!-- SVG content for the fish illustration goes here -->',
+    '  </svg>',
+    '</artifact>',
+  ].join('\n');
+
+  it('drops a placeholder SVG artifact (comment-only body) and strips its markup', () => {
+    const { artifacts, cleanedContent } = parseArtifactsWithFallback(placeholder);
+    expect(artifacts).toHaveLength(0);
+    expect(cleanedContent).not.toContain('<artifact');
+    expect(cleanedContent).not.toContain('<svg');
+  });
+
+  it('keeps an SVG artifact that actually draws something', () => {
+    const real =
+      '<artifact identifier="fish" type="image/svg+xml" title="Fish">' +
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40"/></svg>' +
+      '</artifact>';
+    const { artifacts } = parseArtifactsWithFallback(real);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('svg');
+  });
+
+  it('isSvgGraphicallyEmpty flags comment/whitespace-only and self-closing roots', () => {
+    expect(isSvgGraphicallyEmpty('<svg viewBox="0 0 8 6"><!-- x --></svg>')).toBe(true);
+    expect(isSvgGraphicallyEmpty('<svg></svg>')).toBe(true);
+    expect(isSvgGraphicallyEmpty('  <svg width="10" height="10"/>  ')).toBe(true);
+    expect(isSvgGraphicallyEmpty('<svg><rect width="10" height="10"/></svg>')).toBe(false);
+    expect(isSvgGraphicallyEmpty('<svg><text>hi</text></svg>')).toBe(false);
+  });
+
+  it('drops an empty svg but keeps a real svg in the same reply (mixed content)', () => {
+    const realSvg =
+      '<artifact identifier="real" type="image/svg+xml" title="Real">' +
+      '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="5" cy="5" r="4"/></svg></artifact>';
+    const { artifacts, cleanedContent } = parseArtifactsWithFallback(
+      'Look:\n' + placeholder + '\n' + realSvg + '\nDone.'
+    );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('Real');
+    expect(cleanedContent).toContain('Look:');
+    expect(cleanedContent).toContain('Done.');
+    expect(cleanedContent).not.toContain('Tropical Fish');
+    expect(cleanedContent).not.toContain('<svg');
+  });
+
+  it('treats a whitespace-only svg body as empty', () => {
+    const { artifacts } = parseArtifactsWithFallback(
+      '<artifact identifier="x" type="image/svg+xml" title="X"><svg viewBox="0 0 4 4">   </svg></artifact>'
+    );
+    expect(artifacts).toHaveLength(0);
   });
 });

@@ -23,6 +23,23 @@ export interface ArtifactParseResult {
 }
 
 /**
+ * A "graphically empty" SVG has no drawable content - only the root <svg> wrapper
+ * around whitespace and/or comments. Small local models sometimes emit such a stub
+ * as a placeholder (e.g. `<svg ...><!-- fish illustration goes here --></svg>`),
+ * which would otherwise render/persist as a blank canvas. Deliberately conservative:
+ * only whitespace/comments count as empty, so it never drops an SVG with a real
+ * element (it does miss rarer stubs like an empty `<g></g>`, which is acceptable).
+ * Exported for tests.
+ */
+export function isSvgGraphicallyEmpty(svg: string): boolean {
+  const withoutComments = svg.replace(/<!--[\s\S]*?-->/g, '');
+  // Self-closing root, e.g. `<svg .../>`, has no children.
+  if (/^\s*<svg\b[^>]*\/>\s*$/i.test(withoutComments)) return true;
+  const inner = withoutComments.replace(/^\s*<svg\b[^>]*>/i, '').replace(/<\/svg\s*>\s*$/i, '');
+  return inner.trim().length === 0;
+}
+
+/**
  * Parses Claude-style artifact syntax from text content
  *
  * Example syntax:
@@ -149,6 +166,12 @@ export function parseArtifacts(
     if (artifact.type === 'recharts') {
       // Only filter out if displaying inline, keep if displaying as artifact
       return rechartsDisplayMode === 'artifact';
+    }
+    // Drop graphically-empty SVG placeholders (a small model's `<svg><!-- goes
+    // here --></svg>` stub). The tag was already stripped from cleanedContent
+    // above, so nothing leaks into the reply - it just never becomes an artifact.
+    if (artifact.type === 'svg' && isSvgGraphicallyEmpty(artifact.content)) {
+      return false;
     }
     // Keep all other artifact types
     return true;
