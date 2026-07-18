@@ -4,22 +4,69 @@ import { Logger } from '@bike4mind/observability';
 import { LocalImageService } from './LocalImageService';
 
 vi.mock('axios');
-const mockedPost = vi.mocked(axios.post);
 const mockedGet = vi.mocked(axios.get);
+const mockedPost = vi.mocked(axios.post);
 
-function makeService(baseUrl = 'http://imagegen:7860/') {
-  return new LocalImageService(baseUrl, new Logger());
+const BASE = 'http://imagegen:7860';
+
+interface SdModel {
+  title: string;
+  model_name: string;
+}
+interface OptionsResp {
+  sd_model_checkpoint?: string;
 }
 
-describe('LocalImageService.generate', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    // Default: sd-models lookup finds nothing, so the bare checkpoint name is used.
-    mockedGet.mockResolvedValue({ data: [] });
-  });
+// Route GET/POST by URL so a single generate() call (sd-models + options poll +
+// txt2img) can be stubbed coherently. `optionsSeq` lets GET /options return a
+// sequence across polls (the last entry repeats).
+function mockApi(cfg: {
+  sdModels?: SdModel[];
+  sdModelsError?: boolean;
+  optionsSeq?: OptionsResp[];
+  txt2img?: { images?: string[] };
+}) {
+  const optionsResponses = cfg.optionsSeq && cfg.optionsSeq.length > 0 ? [...cfg.optionsSeq] : [{}];
+  const getImpl = (url: string) => {
+    if (url.endsWith('/sdapi/v1/sd-models')) {
+      if (cfg.sdModelsError) return Promise.reject(new Error('connect ECONNREFUSED'));
+      return Promise.resolve({ data: cfg.sdModels ?? [] });
+    }
+    if (url.endsWith('/sdapi/v1/options')) {
+      const next = optionsResponses.length > 1 ? optionsResponses.shift()! : optionsResponses[0];
+      return Promise.resolve({ data: next });
+    }
+    return Promise.reject(new Error(`unexpected GET ${url}`));
+  };
+  const postImpl = (url: string) => {
+    if (url.endsWith('/sdapi/v1/options')) return Promise.resolve({ data: {} });
+    if (url.endsWith('/sdapi/v1/txt2img')) return Promise.resolve({ data: cfg.txt2img ?? { images: ['QUJD'] } });
+    return Promise.reject(new Error(`unexpected POST ${url}`));
+  };
+  mockedGet.mockImplementation(getImpl as unknown as typeof axios.get);
+  mockedPost.mockImplementation(postImpl as unknown as typeof axios.post);
+}
 
-  it('POSTs to /sdapi/v1/txt2img with the prefix stripped into override_settings and a trimmed base URL', async () => {
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+function makeService(baseUrl = BASE + '/') {
+  // Tiny timings so the load poll doesn't sleep for real.
+  return new LocalImageService(baseUrl, new Logger(), { modelLoadTimeoutMs: 200, modelLoadPollMs: 2 });
+}
+
+/** Body the txt2img POST was called with. */
+function txt2imgBody() {
+  const call = mockedPost.mock.calls.find(c => String(c[0]).endsWith('/sdapi/v1/txt2img'));
+  return call?.[1] as Record<string, unknown> | undefined;
+}
+const optionsPosts = () => mockedPost.mock.calls.filter(c => String(c[0]).endsWith('/sdapi/v1/options'));
+
+describe('LocalImageService.generate', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('when the checkpoint is already loaded, goes straight to txt2img (no options POST)', async () => {
+    mockApi({
+      sdModels: [{ title: 'v1-5-pruned-emaonly.safetensors [abc]', model_name: 'v1-5-pruned-emaonly' }],
+      optionsSeq: [{ sd_model_checkpoint: 'v1-5-pruned-emaonly.safetensors [abc]' }],
+    });
     const svc = makeService('http://imagegen:7860/');
 
     await svc.generate('a red bike', {
@@ -30,48 +77,73 @@ describe('LocalImageService.generate', () => {
       steps: 25,
     });
 
-    expect(mockedPost).toHaveBeenCalledTimes(1);
-    const [url, body] = mockedPost.mock.calls[0];
+    expect(optionsPosts()).toHaveLength(0);
+    const txt2img = mockedPost.mock.calls.find(c => String(c[0]).endsWith('/sdapi/v1/txt2img'));
     // Trailing slash trimmed so the path is not doubled.
-    expect(url).toBe('http://imagegen:7860/sdapi/v1/txt2img');
-    expect(body).toMatchObject({
+    expect(txt2img?.[0]).toBe('http://imagegen:7860/sdapi/v1/txt2img');
+    expect(txt2imgBody()).toMatchObject({
       prompt: 'a red bike',
       steps: 25,
       width: 768,
       height: 512,
       batch_size: 2,
-      override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly' },
+      // Title (name [hash]) preferred as the override value.
+      override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly.safetensors [abc]' },
     });
   });
 
-  it('uses the sd-models title (name [hash]) for the checkpoint override when the checkpoint is found', async () => {
-    mockedGet.mockResolvedValue({
-      data: [{ title: 'v1-5-pruned-emaonly.safetensors [abc123]', model_name: 'v1-5-pruned-emaonly' }],
+  it('when a different (placeholder) model is loaded, POSTs options and polls until the target loads, then txt2img', async () => {
+    mockApi({
+      sdModels: [{ title: 'target.safetensors [t]', model_name: 'target' }],
+      // initial check (mismatch) -> POST -> poll #1 (still loading) -> poll #2 (loaded)
+      optionsSeq: [
+        { sd_model_checkpoint: 'model.safetensors' },
+        { sd_model_checkpoint: 'model.safetensors' },
+        { sd_model_checkpoint: 'target.safetensors [t]' },
+      ],
+      txt2img: { images: ['QUJD'] },
     });
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    const svc = makeService();
+
+    const result = await svc.generate('a cat', { model: 'local-image/target' });
+
+    expect(optionsPosts()).toHaveLength(1);
+    expect(optionsPosts()[0][1]).toEqual({ sd_model_checkpoint: 'target.safetensors [t]' });
+    expect(txt2imgBody()).toMatchObject({ override_settings: { sd_model_checkpoint: 'target.safetensors [t]' } });
+    expect(result).toEqual(['data:image/png;base64,QUJD']);
+  });
+
+  it('throws a clear error when the model never finishes loading (poll timeout), without calling txt2img', async () => {
+    mockApi({
+      sdModels: [{ title: 'target.safetensors [t]', model_name: 'target' }],
+      optionsSeq: [{ sd_model_checkpoint: 'model.safetensors' }], // always the placeholder -> never matches
+    });
+    const svc = makeService();
+
+    await expect(svc.generate('a cat', { model: 'local-image/target' })).rejects.toThrow(/did not finish loading/i);
+    expect(mockedPost.mock.calls.some(c => String(c[0]).endsWith('/sdapi/v1/txt2img'))).toBe(false);
+  });
+
+  it('strips the local-image/ prefix into override_settings when the checkpoint is not in sd-models', async () => {
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'v1-5-pruned-emaonly' }] });
     const svc = makeService();
 
     await svc.generate('a bike', { model: 'local-image/v1-5-pruned-emaonly' });
 
-    const [, body] = mockedPost.mock.calls[0];
-    expect(body).toMatchObject({
-      override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly.safetensors [abc123]' },
-    });
+    expect(txt2imgBody()).toMatchObject({ override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly' } });
   });
 
   it('falls back to the bare checkpoint name when the sd-models lookup fails', async () => {
-    mockedGet.mockRejectedValue(new Error('connect ECONNREFUSED'));
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    mockApi({ sdModelsError: true, optionsSeq: [{ sd_model_checkpoint: 'sd15' }] });
     const svc = makeService();
 
     await svc.generate('a bike', { model: 'local-image/sd15' });
 
-    const [, body] = mockedPost.mock.calls[0];
-    expect(body).toMatchObject({ override_settings: { sd_model_checkpoint: 'sd15' } });
+    expect(txt2imgBody()).toMatchObject({ override_settings: { sd_model_checkpoint: 'sd15' } });
   });
 
   it('maps each bare base64 image to a data URI', async () => {
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD', 'REVG'] } });
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }], txt2img: { images: ['QUJD', 'REVG'] } });
     const svc = makeService();
 
     const result = await svc.generate('two cats', { model: 'local-image/sd15' });
@@ -80,28 +152,25 @@ describe('LocalImageService.generate', () => {
   });
 
   it('defaults steps to 20 and dimensions to 512x512, batch_size to 1', async () => {
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }] });
     const svc = makeService();
 
     await svc.generate('a prompt', { model: 'local-image/sd15' });
 
-    const [, body] = mockedPost.mock.calls[0];
-    expect(body).toMatchObject({ steps: 20, width: 512, height: 512, batch_size: 1 });
+    expect(txt2imgBody()).toMatchObject({ steps: 20, width: 512, height: 512, batch_size: 1 });
   });
 
   it('derives width/height from a size string when explicit dimensions are absent', async () => {
-    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }] });
     const svc = makeService();
 
-    // size is passed via the shared options type (cast mirrors the tool call site).
     await svc.generate('a prompt', { model: 'local-image/sd15', size: '256x256' });
 
-    const [, body] = mockedPost.mock.calls[0];
-    expect(body).toMatchObject({ width: 256, height: 256 });
+    expect(txt2imgBody()).toMatchObject({ width: 256, height: 256 });
   });
 
-  it('throws when the server returns no images', async () => {
-    mockedPost.mockResolvedValue({ data: { images: [] } });
+  it('throws when the server returns no images (200 with empty list)', async () => {
+    mockApi({ sdModels: [], optionsSeq: [{ sd_model_checkpoint: 'sd15' }], txt2img: { images: [] } });
     const svc = makeService();
 
     await expect(svc.generate('nothing', { model: 'local-image/sd15' })).rejects.toThrow(/no images/i);
