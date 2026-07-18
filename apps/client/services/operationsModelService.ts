@@ -93,8 +93,8 @@ export class OperationsModelService {
       modelInfo = models.find(m => m.id === preferredModelId);
     }
     if (!modelInfo) {
-      // Fall back to gpt-3.5-turbo
-      modelInfo = models.find(m => m.id === ('gpt-3.5-turbo' as any));
+      // gpt-3.5-turbo is a legacy fallback id no longer in the ModelName union; compare as string.
+      modelInfo = models.find(m => (m.id as string) === 'gpt-3.5-turbo');
     }
     if (!modelInfo) {
       // Last resort: any available text model

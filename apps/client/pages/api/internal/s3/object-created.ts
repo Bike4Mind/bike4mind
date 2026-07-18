@@ -31,7 +31,11 @@ const secretOk = (authorizationHeader: string | string[] | undefined): boolean =
   const raw = Array.isArray(authorizationHeader) ? '' : (authorizationHeader ?? '');
   // MinIO sends the auth_token verbatim as the Authorization value; tolerate a Bearer prefix.
   const provided = raw.startsWith('Bearer ') ? raw.slice(7) : raw;
-  return provided.length === expected.length && crypto.timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+  // Compare UTF-8 byte lengths (not UTF-16 string .length): timingSafeEqual requires equal
+  // byte lengths and throws otherwise, which a multi-byte value of equal string length would hit.
+  const providedBuf = Buffer.from(provided);
+  const expectedBuf = Buffer.from(expected);
+  return providedBuf.length === expectedBuf.length && crypto.timingSafeEqual(providedBuf, expectedBuf);
 };
 
 const handler = baseApi({ auth: false }).post(
