@@ -61,7 +61,7 @@ import { useConfig } from '@client/app/hooks/data/settings';
  * there, add its tooltip here (a gated tool with no entry falls back to a generic
  * "Requires an API key that has not been configured." message).
  */
-const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
+export const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   web_search: 'Requires a Serper API key or a local SearXNG URL, configured in Admin > API Keys.',
   deep_research:
     'Requires Firecrawl (API key or URL) or a web search provider (Serper key or local SearXNG), configured in Admin > API Keys.',

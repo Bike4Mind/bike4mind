@@ -24,7 +24,7 @@ describe('serpApiSearch — missing key', () => {
   });
 });
 
-describe('performWebSearch — no provider configured', () => {
+describe('performWebSearch - no provider configured', () => {
   it('returns a clear not-configured message and empty citables when no provider resolves', async () => {
     mockGetSerperKey.mockResolvedValue(null);
     mockGetSearxngUrl.mockResolvedValue(null);
