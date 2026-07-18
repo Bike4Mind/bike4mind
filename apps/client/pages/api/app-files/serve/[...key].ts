@@ -59,6 +59,13 @@ const handler = baseApi({ auth: false }).get(
         return;
       }
       res.setHeader('Accept-Ranges', 'bytes');
+      // Served objects are static user assets, never executable. On self-host this
+      // proxy serves them same-origin (hosted uses an isolated CDN origin), so an asset
+      // stored as active content (e.g. an SVG or HTML uploaded as a "profile photo")
+      // could otherwise run in the app origin on direct navigation. Deny all
+      // script/subresource capability so served assets are inert as documents;
+      // <img>/<link> embedding by the app is unaffected.
+      res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
       if (out.ContentRange) {
         res.setHeader('Content-Range', out.ContentRange);
         res.status(206);
