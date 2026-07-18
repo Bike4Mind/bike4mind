@@ -238,7 +238,7 @@ To enable it:
    docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile imagegen up -d
    ```
 
-Open the image model settings and pick your checkpoint. No keys, no admin settings to flip. The first checkpoint download is several GB, so the model may take a few minutes to appear in the picker (which caches models for ~60s).
+Open the image model settings and pick your checkpoint. No keys, no admin settings to flip. The first checkpoint download is several GB; once it finishes, the puller triggers an SD.Next rescan automatically, so the checkpoint appears in the picker **within about a minute** (the app caches the model list for ~60s per user, so allow up to that TTL).
 
 ### Choosing a checkpoint (hardware)
 
@@ -280,7 +280,7 @@ IMAGE_GEN_BASE_URL=http://host.docker.internal:7860
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
 - **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen2.5-coder:1.5b` or `:3b`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
-- **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The picker caches models for ~60s.
+- **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The puller triggers an SD.Next rescan once the download finishes, and the picker caches models for ~60s. If it still isn't listed, force a rescan from the host: `curl -X POST http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints`.
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
 - **GPU override fails with "could not select device driver \"nvidia\" with capabilities: [[gpu]]"** - the NVIDIA Container Toolkit isn't installed or wired into Docker. Install it and run `sudo nvidia-ctk runtime configure --runtime=docker && sudo systemctl restart docker` (see "GPU acceleration"). Without a working GPU runtime, drop the `-f compose.ollama-gpu.yaml` and run CPU-only.
