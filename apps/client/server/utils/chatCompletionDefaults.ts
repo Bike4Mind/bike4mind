@@ -371,6 +371,10 @@ export async function resolveDefaultChatModel(params: {
     m => m.backend === ModelBackend.Ollama && m.type === 'text' && !isLikelyEmbeddingModel(m.id)
   );
   if (localModel) {
+    // No isChatModelUsable re-check on this pick: the route guard (chat.ts) re-validates via
+    // isChatModelUsable, and an Ollama model is usable iff apiKeys.ollama is set - the same
+    // condition under which getAvailableModels enumerates it into `models`. So any Ollama model
+    // present here is already usable, and the guard and this fallback stay in agreement.
     return { model: localModel.id, apiKeys, models };
   }
 

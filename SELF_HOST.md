@@ -139,8 +139,8 @@ On self-host it is served by the **`chatcompletion` container**, not the `app` c
 **Request** - OpenAI-shaped JSON:
 
 - `model` (**required**) - a model id from `GET /api/models`. Unlike `/api/chat`, this endpoint has **no server-side default**; omit it and the request is rejected.
-- `messages` (**required**) - `[{ "role": "user" | "assistant" | "system", "content": "..." }]`.
-- Optional: `temperature`, `max_tokens`, `tools`, `response_format`, `stream`.
+- `messages` (**required**) - `[{ "role": "user" | "assistant" | "system", "content": "..." }]`. `content` is a string or an array of content parts.
+- Optional: `temperature`, `max_tokens`, `tools`, `response_format`, `stream`. `tools` is **not** OpenAI-shaped - each entry is `{ toolSchema: { name, description, parameters } }` (see `CompletionToolSchema` in `b4m-core/common/src/schemas/cliCompletions.ts`), not `{ type: "function", function: {...} }`.
 
 Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_...`, or `Authorization: Bearer <JWT>`.
 

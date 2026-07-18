@@ -21,12 +21,22 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { createMocks } from 'node-mocks-http';
 
-const { mockValidate, mockFindById, mockRateLimit, mockInvoke, mockGetSettingsMap } = vi.hoisted(() => ({
+const {
+  mockValidate,
+  mockFindById,
+  mockRateLimit,
+  mockInvoke,
+  mockGetSettingsMap,
+  mockResolveDefaultChatModel,
+  mockIsChatModelUsable,
+} = vi.hoisted(() => ({
   mockValidate: vi.fn(),
   mockFindById: vi.fn(),
   mockRateLimit: vi.fn(),
   mockInvoke: vi.fn(),
   mockGetSettingsMap: vi.fn(),
+  mockResolveDefaultChatModel: vi.fn(),
+  mockIsChatModelUsable: vi.fn(),
 }));
 
 const RATE_LIMIT_HEADERS = {
@@ -63,11 +73,8 @@ vi.mock('@server/utils/userRateTier', () => ({
 vi.mock('@server/utils/chatCompletionDefaults', () => ({
   getDefaultChatCompletionOptions: () => ({}),
   getSharedTokenizer: () => ({}),
-  // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
-  resolveDefaultChatModel: async ({ configuredModel }: { configuredModel?: string | null }) => ({
-    model: configuredModel || 'test-default-model',
-  }),
-  isChatModelUsable: () => true,
+  resolveDefaultChatModel: (...a: unknown[]) => mockResolveDefaultChatModel(...a),
+  isChatModelUsable: (...a: unknown[]) => mockIsChatModelUsable(...a),
 }));
 
 // Only the data dependencies of the real apiKeyAuth middleware and the chat
@@ -189,6 +196,13 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
       })
     );
     mockRateLimit.mockResolvedValue({ allowed: true, retryAfter: undefined, headers: RATE_LIMIT_HEADERS });
+    // Hosted-path shape: no apiKeys/models, so chat.ts skips the self-host usability guard.
+    mockResolveDefaultChatModel.mockImplementation(
+      async ({ configuredModel }: { configuredModel?: string | null }) => ({
+        model: configuredModel || 'test-default-model',
+      })
+    );
+    mockIsChatModelUsable.mockReturnValue(true);
   });
 
   it('rejects a key holding neither ai:chat nor ai:generate (403)', async () => {
@@ -244,5 +258,19 @@ describe('POST /api/chat (integration — scope enforcement via real middleware 
     // scope validation never ran - this request was never an api-key caller
     expect(mockValidate).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 400 when the resolved default chat model is unusable (self-host, no key, no local model)', async () => {
+    // Self-host resolver shape: apiKeys/models ARE present (unlike the hosted default),
+    // so chat.ts runs its no-usable-model guard. An empty model list plus an unusable
+    // default trips the 400 before any quest is created.
+    validateWithScopes([ApiKeyScope.AI_CHAT]);
+    mockResolveDefaultChatModel.mockResolvedValue({ model: 'test-default-model', apiKeys: {}, models: [] });
+    mockIsChatModelUsable.mockReturnValue(false);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(res._getJSONData().error).toMatch(/no usable default chat model/i);
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 });
