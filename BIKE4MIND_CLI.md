@@ -141,6 +141,8 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 It also exposes a `b4m://notebook/{id}` resource that lists and reads notebooks as JSON.
 
+The **Scope** column is the *recommended* key configuration for that tool, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
+
 ### Auth and endpoint
 
 Listing tools needs no credentials; tool *calls* hit the API and authenticate. Precedence:
@@ -148,12 +150,14 @@ Listing tools needs no credentials; tool *calls* hit the API and authenticate. P
 - **Auth**: `--api-key` > `B4M_API_KEY` env var > the CLI's stored login (`b4m login`).
 - **Endpoint**: `B4M_API_URL` env var > `--api-url` > the CLI's configured backend.
 
-Create a key in the app under **Settings > API Keys** with the scopes for the tools you plan to use (keys start `b4m_live_`).
+Create a key in the app under **Settings > API Keys** with the scopes for the tools you plan to use (keys start `b4m_live_`). Prefer `B4M_API_KEY` over `--api-key`: a flag value is visible in process listings (`ps`), an env var is not.
 
 ### Transports
 
 - **stdio (default)**: `b4m mcp serve`. For local clients like Claude Desktop that spawn the process and speak JSON-RPC over stdin/stdout.
-- **streamable HTTP**: `b4m mcp serve --http --port 7000`. A stateless HTTP endpoint at `http://localhost:<port>/mcp` for clients that connect over HTTP.
+- **streamable HTTP**: `b4m mcp serve --http --port 7000`. A stateless endpoint at `http://127.0.0.1:<port>/mcp` for clients that connect over HTTP.
+
+HTTP mode binds **loopback only** (`127.0.0.1`) by design: it has no per-request auth of its own, so it must not be exposed on a routable interface. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
 
 ### Claude Desktop
 

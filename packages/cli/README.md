@@ -396,10 +396,10 @@ The reverse of adding a server: `b4m mcp serve` exposes your Bike4Mind backend t
 
 ```bash
 b4m mcp serve                        # stdio (default) - for local clients that spawn the process
-b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://localhost:7000/mcp
+b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0.0.1:7000/mcp
 ```
 
-Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool *listing* needs no credentials; tool *calls* authenticate. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and per-tool scopes.
+Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool *listing* needs no credentials; tool *calls* authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
 
 ## Git-Aware Code Search
 
