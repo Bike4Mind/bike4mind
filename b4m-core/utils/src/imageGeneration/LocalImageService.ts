@@ -19,6 +19,14 @@ interface Txt2ImgResponse {
   images?: string[];
 }
 
+/** One entry of the `GET /sdapi/v1/sd-models` response. `title` is `name [hash]`. */
+interface SdModel {
+  title: string;
+  model_name: string;
+}
+
+const SD_MODELS_TIMEOUT_MS = 4000;
+
 const DEFAULT_STEPS = 20;
 const DEFAULT_DIMENSION = 512;
 // CPU generation on a self-host box can take minutes per image; keep the client
@@ -44,6 +52,7 @@ export class LocalImageService extends AIImageService {
 
   async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
     const { width, height } = this.resolveDimensions(options);
+    const bareName = (options.model ?? '').replace(/^local-image\//, '');
     const request: Txt2ImgRequest = {
       prompt,
       steps: options.steps ?? DEFAULT_STEPS,
@@ -51,25 +60,51 @@ export class LocalImageService extends AIImageService {
       height,
       batch_size: options.n ?? 1,
       override_settings: {
-        sd_model_checkpoint: (options.model ?? '').replace(/^local-image\//, ''),
+        sd_model_checkpoint: await this.resolveCheckpointName(bareName),
       },
     };
 
+    let images: string[] = [];
     try {
       const { data } = await axios.post<Txt2ImgResponse>(`${this.baseUrl}/sdapi/v1/txt2img`, request, {
         timeout: REQUEST_TIMEOUT_MS,
       });
-      const images = data.images ?? [];
-      if (images.length === 0) {
-        throw new Error('Local image server returned no images');
-      }
-      // The A1111 API returns bare base64; wrap as a data URI so downstream
-      // download/upload treats it like the other providers' data-URI results.
-      return images.map(b64 => `data:image/png;base64,${b64}`);
+      images = data.images ?? [];
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error(`[LocalImageService] txt2img failed at ${this.baseUrl}: ${message}`);
       throw error instanceof Error ? error : new Error('Local image generation error: Unknown error');
+    }
+
+    // A successful HTTP call that returns no images is a server-side generation
+    // failure, not a transport error - kept outside the try so it isn't mislabeled.
+    if (images.length === 0) {
+      throw new Error('Local image server returned no images');
+    }
+
+    // The A1111 API returns bare base64; wrap as a data URI so downstream
+    // download/upload treats it like the other providers' data-URI results.
+    return images.map(b64 => `data:image/png;base64,${b64}`);
+  }
+
+  /**
+   * Resolve the value to send as `sd_model_checkpoint`. Stock A1111 commonly
+   * matches on the full title (`name [hash]`) rather than the bare model_name,
+   * so look the checkpoint up in `/sdapi/v1/sd-models` and prefer its title.
+   * Falls back to the bare name if the lookup fails or finds no match (SD.Next
+   * accepts the bare name), so a slow/absent models endpoint never blocks a render.
+   */
+  private async resolveCheckpointName(bareName: string): Promise<string> {
+    try {
+      const { data } = await axios.get<SdModel[]>(`${this.baseUrl}/sdapi/v1/sd-models`, {
+        timeout: SD_MODELS_TIMEOUT_MS,
+      });
+      const match = (data ?? []).find(m => m.model_name === bareName);
+      return match?.title ?? bareName;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.debug(`[LocalImageService] sd-models lookup failed at ${this.baseUrl}: ${message}`);
+      return bareName;
     }
   }
 

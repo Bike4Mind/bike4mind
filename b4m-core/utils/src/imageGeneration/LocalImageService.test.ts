@@ -5,13 +5,18 @@ import { LocalImageService } from './LocalImageService';
 
 vi.mock('axios');
 const mockedPost = vi.mocked(axios.post);
+const mockedGet = vi.mocked(axios.get);
 
 function makeService(baseUrl = 'http://imagegen:7860/') {
   return new LocalImageService(baseUrl, new Logger());
 }
 
 describe('LocalImageService.generate', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: sd-models lookup finds nothing, so the bare checkpoint name is used.
+    mockedGet.mockResolvedValue({ data: [] });
+  });
 
   it('POSTs to /sdapi/v1/txt2img with the prefix stripped into override_settings and a trimmed base URL', async () => {
     mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
@@ -37,6 +42,32 @@ describe('LocalImageService.generate', () => {
       batch_size: 2,
       override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly' },
     });
+  });
+
+  it('uses the sd-models title (name [hash]) for the checkpoint override when the checkpoint is found', async () => {
+    mockedGet.mockResolvedValue({
+      data: [{ title: 'v1-5-pruned-emaonly.safetensors [abc123]', model_name: 'v1-5-pruned-emaonly' }],
+    });
+    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    const svc = makeService();
+
+    await svc.generate('a bike', { model: 'local-image/v1-5-pruned-emaonly' });
+
+    const [, body] = mockedPost.mock.calls[0];
+    expect(body).toMatchObject({
+      override_settings: { sd_model_checkpoint: 'v1-5-pruned-emaonly.safetensors [abc123]' },
+    });
+  });
+
+  it('falls back to the bare checkpoint name when the sd-models lookup fails', async () => {
+    mockedGet.mockRejectedValue(new Error('connect ECONNREFUSED'));
+    mockedPost.mockResolvedValue({ data: { images: ['QUJD'] } });
+    const svc = makeService();
+
+    await svc.generate('a bike', { model: 'local-image/sd15' });
+
+    const [, body] = mockedPost.mock.calls[0];
+    expect(body).toMatchObject({ override_settings: { sd_model_checkpoint: 'sd15' } });
   });
 
   it('maps each bare base64 image to a data URI', async () => {
