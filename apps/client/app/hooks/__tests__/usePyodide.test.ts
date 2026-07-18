@@ -51,19 +51,32 @@ vi.mock('@client/app/workers/pyodide/types', () => ({
   ExecutionResult: {},
 }));
 
-// usePyodide reads the public config to pick up an optional Pyodide mirror; stub it so the
-// hook renders without a react-query provider.
+// usePyodide reads the public config to pick up an optional Pyodide mirror; stub it (via a
+// hoisted, mutable holder) so the hook renders without a react-query provider and tests can
+// vary what the config returns.
+const { publicConfigRef } = vi.hoisted(() => ({
+  publicConfigRef: { current: undefined as { pyodideBaseUrl?: string } | undefined },
+}));
 vi.mock('@client/app/hooks/data/settings', () => ({
-  usePublicConfig: () => ({ data: undefined }),
+  usePublicConfig: () => ({ data: publicConfigRef.current }),
 }));
 
 describe('usePyodide', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    publicConfigRef.current = undefined;
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('configures the pyodide manager with the public pyodideBaseUrl when config arrives', async () => {
+    const { pyodideManager } = await import('@client/app/utils/pyodideManager');
+    publicConfigRef.current = { pyodideBaseUrl: 'http://mirror.local/pyodide/' };
+    const { usePyodide } = await import('../usePyodide');
+    renderHook(() => usePyodide());
+    expect(pyodideManager.configure).toHaveBeenCalledWith('http://mirror.local/pyodide/');
   });
 
   it('should return initial state', async () => {

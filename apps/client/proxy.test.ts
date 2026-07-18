@@ -221,10 +221,18 @@ describe('proxy CSP - optional PYODIDE_BASE_URL mirror', () => {
     warn.mockRestore();
   });
 
-  it('leaves the default CDN allow-listed when unset', () => {
+  it('adds nothing when unset, empty, or invalid - byte-identical to the no-var baseline', () => {
+    const url = 'https://app.bike4mind.com/dashboard';
+    // afterEach clears stubs and PYODIDE_BASE_URL is not in the base env, so this is the no-var baseline.
+    const baseline = proxy(makeRequest(url)).headers.get('Content-Security-Policy') ?? '';
+    expect(baseline).toContain('https://cdn.jsdelivr.net'); // the default CDN is already allow-listed
+
     vi.stubEnv('PYODIDE_BASE_URL', '');
-    const csp = proxy(makeRequest('https://app.bike4mind.com/dashboard')).headers.get('Content-Security-Policy') ?? '';
-    expect(directive(csp, 'script-src')).toContain('https://cdn.jsdelivr.net');
-    expect(directive(csp, 'connect-src')).toContain('https://cdn.jsdelivr.net');
+    expect(proxy(makeRequest(url)).headers.get('Content-Security-Policy')).toBe(baseline);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubEnv('PYODIDE_BASE_URL', 'not a url');
+    expect(proxy(makeRequest(url)).headers.get('Content-Security-Policy')).toBe(baseline);
+    warn.mockRestore();
   });
 });
