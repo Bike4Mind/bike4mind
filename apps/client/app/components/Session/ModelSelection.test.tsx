@@ -1,9 +1,10 @@
 import React from 'react';
 import { CssVarsProvider } from '@mui/joy/styles';
 import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ModelInfo, ModelName } from '@bike4mind/common';
-import ModelSelection from './ModelSelection';
+import { ModelBackend } from '@bike4mind/common';
+import ModelSelection, { getModelBackend, SELF_HOSTED_BACKEND } from './ModelSelection';
 
 const { setLLM } = vi.hoisted(() => ({ setLLM: vi.fn() }));
 
@@ -124,5 +125,43 @@ describe('ModelSelection apply behavior', () => {
     expect(setModel).toHaveBeenCalledWith(imageModel.id);
     expect(onSettingsClick).toHaveBeenCalledWith(imageModel);
     expect(onSelectionComplete).not.toHaveBeenCalled();
+  });
+});
+
+describe('getModelBackend self-hosted grouping', () => {
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+  });
+
+  const makeModel = (over: Partial<ModelInfo>): ModelInfo =>
+    ({ id: 'x', name: 'X', description: '', type: 'image', contextWindow: 1, max_tokens: 1, ...over }) as ModelInfo;
+
+  it('groups a local image model under "Local / Self-Hosted" (not "Other") in self-host', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    const model = makeModel({
+      id: 'local-image/v1-5-pruned-emaonly',
+      name: 'v1-5-pruned-emaonly',
+      backend: ModelBackend.LocalImage,
+    });
+    expect(getModelBackend(model)).toBe(SELF_HOSTED_BACKEND);
+  });
+
+  it('groups a local Ollama text model under the same heading in self-host', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    const model = makeModel({
+      id: 'qwen2.5-coder:7b',
+      name: 'qwen2.5-coder:7b',
+      backend: ModelBackend.Ollama,
+      type: 'text',
+    });
+    expect(getModelBackend(model)).toBe(SELF_HOSTED_BACKEND);
+  });
+
+  it('does not force the heading outside self-host (falls through to name-based grouping)', () => {
+    delete process.env.B4M_SELF_HOST;
+    const model = makeModel({ id: 'local-image/foo', name: 'foo', backend: ModelBackend.LocalImage });
+    expect(getModelBackend(model)).toBe('Other');
   });
 });
