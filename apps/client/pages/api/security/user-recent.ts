@@ -35,9 +35,11 @@ const handler = baseApi().get(
         data: login,
         timestamp: login.createdAt,
       })),
-      ...suspiciousPatterns.map(pattern => ({
+      ...suspiciousPatterns.map(({ emails: _emails, ...pattern }) => ({
         type: 'suspicious_pattern',
-        // Filter usernames to only those belonging to the current user
+        // Filter usernames to only those belonging to the current user; drop the
+        // aggregation's `emails` array entirely (it buckets by IP and would leak
+        // other co-targeted users' email addresses). The UI renders neither.
         data: {
           ...pattern,
           usernames: Array.isArray(pattern.usernames)

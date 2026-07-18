@@ -72,6 +72,97 @@ beforeEach(() => {
   findOne.mockReset();
 });
 
+/** A public artifact carrying owner/moderation/storage internals. */
+function makePublicArtifactRow() {
+  return {
+    publicId: 'pub-1',
+    title: 'My Artifact',
+    description: 'desc',
+    visibility: 'public',
+    commentPolicy: 'none',
+    embedOrigins: undefined,
+    publishedAt: new Date('2026-01-01').toISOString(),
+    // Sensitive internals that must NOT reach a public viewer:
+    ownerId: OWNER,
+    lastPublishedBy: OWNER,
+    storageKeyPrefix: 'artifacts/pub-1/',
+    reportCount: 3,
+    takedownReason: 'nsfw',
+    deletedBy: null,
+    moderationStatus: 'active',
+    source: { kind: 'bundle' },
+    tier: 'user',
+    scopeId: 'scope-1',
+  };
+}
+
+async function getArtifact(user: unknown, row = makePublicArtifactRow()) {
+  findOne.mockReturnValue({ select: () => ({ lean: () => Promise.resolve(row) }) });
+  const { req, res } = createMocks({ method: 'GET' });
+  (req as unknown as { query: unknown }).query = { id: 'pub-1' };
+  (req as unknown as { user?: unknown }).user = user;
+  await (handler as unknown as (req: unknown, res: unknown) => Promise<void>)(req, res);
+  return res;
+}
+
+describe('GET public artifact - response scoping', () => {
+  it('returns only public display fields to a non-owner viewer', async () => {
+    const res = await getArtifact({ id: 'someone-else', isAdmin: false });
+    expect(res._getStatusCode()).toBe(200);
+    const { artifact } = res._getJSONData();
+    expect(artifact.title).toBe('My Artifact');
+    expect(artifact.publicId).toBe('pub-1');
+    for (const leaked of [
+      'ownerId',
+      'lastPublishedBy',
+      'storageKeyPrefix',
+      'reportCount',
+      'takedownReason',
+      'deletedBy',
+      'moderationStatus',
+      'source',
+      'tier',
+      'scopeId',
+    ]) {
+      expect(leaked in artifact).toBe(false);
+    }
+    expect(JSON.stringify(artifact)).not.toContain('artifacts/pub-1/');
+  });
+
+  it('returns only public display fields to an anonymous viewer', async () => {
+    const res = await getArtifact(undefined);
+    const { artifact } = res._getJSONData();
+    expect('ownerId' in artifact).toBe(false);
+    expect(artifact.title).toBe('My Artifact');
+  });
+
+  it('returns the full record to the owner (manage modal needs it)', async () => {
+    const res = await getArtifact({ id: OWNER, isAdmin: false });
+    const { artifact } = res._getJSONData();
+    expect(artifact.ownerId).toBe(OWNER);
+    expect(artifact.storageKeyPrefix).toBe('artifacts/pub-1/');
+  });
+
+  it('returns the full record to an admin', async () => {
+    const res = await getArtifact({ id: 'admin-1', isAdmin: true });
+    const { artifact } = res._getJSONData();
+    expect(artifact.ownerId).toBe(OWNER);
+  });
+
+  it('does not leak DTO metadata for a GATED public artifact to a non-manager (404)', async () => {
+    const gated = { ...makePublicArtifactRow(), accessGate: { kind: 'passphrase' } };
+    const res = await getArtifact({ id: 'someone-else', isAdmin: false }, gated);
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('still returns the full record for a GATED artifact to its owner', async () => {
+    const gated = { ...makePublicArtifactRow(), accessGate: { kind: 'passphrase' } };
+    const res = await getArtifact({ id: OWNER, isAdmin: false }, gated);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData().artifact.ownerId).toBe(OWNER);
+  });
+});
+
 describe('PATCH domain access gate - stored as entered, validated', () => {
   it('stores entries AS ENTERED (lowercased, de-duped) - never reduced to eTLD+1', async () => {
     const { res, artifact } = await patchGate(['mail.acme.com', 'acme.com', 'PARTNER.CO', 'acme.com']);

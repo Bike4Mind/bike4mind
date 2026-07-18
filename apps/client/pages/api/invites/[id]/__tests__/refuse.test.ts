@@ -66,4 +66,18 @@ describe('POST /api/invites/[id]/refuse', () => {
     expect(res._getStatusCode()).toBe(400);
     expect(refuseWholeInvite).not.toHaveBeenCalled();
   });
+
+  it('strips co-recipients from the returned invite', async () => {
+    refuseWholeInvite.mockResolvedValue({
+      id: 'inv-1',
+      recipients: { pending: [], accepted: ['other@x.com'], refused: ['me@x.com'] },
+    });
+    const { req, res } = createMocks({ method: 'POST', query: { id: 'inv-1' }, body: {} });
+    (req as any).user = { id: 'u1', email: 'me@x.com' };
+    await mockRefs.postHandler!(req, res);
+
+    const body = res._getJSONData();
+    expect(body.recipients.refused).toEqual(['me@x.com']);
+    expect(JSON.stringify(body)).not.toContain('other@x.com');
+  });
 });

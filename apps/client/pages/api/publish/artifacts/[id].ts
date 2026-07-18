@@ -54,6 +54,28 @@ function canManage(artifact: { ownerId: string }, user: { id: string; isAdmin?: 
   return artifact.ownerId === String(user.id) || !!user.isAdmin;
 }
 
+// Public viewers (anyone hitting a `visibility: 'public'` artifact) get only these
+// display fields. Everything else -- ownerId, lastPublishedBy, storageKeyPrefix,
+// moderation internals (reportCount/takedownReason/deletedBy/moderationStatus),
+// source, tier/scopeId/slug, manifest/renderedBody, etc. -- is owner/admin-only.
+const PUBLIC_ARTIFACT_FIELDS = [
+  'publicId',
+  'title',
+  'description',
+  'visibility',
+  'commentPolicy',
+  'embedOrigins',
+  'publishedAt',
+] as const;
+
+function toPublicArtifact(artifact: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const field of PUBLIC_ARTIFACT_FIELDS) {
+    if (artifact[field] !== undefined) out[field] = artifact[field];
+  }
+  return out;
+}
+
 const handler = baseApi()
   .get(async (req, res) => {
     const publicId = String(req.query.id);
@@ -61,21 +83,27 @@ const handler = baseApi()
     // artifact, and .lean() bypasses the schema's toJSON strip - so project it out here.
     const artifact = await PublishedArtifact.findOne({ publicId, deletedAt: null })
       .select('-shareToken -shareTokenUpdatedAt')
-      .lean<{
-        ownerId: string;
-        visibility: string;
-      } | null>();
+      .lean<(Record<string, unknown> & { ownerId: string; visibility: string }) | null>();
     if (!artifact) {
       return res.status(404).json({ error: 'Artifact not found' });
     }
+    const isManager = !!req.user && canManage(artifact, req.user);
     // Non-public artifacts require an owner/admin viewer on this management route.
     if (artifact.visibility !== 'public') {
       if (!req.user) return res.status(401).json({ error: 'Authentication required' });
-      if (!canManage(artifact, req.user)) {
+      if (!isManager) {
         return res.status(403).json({ error: 'Not authorized to view this artifact' });
       }
     }
-    return res.status(200).json({ artifact });
+    // A gated public artifact must not leak even display metadata to a non-manager
+    // who merely knows the publicId - the gate is enforced on the serve path, so
+    // treat it as not-found here (indistinguishable from a private artifact).
+    if (artifact.visibility === 'public' && artifact.accessGate && !isManager) {
+      return res.status(404).json({ error: 'Artifact not found' });
+    }
+    // Owner/admin get the full record (the manage modal needs it); any other viewer
+    // of an ungated public artifact gets only the public display DTO.
+    return res.status(200).json({ artifact: isManager ? artifact : toPublicArtifact(artifact) });
   })
   .patch(async (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'Authentication required' });

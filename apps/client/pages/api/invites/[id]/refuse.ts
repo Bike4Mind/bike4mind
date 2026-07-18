@@ -3,6 +3,7 @@
 
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
+import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { sendToClient } from '@server/websocket/utils';
 import { sharingService } from '@bike4mind/services';
 import { inviteRepository } from '@bike4mind/database';
@@ -31,7 +32,8 @@ const handler = baseApi().post(
       status: 'Refused invite',
     });
 
-    return res.json(invite);
+    // Invitee-facing: strip co-recipients' emails from the returned invite.
+    return res.json(filterInviteRecipientsToSelf(invite, req.user.email));
   })
 );
 
