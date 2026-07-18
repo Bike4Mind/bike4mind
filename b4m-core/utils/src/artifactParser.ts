@@ -269,7 +269,17 @@ function toolCallJsonToArtifact(candidate: string): string | null {
     name = obj.name ?? obj.function ?? obj.tool ?? obj.tool_name;
   }
   if (args === undefined) args = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
-  if (typeof name !== 'string' || !args || typeof args !== 'object') return null;
+  // Promote only an invented artifact-builder tool name (build_html, create_webpage,
+  // render_page, generate_ui...). A real tool whose args merely include HTML, e.g.
+  // send_html_email, must be left alone. Anchored so the leading verb is the tool's
+  // purpose, not an "html" substring buried mid-name.
+  if (
+    typeof name !== 'string' ||
+    !/^(build|create|render|make|generate|write)[-_]?(html|artifact|page|webpage|website|ui)/i.test(name) ||
+    !args ||
+    typeof args !== 'object'
+  )
+    return null;
 
   const html = Object.values(args as Record<string, unknown>).find(
     (v): v is string => typeof v === 'string' && looksLikeHtml(v)

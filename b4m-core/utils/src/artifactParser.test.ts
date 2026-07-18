@@ -104,6 +104,21 @@ describe('convertCodeBlocksToArtifacts - tool-call JSON promotion', () => {
     expect(artifacts[0].type).toBe('html');
   });
 
+  it('promotes other artifact-builder tool names (create_webpage) with a fragment', () => {
+    const call = JSON.stringify({ name: 'create_webpage', arguments: { body: '<section><p>hi</p></section>' } });
+    const { artifacts } = promote('```json\n' + call + '\n```');
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].type).toBe('html');
+  });
+
+  it('leaves a legit tool whose args merely include HTML untouched (send_email)', () => {
+    // Regression: a normal API-shaped answer must survive for all backends.
+    const call = JSON.stringify({ name: 'send_email', arguments: { html_body: '<p>Hi</p>' } });
+    const { artifacts, converted } = promote('```json\n' + call + '\n```');
+    expect(artifacts).toHaveLength(0);
+    expect(converted).toContain('send_email');
+  });
+
   it('promotes a bare tool-call object that is the entire reply', () => {
     const { artifacts } = promote(buildHtmlCall('<html><body>bare</body></html>'));
     expect(artifacts).toHaveLength(1);
