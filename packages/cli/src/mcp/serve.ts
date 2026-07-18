@@ -55,10 +55,10 @@ function captureStdout(): FrameWriter {
   console.info = toStderr;
   console.debug = toStderr;
 
-  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
-    process.stderr.write(chunk as string);
-    return true;
-  }) as typeof process.stdout.write;
+  // Forward every arg (chunk, encoding, callback) to stderr so a caller's encoding
+  // and write-completion callback are honoured and real backpressure is returned;
+  // only the destination changes, keeping stdout clean for JSON-RPC frames.
+  process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write;
 
   return writeToRealStdout;
 }
@@ -115,10 +115,19 @@ async function handleHttpRequest(
     allowedHosts: [`127.0.0.1:${port}`, `localhost:${port}`],
   });
 
-  res.on('close', () => {
+  // Release the per-request server/transport once the response is done. 'finish'
+  // fires after a successful send - which under keep-alive 'close' may not do until
+  // the socket is later torn down - while 'close' still covers a premature client
+  // disconnect. The guard makes whichever fires first the only one to run.
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
     void transport.close();
     void server.close();
-  });
+  };
+  res.on('finish', release);
+  res.on('close', release);
 
   await server.connect(transport);
   await transport.handleRequest(req, res);

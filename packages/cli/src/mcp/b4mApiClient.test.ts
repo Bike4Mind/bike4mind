@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AxiosError, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 
 const mockGet = vi.fn();
@@ -104,6 +104,10 @@ describe('B4mApiClient', () => {
 });
 
 describe('mapApiError', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('maps 401 to a re-auth hint', () => {
     expect(mapApiError(axiosError(401), 'http://x')).toContain('authentication failed');
   });
@@ -114,10 +118,36 @@ describe('mapApiError', () => {
     );
   });
 
-  it('surfaces a retry-after on 429', () => {
+  it('surfaces a numeric retry-after on 429', () => {
     const msg = mapApiError(axiosError(429, { headers: { 'retry-after': '30' } }), 'http://x');
     expect(msg).toContain('rate limit');
     expect(msg).toContain('30s');
+  });
+
+  it('converts an HTTP-date retry-after into a non-negative seconds delay', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2015-10-21T07:28:00Z'));
+    const msg = mapApiError(
+      axiosError(429, { headers: { 'retry-after': 'Wed, 21 Oct 2015 07:28:30 GMT' } }),
+      'http://x'
+    );
+    expect(msg).toContain('retry after 30s');
+    expect(msg).not.toContain('GMT');
+  });
+
+  it('clamps a past HTTP-date retry-after to 0 seconds', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2015-10-21T07:28:00Z'));
+    const msg = mapApiError(
+      axiosError(429, { headers: { 'retry-after': 'Wed, 21 Oct 2015 07:27:00 GMT' } }),
+      'http://x'
+    );
+    expect(msg).toContain('retry after 0s');
+  });
+
+  it('omits the retry hint when retry-after is unparseable', () => {
+    const msg = mapApiError(axiosError(429, { headers: { 'retry-after': 'soon' } }), 'http://x');
+    expect(msg).toBe('rate limit exceeded');
   });
 
   it('maps ECONNREFUSED to an unreachable-endpoint message with the base URL', () => {

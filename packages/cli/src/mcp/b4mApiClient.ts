@@ -161,10 +161,10 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
       return scope ? `${base} (recommended scope: ${scope})` : base;
     }
     if (status === 429) {
-      const retryAfter = error.response?.headers?.['retry-after'];
+      const retryAfterSeconds = parseRetryAfterSeconds(error.response?.headers?.['retry-after']);
       const serverMsg = extractServerMessage(error.response?.data);
       const base = serverMsg || 'rate limit exceeded';
-      return retryAfter ? `${base} (retry after ${retryAfter}s)` : base;
+      return retryAfterSeconds !== undefined ? `${base} (retry after ${retryAfterSeconds}s)` : base;
     }
     if (error.code === 'ECONNREFUSED' || error.message.includes('ECONNREFUSED')) {
       return `cannot reach Bike4Mind at ${baseURL}`;
@@ -176,6 +176,20 @@ export function mapApiError(error: unknown, baseURL: string, scope?: string): st
     return error.message;
   }
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Normalize a Retry-After header (RFC 7231: either delta-seconds or an HTTP-date)
+ * to a whole, non-negative number of seconds. Returns undefined when the header is
+ * absent or parses as neither, so callers can omit the retry hint entirely.
+ */
+function parseRetryAfterSeconds(value: unknown): number | undefined {
+  if (value === undefined || value === null) return undefined;
+  const raw = String(value).trim();
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) return undefined;
+  return Math.max(0, Math.ceil((dateMs - Date.now()) / 1000));
 }
 
 /** Pull a human-readable message out of a JSON error body (`error` or `message` field). */
