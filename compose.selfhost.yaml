@@ -362,6 +362,36 @@ services:
         echo "Done. Pulled models are now available in the app model picker."
     restart: 'no'
 
+  # Local web search via SearXNG (optional).
+  # A self-hosted metasearch engine so the web_search tool (and deep_research)
+  # work with NO SerpAPI key. Opt in with the `search` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
+  # Then set SEARXNG_BASE_URL=http://searxng:8080 in .env.selfhost (see the file).
+  searxng:
+    image: searxng/searxng:latest
+    profiles: ['search']
+    # Read-only config; only the JSON format + limiter tweaks the adapter needs are
+    # overridden, everything else inherits SearXNG defaults. See selfhost/searxng/settings.yml.
+    volumes:
+      - ./selfhost/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      # SearXNG's settings loader maps this env var onto server.secret_key at load time
+      # (searx/settings_defaults.py: secret_key has environ_name='SEARXNG_SECRET'), so it applies
+      # even with the read-only settings.yml above - no file mutation, no secret committed to the
+      # repo. Verified in-container: get_setting('server.secret_key') returns this value.
+      # Override in .env.selfhost for anything but local eval.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-selfhost-local-dev}
+    # Loopback-only, like the other backing services. The app reaches it over the
+    # compose network as http://searxng:8080. Override SEARXNG_HOST_PORT if 8080 is taken.
+    ports:
+      - '127.0.0.1:${SEARXNG_HOST_PORT:-8080}:8080'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:8080/healthz || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
   # Local image generation via a self-hosted Stable-Diffusion server (optional).
   # Generate images with NO provider API keys, using the SD.Next WebUI's
   # AUTOMATIC1111-compatible REST API (/sdapi/v1/txt2img). Opt in with the

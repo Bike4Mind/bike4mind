@@ -20,6 +20,8 @@ describe('unsafeHostnameReason (literal, no DNS)', () => {
     '172.31.255.255',
     '192.168.1.1',
     '0.0.0.1',
+    '100.64.0.1', // carrier-grade NAT (RFC 6598) 100.64.0.0/10
+    '100.127.255.255', // top of the CGNAT range
     'fd00::1',
     'fe80::1',
     '::ffff:169.254.169.254',
@@ -27,12 +29,18 @@ describe('unsafeHostnameReason (literal, no DNS)', () => {
     expect(unsafeHostnameReason(host)).not.toBeNull();
   });
 
-  it.each(['example.com', '8.8.8.8', '1.1.1.1', 'en.wikipedia.org', '172.32.0.1', '2606:4700::1111'])(
-    'allows %s',
-    host => {
-      expect(unsafeHostnameReason(host)).toBeNull();
-    }
-  );
+  it.each([
+    'example.com',
+    '8.8.8.8',
+    '1.1.1.1',
+    'en.wikipedia.org',
+    '172.32.0.1',
+    '100.63.255.255', // just below the CGNAT range
+    '100.128.0.1', // just above the CGNAT range
+    '2606:4700::1111',
+  ])('allows %s', host => {
+    expect(unsafeHostnameReason(host)).toBeNull();
+  });
 });
 
 describe('unsafeFetchUrlReason (protocol + literal + resolved)', () => {

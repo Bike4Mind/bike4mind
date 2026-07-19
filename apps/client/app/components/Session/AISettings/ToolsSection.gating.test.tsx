@@ -96,7 +96,7 @@ vi.mock('./DeepResearchConfigModal', () => ({ default: () => null }));
 vi.mock('./ImageGenerationModelSelectionModal', () => ({ default: () => null }));
 vi.mock('@client/app/components/help/ContextHelpButton', () => ({ default: () => null }));
 
-import ToolsSection from './ToolsSection';
+import ToolsSection, { MISSING_KEY_TOOLTIPS } from './ToolsSection';
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const Wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => (
@@ -255,5 +255,17 @@ describe('ToolsSection missing-key gating', () => {
     mocks.toolAvailability.value = { wolfram_alpha: false };
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(gated(container, 'tool-item-wolfram-alpha')).toBeTruthy();
+  });
+});
+
+// LOCK-STEP with computeToolAvailability in pages/api/settings/serverConfig.ts: web_search and
+// deep_research now resolve through the SearXNG/Firecrawl providers, so their disabled-tooltips must
+// name those alternatives (not just Serper/Firecrawl keys).
+describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
+  it('names the SearXNG and Firecrawl alternatives', () => {
+    expect(MISSING_KEY_TOOLTIPS.web_search).toContain('SearXNG');
+    expect(MISSING_KEY_TOOLTIPS.web_search).toContain('Serper');
+    expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('SearXNG');
+    expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('Firecrawl');
   });
 });

@@ -273,6 +273,30 @@ Already run Ollama on the host (e.g. a native GPU install)? Skip the `ollama` pr
 OLLAMA_BASE_URL=http://host.docker.internal:11434
 ```
 
+## Local web search (no SerpAPI key)
+
+The `web_search` tool (and `deep_research`) can run against a self-hosted [SearXNG](https://docs.searxng.org/) metasearch engine instead of the paid SerpAPI, so search works with **no external search key**. The stack bundles an optional `searxng` service.
+
+1. In `.env.selfhost`, uncomment `SEARXNG_BASE_URL`:
+
+   ```bash
+   SEARXNG_BASE_URL=http://searxng:8080
+   ```
+
+2. Bring the stack up with the `search` profile:
+
+   ```bash
+   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile search up -d
+   ```
+
+Enable the **Web Search** tool in the composer and it will use SearXNG automatically. Provider selection follows the `WebSearchProvider` admin setting (default `auto`): `auto` prefers SearXNG when a URL is configured and otherwise falls back to a SerpAPI key (`SerperKey` in Admin > API Keys); set it to `serpapi` or `searxng` to force one. The SearXNG config lives in `selfhost/searxng/settings.yml` (mounted read-only) and its `secret_key` comes from `SEARXNG_SECRET` in `.env.selfhost` - no secret is committed to the repo.
+
+### Reading pages: web_fetch and Firecrawl
+
+The `web_fetch` tool (reading a specific URL) and `deep_research` (which extracts page content) use [Firecrawl](https://www.firecrawl.dev/) when it is configured - set `FIRECRAWL_API_URL` (a self-hosted Firecrawl instance, no key needed) and/or `FIRECRAWL_API_KEY` (hosted cloud) in `.env.selfhost`, or the equivalents in Admin > API Keys.
+
+Without any Firecrawl config, `web_fetch` falls back to a **keyless direct fetch** that downloads the page and converts its HTML to markdown - so reading pages works out of the box with no key. That fallback has two limits versus Firecrawl: it does not run JavaScript (heavily client-rendered pages may come back sparse) and it cannot parse PDFs (upload a PDF directly instead). `deep_research` likewise runs on just a web-search provider, using the same plain-fetch reader for extraction.
+
 ## Local image generation (no API keys)
 
 Generate images on your own hardware with **no provider API keys**. The stack bundles an optional `imagegen` service (SD.Next) that exposes the AUTOMATIC1111-compatible REST API. When `IMAGE_GEN_BASE_URL` is set, its installed checkpoints appear in the image model picker automatically (as `local-image/<checkpoint>`) and work in chat like any other image model. This is the image counterpart to local models with Ollama.

@@ -13,7 +13,8 @@ import { User } from '@bike4mind/database';
 import { fabFileRepository } from '@bike4mind/database';
 import { getFilesStorage } from '@server/utils/storage';
 // Interop-safe constructor (not the raw default import) - see firecrawlApp.ts in services
-import { FirecrawlApp } from '@bike4mind/services/llm/tools/implementation/webfetch';
+import { createFirecrawlApp } from '@bike4mind/services/llm/tools/implementation/webfetch';
+import { getFirecrawlConfig } from '@bike4mind/auth/apiKeyService';
 import { scrapeWithRetry } from '@bike4mind/services/llm/tools/implementation/webfetch/scrapeWithRetry';
 import { taskScheduleRepository } from '@bike4mind/database';
 import { ResearchTaskStatus } from '@bike4mind/common';
@@ -95,14 +96,15 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
           llm,
           scraper: {
             fetch: async (url: string) => {
-              const apiKey = await adminSettingsRepository.findBySettingName('FirecrawlApiKey');
-
-              if (!apiKey) {
+              // Resolve Firecrawl from admin settings + self-host env (key or self-hosted URL).
+              const app = createFirecrawlApp(
+                await getFirecrawlConfig({ db: { adminSettings: adminSettingsRepository, apiKeys: apiKeyRepository } })
+              );
+              if (!app) {
                 throw new Error('Scraping API key not set');
               }
 
               logger.info(`Scraping URL: ${url}`);
-              const app = new FirecrawlApp({ apiKey: apiKey?.settingValue });
               return scrapeWithRetry(app, url, logger);
             },
           },

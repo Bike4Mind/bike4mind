@@ -77,6 +77,7 @@ export const SettingKeySchema = z.enum([
   'xaiApiKey',
   'voyageApiKey',
   'FirecrawlApiKey',
+  'FirecrawlApiUrl',
   'EnableDeepResearch',
   'EnableDeepResearchDefault',
   'EnableKnowledgeBaseSearch',
@@ -148,6 +149,8 @@ export const SettingKeySchema = z.enum([
   'SystemFiles',
   'OpenWeatherKey',
   'SerperKey',
+  'SearxngUrl',
+  'WebSearchProvider',
   'WolframAlphaKey',
   'FmpApiKey',
   'EnableFmpFinancialData',
@@ -1279,9 +1282,11 @@ export const API_SERVICE_GROUPS = {
     icon: 'Search',
     settings: [
       { key: 'SerperKey', order: 1 },
-      { key: 'WolframAlphaKey', order: 2 },
-      { key: 'FmpApiKey', order: 3 },
-      { key: 'PotionQuestApiKey', order: 4 },
+      { key: 'WebSearchProvider', order: 2 },
+      { key: 'SearxngUrl', order: 3 },
+      { key: 'WolframAlphaKey', order: 4 },
+      { key: 'FmpApiKey', order: 5 },
+      { key: 'PotionQuestApiKey', order: 6 },
     ],
   },
   CALENDAR: {
@@ -2402,6 +2407,27 @@ export const settingsMap = {
     order: 1,
     isSensitive: true,
   }),
+  WebSearchProvider: makeStringSetting({
+    key: 'WebSearchProvider',
+    name: 'Web Search Provider',
+    defaultValue: 'auto',
+    description:
+      'Which backend the web_search tool uses. "auto" prefers a configured local SearXNG instance, then falls back to the Serp Search API. "serpapi" or "searxng" force that provider.',
+    options: ['auto', 'serpapi', 'searxng'],
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.SEARCH.id,
+    order: 2,
+  }),
+  SearxngUrl: makeStringSetting({
+    key: 'SearxngUrl',
+    name: 'SearXNG Base URL',
+    defaultValue: '',
+    description:
+      'Base URL of a self-hosted SearXNG instance for local web search (e.g. http://searxng:8080). Enables keyless web search when set.',
+    category: 'Tools',
+    group: API_SERVICE_GROUPS.SEARCH.id,
+    order: 3,
+  }),
   WolframAlphaKey: makeStringSetting({
     key: 'WolframAlphaKey',
     name: 'Wolfram Alpha API Key',
@@ -2739,6 +2765,14 @@ export const settingsMap = {
     description: 'The API key for Firecrawl web scraping service',
     defaultValue: '',
     isSensitive: true,
+    category: 'AI',
+  }),
+  FirecrawlApiUrl: makeStringSetting({
+    key: 'FirecrawlApiUrl',
+    name: 'Firecrawl API URL',
+    description:
+      'Base URL for a self-hosted Firecrawl instance (e.g. http://firecrawl:3002). Leave blank to use the hosted Firecrawl cloud with the API key above.',
+    defaultValue: '',
     category: 'AI',
   }),
   EnableDeepResearch: makeBooleanSetting({

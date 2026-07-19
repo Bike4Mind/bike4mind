@@ -1,7 +1,13 @@
 import { Logger } from '@bike4mind/observability';
 import { ToolDefinition, ToolContext } from '../../base/types';
-import { GetEffectiveApiKeyAdapters, getSerperKey } from '../../../../apiKeyService';
+import { GetEffectiveApiKeyAdapters } from '../../../../apiKeyService';
 import { CitableSource } from '@bike4mind/common';
+import { resolveWebSearchProvider } from './providers';
+
+// serpApiSearch lives in providers.ts (alongside the provider abstraction) but is re-exported here
+// so its external import path (`.../websearch`) and the existing tests stay stable.
+export { serpApiSearch, resolveWebSearchProvider } from './providers';
+export type { WebSearchProvider, WebSearchProviderResult } from './providers';
 
 export function safeHostname(url: string): string {
   try {
@@ -16,74 +22,14 @@ export interface WebSearchParams {
   num_results?: number;
 }
 
-interface SearchResult {
-  title: string;
-  link: string;
-  snippet: string;
-}
-
 interface WebSearchResult {
   formattedResults: string;
   citables: CitableSource[];
 }
 
-export async function serpApiSearch(
-  adapters: GetEffectiveApiKeyAdapters,
-  query: string,
-  num_results?: number
-): Promise<any> {
-  const apiKey = await getSerperKey(adapters);
-  const url = new URL('https://serpapi.com/search');
-
-  if (!apiKey) {
-    Logger.globalInstance.error('❌ WebSearch Tool: No API key configured. Skipping search.');
-    return { organic_results: [] };
-  }
-  // Add required SerpAPI parameters exactly as shown in playground
-  const searchParams = new URLSearchParams({
-    engine: 'google',
-    api_key: apiKey,
-    q: query,
-    location: 'United States',
-    google_domain: 'google.com',
-    gl: 'us',
-    hl: 'en',
-    num: (num_results || 3).toString(),
-  });
-
-  url.search = searchParams.toString();
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60000);
-
-  let response: Response;
-  try {
-    response = await fetch(url.toString(), {
-      method: 'GET',
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
-  Logger.globalInstance.log('📡 WebSearch Tool: Response status:', response.status);
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    Logger.globalInstance.error('❌ WebSearch Tool: API error details:', {
-      status: response.status,
-      statusText: response.statusText,
-      errorText,
-      endpoint: url.origin,
-    });
-    throw new Error(`SERP API error: ${response.statusText} - ${errorText}`);
-  }
-
-  return response.json();
-}
-
 export const WEB_SEARCH_NOT_CONFIGURED_MSG =
-  'Web search is not configured: an administrator needs to set the Serper API key in Admin > API Keys. ' +
-  'No search was performed.';
+  'Web search is not configured: an administrator needs to set a Serper API key or a local SearXNG URL ' +
+  'in Admin > API Keys. No search was performed.';
 
 export async function performWebSearch(
   adapters: GetEffectiveApiKeyAdapters,
@@ -94,28 +40,21 @@ export async function performWebSearch(
   // Surface a clear "not configured" message instead of silently returning
   // "No results found", which reads to the model (and user) as if the web
   // genuinely had nothing - the exact confusion this tool's gating fixes.
-  const apiKey = await getSerperKey(adapters);
-  if (!apiKey) {
-    Logger.globalInstance.error('❌ WebSearch Tool: No API key configured. Skipping search.');
+  const provider = await resolveWebSearchProvider(adapters);
+  if (!provider) {
+    Logger.globalInstance.error('❌ WebSearch Tool: No web-search provider configured. Skipping search.');
     return { formattedResults: WEB_SEARCH_NOT_CONFIGURED_MSG, citables: [] };
   }
 
   try {
-    const data = await serpApiSearch(adapters, params.query, params.num_results);
-    Logger.globalInstance.log('📡 WebSearch Tool: Response status:', data.status);
-    Logger.globalInstance.log('📊 WebSearch Tool: Found results:', data.organic_results?.length || 0);
-    const results: SearchResult[] =
-      data.organic_results?.map((result: any) => ({
-        title: result.title,
-        link: result.link,
-        snippet: result.snippet,
-      })) || [];
+    const results = await provider.search(params.query, params.num_results);
+    Logger.globalInstance.log(`📊 WebSearch Tool: ${provider.name} found ${results.length} results`);
 
     const citables: CitableSource[] = results.map((result, index) => ({
-      id: result.link, // Use URL as unique identifier
+      id: result.url, // Use URL as unique identifier
       type: 'web_url' as const,
       title: result.title,
-      url: result.link,
+      url: result.url,
       description: result.snippet,
       timestamp: new Date().toISOString(),
       status: 'complete' as const,
@@ -130,7 +69,7 @@ export async function performWebSearch(
       .map(
         (result, index) =>
           `${index + 1}. **${result.title}**\n${result.snippet}\n` +
-          `Source: [${safeHostname(result.link)}](${result.link})\n`
+          `Source: [${safeHostname(result.url)}](${result.url})\n`
       )
       .join('\n');
 

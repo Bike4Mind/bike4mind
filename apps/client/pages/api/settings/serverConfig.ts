@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { Config } from '@server/utils/config';
 import { apiKeyService } from '@bike4mind/services';
+import { resolveWebSearchProvider } from '@bike4mind/services/llm/tools/implementation/websearch';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { ApiKeyType } from '@bike4mind/common';
@@ -104,13 +105,14 @@ export function isLocalImageBackendAvailable(): boolean {
  * `MISSING_KEY_TOOLTIPS` in `apps/client/app/components/Session/AISettings/ToolsSection.tsx`,
  * which supplies the user-facing "why it's disabled" text.
  *
- * Cost: this runs ~10 admin-setting / user-key lookups per request (4 single-key
- * getters + Firecrawl + the batched LLM keys + one per image provider). It's on
+ * Cost: this runs ~12 admin-setting / user-key lookups per request (3 single-key
+ * getters + the web-search provider resolver + Firecrawl + the batched LLM keys +
+ * one per image provider). It's on
  * the /serverConfig path (which also serves the WebSocket URL), but the client
  * caches that response for ~5 min (see `useConfig`), so it touches the DB only on
  * a fresh page-load, not on every render.
  */
-async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
+export async function computeToolAvailability(userId: string | undefined): Promise<ToolAvailability> {
   const dbAdapters = {
     db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
     getSettingsByNames,
@@ -122,28 +124,30 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     // getEffectiveLLMApiKeys would add an env fallback the tool never sees.
     const imageProviders = [ApiKeyType.bfl, ApiKeyType.openai, ApiKeyType.gemini, ApiKeyType.xai];
 
-    const [serperKey, openWeatherKey, wolframKey, fmpKey, firecrawlSetting, llmKeys, imageKeys] = await Promise.all([
-      apiKeyService.getSerperKey(dbAdapters),
-      apiKeyService.getOpenWeatherKey(dbAdapters),
-      apiKeyService.getWolframAlphaKey(dbAdapters),
-      apiKeyService.getFmpApiKey(dbAdapters),
-      // Deep Research uses Firecrawl (not Serper) - mirror the tool's own key read.
-      adminSettingsRepository.findBySettingName('FirecrawlApiKey'),
-      // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
-      // so matching its self-host env fallback here is correct.
-      userId ? apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
-      userId
-        ? Promise.all(imageProviders.map(type => apiKeyService.getEffectiveApiKey(userId, { type }, dbAdapters)))
-        : Promise.resolve<(string | undefined)[]>([]),
-    ]);
+    const [webSearchProvider, openWeatherKey, wolframKey, fmpKey, firecrawlConfig, llmKeys, imageKeys] =
+      await Promise.all([
+        // web_search resolves to SerpAPI or a local SearXNG instance; mirror the tool's own resolver
+        // so the picker never disables a working provider (and vice versa).
+        resolveWebSearchProvider(dbAdapters),
+        apiKeyService.getOpenWeatherKey(dbAdapters),
+        apiKeyService.getWolframAlphaKey(dbAdapters),
+        apiKeyService.getFmpApiKey(dbAdapters),
+        // Deep Research uses Firecrawl (key OR self-hosted URL) - mirror the tool's own resolver.
+        apiKeyService.getFirecrawlConfig(dbAdapters),
+        // Embedding keys (for Knowledge Base) resolve per user; KB uses this same getter,
+        // so matching its self-host env fallback here is correct.
+        userId ? apiKeyService.getEffectiveLLMApiKeys(userId, dbAdapters) : Promise.resolve(null),
+        userId
+          ? Promise.all(imageProviders.map(type => apiKeyService.getEffectiveApiKey(userId, { type }, dbAdapters)))
+          : Promise.resolve<(string | undefined)[]>([]),
+      ]);
 
     // getEffectiveLLMApiKeys returns the sentinel 'expired' (truthy) for an expired
     // user key, which the tool then rejects - treat it as absent so we don't report
     // a tool as available when it would actually fail.
     const usable = (key: string | null | undefined) => !!key && key !== 'expired';
 
-    const hasSerper = !!serperKey;
-    const hasFirecrawl = !!firecrawlSetting?.settingValue;
+    const hasFirecrawl = !!(firecrawlConfig.apiKey || firecrawlConfig.apiUrl);
     const hasImageKey = imageKeys.some(usable);
     // Knowledge Base semantic search needs an embeddings provider key (VoyageAI/OpenAI).
     // Note: this checks "any embeddings key present", not the admin's `defaultEmbeddingModel`
@@ -154,9 +158,11 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
     const hasEmbeddingKey = usable(llmKeys?.openai) || usable(llmKeys?.voyageai);
 
     return {
-      web_search: hasSerper,
-      // Deep Research uses the Firecrawl web-scraping service, not Serper.
-      deep_research: hasFirecrawl,
+      // web_search is available when any provider (SerpAPI or local SearXNG) resolves.
+      web_search: !!webSearchProvider,
+      // Deep Research works with Firecrawl (key or self-hosted URL) OR a web-search provider
+      // (SerpAPI/SearXNG) - the latter drives search with plain-fetch extraction.
+      deep_research: hasFirecrawl || !!webSearchProvider,
       weather_info: !!openWeatherKey,
       wolfram_alpha: !!wolframKey,
       fmp_financial_data: !!fmpKey,

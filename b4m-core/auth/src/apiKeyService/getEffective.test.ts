@@ -1,5 +1,5 @@
 import { vi, describe, it, expect } from 'vitest';
-import { getEffectiveLLMApiKeys } from './getEffective';
+import { getEffectiveLLMApiKeys, getSearxngUrl, getWebSearchProviderSetting } from './getEffective';
 import type { IAdminSettingsRepository, IApiKeyRepository, IApiKeyDocument } from '@bike4mind/common';
 import { ApiKeyType } from '@bike4mind/common';
 
@@ -314,5 +314,57 @@ describe('getEffectiveLLMApiKeys', () => {
         expect(result.imageGen).toBeNull();
       });
     });
+  });
+});
+
+describe('getSearxngUrl / getWebSearchProviderSetting', () => {
+  const withEnv = async (env: Record<string, string | undefined>, fn: () => Promise<void>) => {
+    const saved = Object.fromEntries(Object.keys(env).map(k => [k, process.env[k]]));
+    Object.entries(env).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v)));
+    try {
+      await fn();
+    } finally {
+      Object.entries(saved).forEach(([k, v]) => (v === undefined ? delete process.env[k] : (process.env[k] = v)));
+    }
+  };
+
+  const adaptersFor = (settings: Record<string, string | null>) => ({
+    db: {
+      adminSettings: {
+        findBySettingName: vi.fn(async (name: string) =>
+          name in settings && settings[name] !== null ? { settingName: name, settingValue: settings[name] } : null
+        ),
+      },
+    },
+  });
+  // Only db.adminSettings.findBySettingName is exercised by these getters.
+  const adapters = (settings: Record<string, string | null>) =>
+    adaptersFor(settings) as unknown as Parameters<typeof getSearxngUrl>[0];
+
+  it('returns the admin SearxngUrl when set', async () => {
+    expect(await getSearxngUrl(adapters({ SearxngUrl: 'http://admin:8080' }))).toBe('http://admin:8080');
+  });
+
+  it('falls back to SEARXNG_BASE_URL under B4M_SELF_HOST when no admin URL is set', async () => {
+    await withEnv({ B4M_SELF_HOST: 'true', SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
+      expect(await getSearxngUrl(adapters({}))).toBe('http://searxng:8080');
+    });
+  });
+
+  it('ignores SEARXNG_BASE_URL outside self-host', async () => {
+    await withEnv({ B4M_SELF_HOST: undefined, SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
+      expect(await getSearxngUrl(adapters({}))).toBeNull();
+    });
+  });
+
+  it('prefers the admin SearxngUrl over the env fallback', async () => {
+    await withEnv({ B4M_SELF_HOST: 'true', SEARXNG_BASE_URL: 'http://searxng:8080' }, async () => {
+      expect(await getSearxngUrl(adapters({ SearxngUrl: 'http://admin:8080' }))).toBe('http://admin:8080');
+    });
+  });
+
+  it('returns the provider setting when set, else null', async () => {
+    expect(await getWebSearchProviderSetting(adapters({ WebSearchProvider: 'searxng' }))).toBe('searxng');
+    expect(await getWebSearchProviderSetting(adapters({}))).toBeNull();
   });
 });
