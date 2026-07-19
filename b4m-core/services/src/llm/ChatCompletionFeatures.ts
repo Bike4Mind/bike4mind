@@ -45,6 +45,8 @@ import {
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   ImageModerationIncident,
+  isExperimentalFeatureEnabled,
+  buildMemoryContext,
 } from '@bike4mind/common';
 import { getDynamicDataLakeAccess } from '../dataLakeService/getDynamicDataLakeTags';
 import { getRelevantMementos } from '../mementoService';
@@ -170,8 +172,28 @@ export interface IChatCompletionServiceOptions {
     sessionId: string,
     userId: string,
     prompt: string,
-    model: string
+    model: string,
+    // The RESOLVED write flags. Chat must forward these the same way the agent path does, or the
+    // memento subscriber defaults writeV1=true and force-writes a V1 memento on every turn even when
+    // V1 is off - the concrete thing that kept V1 un-deletable.
+    flags: { enableMementos: boolean; enableMementosV2: boolean }
   ) => Promise<void>;
+  /**
+   * Mementos V2 retrieval, injected by the app tier (b4m-core cannot reach the ledger store). For a
+   * user on V2 it returns the beliefs to inject for `query` (the ledger unioned with their V1
+   * mementos, recalled); for a user on V1 it returns null so the caller keeps the classic memento
+   * path. Optional so callers that do not wire it fall back to V1.
+   */
+  /**
+   * `enabled` lets the caller hand over the V2 opt-in it has ALREADY resolved from the in-hand user
+   * document, so the recall does not re-fetch the user just to re-read a flag - a wasted remote-DB
+   * round trip (~100ms) on the critical path of every chat turn. Omitted, the recall looks it up.
+   */
+  recallMementosV2?: (
+    userId: string,
+    query: string,
+    opts?: { enabled?: boolean }
+  ) => Promise<{ fact: string; relevance: number }[] | null>;
   summarizeSession: (sessionId: string, trigger: ISessionDocument['summaryTrigger']) => Promise<void>;
   contextSummarizeSession: (sessionId: string, verbatimWindowStartQuestId: string) => Promise<void>;
   getMcpClient: (server: IMcpServerDocument) => Promise<{
@@ -309,6 +331,7 @@ export type ChatCompletionContext = Pick<
   | 'userAbility'
   | 'autoNameSession'
   | 'invokeCreateMemento'
+  | 'recallMementosV2'
   | 'logEvent'
   | 'db'
   | 'sessionId'
@@ -375,9 +398,15 @@ export class MementoFeature implements ChatCompletionFeature {
   private logger: Logger;
   private user: IUserDocument;
   private usedMementoIds: string[] = [];
+  // Which pipelines this turn should WRITE to, resolved once at construction (where the admin gate and
+  // the per-user opt-in are both in scope) and forwarded on completion - never re-defaulted downstream.
+  private writeV1: boolean;
+  private writeV2: boolean;
 
-  constructor(chatCompletion: ChatCompletionContext) {
+  constructor(chatCompletion: ChatCompletionContext, writeFlags: { writeV1: boolean; writeV2: boolean }) {
     this.chatCompletion = chatCompletion;
+    this.writeV1 = writeFlags.writeV1;
+    this.writeV2 = writeFlags.writeV2;
     this.db = chatCompletion.db;
     this.logger = chatCompletion.logger;
     this.user = chatCompletion.user;
@@ -394,6 +423,25 @@ export class MementoFeature implements ChatCompletionFeature {
     max_tokens: number,
     modelInfo: ModelInfo
   ): Promise<IMessage[]> {
+    // Mementos V2: if this user is on V2, inject the ledger-unioned-with-mementos recall and skip
+    // the V1 path (the two are mutually exclusive). A null result means the user is on V1.
+    //
+    // The opt-in is resolved HERE, off the user document we already hold - the recall would
+    // otherwise re-fetch the user from the remote DB just to re-read the same flag, ~100ms of dead
+    // time on every chat turn. Must use the Map-aware reader: the bag is a Mongoose Map.
+    const isV2 = isExperimentalFeatureEnabled(this.user, 'enableMementosV2');
+    if (isV2 && this.chatCompletion.recallMementosV2) {
+      const v2 = await this.chatCompletion.recallMementosV2(this.user.id, message, { enabled: true });
+      if (v2 !== null) {
+        this.usedMementoIds = [];
+        this.logger.log(`[Mementos V2] injecting ${v2.length} belief(s) into context`);
+        // ONE framed system block, not one note-card per fact - see buildMemoryContext. Injecting each
+        // belief as its own `[Memory] ...` message is what made the model recite its memory.
+        const context = buildMemoryContext(v2.map(({ fact }) => fact));
+        return context ? [{ role: 'system' as const, content: context }] : [];
+      }
+    }
+
     this.logger.log('📚 Retrieving relevant mementos using vector similarity');
 
     const relevantMementos = await getRelevantMementos(
@@ -448,7 +496,10 @@ export class MementoFeature implements ChatCompletionFeature {
       this.logger.log(`• Tracked ${this.usedMementoIds.length} mementos used in quest ${quest.id}`);
     }
 
-    await this.chatCompletion.invokeCreateMemento(quest.id, quest.sessionId, this.user.id, quest.prompt, model);
+    await this.chatCompletion.invokeCreateMemento(quest.id, quest.sessionId, this.user.id, quest.prompt, model, {
+      enableMementos: this.writeV1,
+      enableMementosV2: this.writeV2,
+    });
   }
 }
 

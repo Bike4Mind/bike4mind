@@ -70,6 +70,7 @@
     "@bike4mind/infra": "workspace:*",
     "@bike4mind/llm-adapters": "workspace:*",
     "@bike4mind/mcp": "workspace:*",
+    "@bike4mind/memory": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@bike4mind/resource": "workspace:*",
     "@bike4mind/scripts": "workspace:*",

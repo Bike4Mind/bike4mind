@@ -27,6 +27,8 @@ export {
   OPENAI_EMBEDDING_MODEL_MAP,
   VoyageAIEmbeddingProvider,
   VOYAGEAI_EMBEDDING_MODEL_MAP,
+  OllamaEmbeddingService,
+  OLLAMA_EMBEDDING_MODEL_MAP,
   // storage
   BaseStorage,
   S3Storage,

@@ -65,7 +65,7 @@ const process = async (parameters: { id: string; userId: string }, logger: Logge
 
   try {
     try {
-      const { modelId, llm } = await OperationsModelService.getOperationsModel();
+      const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
       llm.currentModel = modelId;
 
       if (!llm) {
@@ -179,7 +179,7 @@ const processDiscoveredLinks = async (parameters: { id: string; userId: string }
   logger.log(`Started processDiscoveredLinks queue handler for researchTaskId: ${researchTaskId}`);
   logger.log('====================================');
 
-  const { modelId, llm } = await OperationsModelService.getOperationsModel();
+  const { modelId, llm } = await OperationsModelService.getOperationsTextModel();
 
   if (!llm) {
     throw new Error('No LLM found');

@@ -11,6 +11,8 @@ export * from './DataLakeModel';
 export * from './EmbeddingCacheModel';
 export * from './LatticeModel';
 export * from './McpServerModel';
+export * from './MemoryLedgerEventModel';
+export * from './MemoryPrincipalKeyModel';
 export * from './NotebookCurationJobModel';
 export * from './RapidReplyAuditLogModel';
 export * from './RapidReplyMappingModel';

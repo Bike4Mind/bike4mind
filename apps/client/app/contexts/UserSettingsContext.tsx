@@ -20,6 +20,7 @@ import { useSettingsFromServer } from '../hooks/data/settings';
 export type ExperimentalFeature =
   | 'enableQuestMaster'
   | 'enableMementos'
+  | 'enableMementosV2'
   | 'enableArtifacts'
   | 'enableOllama'
   | 'enableAgents'
@@ -81,6 +82,7 @@ const defaultSettings: UserSettings = {
   experimentalFeatures: {
     enableQuestMaster: false,
     enableMementos: false,
+    enableMementosV2: false,
     enableArtifacts: false,
     enableOllama: false,
     enableAgents: false,

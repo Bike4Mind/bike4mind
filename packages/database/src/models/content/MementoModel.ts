@@ -34,6 +34,10 @@ const MementoSchema = new Schema<IMementoDocument, IMementoModel>(
     fullContent: { type: String, required: true },
     tags: [{ type: String }],
     embedding: { type: [Number] },
+    // Which model produced `embedding`. Without it a vector is uninterpretable: cosine across two
+    // models' spaces is noise, so a read path cannot tell a usable vector from a booby-trapped one.
+    // Un-stamped (pre-migration) mementos are treated as untrusted until the re-embed backfill runs.
+    embeddingModel: { type: String },
     lastAccessedAt: { type: Date, required: true, default: Date.now },
   },
   {
@@ -72,6 +76,33 @@ class MementoRepository extends BaseRepository<IMementoDocument> implements IMem
       query.select(select);
     }
     return query.exec();
+  }
+
+  /**
+   * Hard-delete specific mementos, owner-scoped. Used by the per-belief V2 shred to remove the V1
+   * memento(s) backing a belief - a belief in the unified view can be a V1 memento (deleted by its own
+   * id) or a ledger belief with a V1 memento TWIN carrying the same plaintext fact (deleted by fact
+   * match). Leaving either behind re-injects the "deleted" fact into the next chat prompt. Owner-scoped
+   * so a caller can only delete their own.
+   */
+  async deleteByIdsForUser(ids: string[], userId: string): Promise<number> {
+    if (ids.length === 0) return 0;
+    const res = await this.model.deleteMany({ _id: { $in: ids }, userId });
+    return res.deletedCount ?? 0;
+  }
+
+  /**
+   * Hard-delete every memento for a user - the V1 half of "delete my data".
+   *
+   * A ledger fact is crypto-shredded (destroy the key, the ciphertext becomes unreadable), but a
+   * memento stores its summary, the full original prompt and a plaintext embedding with no key to
+   * destroy. Archiving would only hide it: the content would remain in the collection AND keep
+   * coming back through the V2 unified read, which unions the ledger with these mementos. Deletion
+   * has to be real.
+   */
+  async deleteAllByUserId(userId: string): Promise<number> {
+    const res = await this.model.deleteMany({ userId });
+    return res.deletedCount ?? 0;
   }
 }
 

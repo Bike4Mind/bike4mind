@@ -1,4 +1,10 @@
-import { IMessage, ModelBackend, PermissionDeniedError, type ModelInfo } from '@bike4mind/common';
+import {
+  IMessage,
+  ModelBackend,
+  PermissionDeniedError,
+  type MessageContentObject,
+  type ModelInfo,
+} from '@bike4mind/common';
 import {
   CompletionInfo,
   DEFAULT_MAX_TOOL_CALLS,
@@ -385,17 +391,27 @@ export class OllamaBackend implements ICompletionBackend {
    * none match, the content is a normal answer.
    *
    * Guards against false positives: reasoning traces (<think>...</think>) are
-   * stripped first, and we only treat content as a call when the model emits it
-   * as its response (starts with a JSON object or a code fence). JSON merely
-   * quoted inside prose ("the math_evaluate tool takes {...}") is left alone.
+   * stripped first. The search source is a leading bare object (only when the
+   * reply STARTS with one) plus every fenced body - so a call wrapped in a fence
+   * after preamble prose is recovered, a bare call is not lost just because the
+   * reply also contains an unrelated fence, and JSON merely quoted mid-prose
+   * ("the math_evaluate tool takes {...}") is ignored. The seen-set dedupes any
+   * overlap between the two sources.
+   *
+   * Because any fenced block is a search source, a fenced EXAMPLE of a real
+   * (authorized) tool is also recovered and executed. This stays bounded to
+   * authorized tools (tryParseToolCallJson requires a name present in `tools`),
+   * so there is no privilege escalation - only a wider trigger surface.
    */
   private parseContentToolCall(content: string, tools: ICompletionOptionTools[]): NormalizedToolCall[] {
     const withoutThink = content.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
-    if (!withoutThink.startsWith('{') && !withoutThink.startsWith('```')) return [];
+    const fenced = this.extractFencedBlocks(withoutThink);
+    const source = [withoutThink.startsWith('{') ? withoutThink : '', ...fenced].join('\n');
+    if (!source.trim()) return [];
 
     const calls: NormalizedToolCall[] = [];
     const seen = new Set<string>();
-    for (const candidate of this.extractJsonObjects(withoutThink)) {
+    for (const candidate of this.extractJsonObjects(source)) {
       const call = this.tryParseToolCallJson(candidate, tools);
       if (!call) continue;
       const key = `${call.name}:${call.arguments}`;
@@ -404,6 +420,20 @@ export class OllamaBackend implements ICompletionBackend {
       calls.push({ ...call, id: `ollama-content-tool-${calls.length}-${call.name}` });
     }
     return calls;
+  }
+
+  /**
+   * Return the body of every ```-fenced block, so a tool call the model wrapped
+   * in a fence after preamble prose can be isolated from the surrounding text.
+   */
+  private extractFencedBlocks(content: string): string[] {
+    const blocks: string[] = [];
+    const fenceRegex = /```[^\n]*\n?([\s\S]*?)```/g;
+    let match: RegExpExecArray | null;
+    while ((match = fenceRegex.exec(content)) !== null) {
+      blocks.push(match[1]);
+    }
+    return blocks;
   }
 
   /**
@@ -546,10 +576,41 @@ export class OllamaBackend implements ICompletionBackend {
     const converted = convertMessagesToOpenAIFormat(messages);
     return converted.map(msg => {
       const raw = msg as unknown as Record<string, unknown>;
-      const mapped: OllamaMessage = {
-        role: msg.role,
-        content: msg.content != null ? String(msg.content) : '',
-      };
+      const mapped: OllamaMessage = { role: msg.role, content: '' };
+
+      if (Array.isArray(msg.content)) {
+        // Ollama has no multimodal content-block array: text goes in `content`
+        // and images in `images` as RAW base64 (no data: prefix). Only text/image
+        // blocks reach here - convertMessagesToOpenAIFormat already flattened any
+        // tool_use/tool_result blocks into tool_calls/tool_name above.
+        const texts: string[] = [];
+        const images: string[] = [];
+        for (const block of msg.content as MessageContentObject[]) {
+          if (block.type === 'text' && typeof block.text === 'string') {
+            texts.push(block.text);
+          } else if (block.type === 'image') {
+            if (block.source.type === 'base64') {
+              images.push(block.source.data);
+            } else {
+              // Symmetric with the image_url drop below: Ollama needs inline base64.
+              this._logger.debug('[OllamaBackend] Dropping non-base64 image block; Ollama requires inline base64.');
+            }
+          } else if (block.type === 'image_url') {
+            const dataUrl = block.image_url.url.match(/^data:[^,]*;base64,(.+)$/s);
+            if (dataUrl) {
+              images.push(dataUrl[1]);
+            } else {
+              // Ollama can't fetch a remote URL; it needs inline base64.
+              this._logger.debug('[OllamaBackend] Dropping non-data image_url; Ollama requires inline base64.');
+            }
+          }
+        }
+        mapped.content = texts.join('\n');
+        if (images.length > 0) mapped.images = images;
+      } else {
+        mapped.content = msg.content != null ? String(msg.content) : '';
+      }
+
       // Carry through tool_calls and tool_name so the conversation history is intact
       if (Array.isArray(raw.tool_calls)) {
         mapped.tool_calls = raw.tool_calls as ToolCall[];
