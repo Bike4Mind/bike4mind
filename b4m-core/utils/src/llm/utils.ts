@@ -633,6 +633,11 @@ export async function processUrlsFromPrompt(
  * Returns a value between -1 and 1, where 1 means identical, 0 means orthogonal, -1 means opposite
  */
 export function computeCosineSimilarity(vector1: number[], vector2: number[]): number {
+  // Vectors of different dimensions cannot be compared: this happens when the
+  // Default Embedding Model changes and old chunks were embedded at another
+  // dimension (e.g. switching between Ollama nomic-embed-text at 768 and OpenAI
+  // at 1536). Score 0 keeps the mismatch out of results instead of returning NaN.
+  if (vector1.length !== vector2.length) return 0;
   const dotProduct = vector1.reduce((sum, value, index) => sum + value * vector2[index], 0);
   const magnitude1 = Math.sqrt(vector1.reduce((sum, value) => sum + value * value, 0));
   const magnitude2 = Math.sqrt(vector2.reduce((sum, value) => sum + value * value, 0));
@@ -895,6 +900,44 @@ export async function processFabFilesServer(
             }
 
             break;
+
+          case ModelBackend.Ollama: {
+            // Vision-capable local models take the image inline. We build the same
+            // Anthropic-style base64 block the Anthropic path uses; the Ollama
+            // backend later maps it into Ollama's images[] field. Enforce the
+            // dimension cap so a large upload does not blow the local context.
+            const rawImageBuffer = await storage.download(file.filePath!);
+            const imageBuffer = await ensureImageWithinDimensionLimit(rawImageBuffer, MAX_IMAGE_DIMENSION_PX, logger);
+            const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
+            const ollamaBase64 = imageBuffer.toString('base64');
+
+            // Soft byte guard paralleling the Anthropic/Gemini path above: even after
+            // the dimension cap, a heavy image inflates the prompt and can overflow a
+            // small local model's context window. Warn (do not drop) so the operator
+            // can shrink the upload if the model then misbehaves.
+            const OLLAMA_IMAGE_WARN_MB = 3.5;
+            const ollamaImageSizeMB = imageBuffer.byteLength / (1024 * 1024);
+            if (ollamaImageSizeMB > OLLAMA_IMAGE_WARN_MB) {
+              const warnMsg = `Image "${file.fileName}" (${ollamaImageSizeMB.toFixed(1)}MB) is large for a local model and may exceed its context window.`;
+              logger.warn(`[processFabFilesServer] ${warnMsg}`);
+              await sendStatusUpdate(warnMsg);
+            }
+
+            imageContent.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: ollamaMimeType,
+                data: ollamaBase64,
+              },
+            });
+            // Add filename and fabFileId as text context to prevent hallucinated filenames.
+            imageContent.push({
+              type: 'text',
+              text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
+            });
+            break;
+          }
 
           default:
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);

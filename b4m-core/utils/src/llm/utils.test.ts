@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildAndSortMessages,
+  computeCosineSimilarity,
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
@@ -1535,5 +1536,21 @@ describe('Context Management Tests', () => {
       expect(messages).toEqual([]);
       expect(getMostRecentChatHistory).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('computeCosineSimilarity', () => {
+  it('returns 1 for identical vectors', () => {
+    expect(computeCosineSimilarity([1, 0, 1], [1, 0, 1])).toBeCloseTo(1, 10);
+  });
+
+  it('returns 0 for orthogonal vectors', () => {
+    expect(computeCosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0, 10);
+  });
+
+  it('returns 0 when vector dimensions differ (mixed embedding models)', () => {
+    // e.g. an Ollama nomic-embed-text query (768) against an OpenAI chunk (1536).
+    expect(computeCosineSimilarity([1, 2, 3], [1, 2])).toBe(0);
+    expect(computeCosineSimilarity([1, 2], [1, 2, 3, 4])).toBe(0);
   });
 });

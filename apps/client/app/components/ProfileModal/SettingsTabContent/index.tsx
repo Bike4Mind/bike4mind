@@ -49,7 +49,9 @@ const SettingsTabContent = () => {
   // gate is respected (not just the raw user preference), and keep the sub-tab out
   // of the tree until both admin + user settings hydrate to avoid a flash.
   const { isFeatureEnabled, isLoading } = useFeatureEnabled();
-  const enableMementos = !isLoading && isFeatureEnabled('enableMementos');
+  // The Mementos sub-tab is shown for V1 OR V2 - a V2 user must be able to VIEW their memory even with
+  // V1 off (MementosTabContent renders the V2 belief view when enableMementosV2 is on).
+  const showMementos = !isLoading && (isFeatureEnabled('enableMementos') || isFeatureEnabled('enableMementosV2'));
   const hasEmailIntegration = !!currentUser?.platformEmailAddress;
 
   // Fall back to General when the requested sub-tab isn't actually rendered - e.g.
@@ -62,7 +64,7 @@ const SettingsTabContent = () => {
     SettingsSubTab.General,
     SettingsSubTab.CustomInstructions,
     ...(hasEmailIntegration ? [SettingsSubTab.EmailInbox] : []),
-    ...(enableMementos ? [SettingsSubTab.Mementos] : []),
+    ...(showMementos ? [SettingsSubTab.Mementos] : []),
   ]);
   const requestedSubTab = search?.subtab || SettingsSubTab.General;
   const activeSubTab = renderedSubTabs.has(requestedSubTab) ? requestedSubTab : SettingsSubTab.General;
@@ -103,7 +105,7 @@ const SettingsTabContent = () => {
           </StyledSubTab>
         )}
 
-        {enableMementos && (
+        {showMementos && (
           <StyledSubTab data-testid="settings-subtab-mementos" value={SettingsSubTab.Mementos}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
               <AccessTimeIcon sx={{ fontSize: '16px' }} />
@@ -127,7 +129,7 @@ const SettingsTabContent = () => {
         </StyledSubTabPanel>
       )}
 
-      {enableMementos && (
+      {showMementos && (
         <StyledSubTabPanel value={SettingsSubTab.Mementos}>
           {activeSubTab === SettingsSubTab.Mementos && <MementosTabContent />}
         </StyledSubTabPanel>

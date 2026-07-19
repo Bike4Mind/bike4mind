@@ -2,6 +2,7 @@ export enum EmbeddingModelProvider {
   OPENAI = 'OpenAI',
   BEDROCK = 'Amazon Bedrock',
   VOYAGE_AI = 'Voyage AI',
+  OLLAMA = 'Ollama',
 }
 
 export interface EmbeddingModelInfo<Model extends string> {

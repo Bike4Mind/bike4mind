@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import { CHAT_MODELS, ChatModels } from '../models';
-import { BedrockEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
+import { BedrockEmbeddingModel, OllamaEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 
@@ -2696,6 +2696,9 @@ export const settingsMap = {
       ...Object.values(OpenAIEmbeddingModel),
       ...Object.values(VoyageAIEmbeddingModel),
       ...Object.values(BedrockEmbeddingModel),
+      // Local Ollama embedders only make sense in self-host, where the operator
+      // runs Ollama; hide them from the cloud admin dropdown otherwise.
+      ...(process.env.B4M_SELF_HOST === 'true' ? Object.values(OllamaEmbeddingModel) : []),
     ],
   }),
   // Analytics Bot (existing production bot - DO NOT CHANGE)
