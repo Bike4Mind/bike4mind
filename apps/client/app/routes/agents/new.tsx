@@ -6,6 +6,7 @@ import { createAgentToServer } from '@client/app/utils/agentsAPICalls';
 import AgentForm from '@client/app/components/Agent/AgentForm';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useQueryClient } from '@tanstack/react-query';
+import { GearsStatusResponse } from '@client/app/hooks/useGearsStatus';
 
 const NewAgentPage: React.FC = () => {
   const navigate = useNavigate();
@@ -31,6 +32,17 @@ const NewAgentPage: React.FC = () => {
 
         toast.success('Agent created successfully!');
         queryClient.invalidateQueries({ queryKey: ['agents'] });
+        // A first agent unlocks the 'agents' gear server-side, but the Gears
+        // status query has a 5-minute staleTime - without an explicit
+        // invalidation the sidenav keeps hiding the earned Agents row until a
+        // reload. Only invalidate while the gear is still locked so routine
+        // creations don't refetch the status (same pattern as SessionFilePond's
+        // first-upload invalidation for the files gear).
+        const gearsStatus = queryClient.getQueryData<GearsStatusResponse>(['gears', 'status']);
+        const agentsGear = gearsStatus?.gears.find(g => g.key === 'agents');
+        if (!agentsGear || !agentsGear.unlocked) {
+          void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
+        }
         navigate({ to: `/agents/${newAgent.id}` });
       } catch (error) {
         console.error('Error creating agent:', error);
@@ -39,7 +51,7 @@ const NewAgentPage: React.FC = () => {
         setIsSubmitting(false);
       }
     },
-    [navigate, currentUser, setCurrentUser]
+    [navigate, currentUser, setCurrentUser, queryClient]
   );
 
   return (
