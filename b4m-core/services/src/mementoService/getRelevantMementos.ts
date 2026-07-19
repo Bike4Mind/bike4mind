@@ -54,6 +54,7 @@ export interface GetRelevantMementosOptions {
     anthropic?: string | null;
     gemini?: string | null;
     voyageai?: string | null;
+    ollama?: string | null;
   };
 
   /**
@@ -144,7 +145,8 @@ export async function getRelevantMementos(
 
   // STEP 3: Setup embedding service
   const requiredProvider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
+    {};
 
   if (requiredProvider === 'openai') {
     if (!apiKeyTable?.openai) {
@@ -156,6 +158,12 @@ export async function getRelevantMementos(
       throw new Error('VoyageAI API key is required for memento retrieval but not found.');
     }
     embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+  } else if (requiredProvider === 'ollama') {
+    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+    if (!apiKeyTable?.ollama) {
+      throw new Error('Ollama base URL is required for memento retrieval but not found.');
+    }
+    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
   }
 
   const embeddingFactory = new EmbeddingFactory(embeddingConfig);

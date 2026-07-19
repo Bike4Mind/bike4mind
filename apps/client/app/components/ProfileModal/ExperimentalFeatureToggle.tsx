@@ -225,6 +225,17 @@ export default function ExperimentalFeatureToggle() {
         loading={false}
         onChange={() => handleToggle('enableResearchEngine')}
       />
+      {(getServerSettingValue('EnableMementos') || currentUser?.isAdmin) && (
+        <FeatureContainer
+          title="Mementos V2 (ledger)"
+          featureKey="enableMementosV2"
+          description="Use the Mementos 2.0 principal-scoped memory ledger. Peer to V1 - your existing mementos still appear. Experimental."
+          enabled={settings.experimentalFeatures?.enableMementosV2}
+          disabled={false}
+          loading={false}
+          onChange={() => handleToggle('enableMementosV2')}
+        />
+      )}
       <FeatureContainer
         title="Research Mode"
         featureKey="enableResearchMode"

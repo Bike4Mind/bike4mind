@@ -49,6 +49,8 @@ import { toast } from 'sonner';
 import { AxiosError } from 'axios';
 import { useSessions } from '@client/app/contexts/SessionsContext';
 import ErrorBoundary from '@client/app/components/common/ErrorBoundary';
+import MementosV2Panel from './MementosV2Panel';
+import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { calculateMemoryUsage, calculateTierMemoryUsage, buildMementosCSV } from '@client/app/utils/mementoHelpers';
 import { CreateMementoDTO, UpdateMementoDTO } from '@client/app/utils/mementoDtos';
 import { useGetMementos } from '@client/app/hooks/data/mementos';
@@ -1362,16 +1364,22 @@ const MementosTabContentInner = () => {
   );
 };
 
-const MementosTabContent = () => (
-  <ErrorBoundary
-    fallback={
-      <Box sx={{ p: 2 }}>
-        <Typography level="h4">Failed to load Mementos. Please refresh or re-authenticate.</Typography>
-      </Box>
-    }
-  >
-    <MementosTabContentInner />
-  </ErrorBoundary>
-);
+const MementosTabContent = () => {
+  const { isFeatureEnabled } = useFeatureEnabled();
+  // V2 is the unified view (the read path unions V1 mementos into the ledger), so when it is on it wins
+  // regardless of V1. V1-only users still get the classic CRUD table.
+  const v2Enabled = isFeatureEnabled('enableMementosV2');
+  return (
+    <ErrorBoundary
+      fallback={
+        <Box sx={{ p: 2 }}>
+          <Typography level="h4">Failed to load Mementos. Please refresh or re-authenticate.</Typography>
+        </Box>
+      }
+    >
+      {v2Enabled ? <MementosV2Panel /> : <MementosTabContentInner />}
+    </ErrorBoundary>
+  );
+};
 
 export default MementosTabContent;

@@ -59,6 +59,15 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
+      // Self-host: the direct S3 presign targets the internal MinIO host (unreachable from a
+      // browser and blocked by CSP connect-src). Hand back a same-origin proxy URL instead;
+      // it streams the PUT to storage server-side (pages/api/files/[id]/upload.ts) and writes
+      // the same key, so the MinIO webhook + ingestion pipeline fire unchanged. Hosted keeps
+      // the direct presign (byte-identical).
+      if (process.env.B4M_SELF_HOST === 'true' && result.presignedUrl) {
+        result.presignedUrl = `/api/files/${result.id}/upload`;
+      }
+
       return res.json(result);
     })
   );

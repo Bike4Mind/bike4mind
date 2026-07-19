@@ -96,6 +96,55 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
   });
 
+  it('recovers a fenced tool call preceded by preamble prose', async () => {
+    const toolFn = vi.fn(async () => '4');
+    const { backend, chat } = makeBackend([
+      {
+        // A real, offered tool wrapped in a fence after explanatory prose - the
+        // old startsWith guard dropped this because it did not start with { or ```.
+        message: {
+          content:
+            'Let me use the calculator:\n```json\n{"name":"math_evaluate","arguments":{"expression":"2+2"}}\n```',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 10,
+      },
+      { message: { content: 'The answer is 4.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 4 },
+    ]);
+
+    const { text, toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolFn).toHaveBeenCalledWith({ expression: '2+2' });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(text).toContain('The answer is 4.');
+    expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
+  });
+
+  it('recovers a leading bare tool call even when the reply also contains an unrelated fence', async () => {
+    const toolFn = vi.fn(async () => '4');
+    const { backend, chat } = makeBackend([
+      {
+        // Bare call first, then a fenced example block. The fence must not become
+        // the ONLY search source, or the real leading call would be dropped.
+        message: {
+          content: '{"name":"math_evaluate","arguments":{"expression":"2+2"}}\n```\nexample output\n```',
+          tool_calls: [],
+        },
+        prompt_eval_count: 5,
+        eval_count: 10,
+      },
+      { message: { content: 'The answer is 4.', tool_calls: [] }, prompt_eval_count: 6, eval_count: 4 },
+    ]);
+
+    const { text, toolsUsed } = await run(backend, { executeTools: true, tools: [mathTool(toolFn)] });
+
+    expect(toolFn).toHaveBeenCalledWith({ expression: '2+2' });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(text).toContain('The answer is 4.');
+    expect(toolsUsed.map(t => t.name)).toEqual(['math_evaluate']);
+  });
+
   it('recovers multiple content tool calls run together and skips unknown tools', async () => {
     const toolFn = vi.fn(async () => '1554453600');
     const { backend, chat } = makeBackend([
@@ -262,5 +311,53 @@ describe('OllamaBackend.complete tool loop', () => {
     expect(toolFn).not.toHaveBeenCalled();
     expect(chat).toHaveBeenCalledTimes(1);
     expect(text).toContain('The math_evaluate tool takes');
+  });
+});
+
+// Vision-capable local models receive images via Ollama's images[] field (raw
+// base64), not the multimodal content-block array other providers use.
+describe('OllamaBackend.buildMessages image handling', () => {
+  const answer = [{ message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 }];
+
+  // Drive a plain completion and return the message the api chat call received.
+  async function sentMessage(content: unknown) {
+    const { backend, chat } = makeBackend(answer);
+    await backend.complete('moondream', [{ role: 'user', content } as any], { stream: false } as any, async () => {});
+    return (chat.mock.calls[0][0] as { messages: Array<{ content: string; images?: string[] }> }).messages[0];
+  }
+
+  it('maps an inline base64 image block to images[] and keeps text in content', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'What is this?' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAA' } },
+    ]);
+    expect(msg.content).toBe('What is this?');
+    expect(msg.images).toEqual(['AAA']);
+  });
+
+  it('strips the data: URL prefix from an image_url block', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'describe' },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,BBB' } },
+    ]);
+    expect(msg.content).toBe('describe');
+    expect(msg.images).toEqual(['BBB']);
+  });
+
+  it('drops a non-data image_url since Ollama needs inline base64', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'hi' },
+      { type: 'image_url', image_url: { url: 'https://example.com/cat.png' } },
+    ]);
+    expect(msg.content).toBe('hi');
+    expect(msg.images).toBeUndefined();
+  });
+
+  it('strips the prefix from a parameterized data: URL (e.g. charset)', async () => {
+    const msg = await sentMessage([
+      { type: 'text', text: 'x' },
+      { type: 'image_url', image_url: { url: 'data:image/png;charset=utf-8;base64,CCC' } },
+    ]);
+    expect(msg.images).toEqual(['CCC']);
   });
 });

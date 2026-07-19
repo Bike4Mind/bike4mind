@@ -83,6 +83,10 @@ export const DEFAULT_MANIFEST = {
   notebookCurationQueue: { kind: 'queue', optional: true },
   researchEngineQueue: { kind: 'queue' },
   sreAnalysisQueue: { kind: 'queue' },
+  // Queue name -> URL map read by getSourceQueueUrl (dlqRegistry). Hosted links this as a
+  // Linkable to the frontend Lambda instead of the individual queues; the shim computes it
+  // from the same per-queue env vars so enqueue sites resolve identically in self-host.
+  sourceQueueUrls: { kind: 'queueUrls' },
   sreFixQueue: { kind: 'queue' },
   // --- function ---
   AgentExecutor: { kind: 'function' },

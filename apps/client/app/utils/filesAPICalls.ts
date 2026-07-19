@@ -89,19 +89,27 @@ export const createFabFileOnServerWithUpload = async (
 
     // If the a file has a presigned URL, upload the file to the bucket
     if (newFabFile.presignedUrl) {
-      await axios.put(newFabFile.presignedUrl, fileToUpload, {
+      const putConfig = {
         headers: {
           'Content-Type': fileToUpload.type,
         },
         signal: abortSignal,
         onUploadProgress: onProgress
-          ? progressEvent => {
+          ? (progressEvent: { total?: number; loaded: number }) => {
               const total = progressEvent.total || fileToUpload.size;
               const loaded = progressEvent.loaded;
               onProgress(loaded, total);
             }
           : undefined,
-      });
+      };
+      // Self-host returns a same-origin proxy path (leading '/') that needs the app's auth;
+      // the hosted S3 presign is an absolute, self-authenticating URL. Route the proxy through
+      // the authenticated `api` client, the S3 presign through raw axios (no app auth/cookies).
+      if (newFabFile.presignedUrl.startsWith('/')) {
+        await api.put(newFabFile.presignedUrl, fileToUpload, putConfig);
+      } else {
+        await axios.put(newFabFile.presignedUrl, fileToUpload, putConfig);
+      }
 
       // Check abort before presigned URL generation
       if (abortSignal?.aborted) {

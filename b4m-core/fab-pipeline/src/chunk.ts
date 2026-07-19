@@ -1,6 +1,7 @@
 import {
   BedrockEmbeddingModel,
   IFabFile,
+  OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   SupportedFabFileMimeTypes,
@@ -11,7 +12,12 @@ import JSZip from 'jszip';
 import type { Tiktoken } from 'tiktoken';
 import { extractText, getDocumentProxy } from 'unpdf';
 import { z } from 'zod';
-import { BEDROCK_EMBEDDING_MODEL_MAP, OPENAI_EMBEDDING_MODEL_MAP, VOYAGEAI_EMBEDDING_MODEL_MAP } from './embeddings';
+import {
+  BEDROCK_EMBEDDING_MODEL_MAP,
+  OLLAMA_EMBEDDING_MODEL_MAP,
+  OPENAI_EMBEDDING_MODEL_MAP,
+  VOYAGEAI_EMBEDDING_MODEL_MAP,
+} from './embeddings';
 import { Logger } from '@bike4mind/observability';
 import { S3Storage } from './storage';
 
@@ -59,6 +65,8 @@ export class SmartChunker {
       this.maxTokens = VOYAGEAI_EMBEDDING_MODEL_MAP[model].contextWindow;
     } else if (isEmbeddingModel(model, BedrockEmbeddingModel)) {
       this.maxTokens = BEDROCK_EMBEDDING_MODEL_MAP[model].contextWindow;
+    } else if (isEmbeddingModel(model, OllamaEmbeddingModel)) {
+      this.maxTokens = OLLAMA_EMBEDDING_MODEL_MAP[model].contextWindow;
     } else {
       throw new Error(`Unsupported embedding model: ${model}`);
     }

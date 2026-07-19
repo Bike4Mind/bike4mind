@@ -26,7 +26,7 @@ import {
   isSupportedEmbeddingModel,
   type SupportedEmbeddingModel,
 } from '@bike4mind/common';
-import { createTokenizer, type ITokenizer } from '@bike4mind/utils';
+import { createTokenizer, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
 import type { Logger } from '@bike4mind/observability';
 import { getRequestEntitlements } from '@server/entitlements';
 
@@ -152,17 +152,36 @@ const handler = baseApi()
       const dbAdapters = { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } };
       const userIdForService = req.user?.id || 'system';
       const embeddingProvider = getProviderFromModel(embedding_model as SupportedEmbeddingModel);
-      const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
-      const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
-        userIdForService,
-        { type: embeddingKeyType },
-        dbAdapters
-      );
 
-      if (!embeddingApiKey) {
-        return res.status(500).json({
-          error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
-        });
+      // Ollama (self-host) is keyless: it needs a base URL, resolved via the effective
+      // LLM keys, not a stored secret. Other providers resolve a single API key.
+      let embeddingApiKeyTable: { openai?: string | null; voyageai?: string | null; ollama?: string | null };
+      if (embeddingProvider === ModelBackend.Ollama) {
+        const effectiveKeys = await apiKeyService.getEffectiveLLMApiKeys(
+          userIdForService,
+          { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+          { logger: req.logger }
+        );
+        if (!effectiveKeys?.ollama) {
+          return res.status(500).json({
+            error: `Ollama base URL not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        }
+        embeddingApiKeyTable = { ollama: effectiveKeys.ollama };
+      } else {
+        const embeddingKeyType = embeddingProvider === ModelBackend.VoyageAI ? ApiKeyType.voyageai : ApiKeyType.openai;
+        const embeddingApiKey = await apiKeyService.getEffectiveApiKey(
+          userIdForService,
+          { type: embeddingKeyType },
+          dbAdapters
+        );
+        if (!embeddingApiKey) {
+          return res.status(500).json({
+            error: `${embeddingProvider} API key not configured. Required for query embedding with model ${embedding_model}.`,
+          });
+        }
+        embeddingApiKeyTable =
+          embeddingProvider === ModelBackend.VoyageAI ? { voyageai: embeddingApiKey } : { openai: embeddingApiKey };
       }
 
       if (isAborted()) return res.end();
@@ -179,8 +198,7 @@ const handler = baseApi()
           topK: top_k,
           minScore: min_score,
           embeddingModel: embedding_model as SupportedEmbeddingModel,
-          apiKeyTable:
-            embeddingProvider === ModelBackend.VoyageAI ? { voyageai: embeddingApiKey } : { openai: embeddingApiKey },
+          apiKeyTable: embeddingApiKeyTable,
           dataLakeTags,
           dataLakeTagPrefixes,
           logger: req.logger,

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { getEmbeddingModelCost, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
+import { getEmbeddingModelCost, OllamaEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
 
 describe('getEmbeddingModelCost', () => {
   it('prices a known OpenAI model at its per-token rate', () => {
@@ -22,6 +22,13 @@ describe('getEmbeddingModelCost', () => {
   it('does not alarm for an unpriced model with zero usage', () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     expect(getEmbeddingModelCost('made-up-embedding-model', 0)).toBe(0);
+    expect(spy).not.toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it('prices local Ollama embedders at $0 without alarming', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(getEmbeddingModelCost(OllamaEmbeddingModel.NOMIC_EMBED_TEXT, 1_000_000)).toBe(0);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
   });
