@@ -292,5 +292,27 @@ describe('getEffectiveLLMApiKeys', () => {
         expect(result.ollama).toBe('http://admin-configured:11434');
       });
     });
+
+    it('enables local image generation from IMAGE_GEN_BASE_URL under self-host', async () => {
+      await withEnv({ B4M_SELF_HOST: 'true', IMAGE_GEN_BASE_URL: 'http://imagegen:7860' }, async () => {
+        const result = await getEffectiveLLMApiKeys(null, {
+          db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+          getSettingsByNames: makeGetSettingsByNames(),
+        });
+
+        expect(result.imageGen).toBe('http://imagegen:7860');
+      });
+    });
+
+    it('ignores IMAGE_GEN_BASE_URL outside self-host', async () => {
+      await withEnv({ B4M_SELF_HOST: undefined, IMAGE_GEN_BASE_URL: 'http://imagegen:7860' }, async () => {
+        const result = await getEffectiveLLMApiKeys(null, {
+          db: { apiKeys: makeApiKeyRepo(), adminSettings: makeAdminSettingsRepo() },
+          getSettingsByNames: makeGetSettingsByNames(),
+        });
+
+        expect(result.imageGen).toBeNull();
+      });
+    });
   });
 });

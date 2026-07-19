@@ -13,6 +13,9 @@ export enum ModelBackend {
   XAI = 'xai',
   VoyageAI = 'voyageai',
   AWS = 'aws',
+  // Self-hosted Stable-Diffusion image backend (A1111-compatible REST API),
+  // gated by IMAGE_GEN_BASE_URL. Mirrors Ollama's local-text role for images.
+  LocalImage = 'local-image',
 }
 
 /**

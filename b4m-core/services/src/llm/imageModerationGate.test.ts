@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
 import { ImageModerationBlockedError, type ImageModerationService, type ModerationLabelHit } from '@bike4mind/utils';
 import { moderateImageOrThrow } from './imageModerationGate';
@@ -10,6 +10,38 @@ function makeMeta() {
 }
 
 describe('moderateImageOrThrow (moderation gate)', () => {
+  // These cases assert the hosted-mode behavior, so pin B4M_SELF_HOST off
+  // (the self-host branch short-circuits before any of them run).
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+  beforeEach(() => {
+    delete process.env.B4M_SELF_HOST;
+  });
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+  });
+
+  it('self-host: returns without calling checkImage (Rekognition gate skipped)', async () => {
+    process.env.B4M_SELF_HOST = 'true';
+    const service: ImageModerationService = { checkImage: vi.fn() };
+    const record = vi.fn();
+
+    await expect(
+      moderateImageOrThrow({
+        service,
+        enabled: true,
+        incidents: { record },
+        buffer: Buffer.from('bytes'),
+        mimeType: 'image/png',
+        incidentMeta: makeMeta(),
+        logger: Logger.globalInstance,
+      })
+    ).resolves.toBeUndefined();
+
+    expect(service.checkImage).not.toHaveBeenCalled();
+    expect(record).not.toHaveBeenCalled();
+  });
+
   it('block: throws ImageModerationBlockedError and records the incident once', async () => {
     const service: ImageModerationService = {
       checkImage: vi.fn().mockRejectedValue(new ImageModerationBlockedError(labels)),

@@ -67,7 +67,8 @@ const MISSING_KEY_TOOLTIPS: Partial<Record<B4MLLMTools, string>> = {
   weather_info: 'Requires an OpenWeather API key, configured in Admin > API Keys.',
   wolfram_alpha: 'Requires a Wolfram Alpha API key, configured in Admin > API Keys.',
   fmp_financial_data: 'Requires an FMP API key, configured in Admin > API Keys.',
-  image_generation: 'Requires an image generation API key (e.g. BFL or OpenAI), configured in Admin > API Keys.',
+  image_generation:
+    'Requires an image generation API key (e.g. BFL or OpenAI) in Admin > API Keys, or a self-hosted local image server (IMAGE_GEN_BASE_URL).',
   search_knowledge_base: 'Requires an embeddings API key (VoyageAI or OpenAI), configured in Admin > API Keys.',
 };
 

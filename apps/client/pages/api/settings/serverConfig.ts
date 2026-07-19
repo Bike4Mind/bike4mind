@@ -84,6 +84,17 @@ const handler = baseApi({ auth: true }).get(
 );
 
 /**
+ * A self-hosted local image backend (IMAGE_GEN_BASE_URL) needs no provider API
+ * key, so image generation is usable whenever it's configured. The env var is
+ * honored ONLY under B4M_SELF_HOST - mirroring the tool's own dispatch gate and
+ * the getAvailableModels enumeration gate - so a hosted deploy that happens to
+ * set it never reports the tool as available on that basis. Exported for tests.
+ */
+export function isLocalImageBackendAvailable(): boolean {
+  return process.env.B4M_SELF_HOST === 'true' && !!process.env.IMAGE_GEN_BASE_URL?.trim();
+}
+
+/**
  * Resolves which key-gated tools are usable, mirroring the same key getters the
  * tools themselves use so the picker never disables a tool that would actually
  * work (and vice versa). Only booleans are returned - never the key values.
@@ -149,7 +160,8 @@ async function computeToolAvailability(userId: string | undefined): Promise<Tool
       weather_info: !!openWeatherKey,
       wolfram_alpha: !!wolframKey,
       fmp_financial_data: !!fmpKey,
-      image_generation: hasImageKey,
+      // Available with a provider key OR a self-hosted local image backend (which needs none).
+      image_generation: hasImageKey || isLocalImageBackendAvailable(),
       // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
       search_knowledge_base: hasEmbeddingKey,
