@@ -193,6 +193,8 @@ b4m                                  # start, then /login — read the sign-in c
 
 Auth is cached per environment, so you can keep a separate hosted login and switch with `--prod` / `--api-url`. Full guide (hosted **and** self-host, switching, troubleshooting): [**BIKE4MIND_CLI.md**](./BIKE4MIND_CLI.md).
 
+Want other MCP clients (Claude Desktop, editors) to drive your stack? Run `b4m mcp serve` to expose it as an MCP server - see [Serve Bike4Mind as an MCP server](./BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve).
+
 ## Local models with Ollama (no API keys)
 
 Run open-weight models (Qwen, Llama, etc.) on your own hardware with **no provider API keys** and, once a model is pulled, **no internet**. Local models appear in the model picker under a **Local / Self-Hosted** section and work in chat like any other model.
