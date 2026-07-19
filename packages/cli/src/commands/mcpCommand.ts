@@ -5,12 +5,17 @@
 
 import { ConfigStore } from '../storage/ConfigStore.js';
 import type { CliConfig } from '../storage/types.js';
+import packageJson from '../../package.json';
 
 interface McpCommandArgs {
   _: (string | number)[];
   name?: string;
   command?: string;
   args?: string[];
+  http?: boolean;
+  port?: number;
+  apiKey?: string;
+  apiUrl?: string;
   [key: string]: unknown;
 }
 
@@ -91,6 +96,20 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
       await handleDisable(config, argv.name, configStore);
       break;
 
+    case 'serve': {
+      // Lazily loaded: only `serve` pulls in the MCP server SDK + node:http, so
+      // the lightweight config subcommands (list/add/...) stay cheap to import.
+      const { handleMcpServeCommand } = await import('../mcp/serve.js');
+      await handleMcpServeCommand({
+        http: Boolean(argv.http),
+        port: typeof argv.port === 'number' ? argv.port : undefined,
+        apiKey: typeof argv.apiKey === 'string' ? argv.apiKey : undefined,
+        apiUrl: typeof argv.apiUrl === 'string' ? argv.apiUrl : undefined,
+        version: packageJson.version,
+      });
+      break;
+    }
+
     default:
       console.error(`❌ Unknown MCP subcommand: ${subcommand}`);
       console.error('');
@@ -100,6 +119,7 @@ export async function handleMcpCommand(subcommand: string, argv: McpCommandArgs)
       console.error('  b4m mcp remove <name>             - Remove an MCP server');
       console.error('  b4m mcp enable <name>             - Enable an MCP server');
       console.error('  b4m mcp disable <name>            - Disable an MCP server');
+      console.error('  b4m mcp serve [--http] [--port]   - Run Bike4Mind as an MCP server');
       process.exit(1);
   }
 }

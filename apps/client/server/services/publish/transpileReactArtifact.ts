@@ -82,6 +82,37 @@ function findRelativeImport(source: string): string | null {
   return null;
 }
 
+/**
+ * Remove TypeScript type-only import syntax, which carries no runtime binding. The import rewrite
+ * and dependency scan below are regex passes that run BEFORE Babel's typescript preset, so they'd
+ * otherwise emit broken `const { type Foo } = ...` or gate a type-only package as a missing runtime
+ * dep. Runs on the raw source so the whole pipeline (relative-import guard, dep gating, rewrite)
+ * sees value imports only. Idempotent. Kept in sync with the sandbox preview
+ * (react-artifact-sandbox.ts).
+ *
+ * Handles: whole-clause `import type { X } from 'm'` / `import type X from 'm'` (dropped), and
+ * inline `import { type X, y } from 'm'` -> `import { y } from 'm'`. A binding literally named
+ * `type` (`import type from 'm'`, `import { type as T } from 'm'`) is preserved - `type` is only
+ * a modifier when followed by another binding identifier that is not `as`.
+ */
+export function stripTypeOnlyImports(source: string): string {
+  return source
+    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+      if (!braceMatch) return stmt;
+      const kept = braceMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+      // No value bindings left and no default/namespace before the brace -> whole import was type-only.
+      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+      if (!kept.length && !beforeBrace) return '';
+      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+    });
+}
+
 /** React APIs pre-injected as bare globals in the bootstrap (see HOOK_GLOBALS). A named import of
  *  one of these is dropped (already global); any OTHER named React import is bound from `React`. */
 const HOOK_GLOBAL_NAMES: readonly string[] = [
@@ -104,7 +135,8 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  * Uses lazy `[\s\S]*?` (not greedy `[^;]+`) so adjacent semicolon-less imports (valid via ASI) are
  * not conflated into one broken match. Exported for unit tests.
  */
-export function rewriteImportsToRequire(source: string): string {
+export function rewriteImportsToRequire(rawSource: string): string {
+  const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
   // Convert ESM `X as Y` renames in a named-imports clause to valid destructuring `X: Y`
   // (a raw `const { X as Y } = ...` is a syntax error that would blank the published page).
   const renameNamedBindings = (named: string): string =>
@@ -151,7 +183,8 @@ export function rewriteImportsToRequire(source: string): string {
 }
 
 /** Module specifiers from real `import ... from '...'` statements (non-relative only). */
-function extractImportedModules(source: string): string[] {
+function extractImportedModules(rawSource: string): string[] {
+  const source = stripTypeOnlyImports(rawSource); // don't gate a type-only import as a runtime dep
   const mods = new Set<string>();
   const re = /import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/g;
   let m: RegExpExecArray | null;
@@ -190,7 +223,9 @@ export function assertPublishableDependencies(source: string): void {
  * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
-  const relImport = findRelativeImport(source);
+  // Strip type-only imports first so a type-only relative import isn't misread as a multi-file ref.
+  const cleaned = stripTypeOnlyImports(source);
+  const relImport = findRelativeImport(cleaned);
   if (relImport) {
     throw new ReactArtifactTranspileError(
       `Multi-file artifacts are not supported: this one references "${relImport}" from a separate file. ` +
@@ -199,17 +234,21 @@ export async function transpileReactSource(source: string): Promise<string> {
   }
 
   const Babel = await getBabel();
-  const withRequires = rewriteImportsToRequire(source);
+  const withRequires = rewriteImportsToRequire(cleaned);
 
   let transformed: string | null | undefined;
   try {
     // Classic runtime: emit React.createElement against the React global (the AUTOMATIC runtime
     // injects `import { jsx } from "react/jsx-runtime"`, fatal in a no-module-loader script).
+    // The `typescript` preset strips TS syntax (types/generics/interfaces the assistant emits by
+    // default); presets run last-to-first, so types are stripped BEFORE the JSX transform. TSX is
+    // detected via the `.tsx` filename - NOT preset-typescript's allExtensions/isTSX options, which
+    // conflict with preset-react JSX detection and break the plain-JS path.
     // Identical config to the in-app sandbox (react-artifact-sandbox.ts) so a published artifact
-    // renders the same as the chat preview.
+    // renders the same as the chat preview - keep the two in sync.
     transformed = Babel.transform(withRequires, {
-      presets: [['react', { runtime: 'classic' }]],
-      filename: 'component.jsx',
+      presets: [['react', { runtime: 'classic' }], 'typescript'],
+      filename: 'component.tsx',
     }).code;
   } catch (e) {
     throw new ReactArtifactTranspileError(`JSX transform failed: ${(e as Error).message}`);

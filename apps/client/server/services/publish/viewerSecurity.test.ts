@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
   sanitizeRenderedHtml,
   resolveDocOrigin,
@@ -125,6 +125,14 @@ describe('resolveDocOrigin (untrusted Host / X-Forwarded-Proto)', () => {
     expect(resolveDocOrigin('app.staging.bike4mind.com')).toBe('https://app.staging.bike4mind.com');
   });
 
+  it('rejects a bracketed IPv6 literal on hosted (IPv6 is a self-host-only origin)', () => {
+    // The format gate now admits IPv6 literals, but the hosted allowlist below it
+    // never matches one, so hosted still falls back to PUBLISH_HOST - unchanged.
+    expect(resolveDocOrigin('[::1]:3000')).toBe(`https://${PUBLISH_HOST}`);
+    // a bracket with an injection payload inside must still fail the format gate.
+    expect(resolveDocOrigin('[::1] ; script-src *')).toBe(`https://${PUBLISH_HOST}`);
+  });
+
   it('respects a valid X-Forwarded-Proto and ignores an invalid one', () => {
     expect(resolveDocOrigin('app.bike4mind.com', 'http')).toBe('http://app.bike4mind.com');
     expect(resolveDocOrigin('app.bike4mind.com', 'https')).toBe('https://app.bike4mind.com');
@@ -191,5 +199,92 @@ describe('isAppWrapperHost / isUsercontentHost — host classification', () => {
     expect(isAppWrapperHost('evil.bike4mind.com')).toBe(false);
     expect(isAppWrapperHost('bike4mind.com')).toBe(false);
     expect(isAppWrapperHost(undefined)).toBe(false);
+  });
+});
+
+describe('self-host CSP (B4M_SELF_HOST=true, SERVER_DOMAIN unset -> PUBLISH_HOST empty)', () => {
+  const P0 = BLESSED_SCRIPT_PATHS[0];
+
+  // PUBLISH_HOST is resolved at module-load from SERVER_DOMAIN, so re-import the
+  // modules with the self-host env stubbed to exercise the empty-PUBLISH_HOST path.
+  async function loadSelfHost() {
+    vi.stubEnv('SERVER_DOMAIN', '');
+    vi.stubEnv('B4M_SELF_HOST', 'true');
+    vi.resetModules();
+    return import('./viewerSecurity');
+  }
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it('emits no scheme-only https:/// token when PUBLISH_HOST is unset', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('localhost:3000');
+    expect(src).not.toContain('https:///');
+    expect(src).not.toContain('https://'); // localhost self-host resolves to http
+    expect(src).toContain(`http://localhost:3000${P0}`);
+  });
+
+  it('serves blessed libs same-origin over http for a localhost self-host viewer', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('localhost:3000');
+    for (const p of BLESSED_SCRIPT_PATHS) {
+      expect(src).toContain(`http://localhost:3000${p}`);
+    }
+  });
+
+  it('trusts a LAN/tailnet Host and resolves it over http', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('host.lan:3000')).toBe('http://host.lan:3000');
+    expect(buildBundleScriptSrc('host.lan:3000')).toContain(`http://host.lan:3000${P0}`);
+  });
+
+  it('trusts a bracketed IPv6 literal Host and resolves it over http', async () => {
+    // Regression guard: the format gate must admit `[::1]:3000` (and other IPv6
+    // literals) BEFORE the self-host bypass, else it degrades to the localhost
+    // fallback and mints CSP tokens that don't match the actual document origin.
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('[::1]:3000')).toBe('http://[::1]:3000');
+    expect(resolveDocOrigin('[2001:db8::1]')).toBe('http://[2001:db8::1]');
+    expect(buildBundleScriptSrc('[::1]:3000')).toContain(`http://[::1]:3000${P0}`);
+  });
+
+  it('upgrades the scheme to https when a TLS reverse proxy sets X-Forwarded-Proto', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    expect(resolveDocOrigin('artifacts.example.internal', 'https')).toBe('https://artifacts.example.internal');
+    expect(buildBundleScriptSrc('artifacts.example.internal', 'https')).toContain(
+      `https://artifacts.example.internal${P0}`
+    );
+  });
+
+  it('never lets a hostile Host inject a CSP directive even in self-host', async () => {
+    const { buildBundleScriptSrc } = await loadSelfHost();
+    const src = buildBundleScriptSrc('evil.test/ ; script-src *');
+    expect(src).not.toContain(';');
+    expect(src).not.toContain('*');
+  });
+
+  it('falls back to a safe localhost origin (never a bare scheme) for a malformed Host', async () => {
+    const { buildBundleScriptSrc, resolveDocOrigin } = await loadSelfHost();
+    // A malformed-but-non-injecting Host fails the format gate; with PUBLISH_HOST
+    // unset the fallback must be `localhost`, never '' (which would yield http:///).
+    expect(resolveDocOrigin('has space.test')).toBe('http://localhost');
+    const src = buildBundleScriptSrc('has space.test');
+    expect(src).not.toContain('http:///');
+    expect(src).not.toContain('https:///');
+    expect(src).toContain(`http://localhost${P0}`);
+  });
+});
+
+describe('buildBundleScriptSrc hosted regression (byte-identical, B4M_SELF_HOST unset)', () => {
+  it('produces the exact deduped doc-origin + app-host token string', () => {
+    // Hardcoded expected (NOT re-derived with the implementation's own Set/join),
+    // so an identical bug on both sides can't pass. Regenerate this literal if
+    // BLESSED_SCRIPT_PATHS or PUBLISH_HOST (SERVER_DOMAIN=bike4mind.com in setup) changes.
+    const expected =
+      'https://app.pr5.preview.bike4mind.com/static/lib/chart.js@4.x.js https://app.pr5.preview.bike4mind.com/static/b4m-client.js@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/react@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/react-dom@18.x.js https://app.pr5.preview.bike4mind.com/static/lib/prop-types@15.x.js https://app.pr5.preview.bike4mind.com/static/lib/recharts@2.x.js https://app.pr5.preview.bike4mind.com/static/lib/lucide@1.x.js https://app.pr5.preview.bike4mind.com/static/lib/d3@7.x.js https://app.pr5.preview.bike4mind.com/static/lib/lodash@4.x.js https://app.pr5.preview.bike4mind.com/static/lib/mathjs@11.x.js https://app.pr5.preview.bike4mind.com/static/lib/papaparse@5.x.js https://app.pr5.preview.bike4mind.com/static/lib/xlsx@0.18.x.js https://app.bike4mind.com/static/lib/chart.js@4.x.js https://app.bike4mind.com/static/b4m-client.js@1.x.js https://app.bike4mind.com/static/lib/react@18.x.js https://app.bike4mind.com/static/lib/react-dom@18.x.js https://app.bike4mind.com/static/lib/prop-types@15.x.js https://app.bike4mind.com/static/lib/recharts@2.x.js https://app.bike4mind.com/static/lib/lucide@1.x.js https://app.bike4mind.com/static/lib/d3@7.x.js https://app.bike4mind.com/static/lib/lodash@4.x.js https://app.bike4mind.com/static/lib/mathjs@11.x.js https://app.bike4mind.com/static/lib/papaparse@5.x.js https://app.bike4mind.com/static/lib/xlsx@0.18.x.js';
+    expect(buildBundleScriptSrc('app.pr5.preview.bike4mind.com', 'https')).toBe(expected);
   });
 });
