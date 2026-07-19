@@ -190,13 +190,11 @@ export function recall(beliefs: readonly Belief[], query: string, options: Recal
   if (candidates.length === 0) return [];
 
   return candidates
-    .map(
-      (c): RecalledBelief => ({
-        belief: c.belief,
-        relevance: c.relevance,
-        score: c.relevance + activationWeight * recallProbability(c.activation),
-      })
-    )
+    .map((c): RecalledBelief => ({
+      belief: c.belief,
+      relevance: c.relevance,
+      score: c.relevance + activationWeight * recallProbability(c.activation),
+    }))
     .sort((a, b) => b.score - a.score || b.relevance - a.relevance || a.belief.id.localeCompare(b.belief.id))
     .slice(0, k);
 }

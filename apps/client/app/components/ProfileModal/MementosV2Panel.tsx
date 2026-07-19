@@ -13,7 +13,10 @@ import { useV2Memory, useShredBelief, type V2Belief } from '@client/app/hooks/da
  * read path already UNIONS V1 mementos into the ledger, so they appear here as beliefs too.
  */
 
-const SALIENCE: Record<NonNullable<V2Belief['salience']>, { label: string; color: 'danger' | 'warning' | 'neutral'; icon: ReactNode }> = {
+const SALIENCE: Record<
+  NonNullable<V2Belief['salience']>,
+  { label: string; color: 'danger' | 'warning' | 'neutral'; icon: ReactNode }
+> = {
   hot: { label: 'Hot', color: 'danger', icon: <LocalFireDepartmentIcon fontSize="small" /> },
   warm: { label: 'Warm', color: 'warning', icon: <WbTwilightIcon fontSize="small" /> },
   cold: { label: 'Cold', color: 'neutral', icon: <AcUnitIcon fontSize="small" /> },
@@ -78,12 +81,7 @@ const BeliefRow = ({
           >
             Yes
           </Button>
-          <Button
-            size="sm"
-            variant="plain"
-            onClick={() => setConfirming(false)}
-            data-testid="v2-belief-cancel-btn"
-          >
+          <Button size="sm" variant="plain" onClick={() => setConfirming(false)} data-testid="v2-belief-cancel-btn">
             No
           </Button>
         </Stack>
@@ -129,8 +127,8 @@ const MementosV2Panel = () => {
     <Box sx={{ p: 2 }}>
       <Typography level="h4">Memory (Mementos 2.0)</Typography>
       <Typography level="body-sm" textColor="text.secondary" sx={{ mt: 0.5 }}>
-        What the assistant knows about you, folded from your encrypted memory ledger. Deleting a memory
-        shreds it for good - the fact is destroyed, not hidden.
+        What the assistant knows about you, folded from your encrypted memory ledger. Deleting a memory shreds it for
+        good - the fact is destroyed, not hidden.
       </Typography>
       <Divider sx={{ my: 2 }} />
 

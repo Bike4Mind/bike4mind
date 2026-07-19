@@ -1,11 +1,17 @@
 import { describe, it, expect } from 'vitest';
-import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
+import { BedrockEmbeddingModel, ModelBackend, OllamaEmbeddingModel } from '@bike4mind/common';
 import { getProviderFromModel } from './getProviderFromModel';
 
 describe('getProviderFromModel', () => {
   it('routes every Bedrock model ID to ModelBackend.Bedrock', () => {
     for (const model of Object.values(BedrockEmbeddingModel)) {
       expect(getProviderFromModel(model)).toBe(ModelBackend.Bedrock);
+    }
+  });
+
+  it('routes every Ollama model ID to ModelBackend.Ollama', () => {
+    for (const model of Object.values(OllamaEmbeddingModel)) {
+      expect(getProviderFromModel(model)).toBe(ModelBackend.Ollama);
     }
   });
 

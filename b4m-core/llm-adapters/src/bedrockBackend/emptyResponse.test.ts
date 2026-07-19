@@ -65,7 +65,7 @@ describe('BaseBedrockBackend empty-response guard', () => {
     await expect(run(withBody(streamBody([])))).rejects.toThrow(/EMPTY response/i);
   });
 
-  it("names the model and region so the fix is obvious from the message", async () => {
+  it('names the model and region so the fix is obvious from the message', async () => {
     await expect(run(withBody(streamBody([])))).rejects.toThrow(/test-model/);
     await expect(run(withBody(streamBody([])))).rejects.toThrow(/us-east-2/); // default region
   });

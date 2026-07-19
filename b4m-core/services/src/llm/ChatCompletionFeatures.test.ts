@@ -231,7 +231,11 @@ describe('MementoFeature - Mementos V2 injection', () => {
     await feature.onComplete({ quest: makeQuest(), model: 'gpt-5.4' } as never);
 
     expect(invokeCreateMemento).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), 'u1', expect.anything(), 'gpt-5.4',
+      expect.anything(),
+      expect.anything(),
+      'u1',
+      expect.anything(),
+      'gpt-5.4',
       { enableMementos: false, enableMementosV2: true }
     );
   });

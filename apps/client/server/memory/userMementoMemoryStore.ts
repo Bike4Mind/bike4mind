@@ -23,8 +23,7 @@ export interface UserMementoReader {
  * what recall scores topicality with - and `embeddingModel` with it, since a vector is uninterpretable
  * without knowing the space it lives in.
  */
-const PROFILE_FIELDS =
-  'summary tier weight sessionId questId lastAccessedAt isArchived embedding embeddingModel';
+const PROFILE_FIELDS = 'summary tier weight sessionId questId lastAccessedAt isArchived embedding embeddingModel';
 
 /**
  * User-memory MemoryStore. Scope isolation: a user may only read their OWN memory, so the principal

@@ -28,7 +28,9 @@ describe('MemoryPrincipalKeyRepository', () => {
     // insert, the unique index rejects the losers with E11000, and getOrCreate must turn that into a read
     // of the winner's key rather than throwing (which would drop the mirrored fact).
     const candidates = ['dek-A', 'dek-B', 'dek-C', 'dek-D', 'dek-E'];
-    const results = await Promise.all(candidates.map(dek => memoryPrincipalKeyRepository.getOrCreate('user', 'race', 'race', dek)));
+    const results = await Promise.all(
+      candidates.map(dek => memoryPrincipalKeyRepository.getOrCreate('user', 'race', 'race', dek))
+    );
 
     // Every caller gets the SAME key, and only one document was ever created.
     const winner = results[0];

@@ -22,7 +22,7 @@ describe('buildMemoryContext', () => {
     expect(out).not.toContain('KNOWN FACTS ABOUT THE USER');
   });
 
-  it('frames the facts as the assistant\'s own knowledge, with a POSITIVE use-instruction', () => {
+  it("frames the facts as the assistant's own knowledge, with a POSITIVE use-instruction", () => {
     // Positive ("the way a friend who remembers would") beat the negative "do not mention this list",
     // which models leak past. Keep both the framing and the positive instruction.
     const out = buildMemoryContext(['Works in sales']);

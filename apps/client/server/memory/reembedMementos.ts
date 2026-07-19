@@ -83,10 +83,7 @@ export async function reembedMementosForUser(
       // Vector and stamp are written TOGETHER. Split across two writes, a crash between them leaves a
       // memento claiming a space its vector is not in - worse than the un-stamped state we started in,
       // because the read paths would then trust it.
-      await Memento.updateOne(
-        { _id: memento._id },
-        { $set: { embedding, embeddingModel: MEMENTO_EMBEDDING_ID } }
-      );
+      await Memento.updateOne({ _id: memento._id }, { $set: { embedding, embeddingModel: MEMENTO_EMBEDDING_ID } });
       stats.reembedded += 1;
     } catch (err) {
       // Leave it stale rather than half-written: it stays excluded from vector search, which is the
@@ -102,7 +99,6 @@ export async function reembedMementosForUser(
 
   return stats;
 }
-
 
 /**
  * Migrate a user's LEDGER vectors into the current space.
@@ -128,9 +124,7 @@ export async function reembedMementosForUser(
  *
  * Idempotent: an event already in the current space is skipped.
  */
-export async function migrateLedgerVectorsForUser(
-  userId: string
-): Promise<{
+export async function migrateLedgerVectorsForUser(userId: string): Promise<{
   total: number;
   alreadyCurrent: number;
   truncated: number;

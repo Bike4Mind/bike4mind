@@ -41,7 +41,6 @@ const V2_RECALL_K = 8;
  */
 const V2_ACTIVATION_WEIGHT = 0.025;
 
-
 /**
  * Embed the query in the SAME vector space the mementos were written in - MEMENTO_EMBEDDING_MODEL,
  * which the memento write path pins and stamps. Cosine between vectors from different models is
@@ -135,8 +134,6 @@ export async function recallMementosV2(
     // The floor is a cosine calibrated for MEMENTO_EMBEDDING_MODEL, so it only means anything when we
     // actually scored with that model. With no embedding the scorer is lexical, whose scale is
     // unrelated, and applying a cosine floor to a Jaccard score would reject everything.
-    ...(queryEmbedding.length
-      ? { scorer: embeddingScorer(queryEmbedding), minRelevance: MEMENTO_MIN_SIMILARITY }
-      : {}),
+    ...(queryEmbedding.length ? { scorer: embeddingScorer(queryEmbedding), minRelevance: MEMENTO_MIN_SIMILARITY } : {}),
   }).map(r => ({ fact: r.belief.fact, relevance: r.relevance }));
 }

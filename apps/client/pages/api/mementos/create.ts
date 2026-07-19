@@ -1,5 +1,5 @@
 import { Request, Response } from 'express';
-import { Memento } from '@bike4mind/database';
+import { Memento, apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import {
   MementoGroomingService,
@@ -7,6 +7,9 @@ import {
   calculateHotMementoSize,
 } from '../../../services/MementoGroomingService';
 import { CreateMementoSchema } from '@server/validators/mementoValidators';
+import { apiKeyService } from '@bike4mind/services';
+import { getSettingsByNames } from '@bike4mind/utils';
+import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
 
 const handler = baseApi().post(async (req: Request, res: Response) => {
   req.logger.updateMetadata({ endpoint: 'mementos/create' });
@@ -81,6 +84,20 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
       }
     }
 
+    // Embed the summary so manually-created mementos are retrievable by semantic
+    // similarity, matching the auto path (events/createMemento.ts). Graceful: a null
+    // embedding (no provider configured) just stores the memento without a vector.
+    const apiKeyTable = await apiKeyService.getEffectiveLLMApiKeys(
+      req.user.id,
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+      { logger: req.logger }
+    );
+    const embedding = await generateMementoSummaryEmbedding(summary.trim(), {
+      adminSettings: adminSettingsRepository,
+      apiKeyTable,
+      logger: req.logger,
+    });
+
     const memento = await Memento.create({
       userId: req.user.id,
       sessionId: sessionId,
@@ -94,6 +111,7 @@ const handler = baseApi().post(async (req: Request, res: Response) => {
       questId,
       lastAccessedAt: lastAccessedAt ?? new Date(),
       isArchived: isArchived ?? false,
+      ...(embedding ? { embedding } : {}),
     });
 
     const finalMementos = await Memento.findByUserId(req.user.id);

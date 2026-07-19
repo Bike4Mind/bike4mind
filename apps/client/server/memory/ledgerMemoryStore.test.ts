@@ -42,7 +42,9 @@ function makeFake(opts: { failFirst?: number } = {}) {
       // Mirror the real projection: with embeddings excluded, the ciphertext genuinely is not there.
       // A fake that quietly returned it anyway would let a two-pass bug pass as a green test.
       if (options?.withEmbeddings === false) {
-        return chain.map(({ embeddingCipher: _c, embeddingIv: _i, embeddingTag: _t, ...rest }) => rest as IMemoryLedgerEvent);
+        return chain.map(
+          ({ embeddingCipher: _c, embeddingIv: _i, embeddingTag: _t, ...rest }) => rest as IMemoryLedgerEvent
+        );
       }
       return chain;
     },

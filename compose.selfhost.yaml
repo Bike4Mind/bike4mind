@@ -72,6 +72,13 @@ services:
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      # ObjectCreated -> app webhook (self-host replacement for S3 events). MinIO POSTs
+      # uploads to the app's internal route, which marks the FabFile complete and enqueues
+      # RAG chunking. Bound to the fab-file bucket by `mc event add` in createbuckets below.
+      # The worker's periodic scan is the safety net if a notification is missed.
+      MINIO_NOTIFY_WEBHOOK_ENABLE_primary: 'on'
+      MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary: http://app:3000/api/internal/s3/object-created
+      MINIO_NOTIFY_WEBHOOK_AUTH_TOKEN_primary: ${INTERNAL_S3_WEBHOOK_SECRET}
     volumes:
       - minio-data:/data
     # Loopback-only. Override MINIO_ROOT_USER/PASSWORD for anything but local eval.
@@ -100,7 +107,8 @@ services:
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
         for b in "$$APP_FILES_BUCKET" "$$EMAIL_INGESTION_BUCKET" "$$FAB_FILE_BUCKET" "$$GENERATED_IMAGES_BUCKET" "$$HISTORY_IMPORT_BUCKET" "$$PUBLISHED_ARTIFACTS_BUCKET" "$$SLACK_EXPORT_BUCKET"; do
           [ -n "$$b" ] && mc mb -p "local/$$b" || true;
-        done
+        done &&
+        [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.
@@ -206,6 +214,33 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+
+  # Background worker - the self-host replacement for the hosted SST queue consumers
+  # (infra/queues.ts) and cron (infra/cron.ts), neither of which exists in plain Docker.
+  # Long-polls ElasticMQ (research engine; later chunk/vectorize + the event queue) and
+  # runs the task scheduler, calling the SAME handlers the hosted Lambdas use. Reuses the
+  # chatcompletion image; only the command differs (runs server/worker/main.ts). No ports:
+  # it dispatches nothing inbound. Logs: `docker compose -f compose.selfhost.yaml logs -f worker`.
+  worker:
+    build:
+      context: .
+      dockerfile: apps/client/Dockerfile.chatcompletion.selfhost
+    env_file:
+      - .env.selfhost
+    command:
+      ['pnpm', 'exec', 'tsx', '--import', './server/chatCompletion/selfhostSstAlias.mjs', 'server/worker/main.ts']
+    depends_on:
+      mongo:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      sqs:
+        condition: service_started
+    # Lets it reach a host-native Ollama (OLLAMA_BASE_URL=http://host.docker.internal:11434),
+    # matching the app/chatcompletion containers - background embedding needs it.
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    restart: unless-stopped
 
   # Realtime WebSocket gateway — the self-host replacement for AWS API Gateway
   # WebSocket. One port (3001) with two faces: a browser-facing socket server

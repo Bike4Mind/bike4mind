@@ -87,7 +87,9 @@ for (const floor of FLOORS) {
     console.info(
       `${floor.toFixed(3)}   ${w.toFixed(2)}    ${pct(r.pos.hitRate).padStart(5)}  ${r.pos.mrr.toFixed(3)}  ${pct(
         r.pos.precision
-      ).padStart(8)}  |  ${r.neg.meanInjected.toFixed(1).padStart(6)}  ${pct(r.neg.falseInjectionRate).padStart(11)}  |  ${
+      ).padStart(
+        8
+      )}  |  ${r.neg.meanInjected.toFixed(1).padStart(6)}  ${pct(r.neg.falseInjectionRate).padStart(11)}  |  ${
         retractionWins(w) ? 'yes' : 'NO'
       }`
     );

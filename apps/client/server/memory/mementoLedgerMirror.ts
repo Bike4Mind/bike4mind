@@ -64,9 +64,7 @@ export async function writeFactToLedger(params: {
   if (!derivedSubject) return; // nothing to key on (content-free summary)
 
   const keys = createKeyProvider(memoryPrincipalKeyRepository);
-  const existing = params.embedding?.length
-    ? await findExistingSubject(params.userId, keys, params.embedding)
-    : null;
+  const existing = params.embedding?.length ? await findExistingSubject(params.userId, keys, params.embedding) : null;
 
   await appendMemoryEvent(
     memoryLedgerRepository,

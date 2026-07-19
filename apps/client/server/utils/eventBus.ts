@@ -10,10 +10,14 @@ import {
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 
-// Self-host has no EventBridge. Deliver email.send straight to the mailer and
-// drop everything else: those events feed async enrichment (summaries, tags,
-// analytics), and a dropped event must degrade the feature, not 500 the caller.
+// Self-host has no EventBridge. Deliver email.send straight to the mailer, and route
+// everything else to the SELF_HOST_EVENT_QUEUE for the background worker to consume
+// (server/worker/eventDispatch.ts). These events feed async enrichment (naming,
+// summaries, tags, memento embedding), so a delivery failure must degrade the feature,
+// not 500 the caller - hence warn-and-drop, never throw.
 async function publishSelfHost(eventName: string, detail: unknown): Promise<void> {
+  const logger = new Logger({ metadata: { service: 'eventBus' } });
+
   if (eventName === 'email.send') {
     const { default: mailer } = await import('./mailer');
     const { to, subject, body, attachments } = detail as {
@@ -33,7 +37,21 @@ async function publishSelfHost(eventName: string, detail: unknown): Promise<void
     });
     return;
   }
-  new Logger({ metadata: { service: 'eventBus' } }).debug(`Self-host: dropping event ${eventName} (no event bus)`);
+
+  const queueUrl = process.env.SELF_HOST_EVENT_QUEUE;
+  if (!queueUrl) {
+    logger.warn(`Self-host: SELF_HOST_EVENT_QUEUE unset; dropping event ${eventName} (enrichment will not run)`);
+    return;
+  }
+  try {
+    // Lazy import so modules that never publish don't pull the SQS client at load.
+    const { sendToQueue } = await import('./sqs');
+    await sendToQueue(queueUrl, { detailType: eventName, detail });
+  } catch (error) {
+    logger.warn(`Self-host: failed to enqueue event ${eventName}`, {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 function createEventBuilder({

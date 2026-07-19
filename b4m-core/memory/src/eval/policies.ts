@@ -29,7 +29,11 @@ export interface V1Options {
  * below `minSimilarity`, keep the top K. No recency, no frequency - similarity is the whole story.
  * Mirrors `getRelevantMementos` (b4m-core/services/src/mementoService).
  */
-export function retrieveV1(beliefs: readonly Belief[], queryEmbedding: readonly number[], options: V1Options = {}): Retrieved {
+export function retrieveV1(
+  beliefs: readonly Belief[],
+  queryEmbedding: readonly number[],
+  options: V1Options = {}
+): Retrieved {
   const topK = options.topK ?? 10;
   const minSimilarity = options.minSimilarity ?? 0.75;
 

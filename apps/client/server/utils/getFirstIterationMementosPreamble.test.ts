@@ -175,7 +175,11 @@ describe('getFirstIterationMementosPreamble', () => {
   it('serves a V2 user from the ledger and never touches the V1 path', async () => {
     recallMementosV2Mock.mockResolvedValueOnce([{ fact: 'User is a marine biologist', relevance: 0.61 }]);
 
-    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), makeLogger());
+    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(
+      makeExecution(),
+      makeAdapters(),
+      makeLogger()
+    );
 
     expect(preamble).toContain('User is a marine biologist');
     expect(preamble).not.toContain('% relevant'); // framed as knowledge, not a scored list
@@ -203,7 +207,11 @@ describe('getFirstIterationMementosPreamble', () => {
   it('stays silent for a V2 user whose memory has nothing relevant', async () => {
     recallMementosV2Mock.mockResolvedValueOnce([]);
 
-    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(makeExecution(), makeAdapters(), makeLogger());
+    const { preamble, mementoIds } = await getFirstIterationMementosPreamble(
+      makeExecution(),
+      makeAdapters(),
+      makeLogger()
+    );
 
     expect(preamble).toBe('');
     expect(mementoIds).toEqual([]);
