@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
 import { createMongoServer } from '../../../__test__/createMongoServer';
-import Agent from '../AgentModel';
+import Agent, { agentRepository } from '../AgentModel';
 
 const baseAgentData = {
   name: 'Test Agent',
@@ -119,6 +119,39 @@ describe('AgentModel', () => {
 
     it('should reject a non-integer turnTimeoutSeconds (mirrors the API .int() rule)', async () => {
       await expect(Agent.create({ ...baseAgentData, turnTimeoutSeconds: 1.5 })).rejects.toThrow(/turnTimeoutSeconds/i);
+    });
+  });
+
+  describe('countByUserId vs softDeletePlugin deletedAt default', () => {
+    it('stores deletedAt: null (field present) on a freshly created agent', async () => {
+      // Pins the softDeletePlugin premise the count filter depends on: if this
+      // ever flips to field-absent, revisit every deletedAt filter in the model.
+      const agent = await Agent.create(baseAgentData);
+      const raw = await mongoose.connection.db!.collection('agents').findOne({ _id: agent._id });
+      expect(raw).not.toBeNull();
+      expect('deletedAt' in raw!).toBe(true);
+      expect(raw!.deletedAt).toBeNull();
+    });
+
+    it('counts live agents even though deletedAt is stored as null', async () => {
+      // Regression: `deletedAt: { $exists: false }` matched nothing (the plugin
+      // stores null), so the Agents gear never unlocked - even right after a
+      // create. countDocuments has no plugin pre-hook to rescue the filter.
+      await Agent.create(baseAgentData);
+      await Agent.create({ ...baseAgentData, name: 'Second Agent' });
+      expect(await agentRepository.countByUserId(baseAgentData.userId)).toBe(2);
+    });
+
+    it('excludes soft-deleted agents from the count', async () => {
+      const agent = await Agent.create(baseAgentData);
+      agent.deletedAt = new Date();
+      await agent.save();
+      expect(await agentRepository.countByUserId(baseAgentData.userId)).toBe(0);
+    });
+
+    it('does not count agents owned by other users', async () => {
+      await Agent.create({ ...baseAgentData, userId: 'someone-else' });
+      expect(await agentRepository.countByUserId(baseAgentData.userId)).toBe(0);
     });
   });
 });
