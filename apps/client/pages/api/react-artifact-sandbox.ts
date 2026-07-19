@@ -134,16 +134,35 @@ const SANDBOX_HTML = `<!DOCTYPE html>
     ${LUCIDE_WRAPPER_FN}
 
     function renderArtifact(code, dependencies, mode) {
+      // Strip TS type-only import syntax FIRST, before any check or rewrite below sees it: whole
+      // \`import type ...\` statements and inline \`{ type X, y }\` specifiers carry no runtime
+      // binding. This must precede the relative-import guard so a type-only relative import
+      // (\`import type Foo from './x'\`) is not misread as a multi-file artifact - matches the
+      // publish transpiler, which strips before findRelativeImport (transpileReactArtifact.ts).
+      // A binding named \`type\` (\`type as T\`) is kept. Mirrors stripTypeOnlyImports there.
+      var withoutTypeImports = code
+        .replace(/import\\s+type\\s+[\\s\\S]*?\\s+from\\s+['"][^'"]+['"]\\s*;?/g, '')
+        .replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"][^'"]+['"]\\s*;?/g, function (stmt, clause) {
+          var brace = clause.match(/\\{([\\s\\S]*?)\\}/);
+          if (!brace) return stmt;
+          var kept = brace[1].split(',').map(function (s) { return s.trim(); })
+            .filter(Boolean).filter(function (s) { return !/^type\\s+(?!as\\b)\\w/.test(s); });
+          var beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\\s*$/, '').trim();
+          if (!kept.length && !beforeBrace) return '';
+          return stmt.replace(/\\{[\\s\\S]*?\\}/, '{ ' + kept.join(', ') + ' }');
+        });
+
       // Multi-file artifacts aren't supported yet (#9403 follow-up): the require() shim below
       // resolves only npm packages, not sibling artifact files. Detect a relative import up
       // front and show a clear message instead of a cryptic "Cannot use import statement" /
       // "Module not available" further down.
       // Catch every relative-reference form: import-from, export-from, side-effect import,
       // and require() of a "./" or "../" path — all unresolvable by the npm-only shim below.
+      // Run on the type-stripped view so a type-only relative import is already gone.
       var relImport =
-        code.match(/(?:import|export)\\b[^;'"]*\\bfrom\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        code.match(/\\bimport\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
-        code.match(/\\brequire\\(\\s*['"](\\.\\.?\\/[^'"]+)['"]\\s*\\)/);
+        withoutTypeImports.match(/(?:import|export)\\b[^;'"]*\\bfrom\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
+        withoutTypeImports.match(/\\bimport\\s*['"](\\.\\.?\\/[^'"]+)['"]/) ||
+        withoutTypeImports.match(/\\brequire\\(\\s*['"](\\.\\.?\\/[^'"]+)['"]\\s*\\)/);
       if (relImport) {
         var msg = 'Multi-file artifacts are not supported yet — this one references "' + relImport[1] +
           '" from a separate file. Ask for a single, self-contained component (one file, one default export).';
@@ -170,7 +189,7 @@ const SANDBOX_HTML = `<!DOCTYPE html>
         // Normalize ESM "X as Y" renames to valid destructuring "X: Y" (a raw { X as Y } in a
         // const-destructure is a syntax error). Kept in sync with the publish transpiler.
         var renameNamed = function (clause) { return clause.replace(/(\\w+)\\s+as\\s+(\\w+)/g, '$1: $2'); };
-        var transformedCode = code.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
+        var transformedCode = withoutTypeImports.replace(/import\\s+([\\s\\S]*?)\\s+from\\s+['"]([^'"]+)['"]/g, function (match, imports, module) {
           if (module === 'react') return '// React is global';
           if (imports.trim().match(/^\\w+$/)) return 'const ' + imports.trim() + " = require('" + module + "');";
           // Namespace import (import * as d3 from 'd3') -> const d3 = require('d3'). Without this it
@@ -198,9 +217,14 @@ const SANDBOX_HTML = `<!DOCTYPE html>
           // throws "Cannot use import statement outside a module" and nothing renders. The
           // classic runtime emits React.createElement, which resolves against the in-scope
           // React global. (#9506 follow-up — surfaced once #9539 fixed the script truncation.)
+          // The \`typescript\` preset strips TS syntax (types/generics/interfaces the assistant
+          // emits by default) before the JSX transform (presets run last-to-first). TSX is detected
+          // via the \`.tsx\` filename, NOT preset-typescript allExtensions/isTSX (those conflict with
+          // preset-react JSX detection and break plain JS). Keep in sync with
+          // transpileReactArtifact.ts so the published bundle matches this preview.
           processedCode = Babel.transform(transformedCode, {
-            presets: [['react', { runtime: 'classic' }]],
-            filename: 'component.jsx',
+            presets: [['react', { runtime: 'classic' }], 'typescript'],
+            filename: 'component.tsx',
           }).code;
         } catch (e) {
           processedCode = transformedCode;
