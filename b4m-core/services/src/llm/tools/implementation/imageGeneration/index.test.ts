@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ImageModerationBlockedError } from '@bike4mind/utils';
 import type { ToolContext } from '../../base/types';
 
@@ -22,7 +22,7 @@ vi.mock('@bike4mind/utils', async importOriginal => {
 });
 
 // Imported after the mock so `processAndStoreImages` picks up the mocked service.
-const { processAndStoreImages } = await import('./index');
+const { processAndStoreImages, imageGenerationTool } = await import('./index');
 
 // 1x1 transparent PNG - downloadImage() short-circuits data: URLs with no network call.
 const PNG_DATA_URL =
@@ -85,5 +85,28 @@ describe('image_generation processAndStoreImages moderation gate (agent-tool ser
     expect(mockCheckImage).toHaveBeenCalledTimes(1);
     expect(context.imageGenerateStorage.upload).toHaveBeenCalledTimes(1);
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('image_generation local-image env gating (self-host only)', () => {
+  const savedSelfHost = process.env.B4M_SELF_HOST;
+  const savedUrl = process.env.IMAGE_GEN_BASE_URL;
+  afterEach(() => {
+    if (savedSelfHost === undefined) delete process.env.B4M_SELF_HOST;
+    else process.env.B4M_SELF_HOST = savedSelfHost;
+    if (savedUrl === undefined) delete process.env.IMAGE_GEN_BASE_URL;
+    else process.env.IMAGE_GEN_BASE_URL = savedUrl;
+  });
+
+  it('refuses to dispatch a local-image model when IMAGE_GEN_BASE_URL is set but B4M_SELF_HOST is not', async () => {
+    delete process.env.B4M_SELF_HOST;
+    process.env.IMAGE_GEN_BASE_URL = 'http://imagegen:7860';
+    const context = createFakeContext();
+
+    const { toolFn } = imageGenerationTool.implementation(context, { model: 'local-image/sd15' });
+
+    // requireApiKey sees no base URL (env ignored outside self-host) and throws
+    // the generic "unavailable" error rather than dispatching a free generation.
+    await expect(toolFn({ prompt: 'a red bike' })).rejects.toThrow(/unavailable/i);
   });
 });

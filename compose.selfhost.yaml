@@ -392,7 +392,121 @@ services:
       retries: 6
       start_period: 10s
 
+  # Local image generation via a self-hosted Stable-Diffusion server (optional).
+  # Generate images with NO provider API keys, using the SD.Next WebUI's
+  # AUTOMATIC1111-compatible REST API (/sdapi/v1/txt2img). Opt in with the
+  # `imagegen` profile:
+  #   docker compose -f compose.selfhost.yaml --env-file .env.selfhost --profile imagegen up -d
+  # Then set IMAGE_GEN_BASE_URL=http://imagegen:7860 in .env.selfhost (see the file).
+  # CPU-only by default so it runs on any host (slow: ~1-3 min/image); for NVIDIA
+  # GPU acceleration add the override file: `-f compose.imagegen-gpu.yaml`.
+  imagegen:
+    # Floating :latest is convenient but NOT reproducible - a later upstream push can
+    # change the SD backend under you. For a stable stack, override IMAGEGEN_IMAGE in
+    # .env.selfhost with a specific tag or (better) a digest, e.g.
+    # IMAGEGEN_IMAGE=vladmandic/sdnext-cuda@sha256:<digest>. See SELF_HOST.md.
+    image: ${IMAGEGEN_IMAGE:-vladmandic/sdnext-cuda:latest}
+    profiles: ['imagegen']
+    # Pin the data/models dirs explicitly so the checkpoint the puller writes to
+    # /mnt/models/Stable-diffusion is always the dir SD.Next scans - never rely on
+    # an image default that could drift and silently no-op the feature. Must stay
+    # in sync with the volume targets below and the puller's download path.
+    environment:
+      SD_DATADIR: /mnt/data
+      SD_MODELSDIR: /mnt/models
+    # SD.Next serves the REST API by default. --use-cpu all forces CPU so the
+    # nVidia-base image still runs on a host with no GPU; the GPU override file
+    # replaces this command to drop --use-cpu all. --quick skips the per-boot
+    # reinstall check (the image ships its deps prebuilt). Checkpoints live under
+    # SD_MODELSDIR (/mnt/models/Stable-diffusion); state under SD_DATADIR.
+    command: ['python', 'launch.py', '--listen', '--use-cpu', 'all', '--api', '--quick', '--log', 'sdnext.log']
+    volumes:
+      - imagegen-models:/mnt/models
+      - imagegen-data:/mnt/data
+    # Loopback-only, like the other backing services. Override IMAGEGEN_HOST_PORT
+    # if 7860 is taken (e.g. by a host SD server).
+    ports:
+      - '127.0.0.1:${IMAGEGEN_HOST_PORT:-7860}:7860'
+    healthcheck:
+      # curl may be absent from the image, but python always is; poll the models
+      # endpoint (an empty list before any checkpoint is pulled is still healthy).
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import urllib.request; urllib.request.urlopen('http://localhost:7860/sdapi/v1/sd-models', timeout=5)" || exit 1
+      interval: 15s
+      timeout: 10s
+      retries: 20
+      # First boot compiles/loads the backend before the API answers; be generous.
+      start_period: 300s
+
+  # One-shot: download the checkpoint(s) named in IMAGE_GEN_PULL_MODELS (space-
+  # separated URLs) into the shared models volume so they show up in the app's
+  # model picker. Safe to re-run; an already-present file is skipped. Pick your
+  # checkpoint in .env.selfhost (menu + disk/VRAM specs there).
+  imagegen-pull:
+    # Floating :latest, same reproducibility caveat as `imagegen` above. This one is
+    # not env-overridable - pin a specific curlimages/curl digest here if you need a
+    # reproducible pull step.
+    image: curlimages/curl:latest
+    profiles: ['imagegen']
+    # Write into the same volume SD.Next created as root.
+    user: root
+    depends_on:
+      imagegen:
+        condition: service_healthy
+    environment:
+      IMAGE_GEN_PULL_MODELS: ${IMAGE_GEN_PULL_MODELS:-https://huggingface.co/stable-diffusion-v1-5/stable-diffusion-v1-5/resolve/main/v1-5-pruned-emaonly.safetensors}
+    volumes:
+      - imagegen-models:/mnt/models
+    # Literal block scalar (|), not folded (>): the script has inline `# ...`
+    # shell comments, and folding would join them onto the following code line
+    # so the comment swallows real statements. `|` keeps every line intact.
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        mkdir -p /mnt/models/Stable-diffusion
+        echo "Pulling: $$IMAGE_GEN_PULL_MODELS"
+        first=""
+        for url in $$IMAGE_GEN_PULL_MODELS; do
+          name=$$(basename "$${url%%\?*}")
+          [ -z "$$first" ] && first="$$name"
+          dest="/mnt/models/Stable-diffusion/$$name"
+          if [ -f "$$dest" ]; then
+            echo "==> $$name already present, skipping"
+          else
+            # Download to a .part file and rename only on success, so an
+            # interrupted pull never leaves a corrupt file the guard above skips.
+            echo "==> downloading $$name" && curl -fL --retry 3 -o "$$dest.part" "$$url" && mv "$$dest.part" "$$dest" || { echo "WARN: failed to download $$url"; rm -f "$$dest.part"; }
+          fi
+        done
+        # SD.Next scanned the (empty) models dir at boot, before the download finished,
+        # so poke it to rescan - otherwise /sdapi/v1/sd-models stays [] until a manual
+        # refresh and the checkpoint never reaches the picker. Best-effort with a short
+        # retry in case the server is still warming.
+        echo "Refreshing SD.Next checkpoint list..."
+        for i in 1 2 3 4 5; do
+          curl -fsS -X POST http://imagegen:7860/sdapi/v1/refresh-checkpoints && break || sleep 3
+        done || true
+        # Preload the first checkpoint (model_name = filename without extension) via
+        # POST /sdapi/v1/options, because override_settings alone won't load a model
+        # from a cold start - so the first chat generation isn't stuck on a never-loaded
+        # model. Best-effort and generously capped; the load can take minutes on CPU.
+        if [ -n "$$first" ]; then
+          model="$${first%.*}"
+          echo "Preloading active checkpoint: $$model (can take minutes on CPU)..."
+          curl -fsS --max-time 900 -X POST -H "Content-Type: application/json" \
+            -d "{\"sd_model_checkpoint\": \"$$model\"}" http://imagegen:7860/sdapi/v1/options || \
+            echo "WARN: could not preload $$model; it will load on first use"
+        fi
+        echo "Done. Pulled checkpoints are now available in the app model picker."
+    restart: 'no'
+
 volumes:
   mongo-data:
   minio-data:
   ollama-data:
+  imagegen-models:
+  imagegen-data:

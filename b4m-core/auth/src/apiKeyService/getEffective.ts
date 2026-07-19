@@ -217,5 +217,9 @@ export const getEffectiveLLMApiKeys = async (
     // out of the box with no provider keys. An explicit admin config still
     // takes precedence. envKey() only returns a value when B4M_SELF_HOST=true.
     ollama: (ollamaEnabled ? ollamaBackend || null : null) || envKey('OLLAMA_BASE_URL'),
+    // Self-host: base URL of a local Stable-Diffusion server (A1111-compatible
+    // REST API). Gated on B4M_SELF_HOST like the other env fallbacks; mirrors
+    // OLLAMA_BASE_URL for local image generation with no provider keys.
+    imageGen: envKey('IMAGE_GEN_BASE_URL'),
   };
 };

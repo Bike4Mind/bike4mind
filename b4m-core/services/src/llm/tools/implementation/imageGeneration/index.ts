@@ -13,6 +13,7 @@ import {
   OpenAIImageService,
   XAIImageService,
   GeminiImageService,
+  LocalImageService,
   getSettingsMap,
   getSettingsValue,
   RekognitionImageModerationService,
@@ -198,9 +199,19 @@ export const imageGenerationTool: ToolDefinition = {
       const isBFLModel = BFL_IMAGE_MODELS.includes(model as any);
       const isXAIModel = XAI_IMAGE_MODELS.includes(model as any);
       const isGeminiModel = GEMINI_IMAGE_MODELS.includes(model as any);
+      // Self-hosted Stable-Diffusion models are namespaced `local-image/<checkpoint>`.
+      const isLocalImageModel = model.startsWith('local-image/');
       // Real provider for the moderation incident audit record - more accurate
       // than a generic lookup since the branch below already knows which backend is used.
-      const provider = isXAIModel ? 'xai' : isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
+      const provider = isXAIModel
+        ? 'xai'
+        : isBFLModel
+          ? 'bfl'
+          : isGeminiModel
+            ? 'gemini'
+            : isLocalImageModel
+              ? 'local-image'
+              : 'openai';
 
       // Call onStart callback for credit validation
       await context.onStart?.('image_generation', {
@@ -296,6 +307,46 @@ export const imageGenerationTool: ToolDefinition = {
           aspect_ratio: aspect_ratio,
           output_format: output_format ?? 'png',
           safety_tolerance: safety_tolerance,
+        });
+
+        const storedImageUrls = await processAndStoreImages(images, context, model, provider);
+
+        return updateQuestAndReturnMarkdown(storedImageUrls, context);
+      } else if (isLocalImageModel) {
+        // Self-hosted Stable-Diffusion server (A1111-compatible REST API), gated
+        // by IMAGE_GEN_BASE_URL. The env var is honored ONLY under B4M_SELF_HOST
+        // (mirrors the getAvailableModels enumeration gate) so a hosted deploy
+        // that happens to set it can't dispatch free local generations.
+        const selfHostBaseUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
+        if (!selfHostBaseUrl) {
+          // This is a base URL, not an API key, so guard/log it explicitly here
+          // instead of via requireApiKey (whose log line says "API key is not
+          // configured"); keep the user-facing message identical so tool
+          // observations stay uniform across providers.
+          context.logger.error(
+            '[image_generation] Local image generation base URL (IMAGE_GEN_BASE_URL) is not configured under B4M_SELF_HOST; refusing to dispatch'
+          );
+          throw new Error('Image generation is currently unavailable. Please try again later.');
+        }
+        const service = new LocalImageService(selfHostBaseUrl, context.logger);
+
+        // The local backend takes discrete width/height; derive them from the
+        // size string (e.g. '512x512') when explicit dimensions aren't set.
+        let localWidth = width;
+        let localHeight = height;
+        if ((!localWidth || !localHeight) && typeof size === 'string') {
+          const [sw, sh] = size.split('x').map(Number);
+          if (sw && sh) {
+            localWidth = sw;
+            localHeight = sh;
+          }
+        }
+
+        const images = await service.generate(prompt, {
+          n,
+          model: model.replace(/^local-image\//, ''),
+          width: localWidth,
+          height: localHeight,
         });
 
         const storedImageUrls = await processAndStoreImages(images, context, model, provider);

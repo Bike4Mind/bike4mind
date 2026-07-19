@@ -16,9 +16,15 @@ describe('resolveProxyTarget', () => {
     });
   });
 
+  it('maps admin-logos back to the admin/logos key prefix in appFiles', () => {
+    expect(resolveProxyTarget('admin-logos/custom-light.png')).toEqual({
+      bucket: 'appFiles',
+      key: 'admin/logos/custom-light.png',
+    });
+  });
+
   it.each([
     ['proxied-images/hash.jpg', 'proxied-images/hash.jpg'],
-    ['admin/logos/custom-light.png', 'admin/logos/custom-light.png'],
     ['profile-photos/u1/p.png', 'profile-photos/u1/p.png'],
     ['tavern-sounds/custom/u1/slot.mp3', 'tavern-sounds/custom/u1/slot.mp3'],
     ['tavern-icons/pack/bg/1.png', 'tavern-icons/pack/bg/1.png'],
@@ -33,6 +39,7 @@ describe('resolveProxyTarget', () => {
     'cc-bridge-downloads/u/z.zip',
     'cc-bridge/artifacts/bin',
     'organizations/123/x.png',
+    'admin/logos/raw-key.png',
     'random/foo',
     '',
   ])('returns null for blocked prefix: %s', input => {

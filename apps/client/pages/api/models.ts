@@ -7,6 +7,7 @@ import {
   BFLBackend,
   XAIBackend,
   AWSBackend,
+  LocalImageBackend,
 } from '@bike4mind/llm-adapters';
 import { ModelBackend } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
@@ -45,6 +46,7 @@ async function buildModelsResponse(userId: string, logger: Logger) {
     bfl: coreKeys.bfl || undefined,
     ollama: coreKeys.ollama || undefined,
     xai: coreKeys.xai || undefined,
+    imageGen: coreKeys.imageGen || undefined,
   };
 
   const isSelfHost = process.env.B4M_SELF_HOST === 'true';
@@ -61,6 +63,8 @@ async function buildModelsResponse(userId: string, logger: Logger) {
     [ModelBackend.BFL]: apiKeys.bfl ? new BFLBackend(apiKeys.bfl) : new BFLBackend('demo-key'), // Always create BFL backend for testing
     [ModelBackend.XAI]: apiKeys.xai ? new XAIBackend(apiKeys.xai, logger) : null,
     [ModelBackend.AWS]: isSelfHost ? null : new AWSBackend(),
+    // Self-hosted Stable-Diffusion image backend, enabled by IMAGE_GEN_BASE_URL.
+    [ModelBackend.LocalImage]: apiKeys.imageGen ? new LocalImageBackend(apiKeys.imageGen, logger) : null,
   } as const;
 
   const backendPromises = Object.entries(backends).map(async ([backendName, backend]) => {

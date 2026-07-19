@@ -36,6 +36,13 @@ export class UnsupportedImageModelError extends Error {
  * unknown model.
  */
 export function computeImageUsdCostPerImage(modelId: string, input: CostInput): number {
+  // Self-hosted local image models run on the operator's own hardware: no
+  // provider spend, so they are free. Guarding here keeps them out of the
+  // UnsupportedImageModelError path, which credit validation surfaces as
+  // "Model not supported" in ToolBuilder.onStart.
+  if (modelId.startsWith('local-image/')) {
+    return 0;
+  }
   if (isGPTImageModel(modelId)) {
     // isGPTImageModel narrows the model id but TypeScript can't propagate that to the CostInput union;
     // the conditional guarantees this branch only sees an OpenAICostInput.
