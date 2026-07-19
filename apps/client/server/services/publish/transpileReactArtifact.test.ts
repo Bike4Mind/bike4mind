@@ -3,6 +3,7 @@ import {
   buildReactArtifactBundle,
   transpileReactSource,
   rewriteImportsToRequire,
+  stripTypeOnlyImports,
   UnsupportedReactDependencyError,
   ReactArtifactTranspileError,
 } from './transpileReactArtifact';
@@ -33,6 +34,81 @@ describe('transpileReactSource', () => {
     // default export is rewritten to the local the bootstrap reads
     expect(out).toContain('__DEFAULT_EXPORT__');
   });
+
+  it('strips TypeScript syntax (interface, generic hook, param annotations, type imports) before the JSX transform', async () => {
+    const TS = `import { useState, type FC } from 'react';
+import type { ReactNode } from 'react';
+interface Props { label: string; }
+const Counter: FC<Props> = ({ label }) => {
+  const [count, setCount] = useState<number>(0);
+  const bump = (by: number): void => setCount(c => c + by);
+  const wrap = (n: ReactNode): ReactNode => n;
+  return (
+    <div className="p-4">
+      <span>{wrap(label)}: {count}</span>
+      <button onClick={() => bump(1)}>+</button>
+    </div>
+  );
+}
+export default Counter;`;
+    const out = await transpileReactSource(TS);
+    expect(out).toContain('React.createElement');
+    // TS-only syntax is gone: no interface, no <number> generic arg, no `: type` annotations,
+    // and no leftover `type` import specifier that would blank the page as invalid destructuring.
+    expect(out).not.toMatch(/\binterface\b/);
+    expect(out).not.toContain('useState<number>');
+    expect(out).not.toMatch(/:\s*Props\b/);
+    expect(out).not.toMatch(/:\s*void\b/);
+    expect(out).not.toMatch(/\btype\s+FC\b/);
+    expect(out).not.toMatch(/\bReactNode\b/);
+  });
+});
+
+describe('stripTypeOnlyImports', () => {
+  it('drops a whole-clause `import type { X } from` statement', () => {
+    expect(stripTypeOnlyImports(`import type { Opts } from 'lodash';\nconst x = 1;`)).not.toMatch(/\bimport\b/);
+  });
+
+  it('drops inline `type` specifiers but keeps value bindings from the same clause', () => {
+    const out = stripTypeOnlyImports(`import { type Opts, merge, type Cfg } from 'lodash';`);
+    expect(out).toContain('merge');
+    expect(out).not.toMatch(/\btype\b/);
+    expect(out).not.toContain('Opts');
+    expect(out).not.toContain('Cfg');
+  });
+
+  it('drops the whole import when every named specifier is type-only and there is no default', () => {
+    expect(stripTypeOnlyImports(`import { type A, type B } from 'some-types';`).trim()).toBe('');
+  });
+
+  it('keeps the default binding when only the named specifiers are type-only', () => {
+    const out = stripTypeOnlyImports(`import Foo, { type Bar } from 'mod';`);
+    expect(out).toContain('Foo');
+    expect(out).not.toContain('Bar');
+  });
+
+  it('preserves a binding literally named `type` (not a type modifier)', () => {
+    // `import { type as T }` renames the value `type` to T; `import type from` is a default `type`.
+    expect(stripTypeOnlyImports(`import { type as T } from 'm';`)).toContain('type as T');
+    expect(stripTypeOnlyImports(`import type from 'm';`)).toContain("import type from 'm'");
+  });
+
+  it('does not gate a type-only import as a missing runtime dependency', async () => {
+    // `some-types` is not a publishable dep; a type-only import of it must NOT throw.
+    const src = `import type { Whatever } from 'some-types';
+function C() { return <div>ok</div>; }
+export default C;`;
+    await expect(transpileReactSource(src)).resolves.toContain('React.createElement');
+  });
+
+  it('does not misread a type-only RELATIVE import as a multi-file artifact', async () => {
+    // The type-only import has no runtime reference, so it must be stripped BEFORE the
+    // relative-import (multi-file) guard runs - not rejected as a sibling-file reference.
+    const src = `import type Foo from './types';
+function C() { return <div>ok</div>; }
+export default C;`;
+    await expect(transpileReactSource(src)).resolves.toContain('React.createElement');
+  });
 });
 
 describe('buildReactArtifactBundle', () => {
@@ -51,6 +127,24 @@ describe('buildReactArtifactBundle', () => {
     const result = validateBundle({ indexHtml, manifest: INDEX_MANIFEST });
     expect(result.violations).toEqual([]);
     expect(result.valid).toBe(true);
+  });
+
+  it('builds a valid inert bundle from a TypeScript artifact end-to-end (types stripped)', async () => {
+    const TS = `import { useState, type FC } from 'react';
+interface Props { start: number; }
+const Counter: FC<Props> = ({ start }) => {
+  const [count, setCount] = useState<number>(start);
+  return <button onClick={() => setCount(c => c + 1)}>{count}</button>;
+};
+export default Counter;`;
+    const { indexHtml } = await buildReactArtifactBundle({ source: TS, title: 'TS Counter' });
+
+    for (const { pattern, reason } of __testing.FORBIDDEN_INLINE_PATTERNS) {
+      expect(pattern.test(indexHtml), `forbidden pattern hit: ${reason}`).toBe(false);
+    }
+    expect(indexHtml).toContain('React.createElement');
+    expect(indexHtml).not.toMatch(/\binterface\b/); // TS stripped, not shipped as broken JS
+    expect(validateBundle({ indexHtml, manifest: INDEX_MANIFEST }).valid).toBe(true);
   });
 
   it('handles a mixed default+named React import (import React, { useState })', async () => {

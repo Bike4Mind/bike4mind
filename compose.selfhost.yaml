@@ -92,7 +92,16 @@ services:
       timeout: 5s
       retries: 10
 
-  # One-shot: create the buckets the app expects (names come from .env.selfhost).
+  # One-shot: create the buckets the app expects (names come from .env.selfhost),
+  # register the FabFile bucket's put-event webhook (drives self-host upload
+  # chunking), then set a MinIO lifecycle rule that expires abandoned publish drafts. finalize.ts
+  # deletes a draft on success, so the drafts/ prefix only lingers when a publish is
+  # started but never finalized; the rule reaps those after 7 days. Scoped to the
+  # drafts/ prefix so promoted bundles (stored under tier/scope/slug) are never
+  # touched. Idempotent (skips the add if a lifecycle config already exists) and
+  # best-effort (an mc build without ilm support just skips it). Hosted gets the same
+  # cleanup from an S3 lifecycle rule; this is the MinIO equivalent. If you point
+  # object storage at a different S3 backend, add an equivalent drafts/ rule there.
   createbuckets:
     image: minio/mc
     depends_on:
@@ -107,8 +116,9 @@ services:
         mc alias set local http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD" &&
         for b in "$$APP_FILES_BUCKET" "$$EMAIL_INGESTION_BUCKET" "$$FAB_FILE_BUCKET" "$$GENERATED_IMAGES_BUCKET" "$$HISTORY_IMPORT_BUCKET" "$$PUBLISHED_ARTIFACTS_BUCKET" "$$SLACK_EXPORT_BUCKET"; do
           [ -n "$$b" ] && mc mb -p "local/$$b" || true;
-        done &&
-        [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true
+        done;
+        [ -n "$$FAB_FILE_BUCKET" ] && mc event add "local/$$FAB_FILE_BUCKET" arn:minio:sqs::primary:webhook --event put --ignore-existing || true;
+        { [ -n "$$PUBLISHED_ARTIFACTS_BUCKET" ] && { mc ilm rule ls "local/$$PUBLISHED_ARTIFACTS_BUCKET" >/dev/null 2>&1 || mc ilm rule add --expire-days 7 --prefix "drafts/" "local/$$PUBLISHED_ARTIFACTS_BUCKET"; }; }; true
 
   # SQS-compatible queue. Queues are predeclared in elasticmq.conf; the URL
   # format there matches the *_QUEUE URLs in .env.selfhost.example.

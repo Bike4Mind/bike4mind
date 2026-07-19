@@ -130,6 +130,57 @@ curl -X POST http://localhost:3000/api/chat \
 
 The same header works as `Authorization: ApiKey <key>`. Keys, scopes, and rate limits are managed per-user in Settings > API Keys.
 
+## Streaming completions API (`/api/ai/v1/completions`)
+
+`POST /api/chat` (above) is the high-level chat API. For a low-level streaming completion - one request in, a token-by-token Server-Sent Events (SSE) stream out - call `/api/ai/v1/completions`. This is the endpoint the CLI uses under the hood, and the one to target from a custom client or agent loop.
+
+On self-host it is served by the **`chatcompletion` container**, not the `app` container: reach it at `http://localhost:8788` by default (override the host port with `CHATCOMPLETION_HOST_PORT`, and advertise the external origin via `CHAT_COMPLETION_PUBLIC_URL`).
+
+**Request** - OpenAI-shaped JSON:
+
+- `model` (**required**) - a model id from `GET /api/models`. Unlike `/api/chat`, this endpoint has **no server-side default**; omit it and the request is rejected.
+- `messages` (**required**) - `[{ "role": "user" | "assistant" | "system", "content": "..." }]`. `content` is a string or an array of content parts.
+- Optional: `temperature`, `max_tokens`, `tools`, `response_format`, `stream`. `tools` is **not** OpenAI-shaped - each entry is `{ toolSchema: { name, description, parameters } }` (see `CompletionToolSchema` in `b4m-core/common/src/schemas/cliCompletions.ts`), not `{ type: "function", function: {...} }`.
+
+Authenticate with any one of: `x-api-key: b4m_...`, `Authorization: ApiKey b4m_...`, or `Authorization: Bearer <JWT>`.
+
+**Response** - a **custom SSE contract, not OpenAI's**: there is no `choices[].delta`. Each frame is either an SSE comment (a line starting with `:`) or a `data:` line carrying one JSON object, and every frame ends with a blank line (`\n\n`). The stream opens and closes in the order below, but the middle is a stream: `content` and `tool_use` frames interleave one per chunk (a tool-calling turn emits `tool_use` frames among the `content` ones), and keep-alive comments keep recurring (about every 10s) throughout:
+
+1. `: keep-alive` - an SSE comment sent immediately and then roughly every 10s so an intermediary does not drop an idle stream. EventSource ignores comment lines; a raw reader should skip any line starting with `:`.
+2. `data: {"type":"meta","requestId":"..."}` - always the first JSON event; use `requestId` to correlate with server logs.
+3. `data: {"type":"content","text":"...","usage":{...}}` - zero or more content chunks. `text` is the incremental output; `usage`, when present, carries `inputTokens`/`outputTokens` (and Anthropic cache-token deltas).
+4. `data: {"type":"tool_use","text":"...","tools":[...]}` - sent instead of `content` for a chunk in which the model invoked a tool.
+5. `data: {"type":"error","message":"...","requestId":"..."}` - on failure (invalid body, auth failure, or a mid-stream error); the stream then ends.
+6. `data: [DONE]` - terminal sentinel on success.
+
+**Example** - a local Ollama model (`-N` disables curl buffering so the stream prints live):
+
+```bash
+curl -N -X POST http://localhost:8788/api/ai/v1/completions \
+  -H "x-api-key: $B4M_API_KEY" \
+  -H "content-type: application/json" \
+  -d '{
+    "model": "qwen2.5-coder:7b",
+    "messages": [{ "role": "user", "content": "Say hello in five words." }]
+  }'
+```
+
+Sample transcript:
+
+```
+: keep-alive
+
+data: {"type":"meta","requestId":"1a2b3c4d"}
+
+data: {"type":"content","text":"Hello"}
+
+data: {"type":"content","text":" there, good"}
+
+data: {"type":"content","text":" to meet you","usage":{"inputTokens":13,"outputTokens":5}}
+
+data: [DONE]
+```
+
 ## Drive it with the CLI (`b4m`)
 
 Prefer the terminal? The [Bike4Mind CLI](./BIKE4MIND_CLI.md) talks to your self-hosted stack directly — the OAuth device-flow and chat APIs ship in the open core, so no hosted account or credits are involved.
@@ -141,6 +192,8 @@ b4m                                  # start, then /login — read the sign-in c
 ```
 
 Auth is cached per environment, so you can keep a separate hosted login and switch with `--prod` / `--api-url`. Full guide (hosted **and** self-host, switching, troubleshooting): [**BIKE4MIND_CLI.md**](./BIKE4MIND_CLI.md).
+
+Want other MCP clients (Claude Desktop, editors) to drive your stack? Run `b4m mcp serve` to expose it as an MCP server - see [Serve Bike4Mind as an MCP server](./BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve).
 
 ## Local models with Ollama (no API keys)
 
@@ -300,11 +353,20 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 
 The stack is configured for **local, single-host use**: the backing services (Mongo, MinIO, ElasticMQ, Mailpit) run without authentication and bind to `127.0.0.1` only. Before running on a public-facing server you must enable Mongo auth, change the MinIO credentials, use a real SMTP provider, and put the app behind a reverse proxy with TLS. See the header of `compose.selfhost.yaml`.
 
+When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
+
+Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
+
 ## What you get (and don't)
 
-Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts. It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
+Self-host runs the open-core engine - notebooks, multi-LLM chat, agents, the Quest Master, the knowledge engine, and artifacts (including publishing and sharing artifact bundles - uploads proxy through the app, so MinIO stays internal). It includes **realtime streaming**: the `ws` gateway + `subscriber-fanout` services stream chat replies token-by-token and push live document updates (notebooks, sync) without a page refresh - the same WebSocket experience as the hosted app, with no AWS API Gateway. It also includes **background enrichment and offline RAG**: the `worker` service runs the queue consumers and scheduler, so notebook auto-naming, summaries, tagging, memento creation, research tasks, and automatic file chunking + embedding all work (embeddings can run fully offline via a local Ollama embedder - see "Offline RAG"). Known gaps today:
 
 - **Image moderation on upload** - the hosted upload path runs AWS Rekognition; self-host skips it (no AWS), so uploaded images are not content-scanned.
 - **Hosted-service features** - billing, entitlements, and premium overlays are not part of the open core; see the [open/closed boundary](./CONTRIBUTING.md#the-openclosed-boundary).
+- **Python artifacts need internet** - the in-browser Python runtime (Pyodide) is fetched from a public CDN, so running a Python artifact needs internet unless you point `PYODIDE_BASE_URL` at a local mirror (see below).
+
+### Python artifacts offline
+
+Python artifacts execute in the browser via Pyodide (WebAssembly), fetched by default from the public jsDelivr CDN - so a fully air-gapped box cannot run them out of the box. To run them offline, mirror the Pyodide v0.25.1 "full" distribution on a server you control and set `PYODIDE_BASE_URL` in `.env.selfhost` to that base (a trailing slash is added automatically if you omit it). A cross-origin mirror must send permissive CORS headers; its origin is added to the app CSP automatically. See the `PYODIDE_BASE_URL` block in `.env.selfhost.example` for what to mirror. Leave it unset to use the CDN.
 
 Need help? Ask in [Discussions](https://github.com/bike4mind/bike4mind/discussions).

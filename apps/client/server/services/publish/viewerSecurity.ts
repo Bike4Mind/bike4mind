@@ -125,14 +125,22 @@ export function sanitizeRenderedHtml(html: string): string {
  */
 export function resolveDocOrigin(hostHeader?: string, forwardedProtoHeader?: string | string[]): string {
   const rawHost = hostHeader ?? PUBLISH_HOST;
-  const reqHost = isAllowedDocHost(rawHost) ? rawHost : PUBLISH_HOST;
+  // Fall back to the canonical app host for a disallowed/malformed Host; when
+  // PUBLISH_HOST is unset (self-host, no SERVER_DOMAIN) use the literal
+  // `localhost` so the origin can never degrade to a bare scheme (`http://`),
+  // which would emit scheme-only `http:///static/...` CSP tokens.
+  const reqHost = isAllowedDocHost(rawHost) ? rawHost : PUBLISH_HOST || 'localhost';
 
   const fwdRaw = Array.isArray(forwardedProtoHeader) ? forwardedProtoHeader[0] : forwardedProtoHeader;
   const fwdProto = fwdRaw?.split(',')[0]?.trim().toLowerCase();
+  // X-Forwarded-Proto wins (a TLS reverse proxy sets it to https). Otherwise
+  // default to http for self-host and localhost/loopback - a self-host stack
+  // serves plain http unless the operator terminates TLS upstream (in which case
+  // the proxy sends X-Forwarded-Proto=https, handled above) - and https elsewhere.
   const reqProto =
     fwdProto === 'http' || fwdProto === 'https'
       ? fwdProto
-      : /^(localhost|127\.0\.0\.1)(:|$)/.test(reqHost)
+      : process.env.B4M_SELF_HOST === 'true' || /^(localhost|127\.0\.0\.1)(:|$)/.test(reqHost)
         ? 'http'
         : 'https';
 
@@ -149,7 +157,20 @@ export function resolveDocOrigin(hostHeader?: string, forwardedProtoHeader?: str
  * (`evilexample.com`).
  */
 function isAllowedDocHost(host: string): boolean {
-  if (!/^[a-zA-Z0-9.-]+(:\d+)?$/.test(host)) return false;
+  // Accept a DNS/IPv4 name OR a bracketed IPv6 literal (e.g. `[::1]:3000`), each
+  // with an optional port. A self-host viewer reached over an IPv6 loopback/LAN
+  // literal must pass this gate BEFORE the self-host bypass below, or it degrades
+  // to the `localhost` fallback and mints CSP tokens that don't match its origin.
+  // Both shapes exclude spaces/quotes/semicolons, so a crafted Host still can't
+  // inject extra CSP directives.
+  const wellFormed = /^[a-zA-Z0-9.-]+(:\d+)?$/.test(host) || /^\[[0-9a-fA-F:.]+\](:\d+)?$/.test(host);
+  if (!wellFormed) return false;
+  // Self-host serves the app + viewer from an operator-chosen origin (localhost,
+  // a LAN/tailnet host, or a reverse-proxied domain) that SERVER_DOMAIN doesn't
+  // enumerate. The format gate above already blocks CSP-directive injection, so
+  // admit any well-formed Host in self-host; the SERVER_DOMAIN allowlist below is
+  // a hosted, multi-tenant concern, moot on a single-operator deployment.
+  if (process.env.B4M_SELF_HOST === 'true') return true;
   const name = host.split(':')[0].toLowerCase();
   if (name === 'localhost' || name === '127.0.0.1') return true;
   if (PUBLISH_HOST && name === PUBLISH_HOST) return true;
@@ -166,10 +187,13 @@ function isAllowedDocHost(host: string): boolean {
  */
 export function buildBundleScriptSrc(hostHeader?: string, forwardedProtoHeader?: string | string[]): string {
   const docOrigin = resolveDocOrigin(hostHeader, forwardedProtoHeader);
-  return Array.from(
-    new Set([
-      ...BLESSED_SCRIPT_PATHS.map(p => `${docOrigin}${p}`),
-      ...BLESSED_SCRIPT_PATHS.map(p => `https://${PUBLISH_HOST}${p}`),
-    ])
-  ).join(' ');
+  const tokens = BLESSED_SCRIPT_PATHS.map(p => `${docOrigin}${p}`);
+  // Canonical app-host form only when PUBLISH_HOST is configured; skipping it when
+  // SERVER_DOMAIN is unset (self-host) avoids emitting a scheme-only
+  // `https:///static/...` token. The doc-origin form above already covers
+  // self-host, where blessed libs load same-origin from the app itself.
+  if (PUBLISH_HOST) {
+    tokens.push(...BLESSED_SCRIPT_PATHS.map(p => `https://${PUBLISH_HOST}${p}`));
+  }
+  return Array.from(new Set(tokens)).join(' ');
 }

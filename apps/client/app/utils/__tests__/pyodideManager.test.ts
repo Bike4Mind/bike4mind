@@ -235,6 +235,40 @@ from numpy import array
   });
 });
 
+describe('configure (Pyodide mirror baseUrl)', () => {
+  // Inject a fake worker so spawnWorker() (real `new Worker(new URL(...))`) is skipped, then
+  // assert the message the manager posts. initialize() posts synchronously before awaiting the
+  // 'ready' the fake never sends, so the pending promise is intentionally discarded.
+  const injectWorker = (mgr: unknown) => {
+    const worker = { onmessage: null, onerror: null, postMessage: vi.fn(), terminate: vi.fn() };
+    (mgr as { worker: typeof worker }).worker = worker;
+    return worker;
+  };
+
+  beforeEach(() => {
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('forwards a configured baseUrl to the worker on initialize', async () => {
+    const { pyodideManager } = await import('../pyodideManager');
+    const worker = injectWorker(pyodideManager);
+    pyodideManager.configure('http://mirror.local/pyodide/');
+    void pyodideManager.initialize().catch(() => {});
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'initialize', baseUrl: 'http://mirror.local/pyodide/' });
+  });
+
+  it('sends baseUrl undefined when not configured (worker keeps the default CDN)', async () => {
+    const { pyodideManager } = await import('../pyodideManager');
+    const worker = injectWorker(pyodideManager);
+    void pyodideManager.initialize().catch(() => {});
+    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'initialize', baseUrl: undefined });
+  });
+});
+
 describe('execution timeout', () => {
   it('should have EXECUTION_TIMEOUT_MS constant defined', async () => {
     // The timeout constant is private, but we can verify the execute method

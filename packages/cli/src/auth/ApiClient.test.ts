@@ -20,7 +20,7 @@ vi.mock('./OAuthClient', () => ({
   },
 }));
 
-import { ApiClient } from './ApiClient';
+import { ApiClient, DEFAULT_API_TIMEOUT_MS } from './ApiClient';
 
 const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
   new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
@@ -126,5 +126,73 @@ describe('ApiClient.checkSessionValid', () => {
     client.getAxiosInstance().defaults.adapter = (() => Promise.reject(new Error('Network Error'))) as AxiosAdapter;
 
     expect(await client.checkSessionValid()).toBe(true);
+  });
+});
+
+describe('ApiClient API key auth', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('injects x-api-key and never a Bearer token when an API key is set', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(ok(config));
+    }) as AxiosAdapter;
+
+    await client.get('/api/sessions');
+
+    expect(seen?.headers['x-api-key']).toBe('b4m_live_secret');
+    expect(seen?.headers.Authorization).toBeUndefined();
+    // The stored-JWT path must not be consulted at all when an API key is present.
+    expect(mockGetAuthTokens).not.toHaveBeenCalled();
+  });
+
+  it('does not attempt a token refresh on 401 when an API key is set', async () => {
+    const client = new ApiClient('http://localhost:3000', undefined, 'b4m_live_secret');
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(make401(config))) as AxiosAdapter;
+
+    await expect(client.get('/api/sessions')).rejects.toBeInstanceOf(AxiosError);
+    expect(mockRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it('applies the generous default request timeout so a hung backend cannot wedge a caller forever', () => {
+    const client = new ApiClient('http://localhost:3000');
+    expect(client.getAxiosInstance().defaults.timeout).toBe(DEFAULT_API_TIMEOUT_MS);
+  });
+
+  it('honors a B4M_API_TIMEOUT_MS override', () => {
+    const prev = process.env.B4M_API_TIMEOUT_MS;
+    process.env.B4M_API_TIMEOUT_MS = '1234';
+    try {
+      const client = new ApiClient('http://localhost:3000');
+      expect(client.getAxiosInstance().defaults.timeout).toBe(1234);
+    } finally {
+      if (prev === undefined) delete process.env.B4M_API_TIMEOUT_MS;
+      else process.env.B4M_API_TIMEOUT_MS = prev;
+    }
+  });
+
+  it('still injects a Bearer token when no API key is set (unchanged JWT path)', async () => {
+    mockGetAuthTokens.mockResolvedValue({
+      accessToken: 'jwt-token',
+      refreshToken: 'refresh',
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString(),
+      userId: 'user-1',
+    });
+    const client = new ApiClient('http://localhost:3000');
+    let seen: InternalAxiosRequestConfig | undefined;
+    client.getAxiosInstance().defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seen = config;
+      return Promise.resolve(ok(config));
+    }) as AxiosAdapter;
+
+    await client.get('/api/sessions');
+
+    expect(seen?.headers.Authorization).toBe('Bearer jwt-token');
+    expect(seen?.headers['x-api-key']).toBeUndefined();
   });
 });
