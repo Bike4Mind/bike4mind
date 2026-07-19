@@ -14,7 +14,7 @@ export interface ExecutionResult {
 
 /** Messages sent from main thread to worker */
 export type PyodideWorkerMessage =
-  | { type: 'initialize' }
+  | { type: 'initialize'; baseUrl?: string }
   | { type: 'execute'; code: string; packages: string[]; timeoutMs: number }
   | { type: 'cancel' };
 

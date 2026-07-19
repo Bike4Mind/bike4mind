@@ -29,15 +29,19 @@ import {
   dataLakeRepository,
 } from '@bike4mind/database';
 import {
+  ChatModels,
   ContextTelemetry,
   ContextTelemetryAlerts,
   IMcpServerDocument,
   IUserDocument,
+  ModelBackend,
   Permission,
+  type ModelInfo,
 } from '@bike4mind/common';
 import { MCPClient } from '@bike4mind/mcp';
-import { IChatCompletionServiceOptions } from '@bike4mind/services';
-import { ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
+import { apiKeyService, IChatCompletionServiceOptions } from '@bike4mind/services';
+import { ApiKeyTable, getAvailableModels, getLlmByModel } from '@bike4mind/llm-adapters';
+import { getSettingsByNames, ITokenizer, TiktokenTokenizer } from '@bike4mind/utils';
 import { ILogger, Logger } from '@bike4mind/observability';
 import { accessibleBy } from '@casl/mongoose';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -284,4 +288,100 @@ export function getSharedTokenizer(logger?: ILogger): ITokenizer {
     return sharedTokenizer.withLogger(enrichedLogger);
   }
   return sharedTokenizer;
+}
+
+/**
+ * Whether `modelInfo` can actually serve a completion with these keys. `getLlmByModel`
+ * returns null when the provider key is absent AND throws ('<provider> API key is expired')
+ * when a stored key is past its expiry - both mean "not usable" here, so the throw is
+ * swallowed rather than surfaced as a 500. Shared by the resolver's fallback decision and
+ * chat.ts's no-usable-model guard so they agree on what "usable" means.
+ */
+export function isChatModelUsable(apiKeys: ApiKeyTable, modelInfo: ModelInfo | undefined, logger: Logger): boolean {
+  if (!modelInfo) return false;
+  try {
+    return getLlmByModel(apiKeys, { modelInfo, logger }) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Heuristic name match for an Ollama embedding model. The Ollama backend enumerates every
+ * pulled model as type 'text', so an embedding model (e.g. nomic-embed-text) would otherwise
+ * be a valid chat fallback and answer with empty replies. Matched by id against known
+ * embedding families; kept deliberately narrow so a general model like gemma3 does NOT trip
+ * the `embeddinggemma` term. Self-contained on purpose - do not couple to ollamaBackend.
+ */
+export function isLikelyEmbeddingModel(id: string): boolean {
+  return /embed|bge-|bge:|minilm|arctic-embed|embeddinggemma/i.test(id);
+}
+
+export interface ResolvedDefaultChatModel {
+  /** The model id to use when a request omits one. */
+  model: string;
+  /**
+   * Effective API keys and the available-models list. Computed only on self-host
+   * (undefined on hosted, where no per-request probing happens) and returned so the
+   * caller can judge the model's usability without re-running the two lookups.
+   */
+  apiKeys?: ApiKeyTable;
+  models?: ModelInfo[];
+}
+
+/**
+ * Resolve the default chat model for a request that omits `model`.
+ *
+ * Hosted (B4M_SELF_HOST !== 'true'): the Bedrock-backed schema default is always
+ * reachable via IAM, so return it directly with zero extra work.
+ *
+ * Self-host: Bedrock never works, so the schema default maps to its direct-API
+ * Anthropic twin - but a local-only box may have no ANTHROPIC_API_KEY at all. Probe
+ * the effective keys and the live model list, then keep the configured default when
+ * its provider key is usable, else fall back to the first local Ollama chat model
+ * (needs no key; embedding models are skipped), else return the (unusable) default so
+ * the caller can raise a clear error. The live Ollama /api/tags list is the source of
+ * truth for local models, not OLLAMA_PULL_MODELS.
+ */
+export async function resolveDefaultChatModel(params: {
+  configuredModel: string | null | undefined;
+  userId: string;
+  logger?: Logger;
+}): Promise<ResolvedDefaultChatModel> {
+  const cloudDefault = params.configuredModel || ChatModels.CLAUDE_5_SONNET_BEDROCK;
+
+  if (process.env.B4M_SELF_HOST !== 'true') {
+    return { model: cloudDefault };
+  }
+
+  const configuredDefault =
+    cloudDefault === ChatModels.CLAUDE_5_SONNET_BEDROCK ? ChatModels.CLAUDE_5_SONNET : cloudDefault;
+
+  const logger = params.logger ?? new Logger();
+  const apiKeys = (await apiKeyService.getEffectiveLLMApiKeys(
+    params.userId,
+    { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository }, getSettingsByNames },
+    { logger }
+  )) as ApiKeyTable;
+  const models = await getAvailableModels(apiKeys);
+
+  const configuredInfo = models.find(m => m.id === configuredDefault);
+  if (isChatModelUsable(apiKeys, configuredInfo, logger) && !isLikelyEmbeddingModel(configuredDefault)) {
+    return { model: configuredDefault, apiKeys, models };
+  }
+
+  // First local Ollama text model that is not an embedding model (those enumerate as 'text'
+  // but produce no chat reply, e.g. nomic-embed-text pulled alongside a coder model).
+  const localModel = models.find(
+    m => m.backend === ModelBackend.Ollama && m.type === 'text' && !isLikelyEmbeddingModel(m.id)
+  );
+  if (localModel) {
+    // No isChatModelUsable re-check on this pick: the route guard (chat.ts) re-validates via
+    // isChatModelUsable, and an Ollama model is usable iff apiKeys.ollama is set - the same
+    // condition under which getAvailableModels enumerates it into `models`. So any Ollama model
+    // present here is already usable, and the guard and this fallback stay in agreement.
+    return { model: localModel.id, apiKeys, models };
+  }
+
+  return { model: configuredDefault, apiKeys, models };
 }
