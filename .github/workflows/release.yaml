@@ -281,6 +281,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
 
+      # Publishing is OIDC-only (no token fallback), so a package missing its npm
+      # Trusted Publisher fails with ENEEDAUTH mid-publish - which changesets/action
+      # surfaces only as a bare red step. Spell out the fix so a broken release is
+      # self-diagnosing. (changesets/action doesn't expose per-package output here,
+      # so this is generic; the snapshot path names the exact packages.)
+      - name: Explain a likely npm auth failure
+        if: failure() && steps.changesets.outcome == 'failure'
+        run: |
+          echo "::error title=npm publish may have failed auth (ENEEDAUTH)::If the step above failed while publishing, a package is likely missing its npm Trusted Publisher (publishing is OIDC-only, no token fallback). Configure each published package at npmjs.com/package/<pkg>/access -> Trusted Publisher: Organization=Bike4Mind, Repository=bike4mind, Workflow=release.yaml, Environment=blank. Note: npm allows only ONE trusted publisher per package and it must point at THIS file (release.yaml)."
+
   # Snapshot (prerelease) publish for feature branches, triggered when the
   # "Branch Tests" workflow completes successfully. It lives in this file so
   # npm's single trusted publisher (this workflow) covers snapshot publishes
