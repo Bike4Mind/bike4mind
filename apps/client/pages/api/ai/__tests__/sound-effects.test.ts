@@ -2,8 +2,8 @@ import { isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getApiKey, generate } = vi.hoisted(() => ({
-  getApiKey: vi.fn(),
+const { getEffectiveApiKey, generate } = vi.hoisted(() => ({
+  getEffectiveApiKey: vi.fn(),
   generate: vi.fn(),
 }));
 
@@ -36,9 +36,9 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ apiKeyRepository: {} }));
+vi.mock('@bike4mind/database', () => ({ apiKeyRepository: {}, adminSettingsRepository: {} }));
 vi.mock('@bike4mind/services', () => ({
-  apiKeyService: { getApiKey: (...a: unknown[]) => getApiKey(...a) },
+  apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
 }));
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
@@ -55,13 +55,13 @@ const run = (body: unknown) => {
 };
 
 beforeEach(() => {
-  getApiKey.mockReset();
+  getEffectiveApiKey.mockReset();
   generate.mockReset();
 });
 
 describe('POST /api/ai/sound-effects', () => {
   it('returns generated audio bytes with the vendor content type (200)', async () => {
-    getApiKey.mockResolvedValue({ apiKey: 'eleven-key' });
+    getEffectiveApiKey.mockResolvedValue('eleven-key');
     generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
 
     const { res, promise } = run({ text: 'explosion', durationSeconds: 2 });
@@ -78,7 +78,7 @@ describe('POST /api/ai/sound-effects', () => {
   });
 
   it('returns 401 when the provider key is not configured', async () => {
-    getApiKey.mockResolvedValue(null);
+    getEffectiveApiKey.mockResolvedValue(null);
 
     const { res, promise } = run({ text: 'rain' });
     await promise;
@@ -92,11 +92,11 @@ describe('POST /api/ai/sound-effects', () => {
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
-    expect(getApiKey).not.toHaveBeenCalled();
+    expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
   it('maps an upstream provider failure to 502', async () => {
-    getApiKey.mockResolvedValue({ apiKey: 'eleven-key' });
+    getEffectiveApiKey.mockResolvedValue('eleven-key');
     generate.mockRejectedValue(new Error('ElevenLabs sound generation failed: 429'));
 
     const { res, promise } = run({ text: 'thunder' });
