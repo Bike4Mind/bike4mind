@@ -96,6 +96,33 @@ export interface VerifyApiKeyOptions {
 const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT];
 
 /**
+ * Project a (post-guard) validation result into an ApiKeyInfo. Single source for the
+ * doc->info mapping, shared by verifyApiKey and verifyEmbedKeyById so the two can't
+ * drift. Callers MUST have already asserted keyId/userId/scopes/rateLimit are present.
+ */
+function toApiKeyInfo(v: {
+  keyId?: string;
+  userId?: string;
+  scopes?: ApiKeyScope[];
+  rateLimit?: { requestsPerMinute: number; requestsPerDay: number };
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  organizationId?: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+}): ApiKeyInfo {
+  return {
+    keyId: v.keyId!,
+    userId: v.userId!,
+    scopes: v.scopes!,
+    rateLimit: v.rateLimit!,
+    billingOwnerType: v.billingOwnerType,
+    organizationId: v.organizationId,
+    agentId: v.agentId,
+    allowedOrigins: v.allowedOrigins,
+  };
+}
+
+/**
  * Verify API key from headers
  * @throws Error if API key is invalid, expired, or missing required scope
  */
@@ -126,16 +153,7 @@ export async function verifyApiKey(
       throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
     }
 
-    return {
-      keyId: validation.keyId,
-      userId: validation.userId,
-      scopes: validation.scopes,
-      rateLimit: validation.rateLimit,
-      billingOwnerType: validation.billingOwnerType,
-      organizationId: validation.organizationId,
-      agentId: validation.agentId,
-      allowedOrigins: validation.allowedOrigins,
-    };
+    return toApiKeyInfo(validation);
   } catch (error) {
     if (error instanceof Error) {
       throw error;
@@ -205,16 +223,7 @@ export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
     throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
   }
 
-  const info: ApiKeyInfo = {
-    keyId: validation.keyId,
-    userId: validation.userId,
-    scopes: validation.scopes,
-    rateLimit: validation.rateLimit,
-    billingOwnerType: validation.billingOwnerType,
-    organizationId: validation.organizationId,
-    agentId: validation.agentId,
-    allowedOrigins: validation.allowedOrigins,
-  };
+  const info = toApiKeyInfo(validation);
   assertEmbedCredential(info);
   return info;
 }

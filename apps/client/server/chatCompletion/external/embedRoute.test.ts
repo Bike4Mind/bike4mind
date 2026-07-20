@@ -236,6 +236,7 @@ describe('POST /api/embed/chat', () => {
     mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: false, retryAfter: 30, error: 'too many' });
     const res = await post(CHAT);
     expect(res.status).toBe(429);
+    expect(res.headers.get('retry-after')).toBe('30');
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
