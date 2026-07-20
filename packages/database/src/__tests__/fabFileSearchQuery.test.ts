@@ -481,6 +481,20 @@ describe('buildFabFileSearchQuery', () => {
       expect(result.filter.userId).toBe('user123');
       expect(result.filter._id).toEqual({ $in: ['id1'] });
     });
+
+    it('skipOwnership drops the ownership predicate when the allow-list is present', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ filters: { restrictToFileIds: ['id1'] }, options: { skipOwnership: true } })
+      );
+      expect(result.filter.userId).toBeUndefined();
+      expect(result.filter._id).toEqual({ $in: ['id1'] });
+    });
+
+    it('skipOwnership is IGNORED without an allow-list - it can never widen an unrestricted search', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { skipOwnership: true } }));
+      expect(result.filter.userId).toBe('user123');
+      expect(result.filter._id).toBeUndefined();
+    });
   });
 
   // ── 15. fileSize sort ─────────────────────────────────────────────

@@ -157,11 +157,14 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
  * Security posture (all fail-closed):
  *   - The tool set derives ONLY from the resolver over the agent's server-side config
  *     (see embedToolResolver); nothing in the request can name or enable a tool.
- *   - KB is always scoped to the bound agent's Project file set. No projectId, a
- *     missing/deleted project, or a project not owned by the key's user all resolve to
- *     an EMPTY scope (KB tools present, read nothing) - never owner-wide. Files the
- *     owner curated into the project are readable by the embed audience even when
- *     org-shared rather than owner-owned: curation IS the grant.
+ *   - KB is always scoped to the bound agent's Project file set. The project must be
+ *     owned by the key's user, or - for an org-owned agent - by a member of the key's
+ *     org (org agents' projects are routinely created by a teammate, and the agent
+ *     authorization itself is org-scoped). Anything else (no projectId, missing/
+ *     deleted project, cross-org owner) resolves to an EMPTY scope (KB tools present,
+ *     read nothing) - never owner-wide. Files curated into an authorized project are
+ *     readable by the embed audience even when owned by another user: curation IS
+ *     the grant.
  *   - No orchestration deps (agentStore/dagDispatcher), so delegate/coordinate tools
  *     are structurally impossible; entitlementKeys stays [] so even a bug that reached
  *     data-lake resolution would resolve nothing.
@@ -172,10 +175,18 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
 async function buildEmbedServerTools(args: {
   ctx: EmbedContext;
   hydrated: { model?: string; projectId?: string; allowedTools: string[]; deniedTools: string[] };
+  /**
+   * Owner org, or null. Set only when the bound agent passed the ORG-ownership clause -
+   * it authorizes a project owned by any org member (org projects are routinely created
+   * by a teammate). Null for a personal agent, which restricts to the key owner's own
+   * projects. Membership is read from the org's own member list (a User doc carries no
+   * org field), so no extra lookup is needed.
+   */
+  ownerOrg: { userId?: string; userDetails?: Array<{ id: string }> | null } | null;
   logger: Logger;
   getAbortSignal: () => AbortSignal | undefined;
 }): Promise<ICompletionOptionTools[] | undefined> {
-  const { ctx, hydrated, logger, getAbortSignal } = args;
+  const { ctx, hydrated, ownerOrg, logger, getAbortSignal } = args;
 
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
@@ -183,8 +194,14 @@ async function buildEmbedServerTools(args: {
   let kbFileIds: string[] = [];
   if (hydrated.projectId) {
     const project = await projectRepository.findById(hydrated.projectId);
-    if (project && !project.deletedAt && project.userId === ctx.userId) {
-      kbFileIds = project.fileIds ?? [];
+    if (project && !project.deletedAt) {
+      const isOrgMember = (userId: string): boolean =>
+        !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.userDetails ?? []).some(d => d.id === userId));
+      // Authorized when the key owner owns the project, or - for an org agent - any org
+      // member does. Anything else fails closed to an empty scope (never owner-wide).
+      if (project.userId === ctx.userId || isOrgMember(project.userId)) {
+        kbFileIds = project.fileIds ?? [];
+      }
     }
   }
 
@@ -379,6 +396,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       const serverTools = await buildEmbedServerTools({
         ctx,
         hydrated,
+        // Only an org-owned agent extends KB authorization to org-mate projects.
+        ownerOrg: ownedByOrg ? org : null,
         logger,
         getAbortSignal: () => abortController.signal,
       });

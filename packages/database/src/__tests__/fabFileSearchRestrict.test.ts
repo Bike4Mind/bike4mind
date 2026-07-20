@@ -87,4 +87,25 @@ describe('FabFileRepository.search restrictToFileIds allow-list', () => {
 
     expect(result.data.map(f => f.id)).toEqual([alphaId]);
   });
+
+  it('skipOwnership serves an allow-listed file owned by another user (curation is the grant)', async () => {
+    const [alphaId] = await seedThreeMatchingFiles();
+    const foreign = await FabFile.create({
+      userId: 'teammate',
+      fileName: 'widget-teammate.txt',
+      type: KnowledgeType.FILE,
+      mimeType: 'text/plain',
+    });
+
+    const result = await fabFileRepository.search(
+      userId,
+      'widget',
+      { restrictToFileIds: [alphaId, foreign.id as string] },
+      pagination,
+      order,
+      { includeShared: false, skipOwnership: true }
+    );
+
+    expect(result.data.map(f => f.id).sort()).toEqual([alphaId, foreign.id as string].sort());
+  });
 });

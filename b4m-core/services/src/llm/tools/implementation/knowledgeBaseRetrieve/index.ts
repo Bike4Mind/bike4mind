@@ -143,8 +143,10 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           if (files.length === 0 && (tags?.length || query)) {
             let searchResults;
             if (scope) {
-              // Scoped: restrictToFileIds is the sole authority - no owner/shared/org
-              // expansion and no data-lake resolution on this branch.
+              // Scoped: restrictToFileIds is the sole authority (skipOwnership - curated
+              // files match even when owned by another user, matching Path A's
+              // membership-is-authorization). No owner/shared/org expansion and no
+              // data-lake resolution on this branch.
               searchResults = await context.db.fabfiles.search(
                 context.userId,
                 query || '',
@@ -155,6 +157,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                   textSearch: true,
                   includeShared: false,
                   userGroups: [],
+                  skipOwnership: true,
                   excludeContent: true, // Content fetched via chunks below, not the document field
                   ...retrievalFilter,
                 }

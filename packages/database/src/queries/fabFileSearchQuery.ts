@@ -280,6 +280,15 @@ export interface FabFileSearchParams {
     scopedTagPrefixes?: string[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
     restrictToDataLake?: boolean;
+    /**
+     * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
+     * ownership/sharing predicate entirely, so files curated into a server-resolved
+     * scope match even when owned by another user (curation is the grant - the KB
+     * scoped arms' contract, mirroring getAccessibleFiles on the semantic side).
+     * Ignored unless restrictToFileIds is present, so it can never widen an
+     * unrestricted search.
+     */
+    skipOwnership?: boolean;
     excludeContent?: boolean;
     /**
      * Generic retrieval-exclusion: keep documents whose filename begins with one of these
@@ -379,6 +388,10 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     andConditions.push({
       tags: { $elemMatch: { name: 'curated-notebook' } },
     });
+  } else if (options?.skipOwnership === true && filters.restrictToFileIds !== undefined) {
+    // Allow-list-as-authority: no ownership predicate. Only reachable with a present
+    // restrictToFileIds (see the option's doc), so results are still hard-bounded to
+    // the server-resolved id set composed above.
   } else if (options?.includeShared === true) {
     const ownershipConds = buildOwnershipConditions(userId, {
       userGroups: options.userGroups,

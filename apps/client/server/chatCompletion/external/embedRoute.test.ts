@@ -121,7 +121,9 @@ beforeEach(() => {
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
-  mockUserFindById.mockResolvedValue({ id: 'user-1', organizationId: 'org-1', groups: [] });
+  mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
+  // Org membership lives on the org doc (userDetails), not the user doc.
+  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', userDetails: [] });
   mockHydrate.mockReturnValue({
     model: 'test-model',
     systemPrompt: 'AGENT PERSONA PROMPT',
@@ -487,9 +489,46 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: [] });
   });
 
-  it('a project owned by a DIFFERENT user resolves to an empty kbScope (cross-user fail-closed)', async () => {
+  it('an org-owned agent accepts a project owned by an org TEAMMATE (org-scoped grant)', async () => {
     hydrateWith();
-    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-OTHER', fileIds: ['f1'], deletedAt: null });
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f9'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-TEAMMATE' }],
+    });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: ['f9'] });
+  });
+
+  it('a project owned by a user OUTSIDE the org resolves to an empty kbScope (cross-org fail-closed)', async () => {
+    hydrateWith();
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-FOREIGN', fileIds: ['f1'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-1' }], // user-FOREIGN is not a member
+    });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: [] });
+  });
+
+  it("a PERSONAL agent never inherits a teammate's project (org clause requires an org agent)", async () => {
+    hydrateWith();
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', userId: 'user-1', deletedAt: undefined });
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f1'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-TEAMMATE' }],
+    });
     await post(CHAT);
 
     const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };

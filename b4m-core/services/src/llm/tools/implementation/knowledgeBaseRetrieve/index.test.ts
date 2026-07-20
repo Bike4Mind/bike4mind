@@ -242,6 +242,8 @@ describe('retrieve_knowledge_content agent kbScope enforcement', () => {
     expect(opts.includeShared).toBe(false);
     expect(opts.userGroups).toEqual([]);
     expect(opts.dataLakeTags).toBeUndefined();
+    // Curated files match even when owned by another user - the scope is the authority.
+    expect(opts.skipOwnership).toBe(true);
     expect(getDynamicDataLakeAccessMock).not.toHaveBeenCalled();
   });
 

@@ -176,19 +176,25 @@ const CURATED_FOREIGN_CONTENT = 'Org handbook: curated by a teammate, shared int
 interface SeedOverrides {
   agent?: Record<string, unknown>;
   skipProject?: boolean;
+  /** Make the org teammate (not the key owner) own the agent's project. */
+  projectOwnedByTeammate?: boolean;
 }
 
 // Seeds the full object graph for one embed run and points the stubbed auth at it.
 // Returns the ids the cases assert against.
 async function seed(overrides: SeedOverrides = {}) {
   const owner = await User.create({ username: 'embed-owner', name: 'Embed Owner' });
+  const teammate = await User.create({ username: 'teammate', name: 'Teammate' });
   const org = await Organization.create({
     name: 'Embed Org',
     userId: owner.id,
     currentCredits: 100000,
-    userDetails: [],
+    // Org membership lives here (a User doc carries no org field). Both are members.
+    userDetails: [
+      { id: owner.id, email: 'owner@example.com', name: 'Embed Owner' },
+      { id: teammate.id, email: 'teammate@example.com', name: 'Teammate' },
+    ],
   });
-  await User.updateOne({ _id: owner._id }, { organizationId: org.id });
 
   await AdminSettings.create([
     { settingName: 'defaultEmbeddingModel', settingValue: 'text-embedding-3-small' },
@@ -207,7 +213,6 @@ async function seed(overrides: SeedOverrides = {}) {
     type: 'FILE',
     mimeType: 'text/markdown',
   });
-  const teammate = await User.create({ username: 'teammate', name: 'Teammate' });
   const curatedForeign = await FabFile.create({
     userId: teammate.id,
     fileName: 'org-handbook.md',
@@ -226,7 +231,7 @@ async function seed(overrides: SeedOverrides = {}) {
     const project = await Project.create({
       name: 'Embed KB',
       description: 'agent knowledge set',
-      userId: owner.id,
+      userId: overrides.projectOwnedByTeammate ? teammate.id : owner.id,
       sessionIds: [],
       // The curated-foreign file is owned by a DIFFERENT user: curation is the grant.
       fileIds: [inScopeA.id, curatedForeign.id],
@@ -344,13 +349,25 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
     expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
   }, 30000);
 
+  it('an org-owned agent whose project belongs to an org teammate still gets its KB', async () => {
+    await seed({ projectOwnedByTeammate: true });
+    h.script = { toolName: 'search_knowledge_base', args: { query: 'widget pricing' } };
+
+    const { text } = await post('teammate-owned project authorizes KB for an org agent');
+
+    expect(text).toContain('42 gold pieces');
+    expect(text).not.toContain('SECRET-OUT-OF-SCOPE-DELTA');
+  }, 30000);
+
   it('meters the multi-turn tool run against the owner org', async () => {
     const { org, owner } = await seed();
     h.script = { toolName: 'search_knowledge_base', args: { query: 'widget pricing' } };
 
     await post('usage metered to the org across the tool loop');
 
-    const events = await UsageEvent.find({ feature: 'completion_api' }).lean();
+    // Scope to THIS test's org: a prior test's fire-and-forget usage write can land
+    // after its own dropDatabase, so filter rather than asserting a global count.
+    const events = await UsageEvent.find({ feature: 'completion_api', ownerId: org.id }).lean();
     expect(events).toHaveLength(1);
     expect(String(events[0].ownerId)).toBe(org.id);
     expect(events[0].ownerType).toBe('Organization');

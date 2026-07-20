@@ -360,9 +360,10 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
         try {
           let searchResults;
           if (scope) {
-            // Scoped keyword arm: restrictToFileIds is the sole authority. No owner/shared/
-            // org expansion, no data-lake resolution (getDynamicDataLakeAccess is not called
-            // on this branch), no group sharing.
+            // Scoped keyword arm: restrictToFileIds is the sole authority (skipOwnership -
+            // curated files match even when owned by another user, mirroring the semantic
+            // arm's getAccessibleFiles). No owner/shared/org expansion, no data-lake
+            // resolution (getDynamicDataLakeAccess is not called on this branch).
             searchResults = await context.db.fabfiles.search(
               context.userId,
               query,
@@ -378,6 +379,7 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 textSearch: true,
                 includeShared: false,
                 userGroups: [],
+                skipOwnership: true,
                 excludeContent: true,
                 ...(context.retrievalFilter ?? {}),
               }
