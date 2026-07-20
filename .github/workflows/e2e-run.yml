@@ -399,13 +399,13 @@ jobs:
           webhook-type: incoming-webhook
           payload: |
             {
-              "text": "Playwright E2E ${{ inputs.suite_name }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
+              "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Failed' }}",
               "blocks": [
                 {
                   "type": "header",
                   "text": {
                     "type": "plain_text",
-                    "text": "Playwright E2E ${{ inputs.suite_name }} (${{ inputs.trigger_label }})"
+                    "text": "Playwright E2E${{ inputs.suite_name && format(' {0}', inputs.suite_name) || ' Tests' }} (${{ inputs.trigger_label }})"
                   }
                 },
                 {
