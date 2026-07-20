@@ -95,6 +95,21 @@ describe('parseConsolidatedNarrative', () => {
     expect(parsed.decisions).toBe('Decision text.');
   });
 
+  it('handles delimiters emitted out of order without collapsing sections', () => {
+    const text = [
+      DECISIONS_DELIMITER,
+      'Decision first.',
+      SUMMARY_DELIMITER,
+      'Summary second.',
+      INSIGHTS_DELIMITER,
+      '- insight third',
+    ].join('\n');
+    const parsed = parseConsolidatedNarrative(text);
+    expect(parsed.decisions).toBe('Decision first.');
+    expect(parsed.summary).toBe('Summary second.');
+    expect(parsed.insights).toBe('- insight third');
+  });
+
   it('does not split on a delimiter echoed inline inside a section body', () => {
     const text = [
       SUMMARY_DELIMITER,
