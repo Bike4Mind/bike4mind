@@ -988,7 +988,9 @@ const AdminSettingsTab: React.FC = () => {
             <Tabs
               value={activeTab}
               onChange={(_, value) => setActiveTab(value as string)}
-              sx={{ bgcolor: 'background.body' }}
+              // minWidth: 0 lets this flex child shrink below its content width so the
+              // TabList's overflowX can engage instead of the row spilling past the panel.
+              sx={{ bgcolor: 'background.body', minWidth: 0, maxWidth: '100%' }}
             >
               <TabList
                 variant="plain"
@@ -998,6 +1000,7 @@ const AdminSettingsTab: React.FC = () => {
                   '--ListItem-minHeight': '48px',
                   borderBottom: '1px solid',
                   borderColor: 'divider',
+                  minWidth: 0,
                   overflowX: 'auto',
                 }}
               >
