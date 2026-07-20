@@ -44,4 +44,25 @@ describe('computeCurationContentHash', () => {
     const asHtml = { ...baseOptions, exportFormat: 'html' as const };
     expect(computeCurationContentHash(messages, asHtml)).not.toBe(computeCurationContentHash(messages, baseOptions));
   });
+
+  // These fields feed artifact extraction and are mutated AFTER message creation
+  // (e.g. Deep Research completing), so the hash must react to them or a re-curate
+  // would serve a stale document. See computeCurationContentHash comments.
+  it('changes when deepResearchState changes (prompt/reply unchanged)', () => {
+    const before = [{ ...messages[0], deepResearchState: { status: 'in_progress' } }, messages[1]];
+    const after = [{ ...messages[0], deepResearchState: { status: 'complete', findings: 'x' } }, messages[1]];
+    expect(computeCurationContentHash(after, baseOptions)).not.toBe(computeCurationContentHash(before, baseOptions));
+  });
+
+  it('changes when a message gains an image (prompt/reply unchanged)', () => {
+    const before = messages;
+    const after = [{ ...messages[0], images: ['s3://img-1.png'] }, messages[1]];
+    expect(computeCurationContentHash(after, baseOptions)).not.toBe(computeCurationContentHash(before, baseOptions));
+  });
+
+  it('changes when questMasterPlanId is linked (prompt/reply unchanged)', () => {
+    const before = messages;
+    const after = [{ ...messages[0], questMasterPlanId: 'plan-1' }, messages[1]];
+    expect(computeCurationContentHash(after, baseOptions)).not.toBe(computeCurationContentHash(before, baseOptions));
+  });
 });

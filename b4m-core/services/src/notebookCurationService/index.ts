@@ -26,8 +26,11 @@ export interface NotebookCurationAdapters {
 }
 
 /**
- * Bump when the curation prompts or output format change materially, so that
- * previously cached sessions re-curate instead of serving pre-change output.
+ * Bump when anything that changes the produced document but is NOT captured by the
+ * hashed inputs changes materially, so previously cached sessions re-curate instead
+ * of serving pre-change output. This includes: the curation prompts, the output
+ * format, the operations model (an admin runtime swap, not code), and
+ * sampleConversation's selection logic.
  */
 const CURATION_HASH_VERSION = 'v1';
 
@@ -54,6 +57,10 @@ export function computeCurationContentHash(messages: any[], options: CurationOpt
   );
   // Field-separated so content shifting between fields can't collide (e.g.
   // prompt "foo"+reply "bar" must not hash the same as prompt "fooba"+reply "r").
+  // MUST cover every message field that artifactExtractor.extractArtifactsFromMessage
+  // reads - including ones mutated AFTER message creation (deepResearchState is set
+  // when a Deep Research tool finishes, images/questMasterPlanId land later) - or an
+  // unchanged prompt/reply would mask a real content change and serve a stale doc.
   for (const message of messages) {
     hash.update('|m:');
     hash.update(message.id || message._id?.toString() || '');
@@ -66,6 +73,12 @@ export function computeCurationContentHash(messages: any[], options: CurationOpt
     if (Array.isArray(message.replies)) hash.update(JSON.stringify(message.replies));
     hash.update('|q:');
     hash.update(message.questMasterReply || '');
+    hash.update('|qmp:');
+    hash.update(message.questMasterPlanId || '');
+    hash.update('|drs:');
+    if (message.deepResearchState) hash.update(JSON.stringify(message.deepResearchState));
+    hash.update('|img:');
+    if (Array.isArray(message.images)) hash.update(JSON.stringify(message.images));
   }
   return hash.digest('hex');
 }
@@ -168,6 +181,8 @@ export class NotebookCurationService {
         // rather than return a dangling id (download would 404).
         const existingFile = await this.adapters.fabFileRepository.findById(session.curatedNotebookFileId);
         if (existingFile) {
+          // curatedAt is intentionally NOT refreshed on a cache hit - it records
+          // when the document was actually produced, which has not changed.
           this.adapters.logger.info('Curation cache hit - reusing existing file, skipping LLM and credit charge', {
             sessionId,
             curatedFileId: session.curatedNotebookFileId,
