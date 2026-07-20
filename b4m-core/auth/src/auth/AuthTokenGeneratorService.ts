@@ -35,6 +35,11 @@ export class AuthTokenGeneratorService {
       id,
       tokenVersion,
       ...additionalPayload,
+      // Token-type claim: `typ` is authoritative (set after the spread so an
+      // additionalPayload can't override it). Verifiers reject a token presented on
+      // the wrong path (e.g. an access token replayed at the refresh endpoint). Kept
+      // last so access and refresh tokens are never interchangeable.
+      typ: 'access' as const,
     };
     const accessToken = jwt.sign(payload, this.options.accessTokenSecret, {
       algorithm: 'HS256',
@@ -47,7 +52,7 @@ export class AuthTokenGeneratorService {
   }
 
   createRefreshToken(id: string, tokenVersion: number): string {
-    return jwt.sign({ id, tokenVersion }, this.options.refreshTokenSecret, {
+    return jwt.sign({ id, tokenVersion, typ: 'refresh' }, this.options.refreshTokenSecret, {
       algorithm: 'HS256',
       expiresIn: this.options.refreshTokenExpiresIn,
     } as jwt.SignOptions);
@@ -76,6 +81,10 @@ export class AuthTokenGeneratorService {
     const decode = (secret: string): { userId: string; tokenVersion?: number } | null => {
       const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload;
       if (payload.mfaPending) return null;
+      // Reject a token minted for a different path (e.g. an access token replayed here).
+      // Tokens minted before the typ claim existed carry no typ and are still accepted -
+      // a self-expiring grace: they age out within their TTL, no forced logout.
+      if (payload.typ && payload.typ !== 'refresh') return null;
       return { userId: payload.id, tokenVersion: payload.tokenVersion };
     };
     try {

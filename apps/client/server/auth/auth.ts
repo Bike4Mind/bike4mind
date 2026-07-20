@@ -57,6 +57,14 @@ passport.use(
     },
     async (jwt_payload, done) => {
       try {
+        // Token-type guard: reject a token minted for a different path (e.g. a refresh
+        // token presented as a Bearer access token). Tokens minted before the typ claim
+        // existed carry no typ and are still accepted - a self-expiring grace that ages
+        // out within their TTL. The mfaPending access token also carries no typ and is
+        // handled by the mfaPending gate below.
+        if (jwt_payload.typ && jwt_payload.typ !== 'access') {
+          return done(null, false);
+        }
         const user = await User.findById(jwt_payload.id);
         if (user) {
           if (user.isSystem) return done(null, false);

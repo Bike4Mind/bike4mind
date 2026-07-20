@@ -100,6 +100,49 @@ describe('AuthTokenGeneratorService', () => {
     });
   });
 
+  describe('token-type claim (access vs refresh separation)', () => {
+    // In production accessTokenSecret === refreshTokenSecret, so before the `typ` claim an
+    // access token verified fine on the refresh path and could be exchanged for a full
+    // session. The claim closes that; typ-less legacy tokens stay valid (self-expiring grace).
+    const SHARED = 'shared-jwt-secret';
+    const sharedSecretService = () =>
+      new AuthTokenGeneratorService({
+        accessTokenSecret: SHARED,
+        refreshTokenSecret: SHARED,
+        accessTokenExpiresIn: '7d',
+        refreshTokenExpiresIn: '30d',
+      });
+
+    it('stamps typ=access on access tokens', () => {
+      const svc = makeService();
+      const { accessToken } = svc.createAccessToken('user-1', 0);
+      expect((svc.verifyToken(accessToken) as { typ?: string }).typ).toBe('access');
+    });
+
+    it('stamps typ=refresh on refresh tokens', () => {
+      const svc = makeService();
+      const refreshToken = svc.createRefreshToken('user-1', 0);
+      expect((jwt.decode(refreshToken) as { typ?: string }).typ).toBe('refresh');
+    });
+
+    it('rejects an access token replayed on the refresh path (shared secret)', () => {
+      const svc = sharedSecretService();
+      const { accessToken } = svc.createAccessToken('user-1', 0);
+      expect(svc.verifyRefreshToken(accessToken)).toBeNull();
+    });
+
+    it('still accepts a legacy typ-less refresh token (self-expiring grace)', () => {
+      const svc = sharedSecretService();
+      const legacyRefresh = jwt.sign({ id: 'user-1', tokenVersion: 0 }, SHARED, {
+        algorithm: 'HS256',
+        expiresIn: '30d',
+      });
+      const result = svc.verifyRefreshToken(legacyRefresh);
+      expect(result).not.toBeNull();
+      expect(result!.userId).toBe('user-1');
+    });
+  });
+
   describe('tokenVersion kill switch', () => {
     it('embeds tokenVersion in the access token and surfaces it on verify', () => {
       const svc = makeService();
