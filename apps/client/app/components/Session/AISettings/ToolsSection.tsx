@@ -33,6 +33,7 @@ import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
 import { B4MLLMTools, IMcpServerDocument, classifyQueryComplexity } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
@@ -615,21 +616,22 @@ const ToolsSection = ({
           }}
         >
           <Typography sx={{ color: 'text.primary', fontSize: '14px' }}>Tools</Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <ContextHelpButton
               helpId="features/smart-tools"
               tooltipText="Learn about Smart Tools"
               data-testid="help-button-smart-tools"
               size="sm"
+              sx={HEADER_ICON_BUTTON_SX}
             />
             <IconButton
               variant="plain"
               size="sm"
               onClick={onClose}
               data-testid="tools-header-close-btn"
-              sx={{ '&:hover': { backgroundColor: 'background.level1' } }}
+              sx={HEADER_ICON_BUTTON_SX}
             >
-              <CloseIcon sx={{ fontSize: '16px', color: 'text.primary50', cursor: 'pointer' }} />
+              <CloseIcon sx={{ fontSize: '16px' }} />
             </IconButton>
           </Box>
         </Box>
@@ -666,11 +668,12 @@ const ToolsSection = ({
           justifyContent: 'space-between',
           gap: '24px',
           mb: '20px',
-          px: '4px',
+          pl: '4px',
+          pr: '12px',
         }}
       >
         <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5 }}>
+          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5, fontWeight: 600 }}>
             Smart tools
           </Typography>
           {toolMode === 'fast' ? (
@@ -728,11 +731,12 @@ const ToolsSection = ({
         sx={{
           display: 'flex',
           alignItems: 'center',
+          width: 'fit-content',
           cursor: 'pointer',
           py: 0.5,
           mb: showIndividualTools ? 1 : 0,
           userSelect: 'none',
-          '&:hover .tools-collapsible-title': { color: 'text.primary' },
+          '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
         }}
       >
         <Typography
@@ -743,11 +747,12 @@ const ToolsSection = ({
           Individual tools{pinnedCount > 0 ? ` (${pinnedCount} pinned)` : ''}
         </Typography>
         <ExpandMoreIcon
+          className="tools-collapsible-chevron"
           sx={{
             fontSize: '1rem',
-            transition: 'transform 0.2s',
+            transition: 'transform 0.2s, color 0.3s',
             transform: showIndividualTools ? 'rotate(180deg)' : 'rotate(0deg)',
-            color: 'text.secondary',
+            color: 'text.tertiary',
             ml: '8px',
           }}
         />
@@ -1362,12 +1367,13 @@ const ToolsSection = ({
           sx={{
             display: 'flex',
             alignItems: 'center',
+            width: 'fit-content',
             cursor: 'pointer',
             py: 0.5,
-            mt: '12px',
-            mb: showFunTools ? 1 : 0,
+            mt: '20px',
+            mb: showFunTools ? 1 : '12px',
             userSelect: 'none',
-            '&:hover .tools-collapsible-title': { color: 'text.primary' },
+            '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
           }}
         >
           <Typography
@@ -1378,11 +1384,12 @@ const ToolsSection = ({
             Fun & Novelty{funPinnedCount > 0 ? ` (${funPinnedCount} pinned)` : ''}
           </Typography>
           <ExpandMoreIcon
+            className="tools-collapsible-chevron"
             sx={{
               fontSize: '1rem',
-              transition: 'transform 0.2s',
+              transition: 'transform 0.2s, color 0.3s',
               transform: showFunTools ? 'rotate(180deg)' : 'rotate(0deg)',
-              color: 'text.secondary',
+              color: 'text.tertiary',
               ml: '8px',
             }}
           />
