@@ -148,6 +148,16 @@ describe('PluginStore.discover', () => {
     expect((descriptor as { reason: string }).reason).toContain('reserved');
   });
 
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+    'rejects a plugin whose configKey names a prototype member (%s)',
+    async configKey => {
+      await makePkg('b4m-plugin-proto', { manifest: { entry: './index.js', configKey } });
+      const [descriptor] = await store.discover();
+      expect(descriptor.valid).toBe(false);
+      expect((descriptor as { reason: string }).reason).toContain('not allowed');
+    }
+  );
+
   it('keeps the first plugin and invalidates a duplicate configKey', async () => {
     await makePkg('b4m-plugin-a', { manifest: { entry: './index.js', configKey: 'same' } });
     await makePkg('b4m-plugin-b', { manifest: { entry: './index.js', configKey: 'same' } });

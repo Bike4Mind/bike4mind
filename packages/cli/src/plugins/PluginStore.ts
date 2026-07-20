@@ -22,6 +22,22 @@ import { z } from 'zod';
 /** Feature keys owned by built-in modules; plugins may not claim them. */
 export const RESERVED_BUILTIN_KEYS = ['tavern'];
 
+// Names that resolve on Object.prototype: a configKey like 'constructor' or
+// '__proto__' would make a bracket read (config.features[configKey]) truthy
+// even when the user never set the key, defeating the enable gate. Reject them
+// at discovery so such a plugin is never loadable.
+const PROTOTYPE_POLLUTING_KEYS = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'toLocaleString',
+  'toString',
+  'valueOf',
+]);
+
 const B4mPluginManifestSchema = z.object({
   entry: z.string().min(1),
   configKey: z.string().min(1).optional(),
@@ -206,6 +222,14 @@ export class PluginStore {
         name,
         packageDir,
         reason: `configKey '${configKey}' is reserved for a built-in feature`,
+      };
+    }
+    if (PROTOTYPE_POLLUTING_KEYS.has(configKey)) {
+      return {
+        valid: false,
+        name,
+        packageDir,
+        reason: `configKey '${configKey}' is not allowed`,
       };
     }
 

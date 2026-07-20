@@ -6,6 +6,19 @@ import type { PluginDescriptor } from '../plugins/PluginStore.js';
 import { findMalformedTool, makeScopedLogger } from './pluginContract.js';
 import { loadPlugin } from './loadPlugin.js';
 
+/**
+ * A feature is enabled only by an OWN key set to exactly true. Guards against a
+ * configKey that names an Object.prototype member (e.g. 'constructor') reading
+ * back as truthy through the prototype chain - PluginStore already rejects such
+ * keys, this is defense in depth on the gate itself.
+ */
+function isFeatureEnabled(features: CliConfig['features'], configKey: string): boolean {
+  if (!features || !Object.prototype.hasOwnProperty.call(features, configKey)) {
+    return false;
+  }
+  return features[configKey] === true;
+}
+
 export interface BuildFeatureRegistryResult {
   registry: FeatureModuleRegistry;
   /** Names of external plugins that loaded and registered */
@@ -47,7 +60,7 @@ export async function buildFeatureRegistry(params: {
       skipped.push({ name: descriptor.name, reason: descriptor.reason });
       continue;
     }
-    if (!config.features?.[descriptor.configKey]) {
+    if (!isFeatureEnabled(config.features, descriptor.configKey)) {
       continue; // disabled: not an error, and never imported
     }
 

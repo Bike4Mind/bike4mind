@@ -117,6 +117,23 @@ describe('buildFeatureRegistry', () => {
     await expect(fs.access(sentinel)).rejects.toThrow();
   });
 
+  it('does not treat a prototype-chain configKey as enabled', async () => {
+    // Guards the enable gate: a descriptor whose configKey is 'constructor'
+    // must not load off the inherited Object.prototype value when the user set
+    // no own key. (PluginStore rejects such keys upstream; this is the gate's
+    // own defense.)
+    const descriptor = await writePluginEntry('proto-one.mjs', factorySource('proto-one', 'proto_tool'));
+    descriptor.configKey = 'constructor';
+    const { registry, loaded } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [descriptor],
+      config: makeConfig({}),
+      logger: quietLogger,
+    });
+    expect(loaded).toEqual([]);
+    expect(registry.hasModules).toBe(false);
+  });
+
   it('records an invalid descriptor as skipped', async () => {
     const invalid: PluginDescriptor = {
       valid: false,
