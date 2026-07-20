@@ -1099,6 +1099,7 @@ export const SessionCreatedAction = shareableDocumentSchema.extend({
   summaryModelId: supportedChatModels.optional(),
   curatedNotebookFileId: z.string().optional(),
   curatedAt: z.date().optional(),
+  curationContentHash: z.string().optional(),
   createdAt: z.date(),
   updatedAt: z.date(),
 });
