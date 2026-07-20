@@ -22,6 +22,10 @@ export interface BuildFeatureRegistryResult {
  * hot-reload in index.tsx) wire those differently. Disabled plugins are never
  * imported - their code only runs once the user turns the feature key on.
  * Every plugin failure is a skip + warning, never a throw.
+ *
+ * Only the interactive CLI builds a feature registry today - the headless and
+ * ACP agent paths construct their agents without feature modules, so plugins
+ * do not load there (same as the built-in Tavern module).
  */
 export async function buildFeatureRegistry(params: {
   builtins: ICliFeatureModule[];
