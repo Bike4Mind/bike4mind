@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 
 // Legacy OpenAI TTS adapter. Kept as a thin, contract-stable wrapper over the
 // unified aiVoiceService (#724): body { text, voice? } -> raw audio/mpeg bytes.
@@ -35,6 +36,10 @@ const handler = baseApi().post(async (req, res) => {
       model: 'tts-1', // standard model for faster response
       format: 'mp3',
     });
+
+    if (exceedsTtsResponseLimit(audio.length)) {
+      return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
+    }
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', audio.length);

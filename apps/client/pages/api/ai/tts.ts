@@ -7,6 +7,7 @@ import {
 } from '@bike4mind/common';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
+import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
 
 const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
 
@@ -59,6 +60,12 @@ const handler = baseApi().post(async (req, res) => {
       stability,
       similarityBoost,
     });
+
+    // Serverless response-size guard: a buffered audio body over ~4MB exceeds the
+    // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502.
+    if (exceedsTtsResponseLimit(result.audio.length)) {
+      return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE, provider: vendor });
+    }
 
     if (encoding === 'base64') {
       return res.json({
