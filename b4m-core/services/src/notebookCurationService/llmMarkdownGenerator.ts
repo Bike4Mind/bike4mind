@@ -216,9 +216,17 @@ List any next steps or TODOs mentioned.`;
  * delimiter.
  */
 export function parseConsolidatedNarrative(text: string): { summary: string; insights: string; decisions: string } {
-  const summaryIdx = text.indexOf(SUMMARY_DELIMITER);
-  const insightsIdx = text.indexOf(INSIGHTS_DELIMITER);
-  const decisionsIdx = text.indexOf(DECISIONS_DELIMITER);
+  // Match a delimiter only when it is alone on its own line, so a delimiter
+  // string echoed inside a section body cannot split the response wrongly.
+  // The delimiters contain no regex-special characters.
+  const findDelim = (delim: string): number => {
+    const match = new RegExp(`^${delim}[ \\t]*$`, 'm').exec(text);
+    return match ? match.index : -1;
+  };
+
+  const summaryIdx = findDelim(SUMMARY_DELIMITER);
+  const insightsIdx = findDelim(INSIGHTS_DELIMITER);
+  const decisionsIdx = findDelim(DECISIONS_DELIMITER);
 
   if (summaryIdx === -1 && insightsIdx === -1 && decisionsIdx === -1) {
     return { summary: text.trim(), insights: '', decisions: '' };
