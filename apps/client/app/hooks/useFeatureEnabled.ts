@@ -25,6 +25,7 @@ const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableBmPi: { adminKey: 'EnableBmPi', defaultKey: 'EnableBmPiDefault' },
   enableLattice: { adminKey: 'EnableLattice', defaultKey: 'EnableLatticeDefault' },
   enableBriefcase: { adminKey: 'EnableBriefcase', defaultKey: 'EnableBriefcaseDefault' },
+  enableHearth: { adminKey: 'EnableHearth', defaultKey: 'EnableHearthDefault' },
   // enableResearchMode has no admin SettingKey - it is user-controlled only
   enableResearchMode: {},
   // agentMode is the Layer-1 gate for the Agent-mode / Smart Routing toggle UI.

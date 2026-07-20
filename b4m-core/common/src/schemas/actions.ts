@@ -806,6 +806,54 @@ export const TavernHeartbeatLogAction = z.object({
 });
 export type ITavernHeartbeatLogAction = z.infer<typeof TavernHeartbeatLogAction>;
 
+/**
+ * Server -> Client: a Hearth event appended to a channel the user participates
+ * in. Payload mirrors the wire shape consumed by the CLI HearthEventStream and
+ * the SPA channel view; keep in sync with b4m-core/hearth/src/types.ts.
+ */
+export const HearthEventAction = z.object({
+  action: z.literal('hearth_event'),
+  event: z.object({
+    id: z.string(),
+    channelId: z.string(),
+    seq: z.number(),
+    actorId: z.string(),
+    actorName: z.string().optional(),
+    kind: z.enum([
+      'message',
+      'edit',
+      'reaction',
+      'artifact',
+      'presence',
+      'delegation',
+      'quest.update',
+      'gate.request',
+      'gate.resolve',
+      'system',
+    ]),
+    human: z.object({
+      text: z.string(),
+      format: z.enum(['md', 'text']),
+    }),
+    machine: z
+      .object({
+        schema: z.string(),
+        payload: z.unknown(),
+      })
+      .optional(),
+    refs: z
+      .object({
+        threadRootId: z.string().optional(),
+        replyToId: z.string().optional(),
+        questId: z.string().optional(),
+        externalId: z.string().optional(),
+      })
+      .prefault({}),
+    createdAt: z.string(),
+  }),
+});
+export type IHearthEventAction = z.infer<typeof HearthEventAction>;
+
 /** Server -> Client: real-time quest board update (replaces polling) */
 export const TavernQuestUpdateAction = z.object({
   action: z.literal('tavern_quest_update'),
@@ -1480,6 +1528,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   KeepCommandResultAction,
   TavernSceneBroadcastAction,
   TavernHeartbeatLogAction,
+  HearthEventAction,
   TavernQuestUpdateAction,
   TavernStockUpdateAction,
   JupyterNotebookProgressAction,
