@@ -84,6 +84,7 @@ import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion, type PlanProgressState } from './agentExecutorUtils/planCompletionGuard';
+import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1243,12 +1244,18 @@ async function processExecution(
     // -- which has no reliable memory of which steps it finished -- re-does solved families until
     // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
     const planProgress: PlanProgressState = { needed: null, solved: {} };
-    const guardedPremiumTools = guardPlanCompletion(
-      guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
-        logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
-      ),
-      planProgress,
-      () => logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
+    // Outermost: give the loop the real active brief in-context (#57) so it passes the exact
+    // problem to solve/edit instead of reconstructing it. Wraps the guarded tools last, so it
+    // augments real tool observations and leaves guard redirects (non-envelope strings) untouched.
+    const guardedPremiumTools = injectBriefContext(
+      guardPlanCompletion(
+        guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+          logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
+        ),
+        planProgress,
+        () =>
+          logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
+      )
     );
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
