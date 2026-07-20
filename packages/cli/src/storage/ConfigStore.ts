@@ -272,10 +272,13 @@ const CliConfigSchema = z.object({
     disabled: z.array(z.string()),
     config: z.record(z.string(), z.any()),
   }),
+  // catchall keeps plugin feature keys (features.<configKey>) from being
+  // stripped on load; only tavern is a known built-in.
   features: z
     .object({
       tavern: z.boolean().optional(),
     })
+    .catchall(z.boolean())
     .optional()
     .prefault({}),
   trustedTools: z.array(z.string()).optional().prefault([]),
@@ -856,6 +859,22 @@ export class ConfigStore {
   }
 
   /**
+   * Read the features map straight from the global config file, bypassing the
+   * in-memory cache. save() merges over this so concurrent writers (the
+   * interactive session vs `b4m plugin add`) don't clobber each other's keys.
+   */
+  private async readDiskFeatures(): Promise<Record<string, boolean>> {
+    try {
+      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as {
+        features?: Record<string, boolean>;
+      };
+      return raw.features ?? {};
+    } catch {
+      return {};
+    }
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: Partial<CliConfig>): Promise<void> {
@@ -879,6 +898,13 @@ export class ConfigStore {
         toolApiKeys: {
           ...existingConfig.toolApiKeys,
           ...(config.toolApiKeys || {}),
+        },
+        // Deep-merge over the on-disk values (not the in-memory cache) so a
+        // plugin toggle written by another process (b4m plugin add) survives
+        // a save from a running session; incoming keys still win per-key.
+        features: {
+          ...(await this.readDiskFeatures()),
+          ...(config.features ?? existingConfig.features ?? {}),
         },
       };
     }
