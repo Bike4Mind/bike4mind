@@ -14,7 +14,21 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion, assertOwnerHasCredits } from '@bike4mind/services';
+import {
+  executeCompletion,
+  assertOwnerHasCredits,
+  buildSharedTools,
+  apiKeyService,
+  type ToolBuilderDeps,
+  type ToolBuilderCallbacks,
+} from '@bike4mind/services';
+import { getSettingsByNames } from '@bike4mind/utils';
+import {
+  getAvailableModels,
+  getLlmByModel,
+  type ApiKeyTable,
+  type ICompletionOptionTools,
+} from '@bike4mind/llm-adapters';
 import {
   connectDB,
   mongoose,
@@ -25,6 +39,10 @@ import {
   usageEventRepository,
   organizationRepository,
   agentRepository,
+  projectRepository,
+  fabFileRepository,
+  fabFileChunkRepository,
+  dataLakeRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
@@ -32,7 +50,9 @@ import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
+import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
 import { hydrateEmbedAgent } from './embedAgentHydration';
+import { resolveEmbedTools } from './embedToolResolver';
 import { Config } from '@server/utils/config';
 import { z } from 'zod';
 
@@ -54,6 +74,9 @@ import { z } from 'zod';
 
 const EMBED_CHAT_ENDPOINT = '/api/embed/chat';
 const HEARTBEAT_INTERVAL_MS = 10_000;
+// Lower than the backend default (10): an anonymous caller must not drive the full loop
+// depth on the owner org's credits. KB search + retrieve + one follow-up is plenty.
+const EMBED_MAX_TOOL_CALLS = 5;
 
 const EmbedChatRequestSchema = z.object({
   // Only user/assistant turns from the client. The system persona is set
@@ -121,6 +144,93 @@ async function resolveEmbedContext(headers: Record<string, string | undefined>):
   }
 
   return toContext(await verifyEmbedApiKey(headers));
+}
+
+/**
+ * Materialize the embed run's server-side tools, or undefined when tools are off.
+ *
+ * Security posture (all fail-closed):
+ *   - The tool set derives ONLY from the resolver over the agent's server-side config
+ *     (see embedToolResolver); nothing in the request can name or enable a tool.
+ *   - KB is always scoped to the bound agent's Project file set. No projectId, a
+ *     missing/deleted project, or a project not owned by the key's user all resolve to
+ *     an EMPTY scope (KB tools present, read nothing) - never owner-wide. Files the
+ *     owner curated into the project are readable by the embed audience even when
+ *     org-shared rather than owner-owned: curation IS the grant.
+ *   - No orchestration deps (agentStore/dagDispatcher), so delegate/coordinate tools
+ *     are structurally impossible; entitlementKeys stays [] so even a bug that reached
+ *     data-lake resolution would resolve nothing.
+ *   - Tool callbacks are no-ops: tool names/params/results never reach the SSE wire.
+ *   - Any resolution failure (owner or backend missing) returns undefined - the
+ *     completion still runs persona-only rather than 500ing the request.
+ */
+async function buildEmbedServerTools(args: {
+  ctx: EmbedContext;
+  hydrated: { model?: string; projectId?: string; allowedTools: string[]; deniedTools: string[] };
+  logger: Logger;
+  getAbortSignal: () => AbortSignal | undefined;
+}): Promise<ICompletionOptionTools[] | undefined> {
+  const { ctx, hydrated, logger, getAbortSignal } = args;
+
+  const enabledTools = resolveEmbedTools(hydrated);
+  if (enabledTools.length === 0) return undefined;
+
+  let kbFileIds: string[] = [];
+  if (hydrated.projectId) {
+    const project = await projectRepository.findById(hydrated.projectId);
+    if (project && !project.deletedAt && project.userId === ctx.userId) {
+      kbFileIds = project.fileIds ?? [];
+    }
+  }
+
+  const owner = await userRepository.findById(ctx.userId);
+  if (!owner) {
+    logger.warn('[EMBED_CHAT] Key owner not found; running without tools');
+    return undefined;
+  }
+
+  const toolApiKeys = await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+    getSettingsByNames,
+  });
+  const models = await getAvailableModels(toolApiKeys as ApiKeyTable);
+  const modelInfo = models.find(m => m.id === hydrated.model);
+  const toolLlm = getLlmByModel(toolApiKeys as ApiKeyTable, { modelInfo, logger, endUserId: ctx.userId });
+  if (!toolLlm) {
+    logger.warn('[EMBED_CHAT] No LLM backend for tool context; running without tools');
+    return undefined;
+  }
+  toolLlm.currentModel = hydrated.model ?? '';
+
+  const deps: ToolBuilderDeps = {
+    userId: ctx.userId,
+    user: owner,
+    logger,
+    db: {
+      adminSettings: adminSettingsRepository,
+      apiKeys: apiKeyRepository,
+      fabfiles: fabFileRepository,
+      fabfilechunks: fabFileChunkRepository,
+      users: userRepository,
+      dataLakes: dataLakeRepository,
+      organizations: organizationRepository,
+      usageEvents: usageEventRepository,
+    },
+    entitlementKeys: [],
+    kbScope: { fileIds: kbFileIds },
+    storage: getFilesStorage(),
+    imageGenerateStorage: getGeneratedImageStorage(),
+    llm: toolLlm,
+    model: hydrated.model,
+  };
+  const callbacks: ToolBuilderCallbacks = {
+    onStatusUpdate: async () => {},
+    onToolStart: async () => {},
+    onToolFinish: async () => {},
+  };
+
+  const tools = buildSharedTools(deps, callbacks, { enabledTools, getAbortSignal });
+  return tools && tools.length > 0 ? tools : undefined;
 }
 
 /**
@@ -256,6 +366,18 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         }
       }
 
+      // --- Server-side tools (built pre-stream so a failure is a clean JSON 500) ---
+      // Aborting on client disconnect stops the backend stream AND the tool loop, so a
+      // closed embed tab cannot keep billing the owner org through the remaining turns.
+      const abortController = new AbortController();
+      res.on('close', () => abortController.abort());
+      const serverTools = await buildEmbedServerTools({
+        ctx,
+        hydrated,
+        logger,
+        getAbortSignal: () => abortController.signal,
+      });
+
       // --- All gates passed: open the SSE stream ---
       res.setHeader('Content-Type', 'text/event-stream');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -293,6 +415,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           billingOrganizationId: ctx.organizationId,
           // Meter org usage even on a stage with enforceCredits off.
           alwaysRecordUsage: true,
+          // Server-side tool execution (KB scoped to the agent's project; see
+          // buildEmbedServerTools). Absent => persona-only, executeTools stays false.
+          ...(serverTools ? { serverTools, maxToolCalls: EMBED_MAX_TOOL_CALLS } : {}),
+          abortSignal: abortController.signal,
           requestId,
           source: 'api',
           logger,

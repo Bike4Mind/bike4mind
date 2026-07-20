@@ -11,7 +11,11 @@ export interface HydratedEmbedAgent {
   maxTokens?: number;
   allowedTools: string[];
   deniedTools: string[];
-  /** The agent's Project; its files scope KB retrieval (M5b). Undefined => no KB. */
+  /**
+   * The agent's Project; its files scope KB retrieval. Undefined resolves to an EMPTY
+   * kbScope - the KB tools stay available but read nothing (fail-closed), never
+   * owner-wide. See buildEmbedServerTools in embedRoute.ts.
+   */
   projectId?: string;
 }
 
