@@ -55,6 +55,26 @@ export interface CompletionParams {
     response_format?: import('@bike4mind/common').ResponseFormat;
   };
   /**
+   * Server-side executable tools (each carries a live toolFn). When present, the backend
+   * runs its tool loop server-side (executeTools: true) and the completion becomes
+   * multi-turn. Distinct from options.tools, the WIRE schema surfaced back to a CLI/API
+   * client that executes tools locally - these are resolved server-side by the route from
+   * trusted agent config and are never deserialized from the request. Mutually exclusive
+   * with options.tools (the two imply opposite executeTools semantics).
+   */
+  serverTools?: ICompletionOptionTools[];
+  /**
+   * Per-request ceiling on recursive server-side tool round-trips. Only meaningful with
+   * serverTools. Public surfaces (embed) lower this so an anonymous caller cannot drive
+   * the full default loop depth on the owner's credits.
+   */
+  maxToolCalls?: number;
+  /**
+   * Cancels the in-flight backend stream and tool loop. Wire this to the client
+   * connection (e.g. res 'close') so a disconnected caller stops billing the owner.
+   */
+  abortSignal?: AbortSignal;
+  /**
    * Database repositories required for completion execution
    * ALL repositories are required for proper credit tracking and settings
    */
@@ -125,6 +145,15 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   const source: CompletionSource = params.source ?? 'api';
   const completionStartTime = Date.now();
 
+  // Fail-closed before any credit reservation: wire tools (client-executed, executeTools
+  // false) and server tools (executeTools true) imply opposite loop semantics - silently
+  // picking a winner could bill a server tool loop the client never asked for.
+  if (params.serverTools?.length && options?.tools?.length) {
+    throw new Error(
+      '[CLI_COMPLETIONS] serverTools (server-executed) and options.tools (wire/client-executed) are mutually exclusive'
+    );
+  }
+
   // Resolve the credit holder. Org-billed API keys reserve from and settle to the
   // organization's shared pool; everything else bills the requesting user. The user
   // stays the actor (attribution + per-member usage), only the pool differs.
@@ -180,12 +209,22 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     toolFn: (t as { toolFn?: ICompletionOptionTools['toolFn'] }).toolFn ?? noopToolFn,
   })) as ICompletionOptionTools[] | undefined;
 
+  // serverTools flips this call into server-side execution: real toolFns pass straight
+  // through and the backend's executeToolsBatch loop engages. Absent (or empty), behavior
+  // is byte-for-byte the legacy wire path above - executeTools stays false for every
+  // existing caller (CLI/API clients execute tools locally).
+  const useServerTools = (params.serverTools?.length ?? 0) > 0;
+
   const completionOptions: Partial<ICompletionOptions> = {
     temperature: options?.temperature,
     maxTokens,
     stream: options?.stream ?? true,
-    tools: promotedTools ?? [],
-    executeTools: false, // CLI executes tools locally, not server
+    tools: useServerTools ? params.serverTools! : (promotedTools ?? []),
+    executeTools: useServerTools,
+    ...(useServerTools && params.maxToolCalls !== undefined
+      ? { _internal: { maxToolCalls: params.maxToolCalls } }
+      : {}),
+    ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
     ...(responseFormatEnabled && options?.response_format ? { responseFormat: options.response_format } : {}),
   };
 
