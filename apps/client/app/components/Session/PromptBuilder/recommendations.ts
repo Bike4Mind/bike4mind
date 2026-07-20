@@ -15,7 +15,7 @@ const RULES: { keywords: string[]; aspectRatio: string; label: string }[] = [
   {
     label: 'portrait',
     aspectRatio: '3:4',
-    keywords: ['portrait', 'headshot', 'full-body', 'standing', 'tall ', 'vertical'],
+    keywords: ['portrait', 'headshot', 'full-body', 'standing', 'tall', 'vertical'],
   },
   {
     label: 'landscape',
@@ -29,11 +29,16 @@ const RULES: { keywords: string[]; aspectRatio: string; label: string }[] = [
   },
 ];
 
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// Whole-word match so a keyword doesn't fire inside another word (e.g. 'icon'
+// in "iconic", 'standing' in "understanding", 'tall' in "install").
+const matchesWord = (text: string, keyword: string) => new RegExp(`\\b${escapeRegExp(keyword)}\\b`, 'i').test(text);
+
 export function recommendAspectRatio(prompt: string): AspectRatioRecommendation | null {
-  const p = prompt.toLowerCase();
-  if (!p.trim()) return null;
+  if (!prompt.trim()) return null;
   for (const rule of RULES) {
-    if (rule.keywords.some(k => p.includes(k))) {
+    if (rule.keywords.some(k => matchesWord(prompt, k))) {
       return { aspectRatio: rule.aspectRatio, label: rule.label };
     }
   }

@@ -21,4 +21,10 @@ describe('recommendAspectRatio', () => {
     expect(recommendAspectRatio('a cat wearing a hat')).toBeNull();
     expect(recommendAspectRatio('   ')).toBeNull();
   });
+
+  it('matches whole words only (no firing inside other words)', () => {
+    expect(recommendAspectRatio('an iconic moment')).toBeNull(); // 'icon' must not match 'iconic'
+    expect(recommendAspectRatio('a deep understanding of physics')).toBeNull(); // 'standing' not in 'understanding'
+    expect(recommendAspectRatio('a tall lighthouse')?.aspectRatio).toBe('3:4'); // 'tall' as a real word still matches
+  });
 });
