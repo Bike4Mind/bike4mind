@@ -210,10 +210,10 @@ List any next steps or TODOs mentioned.`;
 
 /**
  * Split the consolidated response into its three sections by delimiter. Tolerant
- * by design: if the model omits the delimiters entirely, the whole response
- * falls back into the summary so no content is lost. Sections are emitted in a
- * fixed order (summary -> insights -> decisions); each ends at the next present
- * delimiter.
+ * by design: if the model omits the delimiters entirely, the whole response falls
+ * back into the summary so no content is lost. Delimiters are located by position
+ * and each section runs to the next delimiter, so any ordering the model emits is
+ * handled (not just summary -> insights -> decisions).
  */
 export function parseConsolidatedNarrative(text: string): { summary: string; insights: string; decisions: string } {
   // Match a delimiter only when it is alone on its own line, so a delimiter
@@ -224,24 +224,35 @@ export function parseConsolidatedNarrative(text: string): { summary: string; ins
     return match ? match.index : -1;
   };
 
-  const summaryIdx = findDelim(SUMMARY_DELIMITER);
-  const insightsIdx = findDelim(INSIGHTS_DELIMITER);
-  const decisionsIdx = findDelim(DECISIONS_DELIMITER);
+  type Key = 'summary' | 'insights' | 'decisions';
+  const marks = (
+    [
+      { key: 'summary', delim: SUMMARY_DELIMITER },
+      { key: 'insights', delim: INSIGHTS_DELIMITER },
+      { key: 'decisions', delim: DECISIONS_DELIMITER },
+    ] as { key: Key; delim: string }[]
+  )
+    .map(m => ({ ...m, idx: findDelim(m.delim) }))
+    .filter(m => m.idx !== -1)
+    .sort((a, b) => a.idx - b.idx);
 
-  if (summaryIdx === -1 && insightsIdx === -1 && decisionsIdx === -1) {
-    return { summary: text.trim(), insights: '', decisions: '' };
+  const result: Record<Key, string> = { summary: '', insights: '', decisions: '' };
+
+  // No delimiters at all -> keep the whole response rather than lose it.
+  if (marks.length === 0) {
+    result.summary = text.trim();
+    return result;
   }
 
-  const slice = (start: number, delim: string, end: number): string => {
-    if (start === -1) return '';
-    return text.slice(start + delim.length, end === -1 ? text.length : end).trim();
-  };
+  // Each section spans from the end of its delimiter to the start of the next one
+  // (in document order), so out-of-order delimiters still slice cleanly.
+  for (let i = 0; i < marks.length; i++) {
+    const start = marks[i].idx + marks[i].delim.length;
+    const end = i + 1 < marks.length ? marks[i + 1].idx : text.length;
+    result[marks[i].key] = text.slice(start, end).trim();
+  }
 
-  const summary = slice(summaryIdx, SUMMARY_DELIMITER, insightsIdx !== -1 ? insightsIdx : decisionsIdx);
-  const insights = slice(insightsIdx, INSIGHTS_DELIMITER, decisionsIdx);
-  const decisions = slice(decisionsIdx, DECISIONS_DELIMITER, -1);
-
-  return { summary, insights, decisions };
+  return result;
 }
 
 /**
