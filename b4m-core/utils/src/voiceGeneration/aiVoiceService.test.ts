@@ -76,8 +76,16 @@ describe('OpenAIVoiceService', () => {
 describe('ElevenLabsVoiceService', () => {
   beforeEach(() => mockedPost.mockReset());
 
-  it('requires a voice id', async () => {
-    await expect(aiVoiceService('elevenlabs', 'key', logger).synthesize('hi')).rejects.toThrow(/requires a voice id/);
+  it('falls back to the premade default voice when none is supplied', async () => {
+    mockedPost.mockResolvedValue({ data: new Uint8Array([1]).buffer });
+
+    await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hi');
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      'https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM',
+      expect.any(Object),
+      expect.any(Object)
+    );
   });
 
   it('rejects input longer than the ElevenLabs 10000-char limit before posting', async () => {

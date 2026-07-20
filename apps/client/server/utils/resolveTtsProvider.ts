@@ -56,18 +56,22 @@ export async function resolveTtsProvider({
     return { apiKey, voice: requestedVoice || preferredVoice || adminVoice };
   }
 
-  // ElevenLabs: key + voiceId both come from the user record; a request voice
-  // (voiceId) overrides the stored one.
+  // ElevenLabs: prefer a per-user key, else fall back to the admin-provisioned
+  // key (via getEffectiveApiKey + the elevenlabs entry in DEMO_KEY_MAP) so the
+  // provider works org-wide like every other AI service. Voice is optional: a
+  // request voiceId beats the user's active voice, and the service applies a
+  // premade default when neither is set.
   const [apiKey, storedVoiceId] = await Promise.all([
-    apiKeyService
-      .getApiKey(userId, { type: ApiKeyType.elevenlabs }, { db: { apiKeys: apiKeyRepository } })
-      .then(key => key?.apiKey ?? null),
+    apiKeyService.getEffectiveApiKey(
+      userId,
+      { type: ApiKeyType.elevenlabs, nullIfMissing: true },
+      { db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository } }
+    ),
     voiceService.getVoiceId(userId, { db: { voices: voiceRepository } }),
   ]);
 
-  const voice = requestedVoice || storedVoiceId || undefined;
-  if (!apiKey || !voice) {
-    throw new TtsProviderNotConfiguredError('API key or voice id not configured');
+  if (!apiKey) {
+    throw new TtsProviderNotConfiguredError('ElevenLabs API key not configured');
   }
-  return { apiKey, voice };
+  return { apiKey, voice: requestedVoice || storedVoiceId || undefined };
 }

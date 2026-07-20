@@ -5,6 +5,10 @@ import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSyn
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
 const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
+// ElevenLabs premade "Rachel" voice - available on every account, used when the
+// caller supplies no voice and the user has no active voice (parallels OpenAI's
+// 'alloy' default).
+const DEFAULT_VOICE = '21m00Tcm4TlvDq8ikWAM';
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly
@@ -21,11 +25,7 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       throw new Error(`ElevenLabs TTS input exceeds ${MAX_INPUT_CHARS} characters (got ${text.length})`);
     }
 
-    const voiceId = options.voice;
-    if (!voiceId) {
-      throw new Error('ElevenLabs TTS requires a voice id');
-    }
-
+    const voiceId = options.voice ?? DEFAULT_VOICE;
     const format = options.format ?? DEFAULT_FORMAT;
     const outputFormat = ELEVENLABS_OUTPUT_FORMAT[format];
     if (!outputFormat) {
