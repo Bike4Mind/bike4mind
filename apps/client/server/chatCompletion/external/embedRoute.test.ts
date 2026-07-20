@@ -450,6 +450,10 @@ describe('POST /api/embed/chat', () => {
   });
 
   it('classifies a mid-stream tagged 422 on the SSE frame (additionalInfo carrier)', async () => {
+    // Wiring test, not current prod behavior: today the spend cap only rejects
+    // pre-flight (enforcement is deliberately passive), so executeCompletion never
+    // throws spendCapExceededError itself. This pins that IF a tagged 422 ever
+    // surfaces mid-stream (e.g. a future in-loop cap check), it arrives classified.
     mockExecuteCompletion.mockRejectedValue(spendCapExceededError('key hit its cap mid-run'));
     const res = await post(CHAT);
     expect(res.status).toBe(200);
