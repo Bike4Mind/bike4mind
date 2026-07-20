@@ -89,7 +89,6 @@ import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
-import { IMAGE_SETTING_TOOLTIPS } from './imageSettingTooltips';
 
 const commonInputStyles = (_mode: string) => ({
   width: '120px',
@@ -1178,13 +1177,10 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     gap: '20px',
                   }}
                 >
-                  {setting.tooltip ? (
-                    <Tooltip title={setting.tooltip}>
-                      <Typography level="body-sm">{setting.label}</Typography>
-                    </Tooltip>
-                  ) : (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Typography level="body-sm">{setting.label}</Typography>
-                  )}
+                    {setting.tooltip && <FieldTooltip ariaLabel={`Help: ${setting.label}`} content={setting.tooltip} />}
+                  </Box>
                   <Box sx={{ minWidth: '120px' }}>
                     {setting.type === 'select' && (
                       <Select
@@ -1231,11 +1227,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title={IMAGE_SETTING_TOOLTIPS.promptEnhancement}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Prompt Upsampling
                       </Typography>
-                    </Tooltip>
+                      <FieldTooltip ariaLabel="Help: Prompt Upsampling" content={FIELD_TOOLTIPS.promptEnhancement} />
+                    </Box>
                     <Box sx={{ minWidth: '120px' }}>
                       <Switch
                         checked={prompt_upsampling ?? false}
@@ -1256,11 +1253,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title={IMAGE_SETTING_TOOLTIPS.safetyTolerance}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
                       </Typography>
-                    </Tooltip>
+                      <FieldTooltip ariaLabel="Help: Safety Tolerance" content={FIELD_TOOLTIPS.safetyTolerance} />
+                    </Box>
                     <Box sx={{ minWidth: '120px' }}>
                       <Input
                         sx={commonInputStyles(mode || 'light')}
@@ -1748,12 +1746,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(model)].defaultSize,
               onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
               options: getAvailableSizes(model).map(s => ({ value: s, label: s })),
-              tooltip: IMAGE_SETTING_TOOLTIPS.size,
+              tooltip: FIELD_TOOLTIPS.imageSize,
             },
           ]),
       {
         label: 'Quality',
-        tooltip: IMAGE_SETTING_TOOLTIPS.quality,
+        tooltip: FIELD_TOOLTIPS.imageQuality,
         type: 'select' as const,
         value: quality,
         onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
@@ -1788,7 +1786,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'input' as const,
         value: seed?.toString() ?? '',
         onChange: (value: number | null) => setLLM({ seed: value }),
-        tooltip: IMAGE_SETTING_TOOLTIPS.seed,
+        tooltip: FIELD_TOOLTIPS.imageSeed,
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
@@ -1825,7 +1823,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: aspect_ratio?.toString() ?? '',
         onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
-        tooltip: IMAGE_SETTING_TOOLTIPS.aspectRatio,
+        tooltip: FIELD_TOOLTIPS.aspectRatio,
         options: [
           { value: '', label: 'Auto' },
           { value: '16:9', label: '16:9' },
