@@ -40,9 +40,9 @@ export interface IUserApiKeyUsage {
   requestsToday: number;
   requestsThisMinute: number;
   /**
-   * Cumulative settled spend in credits, accumulated atomically per completion.
-   * The counter `spendCap` (IUserApiKey) is enforced against. Written only via
-   * IUserApiKeyRepository.incrementSpend, never via updateUsage.
+   * Cumulative settled spend in credits, accumulated atomically per completion -
+   * the counter that `spendCap` (IUserApiKey) is enforced against. Written only
+   * via IUserApiKeyRepository.incrementSpend, never via updateUsage.
    */
   totalSpendCredits?: number;
 }
