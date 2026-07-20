@@ -154,6 +154,10 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
   /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
   incrementSpend: (id: string, credits: number) => Promise<void>;
+  /** Sets the spend ceiling; `null` clears it ($unset), so the key becomes uncapped. */
+  setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
+  /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
+  resetSpend: (id: string) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;

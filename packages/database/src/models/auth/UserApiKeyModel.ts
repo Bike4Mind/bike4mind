@@ -54,6 +54,16 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     await this.model.updateOne({ _id: id }, { $inc: { 'usage.totalSpendCredits': credits } });
   }
 
+  async setSpendCap(id: string, spendCap: number | null) {
+    // null clears via $unset so the field goes truly absent ("uncapped"), never
+    // null - the gate distinguishes absent from a present 0.
+    await this.model.updateOne({ _id: id }, spendCap === null ? { $unset: { spendCap: 1 } } : { $set: { spendCap } });
+  }
+
+  async resetSpend(id: string) {
+    await this.model.updateOne({ _id: id }, { $set: { 'usage.totalSpendCredits': 0 } });
+  }
+
   async updateLastUsed(id: string) {
     await this.model.updateOne(
       { _id: id },

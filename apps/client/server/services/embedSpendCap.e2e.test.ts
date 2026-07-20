@@ -81,6 +81,47 @@ describe('embed spend cap (end-to-end, real repos + Mongo)', () => {
     ).not.toThrow();
   });
 
+  it('an over-cap key resumes after the cap is raised, cleared, or the meter is reset (top-up levers)', async () => {
+    const minted = await mintCappedKey(50);
+    await userApiKeyRepository.incrementSpend(minted.id, 50);
+
+    const gateFor = async () => {
+      const v = await userApiKeyService.validateUserApiKeyById(minted.id, adapters);
+      return () => assertKeySpendWithinCap({ spendCap: v.spendCap, currentSpend: v.currentSpend });
+    };
+    expect(await gateFor()).toThrow(/spend cap/);
+
+    // Lever 1: raise the cap above the accumulated spend.
+    await userApiKeyService.setEmbedKeySpendCap('owner-1', { keyId: minted.id, spendCap: 200 }, adapters);
+    expect(await gateFor()).not.toThrow();
+
+    // Lever 2: clear the cap entirely - the field goes absent, not null/0.
+    await userApiKeyService.setEmbedKeySpendCap('owner-1', { keyId: minted.id, spendCap: 50 }, adapters);
+    expect(await gateFor()).toThrow(/spend cap/);
+    await userApiKeyService.setEmbedKeySpendCap('owner-1', { keyId: minted.id, spendCap: null }, adapters);
+    const cleared = await userApiKeyService.validateUserApiKeyById(minted.id, adapters);
+    expect(cleared.spendCap).toBeUndefined();
+    expect(await gateFor()).not.toThrow();
+
+    // Lever 3: keep the cap but zero the meter.
+    await userApiKeyService.setEmbedKeySpendCap('owner-1', { keyId: minted.id, spendCap: 50 }, adapters);
+    expect(await gateFor()).toThrow(/spend cap/);
+    await userApiKeyService.resetEmbedKeySpend('owner-1', { keyId: minted.id }, adapters);
+    const reset = await userApiKeyService.validateUserApiKeyById(minted.id, adapters);
+    expect(reset.currentSpend).toBe(0);
+    expect(await gateFor()).not.toThrow();
+  });
+
+  it('the top-up levers refuse a caller who does not own the key', async () => {
+    const minted = await mintCappedKey(50);
+    await expect(
+      userApiKeyService.setEmbedKeySpendCap('someone-else', { keyId: minted.id, spendCap: 200 }, adapters)
+    ).rejects.toThrow(/not found/i);
+    await expect(userApiKeyService.resetEmbedKeySpend('someone-else', { keyId: minted.id }, adapters)).rejects.toThrow(
+      /not found/i
+    );
+  });
+
   it('a stored cap of 0 blocks all spend through the real chain (falsy trap)', async () => {
     // Mint rejects 0, but a stored 0 (e.g. set by the cap-update path) must gate.
     const minted = await mintCappedKey(1);
