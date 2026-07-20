@@ -169,7 +169,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
         sx={{
           zIndex: 1400,
           ...(modelSupportsTools
-            ? { minWidth: '400px', maxWidth: '400px', p: '8px' }
+            ? { minWidth: '500px', maxWidth: '500px', p: '8px' }
             : { minWidth: 'auto', maxWidth: 'auto', p: '16px' }),
           backgroundColor: theme => theme.palette.background.body,
           border: theme => `1px solid ${theme.vars.palette.neutral.outlinedBorder}`,

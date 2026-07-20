@@ -559,6 +559,16 @@ const ToolsSection = ({
     (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   const pinnedCount = tools.length + enabledMcpServerCount + specialToolsCount;
 
+  // Second line appended to the Smart tools description in Smart mode, only when Agent-mode
+  // routing would ignore the Smart Tools below; null otherwise so it stays a single line.
+  // (Fast mode has its own dedicated two-line description - see the master switch below.)
+  const agentModeNote =
+    toolMode === 'smart' && agentWillRunFixedToolset
+      ? agentModeActive
+        ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
+        : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
+      : null;
+
   return (
     <>
       {/* Sticky header (dropdown only): title + help on the left, close on the right.
@@ -577,7 +587,7 @@ const ToolsSection = ({
             p: '8px 12px',
             mx: '-8px',
             mt: '-8px',
-            mb: 1,
+            mb: '12px',
             borderBottom: '1px solid',
             borderColor: 'border.soft',
             position: 'sticky',
@@ -608,51 +618,82 @@ const ToolsSection = ({
         </Box>
       )}
 
-      {/* Top descriptor. When there's no header (modal embed), keep the inline help button. */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-        <Typography
-          level="body-xs"
-          sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
-          data-testid="smart-tools-descriptor"
-        >
-          Enable tools the AI can use during this conversation.
-        </Typography>
-        {!onClose && (
+      {/* Modal embed (no header) keeps a descriptor + inline help; the dropdown drops
+          it in favor of the header's help button. */}
+      {!onClose && (
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+          <Typography
+            level="body-xs"
+            sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
+            data-testid="smart-tools-descriptor"
+          >
+            Enable tools the AI can use during this conversation.
+          </Typography>
           <ContextHelpButton
             helpId="features/smart-tools"
             tooltipText="Learn about Smart Tools"
             data-testid="help-button-smart-tools"
           />
-        )}
-      </Box>
+        </Box>
+      )}
 
-      {/* Fast / Smart mode tabs */}
-      <Box sx={{ mb: 0.5 }}>
-        <SwitchSelector
-          options={[
-            { value: 'smart', label: 'Smart', tooltip: 'AI picks the right tools as needed' },
-            { value: 'fast', label: 'Fast', tooltip: 'No tools — fastest possible response' },
-          ]}
-          value={toolMode}
-          onChange={value => setLLM({ toolMode: value as 'fast' | 'smart' })}
-          width="100%"
+      {/* Smart tools master switch. On = Smart (enabled tools + prompt-based auto-recommend),
+          Off = Fast (no tools). No surface2 frame so it reads as a master control, not a tool.
+          The description gains a second line only when there's non-obvious context to add
+          (Fast mode, or Agent-mode routing that would ignore the Smart Tools below). */}
+      <Box
+        sx={{
+          display: 'flex',
+          // Center the toggle against the multi-line text on desktop; keep it top-aligned on mobile.
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          justifyContent: 'space-between',
+          gap: '24px',
+          mb: '12px',
+          px: '4px',
+        }}
+      >
+        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5 }}>
+            Smart tools
+          </Typography>
+          {toolMode === 'fast' ? (
+            <>
+              <Typography
+                level="body-xs"
+                data-testid="tool-mode-caption-fast"
+                sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3 }}
+              >
+                No tools are currently used. AI replies are as quick as possible.
+              </Typography>
+              <Typography
+                level="body-xs"
+                sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
+              >
+                Turn on Smart tools to let the AI use your enabled tools.
+              </Typography>
+            </>
+          ) : (
+            <Typography
+              level="body-xs"
+              sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3 }}
+              data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
+            >
+              AI uses enabled tools as needed. Turn off for the fastest reply.
+              {agentModeNote && (
+                <>
+                  <br />
+                  {agentModeNote}
+                </>
+              )}
+            </Typography>
+          )}
+        </Box>
+        <SquareSlideToggle
+          onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
+          checked={toolMode === 'smart'}
+          data-testid="tool-mode-toggle"
         />
       </Box>
-
-      {/* Mode caption: explains what each mode does and resolves the Smart-mode toggle ambiguity */}
-      <Typography
-        level="body-xs"
-        sx={{ color: 'text.secondary', mb: 1, lineHeight: 1.35 }}
-        data-testid={`tool-mode-caption-${toolMode}`}
-      >
-        {toolMode === 'smart'
-          ? agentWillRunFixedToolset
-            ? agentModeActive
-              ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
-              : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
-            : 'AI uses any enabled tools as needed. Toggle one off to disallow it.'
-          : 'No tools are used. AI replies as quickly as possible.'}
-      </Typography>
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
       <Box
