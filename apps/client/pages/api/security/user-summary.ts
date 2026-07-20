@@ -34,7 +34,10 @@ const handler = baseApi().get(
       suspiciousPatterns: {
         total: suspiciousPatterns.length,
         // Normalize usernames and dates to avoid UI 'unknown' values
-        items: suspiciousPatterns.map(p => ({
+        items: suspiciousPatterns.map(({ emails: _emails, ...p }) => ({
+          // Drop the aggregation's `emails` array: it buckets by IP and would leak
+          // the email addresses of OTHER users targeted from the same IP. Only the
+          // caller's own usernames are exposed (filtered below); the UI renders neither.
           ...p,
           usernames: Array.isArray(p.usernames)
             ? p.usernames.filter(u => typeof u === 'string' && u.length > 0 && userIdentifiers.has(u.toLowerCase()))

@@ -10,7 +10,7 @@ import {
   organizationRepository,
   Group,
 } from '@bike4mind/database';
-import { getInviteDetails } from '@server/managers/inviteManager';
+import { getInviteDetails, filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { sharingService } from '@bike4mind/services';
@@ -32,7 +32,9 @@ const handler = baseApi()
         return res.status(404).json({ message: 'Invite Not Found' });
       }
 
-      return res.json(await getInviteDetails(invite, true));
+      // Invitee-facing view: strip other recipients' emails, keep the caller's own.
+      const details = await getInviteDetails(invite, true);
+      return res.json(filterInviteRecipientsToSelf(details, req.user.email));
     })
   )
   /**
