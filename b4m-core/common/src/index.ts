@@ -7,6 +7,7 @@ export * from './modelPriceCatalog';
 export * from './pricing';
 export * from './realtimeVoicePricing';
 export * from './imageGeneration';
+export * from './voiceGeneration';
 export * from './videoGeneration';
 export * from './schemas/sora';
 export * from './schemas';
