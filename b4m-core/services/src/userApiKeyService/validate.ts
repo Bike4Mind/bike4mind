@@ -33,6 +33,8 @@ export interface ValidationResult {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
+  spendCap?: number;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -67,6 +69,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     organizationId: apiKey.organizationId,
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
+    spendCap: apiKey.spendCap,
   };
 }
 

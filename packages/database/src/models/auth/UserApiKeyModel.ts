@@ -162,6 +162,11 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       ),
       default: undefined,
     },
+    // Lifetime spend ceiling for an embed key, in whole credits. `default: undefined`
+    // is load-bearing: absent means "no cap", while a stored 0 is a real cap that
+    // blocks all spend - enforcement must guard with `spendCap !== undefined`,
+    // never a truthy check.
+    spendCap: { type: Number, default: undefined },
     metadata: {
       clientIP: { type: String },
       userAgent: { type: String },

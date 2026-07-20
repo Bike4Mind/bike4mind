@@ -125,6 +125,12 @@ export interface IUserApiKey {
   allowedOrigins?: string[];
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
+  /**
+   * Lifetime spend ceiling for an embed key, in whole credits. Absent = uncapped.
+   * A present 0 is a real cap (blocks all spend), so enforcement guards with
+   * `spendCap !== undefined`, never a truthy check.
+   */
+  spendCap?: number;
 }
 
 /**
