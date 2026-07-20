@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError, NotFoundError } from '@server/utils/errors';
 import { questRepository, sessionRepository } from '@bike4mind/database';
 import { ApiKeyScope } from '@bike4mind/common';
+import { toGeneratedFiles } from '@server/utils/generatedFiles';
 import type { Request } from 'express';
 
 // Reading a quest is the documented poll step after POST /api/chat, so an AI
@@ -34,14 +35,13 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
-  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`) served from the CDN
-  // under `/generated`. Programmatic pollers shouldn't have to know that path convention, so we
-  // derive ready-to-use URLs server-side - the single source of truth - mirroring the web client
-  // (PromptReplies.tsx). `images` (raw basenames) is kept for parity with the WebSocket payload.
-  // Skip URL building when no CDN is configured rather than emit a misleading relative path.
-  const cdnUrl = process.env.NEXT_PUBLIC_CDN_URL || '';
+  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`, or a `.xlsx` from
+  // excel_generation - not everything here is an image). Programmatic pollers shouldn't have to
+  // know the CDN path convention, so we resolve each into a typed descriptor with a ready-to-use
+  // URL server-side (the single source of truth). `images` (raw basenames) is kept for parity
+  // with the WebSocket payload; `files[].isImage` lets a caller pick out renderable images.
   const images = quest.images ?? [];
-  const imageUrls = cdnUrl ? images.map(name => `${cdnUrl}/generated/${name}`) : [];
+  const files = toGeneratedFiles(images);
 
   return res.json({
     id: quest.id,
@@ -50,7 +50,7 @@ const handler = baseApi({
     reply: quest.reply,
     replies: quest.replies,
     images,
-    imageUrls,
+    files,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
     promptMeta: quest.promptMeta,

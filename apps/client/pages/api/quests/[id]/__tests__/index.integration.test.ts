@@ -162,7 +162,7 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(mockValidate).not.toHaveBeenCalled();
   });
 
-  it('derives ready-to-use CDN imageUrls from quest.images basenames', async () => {
+  it('resolves quest.images basenames into typed CDN file descriptors', async () => {
     const prev = process.env.NEXT_PUBLIC_CDN_URL;
     process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
     mockQuestFindById.mockResolvedValue({
@@ -172,24 +172,28 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
       reply: {},
       replies: [],
       promptMeta: {},
-      images: ['a1b2c3.png', 'doc.xlsx'],
+      images: ['a1b2c3.png', 'report.xlsx'],
     });
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
+    // Raw basenames preserved; files[] carries ready-to-use URLs and flags the non-image .xlsx.
     expect(res._getJSONData()).toMatchObject({
-      images: ['a1b2c3.png', 'doc.xlsx'],
-      imageUrls: ['https://cdn.example.com/generated/a1b2c3.png', 'https://cdn.example.com/generated/doc.xlsx'],
+      images: ['a1b2c3.png', 'report.xlsx'],
+      files: [
+        { name: 'a1b2c3.png', url: 'https://cdn.example.com/generated/a1b2c3.png', isImage: true },
+        { name: 'report.xlsx', url: 'https://cdn.example.com/generated/report.xlsx', isImage: false },
+      ],
     });
     process.env.NEXT_PUBLIC_CDN_URL = prev;
   });
 
-  it('returns empty images/imageUrls when the quest generated nothing', async () => {
+  it('returns empty images/files when the quest generated nothing', async () => {
     validateWithScopes([ApiKeyScope.AI_GENERATE]);
     const { req, res } = fire();
     await handler(req, res);
     expect(res._getStatusCode()).toBe(200);
-    expect(res._getJSONData()).toMatchObject({ images: [], imageUrls: [] });
+    expect(res._getJSONData()).toMatchObject({ images: [], files: [] });
   });
 });

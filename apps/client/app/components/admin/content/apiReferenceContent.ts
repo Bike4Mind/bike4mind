@@ -152,15 +152,19 @@ GET /api/quests/[id]
     "artifacts": []
   },
   "images": ["a1b2c3.png"],
-  "imageUrls": ["https://cdn.example.com/generated/a1b2c3.png"],
+  "files": [
+    { "name": "a1b2c3.png", "url": "https://cdn.example.com/generated/a1b2c3.png", "isImage": true }
+  ],
   "createdAt": "2025-01-15T10:30:00Z",
   "completedAt": "2025-01-15T10:30:05Z"
 }
 \`\`\`
 
-For image/file-generating quests, \`images\` lists the generated file basenames and \`imageUrls\`
-lists the same files as ready-to-use CDN URLs (empty until \`status\` is \`done\`). Prefer
-\`imageUrls\` - it saves you having to know the CDN path convention.
+For file-generating quests (image generation, editing, etc.), \`images\` lists the raw generated
+file basenames and \`files\` lists each as a descriptor with a ready-to-use CDN \`url\` and an
+\`isImage\` flag (empty until \`status\` is \`done\`). Prefer \`files\` - it saves you knowing the CDN
+path convention, and \`isImage\` lets you pick out renderable images (not every generated file is
+one, e.g. a spreadsheet export).
 
 #### Get Quest Files
 
@@ -629,7 +633,7 @@ POST /api/ai/generate-image
 Generation is asynchronous - the request enqueues work and returns immediately with a quest
 (no image yet). It never blocks on generation, so it is not subject to the API-gateway request
 timeout. Retrieve the result by polling \`GET /api/quests/{id}\` until \`status\` is \`done\`, then
-read \`imageUrls\` (see [Poll Quest Status](#poll-quest-status)).
+read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 
 **Response:**
 
