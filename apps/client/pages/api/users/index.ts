@@ -90,7 +90,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     } else if (downloadAll && !isAdmin) {
       return res.status(403).json({ message: 'Bulk user export is admin-only.' });
     }
-    const PUBLIC_VIEW_MAX_LIMIT = 20;
+    const PUBLIC_VIEW_MAX_LIMIT = 50;
     const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
