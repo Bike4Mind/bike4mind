@@ -10,7 +10,6 @@ import {
   SSE_KEEPALIVE,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
-  getQuestErrorCode,
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
@@ -246,7 +245,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         return res.status(status).json({
           error: 'insufficient_credits',
           error_description: creditErr instanceof Error ? creditErr.message : 'Insufficient credits',
-          code: getQuestErrorCode(creditErr),
+          code: resolveQuestErrorCode(creditErr),
         });
       }
 
@@ -262,7 +261,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         return res.status(status).json({
           error: 'spend_cap_exceeded',
           error_description: capErr instanceof Error ? capErr.message : 'Spend cap exceeded',
-          code: getQuestErrorCode(capErr),
+          code: resolveQuestErrorCode(capErr),
         });
       }
 
