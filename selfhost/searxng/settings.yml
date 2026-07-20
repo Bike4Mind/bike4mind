@@ -1,0 +1,24 @@
+# SearXNG configuration for the Bike4Mind self-host web-search provider.
+#
+# Only the few keys the app's JSON search adapter needs are overridden here;
+# everything else inherits SearXNG's shipped defaults via use_default_settings.
+# Mounted read-only into the searxng container (see compose.selfhost.yaml).
+use_default_settings: true
+
+server:
+  # The rate limiter (bot/abuse protection) rejects server-side JSON API calls
+  # and needs a Valkey/Redis instance this stack does not run. Only the app
+  # talks to SearXNG (bound to loopback), so disable it.
+  limiter: false
+  # This is not a shared/public instance.
+  public_instance: false
+  # secret_key is intentionally NOT set here (no secret in a public repo): the
+  # searxng image reads it from the SEARXNG_SECRET env var, wired in
+  # compose.selfhost.yaml (default documented in .env.selfhost.example).
+
+search:
+  # The default config ships only 'html'; the app's SearXNG adapter requires the
+  # JSON format to read results programmatically.
+  formats:
+    - html
+    - json

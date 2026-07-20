@@ -122,7 +122,15 @@ export const OpenAIImageGenerationInput = z.object({
       typeof val === 'string' && Object.prototype.hasOwnProperty.call(LEGACY_IMAGE_MODEL_MAP, val)
         ? LEGACY_IMAGE_MODEL_MAP[val]
         : val,
-    z.enum(ALL_IMAGE_MODELS)
+    // Self-hosted image models are namespaced `local-image/<checkpoint>` and are
+    // not part of the static enum (the checkpoint set is discovered at runtime
+    // from the local backend), so accept them via a pattern - same approach as
+    // ImageSizeSchema above. The suffix allows spaces and forward slashes because
+    // A1111/SD.Next checkpoint names can contain both (e.g. "Deliberate v2",
+    // "anime/foo.safetensors"); the `local-image/` prefix stays anchored. The
+    // leading (?=.*\S) lookahead requires at least one non-whitespace character
+    // so an all-blank suffix (e.g. "local-image/   ") is rejected.
+    z.union([z.enum(ALL_IMAGE_MODELS), z.string().regex(/^local-image\/(?=.*\S)[\w.:/ -]+$/)])
   ),
   n: z.number().min(1).max(10).optional(),
   quality: OpenAIImageQualitySchema.optional(),

@@ -1,6 +1,6 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { adminSettingsRepository, apiKeyRepository } from '@bike4mind/database';
-import { serpApiSearch } from '@bike4mind/services/llm/tools/implementation/websearch';
+import { performWebSearch } from '@bike4mind/services/llm/tools/implementation/websearch';
 import { z } from 'zod';
 
 const WebSearchBodySchema = z.object({
@@ -18,22 +18,12 @@ const handler = baseApi().post(async (req, res) => {
     },
   };
 
-  const searchResults = await serpApiSearch(dbAdapters, query, num_results);
-
-  const results = searchResults.organic_results
-    ?.map(
-      (result: any, index: number) =>
-        `${index + 1}. **${result.title}**\n${result.snippet}\n` +
-        `Source: [${new URL(result.link).hostname}](${result.link})\n`
-    )
-    .join('\n');
-
-  const formattedResult = results
-    ? `Here's what I found from searching the web:\n\n${results}`
-    : 'No results found from web search.';
+  // Route through performWebSearch so this endpoint honors the configured provider
+  // (SerpAPI or local SearXNG) and its not-configured messaging, same as the tool.
+  const { formattedResults } = await performWebSearch(dbAdapters, { query, num_results });
 
   return res.json({
-    result: formattedResult,
+    result: formattedResults,
   });
 });
 

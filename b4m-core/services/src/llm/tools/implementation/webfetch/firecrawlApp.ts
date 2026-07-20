@@ -20,3 +20,18 @@ export function resolveFirecrawlApp(moduleBinding: unknown): FirecrawlAppCtor {
 }
 
 export const FirecrawlApp = resolveFirecrawlApp(FirecrawlDefault);
+
+export interface FirecrawlAppConfig {
+  apiKey?: string;
+  apiUrl?: string;
+}
+
+/**
+ * Build a FirecrawlApp from resolved config, or null when neither an API key nor a custom API URL
+ * is set - the caller then falls back to plain fetch (self-host without Firecrawl). firecrawl-js
+ * allows a keyless client when apiUrl targets a self-hosted instance (not api.firecrawl.dev).
+ */
+export function createFirecrawlApp(config: FirecrawlAppConfig): InstanceType<FirecrawlAppCtor> | null {
+  if (!config.apiKey && !config.apiUrl) return null;
+  return new FirecrawlApp({ apiKey: config.apiKey, apiUrl: config.apiUrl });
+}

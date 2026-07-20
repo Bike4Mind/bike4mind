@@ -61,6 +61,15 @@ export {
   verifyGateToken,
   GATE_TOKEN_TTL_SECONDS,
 } from './publishGateToken';
+export {
+  signDraftUploadToken,
+  verifyDraftUploadToken,
+  mintDraftUploadUrl,
+  DRAFT_UPLOAD_EXPIRY_SECONDS,
+  type DraftUploadClaims,
+  type DraftUploadStorage,
+  type MintDraftUploadUrlInput,
+} from './draftUploadUrl';
 export { toPublishUser, authorDisplayName, canAnnotate, toAnnotationDto, type AnnotationLean } from './annotations';
 export { validateEmbedOrigins, validateEmbedKeyOrigins, type EmbedOriginsResult } from './embedOrigins';
 export {

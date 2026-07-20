@@ -56,7 +56,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
     const result = await this.agentModel.find({
       $or: [{ userId }, { 'users.userId': userId }],
       triggerWords: { $in: triggerWords },
-      deletedAt: { $exists: false },
+      deletedAt: null,
     });
 
     return result.map(doc => doc.toJSON());
@@ -84,7 +84,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
         { 'users.userId': userId }, // User is a shared member
       ],
       ...(filters.query || {}),
-      deletedAt: { $exists: false },
+      deletedAt: null,
     };
 
     if (search) {
@@ -211,7 +211,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
   async findHeartbeatEligible(): Promise<IAgentDocument[]> {
     const now = new Date();
     const result = await this.agentModel.find({
-      deletedAt: { $exists: false },
+      deletedAt: null,
       'heartbeatConfig.enabled': true,
       $or: [
         { 'heartbeatConfig.lastHeartbeatAt': { $exists: false } },
@@ -259,7 +259,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
 
   async bulkSetHeartbeatEnabled(userId: string, enabled: boolean): Promise<{ modifiedCount: number }> {
     const result = await this.agentModel.updateMany(
-      { userId, deletedAt: { $exists: false } },
+      { userId, deletedAt: null },
       { $set: { 'heartbeatConfig.enabled': enabled } }
     );
     return { modifiedCount: result.modifiedCount };
@@ -274,7 +274,12 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
   }
 
   async countByUserId(userId: string): Promise<number> {
-    return this.agentModel.countDocuments({ userId, deletedAt: { $exists: false } });
+    // deletedAt must be `null`, not `$exists: false`: softDeletePlugin defaults
+    // the field to null on every document, so `$exists: false` matches nothing.
+    // find()/findOne() were shielded (the plugin's pre-hooks overwrite the
+    // condition) but countDocuments has no hook, which left this count at 0 for
+    // everyone and kept the Agents gear permanently locked.
+    return this.agentModel.countDocuments({ userId, deletedAt: null });
   }
 
   async setHeartbeatStarted(agentId: string): Promise<void> {
@@ -308,17 +313,17 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
   // ServerAgentStore construction.
 
   async listForUser(userId: string): Promise<IAgent[]> {
-    const results = await this.agentModel.find({ userId, deletedAt: { $exists: false } }).sort({ name: 1 });
+    const results = await this.agentModel.find({ userId, deletedAt: null }).sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
   async listForOrganization(organizationId: string): Promise<IAgent[]> {
-    const results = await this.agentModel.find({ organizationId, deletedAt: { $exists: false } }).sort({ name: 1 });
+    const results = await this.agentModel.find({ organizationId, deletedAt: null }).sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
   async listSystem(): Promise<IAgent[]> {
-    const results = await this.agentModel.find({ isSystem: true, deletedAt: { $exists: false } }).sort({ name: 1 });
+    const results = await this.agentModel.find({ isSystem: true, deletedAt: null }).sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
@@ -327,15 +332,13 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
    * surfaced to all users on the /agents Voice Agents tab).
    */
   async listPublicVoiceAgents(): Promise<IAgent[]> {
-    const results = await this.agentModel
-      .find({ type: 'voice', isPublic: true, deletedAt: { $exists: false } })
-      .sort({ name: 1 });
+    const results = await this.agentModel.find({ type: 'voice', isPublic: true, deletedAt: null }).sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
   /** Lists every voice agent (used by admin Voice Settings page; includes non-public). */
   async listAllVoiceAgents(): Promise<IAgent[]> {
-    const results = await this.agentModel.find({ type: 'voice', deletedAt: { $exists: false } }).sort({ name: 1 });
+    const results = await this.agentModel.find({ type: 'voice', deletedAt: null }).sort({ name: 1 });
     return results.map(doc => doc.toJSON());
   }
 
@@ -344,7 +347,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
     const result = await this.agentModel.findOne({
       type: 'voice',
       isDefaultVoiceAgent: true,
-      deletedAt: { $exists: false },
+      deletedAt: null,
     });
     return result?.toJSON() ?? null;
   }
@@ -359,7 +362,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
   }
 
   async findByNameForUser(userId: string, name: string): Promise<IAgent | null> {
-    const result = await this.agentModel.findOne({ userId, name, deletedAt: { $exists: false } });
+    const result = await this.agentModel.findOne({ userId, name, deletedAt: null });
     return result?.toJSON() ?? null;
   }
 
@@ -367,7 +370,7 @@ export class AgentRepository extends BaseRepository<IAgentDocument> implements I
     const result = await this.agentModel.findOne({
       organizationId,
       name,
-      deletedAt: { $exists: false },
+      deletedAt: null,
     });
     return result?.toJSON() ?? null;
   }

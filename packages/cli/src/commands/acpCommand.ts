@@ -45,12 +45,11 @@ function captureStdout(): FrameWriter {
   console.info = toStderr;
   console.debug = toStderr;
 
-  // Redirect direct stdout writes (bypassing console) to stderr. The protocol
-  // uses the captured `writeToRealStdout` above, so frames are unaffected.
-  process.stdout.write = ((chunk: string | Uint8Array): boolean => {
-    process.stderr.write(chunk as string);
-    return true;
-  }) as typeof process.stdout.write;
+  // Redirect direct stdout writes (bypassing console) to stderr. The protocol uses the
+  // captured `writeToRealStdout` above, so frames are unaffected. Forward every arg
+  // (chunk, encoding, callback) so a caller's encoding and write-completion callback are
+  // honoured and real backpressure is returned; only the destination changes.
+  process.stdout.write = process.stderr.write.bind(process.stderr) as typeof process.stdout.write;
 
   return writeToRealStdout;
 }

@@ -10,9 +10,14 @@ ARG NODE_VERSION=24
 
 # ── Base: pnpm via corepack, self-host flag on for every stage ──────────────
 FROM node:${NODE_VERSION}-slim AS base
+# NEXT_PUBLIC_CDN_URL is baked so `next build` inlines the self-host asset-proxy path
+# into client bundles (e.g. the deprecated getAppFileUrl helper, which has no runtime
+# fallback). Server code reads it at runtime too; the compose env can override it if you
+# front the app with a real CDN.
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
-    B4M_SELF_HOST=true
+    B4M_SELF_HOST=true \
+    NEXT_PUBLIC_CDN_URL=/api/app-files/serve
 RUN corepack enable
 WORKDIR /app
 
@@ -36,11 +41,16 @@ RUN pnpm turbo:build
 # Build the Next.js client in standalone mode; B4M_SELF_HOST (base ENV) turns on
 # both the sst→shim turbopack alias and `output: 'standalone'`.
 RUN NODE_OPTIONS='--max-old-space-size=12288' pnpm --filter @bike4mind/client build
+# Strip compiled test routes: pages/__tests__ files build into routable entries
+# and the standalone server preloads them at boot, running test-only module
+# side effects in production (see the script header for the S3 stub failure).
+RUN node apps/client/scripts/pruneTestRoutes.mjs apps/client/.next/standalone/apps/client/.next
 
 # ── Runner: minimal image, standalone output only ───────────────────────────
 FROM node:${NODE_VERSION}-slim AS runner
 ENV NODE_ENV=production \
     B4M_SELF_HOST=true \
+    NEXT_PUBLIC_CDN_URL=/api/app-files/serve \
     PORT=3000 \
     HOSTNAME=0.0.0.0
 WORKDIR /app

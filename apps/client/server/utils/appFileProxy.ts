@@ -31,8 +31,9 @@ export function resolveProxyTarget(cdnPath: string): ProxyTarget | null {
   if (cdnPath.startsWith('proxied-images/')) {
     return { bucket: 'appFiles', key: cdnPath };
   }
-  if (cdnPath.startsWith('admin/logos/')) {
-    return { bucket: 'appFiles', key: cdnPath };
+  if (cdnPath.startsWith('admin-logos/')) {
+    // infra: admin-logos -> appFilesBucket with `^/admin-logos/(.*)$` -> `/admin/logos/$1`
+    return { bucket: 'appFiles', key: `admin/logos/${cdnPath.slice('admin-logos/'.length)}` };
   }
   if (cdnPath.startsWith('profile-photos/')) {
     return { bucket: 'appFiles', key: cdnPath };

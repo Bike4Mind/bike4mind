@@ -3,6 +3,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { toast } from 'sonner';
 import { QueryClient } from '@tanstack/react-query';
 import { createOptimisticQuest } from '@client/app/utils/llm';
+import { GearsStatusResponse } from '@client/app/hooks/useGearsStatus';
 
 interface CreateAgentCommandArgs {
   params: string; // Agent name from command
@@ -50,6 +51,13 @@ export const handleCreateAgentCommand = async (args: CreateAgentCommandArgs): Pr
 
         // Invalidate agent queries to refresh the list
         queryClient.invalidateQueries({ queryKey: ['agents'] });
+        // A first agent unlocks the 'agents' gear - refresh the earned-nav
+        // state (see routes/agents/new.tsx for the same first-create pattern).
+        const gearsStatus = queryClient.getQueryData<GearsStatusResponse>(['gears', 'status']);
+        const agentsGear = gearsStatus?.gears.find(g => g.key === 'agents');
+        if (!agentsGear || !agentsGear.unlocked) {
+          void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
+        }
 
         const quest = {
           id: response.data.agent.id,

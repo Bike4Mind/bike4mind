@@ -7,7 +7,6 @@ import {
   Permission,
   SettingKey,
   OpenAIEmbeddingModel,
-  VoyageAIEmbeddingModel,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -34,6 +33,7 @@ import {
   calculateTotalTokenLength,
   ClientMessageSender,
   EmbeddingFactory,
+  getProviderFromModel,
   fetchAndConvertFabFiles,
   fetchAndProcessPreviousMessages,
   getLlmWithFallback,
@@ -1316,13 +1316,13 @@ export class ChatCompletionProcess {
 
       const finalEmbeddingModel = embeddingModel || OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
 
+      // Give the factory only the credential the chosen model's provider needs.
+      // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
+      const embeddingProvider = getProviderFromModel(finalEmbeddingModel);
       const embeddingFactory = new EmbeddingFactory({
-        ...(finalEmbeddingModel === OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002 && {
-          openaiApiKey: apiKeyTable?.openai,
-        }),
-        ...(finalEmbeddingModel === VoyageAIEmbeddingModel.VOYAGE_3 && {
-          voyageApiKey: apiKeyTable?.voyageai,
-        }),
+        ...(embeddingProvider === 'openai' && { openaiApiKey: apiKeyTable?.openai }),
+        ...(embeddingProvider === 'voyageai' && { voyageApiKey: apiKeyTable?.voyageai }),
+        ...(embeddingProvider === 'ollama' && { ollamaBaseUrl: apiKeyTable?.ollama }),
       });
 
       // Fetch previous messages

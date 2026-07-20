@@ -1,12 +1,17 @@
-import { BedrockEmbeddingModel, ModelBackend } from '@bike4mind/common';
+import { BedrockEmbeddingModel, ModelBackend, OllamaEmbeddingModel } from '@bike4mind/common';
 
 // Determine which provider is needed based on the embedding model
 export const getProviderFromModel = (
   modelName: string
-): ModelBackend.OpenAI | ModelBackend.VoyageAI | ModelBackend.Bedrock => {
+): ModelBackend.OpenAI | ModelBackend.VoyageAI | ModelBackend.Bedrock | ModelBackend.Ollama => {
   // Check if it's a Bedrock model
   if (Object.values(BedrockEmbeddingModel).includes(modelName as BedrockEmbeddingModel)) {
     return ModelBackend.Bedrock;
+  }
+
+  // Check if it's an Ollama (local) embedding model
+  if (Object.values(OllamaEmbeddingModel).includes(modelName as OllamaEmbeddingModel)) {
+    return ModelBackend.Ollama;
   }
 
   // Check if it's a VoyageAI model

@@ -3,17 +3,10 @@ import { LLMEvents } from '@server/utils/eventBus';
 import { apiKeyRepository, adminSettingsRepository, Memento } from '@bike4mind/database';
 import { getSettingsByNames } from '@bike4mind/utils';
 import { EmbeddingFactory, getProviderFromModel } from '@bike4mind/fab-pipeline';
-import {
-  ChatModels,
-  isSupportedEmbeddingModel,
-  MEMENTO_EMBEDDING_MODEL,
-  toMementoVector,
-  MementoTier,
-  MementoType,
-  SupportedEmbeddingModel,
-} from '@bike4mind/common';
+import { ChatModels, MEMENTO_EMBEDDING_MODEL, toMementoVector, MementoTier, MementoType } from '@bike4mind/common';
 import { apiKeyService, MementoEvaluationService, mementoService } from '@bike4mind/services';
 import { isMementosV2Enabled, writeFactToLedger } from '@server/memory/mementoLedgerMirror';
+import { generateMementoSummaryEmbedding } from '@server/utils/mementoEmbedding';
 
 const { findMostSimilarMemento } = mementoService;
 
@@ -61,7 +54,7 @@ export const handler = withEventContext(async (event, logger) => {
   );
 
   // STEP 1: Evaluate the prompt into distinct facts. The fact-style extraction prompt is a V2 change:
-  // with V2 off the extraction is main's prompt, so a flag-off V1 user's mementos read exactly as before.
+  // with V2 off the extraction uses the original prompt, so a flag-off V1 user's mementos are unchanged.
   const mementoEvaluator = new MementoEvaluationService(logger);
   const evaluations = await mementoEvaluator.evaluate({
     apiKeyTable,
@@ -95,7 +88,7 @@ export const handler = withEventContext(async (event, logger) => {
     }
   };
 
-  // STEP 2a: V2 embedding service. The ledger is its OWN corpus, pinned to MEMENTO_EMBEDDING_MODEL and
+  // STEP 2: V2 embedding service. The ledger is its OWN corpus, pinned to MEMENTO_EMBEDDING_MODEL and
   // independent of the admin `defaultEmbeddingModel` that governs V1/FAB. A missing key degrades to a
   // vector-less ledger write (the fact stays lexically recallable and the re-embed backfill vectorizes
   // it later) rather than dropping the fact.
@@ -118,36 +111,6 @@ export const handler = withEventContext(async (event, logger) => {
     } else {
       v2EmbeddingService = new EmbeddingFactory(v2Config).createEmbeddingService(MEMENTO_EMBEDDING_MODEL);
     }
-  }
-
-  // STEP 2b: V1 embedding service. Held to main's behavior exactly - the admin `defaultEmbeddingModel`,
-  // so the V1 corpus and the V1 query (getRelevantMementos) share a vector space - and a hard failure on
-  // a missing key or unconfigured model, because a V1 memento without a comparable vector is unrecallable.
-  let v1EmbeddingService: EmbeddingService | null = null;
-  if (writeV1) {
-    const defaultEmbeddingModel = await adminSettingsRepository.getSettingsValue('defaultEmbeddingModel');
-    if (!defaultEmbeddingModel || !isSupportedEmbeddingModel(defaultEmbeddingModel)) {
-      throw new Error('Default embedding model not configured. Please configure it in admin settings.');
-    }
-    const v1Provider = getProviderFromModel(defaultEmbeddingModel);
-    const v1Config: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
-    if (v1Provider === 'openai') {
-      if (!apiKeyTable?.openai) {
-        throw new Error('OpenAI API key is required for embedding generation but not found. Please add your API key.');
-      }
-      v1Config.openaiApiKey = apiKeyTable.openai;
-    } else if (v1Provider === 'voyageai') {
-      if (!apiKeyTable?.voyageai) {
-        throw new Error(
-          'VoyageAI API key is required for embedding generation but not found. Please add your API key.'
-        );
-      }
-      v1Config.voyageApiKey = apiKeyTable.voyageai;
-    }
-    // Bedrock uses AWS credentials, no API key needed
-    v1EmbeddingService = new EmbeddingFactory(v1Config).createEmbeddingService(
-      defaultEmbeddingModel as SupportedEmbeddingModel
-    );
   }
 
   // STEP 3: Existing HOT mementos for V1 de-dup (V1 only - a V2-only user has none; V2 de-dups against
@@ -182,55 +145,65 @@ export const handler = withEventContext(async (event, logger) => {
       continue;
     }
 
-    // V1 memento write - main's behavior: admin-default embedding, 0.88 cosine de-dup, no model stamp.
-    const summaryEmbedding = await v1EmbeddingService!.generateEmbedding(evaluation.summary);
-    logger.debug('Summary embedding generated', { embeddingLength: summaryEmbedding.length });
+    // V1 memento write: admin-default embedding, 0.88 cosine de-dup, no model stamp. Embed the summary,
+    // not the raw prompt - the summary is the actual personal info. The shared helper (also used by the
+    // manual create endpoint) adds the Ollama provider and returns null when no embedding provider is
+    // available, degrading to an un-embedded memento rather than failing.
+    const summaryEmbedding = await generateMementoSummaryEmbedding(evaluation.summary, {
+      adminSettings: adminSettingsRepository,
+      apiKeyTable,
+      logger,
+    });
 
-    const { memento: mostSimilarMemento, similarity: highestSimilarity } = findMostSimilarMemento(
-      summaryEmbedding,
-      existingMementos
-    );
-
-    // STEP 5: Handle similar personal information - update existing memento
-    if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
-      console.info('Similar personal information found, updating existing memento', {
-        existingMementoId: mostSimilarMemento.id,
-        similarity: highestSimilarity.toFixed(3),
-      });
-
-      const newWeight = Math.max(mostSimilarMemento.weight, evaluation.importance * 100);
-      const updatedFullContent = `${mostSimilarMemento.fullContent}\n\n[Update]: ${prompt}`;
-
-      const mergedTags = Array.from(new Set([...(mostSimilarMemento.tags || []), ...(evaluation.tags || [])]));
-
-      await Memento.updateOne(
-        { _id: mostSimilarMemento.id },
-        {
-          $set: {
-            summary: evaluation.summary,
-            fullContent: updatedFullContent, // append new prompt to history
-            embedding: summaryEmbedding,
-            weight: newWeight,
-            lastAccessedAt: new Date(),
-            tags: mergedTags,
-          },
-        }
+    // Without an embedding we can't similarity-match against existing HOT mementos;
+    // skip the dedup step and create a standalone memento below.
+    if (summaryEmbedding) {
+      const { memento: mostSimilarMemento, similarity: highestSimilarity } = findMostSimilarMemento(
+        summaryEmbedding,
+        existingMementos
       );
 
-      console.info('Successfully updated existing memento with new information', {
-        mementoId: mostSimilarMemento.id,
-        newWeight,
-      });
+      // STEP 5: Handle similar personal information - update existing memento
+      if (highestSimilarity >= SIMILARITY_THRESHOLD && mostSimilarMemento) {
+        console.info('Similar personal information found, updating existing memento', {
+          existingMementoId: mostSimilarMemento.id,
+          similarity: highestSimilarity.toFixed(3),
+        });
 
-      updatedCount++;
-      continue;
+        const newWeight = Math.max(mostSimilarMemento.weight, evaluation.importance * 100);
+        const updatedFullContent = `${mostSimilarMemento.fullContent}\n\n[Update]: ${prompt}`;
+
+        const mergedTags = Array.from(new Set([...(mostSimilarMemento.tags || []), ...(evaluation.tags || [])]));
+
+        await Memento.updateOne(
+          { _id: mostSimilarMemento.id },
+          {
+            $set: {
+              summary: evaluation.summary,
+              fullContent: updatedFullContent, // append new prompt to history
+              embedding: summaryEmbedding,
+              weight: newWeight,
+              lastAccessedAt: new Date(),
+              tags: mergedTags,
+            },
+          }
+        );
+
+        console.info('Successfully updated existing memento with new information', {
+          mementoId: mostSimilarMemento.id,
+          newWeight,
+        });
+
+        updatedCount++;
+        continue;
+      }
+
+      console.debug(
+        `No similar personal information found (highest similarity: ${highestSimilarity.toFixed(3)}), creating new memento`
+      );
     }
 
-    console.debug(
-      `No similar personal information found (highest similarity: ${highestSimilarity.toFixed(3)}), creating new memento`
-    );
-
-    // STEP 6: No duplicate - create new memento
+    // STEP 6: No duplicate (or no embedding available) - create new memento
     const memento = await Memento.create({
       userId,
       sessionId,
@@ -241,21 +214,21 @@ export const handler = withEventContext(async (event, logger) => {
       summary: evaluation.summary,
       fullContent: prompt,
       tags: evaluation.tags || [],
-      embedding: summaryEmbedding,
+      ...(summaryEmbedding ? { embedding: summaryEmbedding } : {}),
       lastAccessedAt: new Date(),
     });
 
-    logger.info('Successfully created memento with embedding', {
+    logger.info('Successfully created memento', {
       mementoId: memento.id,
       importance: evaluation.importance,
       weight: memento.weight,
-      embeddingLength: summaryEmbedding.length,
+      embeddingLength: summaryEmbedding?.length ?? 0,
     });
 
     createdCount++;
 
-    // Add to existingMementos for subsequent similarity checks in this batch
-    existingMementos.push(memento);
+    // Only embedded mementos participate in the in-batch similarity checks.
+    if (summaryEmbedding) existingMementos.push(memento);
   }
 
   logger.info('Completed processing all memento evaluations', {

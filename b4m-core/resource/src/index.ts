@@ -10,7 +10,7 @@
  */
 import { DEFAULT_MANIFEST } from './manifest';
 
-export type Kind = 'secret' | 'bucket' | 'queue' | 'function' | 'service' | 'websocket' | 'record';
+export type Kind = 'secret' | 'bucket' | 'queue' | 'function' | 'service' | 'websocket' | 'record' | 'queueUrls';
 
 export interface ManifestEntry {
   kind: Kind;
@@ -43,7 +43,9 @@ type Shape<E extends ManifestEntry> = E['kind'] extends 'secret'
             ? { managementEndpoint: string; url: string }
             : E['kind'] extends 'record'
               ? Optional<E, Record<string, string>>
-              : never;
+              : E['kind'] extends 'queueUrls'
+                ? Record<string, string | undefined>
+                : never;
 
 export type ResourceShim<M extends Manifest = Manifest> = { App: App } & {
   [K in keyof M]: Shape<M[K]>;
@@ -86,6 +88,7 @@ type Shaped =
   | { url: string | undefined }
   | { managementEndpoint: string; url: string }
   | Record<string, string>
+  | Record<string, string | undefined>
   | undefined;
 
 function buildShape(name: string, entry: ManifestEntry, env: Env): Shaped {
@@ -124,6 +127,16 @@ function buildShape(name: string, entry: ManifestEntry, env: Env): Shaped {
       const raw = env[key];
       return raw ? (JSON.parse(raw) as Record<string, string>) : undefined;
     }
+    case 'queueUrls':
+      // Hosted links a `sourceQueueUrls` Linkable (queue name -> URL) to the frontend, so
+      // getSourceQueueUrl reads it rather than the individual queues. Reproduce that here by
+      // lazily mapping each requested camelCase queue name to its SCREAMING_SNAKE env URL;
+      // unset queues resolve to undefined (getSourceQueueUrl then reports "missing").
+      return new Proxy({} as Record<string, string | undefined>, {
+        get(_t, prop) {
+          return typeof prop === 'string' ? resolve(env, toEnvKey(prop), true) : undefined;
+        },
+      });
   }
 }
 

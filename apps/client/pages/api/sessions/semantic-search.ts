@@ -149,7 +149,11 @@ const handler = baseApi().post(
       // STEP 3: Setup embedding service
       const requiredProvider = getProviderFromModel(embeddingModel);
       req.logger?.debug?.('Required provider for model:', requiredProvider);
-      const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+      const embeddingConfig: {
+        openaiApiKey?: string | null;
+        voyageApiKey?: string | null;
+        ollamaBaseUrl?: string | null;
+      } = {};
 
       if (requiredProvider === 'openai') {
         if (!apiKeyTable?.openai) {
@@ -167,6 +171,15 @@ const handler = baseApi().post(
           });
         }
         embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+      } else if (requiredProvider === 'ollama') {
+        // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+        if (!apiKeyTable?.ollama) {
+          req.logger?.error?.('Ollama base URL not configured');
+          return res.status(400).json({
+            error: `Ollama base URL is required for semantic search (model: ${embeddingModel}) but not configured. Set OLLAMA_BASE_URL or configure Ollama in Settings.`,
+          });
+        }
+        embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
       } else {
         req.logger?.error?.('Unsupported embedding provider:', requiredProvider);
         return res.status(400).json({
@@ -177,6 +190,7 @@ const handler = baseApi().post(
       req.logger?.debug?.('Creating embedding service with config:', {
         hasOpenAIKey: !!embeddingConfig.openaiApiKey,
         hasVoyageKey: !!embeddingConfig.voyageApiKey,
+        hasOllamaBaseUrl: !!embeddingConfig.ollamaBaseUrl,
         model: embeddingModel,
       });
       const embeddingFactory = new EmbeddingFactory(embeddingConfig);

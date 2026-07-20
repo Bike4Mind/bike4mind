@@ -77,6 +77,8 @@ async function trySemanticKbSearch(
     const provider = getProviderFromModel(embeddingModel);
     if (provider === 'openai' && !apiKeyTable?.openai) return null;
     if (provider === 'voyageai' && !apiKeyTable?.voyageai) return null;
+    // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
+    if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
     if (dataLakeTags.length === 0) return null; // no accessible data lake — keyword search owns the user's own files
