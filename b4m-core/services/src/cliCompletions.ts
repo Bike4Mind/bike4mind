@@ -92,6 +92,14 @@ export interface CompletionParams {
    * called by the public completions endpoints - never by web chat.
    */
   source?: CompletionSource;
+  /**
+   * Record the analytics usage event even when settlement did not (enforceCredits
+   * off, or a settlement miss). The credit ledger/settlement itself stays gated by
+   * `enforceCredits` - nothing is ever charged or double-recorded. Used by the embed
+   * path, which must meter org usage regardless of the platform-wide toggle. Off by
+   * default, so existing callers record only on the settlement-success path as before.
+   */
+  alwaysRecordUsage?: boolean;
   logger?: Logger;
   onChunk: (text: (string | null | undefined)[], info?: CompletionInfo) => Promise<void>;
 }
@@ -356,6 +364,34 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
     logger?.warn?.('[CLI_CREDITS] Cannot send credits - modelInfo is undefined');
   }
 
+  // Analytics/metering usage event. Recorded exactly once: on the settlement-success
+  // path for enforced runs (preserving legacy behavior - no event when settlement is
+  // skipped or fails), and via the unconditional embed fallback below when settlement
+  // didn't record it. `usageRecorded` guards against a double write.
+  let usageRecorded = false;
+  const recordUsageEvent = (creditsCharged: number) => {
+    db.usageEvents
+      ?.record({
+        requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+        userId,
+        ownerId: holderId,
+        ownerType: holderType,
+        feature: 'completion_api',
+        provider: modelInfo!.backend,
+        model,
+        inputTokens: finalInputTokens,
+        outputTokens: finalOutputTokens,
+        cachedInputTokens: finalCacheReadTokens,
+        cacheWriteTokens: finalCacheCreationTokens,
+        costUsd: finalUsdCost,
+        creditsCharged,
+        status: 'ok',
+        latencyMs: Date.now() - completionStartTime,
+      })
+      .catch(err => logger?.warn?.('Failed to record usage event', err));
+    usageRecorded = true;
+  };
+
   // Adjust credits after completion: refund over-reservation or charge under-reservation
   if (enforceCredits && modelInfo) {
     try {
@@ -480,26 +516,9 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
           }
         );
 
-        // Dual-write usage event: analytics only, never billing.
-        db.usageEvents
-          ?.record({
-            requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
-            userId,
-            ownerId: holderId,
-            ownerType: holderType,
-            feature: 'completion_api',
-            provider: modelInfo.backend,
-            model,
-            inputTokens: finalInputTokens,
-            outputTokens: finalOutputTokens,
-            cachedInputTokens: finalCacheReadTokens,
-            cacheWriteTokens: finalCacheCreationTokens,
-            costUsd: usdCost,
-            creditsCharged: actualCredits,
-            status: 'ok',
-            latencyMs: Date.now() - completionStartTime,
-          })
-          .catch(err => logger?.warn?.('Failed to record usage event', err));
+        // Usage event on the settlement-success path (legacy behavior: an enforced
+        // run records an event only when the ledger row committed).
+        recordUsageEvent(actualCredits);
       }
     } catch (error) {
       // Log with sufficient detail for manual reconciliation
@@ -513,5 +532,17 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       });
       // Don't throw - completion already happened, but ensure this is tracked
     }
+  }
+
+  // Embed metering fallback: the embed path must record org usage even when the
+  // settlement block above did not (enforceCredits off - the normal embed case - or
+  // the rare enforced run whose settlement threw before recording). Guarded by
+  // `usageRecorded` so an enforced run that already recorded on success never
+  // double-writes. creditsCharged is 0 when enforcement is off (no charge occurred);
+  // in the enforced-but-settlement-missed case it records finalCredits, and a
+  // `[CLI_CREDITS] CRITICAL` reconciliation alert has already fired for that path.
+  // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
+  if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
+    recordUsageEvent(enforceCredits ? finalCredits : 0);
   }
 }

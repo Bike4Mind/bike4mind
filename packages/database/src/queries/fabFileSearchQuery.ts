@@ -1,5 +1,6 @@
 import { CODE_FILE_MIME_TYPES } from '@bike4mind/common';
 import { escapeRegex } from '@bike4mind/utils/escapeRegex';
+import { buildFilenameMarkerRegex } from '@bike4mind/utils/retrievalExclusion';
 import { USE_DOCUMENTDB } from '../utils/documentdb-compat';
 
 /**
@@ -247,16 +248,7 @@ export function buildOwnershipConditions(
 }
 
 export type FabFileFilterType =
-  | 'text'
-  | 'pdf'
-  | 'url'
-  | 'image'
-  | 'excel'
-  | 'word'
-  | 'json'
-  | 'csv'
-  | 'markdown'
-  | 'code';
+  'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
 
 export interface FabFileSearchParams {
   userId: string;
@@ -282,6 +274,15 @@ export interface FabFileSearchParams {
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
     restrictToDataLake?: boolean;
     excludeContent?: boolean;
+    /**
+     * Generic retrieval-exclusion: keep documents whose filename begins with one of these
+     * markers (case-insensitive, WORD-BOUNDARY anchored - not a bare prefix) out of results,
+     * so retrieval agrees with a product surface's document-listing predicate. Unset/empty/
+     * whitespace-only is a byte-identical no-op. See @bike4mind/utils/retrievalExclusion.
+     */
+    excludeFilenameMarkers?: string[];
+    /** When true, restrict results to vectorized files only (excludes unvectorized). */
+    vectorizedOnly?: boolean;
   };
   useDocumentDB?: boolean;
 }
@@ -391,6 +392,20 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
       { tags: { $elemMatch: { name: 'curated-notebook' } } },
     ],
   });
+
+  // Generic retrieval exclusion (opt-in): drop unvectorized files and/or files whose name
+  // begins with a caller-supplied marker, so RAG retrieval agrees with the caller's listing
+  // predicate. Pushed as $and clauses (never Object.assign onto baseFilter, which would clobber
+  // baseFilter.fileName for the plain-search path). Both are no-ops when unset - an empty
+  // marker set yields a null regex (buildFilenameMarkerRegex), so today's queries are unchanged.
+  if (options?.vectorizedOnly) {
+    andConditions.push({ vectorized: true });
+  }
+  // Matched against the pre-lowered, indexed `fileNameLower` (no $options:'i' - index-safe).
+  const markerRegex = buildFilenameMarkerRegex(options?.excludeFilenameMarkers);
+  if (markerRegex) {
+    andConditions.push({ fileNameLower: { $not: markerRegex } });
+  }
 
   // Assemble final filter
   const filter: Record<string, unknown> = { ...baseFilter };

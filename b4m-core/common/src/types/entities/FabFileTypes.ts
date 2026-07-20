@@ -315,6 +315,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
+      excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
+      vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)
     }
   ) => Promise<{ data: IFabFileDocument[]; hasMore: boolean; total: number }>;
 

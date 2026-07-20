@@ -379,6 +379,12 @@ class SubscriptionRepository extends BaseRepository<ISubscription & IMongoDocume
       total: [{ $count: 'count' }],
 
       // Active subscriptions
+      // NOTE: "live subscriber" here = `status: 'active'` on User-owned subs.
+      // This exact definition is mirrored (hand-transcribed, raw collection)
+      // by the Overwatch product-stats self-report cron in the premium
+      // overlay, which cannot import this model. If the live-status set ever
+      // changes (e.g. counting `trialing`), update that mirror in the same
+      // change or the dashboard's subscriber count silently diverges.
       active: [{ $match: { status: 'active' } }, { $count: 'count' }],
 
       // Subscriptions expiring this month

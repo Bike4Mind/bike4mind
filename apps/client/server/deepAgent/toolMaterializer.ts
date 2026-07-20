@@ -11,6 +11,7 @@ import {
   userRepository,
 } from '@bike4mind/database';
 import { getAvailableModels, type ApiKeyTable, type ICompletionBackend } from '@bike4mind/llm-adapters';
+import type { RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import type { IUserDocument } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import { getFilesStorage, getGeneratedImageStorage } from '@server/utils/storage';
@@ -35,6 +36,14 @@ export interface DeepAgentToolMaterializerConfig {
   llm: ICompletionBackend;
   model: string;
   logger: Logger;
+  /**
+   * Generic retrieval exclusion forwarded to the owner-scoped knowledge tools. Deep agents
+   * run from a charter (ownerUserId), not a chat session, so there is no session-level field
+   * to read here today - this stays a threadable pass-through: a caller with session context
+   * can supply it, otherwise retrieval is unfiltered (unchanged behavior). Kept explicit so
+   * this path is not silently unable to exclude if a session-aware caller is added later.
+   */
+  retrievalFilter?: RetrievalExclusionOptions;
 }
 
 export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterializerConfig): ToolMaterializer {
@@ -53,6 +62,7 @@ export function createDeepAgentToolMaterializer(config: DeepAgentToolMaterialize
       userId: ownerUserId,
       user: owner,
       logger: config.logger,
+      retrievalFilter: config.retrievalFilter,
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,

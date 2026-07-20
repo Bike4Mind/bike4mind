@@ -227,6 +227,13 @@ if (!$dev) {
   // held the response open for the whole completion, forcing a direct function URL).
   router.route(`${routePrefix}/api/ai/v1/ws-completions`, chatCompletion.url);
 
+  // Public embed chat endpoint (epic #41 Phase B). Same always-on origin as the
+  // completions routes, so it inherits their all-viewer forwarding: the browser
+  // Origin header and the OPTIONS preflight reach the container (the route sets
+  // its own per-origin CORS), and the SSE stream is not cached. Only the chat
+  // path is on this origin; /api/embed/session is a normal Next app route.
+  router.route(`${routePrefix}/api/embed/chat`, chatCompletion.url);
+
   const defaultSecurityGroupId = aws.ec2
     .getSecurityGroupsOutput({
       filters: [

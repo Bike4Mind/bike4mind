@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
-import { validateUserApiKey } from '../validate';
-import { ApiKeyScope } from '@bike4mind/common';
+import { validateUserApiKey, validateUserApiKeyById } from '../validate';
+import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
@@ -79,6 +79,17 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
   });
 
+  it('does not self-heal the prefix of an expired legacy key (only valid keys are healed)', async () => {
+    const { key, repo, getStored, adapters } = await mintLegacyKey();
+    getStored()!.expiresAt = new Date(Date.now() - 1000);
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('expired');
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a wrong key that collides on the legacy prefix', async () => {
     const { key, repo, adapters } = await mintLegacyKey();
 
@@ -116,5 +127,112 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     expect(result.isValid).toBe(true);
     expect(repo.update).not.toHaveBeenCalled();
     expect(getStored()!.keyPrefix).toHaveLength(KEY_PREFIX_LENGTH);
+  });
+});
+
+describe('validateUserApiKey - embed context fields', () => {
+  it('flows agentId and allowedOrigins through for an embed:chat key', async () => {
+    const { repo } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    const { key } = await createUserApiKey(
+      'sys-1',
+      {
+        name: 'embed-key',
+        scopes: [ApiKeyScope.EMBED_CHAT],
+        agentId: 'agent-1',
+        allowedOrigins: ['https://example.com'],
+        metadata: { createdFrom: 'dashboard' as const },
+      },
+      { ...adapters, systemUserId: 'sys-1' }
+    );
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(result.agentId).toBe('agent-1');
+    expect(result.allowedOrigins).toEqual(['https://example.com']);
+  });
+
+  it('leaves embed fields undefined for a non-embed key', async () => {
+    const { repo } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    const { key } = await createUserApiKey('sys-1', mintParams, {
+      ...adapters,
+      systemUserId: 'sys-1',
+    });
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(true);
+    expect(result.agentId).toBeUndefined();
+    expect(result.allowedOrigins).toBeUndefined();
+  });
+});
+
+describe('validateUserApiKeyById + shared finalize gates', () => {
+  // The by-id path (embed session token) loads via findById, which is NOT pre-filtered
+  // to ACTIVE/non-expired the way findActiveByKeyPrefix is - so this is the ONLY path
+  // that actually exercises finalizeApiKeyValidation's expiry + status gates. Without
+  // these cases a dropped gate passes CI silently (confirmed by mutation testing).
+  const baseDoc = {
+    id: 'key-1',
+    userId: 'u1',
+    scopes: [ApiKeyScope.EMBED_CHAT],
+    rateLimit: { requestsPerMinute: 10, requestsPerDay: 100 },
+    status: ApiKeyStatus.ACTIVE,
+    agentId: 'agent-1',
+    allowedOrigins: ['https://example.com'],
+  } as unknown as IUserApiKeyDocument;
+
+  function repoWith(doc: IUserApiKeyDocument | null) {
+    const repo = {
+      findById: vi.fn().mockResolvedValue(doc),
+      updateLastUsed: vi.fn().mockResolvedValue(undefined),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return { repo, adapters: { db: { userApiKeys: repo as any } } };
+  }
+
+  it('validates an active key located by id and bumps last-used', async () => {
+    const { repo, adapters } = repoWith(baseDoc);
+    const result = await validateUserApiKeyById('key-1', adapters);
+    expect(result.isValid).toBe(true);
+    expect(result.keyId).toBe('key-1');
+    expect(result.agentId).toBe('agent-1');
+    // updateLastUsed must fire on the token path too (the drift the refactor fixed).
+    expect(repo.updateLastUsed).toHaveBeenCalledWith('key-1');
+  });
+
+  it('returns not_found when the id does not resolve', async () => {
+    const { adapters } = repoWith(null);
+    const result = await validateUserApiKeyById('missing', adapters);
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('not_found');
+  });
+
+  it('rejects an expired key via the by-id path (finalize expiry gate)', async () => {
+    const { repo, adapters } = repoWith({
+      ...baseDoc,
+      expiresAt: new Date(Date.now() - 1000),
+    } as unknown as IUserApiKeyDocument);
+    const result = await validateUserApiKeyById('key-1', adapters);
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('expired');
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
+  });
+
+  it('rejects a disabled key via the by-id path (finalize status gate)', async () => {
+    const { repo, adapters } = repoWith({
+      ...baseDoc,
+      status: ApiKeyStatus.DISABLED,
+    } as unknown as IUserApiKeyDocument);
+    const result = await validateUserApiKeyById('key-1', adapters);
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('disabled');
+    expect(repo.updateLastUsed).not.toHaveBeenCalled();
   });
 });
