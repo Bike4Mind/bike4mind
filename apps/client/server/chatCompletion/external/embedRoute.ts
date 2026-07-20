@@ -60,7 +60,13 @@ const EmbedChatRequestSchema = z.object({
   // server-side from the bound agent (prepended below); allowing a client
   // `system` turn would let an anonymous end-user override the configured
   // agent's constraints, which defeats the point of a constrained embed agent.
-  messages: z.array(z.object({ role: z.enum(['user', 'assistant']), content: z.string() })).min(1),
+  // Content must be non-empty, and the last turn must be the user's - both are
+  // rejected here as a clean 400 rather than surfacing as a mid-stream provider
+  // error (most backends require a non-empty, user-terminated conversation).
+  messages: z
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().min(1) }))
+    .min(1)
+    .refine(m => m[m.length - 1]?.role === 'user', { message: 'the last message must be from the user' }),
   /** Optional echo of the bound agent id; if present it MUST match the key's agent. */
   agentId: z.string().optional(),
   // No `stream` field: this surface is SSE-only, so advertising a toggle it ignores
@@ -190,14 +196,15 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       if (!agent || agent.deletedAt) {
         return res.status(404).json({ error: 'not_found', error_description: 'Bound agent not found' });
       }
-      // A personal agent (userId set) is reachable only by its creator's keys; for an
-      // embed key to be usable across org members the bound agent must be org-shared
-      // (organizationId set, no userId). The admin UI that mints embed keys (#634)
-      // should surface that constraint.
-      if (
-        (agent.organizationId && agent.organizationId !== ctx.organizationId) ||
-        (agent.userId && agent.userId !== ctx.userId)
-      ) {
+      // Require POSITIVE ownership by the key, fail-closed: the bound agent must be
+      // an org-shared agent of the key's org, or a personal agent of the key owner.
+      // Checking only for a mismatch would let a system/global agent (isSystem, with
+      // neither organizationId nor userId set) through both clauses - an embed key
+      // must never run an agent it does not own. An org-shared agent is the usual
+      // case; the admin UI that mints embed keys (#634) surfaces that constraint.
+      const ownedByOrg = agent.organizationId != null && agent.organizationId === ctx.organizationId;
+      const ownedByUser = agent.userId != null && agent.userId === ctx.userId;
+      if (!ownedByOrg && !ownedByUser) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Agent is not owned by the embed key' });
       }
 

@@ -112,6 +112,20 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
     expect(usageEvents.record).not.toHaveBeenCalled();
   });
 
+  it('records finalCredits (not 0) via the fallback when an enforced run settles but the ledger write throws', async () => {
+    enforceCredits = true;
+    const { db, usageEvents } = buildDb();
+    // Settlement runs (enforced), but the ledger write throws before recordUsageEvent
+    // on the success path fires -> usageRecorded stays false -> the embed fallback records
+    // the event with creditsCharged = finalCredits (the enforced arm), not 0.
+    vi.mocked(subtractCredits).mockRejectedValueOnce(new Error('ledger write failed'));
+
+    await executeCompletion({ ...baseParams, db, alwaysRecordUsage: true });
+
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 10 }));
+  });
+
   it('records no usage event when the model cannot be priced (modelInfo undefined), even with alwaysRecordUsage', async () => {
     enforceCredits = false;
     const { db, usageEvents } = buildDb();

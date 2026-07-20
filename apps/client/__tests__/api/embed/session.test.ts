@@ -91,4 +91,11 @@ describe('POST /api/embed/session - mint embed session token', () => {
     await (handler as any)(req, res);
     expect(res._getStatusCode()).toBe(200);
   });
+
+  it('treats Origin: null (sandboxed iframe) as absent, matching the chat route', async () => {
+    const { req, res } = makeReq({ 'x-api-key': 'b4m_live_embed', origin: 'null' });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (handler as any)(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
 });

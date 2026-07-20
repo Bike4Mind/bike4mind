@@ -101,18 +101,21 @@ export const validateUserApiKey = async (
     return { isValid: false, reason: 'invalid_hash' };
   }
 
+  const result = finalizeApiKeyValidation(apiKey, db);
+
   // Self-heal legacy records: now that the full key is in hand (hash matched),
   // upgrade the stored prefix to the current length so future lookups hit directly
-  // (fire and forget). Prefix-specific to this path, so it stays here, not in the
-  // shared finalize helper.
-  if (foundViaLegacyPrefix) {
+  // (fire and forget). Only heal a VALID key - matches the original ordering (gates
+  // first) so an expired/disabled key isn't rewritten on every rejected request.
+  // Prefix-specific to this path, so it stays here, not in the shared finalize helper.
+  if (foundViaLegacyPrefix && result.isValid) {
     apiKey.keyPrefix = keyPrefix;
     db.userApiKeys.update(apiKey).catch(err => {
       Logger.globalInstance.warn('Failed to self-heal legacy API key prefix:', err);
     });
   }
 
-  return finalizeApiKeyValidation(apiKey, db);
+  return result;
 };
 
 /**

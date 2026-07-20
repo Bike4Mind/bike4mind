@@ -42,7 +42,10 @@ const handler = baseApi({ auth: false })
 
     // Defense-in-depth: if a browser Origin is present it must be on the key's
     // allow-list. A non-browser caller (no Origin) is gated by the key alone.
-    const origin = headers.origin;
+    // `Origin: null` (sandboxed iframe) is treated as absent, matching the chat
+    // route - the credential is the boundary, so a hard 403 here would only break
+    // a legitimate sandboxed embed without stopping anyone.
+    const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
     if (origin && !isOriginPermitted(origin, info.allowedOrigins)) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }

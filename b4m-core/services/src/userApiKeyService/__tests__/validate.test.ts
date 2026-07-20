@@ -79,6 +79,17 @@ describe('validateUserApiKey — legacy 12-char prefix fallback', () => {
     expect(getStored()!.keyPrefix).toBe(key.substring(0, KEY_PREFIX_LENGTH));
   });
 
+  it('does not self-heal the prefix of an expired legacy key (only valid keys are healed)', async () => {
+    const { key, repo, getStored, adapters } = await mintLegacyKey();
+    getStored()!.expiresAt = new Date(Date.now() - 1000);
+
+    const result = await validateUserApiKey(key, adapters);
+
+    expect(result.isValid).toBe(false);
+    expect(result.reason).toBe('expired');
+    expect(repo.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a wrong key that collides on the legacy prefix', async () => {
     const { key, repo, adapters } = await mintLegacyKey();
 
