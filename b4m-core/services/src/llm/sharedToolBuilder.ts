@@ -40,6 +40,8 @@ export interface ToolBuilderDeps {
   entitlementKeys?: string[];
   /** Generic retrieval-exclusion filter, forwarded to the tool context (see ToolContext.retrievalFilter). */
   retrievalFilter?: ToolContext['retrievalFilter'];
+  /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
+  kbScope?: ToolContext['kbScope'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -237,6 +239,7 @@ export function buildSharedTools(
     imageProcessorLambdaName,
     entitlementKeys,
     retrievalFilter,
+    kbScope,
   } = deps;
 
   // Merge built-in tools with any external tool definitions (e.g., Slack tools)
@@ -246,7 +249,7 @@ export function buildSharedTools(
     userId,
     user,
     logger,
-    { db, retrievalFilter },
+    { db, retrievalFilter, kbScope },
     storage,
     imageGenerateStorage,
     callbacks.onStatusUpdate,
