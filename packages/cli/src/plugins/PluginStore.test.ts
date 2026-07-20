@@ -156,7 +156,17 @@ describe('PluginStore.discover', () => {
     expect((descriptor as { reason: string }).reason).toContain('reserved');
   });
 
-  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty'])(
+  it('keeps the scoped package name on an invalid descriptor (so remove targets the right package)', async () => {
+    // Invalid manifest (missing entry) for a scoped package: the descriptor
+    // name must stay @scope/... not the unscoped basename.
+    await makePkg('@someone/b4m-plugin-bar', { manifest: { configKey: 'bar' } });
+
+    const [descriptor] = await store.discover();
+    expect(descriptor.valid).toBe(false);
+    expect(descriptor.name).toBe('@someone/b4m-plugin-bar');
+  });
+
+  it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty', '__defineGetter__', '__lookupSetter__'])(
     'rejects a plugin whose configKey names a prototype member (%s)',
     async configKey => {
       await makePkg('b4m-plugin-proto', { manifest: { entry: './index.js', configKey } });

@@ -36,6 +36,10 @@ const PROTOTYPE_POLLUTING_KEYS = new Set([
   'toLocaleString',
   'toString',
   'valueOf',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
 ]);
 
 const B4mPluginManifestSchema = z.object({
@@ -211,9 +215,13 @@ export class PluginStore {
 
     const pkg = PluginPackageJsonSchema.safeParse(parsedJson);
     if (!pkg.success) {
+      // Prefer the real package.json name even when the manifest is invalid:
+      // basename(packageDir) drops the scope for @scope/foo, so `plugin remove`
+      // would target the wrong (unscoped) package name and silently no-op.
+      const declaredName = (parsedJson as { name?: unknown })?.name;
       return {
         valid: false,
-        name: dirName,
+        name: typeof declaredName === 'string' && declaredName.length > 0 ? declaredName : dirName,
         packageDir,
         reason: formatZodIssues(pkg.error),
       };

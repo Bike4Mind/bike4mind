@@ -888,17 +888,20 @@ export class ConfigStore {
   ): Record<string, boolean> {
     const base = snapshot ?? {};
     const next = incoming ?? base;
+    const has = (o: Record<string, boolean | undefined>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
     const merged: Record<string, boolean> = { ...disk };
-    // Keys the caller added or flipped vs its load-time snapshot win.
+    // Keys the caller added or flipped vs its load-time snapshot win. Own-key
+    // checks only (never the prototype chain) so a key like 'toString' can't
+    // read as "already present".
     for (const key of Object.keys(next)) {
       const value = next[key];
-      if (value !== undefined && (!(key in base) || base[key] !== value)) {
+      if (value !== undefined && (!has(base, key) || base[key] !== value)) {
         merged[key] = value;
       }
     }
     // Keys the caller intentionally removed (present at load, absent now) go.
     for (const key of Object.keys(base)) {
-      if (!(key in next)) {
+      if (!has(next, key)) {
         delete merged[key];
       }
     }

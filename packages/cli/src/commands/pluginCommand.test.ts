@@ -61,6 +61,7 @@ describe('validatePluginSpec', () => {
     'foo"bar',
     'foo bar',
     '../escape',
+    'foo%PATH%',
   ])('rejects %j', spec => {
     expect(validatePluginSpec(spec)).toBe(false);
   });

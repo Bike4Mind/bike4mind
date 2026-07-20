@@ -28,7 +28,9 @@ const NPM_TIMEOUT_MS = 120_000;
  * arg-vector exec - never the primary injection control.
  */
 export function validatePluginSpec(spec: string): boolean {
-  if (!spec || /\s/.test(spec) || /[;&|<>`$(){}\\!*?[\]'"]/.test(spec)) {
+  // `%` is rejected too: under the Windows shell path it would trigger cmd.exe
+  // environment-variable expansion.
+  if (!spec || /\s/.test(spec) || /[;&|<>`$(){}\\!*?[\]'"%]/.test(spec)) {
     return false;
   }
   // Segments must start alphanumeric so a relative path (../x, .hidden/y)
@@ -102,9 +104,12 @@ function runNpmOrExit(args: string[], cwd: string, action: string, target: strin
   try {
     // Arg-vector form: user-supplied specs never touch a shell on posix. The
     // npm shim on Windows is npm.cmd and needs a shell; validatePluginSpec's
-    // metacharacter rejection is the guard that keeps that path safe.
+    // metacharacter rejection guards the user spec, and under the shell we
+    // double-quote our own path args (e.g. a --prefix under "C:\Users\John
+    // Doe\...") so a space in the home dir doesn't split the argument.
     const isWindows = process.platform === 'win32';
-    execFileSync(isWindows ? 'npm.cmd' : 'npm', args, {
+    const finalArgs = isWindows ? args.map(a => (/\s/.test(a) ? `"${a}"` : a)) : args;
+    execFileSync(isWindows ? 'npm.cmd' : 'npm', finalArgs, {
       cwd,
       stdio: 'inherit',
       timeout: NPM_TIMEOUT_MS,
@@ -170,8 +175,17 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
   const newTopLevel = new Set([...(await readTopLevelDeps(pluginsDir))].filter(d => !depsBefore.has(d)));
 
   if (added.length === 0) {
-    console.log(`✅ Installed ${spec}.`);
-    console.warn('⚠️ No new b4m-plugin package was detected - it will not load as a plugin.');
+    // Nothing new discovered: either the package carries no b4m-plugin manifest,
+    // or it was already installed (a re-add / version bump). Don't claim it's not
+    // a plugin in the latter case - point at the list instead.
+    const existingPlugins = store.getValid(after);
+    if (existingPlugins.length > 0) {
+      console.log(`✅ Installed ${spec}. No new plugin package was added (it may already be installed).`);
+      console.log('Run `b4m plugin list` to see installed plugins and their enabled state.');
+    } else {
+      console.log(`✅ Installed ${spec}.`);
+      console.warn('⚠️ No b4m-plugin package was detected - it will not load as a plugin.');
+    }
     return;
   }
 
