@@ -123,6 +123,15 @@ jobs:
 
   run:
     needs: prep
+    # Grant the reusable workflow the token scopes it needs: id-token for OIDC AWS
+    # auth and statuses for the e2e/smoke commit status. A called workflow's
+    # permissions can only be downgraded from the caller's, and this repo's default
+    # token is read-only — so without this block the reusable job loses OIDC (no
+    # tests run) and can't stamp e2e/smoke.
+    permissions:
+      contents: read
+      id-token: write
+      statuses: write
     uses: ./.github/workflows/e2e-run.yml
     secrets: inherit
     with:
