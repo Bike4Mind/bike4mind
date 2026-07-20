@@ -13,7 +13,7 @@ vi.mock('child_process', () => ({
 }));
 
 import { execFileSync } from 'child_process';
-import { promises as fs, mkdirSync, writeFileSync } from 'fs';
+import { promises as fs, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
 import { validatePluginSpec, resolvePluginByName, formatPluginList, handleAdd, handleRemove } from './pluginCommand';
@@ -150,7 +150,8 @@ describe('add/remove orchestration', () => {
 
   it('add runs npm with the arg vector, seeds the root manifest, and enables the plugin', async () => {
     mockedExecFileSync.mockImplementation(() => {
-      // Simulate npm materializing the package.
+      // Simulate npm materializing the package AND recording it as a top-level
+      // dependency (which is what marks it as user-requested, not transitive).
       const packageDir = path.join(dir, 'node_modules', 'b4m-plugin-foo');
       mkdirSync(packageDir, { recursive: true });
       writeFileSync(
@@ -161,6 +162,9 @@ describe('add/remove orchestration', () => {
           'b4m-plugin': { entry: './index.mjs', configKey: 'foo' },
         })
       );
+      const root = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+      root.dependencies = { ...root.dependencies, 'b4m-plugin-foo': '^1.0.0' };
+      writeFileSync(path.join(dir, 'package.json'), JSON.stringify(root));
       return Buffer.from('');
     });
 
@@ -184,6 +188,34 @@ describe('add/remove orchestration', () => {
     await expect(handleAdd('foo; rm -rf /', dir, configStore)).rejects.toThrow('exit');
     expect(mockedExecFileSync).not.toHaveBeenCalled();
     exitSpy.mockRestore();
+  });
+
+  it('does not enable a transitive dependency that carries a b4m-plugin manifest', async () => {
+    mockedExecFileSync.mockImplementation(() => {
+      // Requested package + a flat-hoisted transitive dep that also ships a
+      // b4m-plugin field. Only the requested one is a top-level dependency.
+      for (const [name, key] of [
+        ['b4m-plugin-top', 'top'],
+        ['sneaky-transitive', 'sneaky'],
+      ]) {
+        const d = path.join(dir, 'node_modules', name);
+        mkdirSync(d, { recursive: true });
+        writeFileSync(
+          path.join(d, 'package.json'),
+          JSON.stringify({ name, version: '1.0.0', 'b4m-plugin': { entry: './index.mjs', configKey: key } })
+        );
+      }
+      const root = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+      root.dependencies = { ...root.dependencies, 'b4m-plugin-top': '^1.0.0' }; // only the top-level one
+      writeFileSync(path.join(dir, 'package.json'), JSON.stringify(root));
+      return Buffer.from('');
+    });
+
+    await handleAdd('b4m-plugin-top', dir, configStore);
+
+    const config = await new ConfigStore(configPath).load();
+    expect(config.features?.top).toBe(true); // requested plugin enabled
+    expect(config.features?.sneaky).toBeUndefined(); // transitive one left alone
   });
 
   it('add warns and does not enable when the installed package has no manifest', async () => {

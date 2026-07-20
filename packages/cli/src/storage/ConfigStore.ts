@@ -875,6 +875,37 @@ export class ConfigStore {
   }
 
   /**
+   * Merge a features save against the current on-disk map. Start from disk and
+   * apply only the keys the caller actually CHANGED relative to the snapshot it
+   * loaded - so a concurrent writer's edit to a key this caller didn't touch
+   * survives, and a key this caller removed is dropped. This is what makes the
+   * cross-process guarantee hold even for conflicting edits, not just new keys.
+   */
+  private mergeFeatures(
+    disk: Record<string, boolean>,
+    snapshot: Record<string, boolean | undefined> | undefined,
+    incoming: Record<string, boolean | undefined> | undefined
+  ): Record<string, boolean> {
+    const base = snapshot ?? {};
+    const next = incoming ?? base;
+    const merged: Record<string, boolean> = { ...disk };
+    // Keys the caller added or flipped vs its load-time snapshot win.
+    for (const key of Object.keys(next)) {
+      const value = next[key];
+      if (value !== undefined && (!(key in base) || base[key] !== value)) {
+        merged[key] = value;
+      }
+    }
+    // Keys the caller intentionally removed (present at load, absent now) go.
+    for (const key of Object.keys(base)) {
+      if (!(key in next)) {
+        delete merged[key];
+      }
+    }
+    return merged;
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: Partial<CliConfig>): Promise<void> {
@@ -899,13 +930,15 @@ export class ConfigStore {
           ...existingConfig.toolApiKeys,
           ...(config.toolApiKeys || {}),
         },
-        // Deep-merge over the on-disk values (not the in-memory cache) so a
-        // plugin toggle written by another process (b4m plugin add) survives
-        // a save from a running session; incoming keys still win per-key.
-        features: {
-          ...(await this.readDiskFeatures()),
-          ...(config.features ?? existingConfig.features ?? {}),
-        },
+        // Merge features against the fresh on-disk map, applying only the keys
+        // this caller changed vs its load-time snapshot, so a concurrent writer
+        // (e.g. `b4m plugin add` in another process) isn't clobbered - including
+        // conflicting edits, not just brand-new keys.
+        features: this.mergeFeatures(
+          await this.readDiskFeatures(),
+          existingConfig.features,
+          config.features ?? existingConfig.features
+        ),
       };
     }
 

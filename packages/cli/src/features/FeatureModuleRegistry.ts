@@ -1,6 +1,7 @@
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { ICliFeatureModule, FeatureCommand } from './ICliFeatureModule.js';
 import type { WebSocketConnectionManager } from '../ws/WebSocketConnectionManager.js';
+import { logger } from '../utils/Logger.js';
 
 /**
  * Manages the lifecycle of opt-in CLI feature modules.
@@ -38,8 +39,17 @@ export class FeatureModuleRegistry {
 
   /** Register all WS handlers from all modules */
   registerAllWsHandlers(wsManager: WebSocketConnectionManager): void {
+    // A plugin hook must never crash the caller (bootstrap / hot-reload); these
+    // run outside any per-plugin guard and can't be probed at load time because
+    // they have side effects. Isolate each module's throw.
     for (const module of this.modules) {
-      module.registerWsHandlers?.(wsManager);
+      try {
+        module.registerWsHandlers?.(wsManager);
+      } catch (error) {
+        logger.warn(
+          `[feature:${module.name}] registerWsHandlers threw: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
   }
 
@@ -54,7 +64,20 @@ export class FeatureModuleRegistry {
       const commands = module.getCommands?.() ?? [];
       const command = commands.find(c => c.name === name);
       if (command) {
-        command.execute(args);
+        // A throwing (or rejecting) plugin command is handled-but-failed, not
+        // unhandled: swallow so it can't take down the dispatch loop or surface
+        // as an unhandled rejection.
+        try {
+          void Promise.resolve(command.execute(args)).catch(error => {
+            logger.warn(
+              `[feature:${module.name}] command '${name}' failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          });
+        } catch (error) {
+          logger.warn(
+            `[feature:${module.name}] command '${name}' threw: ${error instanceof Error ? error.message : String(error)}`
+          );
+        }
         return true;
       }
     }
@@ -64,7 +87,13 @@ export class FeatureModuleRegistry {
   /** Cleanup all modules */
   disposeAll(): void {
     for (const module of this.modules) {
-      module.dispose?.();
+      try {
+        module.dispose?.();
+      } catch (error) {
+        logger.warn(
+          `[feature:${module.name}] dispose threw: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
   }
 

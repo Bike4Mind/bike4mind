@@ -65,6 +65,41 @@ describe('ConfigStore features map', () => {
     expect(reloaded.features?.tavern).toBe(true);
   });
 
+  it('does not revert a concurrent edit to a key this caller never touched', async () => {
+    // Session A loads with plugin-A on; it will later toggle nothing about A.
+    const config = await store.load();
+    await store.save({ ...config, features: { 'plugin-A': true } });
+
+    const sessionA = new ConfigStore(configPath);
+    const snapshot = await sessionA.load(); // {plugin-A: true}
+
+    // Another process disables plugin-A and adds plugin-B on disk.
+    const other = new ConfigStore(configPath);
+    const oc = await other.load();
+    await other.save({ ...oc, features: { 'plugin-A': false, 'plugin-B': true } });
+
+    // Session A saves adding plugin-C, having never touched plugin-A/B.
+    await sessionA.save({ ...snapshot, features: { ...snapshot.features, 'plugin-C': true } });
+
+    const reloaded = await new ConfigStore(configPath).load();
+    expect(reloaded.features?.['plugin-A']).toBe(false); // the other process's edit survives
+    expect(reloaded.features?.['plugin-B']).toBe(true); // and its new key survives
+    expect(reloaded.features?.['plugin-C']).toBe(true); // session A's own change lands
+  });
+
+  it('drops a key the caller intentionally removed', async () => {
+    const config = await store.load();
+    await store.save({ ...config, features: { keep: true, drop: true } });
+
+    const later = await store.load();
+    const { drop: _drop, ...withoutDrop } = later.features ?? {};
+    await store.save({ ...later, features: withoutDrop });
+
+    const reloaded = await new ConfigStore(configPath).load();
+    expect(reloaded.features?.keep).toBe(true);
+    expect(reloaded.features?.drop).toBeUndefined();
+  });
+
   it('lets an in-memory toggle win per-key over the disk value', async () => {
     const config = await store.load();
     await store.save({ ...config, features: { tavern: true } });

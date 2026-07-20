@@ -122,6 +122,18 @@ function runNpmOrExit(args: string[], cwd: string, action: string, target: strin
   }
 }
 
+/** Top-level dependency names recorded in the plugins-dir package.json. */
+async function readTopLevelDeps(pluginsDir: string): Promise<Set<string>> {
+  try {
+    const raw = JSON.parse(await fs.readFile(path.join(pluginsDir, 'package.json'), 'utf-8')) as {
+      dependencies?: Record<string, string>;
+    };
+    return new Set(Object.keys(raw.dependencies ?? {}));
+  } catch {
+    return new Set();
+  }
+}
+
 async function ensurePluginsDir(pluginsDir: string): Promise<void> {
   await fs.mkdir(pluginsDir, { recursive: true });
   const manifestPath = path.join(pluginsDir, 'package.json');
@@ -145,11 +157,17 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
 
   const store = new PluginStore({ pluginsDir });
   const before = new Set((await store.discover()).map(d => d.name));
+  const depsBefore = await readTopLevelDeps(pluginsDir);
 
   runNpmOrExit(['install', '--prefix', pluginsDir, '--no-fund', '--no-audit', spec], pluginsDir, 'install', spec);
 
   const after = await store.discover();
   const added = after.filter(d => !before.has(d.name));
+  // Only the package(s) npm recorded as a top-level dependency are what the
+  // user asked for; npm flat-hoists transitive deps into the same node_modules,
+  // so a dependency that happens to carry a b4m-plugin field must NOT be
+  // auto-enabled behind the user's back.
+  const newTopLevel = new Set([...(await readTopLevelDeps(pluginsDir))].filter(d => !depsBefore.has(d)));
 
   if (added.length === 0) {
     console.log(`✅ Installed ${spec}.`);
@@ -161,6 +179,12 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
     if (!descriptor.valid) {
       console.warn(`⚠️ ${descriptor.name} installed, but its manifest is invalid: ${descriptor.reason}`);
       console.warn('It will not load until the manifest is fixed.');
+      continue;
+    }
+    if (!newTopLevel.has(descriptor.name)) {
+      // A transitive dependency that ships its own b4m-plugin manifest.
+      console.warn(`ℹ️ ${descriptor.name} is a dependency and carries a plugin manifest; not enabling it.`);
+      console.warn(`   Enable it explicitly with: b4m plugin add ${descriptor.name}`);
       continue;
     }
     const config = await configStore.load();
