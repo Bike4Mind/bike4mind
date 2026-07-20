@@ -12,13 +12,14 @@ export type SoundGenerationVendor = z.infer<typeof supportedSoundGenerationVendo
  * Inbound request body for `POST /api/ai/sound-effects`.
  *
  * `durationSeconds` and `promptInfluence` bounds mirror the ElevenLabs
- * sound-generation limits (0.5-22s, prompt influence 0-1). `format` is the
- * provider-specific output encoding token (e.g. `mp3_44100_128`).
+ * sound-generation limits (0.5-30s for the default eleven_text_to_sound_v2
+ * model, prompt influence 0-1). `format` is the provider-specific output
+ * encoding token (e.g. `mp3_44100_128`).
  */
 export const soundEffectsRequestSchema = z.object({
   provider: supportedSoundGenerationVendor.default('elevenlabs'),
   text: z.string().min(1).max(1000),
-  durationSeconds: z.number().min(0.5).max(22).optional(),
+  durationSeconds: z.number().min(0.5).max(30).optional(),
   promptInfluence: z.number().min(0).max(1).optional(),
   format: z.string().optional(),
 });
