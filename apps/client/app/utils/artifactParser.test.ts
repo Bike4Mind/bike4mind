@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { extractReactDependencies, parseArtifactsWithFallback, isSvgGraphicallyEmpty } from './artifactParser';
+import {
+  extractReactDependencies,
+  hasCompleteOpeningTag,
+  parseArtifactsWithFallback,
+  isSvgGraphicallyEmpty,
+} from './artifactParser';
 
 describe('extractReactDependencies', () => {
   it('detects packages imported via multi-line named imports', () => {
@@ -88,12 +93,80 @@ describe('parseArtifactsWithFallback', () => {
     expect(result.cleanedContent).not.toContain('code');
   });
 
-  it('does not duplicate artifacts when cleanedContent is empty string', () => {
-    const input =
-      '<artifact identifier="app" type="application/vnd.ant.react" title="App">export default function App() { return <div/>; }</artifact>';
+  it('does not duplicate artifacts when cleanedContent is empty and body contains a fenced code block', () => {
+    // When the entire input is a single artifact whose body contains a ```tsx
+    // fence, the old || fallback re-ran convertCodeBlocksToArtifacts on the
+    // original content, double-emitting the inner code block as a second artifact.
+    const input = [
+      '<artifact identifier="app" type="application/vnd.ant.react" title="App">',
+      '```tsx',
+      'export default function Inner() { return <div/>; }',
+      '```',
+      '</artifact>',
+    ].join('\n');
 
     const result = parseArtifactsWithFallback(input);
     expect(result.artifacts).toHaveLength(1);
+  });
+
+  it('parses an artifact with single-quoted attribute values', () => {
+    const input = "<artifact identifier='widget' type='application/vnd.ant.react' title='My Widget'>code</artifact>";
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('My Widget');
+  });
+
+  it('parses a multi-line opening tag whose title contains ">"', () => {
+    const input = [
+      '<artifact',
+      '  identifier="converter"',
+      '  type="application/vnd.ant.react"',
+      '  title="A -> B Converter">',
+      'export default function App() { return <div/>; }',
+      '</artifact>',
+    ].join('\n');
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A -> B Converter');
+  });
+
+  it('does not match an artifact with an unterminated quote containing ">"', () => {
+    // Malformed input: the opening quote on title is never closed.
+    // The new regex correctly rejects this (the old one matched, leaking
+    // broken HTML); documenting the intentional change in behavior.
+    const input = '<artifact identifier="x" type="text/html" title="A -> B>content</artifact>';
+
+    const result = parseArtifactsWithFallback(input);
+    expect(result.artifacts).toHaveLength(0);
+  });
+});
+
+describe('hasCompleteOpeningTag', () => {
+  it('returns true for a well-formed single-line opening tag', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/html" title="Page">')).toBe(true);
+  });
+
+  it('returns true for an opening tag with ">" inside a quoted attribute', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/html" title="A -> B">')).toBe(true);
+  });
+
+  it('returns false when the opening tag is truncated mid-attribute', () => {
+    expect(hasCompleteOpeningTag('<artifact identifier="x" type="text/ht')).toBe(false);
+  });
+
+  it('returns false for a truncated tag with an unterminated quote containing ">"', () => {
+    // Old regex [^>]* would see the > inside the unterminated quote and
+    // return true, leaking broken HTML. The fixed pattern correctly rejects it.
+    expect(hasCompleteOpeningTag('<artifact identifier="x" title="A -> B')).toBe(false);
+  });
+
+  it('returns true for a multi-line opening tag', () => {
+    const tag = ['<artifact', '  identifier="app"', '  type="application/vnd.ant.react"', '  title="My App">'].join(
+      '\n'
+    );
+    expect(hasCompleteOpeningTag(tag)).toBe(true);
   });
 });
 

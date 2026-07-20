@@ -49,7 +49,11 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { isAxiosError } from 'axios';
 import { useConfig } from '@client/app/hooks/data/settings';
-import { parseArtifactsWithFallback, validateMermaidSyntax } from '@client/app/utils/artifactParser';
+import {
+  hasCompleteOpeningTag,
+  parseArtifactsWithFallback,
+  validateMermaidSyntax,
+} from '@client/app/utils/artifactParser';
 import RechartsRenderer from '../Charts/RechartsRenderer';
 import ChessBoard from '../Chess/ChessBoard';
 import { useSessions } from '@client/app/contexts/SessionsContext';
@@ -1380,7 +1384,7 @@ const ReplyContainer: FC<ReplyContainerProps> = ({
       // drop the partial from that tag onward so no raw HTML leaks into the bubble.
       const artifactIndex = preprocessedContent.lastIndexOf('<artifact');
       const tail = artifactIndex !== -1 ? preprocessedContent.substring(artifactIndex) : '';
-      if (/^<artifact\s+(?:[^>"']|"[^"]*"|'[^']*')*>/.test(tail)) {
+      if (hasCompleteOpeningTag(tail)) {
         preprocessedContent = `${preprocessedContent.trimEnd()}\n</artifact>`;
       } else {
         // Opening tag truncated mid-attribute - nothing renderable. Log the dropped

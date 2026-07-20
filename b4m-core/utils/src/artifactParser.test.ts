@@ -262,4 +262,37 @@ describe('parseArtifacts — multi-line and special-character opening tags', () 
     expect(cleanedContent).not.toContain('code1');
     expect(cleanedContent).not.toContain('code2');
   });
+
+  it('parses an artifact with single-quoted attribute values', () => {
+    const input = "<artifact identifier='widget' type='text/html' title='My Widget'><p>hi</p></artifact>";
+
+    const { artifacts } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('My Widget');
+    expect(artifacts[0].type).toBe('html');
+  });
+
+  it('parses a multi-line opening tag whose title contains ">"', () => {
+    const input = [
+      '<artifact',
+      '  identifier="tool"',
+      '  type="text/html"',
+      '  title="A -> B Converter">',
+      '<p>content</p>',
+      '</artifact>',
+    ].join('\n');
+
+    const { artifacts } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0].title).toBe('A -> B Converter');
+  });
+
+  it('does not match an artifact with an unterminated quote containing ">"', () => {
+    // Malformed: opening quote on title never closed. The new regex correctly
+    // rejects this (the old one matched); documenting the behavior change.
+    const input = '<artifact identifier="x" type="text/html" title="A -> B>content</artifact>';
+
+    const { artifacts } = parseArtifacts(input);
+    expect(artifacts).toHaveLength(0);
+  });
 });
