@@ -59,12 +59,49 @@ export function validateFeatureModule(value: unknown): value is ICliFeatureModul
 }
 
 /**
- * Check the shape of a module's tools before registration. The registry's
- * consumers (getAllToolNames at bootstrap) read t.toolSchema.name outside any
- * per-plugin try/catch, so a malformed tool must be caught here or it crashes
- * startup.
+ * Probe a plugin module before it is registered and return the first problem
+ * found, or null if it is safe to register.
+ *
+ * The registry's consumers call getTools()/getSystemPromptSection()/
+ * getCommands() OUTSIDE any per-plugin try/catch (index.tsx bootstrap, /config
+ * hot-reload, and every render for autocomplete), and the registry iterates
+ * modules with a bare map/flatMap - so a plugin method that throws, or a tool
+ * whose schema the LLM backend rejects, would crash the CLI or 400 every
+ * completion. Calling each accessor here, at load time, converts those into a
+ * skip + warning (the loader's contract).
  */
-export function findMalformedTool(module: ICliFeatureModule): string | null {
+export function findModuleProblem(module: ICliFeatureModule): string | null {
+  const toolProblem = findToolProblem(module);
+  if (toolProblem) {
+    return toolProblem;
+  }
+  try {
+    if (typeof module.getSystemPromptSection() !== 'string') {
+      return 'getSystemPromptSection() did not return a string';
+    }
+  } catch (error) {
+    return `getSystemPromptSection() threw: ${error instanceof Error ? error.message : String(error)}`;
+  }
+  if (module.getCommands) {
+    try {
+      const commands = module.getCommands();
+      if (!Array.isArray(commands)) {
+        return 'getCommands() did not return an array';
+      }
+    } catch (error) {
+      return `getCommands() threw: ${error instanceof Error ? error.message : String(error)}`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Validate the shape of a module's tools against ICompletionOptionTools
+ * (b4m-core/llm-adapters). The name must be non-empty and the JSON-schema
+ * parameters must be a real object schema, or the provider backend rejects the
+ * whole request.
+ */
+function findToolProblem(module: ICliFeatureModule): string | null {
   let tools: unknown;
   try {
     tools = module.getTools();
@@ -75,14 +112,20 @@ export function findMalformedTool(module: ICliFeatureModule): string | null {
     return 'getTools() did not return an array';
   }
   for (const [index, tool] of tools.entries()) {
-    const candidate = tool as { toolFn?: unknown; toolSchema?: { name?: unknown } } | null;
-    if (
-      !candidate ||
-      typeof candidate.toolFn !== 'function' ||
-      typeof candidate.toolSchema?.name !== 'string' ||
-      candidate.toolSchema.name.length === 0
-    ) {
-      return `tool at index ${index} is malformed (needs toolFn and toolSchema.name)`;
+    const candidate = tool as { toolFn?: unknown; toolSchema?: Record<string, unknown> } | null;
+    const schema = candidate?.toolSchema;
+    if (!candidate || typeof candidate.toolFn !== 'function' || !schema) {
+      return `tool at index ${index} is malformed (needs toolFn and toolSchema)`;
+    }
+    if (typeof schema.name !== 'string' || schema.name.length === 0) {
+      return `tool at index ${index} is missing a toolSchema.name`;
+    }
+    if (typeof schema.description !== 'string') {
+      return `tool '${schema.name}' is missing a string toolSchema.description`;
+    }
+    const params = schema.parameters as { type?: unknown; properties?: unknown } | undefined;
+    if (!params || params.type !== 'object' || typeof params.properties !== 'object' || params.properties === null) {
+      return `tool '${schema.name}' has invalid parameters (needs { type: 'object', properties })`;
     }
   }
   return null;

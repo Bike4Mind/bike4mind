@@ -56,7 +56,7 @@ function factorySource(moduleName: string, toolName: string): string {
   return `export default () => ({
     name: '${moduleName}',
     description: '',
-    getTools: () => [{ toolFn: () => 'ok', toolSchema: { name: '${toolName}', description: '', parameters: {} } }],
+    getTools: () => [{ toolFn: () => 'ok', toolSchema: { name: '${toolName}', description: '', parameters: { type: 'object', properties: {} } } }],
     getSystemPromptSection: () => '${moduleName} prompt',
     getCommands: () => [{ name: '${moduleName}-cmd', description: '', execute: () => {} }],
   });`;
@@ -200,6 +200,29 @@ describe('buildFeatureRegistry', () => {
     expect(() => registry.getAllToolNames()).not.toThrow();
   });
 
+  it('skips a plugin whose getSystemPromptSection throws (would crash bootstrap)', async () => {
+    const descriptor = await writePluginEntry(
+      'bad-prompt.mjs',
+      `export default () => ({
+        name: 'bad-prompt',
+        description: '',
+        getTools: () => [],
+        getSystemPromptSection: () => { throw new Error('prompt boom'); },
+      });`
+    );
+    const { registry, skipped } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [descriptor],
+      config: makeConfig({ 'bad-prompt': true }),
+      logger: quietLogger,
+    });
+    expect(skipped[0].reason).toContain('prompt boom');
+    expect(registry.hasModules).toBe(false);
+    // The consumer paths that used to crash on a throwing method:
+    expect(() => registry.getSystemPromptSections()).not.toThrow();
+    expect(() => registry.getAllCommands()).not.toThrow();
+  });
+
   it('supports the enable -> dispose -> re-enable hot-reload arc', async () => {
     const sentinel = path.join(dir, 'dispose-sentinel.txt');
     const descriptor = await writePluginEntry(
@@ -208,7 +231,7 @@ describe('buildFeatureRegistry', () => {
        export default () => ({
          name: 'reloadable',
          description: '',
-         getTools: () => [{ toolFn: () => 'ok', toolSchema: { name: 'reloadable_tool', description: '', parameters: {} } }],
+         getTools: () => [{ toolFn: () => 'ok', toolSchema: { name: 'reloadable_tool', description: '', parameters: { type: 'object', properties: {} } } }],
          getSystemPromptSection: () => '',
          dispose: () => writeFileSync('${sentinel}', 'disposed'),
        });`

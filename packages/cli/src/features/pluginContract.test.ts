@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
-import { validateFeatureModule, findMalformedTool, makeScopedLogger } from './pluginContract';
+import { validateFeatureModule, findModuleProblem, makeScopedLogger } from './pluginContract';
 import type { ICliFeatureModule } from './ICliFeatureModule';
 import type { Logger } from '../utils/Logger';
 
@@ -44,15 +44,18 @@ describe('validateFeatureModule', () => {
   });
 });
 
-describe('findMalformedTool', () => {
-  const goodTool = { toolFn: () => {}, toolSchema: { name: 'do_thing', description: '', parameters: {} } };
+describe('findModuleProblem', () => {
+  const goodTool = {
+    toolFn: () => {},
+    toolSchema: { name: 'do_thing', description: 'does a thing', parameters: { type: 'object', properties: {} } },
+  };
 
-  it('passes a module with well-formed tools', () => {
-    expect(findMalformedTool(makeModule({ getTools: () => [goodTool] }))).toBeNull();
+  it('passes a well-formed module', () => {
+    expect(findModuleProblem(makeModule({ getTools: () => [goodTool] }))).toBeNull();
   });
 
   it('passes a module with no tools', () => {
-    expect(findMalformedTool(makeModule())).toBeNull();
+    expect(findModuleProblem(makeModule())).toBeNull();
   });
 
   it('flags a getTools that throws', () => {
@@ -61,20 +64,67 @@ describe('findMalformedTool', () => {
         throw new Error('boom');
       },
     });
-    expect(findMalformedTool(module)).toContain('boom');
+    expect(findModuleProblem(module)).toContain('boom');
   });
 
-  it('flags a non-array return', () => {
-    expect(findMalformedTool(makeModule({ getTools: () => 'nope' }))).toContain('array');
+  it('flags a non-array getTools return', () => {
+    expect(findModuleProblem(makeModule({ getTools: () => 'nope' }))).toContain('array');
   });
 
   it.each([
-    ['missing toolFn', { toolSchema: { name: 'x' } }],
+    ['missing toolFn', { toolSchema: { name: 'x', description: '', parameters: { type: 'object', properties: {} } } }],
     ['missing toolSchema', { toolFn: () => {} }],
-    ['empty schema name', { toolFn: () => {}, toolSchema: { name: '' } }],
     ['null tool', null],
   ])('flags a tool with %s', (_label, tool) => {
-    expect(findMalformedTool(makeModule({ getTools: () => [goodTool, tool] }))).toContain('index 1');
+    expect(findModuleProblem(makeModule({ getTools: () => [goodTool, tool] }))).toContain('index 1');
+  });
+
+  it('flags a tool with an empty schema name', () => {
+    const tool = {
+      toolFn: () => {},
+      toolSchema: { name: '', description: '', parameters: { type: 'object', properties: {} } },
+    };
+    expect(findModuleProblem(makeModule({ getTools: () => [tool] }))).toContain('name');
+  });
+
+  it('flags a tool missing a string description', () => {
+    const tool = { toolFn: () => {}, toolSchema: { name: 'x', parameters: { type: 'object', properties: {} } } };
+    expect(findModuleProblem(makeModule({ getTools: () => [tool] }))).toContain('description');
+  });
+
+  it.each([
+    ['empty parameters', {}],
+    ['wrong type', { type: 'array', properties: {} }],
+    ['missing properties', { type: 'object' }],
+  ])('flags a tool with %s', (_label, parameters) => {
+    const tool = { toolFn: () => {}, toolSchema: { name: 'x', description: 'd', parameters } };
+    expect(findModuleProblem(makeModule({ getTools: () => [tool] }))).toContain('parameters');
+  });
+
+  it('flags a getSystemPromptSection that throws', () => {
+    const module = makeModule({
+      getSystemPromptSection: () => {
+        throw new Error('prompt boom');
+      },
+    });
+    expect(findModuleProblem(module)).toContain('prompt boom');
+  });
+
+  it('flags a getSystemPromptSection that returns a non-string', () => {
+    expect(findModuleProblem(makeModule({ getSystemPromptSection: () => 42 }))).toContain('string');
+  });
+
+  it('flags a getCommands that throws', () => {
+    const module = makeModule({
+      getCommands: () => {
+        throw new Error('cmd boom');
+      },
+    });
+    expect(findModuleProblem(module)).toContain('cmd boom');
+  });
+
+  it('flags a getCommands that returns a non-array', () => {
+    expect(findModuleProblem(makeModule({ getCommands: () => 'nope' }))).toContain('array');
   });
 });
 

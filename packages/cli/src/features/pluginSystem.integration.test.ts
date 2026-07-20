@@ -55,7 +55,7 @@ describe('plugin system integration (discover -> build registry)', () => {
       `export default (ctx) => ({
         name: 'greeter',
         description: 'greets',
-        getTools: () => [{ toolFn: async () => 'hello', toolSchema: { name: 'greet', description: 'say hello', parameters: {} } }],
+        getTools: () => [{ toolFn: async () => 'hello', toolSchema: { name: 'greet', description: 'say hello', parameters: { type: 'object', properties: {} } } }],
         getSystemPromptSection: () => 'You can greet.',
         getCommands: () => [{ name: 'greet', description: 'greet', execute: () => {} }],
       });`
