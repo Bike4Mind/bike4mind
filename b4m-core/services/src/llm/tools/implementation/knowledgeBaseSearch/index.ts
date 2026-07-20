@@ -10,7 +10,11 @@ import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokeni
 import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
-import { semanticDataLakeSearch, SemanticChunkResult } from '../../../../dataLakeService/semanticDataLakeSearch';
+import {
+  fileScopedSemanticSearch,
+  semanticDataLakeSearch,
+  SemanticChunkResult,
+} from '../../../../dataLakeService/semanticDataLakeSearch';
 import { getEffectiveLLMApiKeys } from '../../../../apiKeyService';
 import { recordOperationalUsage } from '../../../../billing';
 
@@ -48,10 +52,120 @@ function formatSemanticResults(results: SemanticChunkResult[]): string {
 }
 
 /**
+ * Resolve the embedding model and provider keys the semantic paths need. Returns null when
+ * any dep is missing/unconfigured (caller falls back to keyword search). Shared by the
+ * unscoped and agent-scoped semantic arms so provider handling can never drift between them.
+ */
+async function resolveEmbeddingContext(context: ToolContext): Promise<{
+  embeddingModel: SupportedEmbeddingModel;
+  provider: string;
+  apiKeyTable: Awaited<ReturnType<typeof getEffectiveLLMApiKeys>>;
+} | null> {
+  const adminSettings = context.db.adminSettings;
+  const apiKeys = context.db.apiKeys;
+  if (!adminSettings || !apiKeys) return null;
+
+  const modelRaw = await adminSettings.getSettingsValue('defaultEmbeddingModel');
+  if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) return null;
+  const embeddingModel = modelRaw as SupportedEmbeddingModel;
+
+  const apiKeyTable = await getEffectiveLLMApiKeys(
+    context.userId,
+    { db: { apiKeys, adminSettings }, getSettingsByNames },
+    { logger: context.logger }
+  );
+  const provider = getProviderFromModel(embeddingModel);
+  if (provider === 'openai' && !apiKeyTable?.openai) return null;
+  if (provider === 'voyageai' && !apiKeyTable?.voyageai) return null;
+  // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
+  if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
+
+  return { embeddingModel, provider, apiKeyTable };
+}
+
+/**
+ * Record the query-embedding spend (the embed ran once regardless of hit count).
+ * Isolated so a recording failure never discards a good search result.
+ */
+async function recordQueryEmbeddingUsage(
+  context: ToolContext,
+  query: string,
+  embeddingModel: SupportedEmbeddingModel,
+  provider: string
+): Promise<void> {
+  try {
+    const queryTokens = await getSharedTokenizer(context.logger).countTokens(query, embeddingModel);
+    const organization =
+      context.user.organizationId && context.db.organizations
+        ? await context.db.organizations.findById(context.user.organizationId)
+        : null;
+    await recordOperationalUsage(
+      {
+        requestId: context.sessionId ?? context.userId,
+        user: context.user,
+        organization,
+        sessionId: context.sessionId,
+        feature: 'embedding',
+        provider,
+        model: embeddingModel,
+        inputTokens: queryTokens,
+        costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
+        source: 'system',
+      },
+      { db: { usageEvents: context.db.usageEvents, adminSettings: context.db.adminSettings }, logger: context.logger }
+    );
+  } catch (recordErr) {
+    context.logger.warn('📚 [semantic] failed to record embedding usage:', recordErr);
+  }
+}
+
+/**
+ * Emit citable chips + a found-status line for semantic hits. corpusLabel keeps the scoped
+ * wording free of owner-corpus framing ("the data lake" would misdescribe - and leak the
+ * existence of - a corpus an agent-scoped caller cannot see).
+ */
+async function emitSemanticCitables(
+  context: ToolContext,
+  ranked: SemanticChunkResult[],
+  corpusLabel: string
+): Promise<void> {
+  // Citables - dedup to one chip per file (multiple chunks can match the same article)
+  const seenFile = new Set<string>();
+  const citables: CitableSource[] = [];
+  for (const r of ranked) {
+    if (seenFile.has(r.fileId)) continue;
+    seenFile.add(r.fileId);
+    citables.push({
+      id: r.fileId,
+      type: 'document',
+      title: r.fileName,
+      url: `/opti?mode=datalake&article=${r.fileId}`,
+      description:
+        r.fileTags
+          .filter(t => !t.startsWith('datalake:'))
+          .slice(0, 4)
+          .join(', ') || undefined,
+      timestamp: new Date().toISOString(),
+      status: 'complete',
+      metadata: { sourceSystem: 'knowledge_base', tags: r.fileTags, relevanceScore: r.score },
+    });
+  }
+  const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
+  const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
+  await context.statusUpdate(
+    { promptMeta: { citables } } as any,
+    `📄 Found ${citables.length} relevant doc(s) in ${corpusLabel}: ${names.join(', ')}${more}`
+  );
+}
+
+/**
  * Semantic-first KB search: embed the query and cosine-rank against the pre-computed chunk
  * vectors (tag-independent, ranks by meaning), returning the matching passage TEXT inline so
  * the model answers without a search->retrieve-N loop. Returns null to fall through to the
  * keyword path when embedding deps are unavailable or nothing matches.
+ *
+ * UNSCOPED arm only - resolves owner-wide data-lake access. The agent-scoped arm is
+ * tryScopedSemanticKbSearch below, which never consults getDynamicDataLakeAccess.
  */
 async function trySemanticKbSearch(
   context: ToolContext,
@@ -60,26 +174,13 @@ async function trySemanticKbSearch(
   maxResults: number
 ): Promise<string | null> {
   const chunkRepo = context.db.fabfilechunks;
-  const adminSettings = context.db.adminSettings;
-  const apiKeys = context.db.apiKeys;
-  if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds || !adminSettings || !apiKeys) {
+  if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
     return null; // semantic deps not wired — use keyword
   }
   try {
-    const modelRaw = await adminSettings.getSettingsValue('defaultEmbeddingModel');
-    if (!modelRaw || !isSupportedEmbeddingModel(modelRaw)) return null;
-    const embeddingModel = modelRaw as SupportedEmbeddingModel;
-
-    const apiKeyTable = await getEffectiveLLMApiKeys(
-      context.userId,
-      { db: { apiKeys, adminSettings }, getSettingsByNames },
-      { logger: context.logger }
-    );
-    const provider = getProviderFromModel(embeddingModel);
-    if (provider === 'openai' && !apiKeyTable?.openai) return null;
-    if (provider === 'voyageai' && !apiKeyTable?.voyageai) return null;
-    // Ollama base URL lives in apiKeyTable.ollama (self-host); without it, fall back to keyword.
-    if (provider === 'ollama' && !apiKeyTable?.ollama) return null;
+    const embedCtx = await resolveEmbeddingContext(context);
+    if (!embedCtx) return null;
+    const { embeddingModel, provider, apiKeyTable } = embedCtx;
 
     const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
     if (dataLakeTags.length === 0) return null; // no accessible data lake — keyword search owns the user's own files
@@ -104,32 +205,7 @@ async function trySemanticKbSearch(
       { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
     );
 
-    // Record the query-embedding spend (the embed ran once above regardless of hit count).
-    // Isolated so a recording failure never discards a good search result.
-    try {
-      const queryTokens = await getSharedTokenizer(context.logger).countTokens(query, embeddingModel);
-      const organization =
-        context.user.organizationId && context.db.organizations
-          ? await context.db.organizations.findById(context.user.organizationId)
-          : null;
-      await recordOperationalUsage(
-        {
-          requestId: context.sessionId ?? context.userId,
-          user: context.user,
-          organization,
-          sessionId: context.sessionId,
-          feature: 'embedding',
-          provider,
-          model: embeddingModel,
-          inputTokens: queryTokens,
-          costUsd: getEmbeddingModelCost(embeddingModel, queryTokens),
-          source: 'system',
-        },
-        { db: { usageEvents: context.db.usageEvents, adminSettings }, logger: context.logger }
-      );
-    } catch (recordErr) {
-      context.logger.warn('📚 [semantic] failed to record embedding usage:', recordErr);
-    }
+    await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
 
     if (search.results.length === 0) return null;
 
@@ -138,40 +214,61 @@ async function trySemanticKbSearch(
     // .slice(0, max_results) so the tool output can't exceed what the caller asked for.
     const ranked = search.results.slice(0, maxResults);
 
-    // Citables - dedup to one chip per file (multiple chunks can match the same article)
-    const seenFile = new Set<string>();
-    const citables: CitableSource[] = [];
-    for (const r of ranked) {
-      if (seenFile.has(r.fileId)) continue;
-      seenFile.add(r.fileId);
-      citables.push({
-        id: r.fileId,
-        type: 'document',
-        title: r.fileName,
-        url: `/opti?mode=datalake&article=${r.fileId}`,
-        description:
-          r.fileTags
-            .filter(t => !t.startsWith('datalake:'))
-            .slice(0, 4)
-            .join(', ') || undefined,
-        timestamp: new Date().toISOString(),
-        status: 'complete',
-        metadata: { sourceSystem: 'knowledge_base', tags: r.fileTags, relevanceScore: r.score },
-      });
-    }
-    const names = citables.slice(0, 3).map(c => prettyFileName(c.title));
-    const more = citables.length > 3 ? ` +${citables.length - 3} more` : '';
-    await context.statusUpdate(
-      { promptMeta: { citables } } as any,
-      `📄 Found ${citables.length} relevant doc(s) in the data lake: ${names.join(', ')}${more}`
-    );
+    await emitSemanticCitables(context, ranked, 'the data lake');
     context.logger.log(
-      `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${citables.length} files (top score ${search.results[0].score.toFixed(3)})`
+      `📚 [semantic] returning ${ranked.length}/${search.results.length} passages from ${new Set(ranked.map(r => r.fileId)).size} files (top score ${search.results[0].score.toFixed(3)})`
     );
 
     return formatSemanticResults(ranked);
   } catch (err) {
     context.logger.warn('📚 [semantic] KB search failed, falling back to keyword:', err);
+    return null;
+  }
+}
+
+/**
+ * Agent-scoped semantic arm: cosine-rank ONLY the kbScope file set. Contains no reference
+ * to getDynamicDataLakeAccess by construction - scope membership is the sole authority, so
+ * owner-wide data-lake resolution is unreachable from here. Returns null to fall through to
+ * the (also scoped) keyword path.
+ */
+async function tryScopedSemanticKbSearch(
+  context: ToolContext,
+  scopeFileIds: string[],
+  query: string,
+  maxResults: number
+): Promise<string | null> {
+  const chunkRepo = context.db.fabfilechunks;
+  if (!context.db.fabfiles || !chunkRepo?.findVectorsByFabFileIds) {
+    return null;
+  }
+  try {
+    const embedCtx = await resolveEmbeddingContext(context);
+    if (!embedCtx) return null;
+    const { embeddingModel, provider, apiKeyTable } = embedCtx;
+
+    const search = await fileScopedSemanticSearch(
+      {
+        query,
+        fileIds: scopeFileIds,
+        topK: Math.max(maxResults, 6),
+        minScore: 0,
+        embeddingModel,
+        apiKeyTable,
+        logger: context.logger,
+      },
+      { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
+    );
+
+    await recordQueryEmbeddingUsage(context, query, embeddingModel, provider);
+
+    if (search.results.length === 0) return null;
+
+    const ranked = search.results.slice(0, maxResults);
+    await emitSemanticCitables(context, ranked, "this agent's knowledge base");
+    return formatSemanticResults(ranked);
+  } catch (err) {
+    context.logger.warn('📚 [semantic] scoped KB search failed, falling back to scoped keyword:', err);
     return null;
   }
 }
@@ -244,49 +341,85 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
           return 'Knowledge base search is not available at this time.';
         }
 
+        // Agent-scoped KB restriction (see KbScope). An empty scope reads NOTHING - return
+        // the generic no-results message before either arm runs, never fall back owner-wide.
+        const scope = context.kbScope;
+        if (scope && scope.fileIds.length === 0) {
+          return formatSearchResults([]);
+        }
+
         // Semantic-first: rank by meaning and return passage CONTENT inline so the model can
         // answer without a search->retrieve loop. Falls through to keyword search below if the
-        // embedding deps aren't wired or nothing matches.
-        const semantic = await trySemanticKbSearch(context, query, tags, max_results);
+        // embedding deps aren't wired or nothing matches. The scoped arm never consults
+        // owner-wide data-lake access.
+        const semantic = scope
+          ? await tryScopedSemanticKbSearch(context, scope.fileIds, query, max_results)
+          : await trySemanticKbSearch(context, query, tags, max_results);
         if (semantic) return semantic;
 
         try {
-          // Search files the user has access to (owned + shared + org-shared + data lake)
-          const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
-          const searchResults = await context.db.fabfiles.search(
-            context.userId,
-            query,
-            {
-              tags: tags || [],
-              type: file_type,
-              shared: false, // Not filtering to ONLY shared files
-            },
-            {
-              page: 1,
-              // The WIDE candidate pool only matters for data-lake searches: that corpus is large
-              // and the underlying search sorts by fileName ASC, so a small page alphabetically
-              // truncates matches ([Products] sits past [Acquisitions]/[Cloud] and never entered a
-              // 50-row page, burying the right docs). For a user's own/shared files (small corpus,
-              // no data-lake access) the wide fetch is an unnecessary regression - use a small cap.
-              // (Proper fix for the lake: semantic search above; this is the keyword fallback.)
-              limit: dataLakeTags.length > 0 ? 200 : 50,
-            },
-            {
-              by: 'fileName',
-              direction: 'asc',
-            },
-            {
-              textSearch: true, // Search across fileName + tags + notes for better recall
-              includeShared: true, // Include owned + explicitly shared + org-shared files
-              userGroups: context.user.groups || [], // Pass user's groups for org-level sharing
-              dataLakeTags,
-              dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-              scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
-              excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
-              // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
-              ...(context.retrievalFilter ?? {}),
-            }
-          );
+          let searchResults;
+          if (scope) {
+            // Scoped keyword arm: restrictToFileIds is the sole authority. No owner/shared/
+            // org expansion, no data-lake resolution (getDynamicDataLakeAccess is not called
+            // on this branch), no group sharing.
+            searchResults = await context.db.fabfiles.search(
+              context.userId,
+              query,
+              {
+                tags: tags || [],
+                type: file_type,
+                shared: false,
+                restrictToFileIds: scope.fileIds,
+              },
+              { page: 1, limit: 200 },
+              { by: 'fileName', direction: 'asc' },
+              {
+                textSearch: true,
+                includeShared: false,
+                userGroups: [],
+                excludeContent: true,
+                ...(context.retrievalFilter ?? {}),
+              }
+            );
+          } else {
+            // Search files the user has access to (owned + shared + org-shared + data lake)
+            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+            searchResults = await context.db.fabfiles.search(
+              context.userId,
+              query,
+              {
+                tags: tags || [],
+                type: file_type,
+                shared: false, // Not filtering to ONLY shared files
+              },
+              {
+                page: 1,
+                // The WIDE candidate pool only matters for data-lake searches: that corpus is large
+                // and the underlying search sorts by fileName ASC, so a small page alphabetically
+                // truncates matches ([Products] sits past [Acquisitions]/[Cloud] and never entered a
+                // 50-row page, burying the right docs). For a user's own/shared files (small corpus,
+                // no data-lake access) the wide fetch is an unnecessary regression - use a small cap.
+                // (Proper fix for the lake: semantic search above; this is the keyword fallback.)
+                limit: dataLakeTags.length > 0 ? 200 : 50,
+              },
+              {
+                by: 'fileName',
+                direction: 'asc',
+              },
+              {
+                textSearch: true, // Search across fileName + tags + notes for better recall
+                includeShared: true, // Include owned + explicitly shared + org-shared files
+                userGroups: context.user.groups || [], // Pass user's groups for org-level sharing
+                dataLakeTags,
+                dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
+                scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
+                excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
+                // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
+                ...(context.retrievalFilter ?? {}),
+              }
+            );
+          }
 
           // Dedup (the lake can contain duplicate uploads) and relevance-rank by how well each
           // file's metadata matches the query - since the underlying search sorts by fileName
@@ -366,14 +499,20 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
                 .trim();
             const names = rankedResults.slice(0, 3).map((f: IFabFileDocument) => prettyName(f.fileName));
             const more = rankedResults.length > 3 ? ` +${rankedResults.length - 3} more` : '';
-            const foundStatus = `📄 Found ${rankedResults.length} in the data lake: ${names.join(', ')}${more}`;
+            // Scoped wording avoids "data lake" framing - a scoped caller sees only the
+            // agent's KB, and the status must not imply a wider corpus exists.
+            const corpusLabel = scope ? "this agent's knowledge base" : 'the data lake';
+            const foundStatus = `📄 Found ${rankedResults.length} in ${corpusLabel}: ${names.join(', ')}${more}`;
             await context.statusUpdate({ promptMeta: { citables } } as any, foundStatus);
             context.logger.log(`📚 Knowledge Base Search: Stored ${citables.length} citables`);
           } else {
             // No hits - tell the user what was searched so the wait reads as deliberate.
+            const clippedQuery = query.length > 50 ? query.slice(0, 49) + '…' : query;
             await context.statusUpdate(
               {} as any,
-              `📭 No data-lake matches for “${query.length > 50 ? query.slice(0, 49) + '…' : query}” — broadening…`
+              scope
+                ? `📭 No matches in this agent's knowledge base for “${clippedQuery}”`
+                : `📭 No data-lake matches for “${clippedQuery}” — broadening…`
             );
           }
 
