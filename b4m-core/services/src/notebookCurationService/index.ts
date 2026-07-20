@@ -26,14 +26,26 @@ export interface NotebookCurationAdapters {
 }
 
 /**
- * Stable hash of everything that determines the curated output: the curation
- * type, the include/format options, and the conversation content. An unchanged
- * re-curation produces the same hash, letting curateNotebook reuse the stored
- * file and skip the LLM + credit charge (issue #91).
+ * Bump when the curation prompts or output format change materially, so that
+ * previously cached sessions re-curate instead of serving pre-change output.
+ */
+const CURATION_HASH_VERSION = 'v1';
+
+/**
+ * Stable hash of everything that determines the curated output: the hash version,
+ * the curation type, the include/format options, and the conversation content. An
+ * unchanged re-curation produces the same hash, letting curateNotebook reuse the
+ * stored file and skip the LLM + credit charge (issue #91).
+ *
+ * Intentionally NOT hashed:
+ * - options.tokenBudget: affects only the base credit deduction, not the document.
+ * - session.name: curation is a point-in-time snapshot, so a rename alone should
+ *   not force a full (paid) re-curation just to refresh the header title.
  */
 export function computeCurationContentHash(messages: any[], options: CurationOptions): string {
   const hash = createHash('sha256');
-  hash.update(options.curationType || 'transcript');
+  hash.update(`ver:${CURATION_HASH_VERSION}`);
+  hash.update(`|type:${options.curationType || 'transcript'}`);
   hash.update(`|fmt:${options.exportFormat || 'markdown'}`);
   hash.update(`|name:${options.customNotebookName || ''}`);
   hash.update(
