@@ -35,8 +35,9 @@ passport.use(
           const jwtSecretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
           let prevSecret = undefined;
 
-          // Grace period: allow the previous key if JWT_SECRET was rotated within the last 24 hours
-          if (dayjs(jwtSecretRotation?.rotatedAt).isBefore(dayjs().add(1, 'day'))) {
+          // Grace period: accept the previous key only when JWT_SECRET was rotated within the last
+          // 24 hours. Mirrors the refreshToken endpoint's window so both auth paths agree.
+          if (dayjs(jwtSecretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
             prevSecret = jwtSecretRotation?.previousKey;
           }
 
@@ -268,7 +269,6 @@ export const setupSamlStrategy = (idp: {
   console.log(`[SAML-${requestId}] === STARTING SAML STRATEGY SETUP ===`);
   console.log(`[SAML-${requestId}] Setting up SAML strategy for IDP: ${idp._id}`);
   console.log(`[SAML-${requestId}] IDP object keys:`, Object.keys(idp));
-  console.log(`[SAML-${requestId}] Full IDP object:`, JSON.stringify(idp, null, 2));
 
   if (!idp.samlConfig) {
     console.error('SAML configuration missing for IDP:', idp._id);
