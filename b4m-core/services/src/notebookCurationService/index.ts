@@ -155,10 +155,12 @@ export class NotebookCurationService {
         artifactsFound: artifacts.length,
       });
 
-      // Cache check: if this session was already curated with the same inputs
-      // (content + type + options), reuse the stored file and skip the LLM,
-      // storage, and credit charge entirely. The hash is stored on the session
-      // after a successful curation below.
+      // Cache check runs AFTER artifact extraction (above) on purpose: extraction
+      // is cheap (no LLM) and keeps artifactCount accurate in the cache-hit return.
+      // If this session was already curated with the same inputs (content + type +
+      // options), reuse the stored file and skip the LLM, storage, and credit
+      // charge entirely. The hash is stored on the session after a successful
+      // curation below.
       const contentHash = computeCurationContentHash(messages, options);
       if (session.curatedNotebookFileId && session.curationContentHash === contentHash) {
         // Only reuse if the stored file still exists. The curated FabFile may have
