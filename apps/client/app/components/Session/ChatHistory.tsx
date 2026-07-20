@@ -28,13 +28,8 @@ const VirtuosoScroller = React.forwardRef<HTMLDivElement, React.HTMLAttributes<H
       <Box
         {...props}
         ref={ref}
-        // Match the sidebar's scrollbar look; keep the user-configurable width via the CSS var.
-        sx={{
-          ...scrollbarStyles,
-          '&::-webkit-scrollbar': {
-            width: 'var(--chat-scrollbar-width, 4px)',
-          },
-        }}
+        // Match the sidebar's scrollbar exactly (thin, same thumb/track).
+        sx={scrollbarStyles}
       />
     );
   }
