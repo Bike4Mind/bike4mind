@@ -23,7 +23,7 @@ const handler = baseApi().get(async (req, res) => {
   // A user's collections are private to them; only the user themselves or an
   // admin may list them.
   if (id !== req.user.id && !req.user.isAdmin) {
-    throw new ForbiddenError('Not authorized to view this user\'s collections');
+    throw new ForbiddenError("Not authorized to view this user's collections");
   }
 
   const result = await userService.searchUserCollection(

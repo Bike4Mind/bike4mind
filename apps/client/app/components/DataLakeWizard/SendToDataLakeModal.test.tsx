@@ -17,9 +17,17 @@ vi.mock('@client/app/utils/filesAPICalls', () => ({
 }));
 
 // Mirror React Query's `enabled` semantics: a disabled query never fetches, so it has no data.
+// `lake-1` is manageable (a valid send target); `lake-2` is a read-only public lake the caller
+// doesn't own, so the modal must exclude it (sending is a write).
 const useDataLakes = vi.fn((enabled: boolean = true) =>
   enabled
-    ? { data: [{ id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake:test' }], isLoading: false }
+    ? {
+        data: [
+          { id: 'lake-1', name: 'Test Lake', datalakeTag: 'lake:test', canManage: true },
+          { id: 'lake-2', name: 'Public Lake', datalakeTag: 'lake:pub', canManage: false },
+        ],
+        isLoading: false,
+      }
     : { data: undefined, isLoading: false }
 );
 
@@ -117,6 +125,19 @@ describe('SendToDataLakeModal', () => {
     screen.getByTestId('send-to-datalake-confirm-btn').click();
 
     await waitFor(() => expect(createFabFileOnServerWithUpload).toHaveBeenCalledTimes(2));
+  });
+
+  it('excludes lakes the caller cannot manage (read-only public lakes are not send targets)', () => {
+    render(
+      <TestWrapper>
+        <SendToDataLakeModal />
+      </TestWrapper>
+    );
+
+    // Sending tags a file into the lake - a write - so a non-owned public lake must not appear
+    // as an option, mirroring the backend write gate (assertCanWriteDataLakeTags).
+    expect(screen.getByTestId('send-to-datalake-option-lake-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('send-to-datalake-option-lake-2')).toBeNull();
   });
 
   it('does not run the lakes query when EnableDataLakes is off, even while open', () => {

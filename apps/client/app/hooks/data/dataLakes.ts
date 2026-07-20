@@ -79,17 +79,26 @@ export function useUpdateDataLake() {
   });
 }
 
+export type LakeVisibilityChoice = 'private' | 'organization' | 'public';
+
+const VISIBILITY_TOAST: Record<LakeVisibilityChoice, string> = {
+  organization: 'Data lake shared to your organization',
+  public: 'Data lake published — readable by everyone',
+  private: 'Data lake set to private',
+};
+
 /**
- * Sets a data lake's visibility: 'private' (owner-only) or 'organization' (shared to the
- * caller's active org). Promotion sends the active account-switcher org; the server
- * authorization-validates it against the caller's memberships before scoping.
+ * Sets a data lake's visibility: 'private' (owner-only), 'organization' (shared to the caller's
+ * active org), or 'public' (readable app-wide). Only the org path needs a target org; the server
+ * authorization-validates it against the caller's memberships before scoping. Publishing a gated
+ * lake is refused server-side.
  */
 export function useSetLakeVisibility() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, visibility }: { id: string; visibility: 'private' | 'organization' }) => {
-      // Only a promotion needs a target org; demotion to private ignores it, so don't send it
+    mutationFn: async ({ id, visibility }: { id: string; visibility: LakeVisibilityChoice }) => {
+      // Only an org promotion needs a target org; private/public are org-less, so don't send it
       // (avoids a needless membership round-trip and a spurious 403 if the caller just left the org).
       const organizationId = visibility === 'organization' ? activeOrgId() : undefined;
       const response = await api.post<DataLakeConfig>(`/api/data-lakes/${id}/visibility`, {
@@ -100,9 +109,7 @@ export function useSetLakeVisibility() {
     },
     onSuccess: (_data, { visibility }) => {
       queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
-      toast.success(
-        visibility === 'organization' ? 'Data lake shared to your organization' : 'Data lake set to private'
-      );
+      toast.success(VISIBILITY_TOAST[visibility]);
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to change visibility');

@@ -16,6 +16,11 @@ interface AssertLakeAccessAdapters {
  * `requiredUserTag`, OR a matching `requiredEntitlement`. Org stays a HARD prerequisite,
  * NOT folded into the any-of: a tag/entitlement holder in a different org is still denied.
  *
+ * Public: an `isPublic` lake is readable app-wide - it bypasses the org prerequisite AND
+ * Private-by-default (checked first), but the requirement gate still applies. Since a gated
+ * lake can't be published (setLakeVisibility refuses it), a public lake is normally gate-less
+ * and readable by everyone; the retained gate check is defense in depth for a post-publish gate.
+ *
  * Private-by-default: a lake with NO org and NO gate (requiredUserTag/requiredEntitlement
  * all blank) grants a non-owner nothing, so it is owner/admin-only - never world-readable.
  * This is enforced BEFORE `lakeMatchesAccess` (whose any-of rule returns true for a
@@ -25,10 +30,22 @@ interface AssertLakeAccessAdapters {
  * private lake to any caller.
  */
 export function canAccessLake(
-  lake: Pick<IDataLakeDocument, 'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement'>,
+  lake: Pick<
+    IDataLakeDocument,
+    'createdByUserId' | 'organizationId' | 'requiredUserTag' | 'requiredEntitlement' | 'isPublic'
+  >,
   ctx: AccessContext
 ): boolean {
   if (ctx.isAdmin || lake.createdByUserId === ctx.userId) return true;
+
+  const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
+  const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
+
+  // Public: readable app-wide - bypasses BOTH the org prerequisite and Private-by-default. Must
+  // run before those checks (a public gateless lake trips the private rule otherwise). The gate
+  // is STILL respected via lakeMatchesAccess (defense in depth: a gate added after publishing
+  // keeps holding), but a normal public lake is gate-less so this returns true for everyone.
+  if (lake.isPublic) return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 
   // Private (no org, no gate of any kind) -> owner/admin only; deny every other caller.
   // Must run before lakeMatchesAccess, which treats a no-requirement lake as public.
@@ -38,8 +55,6 @@ export function canAccessLake(
   // tag/entitlement any-of so a holder in a different org can never pass.
   if (lake.organizationId && lake.organizationId !== ctx.organizationId) return false;
 
-  const normalizedTags = ctx.userTags.map(t => t.toLowerCase());
-  const normalizedKeys = (ctx.entitlementKeys ?? []).map(normalizeEntitlementKey);
   return lakeMatchesAccess(lake, normalizedTags, normalizedKeys);
 }
 

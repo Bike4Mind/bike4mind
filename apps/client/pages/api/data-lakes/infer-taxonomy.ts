@@ -75,16 +75,11 @@ const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
   .use(rateLimit({ limit: resolveTaxonomyDailyLimit, windowMs: DAY_MS, bucket: 'data-lakes/infer-taxonomy' }))
   .post(async (req: Request, res) => {
-    // Access control: require admin, developer, or opti tag (matches other data lake endpoints)
-    const userTags: string[] = req.user.tags ?? [];
-    const normalizedTags = userTags.map(t => t.toLowerCase());
-    const hasAccess =
-      req.user.isAdmin || normalizedTags.some(t => ['opti', 'developer', 'developers', 'dev'].includes(t));
-
-    if (!hasAccess) {
-      return res.status(403).json({ error: 'Data lake access required' });
-    }
-
+    // Access is the EnableDataLakes feature flag alone (applied above) - the same gate the
+    // create/manage endpoints use. This step runs INSIDE the create wizard, so the old
+    // admin/opti/developer tag gate (a pre-feature-flag leftover) 403'd feature-enabled users
+    // mid-create and blocked the whole flow. Inference stays optional and non-blocking: it
+    // degrades to an empty taxonomy when no API key is configured.
     const userId = req.user.id;
     const data = InferTaxonomyRequestInput.parse(req.body);
 

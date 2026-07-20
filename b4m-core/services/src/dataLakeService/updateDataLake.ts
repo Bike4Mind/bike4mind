@@ -28,6 +28,17 @@ export const updateDataLake = async (
     throw new BadRequestError('Only the creator can update this data lake');
   }
 
+  // Mirror the setLakeVisibility guardrail from the other side so the "public => no gate"
+  // invariant can't be broken here: a public lake is truly open, so it must never gain an access
+  // gate. Refuse adding requiredUserTag/requiredEntitlement to a public lake (demote to private
+  // first). Reads still defend this (defense in depth), but the state would otherwise contradict
+  // the "readable by everyone" UI.
+  if (existing.isPublic && (params.requiredUserTag || params.requiredEntitlement)) {
+    throw new BadRequestError(
+      'A public data lake cannot have an access tag or required entitlement. Make it private first, then add the gate.'
+    );
+  }
+
   const updated = await db.dataLakes.update({
     id: dataLakeId,
     ...params,
