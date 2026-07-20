@@ -16,7 +16,14 @@ import { execFileSync } from 'child_process';
 import { promises as fs, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import path from 'path';
 import { tmpdir } from 'os';
-import { validatePluginSpec, resolvePluginByName, formatPluginList, handleAdd, handleRemove } from './pluginCommand';
+import {
+  validatePluginSpec,
+  resolvePluginByName,
+  formatPluginList,
+  handleAdd,
+  handleRemove,
+  quoteNpmArgs,
+} from './pluginCommand';
 import { ConfigStore } from '../storage/ConfigStore';
 import type { CliConfig } from '../storage/types';
 import type { PluginDescriptor } from '../plugins/PluginStore';
@@ -64,6 +71,27 @@ describe('validatePluginSpec', () => {
     'foo%PATH%',
   ])('rejects %j', spec => {
     expect(validatePluginSpec(spec)).toBe(false);
+  });
+});
+
+describe('quoteNpmArgs', () => {
+  const args = ['install', '--prefix', 'C:\\Users\\Bob & Alice\\.bike4mind\\plugins', 'b4m-plugin-foo'];
+
+  it('passes args through untouched on posix', () => {
+    expect(quoteNpmArgs(args, 'linux')).toEqual(args);
+  });
+
+  it('double-quotes every arg on win32 so metachars/spaces stay literal', () => {
+    expect(quoteNpmArgs(args, 'win32')).toEqual([
+      '"install"',
+      '"--prefix"',
+      '"C:\\Users\\Bob & Alice\\.bike4mind\\plugins"',
+      '"b4m-plugin-foo"',
+    ]);
+  });
+
+  it('escapes an embedded double quote as ""', () => {
+    expect(quoteNpmArgs(['a"b'], 'win32')).toEqual(['"a""b"']);
   });
 });
 
@@ -220,16 +248,22 @@ describe('add/remove orchestration', () => {
   });
 
   it('add warns and does not enable when the installed package has no manifest', async () => {
+    const warn = vi.mocked(console.warn);
     mockedExecFileSync.mockImplementation(() => {
       const packageDir = path.join(dir, 'node_modules', 'plain-dep');
       mkdirSync(packageDir, { recursive: true });
       writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ name: 'plain-dep', version: '1.0.0' }));
+      const root = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf-8'));
+      root.dependencies = { ...root.dependencies, 'plain-dep': '^1.0.0' };
+      writeFileSync(path.join(dir, 'package.json'), JSON.stringify(root));
       return Buffer.from('');
     });
 
     await handleAdd('plain-dep', dir, configStore);
     const config = await new ConfigStore(configPath).load();
     expect(config.features?.['plain-dep']).toBeUndefined();
+    // A genuinely new non-plugin top-level dep keeps the explicit signal.
+    expect(warn.mock.calls.flat().join(' ')).toContain('b4m-plugin');
   });
 
   it('remove uninstalls via npm and writes the feature key to false', async () => {

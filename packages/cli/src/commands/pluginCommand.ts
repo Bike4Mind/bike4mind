@@ -100,21 +100,26 @@ export function formatPluginList(descriptors: PluginDescriptor[], config: CliCon
  * Run npm with the given args, or print a friendly message and exit. `action`
  * ('install'/'remove') only shapes the error text.
  */
+/**
+ * Quote npm args for the Windows shell path. npm.cmd needs `shell: true`, under
+ * which Node joins args with spaces and hands them to cmd.exe - so a homedir
+ * path with a metachar (`&`, space, ...) would be split or reinterpreted.
+ * Double-quote every arg (escaping embedded `"` as `""`) to keep it literal. A
+ * literal `%` in the homedir still env-expands (a pathological username, out of
+ * scope); the user-supplied spec - the real untrusted input - already rejects
+ * `%`. No-op on posix, where execFileSync runs shell-free.
+ */
+export function quoteNpmArgs(args: string[], platform: NodeJS.Platform = process.platform): string[] {
+  if (platform !== 'win32') {
+    return args;
+  }
+  return args.map(a => `"${a.replace(/"/g, '""')}"`);
+}
+
 function runNpmOrExit(args: string[], cwd: string, action: string, target: string): void {
   try {
-    // Arg-vector form: user-supplied specs never touch a shell on posix. The
-    // npm shim on Windows is npm.cmd and needs a shell; validatePluginSpec's
-    // metacharacter rejection guards the user spec, and under the shell we
-    // double-quote our own path args (e.g. a --prefix under "C:\Users\John
-    // Doe\...") so a space in the home dir doesn't split the argument.
     const isWindows = process.platform === 'win32';
-    // Always double-quote every arg on Windows (not just whitespace ones) so a
-    // homedir path with a cmd metachar like `&` isn't treated as a command
-    // separator. (A literal `%` in the homedir would still env-expand; that's a
-    // pathological username and out of scope - the user-supplied spec, the real
-    // untrusted input, already rejects `%`.)
-    const finalArgs = isWindows ? args.map(a => `"${a.replace(/"/g, '""')}"`) : args;
-    execFileSync(isWindows ? 'npm.cmd' : 'npm', finalArgs, {
+    execFileSync(isWindows ? 'npm.cmd' : 'npm', quoteNpmArgs(args), {
       cwd,
       stdio: 'inherit',
       timeout: NPM_TIMEOUT_MS,
@@ -180,10 +185,15 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
   const newTopLevel = new Set([...(await readTopLevelDeps(pluginsDir))].filter(d => !depsBefore.has(d)));
 
   if (added.length === 0) {
-    // Nothing NEW enabled: the package carries no b4m-plugin manifest, or it was
-    // already installed (re-add / version bump). Either way this message is
-    // accurate without guessing which case it is.
-    console.log(`✅ Installed ${spec}. No new plugin was enabled.`);
+    if (newTopLevel.size > 0) {
+      // A genuinely new top-level package that ships no b4m-plugin manifest -
+      // keep the explicit signal that installing it did nothing plugin-wise.
+      console.log(`✅ Installed ${spec}.`);
+      console.warn('⚠️ It has no "b4m-plugin" manifest, so it will not load as a plugin.');
+    } else {
+      // No new top-level dep: a re-add / version bump of something already there.
+      console.log(`✅ Installed ${spec}. No new plugin was enabled (it may already be installed).`);
+    }
     console.log('Run `b4m plugin list` to see installed plugins and their enabled state.');
     return;
   }
