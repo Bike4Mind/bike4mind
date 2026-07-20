@@ -3759,6 +3759,7 @@ function CliApp() {
       commands={allCommands}
       config={state.config}
       availableModels={state.availableModels}
+      pluginDescriptors={state.pluginDescriptors}
       onSaveConfig={handleSaveConfig}
       prefillInput={state.prefillInput}
       onPrefillConsumed={() => {
