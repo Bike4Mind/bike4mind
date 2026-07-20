@@ -30,7 +30,7 @@ describe('feedback update authorization (CASL class-vs-instance)', () => {
     expect(abilityFor({ id: 'owner1' }).can('update', feedback)).toBe(true);
   });
 
-  it("denies a stranger updating someone else's feedback (instance check)", () => {
+  it('denies a stranger updating someone else\'s feedback (instance check)', () => {
     expect(abilityFor({ id: 'stranger' }).can('update', feedback)).toBe(false);
   });
 
