@@ -25,6 +25,7 @@ import {
   usageEventRepository,
   organizationRepository,
   agentRepository,
+  userApiKeyRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
@@ -287,6 +288,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
+            // Per-key spend metering (spend-cap enforcement). NOT the provider-LLM
+            // key repo above (apiKeys) - this one holds the embed UserApiKey docs.
+            userApiKeys: userApiKeyRepository,
           },
           apiKeyInfo: { keyId: ctx.keyId, keyName: 'embed' },
           // Bill the owner org's pool (ownerType: Organization).

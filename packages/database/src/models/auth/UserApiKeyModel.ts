@@ -29,6 +29,8 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.findOne({ _id: id, userId }).exec();
   }
 
+  // Must stay a per-path $set (never a whole-subdoc $set), or it would clobber
+  // usage.totalSpendCredits, which only incrementSpend may write.
   async updateUsage(id: string, usage: Partial<IUserApiKeyDocument['usage']>) {
     await this.model.updateOne(
       { _id: id },
@@ -42,6 +44,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
         },
       }
     );
+  }
+
+  async incrementSpend(id: string, credits: number) {
+    // Reject NaN/Infinity/<=0: $inc coerces NaN to 0 silently, and a negative
+    // amount would corrupt the accumulator. Atomic $inc is safe under
+    // concurrent streams (no read-modify-write).
+    if (!Number.isFinite(credits) || credits <= 0) return;
+    await this.model.updateOne({ _id: id }, { $inc: { 'usage.totalSpendCredits': credits } });
   }
 
   async updateLastUsed(id: string) {
@@ -132,6 +142,8 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
       lastRequest: { type: Date },
       requestsToday: { type: Number, default: 0 },
       requestsThisMinute: { type: Number, default: 0 },
+      // Cumulative settled spend in credits; written only by incrementSpend ($inc).
+      totalSpendCredits: { type: Number, default: 0 },
     },
     // Overwatch ingest: product this key is bound to (required when scopes includes OVERWATCH_INGEST_WRITE)
     productId: { type: String },

@@ -138,3 +138,72 @@ describe('executeCompletion - unconditional usage metering (alwaysRecordUsage)',
     expect(usageEvents.record).not.toHaveBeenCalled();
   });
 });
+
+describe('executeCompletion - per-key spend accumulation (spend cap)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    enforceCredits = true;
+  });
+
+  function buildDbWithUserApiKeys() {
+    const built = buildDb();
+    const incrementSpend = vi.fn().mockResolvedValue(undefined);
+    return {
+      db: { ...built.db, userApiKeys: { incrementSpend } as never },
+      usageEvents: built.usageEvents,
+      incrementSpend,
+    };
+  }
+
+  it('increments per-key spend once with the settled credit amount', async () => {
+    const { db, incrementSpend } = buildDbWithUserApiKeys();
+
+    await executeCompletion({ ...baseParams, db, alwaysRecordUsage: true });
+
+    expect(incrementSpend).toHaveBeenCalledTimes(1);
+    expect(incrementSpend).toHaveBeenCalledWith('k1', 10);
+  });
+
+  it('increments per-key spend even when enforceCredits is off (real cost, while creditsCharged records 0)', async () => {
+    enforceCredits = false;
+    const { db, usageEvents, incrementSpend } = buildDbWithUserApiKeys();
+
+    await executeCompletion({ ...baseParams, db, alwaysRecordUsage: true });
+
+    // The cap must trip on actual usage cost regardless of the platform debit
+    // toggle - an intentional divergence from UsageEvent.creditsCharged.
+    expect(incrementSpend).toHaveBeenCalledWith('k1', 10);
+    expect(usageEvents.record).toHaveBeenCalledWith(expect.objectContaining({ creditsCharged: 0 }));
+  });
+
+  it('does not increment when the caller did not wire db.userApiKeys (non-embed paths)', async () => {
+    const { db } = buildDb();
+
+    await expect(executeCompletion({ ...baseParams, db, alwaysRecordUsage: true })).resolves.toBeUndefined();
+  });
+
+  it('does not increment without apiKeyInfo (JWT/web-chat completions)', async () => {
+    const { db, incrementSpend } = buildDbWithUserApiKeys();
+
+    await executeCompletion({ ...baseParams, apiKeyInfo: undefined, db });
+
+    expect(incrementSpend).not.toHaveBeenCalled();
+  });
+
+  it('does not increment when the model cannot be priced (modelInfo undefined)', async () => {
+    enforceCredits = false;
+    const { db, incrementSpend } = buildDbWithUserApiKeys();
+
+    await executeCompletion({ ...baseParams, model: 'model-not-in-catalog', db, alwaysRecordUsage: true });
+
+    expect(incrementSpend).not.toHaveBeenCalled();
+  });
+
+  it('is fail-open: a rejected increment does not fail the completion', async () => {
+    const { db, incrementSpend } = buildDbWithUserApiKeys();
+    incrementSpend.mockRejectedValueOnce(new Error('mongo down'));
+
+    await expect(executeCompletion({ ...baseParams, db, alwaysRecordUsage: true })).resolves.toBeUndefined();
+    expect(incrementSpend).toHaveBeenCalledTimes(1);
+  });
+});

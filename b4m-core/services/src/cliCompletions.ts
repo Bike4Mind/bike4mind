@@ -12,6 +12,7 @@ import {
   IOrganizationDocument,
   IOrganizationRepository,
   IUsageEventRepository,
+  IUserApiKeyRepository,
   IUserRepository,
   type CompletionSource,
 } from '@bike4mind/common';
@@ -66,6 +67,12 @@ export interface CompletionParams {
     usageEvents?: IUsageEventRepository;
     /** Required only when `billingOrganizationId` is set (org-billed API keys). */
     organizations?: IOrganizationRepository;
+    /**
+     * Wire only for API-key-authenticated paths that meter per-key spend (the
+     * embed route). When present with `apiKeyInfo.keyId`, settled credits are
+     * accumulated on the key via incrementSpend for spend-cap enforcement.
+     */
+    userApiKeys?: IUserApiKeyRepository;
   };
   /**
    * API key information if authenticated via API key
@@ -544,5 +551,29 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // Only the embed path opts in (alwaysRecordUsage) - legacy callers are untouched.
   if (modelInfo && params.alwaysRecordUsage && !usageRecorded) {
     recordUsageEvent(enforceCredits ? finalCredits : 0);
+  }
+
+  // A model missing from the catalog computes no cost, so per-key spend cannot
+  // accumulate and a spend cap cannot trip - same blind spot as metering. Warn so
+  // a mis-configured embed agent does not silently escape its cap.
+  if (!modelInfo && params.alwaysRecordUsage && apiKeyInfo?.keyId) {
+    logger?.warn?.('[CLI_CREDITS] Model missing from catalog - per-key spend not metered', {
+      keyId: apiKeyInfo.keyId,
+      model,
+    });
+  }
+
+  // Per-key cumulative spend for spend-cap enforcement. Increments by the SAME
+  // stochastic settlement value as the ledger adjustment and UsageEvent above, so
+  // the per-key total reconciles with what was charged. Deliberately independent
+  // of enforceCredits: the cap must trip on real usage cost even when the platform
+  // toggle is off (the normal embed case). Fail-open: the completion already
+  // streamed, so a lost increment (slight under-count) beats breaking the response.
+  if (modelInfo && apiKeyInfo?.keyId && db.userApiKeys && finalCredits > 0) {
+    try {
+      await db.userApiKeys.incrementSpend(apiKeyInfo.keyId, finalCredits);
+    } catch (err) {
+      logger?.warn?.('[CLI_CREDITS] Failed to increment per-key spend', { keyId: apiKeyInfo.keyId, err });
+    }
   }
 }

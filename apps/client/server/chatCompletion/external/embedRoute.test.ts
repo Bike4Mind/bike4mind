@@ -23,6 +23,7 @@ vi.mock('@bike4mind/services', () => ({
 
 const mockAgentFindById = vi.hoisted(() => vi.fn());
 const mockOrgFindById = vi.hoisted(() => vi.fn());
+const mockUserApiKeyRepository = vi.hoisted(() => ({ incrementSpend: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
@@ -33,6 +34,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
   agentRepository: { findById: mockAgentFindById },
+  userApiKeyRepository: mockUserApiKeyRepository,
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
@@ -139,6 +141,14 @@ describe('POST /api/embed/chat', () => {
 
     // No agent internals leak into the stream.
     expect(text).not.toContain('AGENT PERSONA PROMPT');
+  });
+
+  it('wires the UserApiKey repo into executeCompletion for per-key spend metering', async () => {
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.db.userApiKeys).toBe(mockUserApiKeyRepository);
+    expect(params.apiKeyInfo).toEqual({ keyId: 'key-1', keyName: 'embed' });
   });
 
   it('rejects an invalid/missing embed key with 401', async () => {

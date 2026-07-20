@@ -39,6 +39,12 @@ export interface IUserApiKeyUsage {
   lastRequest?: Date;
   requestsToday: number;
   requestsThisMinute: number;
+  /**
+   * Cumulative settled spend in credits, accumulated atomically per completion.
+   * The counter `spendCap` (IUserApiKey) is enforced against. Written only via
+   * IUserApiKeyRepository.incrementSpend, never via updateUsage.
+   */
+  totalSpendCredits?: number;
 }
 
 export interface IUserApiKeyBaseline {
@@ -146,6 +152,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
+  /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
+  incrementSpend: (id: string, credits: number) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
