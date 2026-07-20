@@ -124,7 +124,16 @@ function findToolProblem(module: ICliFeatureModule): string | null {
       return `tool '${schema.name}' is missing a string toolSchema.description`;
     }
     const params = schema.parameters as { type?: unknown; properties?: unknown } | undefined;
-    if (!params || params.type !== 'object' || typeof params.properties !== 'object' || params.properties === null) {
+    // properties must be a plain object; an array is typeof 'object' but the
+    // provider backend rejects it, so exclude it here to keep the load-time
+    // probe from passing a schema that 400s at first invocation.
+    if (
+      !params ||
+      params.type !== 'object' ||
+      typeof params.properties !== 'object' ||
+      params.properties === null ||
+      Array.isArray(params.properties)
+    ) {
       return `tool '${schema.name}' has invalid parameters (needs { type: 'object', properties })`;
     }
   }

@@ -20,9 +20,27 @@ export class FeatureModuleRegistry {
     this.modules.push(module);
   }
 
+  /** Run a per-module accessor, skipping (with a warning) any module that throws. */
+  private collectPerModule<T>(what: string, fn: (m: ICliFeatureModule) => T[]): T[] {
+    // The load-time probe (findModuleProblem) catches methods that throw on the
+    // first call, but these accessors run on every render / rebuild, so a
+    // method that diverges later must not crash the caller either.
+    const out: T[] = [];
+    for (const module of this.modules) {
+      try {
+        out.push(...fn(module));
+      } catch (error) {
+        logger.warn(
+          `[feature:${module.name}] ${what} threw: ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
+    }
+    return out;
+  }
+
   /** Collect all tools from all registered modules */
   getAllTools(): ICompletionOptionTools[] {
-    return this.modules.flatMap(m => m.getTools());
+    return this.collectPerModule('getTools', m => m.getTools());
   }
 
   /** Get all tool names from all registered modules */
@@ -32,7 +50,9 @@ export class FeatureModuleRegistry {
 
   /** Build combined system prompt section from all modules */
   getSystemPromptSections(): string {
-    const sections = this.modules.map(m => m.getSystemPromptSection()).filter(s => s.length > 0);
+    const sections = this.collectPerModule('getSystemPromptSection', m => [m.getSystemPromptSection()]).filter(
+      s => s.length > 0
+    );
 
     return sections.length > 0 ? '\n\n' + sections.join('\n\n') : '';
   }
@@ -55,7 +75,7 @@ export class FeatureModuleRegistry {
 
   /** Collect all slash commands from all registered modules */
   getAllCommands(): FeatureCommand[] {
-    return this.modules.flatMap(m => m.getCommands?.() ?? []);
+    return this.collectPerModule('getCommands', m => m.getCommands?.() ?? []);
   }
 
   /** Try to execute a slash command. Returns true if handled. */

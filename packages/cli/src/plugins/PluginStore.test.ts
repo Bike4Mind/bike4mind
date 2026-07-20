@@ -129,7 +129,7 @@ describe('PluginStore.discover', () => {
 
     const [descriptor] = await store.discover();
     expect(descriptor.valid).toBe(false);
-    expect((descriptor as { reason: string }).reason).toContain('escapes');
+    expect((descriptor as { reason: string }).reason).toContain('inside the package');
   });
 
   it('rejects absolute entry paths', async () => {
@@ -137,7 +137,15 @@ describe('PluginStore.discover', () => {
 
     const [descriptor] = await store.discover();
     expect(descriptor.valid).toBe(false);
-    expect((descriptor as { reason: string }).reason).toContain('escapes');
+    expect((descriptor as { reason: string }).reason).toContain('inside the package');
+  });
+
+  it.each(['.', './'])('rejects an entry that resolves to the package directory itself (%s)', async entry => {
+    await makePkg('b4m-plugin-dir', { manifest: { entry } });
+
+    const [descriptor] = await store.discover();
+    expect(descriptor.valid).toBe(false);
+    expect((descriptor as { reason: string }).reason).toContain('inside the package');
   });
 
   it('rejects a plugin claiming a reserved built-in configKey', async () => {

@@ -96,6 +96,7 @@ describe('findModuleProblem', () => {
     ['empty parameters', {}],
     ['wrong type', { type: 'array', properties: {} }],
     ['missing properties', { type: 'object' }],
+    ['array properties', { type: 'object', properties: [] }],
   ])('flags a tool with %s', (_label, parameters) => {
     const tool = { toolFn: () => {}, toolSchema: { name: 'x', description: 'd', parameters } };
     expect(findModuleProblem(makeModule({ getTools: () => [tool] }))).toContain('parameters');

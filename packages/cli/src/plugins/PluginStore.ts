@@ -228,12 +228,15 @@ export class PluginStore {
     // The entry must resolve inside the package: reject ../ traversal and
     // absolute paths so a manifest can't point the loader outside its own dir.
     const entryAbsPath = path.resolve(packageDir, manifest.entry);
-    if (entryAbsPath !== packageDir && !entryAbsPath.startsWith(packageDir + path.sep)) {
+    if (!entryAbsPath.startsWith(packageDir + path.sep)) {
+      // Must be a file strictly inside the package. Rejecting entryAbsPath ===
+      // packageDir (entry '.'/'./ ') too: importing the dir would fall back to
+      // the package's own main/exports, making the declared entry advisory.
       return {
         valid: false,
         name,
         packageDir,
-        reason: `b4m-plugin.entry escapes the package directory: ${manifest.entry}`,
+        reason: `b4m-plugin.entry must resolve to a file inside the package: ${manifest.entry}`,
       };
     }
 

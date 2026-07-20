@@ -58,6 +58,57 @@ describe('FeatureModuleRegistry fault isolation', () => {
     expect(good).toHaveBeenCalled();
   });
 
+  it('getAllTools isolates a module whose getTools throws and keeps the rest', () => {
+    const registry = new FeatureModuleRegistry();
+    registry.register(
+      mod('bad', {
+        getTools: () => {
+          throw new Error('tools boom');
+        },
+      })
+    );
+    registry.register(
+      mod('good', {
+        getTools: () => [
+          {
+            toolFn: async () => 'ok',
+            toolSchema: { name: 'good_tool', description: 'd', parameters: { type: 'object', properties: {} } },
+          },
+        ],
+      })
+    );
+    expect(() => registry.getAllTools()).not.toThrow();
+    expect(registry.getAllToolNames()).toEqual(['good_tool']);
+  });
+
+  it('getSystemPromptSections isolates a throwing module', () => {
+    const registry = new FeatureModuleRegistry();
+    registry.register(
+      mod('bad', {
+        getSystemPromptSection: () => {
+          throw new Error('prompt boom');
+        },
+      })
+    );
+    registry.register(mod('good', { getSystemPromptSection: () => 'good section' }));
+    expect(() => registry.getSystemPromptSections()).not.toThrow();
+    expect(registry.getSystemPromptSections()).toContain('good section');
+  });
+
+  it('getAllCommands isolates a module whose getCommands throws', () => {
+    const registry = new FeatureModuleRegistry();
+    registry.register(
+      mod('bad', {
+        getCommands: () => {
+          throw new Error('cmds boom');
+        },
+      })
+    );
+    registry.register(mod('good', { getCommands: () => [{ name: 'g', description: '', execute: () => {} }] }));
+    expect(() => registry.getAllCommands()).not.toThrow();
+    expect(registry.getAllCommands().map(c => c.name)).toEqual(['g']);
+  });
+
   it('executeCommand swallows a throwing command but still reports it handled', () => {
     const registry = new FeatureModuleRegistry();
     registry.register(
