@@ -2093,9 +2093,11 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         <ModalDialog
           data-testid="model-details-dialog"
           sx={{
-            width: isMobile ? '100vw' : 'min(640px, 92vw)',
+            // Image models render a 2-column settings grid with per-field info
+            // icons; give them a bit more room so labels don't squish.
+            width: isMobile ? '100vw' : isImageModel(model) ? 'min(720px, 94vw)' : 'min(640px, 92vw)',
             height: isMobile ? '100dvh' : 'auto',
-            maxWidth: isMobile ? '100vw' : '92vw',
+            maxWidth: isMobile ? '100vw' : isImageModel(model) ? '94vw' : '92vw',
             maxHeight: isMobile ? '100dvh' : '85vh',
             margin: 0,
             borderRadius: isMobile ? 0 : 'lg',
