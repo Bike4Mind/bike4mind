@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { parseEmbedOrigin, isOriginUnderHost, EmbedOriginsSchema, EMBED_ORIGINS_MAX } from './publishedArtifact';
+import {
+  parseEmbedOrigin,
+  isOriginUnderHost,
+  isOriginPermitted,
+  EmbedOriginsSchema,
+  EMBED_ORIGINS_MAX,
+} from './publishedArtifact';
 
 describe('parseEmbedOrigin', () => {
   it('accepts and canonicalizes an exact https origin', () => {
@@ -48,6 +54,34 @@ describe('isOriginUnderHost', () => {
     expect(isOriginUnderHost('https://example.com', 'app.bike4mind.com')).toBe(false);
     expect(isOriginUnderHost('https://notapp.bike4mind.com', 'app.bike4mind.com')).toBe(false);
     expect(isOriginUnderHost('https://app.bike4mind.com.evil.io', 'app.bike4mind.com')).toBe(false);
+  });
+});
+
+describe('isOriginPermitted', () => {
+  const allow = ['https://example.com', 'https://app.acme.io:8443'];
+
+  it('permits an exact (case/format-normalized) origin in the allow-list', () => {
+    expect(isOriginPermitted('https://example.com', allow)).toBe(true);
+    expect(isOriginPermitted('  HTTPS://Example.com/  ', allow)).toBe(true);
+    expect(isOriginPermitted('https://app.acme.io:8443', allow)).toBe(true);
+  });
+
+  it('rejects an origin not in the allow-list', () => {
+    expect(isOriginPermitted('https://evil.com', allow)).toBe(false);
+    expect(isOriginPermitted('https://sub.example.com', allow)).toBe(false); // subdomain is not exact
+    expect(isOriginPermitted('https://example.com:8443', allow)).toBe(false); // port matters
+  });
+
+  it('rejects a malformed or non-https origin', () => {
+    expect(isOriginPermitted('http://example.com', allow)).toBe(false);
+    expect(isOriginPermitted('https://example.com/path', allow)).toBe(false);
+    expect(isOriginPermitted('not-a-url', allow)).toBe(false);
+  });
+
+  it('rejects when the origin is missing or the allow-list is empty/absent', () => {
+    expect(isOriginPermitted(undefined, allow)).toBe(false);
+    expect(isOriginPermitted('https://example.com', [])).toBe(false);
+    expect(isOriginPermitted('https://example.com', undefined)).toBe(false);
   });
 });
 
