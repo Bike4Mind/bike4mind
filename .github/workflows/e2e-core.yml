@@ -52,7 +52,7 @@ env:
 
 jobs:
   e2e-core:
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: E2E Core Tests
     timeout-minutes: 25
     permissions:

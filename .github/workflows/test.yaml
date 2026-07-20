@@ -36,7 +36,7 @@ jobs:
   test:
     needs: check-repository
     if: ${{ needs.check-repository.outputs.should-run == 'true' }}
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     env:
       NODE_OPTIONS: --max-old-space-size=14336
 

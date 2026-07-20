@@ -13,7 +13,7 @@ jobs:
     # Same-repo head only: a fork PR has no preview env and no AWS secret, so the
     # AWS-credentials step would soft-fail. Skip on forks (label is maintainer-added).
     if: github.event.label.name == 'run-e2e' && github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: E2E Tests
     timeout-minutes: 20
     continue-on-error: true
