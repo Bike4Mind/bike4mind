@@ -107,6 +107,7 @@ export const SettingKeySchema = z.enum([
   'EnableBriefcase',
   'EnableBriefcaseDefault',
   'EnableImageTemplates',
+  'EnablePromptBuilder',
   'RapidReplySettings',
   'EnableResearchEngine',
   'EnableResearchEngineDefault',
@@ -1340,6 +1341,7 @@ export const API_SERVICE_GROUPS = {
       { key: 'EnableBriefcase', order: 25 },
       { key: 'EnableBriefcaseDefault', order: 26 },
       { key: 'EnableImageTemplates', order: 27 },
+      { key: 'EnablePromptBuilder', order: 28 },
       { key: 'EnableBmPi', order: 30 },
       { key: 'EnableBmPiDefault', order: 31 },
       { key: 'EnableBmPiJira', order: 32 },
@@ -1651,6 +1653,16 @@ export const settingsMap = {
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 88,
+  }),
+  EnablePromptBuilder: makeBooleanSetting({
+    key: 'EnablePromptBuilder',
+    name: 'Enable Prompt Builder',
+    defaultValue: false,
+    description:
+      'Server-side gate for the guided image prompt builder (chip-based prose assembly + educational tooltips). Off by default; turn on to expose the composer prompt-builder icon and modal. Single master toggle: on = available to all users, no per-user opt-in.',
+    category: 'Experimental',
+    group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
+    order: 89,
   }),
   EnableQuestMaster: makeBooleanSetting({
     key: 'EnableQuestMaster',

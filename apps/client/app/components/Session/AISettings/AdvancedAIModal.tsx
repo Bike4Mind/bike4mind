@@ -89,6 +89,7 @@ import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
+import { IMAGE_SETTING_TOOLTIPS } from './imageSettingTooltips';
 
 const commonInputStyles = (_mode: string) => ({
   width: '120px',
@@ -1230,7 +1231,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title="Enhances prompt quality for better image generation">
+                    <Tooltip title={IMAGE_SETTING_TOOLTIPS.promptEnhancement}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Prompt Upsampling
                       </Typography>
@@ -1255,7 +1256,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title="Controls content filtering: 0=Strictest, 2=Most permissive (hard-capped)">
+                    <Tooltip title={IMAGE_SETTING_TOOLTIPS.safetyTolerance}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
                       </Typography>
@@ -1747,10 +1748,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(model)].defaultSize,
               onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
               options: getAvailableSizes(model).map(s => ({ value: s, label: s })),
+              tooltip: IMAGE_SETTING_TOOLTIPS.size,
             },
           ]),
       {
         label: 'Quality',
+        tooltip: IMAGE_SETTING_TOOLTIPS.quality,
         type: 'select' as const,
         value: quality,
         onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
@@ -1785,7 +1788,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'input' as const,
         value: seed?.toString() ?? '',
         onChange: (value: number | null) => setLLM({ seed: value }),
-        tooltip: 'Set a specific seed for reproducible images (leave empty for random)',
+        tooltip: IMAGE_SETTING_TOOLTIPS.seed,
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
@@ -1822,7 +1825,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: aspect_ratio?.toString() ?? '',
         onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
-        tooltip: 'Aspect ratio (some models only)',
+        tooltip: IMAGE_SETTING_TOOLTIPS.aspectRatio,
         options: [
           { value: '', label: 'Auto' },
           { value: '16:9', label: '16:9' },
