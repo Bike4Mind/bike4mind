@@ -187,7 +187,7 @@ const handler = baseApi().post(async (req, res) => {
  * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
  * artifact, fall back to the artifact's own title attribute.
  */
-function deriveTitle(markdown: string): string {
+export function deriveTitle(markdown: string): string {
   const { artifacts, cleanedContent } = parseArtifactsWithFallback(markdown);
   const firstLine = cleanedContent
     .split('\n')
