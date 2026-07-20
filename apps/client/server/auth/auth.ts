@@ -14,9 +14,9 @@ import { ExtractJwt, Strategy as JwtStrategy } from 'passport-jwt';
 import { PassportSamlConfig, Profile as SamlProfile, Strategy as SamlStrategy } from '@node-saml/passport-saml';
 import nc from 'next-connect';
 import { Logger } from '@bike4mind/observability';
-import { dayjs } from '@bike4mind/common';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from './tokenGenerator';
+import { isRotatedSecretWithinGraceWindow } from './secretRotationGrace';
 import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
@@ -35,9 +35,8 @@ passport.use(
           const jwtSecretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
           let prevSecret = undefined;
 
-          // Grace period: accept the previous key only when JWT_SECRET was rotated within the last
-          // 24 hours. Mirrors the refreshToken endpoint's window so both auth paths agree.
-          if (dayjs(jwtSecretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
+          // Grace period: accept the previous key only within the shared rotation window.
+          if (isRotatedSecretWithinGraceWindow(jwtSecretRotation?.rotatedAt)) {
             prevSecret = jwtSecretRotation?.previousKey;
           }
 

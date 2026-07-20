@@ -30,8 +30,8 @@ import { pickBy } from 'lodash';
 import pLimit from 'p-limit';
 import ability from '../auth/ability';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
+import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { APIGatewayProxyWebsocketEventV2 } from 'aws-lambda';
 import { Resource } from 'sst';
 
@@ -55,8 +55,8 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
 
   const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
   let previousSecret = undefined;
-  // If JWT_SECRET was just recently renewed within 24 hours, allow the user to continue using the old key
-  if (dayjs(secretRotation?.rotatedAt).isBefore(dayjs().add(1, 'day'))) {
+  // Accept the previous key only within the shared rotation grace window.
+  if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
     previousSecret = secretRotation?.previousKey;
   }
   const decoded = authTokenGenerator.verifyToken(accessToken!, previousSecret) as jwt.JwtPayload;
