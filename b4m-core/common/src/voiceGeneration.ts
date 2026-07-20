@@ -19,12 +19,21 @@ export const voiceResponseEncodingSchema = z.enum(['binary', 'base64']);
 
 export type VoiceResponseEncoding = z.infer<typeof voiceResponseEncodingSchema>;
 
-// 4096 is OpenAI's hard per-request cap; ElevenLabs allows more but this keeps a
-// single provider-agnostic contract that never surprises an OpenAI caller.
-export const TTS_MAX_INPUT_CHARS = 4096;
+// Per-provider max input length (characters). OpenAI hard-caps at 4096;
+// ElevenLabs accepts more (model-dependent, up to 10k on multilingual v2). Each
+// vendor service enforces its own limit so no provider is needlessly throttled
+// to another's ceiling.
+export const TTS_MAX_INPUT_CHARS: Record<VoiceGenerationVendor, number> = {
+  openai: 4096,
+  elevenlabs: 10000,
+};
+
+// Absolute ceiling for the shared request schema: the largest any provider
+// accepts. The exact per-provider limit is enforced downstream in each service.
+export const TTS_ABSOLUTE_MAX_INPUT_CHARS = Math.max(...Object.values(TTS_MAX_INPUT_CHARS));
 
 export const ttsRequestSchema = z.object({
-  text: z.string().min(1).max(TTS_MAX_INPUT_CHARS),
+  text: z.string().min(1).max(TTS_ABSOLUTE_MAX_INPUT_CHARS),
   provider: supportedVoiceGenerationVendor.optional(),
   model: z.string().optional(),
   voice: z.string().optional(),

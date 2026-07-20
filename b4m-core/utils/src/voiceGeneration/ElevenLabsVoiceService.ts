@@ -1,9 +1,10 @@
 import axios from 'axios';
-import { VoiceOutputFormat } from '@bike4mind/common';
+import { VoiceOutputFormat, TTS_MAX_INPUT_CHARS } from '@bike4mind/common';
 import { AIVoiceService, CONTENT_TYPE_BY_FORMAT, VoiceSynthesisOptions, VoiceSynthesisResult } from './AIVoiceService';
 
 const BASE_URL = 'https://api.elevenlabs.io/v1/text-to-speech/';
 const DEFAULT_FORMAT: VoiceOutputFormat = 'mp3';
+const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly
@@ -16,6 +17,10 @@ const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>> = {
 
 export class ElevenLabsVoiceService extends AIVoiceService {
   async synthesize(text: string, options: VoiceSynthesisOptions = {}): Promise<VoiceSynthesisResult> {
+    if (text.length > MAX_INPUT_CHARS) {
+      throw new Error(`ElevenLabs TTS input exceeds ${MAX_INPUT_CHARS} characters (got ${text.length})`);
+    }
+
     const voiceId = options.voice;
     if (!voiceId) {
       throw new Error('ElevenLabs TTS requires a voice id');

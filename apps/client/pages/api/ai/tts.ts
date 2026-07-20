@@ -1,5 +1,10 @@
 import { baseApi } from '@server/middlewares/baseApi';
-import { ttsRequestSchema, VoiceGenerationVendor } from '@bike4mind/common';
+import {
+  ttsRequestSchema,
+  TTS_MAX_INPUT_CHARS,
+  UnprocessableEntityError,
+  VoiceGenerationVendor,
+} from '@bike4mind/common';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 
@@ -24,6 +29,13 @@ const handler = baseApi().post(async (req, res) => {
 
   const vendor = provider ?? DEFAULT_PROVIDER;
 
+  const maxChars = TTS_MAX_INPUT_CHARS[vendor];
+  if (text.length > maxChars) {
+    throw new UnprocessableEntityError(
+      `Input exceeds the ${vendor} limit of ${maxChars} characters (got ${text.length})`
+    );
+  }
+
   let resolved;
   try {
     resolved = await resolveTtsProvider({
@@ -39,25 +51,37 @@ const handler = baseApi().post(async (req, res) => {
     throw error;
   }
 
-  const result = await aiVoiceService(vendor, resolved.apiKey, req.logger).synthesize(text, {
-    voice: resolved.voice,
-    model,
-    format,
-    stability,
-    similarityBoost,
-  });
-
-  if (encoding === 'base64') {
-    return res.json({
-      audio: result.audio.toString('base64'),
-      format: result.format,
-      contentType: result.contentType,
+  try {
+    const result = await aiVoiceService(vendor, resolved.apiKey, req.logger).synthesize(text, {
+      voice: resolved.voice,
+      model,
+      format,
+      stability,
+      similarityBoost,
     });
-  }
 
-  res.setHeader('Content-Type', result.contentType);
-  res.setHeader('Content-Length', result.audio.length);
-  return res.send(result.audio);
+    if (encoding === 'base64') {
+      return res.json({
+        audio: result.audio.toString('base64'),
+        format: result.format,
+        contentType: result.contentType,
+      });
+    }
+
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Content-Length', result.audio.length);
+    return res.send(result.audio);
+  } catch (error) {
+    // Pass through client-actionable upstream errors (bad voice/param, invalid
+    // key, rate limit) with a generic body so the provider's raw error text
+    // never leaks; treat everything else as an upstream (502) failure.
+    const status = (error as { status?: number })?.status;
+    if (typeof status === 'number' && status >= 400 && status < 500) {
+      return res.status(status).json({ error: `TTS request rejected by the ${vendor} provider`, provider: vendor });
+    }
+    req.logger.error('TTS synthesis failed', { error, provider: vendor });
+    return res.status(502).json({ error: 'Failed to generate speech', provider: vendor });
+  }
 });
 
 export const config = {

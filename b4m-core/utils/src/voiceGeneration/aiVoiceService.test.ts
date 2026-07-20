@@ -50,6 +50,13 @@ describe('OpenAIVoiceService', () => {
     expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
   });
 
+  it('rejects input longer than the OpenAI 4096-char limit before calling the API', async () => {
+    await expect(aiVoiceService('openai', 'key', logger).synthesize('a'.repeat(4097))).rejects.toThrow(
+      /exceeds 4096 characters/
+    );
+    expect(speechCreate).not.toHaveBeenCalled();
+  });
+
   it('passes through requested voice, model and format', async () => {
     speechCreate.mockResolvedValue({ arrayBuffer: async () => new Uint8Array([9]).buffer });
 
@@ -71,6 +78,13 @@ describe('ElevenLabsVoiceService', () => {
 
   it('requires a voice id', async () => {
     await expect(aiVoiceService('elevenlabs', 'key', logger).synthesize('hi')).rejects.toThrow(/requires a voice id/);
+  });
+
+  it('rejects input longer than the ElevenLabs 10000-char limit before posting', async () => {
+    await expect(
+      aiVoiceService('elevenlabs', 'key', logger).synthesize('a'.repeat(10001), { voice: 'v1' })
+    ).rejects.toThrow(/exceeds 10000 characters/);
+    expect(mockedPost).not.toHaveBeenCalled();
   });
 
   it('rejects an output format ElevenLabs cannot produce', async () => {
