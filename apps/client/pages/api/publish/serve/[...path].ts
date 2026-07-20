@@ -34,7 +34,11 @@ import {
   isAppWrapperHost,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
-import { parseArtifactsWithFallback, type ParsedArtifact } from '@client/app/utils/artifactParser';
+import {
+  parseArtifactsWithFallback,
+  type ParsedArtifact,
+  type ArtifactParseResult,
+} from '@client/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
@@ -359,9 +363,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     // the same isolation the bundle path relies on. Reply-only, and the viewer only emits
     // `?a` for html/svg artifacts, so an out-of-range or non-embeddable index is a 404. The
     // visibility gate already ran above, so this reads only content the caller is authorized for.
-    if (artifact.source.kind === 'reply' && typeof req.query.a === 'string') {
+    // Require a non-empty `a` so `?a=` doesn't coerce to index 0 (Number('') === 0); an empty
+    // value falls through to the normal page render instead.
+    if (artifact.source.kind === 'reply' && typeof req.query.a === 'string' && req.query.a !== '') {
       const idx = Number(req.query.a);
-      const { artifacts } = parseArtifactsWithFallback(artifact.renderedBody ?? '');
+      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '');
       const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
       if (!target || (target.type !== 'html' && target.type !== 'svg')) {
         return res.status(404).json({ error: 'Not found' });
@@ -380,6 +386,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
       res.setHeader('Content-Security-Policy', buildReplyArtifactCsp(req));
       res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
       res.setHeader('X-Content-Type-Options', 'nosniff');
+      // No bumpViewCount here: this sub-document is a sub-resource of the reply page (the iframe),
+      // which already counted the view; counting again would double every framed-artifact view.
       return res.status(200).send(srcdoc);
     }
     if (isFormatRaw) {
@@ -396,6 +404,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     }
     // Base URL this page was reached at, so the embedded-artifact iframes point back to the
     // same route (`/p/r|f/{publicId}` or the `/a/{token}` share) carrying the same authorization.
+    // selfPath + canFrameArtifacts are consumed only by the reply render below; the fabfile branch
+    // of renderViewerPage ignores them (it emits an escaped <pre>, no artifact frames).
     const sourcePrefix = artifact.source.kind === 'reply' ? 'r' : 'f';
     const selfPath = isShare ? `/a/${encodeURIComponent(shareToken)}` : `/p/${sourcePrefix}/${artifact.publicId}`;
     // Whether an embedded artifact can be framed via its `?a=` sub-document. The artifact iframe
@@ -1129,6 +1139,19 @@ function sendRawArtifact(
 }
 
 /**
+ * parseArtifactsWithFallback, but with artifacts in DOCUMENT order. `parseArtifacts` returns them
+ * reverse-sorted by position (a side effect of its back-to-front tag-removal pass), which would
+ * otherwise render a multi-artifact reply bottom-up. Sorting by `startIndex` restores document
+ * order for the common case (explicit `<artifact>` tags share one coordinate space). The viewer
+ * render and the `?a=` sub-document handler BOTH extract via this helper, so an iframe's `?a={i}`
+ * always indexes the same artifact the viewer framed at slot i.
+ */
+function extractViewerArtifacts(body: string): ArtifactParseResult {
+  const result = parseArtifactsWithFallback(body);
+  return { ...result, artifacts: [...result.artifacts].sort((a, b) => a.startIndex - b.startIndex) };
+}
+
+/**
  * Clean a snapshot title for display. A reply that LEADS with an `<artifact ...>` tag was
  * snapshotted with the raw wrapper tag as its title (deriveTitle took the first line); recover
  * a sensible title from the first named embedded artifact, else the neutral fallback. New
@@ -1179,7 +1202,7 @@ function renderViewerPage(
   let contentHtml: string;
   let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
   if (artifact.source.kind === 'reply') {
-    const { artifacts, cleanedContent } = parseArtifactsWithFallback(body);
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body);
     const article = cleanedContent
       ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
       : '';
