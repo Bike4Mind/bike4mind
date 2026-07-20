@@ -1,16 +1,19 @@
 name: E2E Tests (Manual)
 
+# Thin caller for the advisory full suite + nightly run. Posts e2e/smoke. The prep
+# job resolves the test_project dropdown to Playwright args and computes the
+# per-run booleans; the run job calls the shared e2e-run workflow.
+
 on:
   schedule:
-    - cron: '0 2 * * *'  # 2am UTC, 10am SGT
+    - cron: '0 2 * * *'   # 2am UTC, 10am SGT
     - cron: '0 12 * * *'  # 12pm UTC, 8pm SGT
   workflow_dispatch:
     inputs:
       stage:
         description: 'Target environment'
         type: choice
-        options:
-          - dev
+        options: [dev]
         default: dev
       test_project:
         description: 'Specific test to run (leave as "All tests" to run the full suite)'
@@ -40,492 +43,100 @@ on:
         description: 'Tester ID for user isolation (e.g. alice)'
         type: string
         required: false
-      # Internal: set to 'true' only by the deployer's staging-deploy trigger when
-      # REQUIRE_E2E is enabled. Coalesces rapid gate runs to the latest tip; leave
-      # 'false' for manual/scheduled runs (which keep their existing behavior).
       gate_run:
         description: 'Internal: deploy-triggered gate run (leave false for manual runs)'
         type: string
         default: 'false'
         required: false
 
-env:
-  AWS_REGION: us-east-2
-  NODE_VERSION: '24'
-
 jobs:
-  e2e:
+  prep:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: E2E Tests
-    timeout-minutes: 35
-    permissions:
-      contents: read
-      id-token: write
-      # Post the e2e/smoke commit status the prod-promotion console reads (P0-2).
-      statuses: write
-    # Serialize per-stage so an overlapping scheduled + manual run (or two
-    # manual runs) can't stomp each other's global-setup data cleanup.
-    # Gate runs (deploy-triggered) share one group and coalesce to the latest tip
-    # via cancel-in-progress. Manual/scheduled runs keep their exact prior behavior:
-    # per-target group, no cancellation (gate_run is unset -> the else branch).
-    concurrency:
-      group: ${{ inputs.gate_run == 'true' && 'e2e-manual-gate' || format('e2e-manual-{0}', inputs.pr_number || inputs.stage || 'dev') }}
-      cancel-in-progress: ${{ inputs.gate_run == 'true' }}
-
+    outputs:
+      playwright_args:    ${{ steps.resolve.outputs.playwright_args }}
+      stamp_promotable:   ${{ steps.resolve.outputs.stamp_promotable }}
+      show_credits:       ${{ steps.resolve.outputs.show_credits }}
+      trigger_label:      ${{ steps.resolve.outputs.trigger_label }}
+      concurrency_group:  ${{ steps.resolve.outputs.concurrency_group }}
+      cancel_in_progress: ${{ steps.resolve.outputs.cancel_in_progress }}
     steps:
-      - name: Resolve configuration
-        id: config
+      - name: Resolve run parameters
+        id: resolve
         env:
-          # Pass dispatch inputs through env (never interpolate attacker-
-          # influenceable values straight into the shell). pr_number flows into
-          # the SST stage and `sst shell --stage`, so it must be digits-only.
+          TEST_PROJECT: ${{ inputs.test_project }}
           PR_NUMBER: ${{ inputs.pr_number }}
           STAGE_INPUT: ${{ inputs.stage }}
-          PREVIEW_SERVER_DOMAIN: ${{ vars.PREVIEW_SERVER_DOMAIN }}
-          STAGING_SERVER_DOMAIN: ${{ vars.STAGING_SERVER_DOMAIN }}
+          GATE_RUN: ${{ inputs.gate_run }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
-          if [ -n "$PR_NUMBER" ]; then
-            if ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
-              echo "::error::pr_number must be digits-only; got '$PR_NUMBER'"
-              exit 1
-            fi
-            STAGE="pr${PR_NUMBER}"
-            API_URL="https://app.pr${PR_NUMBER}.${PREVIEW_SERVER_DOMAIN}"
-            ENV_LABEL="preview-${PR_NUMBER}"
-          else
-            STAGE="${STAGE_INPUT:-dev}"
-            API_URL="https://app.${STAGING_SERVER_DOMAIN}"
-            ENV_LABEL="Staging"
-          fi
-          echo "stage=$STAGE" >> $GITHUB_OUTPUT
-          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
-          echo "env_label=$ENV_LABEL" >> $GITHUB_OUTPUT
-          echo "Stage: $STAGE"
-          echo "API URL: $API_URL"
-
-      - name: Set trigger label
-        id: trigger
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "label=Run via Dispatch" >> $GITHUB_OUTPUT
-          else
-            echo "label=Run via Schedule" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          submodules: false
-          fetch-depth: 0
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v5
-
-      - name: Cache pnpm dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.pnpm-store
-            node_modules
-            */*/node_modules
-          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pnpm-
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile --recursive
-
-      - name: Build core packages
-        run: pnpm core:build
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v6
-        with:
-          role-to-assume: ${{ secrets.AWS_DEV_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # Capture the SHA currently live on staging BEFORE the suite runs, so a mid-
-      # run staging redeploy can't mislabel it. Source of truth = the newest main
-      # commit whose `staging/deploy` status is success (the same signal the
-      # console's staging gate reads) - resolved via GITHUB_TOKEN, no AWS/SSM.
-      # Only the full-suite dev/staging run stamps the promotable frontier (P0-2):
-      # skip previews and scoped single-project dispatches. Best-effort by design.
-      - name: Resolve tested SHA for e2e/smoke status
-        id: tested_sha
-        if: github.event_name == 'schedule' || (inputs.pr_number == '' && (inputs.test_project == '' || inputs.test_project == 'All tests'))
-        continue-on-error: true
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const owner = 'Bike4Mind', repo = 'bike4mind';
-            const { data: commits } = await github.rest.repos.listCommits({ owner, repo, sha: 'main', per_page: 20 });
-            for (const c of commits) {
-              const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: c.sha });
-              if (st.statuses.some(s => s.context === 'staging/deploy' && s.state === 'success')) {
-                core.setOutput('sha', c.sha);
-                core.info(`Tested staging SHA = ${c.sha} (newest with staging/deploy=success)`);
-                return;
-              }
-            }
-            core.warning('No recent main commit has staging/deploy=success; e2e/smoke status will be skipped.');
-
-      - name: Install Playwright Chromium
-        working-directory: apps/client
-        # Cap the install: the yauzl/Node>=24.16 extraction wedge
-        # (playwright#40724) can hang this step indefinitely, idling to the job
-        # cap. Fail fast instead.
-        timeout-minutes: 8
-        run: npx playwright install chromium --with-deps
-
-      # A staging deploy in flight rotates E2E_CLEANUP_SECRET and swaps the Lambda,
-      # so running e2e against it 401s the create-test-user setup - which then skips
-      # the ENTIRE suite via Playwright's setup-dependency graph (one red, the rest
-      # "did not run"). /api/ping is not enough: CloudFront answers it green all
-      # through a deploy. So gate on the `staging/deploy` commit status: if the
-      # newest commit that has one is still `pending`, a deploy is running - wait it
-      # out. dev/staging only (a preview has its own env). Best-effort: warns +
-      # proceeds on timeout so a stuck status can't hang the job forever.
-      - name: Wait for staging deploy to settle (no deploy in flight)
-        if: github.event_name == 'schedule' || inputs.pr_number == ''
-        continue-on-error: true
-        uses: actions/github-script@v8
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const owner = 'Bike4Mind', repo = 'bike4mind';
-            const deployInFlight = async () => {
-              const { data: commits } = await github.rest.repos.listCommits({ owner, repo, sha: 'main', per_page: 10 });
-              for (const c of commits) {
-                const { data: st } = await github.rest.repos.getCombinedStatusForRef({ owner, repo, ref: c.sha });
-                const s = st.statuses.find(x => x.context === 'staging/deploy');
-                if (!s) continue;              // no status on this commit yet; check older
-                return s.state === 'pending';  // the newest commit WITH a status decides
-              }
-              return false;
-            };
-            for (let i = 0; i < 30; i++) {     // up to ~10 min
-              if (!(await deployInFlight())) { core.info('No staging deploy in flight; proceeding.'); return; }
-              core.info(`Staging deploy in progress; waiting 20s (attempt ${i + 1}/30)...`);
-              await new Promise(r => setTimeout(r, 20000));
-            }
-            core.warning('Staging still deploying after ~10 min; proceeding anyway (the health probe below is the backstop).');
-
-      - name: Wait for deployment to be healthy
-        env:
-          # Probe /api/ping (a real Lambda route) rather than the bare origin:
-          # CloudFront can answer the apex with 200/302 before the function is
-          # warm, so a bare-origin check passes against a not-yet-ready deploy.
-          TARGET_URL: ${{ steps.config.outputs.api_url }}/api/ping
-        run: |
-          echo "Waiting for $TARGET_URL to be healthy..."
-          for i in $(seq 1 30); do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$TARGET_URL" || true)
-            if [ "$STATUS" = "200" ]; then
-              echo "Deployment is healthy (HTTP $STATUS) after $((i * 10))s"
-              exit 0
-            fi
-            echo "Attempt $i: HTTP $STATUS — retrying in 10s..."
-            sleep 10
-          done
-          echo "Deployment did not become healthy within 300s"
-          exit 1
-
-      - name: Run E2E tests
-        id: e2e
-        env:
-          API_URL: ${{ steps.config.outputs.api_url }}
-          # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
-          # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
-          E2E_TEST_ID: ${{ inputs.e2e_test_id }}
-          SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
-          AI_LATENCY_RUN: 'false'
-          PW_WORKERS: '3'
-          CI: 'true'
-          TEST_PROJECT: ${{ inputs.test_project }}
-        run: |
-          set -o pipefail
-          # Scheduled runs (no input) and "All tests" run the full suite. Otherwise scope
-          # to a single test. Each option maps to a Playwright --project (whose setup
-          # dependency chain is pulled in automatically, so the isolated test user/auth
-          # is still created). Auth and Signup share the "unauthenticated" project, so
-          # they additionally pass a spec-file filter to run just that one file.
-          PW_ARGS=""
+          # Map the dropdown to Playwright args (whole projects; Auth/Signup add a
+          # spec-file filter). Scheduled runs have no test_project -> full suite.
           case "$TEST_PROJECT" in
-            ""|"All tests")    PW_ARGS="" ;;
-            "Auth")            PW_ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
-            "Signup")          PW_ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
-            "Admin")           PW_ARGS="--project=admin" ;;
-            "Notebook")        PW_ARGS="--project=notebook" ;;
-            "Prompts")         PW_ARGS="--project=prompts" ;;
-            "Notebook Files")  PW_ARGS="--project=notebook-files" ;;
-            "Projects")        PW_ARGS="--project=projects" ;;
-            "Agents")          PW_ARGS="--project=agents" ;;
-            "Image Generation") PW_ARGS="--project=image-gen" ;;
-            "Profile")         PW_ARGS="--project=profile" ;;
-            "Tavern")          PW_ARGS="--project=tavern" ;;
-            "Search")          PW_ARGS="--project=search" ;;
-            "Data Lake")       PW_ARGS="--project=data-lake" ;;
-            "Skills")          PW_ARGS="--project=skills" ;;
-            *)                 echo "Unknown test selection: '$TEST_PROJECT' — running full suite" ;;
+            ""|"All tests")     ARGS="" ;;
+            "Auth")             ARGS="--project=unauthenticated e2e/auth.spec.ts" ;;
+            "Signup")           ARGS="--project=unauthenticated e2e/signup.spec.ts" ;;
+            "Admin")            ARGS="--project=admin" ;;
+            "Notebook")         ARGS="--project=notebook" ;;
+            "Prompts")          ARGS="--project=prompts" ;;
+            "Notebook Files")   ARGS="--project=notebook-files" ;;
+            "Projects")         ARGS="--project=projects" ;;
+            "Agents")           ARGS="--project=agents" ;;
+            "Image Generation") ARGS="--project=image-gen" ;;
+            "Profile")          ARGS="--project=profile" ;;
+            "Tavern")           ARGS="--project=tavern" ;;
+            "Search")           ARGS="--project=search" ;;
+            "Data Lake")        ARGS="--project=data-lake" ;;
+            "Skills")           ARGS="--project=skills" ;;
+            *)                  ARGS="" ; echo "Unknown selection '$TEST_PROJECT' — running full suite" ;;
           esac
-          [ -n "$PW_ARGS" ] && echo "Running specific test: $TEST_PROJECT ($PW_ARGS)"
-          pnpm sst shell --stage ${{ steps.config.outputs.stage }} -- pnpm --filter client exec playwright test $PW_ARGS 2>&1 | tee apps/client/playwright-output.txt
+          echo "playwright_args=$ARGS" >> "$GITHUB_OUTPUT"
 
-      - name: Upload Playwright report
-        if: always()
-        uses: actions/upload-artifact@v6
-        with:
-          name: playwright-report-${{ steps.config.outputs.stage }}${{ inputs.e2e_test_id && format('-{0}', inputs.e2e_test_id) || '' }}
-          path: apps/client/playwright-report/
-          retention-days: 7
-
-      - name: Parse test results
-        id: results
-        if: always()
-        run: |
-          JSON_FILE="apps/client/pw-results.json"
-
-          if [ ! -f "$JSON_FILE" ]; then
-            echo "passed=0" >> $GITHUB_OUTPUT
-            echo "failed=0" >> $GITHUB_OUTPUT
-            echo "skipped=0" >> $GITHUB_OUTPUT
-            echo "not_started=0" >> $GITHUB_OUTPUT
-            echo "real_failed=0" >> $GITHUB_OUTPUT
-            echo "setup_failed=0" >> $GITHUB_OUTPUT
-            echo "total=0" >> $GITHUB_OUTPUT
-            echo "spec_summary=_No results available_" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          FAILED=$(jq '.stats.unexpected' "$JSON_FILE")
-          echo "failed=$FAILED" >> $GITHUB_OUTPUT
-
-          # A spec "ran" if at least one of its test entries has non-empty results.
-          # Tests that were registered but never started (global timeout / worker killed)
-          # appear in pw-results.json with ok:true but results:[] — the old .ok? logic
-          # incorrectly counted those as passed. We now gate on actual execution evidence.
-          SPEC_LINES=$(jq -r '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            . as $suite |
-            ($suite.title | gsub("e2e/"; "") | gsub("\\.spec\\.ts$"; "")) as $raw |
-            ([$raw | split("-")[] | split("_")[] | (.[0:1] | ascii_upcase) + .[1:]] | join(" ")) as $name |
-            ([.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0))] | length) as $ran |
-            ([.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok == true)] | length) as $passed |
-            ([.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
-              select(all(.tests[]?; (.results? // []) | length == 0))] | length) as $not_run |
-            (if $ran == 0 and $not_run > 0 then ":no_entry_sign:"
-             elif $ran > 0 and $ran - $passed > 0 then ":red_circle:"
-             else ":large_green_circle:" end) +
-            " " + $name + ": " + ($passed|tostring) + "/" + ($ran|tostring) +
-            (if $not_run > 0 then " (" + ($not_run|tostring) + " did not run)" else "" end)
-          ] | join("\\n")' "$JSON_FILE")
-          echo "spec_summary=$SPEC_LINES" >> $GITHUB_OUTPUT
-
-          # Count only specs that actually executed (results non-empty) — excludes
-          # unstarted tests that pw-results.json still records with ok:true.
-          PASSED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok == true)] | length
-          ] | add // 0' "$JSON_FILE")
-          TOTAL_WITH_OK=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0))] | length
-          ] | add // 0' "$JSON_FILE")
-          SKIPPED=$(( TOTAL_WITH_OK - PASSED - FAILED ))
-          # Clamp to 0 — FAILED includes setup failures not in TOTAL_WITH_OK
-          [ "$SKIPPED" -lt 0 ] && SKIPPED=0
-          NOT_STARTED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests") and ((.tests | length) > 0)) |
-              select(all(.tests[]?; (.results? // []) | length == 0))] | length
-          ] | add // 0' "$JSON_FILE")
-          # Split failures into real-test vs setup: a spec that ran (non-empty results) and
-          # did NOT pass (.ok != true), scoped to non-setup files vs setup files. Lets the
-          # commit-status step leave e2e/smoke *missing* (not a sticky red) when the only
-          # failure is a global-setup infra flake (e.g. create-test-user 401), while a genuine
-          # test failure still posts `failure`. Mirrors the PASSED computation, inverted.
-          REAL_FAILED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$") | not) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok != true)] | length
-          ] | add // 0' "$JSON_FILE")
-          SETUP_FAILED=$(jq '[
-            .suites[] |
-            select(.title | test("\\.setup\\.ts$")) |
-            [.. | objects | select(has("ok") and has("tests")) |
-              select(any(.tests[]?; (.results? // []) | length > 0)) |
-              select(.ok != true)] | length
-          ] | add // 0' "$JSON_FILE")
-          TOTAL=$((PASSED + SKIPPED + FAILED))
-          echo "passed=$PASSED" >> $GITHUB_OUTPUT
-          echo "skipped=$SKIPPED" >> $GITHUB_OUTPUT
-          echo "not_started=$NOT_STARTED" >> $GITHUB_OUTPUT
-          echo "real_failed=$REAL_FAILED" >> $GITHUB_OUTPUT
-          echo "setup_failed=$SETUP_FAILED" >> $GITHUB_OUTPUT
-          echo "total=$TOTAL" >> $GITHUB_OUTPUT
-
-      - name: Post e2e/smoke commit status (P0-2 console gate)
-        # Stamp the tested staging SHA with the full-suite result so the prod-
-        # promotion console can read a per-commit e2e signal. `success` only when
-        # nothing failed, nothing was left unstarted, and tests actually ran.
-        # A setup-only infra flake leaves the status MISSING (not `failure`) so a
-        # transient blip doesn't stick a red on the SHA - see the guard below.
-        # Best-effort: never fails the e2e run.
-        if: always() && steps.tested_sha.outputs.sha != ''
-        continue-on-error: true
-        uses: actions/github-script@v8
-        env:
-          TESTED_SHA: ${{ steps.tested_sha.outputs.sha }}
-          FAILED: ${{ steps.results.outputs.failed }}
-          NOT_STARTED: ${{ steps.results.outputs.not_started }}
-          REAL_FAILED: ${{ steps.results.outputs.real_failed }}
-          SETUP_FAILED: ${{ steps.results.outputs.setup_failed }}
-          PASSED: ${{ steps.results.outputs.passed }}
-          TOTAL: ${{ steps.results.outputs.total }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        with:
-          github-token: ${{ github.token }}
-          script: |
-            const sha = process.env.TESTED_SHA;
-            const total = Number(process.env.TOTAL || '0');
-            if (total === 0) {
-              core.warning('No e2e results parsed; skipping e2e/smoke status (leaves it missing = not promotable).');
-              return;
-            }
-            // Setup/infra flake (e.g. create-test-user 401): the only failures are in global
-            // setup and no actual test failed. Leave e2e/smoke MISSING (still not promotable,
-            // but re-seedable by a later run) rather than a sticky `failure` red on the SHA.
-            const realFailed = Number(process.env.REAL_FAILED || '0');
-            const setupFailed = Number(process.env.SETUP_FAILED || '0');
-            if (realFailed === 0 && setupFailed > 0) {
-              core.warning(`Setup failed (${setupFailed}) with no test failures; skipping e2e/smoke status (leaves it missing = re-seedable).`);
-              return;
-            }
-            const ok = process.env.FAILED === '0' && process.env.NOT_STARTED === '0';
-            const state = ok ? 'success' : 'failure';
-            const desc = (ok
-              ? `Full e2e suite passed (${process.env.PASSED}/${total})`
-              : `Full e2e suite: ${process.env.FAILED} failed, ${process.env.NOT_STARTED} not started`).slice(0, 140);
-            await github.rest.repos.createCommitStatus({
-              owner: 'Bike4Mind', repo: 'bike4mind', sha,
-              state, context: 'e2e/smoke', target_url: process.env.RUN_URL, description: desc,
-            });
-            core.info(`Posted e2e/smoke=${state} on ${sha.slice(0, 7)}`);
-
-      - name: Parse credits data
-        id: credits
-        if: always()
-        env:
-          TEST_PROJECT: ${{ inputs.test_project }}
-        run: |
-          # Credits data is produced only by the notebook spec. Show the AI Credits
-          # block only when the notebook spec ran: the full suite (scheduled run or
-          # "All tests") or an explicit "Notebook" selection. Hide it for any other
-          # single-test run (an empty credits_block omits the block from the payload).
-          case "$TEST_PROJECT" in
-            ""|"All tests"|"Notebook") SHOW_CREDITS=1 ;;
-            *) SHOW_CREDITS=0 ;;
-          esac
-          if [ "$SHOW_CREDITS" != "1" ]; then
-            echo "credits_block=" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          CREDITS_FILE="apps/client/e2e/fixtures/credits.json"
-          if [ ! -f "$CREDITS_FILE" ]; then
-            CREDITS_LINES="_No credits data available_"
+          # Stamp e2e/smoke only for the promotable frontier: scheduled, or a
+          # dev/staging All-tests dispatch. Skip previews and scoped single tests.
+          if [ "$EVENT_NAME" = "schedule" ] || { [ -z "$PR_NUMBER" ] && { [ -z "$TEST_PROJECT" ] || [ "$TEST_PROJECT" = "All tests" ]; }; }; then
+            echo "stamp_promotable=true" >> "$GITHUB_OUTPUT"
           else
-            CREDITS_LINES=$(jq -r '[.[] |
-              (.avgCredits == null) as $missing |
-              (.avgCredits != null and .avgCredits > 30) as $exceeded |
-              "• " + .model + " — credits: " + ((.avgCredits // "Credit Used data unavailable (chip missing or prior failure).") | tostring) + " " + (if $missing then ":x:" elif $exceeded then ":x: _(exceeds threshold of 30)_" else ":white_check_mark:" end)
-            ] | join("\\n")' "$CREDITS_FILE")
+            echo "stamp_promotable=false" >> "$GITHUB_OUTPUT"
           fi
-          # Emit the AI Credits Slack block as a JSON fragment with a leading comma so it
-          # slots into the blocks array between the summary and actions blocks.
-          echo "credits_block=,{\"type\":\"section\",\"text\":{\"type\":\"mrkdwn\",\"text\":\"*💳 AI Credits*\\n${CREDITS_LINES}\"}}" >> "$GITHUB_OUTPUT"
 
-      - name: Notify Slack
-        if: always()
-        uses: slackapi/slack-github-action@v2
-        with:
-          webhook: ${{ secrets.SLACK_E2E_WEBHOOK_URL }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "Playwright E2E Tests (${{ steps.trigger.outputs.label }}) — ${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: All tests passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Passed but some specs did not start' || ':x: Tests failed' }}",
-              "blocks": [
-                {
-                  "type": "header",
-                  "text": {
-                    "type": "plain_text",
-                    "text": "Playwright E2E Tests (${{ steps.trigger.outputs.label }})"
-                  }
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Status*\n${{ steps.results.outputs.failed == '0' && steps.results.outputs.not_started == '0' && ':white_check_mark: Passed' || steps.results.outputs.failed == '0' && steps.results.outputs.not_started != '0' && ':warning: Incomplete' || ':x: Failed' }}"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Branch*\n`${{ github.ref_name }}`"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "fields": [
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Environment*\n<${{ steps.config.outputs.api_url }}|${{ steps.config.outputs.env_label }}>"
-                    },
-                    {
-                      "type": "mrkdwn",
-                      "text": "*Results*\n:white_check_mark: ${{ steps.results.outputs.passed }} passed  :x: ${{ steps.results.outputs.failed }} failed  :fast_forward: ${{ steps.results.outputs.skipped }} skipped  :no_entry_sign: ${{ steps.results.outputs.not_started }} not started  Total: ${{ steps.results.outputs.total }}"
-                    }
-                  ]
-                },
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Test Run Summary*\n${{ steps.results.outputs.spec_summary }}"
-                  }
-                }${{ steps.credits.outputs.credits_block }},
-                {
-                  "type": "actions",
-                  "elements": [
-                    {
-                      "type": "button",
-                      "text": { "type": "plain_text", "text": "View Report" },
-                      "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
-                    }
-                  ]
-                }
-              ]
-            }
+          # Credits block only when the notebook spec ran (full suite or Notebook).
+          case "$TEST_PROJECT" in
+            ""|"All tests"|"Notebook") echo "show_credits=true"  >> "$GITHUB_OUTPUT" ;;
+            *)                         echo "show_credits=false" >> "$GITHUB_OUTPUT" ;;
+          esac
 
-      - name: Fail if E2E tests failed
-        if: steps.results.outputs.failed != '0'
-        run: exit 1
+          # Trigger label: dispatch vs scheduled.
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "trigger_label=Run via Dispatch" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger_label=Run via Schedule" >> "$GITHUB_OUTPUT"
+          fi
+
+          # Concurrency: gate runs coalesce to one group; else per-target, no cancel.
+          if [ "$GATE_RUN" = "true" ]; then
+            echo "concurrency_group=e2e-manual-gate" >> "$GITHUB_OUTPUT"
+            echo "cancel_in_progress=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "concurrency_group=e2e-manual-${PR_NUMBER:-${STAGE_INPUT:-dev}}" >> "$GITHUB_OUTPUT"
+            echo "cancel_in_progress=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  run:
+    needs: prep
+    uses: ./.github/workflows/e2e-run.yml
+    secrets: inherit
+    with:
+      stage:              ${{ inputs.stage }}
+      pr_number:          ${{ inputs.pr_number }}
+      e2e_test_id:        ${{ inputs.e2e_test_id }}
+      gate_run:           ${{ inputs.gate_run }}
+      playwright_args:    ${{ needs.prep.outputs.playwright_args }}
+      status_context:     'e2e/smoke'
+      suite_name:         ''
+      artifact_suffix:    ''
+      timeout_minutes:    35
+      stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
+      show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}
+      trigger_label:      ${{ needs.prep.outputs.trigger_label }}
+      concurrency_group:  ${{ needs.prep.outputs.concurrency_group }}
+      cancel_in_progress: ${{ needs.prep.outputs.cancel_in_progress == 'true' }}
