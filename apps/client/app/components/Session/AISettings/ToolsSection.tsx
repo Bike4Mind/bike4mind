@@ -542,7 +542,18 @@ const ToolsSection = ({
     );
   }
 
-  const pinnedCount = tools.length;
+  // Enabled MCP servers (integrations) count toward the pinned tally like any other
+  // tool. Agent-only ones (see AGENT_ONLY_MCP_SERVERS) are labeled per-row rather
+  // than excluded here, so the number reflects everything the user has toggled on.
+  const enabledMcpServerCount = visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length;
+  // Feature-gated switches that live outside the `tools` array (each has its own LLM
+  // state flag) but appear in this panel, so they count like any other tool. Must stay
+  // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
+  const specialToolsCount =
+    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
+    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+  const pinnedCount = tools.length + enabledMcpServerCount + specialToolsCount;
 
   return (
     <>
