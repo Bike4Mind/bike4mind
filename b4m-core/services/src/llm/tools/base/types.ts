@@ -99,6 +99,13 @@ export interface ToolContext {
    * (never from request input) and threaded down via the tool-builder deps like
    * retrievalFilter. When present, the KB tools read ONLY the listed files and must never
    * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
+   *
+   * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
+   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
+   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * per-repository, so a new fabfiles tool added to a scoped surface without this handling
+   * would silently read unscoped.
    */
   kbScope?: KbScope;
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;

@@ -13,6 +13,18 @@ interface KnowledgeBaseRetrieveParams {
 const DEFAULT_MAX_CHARS = 8000;
 const ABSOLUTE_MAX_CHARS = 16000;
 
+/**
+ * A directly-fetched file is eligible for retrieval only when it is live (not deleted/
+ * archived) and not retrieval-excluded. Fail-closed: any excluded file reads as
+ * not-found so a direct id probe leaks no existence. Shared by both direct-fetch sites.
+ */
+function isLiveVisibleFile(
+  file: IFabFileDocument | null | undefined,
+  retrievalFilter: Parameters<typeof isRetrievalExcluded>[1]
+): file is IFabFileDocument {
+  return !!file && !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+}
+
 export const knowledgeBaseRetrieveTool: ToolDefinition = {
   name: 'retrieve_knowledge_content',
   implementation: context => {
@@ -84,12 +96,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 return notFoundMsg(file_id);
               }
               const scopedFile = await context.db.fabfiles.findById(file_id);
-              if (
-                scopedFile &&
-                !scopedFile.deletedAt &&
-                !scopedFile.archivedAt &&
-                !isRetrievalExcluded(scopedFile, retrievalFilter)
-              ) {
+              if (isLiveVisibleFile(scopedFile, retrievalFilter)) {
                 files = [scopedFile];
               }
             } else {
@@ -105,13 +112,7 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 // Fallback: file may be accessible via data lake or sharing - fetch by ID
                 // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
                 const sharedFile = await context.db.fabfiles.findById(file_id);
-                // Exclude archived (data-lake archived), deleted, and retrieval-excluded files from direct fetch.
-                if (
-                  sharedFile &&
-                  !sharedFile.deletedAt &&
-                  !sharedFile.archivedAt &&
-                  !isRetrievalExcluded(sharedFile, retrievalFilter)
-                ) {
+                if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
                   const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
                   const fileTags = sharedFile.tags?.map(t => t.name) || [];
                   const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));

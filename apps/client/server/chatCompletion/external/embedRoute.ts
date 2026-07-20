@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Express } from 'express';
 import {
   buildMetaEvent,
-  buildSSEEvent,
+  buildPublicSSEEvent,
   formatSSEError,
   isOriginPermitted,
   resolveRequestId,
@@ -191,30 +191,33 @@ async function buildEmbedServerTools(args: {
   const enabledTools = resolveEmbedTools(hydrated);
   if (enabledTools.length === 0) return undefined;
 
+  // These three reads are independent, so fetch them together (mirrors the
+  // agent/org parallel fetch on the request path above).
+  const [project, owner, toolApiKeys] = await Promise.all([
+    hydrated.projectId ? projectRepository.findById(hydrated.projectId) : Promise.resolve(null),
+    userRepository.findById(ctx.userId),
+    apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
+      db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
+      getSettingsByNames,
+    }),
+  ]);
+
   let kbFileIds: string[] = [];
-  if (hydrated.projectId) {
-    const project = await projectRepository.findById(hydrated.projectId);
-    if (project && !project.deletedAt) {
-      const isOrgMember = (userId: string): boolean =>
-        !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.userDetails ?? []).some(d => d.id === userId));
-      // Authorized when the key owner owns the project, or - for an org agent - any org
-      // member does. Anything else fails closed to an empty scope (never owner-wide).
-      if (project.userId === ctx.userId || isOrgMember(project.userId)) {
-        kbFileIds = project.fileIds ?? [];
-      }
+  if (project && !project.deletedAt) {
+    const isOrgMember = (userId: string): boolean =>
+      !!ownerOrg && (ownerOrg.userId === userId || (ownerOrg.userDetails ?? []).some(d => d.id === userId));
+    // Authorized when the key owner owns the project, or - for an org agent - any org
+    // member does. Anything else fails closed to an empty scope (never owner-wide).
+    if (project.userId === ctx.userId || isOrgMember(project.userId)) {
+      kbFileIds = project.fileIds ?? [];
     }
   }
 
-  const owner = await userRepository.findById(ctx.userId);
   if (!owner) {
     logger.warn('[EMBED_CHAT] Key owner not found; running without tools');
     return undefined;
   }
 
-  const toolApiKeys = await apiKeyService.getEffectiveLLMApiKeys(ctx.userId, {
-    db: { apiKeys: apiKeyRepository, adminSettings: adminSettingsRepository },
-    getSettingsByNames,
-  });
   const models = await getAvailableModels(toolApiKeys as ApiKeyTable);
   const modelInfo = models.find(m => m.id === hydrated.model);
   const toolLlm = getLlmByModel(toolApiKeys as ApiKeyTable, { modelInfo, logger, endUserId: ctx.userId });
@@ -447,12 +450,10 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           source: 'api',
           logger,
           onChunk: async (text, info) => {
-            // Strip tool telemetry before the event is built: backends report
-            // info.toolsUsed (tool names + model-chosen arguments) on tool turns, and
-            // buildSSEEvent would surface it as event.tools. An anonymous embed client
-            // gets text and token counts only - internal tool metadata stays server-side.
-            const { toolsUsed: _toolsUsed, ...clientInfo } = info ?? {};
-            write(serializeSSEEvent(buildSSEEvent(text, info ? clientInfo : undefined)));
+            // Public/anonymous caller: text + usage/credits only. buildPublicSSEEvent
+            // drops server-internal metadata (tool calls, thinking blocks) that the
+            // backend reports on tool/reasoning turns. See its contract in sseEvents.ts.
+            write(serializeSSEEvent(buildPublicSSEEvent(text, info)));
           },
         });
         write(SSE_DONE_SIGNAL);

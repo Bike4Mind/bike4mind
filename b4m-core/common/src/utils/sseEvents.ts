@@ -135,6 +135,25 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
 }
 
 /**
+ * Build an SSE event for an ANONYMOUS/public caller (e.g. the embed chat widget).
+ * Allowlists only what such a caller may see - assistant text plus usage/credit
+ * accounting - and drops server-internal reasoning metadata: tool calls
+ * (`toolsUsed` names + model-chosen arguments), extended-thinking blocks
+ * (`thinking`), and `responseFormatMode`. This is a redaction contract, so it
+ * allowlists forward: any field later added to CompletionInfo stays hidden from
+ * public surfaces until deliberately surfaced here.
+ */
+export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: CompletionInfo): SSEContentEvent {
+  // text[0] is the thinking channel, text[1] the response. Pass ONLY the response
+  // (never fall back to text[0]) so no reasoning content rides along. buildSSEEvent
+  // reads index [1], so put the response there with an empty thinking slot.
+  const responseOnly: (string | null | undefined)[] = ['', text[1] ?? ''];
+  if (!info) return buildSSEEvent(responseOnly, undefined);
+  const { toolsUsed: _tools, thinking: _thinking, responseFormatMode: _rfm, ...safeInfo } = info;
+  return buildSSEEvent(responseOnly, safeInfo);
+}
+
+/**
  * Format error as SSE event
  * @param error - Error object or message
  * @param requestId - Correlation ID to attach, when available
