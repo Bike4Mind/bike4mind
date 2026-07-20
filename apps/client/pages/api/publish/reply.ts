@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { Quest, PublishedArtifact } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 
 /**
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
@@ -180,18 +181,27 @@ const handler = baseApi().post(async (req, res) => {
   return res.status(200).json(response);
 });
 
-/** First non-empty markdown line (stripped of leading #/*), capped, as a title. */
+/**
+ * First non-empty markdown line (stripped of leading #/*), capped, as a title. Embedded
+ * `<artifact>` blocks are removed first so a reply that LEADS with an artifact doesn't take
+ * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
+ * artifact, fall back to the artifact's own title attribute.
+ */
 function deriveTitle(markdown: string): string {
-  const firstLine =
-    markdown
-      .split('\n')
-      .map(l => l.trim())
-      .find(Boolean) ?? 'Shared reply';
-  const cleaned = firstLine
-    .replace(/^#+\s*/, '')
-    .replace(/^[*_>-]+\s*/, '')
-    .slice(0, 120);
-  return cleaned || 'Shared reply';
+  const { artifacts, cleanedContent } = parseArtifactsWithFallback(markdown);
+  const firstLine = cleanedContent
+    .split('\n')
+    .map(l => l.trim())
+    .find(Boolean);
+  if (firstLine) {
+    const cleaned = firstLine
+      .replace(/^#+\s*/, '')
+      .replace(/^[*_>-]+\s*/, '')
+      .slice(0, 120);
+    if (cleaned) return cleaned;
+  }
+  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return named?.title?.slice(0, 120) || 'Shared reply';
 }
 
 export const config = {
