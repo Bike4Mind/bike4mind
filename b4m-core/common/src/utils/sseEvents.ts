@@ -2,6 +2,7 @@
  * Server-Sent Events (SSE) utilities for CLI LLM completions
  * Shared between Next.js API route and Lambda function
  */
+import type { QuestErrorCode } from '../types/entities/SessionTypes';
 
 export interface SSEContentEvent {
   type: 'content' | 'tool_use';
@@ -42,6 +43,12 @@ export interface SSEErrorEvent {
   message: string;
   /** Correlation ID for this request, when available. */
   requestId?: string;
+  /**
+   * Machine-readable classifier (see QUEST_ERROR_CODES), when the failure is a
+   * recognized billing/policy condition. Absent for unclassified errors - clients
+   * must treat it as optional.
+   */
+  code?: QuestErrorCode;
 }
 
 /**
@@ -138,14 +145,16 @@ export function buildSSEEvent(text: (string | null | undefined)[], info?: Comple
  * Format error as SSE event
  * @param error - Error object or message
  * @param requestId - Correlation ID to attach, when available
+ * @param code - Machine-readable classifier to attach, when the caller resolved one
  * @returns SSE error event
  */
-export function formatSSEError(error: unknown, requestId?: string): SSEErrorEvent {
+export function formatSSEError(error: unknown, requestId?: string, code?: QuestErrorCode): SSEErrorEvent {
   const message = error instanceof Error ? error.message : 'Internal server error';
   return {
     type: 'error',
     message,
     ...(requestId && { requestId }),
+    ...(code && { code }),
   };
 }
 

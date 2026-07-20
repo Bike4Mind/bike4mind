@@ -32,6 +32,8 @@ interface CreateApiKeyRequest {
   agentId?: string;
   allowedOrigins?: string[];
   branding?: IEmbedBranding;
+  /** Embed key: lifetime spend ceiling in credits. Validated by the service. */
+  spendCap?: number;
 }
 
 /** Deduplicate keys by id, preserving first occurrence (newest-first order). */
@@ -61,7 +63,8 @@ const handler = baseApi()
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
-    const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding } = req.body;
+    const { name, scopes, expiresAt, rateLimit, organizationId, agentId, allowedOrigins, branding, spendCap } =
+      req.body;
 
     // Authorize org-billed minting: caller must administer the org (owner or
     // manager) or be a platform admin. Fail closed on anything else.
@@ -77,7 +80,8 @@ const handler = baseApi()
     // host). The service re-validates format/dedup/cap and enforces the agentId
     // binding. Pass the normalized list downstream.
     const isEmbedKey = Array.isArray(scopes) && scopes.includes(ApiKeyScope.EMBED_CHAT);
-    const hasEmbedFields = agentId !== undefined || allowedOrigins !== undefined || branding !== undefined;
+    const hasEmbedFields =
+      agentId !== undefined || allowedOrigins !== undefined || branding !== undefined || spendCap !== undefined;
     let embedOrigins = allowedOrigins;
     if (isEmbedKey) {
       const originsCheck = validateEmbedKeyOrigins(allowedOrigins);
@@ -102,7 +106,7 @@ const handler = baseApi()
         // Forward embed fields whenever present - not only for embed keys - so the
         // service's coherence invariant rejects a non-embed key that carries them
         // (fail loud) instead of silently dropping them.
-        ...(isEmbedKey || hasEmbedFields ? { agentId, allowedOrigins: embedOrigins, branding } : {}),
+        ...(isEmbedKey || hasEmbedFields ? { agentId, allowedOrigins: embedOrigins, branding, spendCap } : {}),
         ...(organizationId
           ? { organizationId, billingOwnerType: CreditHolderType.Organization }
           : { billingOwnerType: CreditHolderType.User }),

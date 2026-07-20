@@ -10,11 +10,15 @@ import {
   SSE_KEEPALIVE,
   REQUEST_ID_HEADER,
   LEGACY_REQUEST_ID_HEADER,
-  getQuestErrorCode,
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion, assertOwnerHasCredits } from '@bike4mind/services';
+import {
+  executeCompletion,
+  assertOwnerHasCredits,
+  assertKeySpendWithinCap,
+  resolveQuestErrorCode,
+} from '@bike4mind/services';
 import {
   connectDB,
   mongoose,
@@ -25,6 +29,7 @@ import {
   usageEventRepository,
   organizationRepository,
   agentRepository,
+  userApiKeyRepository,
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
@@ -80,6 +85,10 @@ interface EmbedContext {
   organizationId: string;
   allowedOrigins?: string[];
   rateLimit: { requestsPerMinute: number; requestsPerDay: number };
+  /** Spend ceiling in credits. Present 0 = real cap; absent = uncapped. */
+  spendCap?: number;
+  /** Cumulative settled spend in credits at validation time. */
+  currentSpend?: number;
   /** Present only on the session-token path; enables the per-session rate limit. */
   sessionId?: string;
 }
@@ -92,6 +101,8 @@ function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
     organizationId: info.organizationId!,
     allowedOrigins: info.allowedOrigins,
     rateLimit: info.rateLimit,
+    spendCap: info.spendCap,
+    currentSpend: info.currentSpend,
     ...(sessionId && { sessionId }),
   };
 }
@@ -234,7 +245,23 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         return res.status(status).json({
           error: 'insufficient_credits',
           error_description: creditErr instanceof Error ? creditErr.message : 'Insufficient credits',
-          code: getQuestErrorCode(creditErr),
+          code: resolveQuestErrorCode(creditErr),
+        });
+      }
+
+      // Per-key spend-cap gate, the second billing-class check: the org may be
+      // solvent while this key has exhausted its own budget. Reads the validation-
+      // time snapshot off ctx (no fresh query - the auth layer just loaded the
+      // key); the in-flight race this leaves open is bounded and accepted, since
+      // the cap is a leaked-key backstop, not exact accounting.
+      try {
+        assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
+      } catch (capErr) {
+        const status = (capErr as { statusCode?: number }).statusCode ?? 422;
+        return res.status(status).json({
+          error: 'spend_cap_exceeded',
+          error_description: capErr instanceof Error ? capErr.message : 'Spend cap exceeded',
+          code: resolveQuestErrorCode(capErr),
         });
       }
 
@@ -287,6 +314,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
             users: userRepository,
             usageEvents: usageEventRepository,
             organizations: organizationRepository,
+            // Per-key spend metering (spend-cap enforcement). NOT the provider-LLM
+            // key repo above (apiKeys) - this one holds the embed UserApiKey docs.
+            userApiKeys: userApiKeyRepository,
           },
           apiKeyInfo: { keyId: ctx.keyId, keyName: 'embed' },
           // Bill the owner org's pool (ownerType: Organization).
@@ -310,7 +340,9 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         error: error instanceof Error ? error.message : String(error),
       });
       if (streaming) {
-        write(serializeSSEEvent(formatSSEError(error, requestId)));
+        // Classify billing/policy failures so the embedding client can branch on
+        // `code` instead of parsing message text.
+        write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));
         if (!res.writableEnded) res.end();
       } else if (!res.headersSent) {
         res.status(500).json({ error: 'internal_error', error_description: 'Failed to process embed chat request' });
