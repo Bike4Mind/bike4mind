@@ -625,7 +625,7 @@ POST /api/ai/generate-image
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | prompt | string | Yes | Image description |
-| model | string | No | Image model identifier |
+| model | string | Yes | Image model identifier (e.g. \`gpt-image-1\`); a request without a supported model is rejected \`422\` |
 | n | number | No | Number of images (1-10) |
 | size | string | No | Image dimensions (e.g. \`1024x1024\`) |
 | sessionId | string | No | Existing session; a new one is created if omitted |
