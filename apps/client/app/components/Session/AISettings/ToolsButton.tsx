@@ -152,13 +152,18 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               </Typography>
             )}
           </Box>
-          <ToolIndicators
-            activePrimaryTools={activePrimaryTools}
-            isThinkingActive={isThinkingActive}
-            otherActiveToolsCount={otherActiveToolsCount}
-            enabledMcpServers={enabledMcpServers}
-            availableMcpServers={availableMcpServers}
-          />
+          {/* Fast mode sends no tools, so nothing is actually active - hide all
+              indicators (tool icons, count, and thinking). Selections persist and
+              reappear when switching back to Smart. */}
+          {toolMode !== 'fast' && (
+            <ToolIndicators
+              activePrimaryTools={activePrimaryTools}
+              isThinkingActive={isThinkingActive}
+              otherActiveToolsCount={otherActiveToolsCount}
+              enabledMcpServers={enabledMcpServers}
+              availableMcpServers={availableMcpServers}
+            />
+          )}
         </Box>
       </MenuButton>
 
