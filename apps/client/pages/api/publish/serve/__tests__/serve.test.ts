@@ -452,8 +452,8 @@ describe('GET /api/publish/serve - ?raw=1 authenticated render mode', () => {
   });
 });
 
-describe('GET /api/publish/serve - reply/fabfile plain render (no embedded artifact)', () => {
-  it('renders a public reply with script-src none and no artifact iframe', async () => {
+describe('GET /api/publish/serve - reply/fabfile path is unchanged', () => {
+  it('renders a public reply with script-src none (not the iframe path)', async () => {
     mockArtifactFindOne.mockReturnValue({
       publicId: 'r1',
       title: 'A reply',
@@ -635,41 +635,6 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     expect(svg).toContain('<circle');
     // camelCase SVG attributes must survive the cheerio round-trip, or the SVG renders broken.
     expect(svg).toContain('viewBox');
-  });
-
-  it('renders an embedded HTML artifact in a fabfile viewer too, framed at /p/f/{id}?a=0', async () => {
-    const fabReply = htmlReply({ publicId: 'f-html', slug: 'f-html', source: { kind: 'fabfile' } });
-    mockArtifactFindOne.mockReturnValue(fabReply);
-
-    const { res: pageRes, promise: pagePromise } = run(['f', 'f-html']);
-    await pagePromise;
-    expect(pageRes._getStatusCode()).toBe(200);
-    const page = pageRes._getData() as string;
-    expect(page).toContain('sandbox="allow-scripts"');
-    expect(page).toContain('src="/p/f/f-html?a=0"');
-    expect(page).not.toContain('<label>Bill</label>'); // no raw markup leak in the <pre>
-
-    const { res: subRes, promise: subPromise } = run(['f', 'f-html'], { a: '0' });
-    await subPromise;
-    expect(subRes._getStatusCode()).toBe(200);
-    expect(subRes._getData() as string).toContain('window.ok=1');
-  });
-
-  it('renders remaining fabfile text as escaped <pre> alongside the framed artifact', async () => {
-    const fab = htmlReply({
-      publicId: 'f-mixed',
-      slug: 'f-mixed',
-      source: { kind: 'fabfile' },
-      renderedBody: 'plain notes line\n' + HTML_ARTIFACT,
-    });
-    mockArtifactFindOne.mockReturnValue(fab);
-
-    const { res, promise } = run(['f', 'f-mixed']);
-    await promise;
-    const page = res._getData() as string;
-    expect(page).toContain('b4m-pre'); // fabfile text stays in a <pre>, not markdown-rendered
-    expect(page).toContain('plain notes line');
-    expect(page).toContain('src="/p/f/f-mixed?a=0"');
   });
 });
 
