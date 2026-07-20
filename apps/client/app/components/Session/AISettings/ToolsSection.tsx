@@ -27,6 +27,7 @@ import {
   Functions as WolframIcon,
   TableChart as ExcelIcon,
   ShowChart as FinanceIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
@@ -211,6 +212,7 @@ interface ToolsSectionProps {
   columns?: number;
   onModalOpenChange?: (isOpen: boolean) => void;
   toolContainerSx?: BoxProps['sx'];
+  onClose?: () => void;
 }
 
 const ToolsSection = ({
@@ -219,6 +221,7 @@ const ToolsSection = ({
   columns = 2,
   onModalOpenChange,
   toolContainerSx,
+  onClose,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
@@ -557,7 +560,54 @@ const ToolsSection = ({
 
   return (
     <>
-      {/* Top descriptor + help link */}
+      {/* Sticky header (dropdown only): title + help on the left, close on the right.
+          Mirrors AgentsSection's header so the two dropdowns stay visually consistent.
+          The -8px margins break out of the container's 8px padding (same convention as
+          the unsupported-model message above) so the bottom border runs edge to edge.
+          Only rendered when onClose is provided (the dropdown); the AdvancedAIModal
+          embed omits it and keeps the inline help button below instead. */}
+      {onClose && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            p: '8px 12px',
+            mx: '-8px',
+            mt: '-8px',
+            mb: 1,
+            borderBottom: '1px solid',
+            borderColor: 'border.soft',
+            position: 'sticky',
+            top: '-8px',
+            backgroundColor: theme => theme.palette.background.body,
+            // Above SwitchSelector's internal z-index (1/2) so scrolling tabs pass under it.
+            zIndex: 10,
+          }}
+        >
+          <Typography sx={{ color: 'text.primary', fontSize: '14px' }}>Tools</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <ContextHelpButton
+              helpId="features/smart-tools"
+              tooltipText="Learn about Smart Tools"
+              data-testid="help-button-smart-tools"
+              size="sm"
+            />
+            <IconButton
+              variant="plain"
+              size="sm"
+              onClick={onClose}
+              data-testid="tools-header-close-btn"
+              sx={{ '&:hover': { backgroundColor: 'background.level1' } }}
+            >
+              <CloseIcon sx={{ fontSize: '16px', color: 'text.primary50', cursor: 'pointer' }} />
+            </IconButton>
+          </Box>
+        </Box>
+      )}
+
+      {/* Top descriptor. When there's no header (modal embed), keep the inline help button. */}
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
         <Typography
           level="body-xs"
@@ -566,11 +616,13 @@ const ToolsSection = ({
         >
           Enable tools the AI can use during this conversation.
         </Typography>
-        <ContextHelpButton
-          helpId="features/smart-tools"
-          tooltipText="Learn about Smart Tools"
-          data-testid="help-button-smart-tools"
-        />
+        {!onClose && (
+          <ContextHelpButton
+            helpId="features/smart-tools"
+            tooltipText="Learn about Smart Tools"
+            data-testid="help-button-smart-tools"
+          />
+        )}
       </Box>
 
       {/* Fast / Smart mode tabs */}

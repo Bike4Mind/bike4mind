@@ -1,7 +1,7 @@
 import { FC, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { Construction as ConstructionIcon, Close as CloseIcon } from '@mui/icons-material';
+import { Construction as ConstructionIcon } from '@mui/icons-material';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
 import ToolIndicators from '../../common/ToolIndicators';
@@ -58,6 +58,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     onRollDice,
     columns: 1 as const,
     onModalOpenChange: setIsDeepResearchModalOpen,
+    onClose: () => setOpen(false),
     toolContainerSx: {
       backgroundColor: (theme: { palette: { background: { surface2: string } } }) => theme.palette.background.surface2,
       padding: '12px',
@@ -98,21 +99,9 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               height: '90dvh',
               border: 'none',
               backgroundColor: 'background.body',
+              overflow: 'auto',
             }}
           >
-            <IconButton
-              onClick={() => setOpen(false)}
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={{
-                zIndex: 1,
-                alignSelf: 'flex-end',
-              }}
-              data-testid="tools-modal-close-btn"
-            >
-              <CloseIcon sx={{ fontSize: 20 }} />
-            </IconButton>
             <ToolsSection {...toolsSectionProps} />
           </ModalDialog>
         </Modal>
