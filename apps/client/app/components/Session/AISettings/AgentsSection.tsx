@@ -190,23 +190,11 @@ const AgentsSection: React.FC<AgentsSectionProps> = ({ onClose, showMobileHeader
           zIndex: 1,
         }}
       >
-        <Box
-          sx={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: { xs: 'flex-start', sm: 'space-between' },
-            flex: 1,
-            width: '100%',
-            gap: 1,
-          }}
-        >
-          <Typography sx={{ color: 'text.primary', fontSize: '14px' }}>Agents</Typography>
+        <Typography sx={{ color: 'text.primary', fontSize: '14px' }}>Agents</Typography>
 
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
           <ContextHelpButton helpId="features/agents" tooltipText="Learn about Agents" size="sm" />
-        </Box>
-
-        {onClose && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          {onClose && (
             <IconButton
               variant="plain"
               size="sm"
@@ -219,8 +207,8 @@ const AgentsSection: React.FC<AgentsSectionProps> = ({ onClose, showMobileHeader
             >
               <CloseIcon sx={{ fontSize: '16px', color: 'text.primary50', cursor: 'pointer' }} />
             </IconButton>
-          </Box>
-        )}
+          )}
+        </Box>
       </Box>
 
       <Box

@@ -168,6 +168,7 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
       sx={{
         color: theme => (dim ? theme.palette.text.secondary : theme.palette.text.primary),
         lineHeight: 1.2,
+        mb: 0.5, // match the agent name -> tags gap
       }}
     >
       {name}
@@ -175,7 +176,7 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
     <Typography
       level="body-xs"
       sx={{
-        color: 'text.tertiary',
+        color: 'text.primary50', // match the agent tags color
         fontSize: '0.7rem',
         lineHeight: 1.3,
         display: '-webkit-box',
@@ -190,7 +191,7 @@ const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelP
       <Typography
         level="body-xs"
         data-testid="tool-agent-only-note"
-        sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
+        sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: '12px' }}
       >
         {agentOnlyNote}
       </Typography>
@@ -611,7 +612,7 @@ const ToolsSection = ({
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
         <Typography
           level="body-xs"
-          sx={{ color: 'text.secondary', flex: 1, lineHeight: 1.3 }}
+          sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
           data-testid="smart-tools-descriptor"
         >
           Enable tools the AI can use during this conversation.
