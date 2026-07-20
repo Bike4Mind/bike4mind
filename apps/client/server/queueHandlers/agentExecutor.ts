@@ -41,6 +41,7 @@ import {
   mcpServerRepository,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
+import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
 import { getLlmByModel, getAvailableModels, resolveDeprecatedModelId, type ApiKeyTable } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { Permission, OPTI_SURFACE } from '@bike4mind/common';
@@ -1099,6 +1100,10 @@ async function processExecution(
       userId: execution.userId,
       user: user as IUserDocument,
       logger,
+      // Generic retrieval exclusion (opt-in per session) - thread it here so the agent's
+      // knowledge tools honor the same exclusion as the chat path; absent it fails OPEN
+      // (an excluded file leaks + gets cited). Session is resolved above at execution start.
+      retrievalFilter: toRetrievalFilter(session),
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,
@@ -2410,6 +2415,9 @@ async function processSubagentDispatch(
       userId: child.userId,
       user: user as IUserDocument,
       logger,
+      // Delegated subagent: thread retrieval exclusion here too (same fail-open risk as the
+      // parent toolbelt). Session is resolved above from the child's sessionId.
+      retrievalFilter: toRetrievalFilter(session),
       db: {
         apiKeys: apiKeyRepository,
         adminSettings: adminSettingsRepository,

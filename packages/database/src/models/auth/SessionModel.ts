@@ -46,6 +46,8 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     disableUserIntegrations: { type: Boolean, required: false },
     forceKnowledgeRetrieval: { type: Boolean, required: false },
     retrievalTags: [{ type: String, required: false }],
+    retrievalExcludeFilenameMarkers: [{ type: String, required: false }],
+    retrievalVectorizedOnly: { type: Boolean, required: false },
     citationStyle: { type: String, enum: ['named', 'indexed'], required: false },
     temperature: { type: Number, required: false },
     maxToolCalls: { type: Number, required: false, min: 1 },

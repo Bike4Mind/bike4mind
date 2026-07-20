@@ -6,6 +6,7 @@ export default defineConfig({
     'src/artifactParser.ts',
     'src/llm/backend.ts',
     'src/escapeRegex.ts',
+    'src/retrievalExclusion.ts',
     'src/registrableDomain.ts',
   ],
   format: ['esm', 'cjs'],

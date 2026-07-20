@@ -49,6 +49,16 @@
         "default": "./dist/escapeRegex.cjs"
       }
     },
+    "./retrievalExclusion": {
+      "import": {
+        "types": "./dist/retrievalExclusion.d.mts",
+        "default": "./dist/retrievalExclusion.mjs"
+      },
+      "require": {
+        "types": "./dist/retrievalExclusion.d.cts",
+        "default": "./dist/retrievalExclusion.cjs"
+      }
+    },
     "./registrableDomain": {
       "import": {
         "types": "./dist/registrableDomain.d.mts",

@@ -5,6 +5,7 @@ import {
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { computeCosineSimilarity, EmbeddingFactory, getProviderFromModel } from '@bike4mind/utils';
+import { filterRetrievalExcluded, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import { Logger } from '@bike4mind/observability';
 
 /**
@@ -59,6 +60,13 @@ export interface SemanticDataLakeSearchParams {
   maxFiles?: number;
   /** Max chunk vectors loaded into memory. Default 10_000. */
   chunkLoadCap?: number;
+  /**
+   * Generic retrieval-exclusion filter forwarded to the scoped file set - drop files whose name
+   * begins with a marker (case-insensitive, word-boundary) and/or unvectorized files, before any
+   * chunk vectors are loaded or ranked. Caller-driven so the shared primitive (also backing
+   * /api/opti/semantic-search) stays un-regressed when omitted. See @bike4mind/utils/retrievalExclusion.
+   */
+  retrievalFilter?: RetrievalExclusionOptions;
   logger?: Logger;
 }
 
@@ -87,6 +95,7 @@ export async function semanticDataLakeSearch(
     scopedTagPrefixes = [],
     maxFiles = 2000,
     chunkLoadCap = 10_000,
+    retrievalFilter = {},
     logger,
   } = params;
 
@@ -133,12 +142,18 @@ export async function semanticDataLakeSearch(
       dataLakeTagPrefixes,
       scopedTagPrefixes,
       excludeContent: true,
+      // Retrieval exclusion (caller-driven) - best-effort DB pre-filter; the authoritative
+      // in-memory pass below guarantees excluded files are dropped before any chunk load.
+      ...retrievalFilter,
     }
   );
 
-  const fileIds = fileSearch.data.map(f => f.id);
+  // Authoritative post-filter: never load vectors for or rank a file the caller excludes,
+  // regardless of the DB regex engine or fileNameLower presence (see filterRetrievalExcluded).
+  const scopedFiles = filterRetrievalExcluded(fileSearch.data, retrievalFilter);
+  const fileIds = scopedFiles.map(f => f.id);
   if (fileIds.length === 0) return empty;
-  const fileById = new Map(fileSearch.data.map(f => [f.id, f]));
+  const fileById = new Map(scopedFiles.map(f => [f.id, f]));
 
   // --- Bulk-load vector-bearing chunks (single indexed query) and cosine-rank ---
   const chunks = await adapters.db.fabfilechunks.findVectorsByFabFileIds(fileIds, chunkLoadCap);

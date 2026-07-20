@@ -1,5 +1,6 @@
 import { ToolDefinition } from '../../base/types';
 import { CitableSource, IFabFileDocument } from '@bike4mind/common';
+import { filterRetrievalExcluded, isRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 
 interface KnowledgeBaseRetrieveParams {
@@ -52,6 +53,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
           return 'Knowledge base retrieval is not available at this time (chunk reader unavailable).';
         }
 
+        // Generic retrieval exclusion (opt-in). Path A below bypasses fabfiles.search entirely,
+        // so the query-builder exclusion never runs on it - we apply the SAME predicate in memory
+        // here (shared source of truth: isRetrievalExcluded) so an excluded file can't be pulled
+        // by a direct id probe on either the owned or shared branch. Fail-closed.
+        const retrievalFilter = context.retrievalFilter ?? {};
+
         try {
           let files: IFabFileDocument[] = [];
 
@@ -60,13 +67,22 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
             // Try owned file first (fast path)
             const ownedFile = await context.db.fabfiles.findByIdAndUserId(file_id, context.userId);
             if (ownedFile) {
-              files = [ownedFile];
+              // An excluded owned file is treated as not-found (falls through to the :92 message),
+              // so a direct id probe leaks nothing - not even that the file exists.
+              if (!isRetrievalExcluded(ownedFile, retrievalFilter)) {
+                files = [ownedFile];
+              }
             } else {
               // Fallback: file may be accessible via data lake or sharing - fetch by ID
               // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
               const sharedFile = await context.db.fabfiles.findById(file_id);
-              // Exclude archived (data-lake archived) and deleted files from direct fetch.
-              if (sharedFile && !sharedFile.deletedAt && !sharedFile.archivedAt) {
+              // Exclude archived (data-lake archived), deleted, and retrieval-excluded files from direct fetch.
+              if (
+                sharedFile &&
+                !sharedFile.deletedAt &&
+                !sharedFile.archivedAt &&
+                !isRetrievalExcluded(sharedFile, retrievalFilter)
+              ) {
                 const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
                 const fileTags = sharedFile.tags?.map(t => t.name) || [];
                 const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
@@ -110,9 +126,12 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
                 dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
                 scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
                 excludeContent: true, // Content fetched via chunks below, not the document field
+                // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
+                ...retrievalFilter,
               }
             );
-            files = searchResults.data;
+            // Authoritative exclusion pass on top of the DB pre-filter (see filterRetrievalExcluded).
+            files = filterRetrievalExcluded(searchResults.data, retrievalFilter);
 
             if (files.length === 0) {
               const searchDesc = [query && `query "${query}"`, tags?.length && `tags [${tags.join(', ')}]`]
