@@ -1,8 +1,8 @@
-import { AIImageService } from './AIImageService';
+import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import OpenAI from 'openai';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { Logger } from '@bike4mind/observability';
-import { OpenAIImageSize, ImageModels, isGPTImageModel, isGPTImage2Model } from '@bike4mind/common';
+import { ImageModels, isGPTImageModel, isGPTImage2Model } from '@bike4mind/common';
 import { invokeImageProcessor, downloadImageAsBuffer } from './imageProcessorUtils';
 
 // The image-generation Lambda has a 10-minute timeout. The OpenAI SDK's default
@@ -122,7 +122,7 @@ export class OpenAIImageService extends AIImageService {
                 totalPixels > 8_294_400
               ) {
                 const originalSize = openaiOptions.size;
-                openaiOptions.size = '1024x1024' as any;
+                openaiOptions.size = '1024x1024';
                 parameterWarnings.push(
                   `Size '${originalSize}' violates gpt-image-2 constraints, changed to '1024x1024'`
                 );
@@ -130,25 +130,26 @@ export class OpenAIImageService extends AIImageService {
             }
           } else if (!openaiOptions.size) {
             // gpt-image-2 defaults to 'auto' if no size provided
-            openaiOptions.size = 'auto' as any;
+            openaiOptions.size = 'auto';
           }
         } else {
           const validGPTSizes = ['1024x1024', '1536x1024', '1024x1536'];
           if (openaiOptions.size) {
             if (!validGPTSizes.includes(openaiOptions.size)) {
               const originalSize = openaiOptions.size;
-              openaiOptions.size = '1024x1024' as any;
+              openaiOptions.size = '1024x1024';
               parameterWarnings.push(`Size '${originalSize}' is not supported by ${modelName}, changed to '1024x1024'`);
             }
           } else {
-            openaiOptions.size = '1024x1024' as any;
+            openaiOptions.size = '1024x1024';
           }
         }
 
         // Remove any custom dimensions (width/height) as GPT-Image models use fixed sizes
         if ('width' in openaiOptions || 'height' in openaiOptions) {
-          delete (openaiOptions as any).width;
-          delete (openaiOptions as any).height;
+          const dims = openaiOptions as { width?: unknown; height?: unknown };
+          delete dims.width;
+          delete dims.height;
           parameterWarnings.push(`Custom width/height not supported by ${modelName}, using standard sizes`);
         }
 
@@ -162,7 +163,7 @@ export class OpenAIImageService extends AIImageService {
 
         if (openaiOptions.quality && !['standard', 'hd'].includes(openaiOptions.quality)) {
           const originalQuality = openaiOptions.quality;
-          openaiOptions.quality = 'standard' as any;
+          openaiOptions.quality = 'standard';
           parameterWarnings.push(
             `Quality '${originalQuality}' is not supported by legacy models, changed to 'standard'`
           );
@@ -171,14 +172,14 @@ export class OpenAIImageService extends AIImageService {
         const validLegacySizes = ['256x256', '512x512', '1024x1024', '1792x1024', '1024x1792'];
         if (openaiOptions.size && !validLegacySizes.includes(openaiOptions.size)) {
           const originalSize = openaiOptions.size;
-          openaiOptions.size = '1024x1024' as any;
+          openaiOptions.size = '1024x1024';
           parameterWarnings.push(`Size '${originalSize}' is not supported by legacy models, changed to '1024x1024'`);
         }
       }
 
       // Map seed parameter if provided (OpenAI uses 'seed' directly)
       if (bflSeed !== null && bflSeed !== undefined) {
-        (openaiOptions as any).seed = bflSeed;
+        (openaiOptions as { seed?: number }).seed = bflSeed;
       }
 
       let images: string[] = [];
@@ -219,9 +220,7 @@ export class OpenAIImageService extends AIImageService {
             ...opts,
             image: imageFile,
             size: ['256x256', '512x512', '1024x1024'].find(s => s === openaiOptions.size) as
-              | '256x256'
-              | '512x512'
-              | '1024x1024',
+              '256x256' | '512x512' | '1024x1024',
           });
         }
       } else {
@@ -298,22 +297,8 @@ export class OpenAIImageService extends AIImageService {
   async edit(
     image: string,
     prompt: string,
-    {
-      mask = null,
-      model = ImageModels.GPT_IMAGE_2,
-      n = 1,
-      size,
-      response_format = 'url',
-      user,
-    }: {
-      mask: string | null;
-      model: ImageModels;
-      n?: number;
-      size?: OpenAIImageSize;
-      response_format?: 'url' | 'b64_json';
-      user?: string;
-    }
-  ) {
+    { mask = null, model = ImageModels.GPT_IMAGE_2, n = 1, size, response_format = 'url', user }: ImageEditOptions
+  ): Promise<ImageEditResponse> {
     try {
       const openai = new OpenAI({ apiKey: this.apiKey, ...OPENAI_IMAGE_CLIENT_OPTS });
 
@@ -404,9 +389,5 @@ export class OpenAIImageService extends AIImageService {
       }
       throw error instanceof Error ? error : new Error('OpenAI image edit error: Unknown error');
     }
-  }
-
-  async variantions(image: Buffer, options: any): Promise<string[]> {
-    throw new Error('Method not implemented.');
   }
 }

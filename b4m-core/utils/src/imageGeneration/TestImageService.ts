@@ -1,15 +1,11 @@
-import { AIImageService, AIImageGenerationOptions, ImageEditResponse } from './AIImageService';
+import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 
 export class TestImageService extends AIImageService {
-  async generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]> {
+  async generate(_prompt: string, _options: AIImageGenerationOptions): Promise<string[]> {
     throw new Error('Method not implemented.');
   }
 
-  async edit(image: string, prompt: string, options: any): Promise<ImageEditResponse> {
-    throw new Error('Method not implemented.');
-  }
-
-  async variantions(image: Buffer, options: any): Promise<string[]> {
+  async edit(_image: string, _prompt: string, _options: ImageEditOptions): Promise<ImageEditResponse> {
     throw new Error('Method not implemented.');
   }
 }
