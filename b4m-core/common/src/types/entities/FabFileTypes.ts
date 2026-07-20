@@ -302,7 +302,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
       shared?: boolean;
       curated?: boolean;
-      fileIds?: string[];
+      fileIds?: string[]; // EXCLUDE these ids ($nin)
+      restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },

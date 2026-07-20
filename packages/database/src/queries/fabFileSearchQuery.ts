@@ -259,6 +259,13 @@ export interface FabFileSearchParams {
     shared?: boolean;
     curated?: boolean;
     fileIds?: string[];
+    /**
+     * File-id ALLOW-list (contrast fileIds above, which EXCLUDES). Fail-closed contract:
+     * undefined = no restriction; present (including []) = results restricted to these ids,
+     * and an empty array matches nothing. Never client-supplied - derived server-side
+     * (e.g. a project's file set or an agent's KB scope).
+     */
+    restrictToFileIds?: string[];
   };
   pagination: { page: number; limit: number };
   order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' };
@@ -343,6 +350,14 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
   // File ID exclusion filter
   if (filters.fileIds && filters.fileIds.length > 0) {
     baseFilter._id = { $nin: filters.fileIds };
+  }
+
+  // File ID allow-list (restriction). Deliberately NO length guard: presence of the field -
+  // even as [] - means "restrict", and { $in: [] } matches nothing (fail-closed empty scope).
+  // Merges with the exclusion above so both apply (a file must be in $in AND not in $nin).
+  if (filters.restrictToFileIds !== undefined) {
+    const existing = (baseFilter._id as Record<string, unknown> | undefined) ?? {};
+    baseFilter._id = { ...existing, $in: filters.restrictToFileIds };
   }
 
   // MIME type filter

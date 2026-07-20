@@ -71,22 +71,24 @@ export const search = async (
     excludeContent,
   } = options || {};
 
-  let fileIdsToFilter: string[] | undefined;
+  // ids / projectId express RESTRICTION ("only these files" / "only this project's files").
+  // These used to feed the fileIds EXCLUSION filter, which inverted them - a project-filtered
+  // search returned everything EXCEPT the project's files. Fail-closed: a project that cannot
+  // be resolved (missing, or no files) restricts to [] (matches nothing) rather than falling
+  // through to an unscoped search over all the user's files.
+  let restrictToFileIds: string[] | undefined;
 
   if (filters?.ids && filters.ids.length > 0) {
-    fileIdsToFilter = filters.ids;
+    restrictToFileIds = filters.ids;
   } else if (filters?.projectId) {
     const project = await db.projects.findById(filters.projectId);
-
-    if (project && project.fileIds.length > 0) {
-      fileIdsToFilter = project.fileIds;
-    }
+    restrictToFileIds = project ? project.fileIds : [];
   }
 
   const fabFiles = await db.fabFiles.search(
     userId,
     search,
-    { tags, type, shared, curated, fileIds: fileIdsToFilter },
+    { tags, type, shared, curated, restrictToFileIds },
     { page, limit },
     {
       by,
