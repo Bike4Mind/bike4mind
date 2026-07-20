@@ -194,7 +194,11 @@ export class PluginStore {
 
   /** Returns null for "not a plugin package" (skipped), a descriptor otherwise. */
   private async parseManifest(packageDir: string): Promise<PluginDescriptor | null> {
-    const dirName = path.basename(packageDir);
+    // Reconstruct the scoped name from the layout (@scope/name) so a package
+    // whose manifest can't be read/parsed still gets a name `plugin remove`
+    // can target, not just the unscoped leaf.
+    const parent = path.basename(path.dirname(packageDir));
+    const dirName = parent.startsWith('@') ? `${parent}/${path.basename(packageDir)}` : path.basename(packageDir);
     let rawJson: string;
     try {
       rawJson = await fs.readFile(path.join(packageDir, 'package.json'), 'utf-8');

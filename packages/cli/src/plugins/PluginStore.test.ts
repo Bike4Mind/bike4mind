@@ -166,6 +166,18 @@ describe('PluginStore.discover', () => {
     expect(descriptor.name).toBe('@someone/b4m-plugin-bar');
   });
 
+  it('reconstructs the scoped name from the layout when the manifest has no name', async () => {
+    // package.json with a b4m-plugin field but no name at all -> scope must
+    // still be recovered from the @scope/ directory layout.
+    await makePkg('@someone/b4m-plugin-noname', {
+      rawJson: JSON.stringify({ 'b4m-plugin': { entry: './index.js' } }),
+    });
+
+    const [descriptor] = await store.discover();
+    expect(descriptor.valid).toBe(false);
+    expect(descriptor.name).toBe('@someone/b4m-plugin-noname');
+  });
+
   it.each(['constructor', '__proto__', 'toString', 'hasOwnProperty', '__defineGetter__', '__lookupSetter__'])(
     'rejects a plugin whose configKey names a prototype member (%s)',
     async configKey => {

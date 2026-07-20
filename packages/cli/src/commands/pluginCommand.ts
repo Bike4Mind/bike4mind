@@ -108,7 +108,12 @@ function runNpmOrExit(args: string[], cwd: string, action: string, target: strin
     // double-quote our own path args (e.g. a --prefix under "C:\Users\John
     // Doe\...") so a space in the home dir doesn't split the argument.
     const isWindows = process.platform === 'win32';
-    const finalArgs = isWindows ? args.map(a => (/\s/.test(a) ? `"${a}"` : a)) : args;
+    // Always double-quote every arg on Windows (not just whitespace ones) so a
+    // homedir path with a cmd metachar like `&` isn't treated as a command
+    // separator. (A literal `%` in the homedir would still env-expand; that's a
+    // pathological username and out of scope - the user-supplied spec, the real
+    // untrusted input, already rejects `%`.)
+    const finalArgs = isWindows ? args.map(a => `"${a.replace(/"/g, '""')}"`) : args;
     execFileSync(isWindows ? 'npm.cmd' : 'npm', finalArgs, {
       cwd,
       stdio: 'inherit',
@@ -175,17 +180,11 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
   const newTopLevel = new Set([...(await readTopLevelDeps(pluginsDir))].filter(d => !depsBefore.has(d)));
 
   if (added.length === 0) {
-    // Nothing new discovered: either the package carries no b4m-plugin manifest,
-    // or it was already installed (a re-add / version bump). Don't claim it's not
-    // a plugin in the latter case - point at the list instead.
-    const existingPlugins = store.getValid(after);
-    if (existingPlugins.length > 0) {
-      console.log(`✅ Installed ${spec}. No new plugin package was added (it may already be installed).`);
-      console.log('Run `b4m plugin list` to see installed plugins and their enabled state.');
-    } else {
-      console.log(`✅ Installed ${spec}.`);
-      console.warn('⚠️ No b4m-plugin package was detected - it will not load as a plugin.');
-    }
+    // Nothing NEW enabled: the package carries no b4m-plugin manifest, or it was
+    // already installed (re-add / version bump). Either way this message is
+    // accurate without guessing which case it is.
+    console.log(`✅ Installed ${spec}. No new plugin was enabled.`);
+    console.log('Run `b4m plugin list` to see installed plugins and their enabled state.');
     return;
   }
 
