@@ -35,6 +35,8 @@ export interface ValidationResult {
   allowedOrigins?: string[];
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
   spendCap?: number;
+  /** Cumulative settled spend in credits (`usage.totalSpendCredits`) at validation time. */
+  currentSpend?: number;
   reason?: 'not_found' | 'invalid_hash' | 'expired' | 'disabled' | 'rate_limited';
 }
 
@@ -70,6 +72,7 @@ function finalizeApiKeyValidation(apiKey: IUserApiKeyDocument, db: ValidateUserA
     agentId: apiKey.agentId,
     allowedOrigins: apiKey.allowedOrigins,
     spendCap: apiKey.spendCap,
+    currentSpend: apiKey.usage?.totalSpendCredits,
   };
 }
 

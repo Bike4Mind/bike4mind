@@ -16,9 +16,11 @@ vi.mock('@bike4mind/observability', () => ({
 
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockAssertOwnerHasCredits = vi.hoisted(() => vi.fn());
+const mockAssertKeySpendWithinCap = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/services', () => ({
   executeCompletion: mockExecuteCompletion,
   assertOwnerHasCredits: mockAssertOwnerHasCredits,
+  assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
 }));
 
 const mockAgentFindById = vi.hoisted(() => vi.fn());
@@ -59,6 +61,7 @@ vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
 import { registerEmbedRoutes } from './embedRoute';
+import { spendCapExceededError } from '@bike4mind/common';
 
 const VALID_INFO = {
   keyId: 'key-1',
@@ -92,6 +95,7 @@ beforeEach(() => {
   mockAgentFindById.mockResolvedValue({ id: 'agent-1', organizationId: 'org-1', deletedAt: undefined });
   mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100 });
   mockAssertOwnerHasCredits.mockReturnValue(undefined);
+  mockAssertKeySpendWithinCap.mockReturnValue(undefined);
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockHydrate.mockReturnValue({
@@ -266,6 +270,37 @@ describe('POST /api/embed/chat', () => {
     const res = await post(CHAT);
     expect(res.status).toBe(422);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('passes the key spend snapshot from the credential to the spend-cap gate', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, spendCap: 500, currentSpend: 120 });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    expect(mockAssertKeySpendWithinCap).toHaveBeenCalledWith({ spendCap: 500, currentSpend: 120 });
+  });
+
+  it('returns 422 spend_cap_exceeded as pre-flight JSON (not an SSE frame) when the key is at its cap', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, spendCap: 500, currentSpend: 500 });
+    mockAssertKeySpendWithinCap.mockImplementation(() => {
+      throw spendCapExceededError('This embed key has reached its spend cap');
+    });
+    const res = await post(CHAT);
+    expect(res.status).toBe(422);
+    // Rejected before flushHeaders: a JSON envelope with the classifier, never a stream.
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({
+      error: 'spend_cap_exceeded',
+      error_description: 'This embed key has reached its spend cap',
+      code: 'spend_cap_exceeded',
+    });
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not gate a key with no cap configured', async () => {
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    // VALID_INFO carries no spendCap; the gate still runs but with undefined cap.
+    expect(mockAssertKeySpendWithinCap).toHaveBeenCalledWith({ spendCap: undefined, currentSpend: undefined });
   });
 
   it('returns 429 when the per-key rate limit is exceeded', async () => {

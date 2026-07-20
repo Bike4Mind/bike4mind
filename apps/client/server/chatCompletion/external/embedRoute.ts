@@ -14,7 +14,7 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion, assertOwnerHasCredits } from '@bike4mind/services';
+import { executeCompletion, assertOwnerHasCredits, assertKeySpendWithinCap } from '@bike4mind/services';
 import {
   connectDB,
   mongoose,
@@ -81,6 +81,10 @@ interface EmbedContext {
   organizationId: string;
   allowedOrigins?: string[];
   rateLimit: { requestsPerMinute: number; requestsPerDay: number };
+  /** Spend ceiling in credits. Present 0 = real cap; absent = uncapped. */
+  spendCap?: number;
+  /** Cumulative settled spend in credits at validation time. */
+  currentSpend?: number;
   /** Present only on the session-token path; enables the per-session rate limit. */
   sessionId?: string;
 }
@@ -93,6 +97,8 @@ function toContext(info: ApiKeyInfo, sessionId?: string): EmbedContext {
     organizationId: info.organizationId!,
     allowedOrigins: info.allowedOrigins,
     rateLimit: info.rateLimit,
+    spendCap: info.spendCap,
+    currentSpend: info.currentSpend,
     ...(sessionId && { sessionId }),
   };
 }
@@ -236,6 +242,22 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           error: 'insufficient_credits',
           error_description: creditErr instanceof Error ? creditErr.message : 'Insufficient credits',
           code: getQuestErrorCode(creditErr),
+        });
+      }
+
+      // Per-key spend-cap gate, the second billing-class check: the org may be
+      // solvent while this key has exhausted its own budget. Reads the validation-
+      // time snapshot off ctx (no fresh query - the auth layer just loaded the
+      // key); the in-flight race this leaves open is bounded and accepted, since
+      // the cap is a leaked-key backstop, not exact accounting.
+      try {
+        assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
+      } catch (capErr) {
+        const status = (capErr as { statusCode?: number }).statusCode ?? 422;
+        return res.status(status).json({
+          error: 'spend_cap_exceeded',
+          error_description: capErr instanceof Error ? capErr.message : 'Spend cap exceeded',
+          code: getQuestErrorCode(capErr),
         });
       }
 
