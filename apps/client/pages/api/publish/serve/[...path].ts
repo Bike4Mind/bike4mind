@@ -352,15 +352,14 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // -- Reply / fabfile: render the snapshot body to a sanitized viewer page. --
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
-    // Artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
+    // Reply artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
     // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the
     // response's `sandbox allow-scripts` CSP forces an opaque origin (NO allow-same-origin)
     // even on a direct top-level navigation, so it can never read the app origin's token -
-    // the same isolation the bundle path relies on. Covers reply AND fabfile (both render
-    // their snapshot body through renderViewerPage); the viewer only emits `?a` for html/svg
-    // artifacts, so an out-of-range or non-embeddable index is a 404. The visibility gate
-    // already ran above, so this reads only content the caller is authorized for.
-    if (typeof req.query.a === 'string') {
+    // the same isolation the bundle path relies on. Reply-only, and the viewer only emits
+    // `?a` for html/svg artifacts, so an out-of-range or non-embeddable index is a 404. The
+    // visibility gate already ran above, so this reads only content the caller is authorized for.
+    if (artifact.source.kind === 'reply' && typeof req.query.a === 'string') {
       const idx = Number(req.query.a);
       const { artifacts } = parseArtifactsWithFallback(artifact.renderedBody ?? '');
       const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
@@ -1164,11 +1163,10 @@ function renderArtifactBlock(artifact: ParsedArtifact, index: number, selfPath: 
 }
 
 /**
- * Render a reply/fabfile snapshot to a standalone HTML page. Both extract any embedded
- * `<artifact>` blocks: each HTML/SVG artifact renders in its own sandboxed `?a=` iframe
- * (non-embeddable types get a placeholder card), so no artifact ever leaks as raw markup. The
- * surrounding text differs by kind - a reply is rendered as markdown (via marked), a fabfile as
- * escaped <pre> (a file is literal text, not prose). The PAGE is served with script-src 'none'
+ * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
+ * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
+ * and each HTML/SVG artifact renders in its own sandboxed `?a=` iframe (non-embeddable types get
+ * a placeholder card). Fabfiles render as escaped <pre>. The PAGE is served with script-src 'none'
  * so injected markup cannot execute; artifact JS runs only inside the sandboxed sub-document.
  */
 function renderViewerPage(
@@ -1178,16 +1176,20 @@ function renderViewerPage(
   canFrameArtifacts = false
 ): string {
   const body = artifact.renderedBody ?? '';
-  const { artifacts, cleanedContent } = parseArtifactsWithFallback(body);
-  // Reply prose is markdown; a fabfile is a literal file, so its remaining text stays escaped <pre>.
-  const article = cleanedContent
-    ? artifact.source.kind === 'reply'
+  let contentHtml: string;
+  let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
+  if (artifact.source.kind === 'reply') {
+    const { artifacts, cleanedContent } = parseArtifactsWithFallback(body);
+    const article = cleanedContent
       ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
-      : `<pre class="b4m-pre">${escapeHtml(cleanedContent)}</pre>`
-    : '';
-  const blocks = artifacts.map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts)).join('\n');
-  const contentHtml = `${article}${blocks}`;
-  const titleHtml = escapeHtml(cleanViewerTitle(artifact.title, artifacts));
+      : '';
+    const blocks = artifacts.map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts)).join('\n');
+    contentHtml = `${article}${blocks}`;
+    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+  } else {
+    contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+  }
+  const titleHtml = escapeHtml(displayTitle);
   const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
 
   return `<!doctype html>
