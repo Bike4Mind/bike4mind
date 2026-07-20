@@ -359,6 +359,40 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       logger?.info?.(`[CLI_CREDITS] Completion failed, refunding ${reservedCredits} reserved credits`);
       await holderMethods.incrementCredits(holderId, reservedCredits);
     }
+    // The success-path settlement/metering below is now unreachable, so an
+    // alwaysRecordUsage caller (embed) would otherwise have NO ledger trace of a run
+    // the provider already partially billed - most visibly on a client disconnect
+    // (res 'close' -> abort -> AbortError here) mid tool-loop. Record the partial spend
+    // as an errored event so org metering stays complete. creditsCharged is 0: the
+    // reservation was refunded above and nothing settled. Status 'error' (no 'aborted'
+    // in USAGE_EVENT_STATUSES; a disconnect is an errored completion).
+    if (params.alwaysRecordUsage && modelInfo && (finalInputTokens > 0 || finalOutputTokens > 0)) {
+      db.usageEvents
+        ?.record({
+          requestId: params.requestId ?? `completion-${apiKeyInfo?.keyId ?? userId}-${Date.now()}`,
+          userId,
+          ownerId: holderId,
+          ownerType: holderType,
+          feature: 'completion_api',
+          provider: modelInfo.backend,
+          model,
+          inputTokens: finalInputTokens,
+          outputTokens: finalOutputTokens,
+          cachedInputTokens: finalCacheReadTokens,
+          cacheWriteTokens: finalCacheCreationTokens,
+          costUsd: getTextModelCost(
+            modelInfo,
+            finalInputTokens,
+            finalOutputTokens,
+            finalCacheReadTokens,
+            finalCacheCreationTokens
+          ),
+          creditsCharged: 0,
+          status: 'error',
+          latencyMs: Date.now() - completionStartTime,
+        })
+        .catch(err => logger?.warn?.('Failed to record aborted usage event', err));
+    }
     throw error;
   }
 

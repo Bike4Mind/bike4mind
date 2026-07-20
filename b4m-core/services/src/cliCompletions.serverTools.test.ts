@@ -205,4 +205,79 @@ describe('executeCompletion - serverTools opt-in', () => {
     const refunds = users.incrementCredits.mock.calls.filter(([, delta]: [string, number]) => delta > 0);
     expect(refunds).toEqual([['user1', 10]]);
   });
+
+  it('honors abortSignal fired mid-completion: aborts the backend and rethrows', async () => {
+    const { db } = buildDb();
+    const controller = new AbortController();
+    // Emit one partial chunk, then abort and surface the AbortError like a real backend.
+    completeImpl = async onChunk => {
+      await onChunk(['partial\n'], { inputTokens: 60, outputTokens: 10 });
+      controller.abort();
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    };
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db,
+        serverTools: [makeServerTool('search_knowledge_base')],
+        abortSignal: controller.signal,
+      })
+    ).rejects.toThrow(/aborted/i);
+    expect(capturedOptions!.abortSignal).toBe(controller.signal);
+  });
+
+  it('records an errored usage event for an aborted alwaysRecordUsage run (org metering stays complete)', async () => {
+    const { db, usageEvents, users } = buildDb();
+    completeImpl = async onChunk => {
+      // Partial provider spend accrues, then the client disconnects mid-run.
+      await onChunk(['partial answer'], { inputTokens: 200, outputTokens: 25 });
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    };
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db,
+        billingOrganizationId: 'org1',
+        alwaysRecordUsage: true,
+        serverTools: [makeServerTool('search_knowledge_base')],
+      })
+    ).rejects.toThrow(/aborted/i);
+
+    // An org-visible ledger trace of the partial spend, charged 0 (reservation refunded).
+    expect(usageEvents.record).toHaveBeenCalledTimes(1);
+    expect(usageEvents.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ownerId: 'org1',
+        status: 'error',
+        inputTokens: 200,
+        outputTokens: 25,
+        creditsCharged: 0,
+      })
+    );
+    // Reservation refunded exactly once.
+    const refunds = (db.users.incrementCredits as ReturnType<typeof vi.fn>).mock.calls;
+    expect(refunds.some(([, d]: [string, number]) => d > 0)).toBe(false); // org-billed: user pool untouched
+    void users;
+  });
+
+  it('does NOT record an aborted event when no tokens were consumed', async () => {
+    const { db, usageEvents } = buildDb();
+    completeImpl = async () => {
+      throw Object.assign(new Error('The operation was aborted'), { name: 'AbortError' });
+    };
+
+    await expect(
+      executeCompletion({
+        ...baseParams,
+        db,
+        billingOrganizationId: 'org1',
+        alwaysRecordUsage: true,
+        serverTools: [makeServerTool('search_knowledge_base')],
+      })
+    ).rejects.toThrow(/aborted/i);
+
+    expect(usageEvents.record).not.toHaveBeenCalled();
+  });
 });

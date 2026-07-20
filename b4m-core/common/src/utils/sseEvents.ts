@@ -149,7 +149,18 @@ export function buildPublicSSEEvent(text: (string | null | undefined)[], info?: 
   // reads index [1], so put the response there with an empty thinking slot.
   const responseOnly: (string | null | undefined)[] = ['', text[1] ?? ''];
   if (!info) return buildSSEEvent(responseOnly, undefined);
-  const { toolsUsed: _tools, thinking: _thinking, responseFormatMode: _rfm, ...safeInfo } = info;
+  // Allowlist forward (not denylist): explicitly name the fields a public caller may
+  // see, so a field later added to CompletionInfo stays hidden until surfaced HERE.
+  // Everything not listed (toolsUsed, thinking, responseFormatMode, and any future
+  // addition) is dropped by omission.
+  const safeInfo: CompletionInfo = {
+    inputTokens: info.inputTokens,
+    outputTokens: info.outputTokens,
+    cacheReadInputTokens: info.cacheReadInputTokens,
+    cacheCreationInputTokens: info.cacheCreationInputTokens,
+    creditsUsed: info.creditsUsed,
+    usdCost: info.usdCost,
+  };
   return buildSSEEvent(responseOnly, safeInfo);
 }
 
