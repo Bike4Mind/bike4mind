@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   buildAndSortMessages,
+  computeCosineSimilarity,
   getLastBuildDebugInfo,
   fetchAndProcessPreviousMessages,
   fetchAgentConversationHistory,
-  includeArtifactSystemMessage,
 } from './utils';
 import { ensureToolPairingIntegrity, stripAllToolBlocks } from '@bike4mind/llm-adapters';
 import type { IMessage, ISessionDocument } from '@bike4mind/common';
@@ -1539,30 +1539,18 @@ describe('Context Management Tests', () => {
   });
 });
 
-describe('includeArtifactSystemMessage', () => {
-  const baseMessages: IMessage[] = [{ role: 'user', content: 'hi' } as IMessage];
-
-  const hasArtifactSystemMessage = (messages: IMessage[]) =>
-    messages.some(m => m.role === 'system' && typeof m.content === 'string' && m.content.includes('artifact syntax'));
-
-  it('prepends the artifact system message for long-form content requests', () => {
-    const result = includeArtifactSystemMessage(
-      baseMessages,
-      'Create an article about the 3 most popular night markets in Taipei and add images for each market'
-    );
-    expect(hasArtifactSystemMessage(result)).toBe(true);
-    // Original messages are preserved after the injected system message.
-    expect(result[result.length - 1]).toEqual(baseMessages[0]);
+describe('computeCosineSimilarity', () => {
+  it('returns 1 for identical vectors', () => {
+    expect(computeCosineSimilarity([1, 0, 1], [1, 0, 1])).toBeCloseTo(1, 10);
   });
 
-  it('triggers on other long-form keywords (blog, newsletter, landing page)', () => {
-    for (const prompt of ['write a blog post', 'draft a newsletter', 'build a landing page']) {
-      expect(hasArtifactSystemMessage(includeArtifactSystemMessage(baseMessages, prompt))).toBe(true);
-    }
+  it('returns 0 for orthogonal vectors', () => {
+    expect(computeCosineSimilarity([1, 0], [0, 1])).toBeCloseTo(0, 10);
   });
 
-  it('leaves plain prose requests untouched', () => {
-    const result = includeArtifactSystemMessage(baseMessages, 'What is the capital of France?');
-    expect(result).toEqual(baseMessages);
+  it('returns 0 when vector dimensions differ (mixed embedding models)', () => {
+    // e.g. an Ollama nomic-embed-text query (768) against an OpenAI chunk (1536).
+    expect(computeCosineSimilarity([1, 2, 3], [1, 2])).toBe(0);
+    expect(computeCosineSimilarity([1, 2], [1, 2, 3, 4])).toBe(0);
   });
 });

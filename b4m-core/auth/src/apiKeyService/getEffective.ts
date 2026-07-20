@@ -35,10 +35,53 @@ export type GetEffectiveLLMApiKeysAdapters = GetEffectiveApiKeyAdapters & {
   ) => Promise<Record<string, string | null>>;
 };
 
+// Self-host: fall back to a provider value from the environment (.env.selfhost)
+// when no admin setting is stored. Trimmed so a whitespace-only value stays
+// "unset" instead of enabling the feature. Only returns a value when
+// B4M_SELF_HOST=true. Shared by getEffectiveLLMApiKeys and the search/scrape
+// config getters below so the self-host fallback rule stays in one place.
+export const envKey = (name: string): string | null =>
+  (process.env.B4M_SELF_HOST === 'true' && process.env[name]?.trim()) || null;
+
 export const getSerperKey = async (adapters: GetEffectiveApiKeyAdapters) => {
   const { db } = adapters;
   const settings = await db.adminSettings.findBySettingName('SerperKey');
   return settings?.settingValue;
+};
+
+// Base URL of an admin- or env-configured SearXNG instance for local web search,
+// or null when unconfigured. Consumed by resolveWebSearchProvider (services).
+export const getSearxngUrl = async (adapters: GetEffectiveApiKeyAdapters): Promise<string | null> => {
+  const { db } = adapters;
+  const settings = await db.adminSettings.findBySettingName('SearxngUrl');
+  return settings?.settingValue?.trim() || envKey('SEARXNG_BASE_URL');
+};
+
+// Admin's chosen web-search provider ('auto' | 'serpapi' | 'searxng'), or null
+// when unset (the resolver treats null as 'auto').
+export const getWebSearchProviderSetting = async (adapters: GetEffectiveApiKeyAdapters): Promise<string | null> => {
+  const { db } = adapters;
+  const settings = await db.adminSettings.findBySettingName('WebSearchProvider');
+  return settings?.settingValue?.trim() || null;
+};
+
+export interface FirecrawlConfig {
+  apiKey?: string;
+  apiUrl?: string;
+}
+
+// Resolve Firecrawl config: admin settings first, then the self-host env fallback. A custom apiUrl
+// (self-hosted Firecrawl) is enough on its own - firecrawl-js runs keyless against a non-cloud URL.
+export const getFirecrawlConfig = async (adapters: GetEffectiveApiKeyAdapters): Promise<FirecrawlConfig> => {
+  const { db } = adapters;
+  const [keySetting, urlSetting] = await Promise.all([
+    db.adminSettings.findBySettingName('FirecrawlApiKey'),
+    db.adminSettings.findBySettingName('FirecrawlApiUrl'),
+  ]);
+  return {
+    apiKey: keySetting?.settingValue?.trim() || envKey('FIRECRAWL_API_KEY') || undefined,
+    apiUrl: urlSetting?.settingValue?.trim() || envKey('FIRECRAWL_API_URL') || undefined,
+  };
 };
 
 export const getOpenWeatherKey = async (adapters: GetEffectiveApiKeyAdapters) => {
@@ -160,11 +203,7 @@ export const getEffectiveLLMApiKeys = async (
     return apiKey.apiKey;
   };
 
-  // Self-host: fall back to the provider keys from the environment
-  // (.env.selfhost) when no user or admin key is stored. Trimmed so a
-  // whitespace-only value stays "unset" instead of enabling the provider.
-  const envKey = (name: string) => (process.env.B4M_SELF_HOST === 'true' && process.env[name]?.trim()) || null;
-
+  // Self-host provider-key fallback uses the shared module-scope envKey (above).
   return {
     openai: keyOrExpired(openaiUserKey) || openaiDemoKey || envKey('OPENAI_API_KEY'),
     anthropic: keyOrExpired(anthropicUserKey) || anthropicDemoKey || envKey('ANTHROPIC_API_KEY'),
@@ -178,5 +217,9 @@ export const getEffectiveLLMApiKeys = async (
     // out of the box with no provider keys. An explicit admin config still
     // takes precedence. envKey() only returns a value when B4M_SELF_HOST=true.
     ollama: (ollamaEnabled ? ollamaBackend || null : null) || envKey('OLLAMA_BASE_URL'),
+    // Self-host: base URL of a local Stable-Diffusion server (A1111-compatible
+    // REST API). Gated on B4M_SELF_HOST like the other env fallbacks; mirrors
+    // OLLAMA_BASE_URL for local image generation with no provider keys.
+    imageGen: envKey('IMAGE_GEN_BASE_URL'),
   };
 };

@@ -1,5 +1,6 @@
 import { REACT_BLESSED_SCRIPT_PATHS, PUBLISH_REACT_DEP_SCRIPTS } from '@bike4mind/common';
 import { checkHasDefaultExport } from '@client/app/utils/artifactParser';
+import { LUCIDE_WRAPPER_FN } from '@client/app/utils/reactArtifactDeps';
 import { PUBLISH_HOST } from './validateBundle';
 
 /**
@@ -81,6 +82,37 @@ function findRelativeImport(source: string): string | null {
   return null;
 }
 
+/**
+ * Remove TypeScript type-only import syntax, which carries no runtime binding. The import rewrite
+ * and dependency scan below are regex passes that run BEFORE Babel's typescript preset, so they'd
+ * otherwise emit broken `const { type Foo } = ...` or gate a type-only package as a missing runtime
+ * dep. Runs on the raw source so the whole pipeline (relative-import guard, dep gating, rewrite)
+ * sees value imports only. Idempotent. Kept in sync with the sandbox preview
+ * (react-artifact-sandbox.ts).
+ *
+ * Handles: whole-clause `import type { X } from 'm'` / `import type X from 'm'` (dropped), and
+ * inline `import { type X, y } from 'm'` -> `import { y } from 'm'`. A binding literally named
+ * `type` (`import type from 'm'`, `import { type as T } from 'm'`) is preserved - `type` is only
+ * a modifier when followed by another binding identifier that is not `as`.
+ */
+export function stripTypeOnlyImports(source: string): string {
+  return source
+    .replace(/import\s+type\s+[\s\S]*?\s+from\s+['"][^'"]+['"]\s*;?/g, '')
+    .replace(/import\s+([\s\S]*?)\s+from\s+['"][^'"]+['"]\s*;?/g, (stmt: string, clause: string) => {
+      const braceMatch = clause.match(/\{([\s\S]*?)\}/);
+      if (!braceMatch) return stmt;
+      const kept = braceMatch[1]
+        .split(',')
+        .map(s => s.trim())
+        .filter(Boolean)
+        .filter(spec => !/^type\s+(?!as\b)\w/.test(spec));
+      // No value bindings left and no default/namespace before the brace -> whole import was type-only.
+      const beforeBrace = clause.slice(0, clause.indexOf('{')).replace(/,\s*$/, '').trim();
+      if (!kept.length && !beforeBrace) return '';
+      return stmt.replace(/\{[\s\S]*?\}/, `{ ${kept.join(', ')} }`);
+    });
+}
+
 /** React APIs pre-injected as bare globals in the bootstrap (see HOOK_GLOBALS). A named import of
  *  one of these is dropped (already global); any OTHER named React import is bound from `React`. */
 const HOOK_GLOBAL_NAMES: readonly string[] = [
@@ -103,7 +135,20 @@ const HOOK_GLOBAL_NAMES: readonly string[] = [
  * Uses lazy `[\s\S]*?` (not greedy `[^;]+`) so adjacent semicolon-less imports (valid via ASI) are
  * not conflated into one broken match. Exported for unit tests.
  */
-export function rewriteImportsToRequire(source: string): string {
+export function rewriteImportsToRequire(rawSource: string): string {
+  const source = stripTypeOnlyImports(rawSource); // TS type imports have no runtime binding
+  // Convert ESM `X as Y` renames in a named-imports clause to valid destructuring `X: Y`
+  // (a raw `const { X as Y } = ...` is a syntax error that would blank the published page).
+  const renameNamedBindings = (named: string): string =>
+    named
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean)
+      .map(spec => {
+        const m = spec.match(/^(\w+)\s+as\s+(\w+)$/);
+        return m ? `${m[1]}: ${m[2]}` : spec;
+      })
+      .join(', ');
   return source.replace(/import\s+([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g, (_match, clauseRaw: string, mod: string) => {
     const clause = clauseRaw.trim();
     const namedMatch = clause.match(/\{([\s\S]*)\}/);
@@ -129,16 +174,17 @@ export function rewriteImportsToRequire(source: string): string {
     if (nsMatch) return `const ${nsMatch[1]} = require('${mod}');`;
     if (hasDefault && namedRaw) {
       // mixed default + named: bind the default to the module, then destructure the named off it.
-      return `const ${defMatch![1]} = require('${mod}'); const { ${namedRaw} } = ${defMatch![1]};`;
+      return `const ${defMatch![1]} = require('${mod}'); const { ${renameNamedBindings(namedRaw)} } = ${defMatch![1]};`;
     }
-    if (namedRaw) return `const { ${namedRaw} } = require('${mod}');`;
+    if (namedRaw) return `const { ${renameNamedBindings(namedRaw)} } = require('${mod}');`;
     if (hasDefault) return `const ${defMatch![1]} = require('${mod}');`;
     return `const ${clause} = require('${mod}');`;
   });
 }
 
 /** Module specifiers from real `import ... from '...'` statements (non-relative only). */
-function extractImportedModules(source: string): string[] {
+function extractImportedModules(rawSource: string): string[] {
+  const source = stripTypeOnlyImports(rawSource); // don't gate a type-only import as a runtime dep
   const mods = new Set<string>();
   const re = /import\s+[\s\S]*?\s+from\s+['"]([^'"]+)['"]/g;
   let m: RegExpExecArray | null;
@@ -177,7 +223,9 @@ export function assertPublishableDependencies(source: string): void {
  * bootstrap reads. Output contains no import/export statements and no eval.
  */
 export async function transpileReactSource(source: string): Promise<string> {
-  const relImport = findRelativeImport(source);
+  // Strip type-only imports first so a type-only relative import isn't misread as a multi-file ref.
+  const cleaned = stripTypeOnlyImports(source);
+  const relImport = findRelativeImport(cleaned);
   if (relImport) {
     throw new ReactArtifactTranspileError(
       `Multi-file artifacts are not supported: this one references "${relImport}" from a separate file. ` +
@@ -186,17 +234,21 @@ export async function transpileReactSource(source: string): Promise<string> {
   }
 
   const Babel = await getBabel();
-  const withRequires = rewriteImportsToRequire(source);
+  const withRequires = rewriteImportsToRequire(cleaned);
 
   let transformed: string | null | undefined;
   try {
     // Classic runtime: emit React.createElement against the React global (the AUTOMATIC runtime
     // injects `import { jsx } from "react/jsx-runtime"`, fatal in a no-module-loader script).
+    // The `typescript` preset strips TS syntax (types/generics/interfaces the assistant emits by
+    // default); presets run last-to-first, so types are stripped BEFORE the JSX transform. TSX is
+    // detected via the `.tsx` filename - NOT preset-typescript's allExtensions/isTSX options, which
+    // conflict with preset-react JSX detection and break the plain-JS path.
     // Identical config to the in-app sandbox (react-artifact-sandbox.ts) so a published artifact
-    // renders the same as the chat preview.
+    // renders the same as the chat preview - keep the two in sync.
     transformed = Babel.transform(withRequires, {
-      presets: [['react', { runtime: 'classic' }]],
-      filename: 'component.jsx',
+      presets: [['react', { runtime: 'classic' }], 'typescript'],
+      filename: 'component.tsx',
     }).code;
   } catch (e) {
     throw new ReactArtifactTranspileError(`JSX transform failed: ${(e as Error).message}`);
@@ -253,27 +305,12 @@ function reactRuntimeScriptTags(): string {
 
 /**
  * Builds `window.LucideReactWrapper` from the blessed `lucide` UMD (global `lucide`), embedded in
- * the bootstrap when a bundle imports `lucide-react`. Kept functionally equivalent to the in-app
- * sandbox shim (setupLucideWrapper in apps/client/pages/api/react-artifact-sandbox.ts) so a
- * published lucide artifact renders identically to its chat preview - MUST stay in sync with it.
- * Contains no closing-script-tag sequence, so it is safe inside the inline bootstrap.
+ * the bootstrap when a bundle imports `lucide-react`. The factory itself is the shared LUCIDE_WRAPPER_FN
+ * (single source of truth with the in-app sandbox at react-artifact-sandbox.ts); here we append the
+ * call so the wrapper is set up as the bootstrap runs. LUCIDE_WRAPPER_FN carries no closing-script-tag
+ * sequence, so it is safe inside the inline bootstrap.
  */
-const LUCIDE_WRAPPER_SETUP = `function setupLucideWrapper(){
-    if(window.LucideReactWrapper)return;
-    var toKebabCase=function(str){return str.replace(/([a-z0-9])([A-Z])/g,'$1-$2').toLowerCase();};
-    window.LucideReactWrapper=new Proxy({},{get:function(target,iconName){
-      return function(props){
-        props=props||{};
-        var size=props.size||24,color=props.color||'currentColor',strokeWidth=props.strokeWidth||2,className=props.className||'';
-        var rest=Object.assign({},props);delete rest.size;delete rest.color;delete rest.strokeWidth;delete rest.className;
-        var kebab=toKebabCase(iconName);
-        var node=(window.lucide&&lucide.icons&&(lucide.icons[iconName]||lucide.icons[kebab]))||null;
-        var children=Array.isArray(node)?node.map(function(entry,i){return React.createElement(entry[0],Object.assign({key:i},entry[1]));}):null;
-        return React.createElement('svg',Object.assign({xmlns:'http://www.w3.org/2000/svg',width:size,height:size,viewBox:'0 0 24 24',fill:'none',stroke:color,strokeWidth:strokeWidth,strokeLinecap:'round',strokeLinejoin:'round',className:className},rest),children);
-      };
-    }});
-  }
-  setupLucideWrapper();`;
+const LUCIDE_WRAPPER_SETUP = `${LUCIDE_WRAPPER_FN}\n  setupLucideWrapper();`;
 
 /**
  * Assemble the final inert index.html: blessed React runtime scripts + any blessed optional-dep

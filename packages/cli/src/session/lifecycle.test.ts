@@ -228,6 +228,121 @@ describe('session lifecycle', () => {
       expect(result).toBe(installed);
     });
 
+    it('injects persisted workflow state as a leading message when there is open state but no handoff', async () => {
+      const stored = makeSession({
+        id: 'saved-1',
+        messages: [message('user', 'earlier')],
+        metadata: {
+          totalTokens: 0,
+          totalCost: 0,
+          toolCallCount: 0,
+          workflow: {
+            decisions: [{ id: 'd1', timestamp: ISO, summary: 'use SSE for streaming', rationale: 'simplest' }],
+            blockers: [{ id: 'b1', createdAt: ISO, description: 'waiting on API key', status: 'open' }],
+          },
+        },
+      });
+      const ctx = makeCtx({
+        sessionStore: { load: vi.fn(async () => stored), save: vi.fn() } as unknown as SessionStore,
+      });
+
+      await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      const installed = useCliStore.getState().session!;
+      expect(installed.messages).toHaveLength(2); // workflow-state message prepended to the original one
+      // Stored as a user message so it survives the user/assistant filter and reaches the LLM.
+      expect(installed.messages[0].role).toBe('user');
+      expect(installed.messages[0].content).toContain('use SSE for streaming');
+      expect(installed.messages[0].content).toContain('waiting on API key');
+    });
+
+    it('does not inject workflow state when a handoff exists (handoff wins, no double-injection)', async () => {
+      const stored = makeSession({
+        id: 'saved-1',
+        messages: [message('user', 'earlier')],
+        metadata: {
+          totalTokens: 0,
+          totalCost: 0,
+          toolCallCount: 0,
+          workflow: {
+            decisions: [{ id: 'd1', timestamp: ISO, summary: 'use SSE for streaming', rationale: 'simplest' }],
+            blockers: [{ id: 'b1', createdAt: ISO, description: 'waiting on API key', status: 'open' }],
+            handoff: {
+              summary: 'pick up where we left off',
+              keyFindings: [],
+              nextSteps: [],
+              pendingDecisions: [],
+              blockers: [],
+              generatedAt: ISO,
+            },
+          },
+        },
+      });
+      const ctx = makeCtx({
+        sessionStore: { load: vi.fn(async () => stored), save: vi.fn() } as unknown as SessionStore,
+      });
+
+      await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      const installed = useCliStore.getState().session!;
+      expect(installed.messages).toHaveLength(2); // exactly one injected message, not two
+      expect(installed.messages[0].content).toContain('pick up where we left off');
+      expect(installed.messages.some(m => m.content.includes('[Workflow state from previous session]'))).toBe(false);
+    });
+
+    it('injects nothing when there is no handoff and no open workflow state', async () => {
+      const stored = makeSession({
+        id: 'saved-1',
+        messages: [message('user', 'earlier')],
+        metadata: {
+          totalTokens: 0,
+          totalCost: 0,
+          toolCallCount: 0,
+          workflow: { decisions: [], blockers: [] },
+        },
+      });
+      const ctx = makeCtx({
+        sessionStore: { load: vi.fn(async () => stored), save: vi.fn() } as unknown as SessionStore,
+      });
+
+      await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      const installed = useCliStore.getState().session!;
+      expect(installed.messages).toHaveLength(1); // untouched
+      expect(installed.messages[0].content).toBe('earlier');
+    });
+
+    it('replaces a prior injected workflow-state message on repeated resume (no stacking)', async () => {
+      const priorInjection = message('user', '[Workflow state from previous session]\n\nRecent decisions:\n- stale');
+      const stored = makeSession({
+        id: 'saved-1',
+        messages: [priorInjection, message('user', 'earlier')],
+        metadata: {
+          totalTokens: 0,
+          totalCost: 0,
+          toolCallCount: 0,
+          workflow: {
+            decisions: [{ id: 'd1', timestamp: ISO, summary: 'fresh decision', rationale: 'why' }],
+            blockers: [],
+          },
+        },
+      });
+      const ctx = makeCtx({
+        sessionStore: { load: vi.fn(async () => stored), save: vi.fn() } as unknown as SessionStore,
+      });
+
+      await resumeSession(ctx, makeSession({ id: 'saved-1' }));
+
+      const installed = useCliStore.getState().session!;
+      // One fresh injection + the real message; the stale injection is gone.
+      expect(installed.messages).toHaveLength(2);
+      expect(installed.messages[0].content).toContain('fresh decision');
+      expect(installed.messages.filter(m => m.content.includes('[Workflow state from previous session]'))).toHaveLength(
+        1
+      );
+      expect(installed.messages[1].content).toBe('earlier');
+    });
+
     it('returns null and leaves the store untouched when the load fails', async () => {
       const current = makeSession({ id: 'current' });
       useCliStore.getState().setSession(current);

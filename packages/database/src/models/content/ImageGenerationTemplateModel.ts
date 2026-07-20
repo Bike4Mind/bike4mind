@@ -54,6 +54,11 @@ class ImageGenerationTemplateRepository
     return this.templateModel.countDocuments({ userId, deletedAt: null });
   }
 
+  async listByModel(userId: string, model: string): Promise<IImageGenerationTemplateDocument[]> {
+    const results = await this.templateModel.find({ userId, model, deletedAt: null }).lean<LeanDoc[]>();
+    return results.map(withId);
+  }
+
   async findOwned(id: string, userId: string): Promise<IImageGenerationTemplateDocument | null> {
     if (!mongoose.isValidObjectId(id)) return null;
     const result = await this.templateModel.findOne({ _id: id, userId, deletedAt: null }).lean<LeanDoc>();

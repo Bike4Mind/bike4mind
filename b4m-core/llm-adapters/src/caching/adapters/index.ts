@@ -31,6 +31,7 @@ const ADAPTERS: Record<ModelBackend, ICachingAdapter> = {
   [ModelBackend.BFL]: new NoOpCachingAdapter(),
   [ModelBackend.VoyageAI]: new NoOpCachingAdapter(),
   [ModelBackend.AWS]: new NoOpCachingAdapter(),
+  [ModelBackend.LocalImage]: new NoOpCachingAdapter(),
 };
 
 /**

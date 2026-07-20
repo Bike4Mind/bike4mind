@@ -466,6 +466,27 @@ describe('cleanupDeletedDataLake — phase 2 sweep', () => {
     ).resolves.toBeUndefined();
     expect(adapters.db.dataLakes.delete).not.toHaveBeenCalled();
   });
+
+  it('chunks the fan-outs yet processes every item and preserves step ordering', async () => {
+    const adapters = makeAdapters('deleted');
+    adapters.db.fabFiles.findIdsByDataLakeTag = vi.fn().mockResolvedValue(['f1', 'f2', 'f3']);
+    adapters.db.batches.find = vi.fn().mockResolvedValue([{ id: 'b1' }, { id: 'b2' }, { id: 'b3' }]);
+
+    await cleanupDeletedDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { ...adapters, chunkSize: 2 });
+
+    // Every file's chunks and every batch are still deleted, despite the chunk size < count.
+    expect(adapters.db.fabFileChunks.deleteManyByFabFileId).toHaveBeenCalledTimes(3);
+    expect(adapters.db.batches.delete).toHaveBeenCalledTimes(3);
+
+    // Ordering contract: last chunk delete -> hard-delete files -> first batch delete -> lake last.
+    const lastChunk = Math.max(...adapters.db.fabFileChunks.deleteManyByFabFileId.mock.invocationCallOrder);
+    const hardDelete = adapters.db.fabFiles.hardDeleteByDataLakeTag.mock.invocationCallOrder[0];
+    const firstBatch = Math.min(...adapters.db.batches.delete.mock.invocationCallOrder);
+    const lakeDelete = adapters.db.dataLakes.delete.mock.invocationCallOrder[0];
+    expect(lastChunk).toBeLessThan(hardDelete);
+    expect(hardDelete).toBeLessThan(firstBatch);
+    expect(firstBatch).toBeLessThan(lakeDelete);
+  });
 });
 
 describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
@@ -511,6 +532,49 @@ describe('reconcileStuckBatches — guarded read-time reconciliation', () => {
     const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db }, now);
     expect(db.fabFiles.computeDataLakeStats).not.toHaveBeenCalled();
     expect(forced).toEqual([]);
+  });
+
+  const late = DEFAULT_STUCK_BATCH_TIMEOUT_MS + 10_000;
+
+  it('emits the forced-terminal metric and the stuck gauge when a batch is forced', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitForcedTerminal).toHaveBeenCalledWith('b1', 'lake1');
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+  });
+
+  it('gauges the stuck count but does NOT emit forced-terminal when the guard is lost', async () => {
+    db.batches.markTerminalIfActive = vi.fn().mockResolvedValue(null);
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(1);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('gauges zero when nothing is stuck', async () => {
+    const metrics = { emitForcedTerminal: vi.fn(), emitStuckGauge: vi.fn() };
+    await reconcileStuckBatches(
+      [batch({ updatedAt: new Date(1000) })],
+      DEFAULT_STUCK_BATCH_TIMEOUT_MS,
+      { db, metrics },
+      2000
+    );
+    expect(metrics.emitStuckGauge).toHaveBeenCalledWith(0);
+    expect(metrics.emitForcedTerminal).not.toHaveBeenCalled();
+  });
+
+  it('still reconciles when a metric hook throws (metrics must never break reconcile)', async () => {
+    const metrics = {
+      emitForcedTerminal: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+      emitStuckGauge: vi.fn(() => {
+        throw new Error('cloudwatch down');
+      }),
+    };
+    const forced = await reconcileStuckBatches([batch()], DEFAULT_STUCK_BATCH_TIMEOUT_MS, { db, metrics }, late);
+    expect(forced).toEqual(['b1']);
+    expect(db.fabFiles.computeDataLakeStats).toHaveBeenCalled();
   });
 });
 

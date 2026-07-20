@@ -177,15 +177,20 @@ const formatContextWindow = (size: number): string => {
 };
 
 // Section label for models running on the operator's own hardware (self-host).
-const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
+export const SELF_HOSTED_BACKEND = 'Local / Self-Hosted';
 
-// Function to determine backend from model name/ID
-const getModelBackend = (model: ModelInfo): string => {
-  // Self-host: Ollama models run locally on the operator's hardware, so group
-  // them in a dedicated "Local / Self-Hosted" section rather than "Other". In
-  // the hosted product the same backend is remote, so this only applies when
-  // the bundle was built with B4M_SELF_HOST (inlined by next.config.mjs).
-  if (model.backend === ModelBackend.Ollama && process.env.B4M_SELF_HOST === 'true') {
+// Function to determine backend from model name/ID. Exported for grouping tests.
+export const getModelBackend = (model: ModelInfo): string => {
+  // Self-host: Ollama (text) and the local Stable-Diffusion backend (image) both
+  // run on the operator's hardware, so group them in a dedicated "Local /
+  // Self-Hosted" section rather than "Other". In the hosted product the same
+  // Ollama backend is remote, so this only applies when the bundle was built with
+  // B4M_SELF_HOST (inlined by next.config.mjs) - which is also the only context a
+  // local image model is enumerated in.
+  if (
+    (model.backend === ModelBackend.Ollama || model.backend === ModelBackend.LocalImage) &&
+    process.env.B4M_SELF_HOST === 'true'
+  ) {
     return SELF_HOSTED_BACKEND;
   }
 

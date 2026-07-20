@@ -13,6 +13,7 @@ This is the task-oriented guide. For the exhaustive flag/command reference and t
 - [Pointing at any deployment (AWS, staging, …)](#pointing-at-any-deployment-aws-staging-)
 - [Switching between environments](#switching-between-environments)
 - [Tool API keys & MCP servers](#tool-api-keys--mcp-servers)
+- [Serve Bike4Mind as an MCP server (`b4m mcp serve`)](#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve)
 - [Headless / scripting mode](#headless--scripting-mode)
 - [Troubleshooting](#troubleshooting)
 
@@ -92,7 +93,7 @@ Notes for the self-host path:
 - **Port.** The Docker stack serves the app on `3000` by default (`--dev` is a *different* target — the dev server on `3001`). If you remapped the host port (`APP_HOST_PORT` in `.env.selfhost`), use that port in `--api-url`.
 - **Models.** Only models for providers you configured a key for appear — or your local Ollama models. See [Local models with Ollama](./SELF_HOST.md#local-models-with-ollama-no-api-keys). To surface a host-native Ollama in the picker without editing config, launch with `b4m --ollama-host http://localhost:11434`.
 - **Credits — you don't need them.** Self-host sets `B4M_SELF_HOST=true`, which defaults the **Enforce Credits** admin setting **off**, so usage is never metered: you don't grant yourself credits or top up (`/usage` just shows enforcement is disabled). Your only cost is your own LLM provider bill. An admin *can* turn on **Enforce Credits** (Admin → Settings → Credits) if you want to meter users on your instance.
-- **Streaming.** The self-host stack does not yet include the realtime websocket gateway; see the [self-host gaps](./SELF_HOST.md#what-you-get-and-dont).
+- **Streaming.** The self-host stack includes the realtime WebSocket gateway (the `ws` and `subscriber-fanout` services), so chat replies stream token-by-token and live document updates arrive without a refresh - the same experience as the hosted app, with no AWS API Gateway. See [what you get](./SELF_HOST.md#what-you-get-and-dont).
 
 ## Pointing at any deployment (AWS, staging, …)
 
@@ -121,6 +122,63 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 
 - [Tool API keys](./packages/cli/README.md#tool-api-keys)
 - [MCP servers](./packages/cli/README.md#optional-mcp-servers)
+
+## Serve Bike4Mind as an MCP server (`b4m mcp serve`)
+
+`b4m mcp serve` turns your Bike4Mind backend into a [Model Context Protocol](https://modelcontextprotocol.io) server, so any MCP client (Claude Desktop, editors, other agents) can drive your notebooks, chat, and files. This is the opposite direction from `b4m mcp add`, which attaches external MCP servers *into* the CLI.
+
+### Tools and resources
+
+| Tool | Does | Scope |
+| --- | --- | --- |
+| `list_notebooks` | List your notebooks (sessions) | `notebooks:read` |
+| `get_notebook` | Fetch one notebook by id | `notebooks:read` |
+| `create_notebook` | Create a notebook (optionally in a project) | `notebooks:write` |
+| `send_message` | Send a chat message and wait for the reply | `ai:chat` |
+| `search_knowledge_base` | Semantic search across your notebooks | `notebooks:read` |
+| `list_files` | Search your files | `files:read` |
+| `get_file` | File metadata plus a signed download URL | `files:read` |
+
+It also exposes a `b4m://notebook/{id}` resource that lists and reads notebooks as JSON.
+
+The **Scope** column is the *recommended* key configuration for that tool, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
+
+### Auth and endpoint
+
+Listing tools needs no credentials; tool *calls* hit the API and authenticate. Precedence:
+
+- **Auth**: `--api-key` > `B4M_API_KEY` env var > the CLI's stored login (`b4m login`).
+- **Endpoint**: `B4M_API_URL` env var > `--api-url` > the CLI's configured backend.
+
+Create a key in the app under **Settings > API Keys** with the scopes for the tools you plan to use (keys start `b4m_live_`). Prefer `B4M_API_KEY` over `--api-key`: a flag value is visible in process listings (`ps`), an env var is not.
+
+### Transports
+
+- **stdio (default)**: `b4m mcp serve`. For local clients like Claude Desktop that spawn the process and speak JSON-RPC over stdin/stdout.
+- **streamable HTTP**: `b4m mcp serve --http --port 7000`. A stateless endpoint at `http://127.0.0.1:<port>/mcp` for clients that connect over HTTP.
+
+HTTP mode binds **loopback only** (`127.0.0.1`) by design: it has no per-request auth of its own, so it must not be exposed on a routable interface. There is no flag to change the bind address. Only the `/mcp` path is served (any other path is a 404).
+
+### Claude Desktop
+
+Add the server to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "bike4mind": {
+      "command": "b4m",
+      "args": ["mcp", "serve"],
+      "env": {
+        "B4M_API_KEY": "b4m_live_xxx",
+        "B4M_API_URL": "https://app.your-company.example.com"
+      }
+    }
+  }
+}
+```
+
+Restart Claude Desktop and the Bike4Mind tools appear in its tools menu.
 
 ## Headless / scripting mode
 

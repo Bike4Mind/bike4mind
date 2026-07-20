@@ -73,19 +73,23 @@ interface ClaudeChunkContentBlockStartThinking extends BaseClaudeChunk {
   content_block: { type: 'thinking' };
 }
 
+const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
+
 // Type guard functions
-function isToolUseContentBlock(content_block: any): content_block is { type: 'tool_use'; name: string; id: string } {
-  return content_block?.type === 'tool_use' && 'name' in content_block && 'id' in content_block;
+function isToolUseContentBlock(
+  content_block: unknown
+): content_block is { type: 'tool_use'; name: string; id: string } {
+  return (
+    isRecord(content_block) && content_block.type === 'tool_use' && 'name' in content_block && 'id' in content_block
+  );
 }
 
-function isThinkingContentBlock(content_block: any): content_block is { type: 'thinking' } {
-  return content_block?.type === 'thinking';
+function isThinkingContentBlock(content_block: unknown): content_block is { type: 'thinking' } {
+  return isRecord(content_block) && content_block.type === 'thinking';
 }
 
 type ClaudeChunkContentBlockStart =
-  | ClaudeChunkContentBlockStartText
-  | ClaudeChunkContentBlockStartToolUse
-  | ClaudeChunkContentBlockStartThinking;
+  ClaudeChunkContentBlockStartText | ClaudeChunkContentBlockStartToolUse | ClaudeChunkContentBlockStartThinking;
 
 enum ClaudeChunkDeltaTypes {
   TEXT = 'text_delta',
@@ -116,16 +120,16 @@ interface ClaudeChunkDeltaThinking extends ClaudeChunkDeltaBase {
 }
 
 // Type guard functions for delta types
-function isTextDelta(delta: any): delta is ClaudeChunkDeltaText {
-  return delta?.type === ClaudeChunkDeltaTypes.TEXT && 'text' in delta;
+function isTextDelta(delta: unknown): delta is ClaudeChunkDeltaText {
+  return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.TEXT && 'text' in delta;
 }
 
-function isInputJsonDelta(delta: any): delta is ClaudeChunkDeltaInputJson {
-  return delta?.type === ClaudeChunkDeltaTypes.INPUT_JSON && 'partial_json' in delta;
+function isInputJsonDelta(delta: unknown): delta is ClaudeChunkDeltaInputJson {
+  return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.INPUT_JSON && 'partial_json' in delta;
 }
 
-function isThinkingDelta(delta: any): delta is ClaudeChunkDeltaThinking {
-  return delta?.type === ClaudeChunkDeltaTypes.THINKING && 'thinking' in delta;
+function isThinkingDelta(delta: unknown): delta is ClaudeChunkDeltaThinking {
+  return isRecord(delta) && delta.type === ClaudeChunkDeltaTypes.THINKING && 'thinking' in delta;
 }
 
 type ClaudeChunkDelta = ClaudeChunkDeltaText | ClaudeChunkDeltaInputJson | ClaudeChunkDeltaThinking;
@@ -154,28 +158,28 @@ interface ClaudeChunkMessageStop extends BaseClaudeChunk {
 }
 
 // Type guard for chunk types
-function isMessageStart(chunk: any): chunk is ClaudeChunkMessageStart {
-  return chunk?.type === ClaudeChunkTypes.MESSAGE_START;
+function isMessageStart(chunk: unknown): chunk is ClaudeChunkMessageStart {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.MESSAGE_START;
 }
 
-function isContentBlockStart(chunk: any): chunk is ClaudeChunkContentBlockStart {
-  return chunk?.type === ClaudeChunkTypes.CONTENT_BLOCK_START;
+function isContentBlockStart(chunk: unknown): chunk is ClaudeChunkContentBlockStart {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.CONTENT_BLOCK_START;
 }
 
-function isContentBlockDelta(chunk: any): chunk is ClaudeChunkContentBlockDelta {
-  return chunk?.type === ClaudeChunkTypes.CONTENT_BLOCK_DELTA;
+function isContentBlockDelta(chunk: unknown): chunk is ClaudeChunkContentBlockDelta {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.CONTENT_BLOCK_DELTA;
 }
 
-function isContentBlockStop(chunk: any): chunk is ClaudeChunkContentStop {
-  return chunk?.type === ClaudeChunkTypes.CONTENT_BLOCK_STOP;
+function isContentBlockStop(chunk: unknown): chunk is ClaudeChunkContentStop {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.CONTENT_BLOCK_STOP;
 }
 
-function isMessageDelta(chunk: any): chunk is ClaudeChunkMessageDelta {
-  return chunk?.type === ClaudeChunkTypes.MESSAGE_DELTA;
+function isMessageDelta(chunk: unknown): chunk is ClaudeChunkMessageDelta {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.MESSAGE_DELTA;
 }
 
-function isMessageStop(chunk: any): chunk is ClaudeChunkMessageStop {
-  return chunk?.type === ClaudeChunkTypes.MESSAGE_STOP;
+function isMessageStop(chunk: unknown): chunk is ClaudeChunkMessageStop {
+  return isRecord(chunk) && chunk.type === ClaudeChunkTypes.MESSAGE_STOP;
 }
 
 const TEMPERATURE_ONLY_MODELS = [
@@ -600,17 +604,17 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         // Handle array content - filter out empty text blocks
         if (Array.isArray(m.content)) {
           const sanitizedContent = m.content
-            .map((block: any) => {
+            .map(block => {
               // For text blocks, check if text is empty/whitespace-only
-              if (block.type === 'text') {
-                const text = block.text || '';
+              if (isRecord(block) && block.type === 'text') {
+                const text = typeof block.text === 'string' ? block.text : '';
                 if (!text.trim()) {
                   return null; // Mark for removal
                 }
               }
               return block;
             })
-            .filter((block: any) => block !== null);
+            .filter(block => block !== null);
 
           // If array is now empty, mark message for removal
           if (sanitizedContent.length === 0) {
@@ -677,13 +681,15 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     const supportsThinking = currentModelInfo?.can_think === true;
 
     if (supportsThinking && currentModelInfo) {
-      const isQuestMaster = (options as any).questMaster === true;
-      const userThinkingEnabled = (options as any).thinking?.enabled === true;
+      // questMaster is an Anthropic-specific extra not on the generic ICompletionOptions;
+      // cast locally for that one field (thinking is already declared on the type).
+      const isQuestMaster = (options as { questMaster?: boolean }).questMaster === true;
+      const userThinkingEnabled = options.thinking?.enabled === true;
 
       if (userThinkingEnabled || isQuestMaster) {
         const budgetTokens = isQuestMaster
           ? Math.min(Math.floor(maxTokens * 0.25), 4096)
-          : ((options as any).thinking?.budget_tokens ?? 16000);
+          : (options.thinking?.budget_tokens ?? 16000);
         const effort = isQuestMaster ? ('medium' as const) : ('high' as const);
 
         const result = buildThinkingParams(model, currentModelInfo, budgetTokens, maxTokens, effort);
@@ -814,10 +820,16 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           }
 
           const content = previousMessage.content as MessageContentText[];
-          if (content.some(c => c.type === 'text')) {
-            return cur;
-          }
-          // Ensure value.content is a valid string before adding to message
+          // APPEND, never discard. This branch used to bail out with `return cur` whenever the
+          // accumulated content already held a text block - which is true for every message after
+          // the second - so a run of N same-role messages silently collapsed to the FIRST TWO and
+          // the rest vanished before the request was built.
+          //
+          // System messages are all consecutive at the head of the prompt, so on Bedrock that meant
+          // only the date + artifact prompt survived: the help-center prompt, tool guidance,
+          // knowledge retrieval, session/org prompts and BOTH Mementos versions were dropped, with
+          // no error and no log. Mementos could never reach the model on a Bedrock Claude - the
+          // default chat model.
           const textContent = typeof value.content === 'string' ? value.content : '';
           if (textContent) {
             previousMessage.content = [...content, { type: 'text', text: textContent }];
@@ -862,7 +874,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
       if (thinkingBlocks.length > 0) {
         console.warn(`[AnthropicBedrockBackend] Unexpected thinking blocks in response`, {
           thinkingBlockCount: thinkingBlocks.length,
-          thinkingLengths: thinkingBlocks.map(b => (b as any).thinking?.length || 0),
+          thinkingLengths: thinkingBlocks.map(b => b.thinking?.length || 0),
         });
       }
 
@@ -931,7 +943,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
     }
   }
 
-  translateStreamChunk(model: string, chunk: any): { done: boolean; chunk?: ICompletionResponseChunk } {
+  translateStreamChunk(model: string, chunk: unknown): { done: boolean; chunk?: ICompletionResponseChunk } {
     let done = false;
     let choice: IChoice;
 
@@ -1012,7 +1024,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
           chunkText: '',
         } as IChoice;
       } else {
-        console.warn('[AnthropicBedrockBackend] Unknown chunk type:', chunk.type);
+        console.warn('[AnthropicBedrockBackend] Unknown chunk type:', isRecord(chunk) ? chunk.type : chunk);
         return { done: false };
       }
     } catch (error) {

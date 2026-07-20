@@ -88,6 +88,7 @@ import { useAdvancedAISettings } from './useAdvancedAISettingsStore';
 import { isImageModel } from '@client/app/utils/commands';
 import { updateSessionToServer } from '@client/app/utils/sessionsAPICalls';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
+import { ImageTemplatePanel } from '../ImageTemplates/ImageTemplatePanel';
 
 const commonInputStyles = (_mode: string) => ({
   width: '120px',
@@ -1162,7 +1163,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
         </Grid>
       </Box>
 
-      {/* Image Model Settings */}
+      {/* Image Model Settings, with the Templates panel below */}
       {isImageModel(model) && (
         <>
           <Grid container spacing={2} sx={{ px: 1, mb: 2 }}>
@@ -1336,6 +1337,7 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
               </>
             )}
           </Grid>
+          <ImageTemplatePanel />
         </>
       )}
 
@@ -1580,7 +1582,16 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const mode = theme.palette.mode;
   const isMobile = useIsMobile();
 
-  const [activeTab, setActiveTab, liveAI, setLiveAI, historyLines, setHistoryLines] = useAdvancedAISettings(
+  const [
+    activeTab,
+    setActiveTab,
+    liveAI,
+    setLiveAI,
+    historyLines,
+    setHistoryLines,
+    modelDetailsOpen,
+    setModelDetailsOpen,
+  ] = useAdvancedAISettings(
     useShallow(state => [
       state.activeTab,
       state.setActiveTab,
@@ -1588,6 +1599,8 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
       state.setLiveAI,
       state.historyLines,
       state.setHistoryLines,
+      state.modelDetailsOpen,
+      state.setModelDetailsOpen,
     ])
   );
 
@@ -1833,19 +1846,25 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
     [model, isKontextModel, size, quality, style, seed, width, height, aspect_ratio, output_format, setLLM]
   );
 
-  // Model detail dialog state (responsive, used on all viewports)
-  const [detailsOpen, setDetailsOpen] = useState(false);
+  // Model detail dialog. `modelDetailsOpen` is lifted to the shared store so the
+  // composer Templates button can open it directly; `detailsModel` (which model's
+  // header/metadata to show) stays local.
   const [detailsModel, setDetailsModel] = useState<ModelInfo | null>(null);
 
   const handleViewDetails = (model: ModelInfo) => {
     setDetailsModel(model);
-    setDetailsOpen(true);
+    setModelDetailsOpen(true);
   };
 
   const handleDetailsClose = () => {
-    setDetailsOpen(false);
+    setModelDetailsOpen(false);
     setDetailsModel(null);
   };
+
+  // When opened without a specific model (e.g. the composer Templates button),
+  // `detailsModel` is null and the dialog falls back to the active `modelInfo`
+  // at render (header + SelectedModelDetails), so it shows the current image
+  // settings + templates panel. No effect needed - the fallback does the work.
 
   return (
     <>
@@ -2061,7 +2080,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
 
       {/* Model detail and settings dialog - responsive: fullscreen on phone, centered dialog on desktop */}
       <Modal
-        open={detailsOpen}
+        open={modelDetailsOpen}
         onClose={handleDetailsClose}
         sx={{
           display: 'flex',
@@ -2136,7 +2155,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
                   noWrap
                   sx={{ color: 'text.primary', fontSize: { xs: '14px', sm: '16px' }, fontWeight: '500' }}
                 >
-                  {detailsModel?.name} Settings
+                  {(detailsModel ?? modelInfo)?.name} Settings
                 </Typography>
               </Box>
               {!isMobile && (
@@ -2175,7 +2194,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
             >
               {/* Selected Model Details */}
               <SelectedModelDetails
-                modelInfo={detailsModel}
+                modelInfo={detailsModel ?? modelInfo}
                 model={typedModel}
                 setLLM={setLLM}
                 setSpokenWords={setSpokenWords}

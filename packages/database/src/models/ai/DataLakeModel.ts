@@ -346,6 +346,15 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     return results.map(r => r.toJSON() as IDataLakeBatchDocument);
   }
 
+  async findStuck(cutoff: Date, limit = 500): Promise<IDataLakeBatchDocument[]> {
+    // status equality prefix + updatedAt range -> served by the { status:1, updatedAt:1 } index.
+    const results = await this.batchModel
+      .find({ status: { $in: BATCH_NON_TERMINAL_STATUSES }, updatedAt: { $lt: cutoff } })
+      .sort({ updatedAt: 1 })
+      .limit(limit);
+    return results.map(r => r.toJSON() as IDataLakeBatchDocument);
+  }
+
   async updateFileStatus(batchId: string, fabFileId: string, status: BatchFileStatus, error?: string): Promise<void> {
     const update: Record<string, unknown> = { 'files.$.status': status };
     if (error) update['files.$.error'] = error;

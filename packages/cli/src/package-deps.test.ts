@@ -7,9 +7,11 @@
  */
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'fs';
-import { builtinModules } from 'module';
 import { resolve, dirname, join } from 'path';
 import { fileURLToPath } from 'url';
+// Shared with the build-time bundle guard so the two "is this an installable
+// external package" definitions can't drift apart (they used to).
+import { getPackageName, isExternalPackage } from './verifyBundleExternals';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CLI_ROOT = resolve(__dirname, '..');
@@ -26,29 +28,9 @@ const productionDeps = new Set([
   ...Object.keys(pkg.optionalDependencies ?? {}),
 ]);
 
-// Node.js built-in modules - no installation needed
-const NODE_BUILTINS = new Set([...builtinModules, ...builtinModules.map(m => `node:${m}`)]);
-
-// tsup noExternal: @bike4mind/* workspace packages are bundled, not installed
-const BUNDLED_SCOPES = ['@bike4mind/'];
-
 // Test file patterns to exclude - devDependencies are fine in test code
 const TEST_PATTERNS = ['.test.ts', '.test.tsx', '.spec.ts', '.spec.tsx'];
 const TEST_DIRS = new Set(['test-utils', '__tests__']);
-
-function getPackageName(specifier: string): string {
-  if (specifier.startsWith('@')) {
-    return specifier.split('/').slice(0, 2).join('/');
-  }
-  return specifier.split('/')[0] ?? specifier;
-}
-
-function isExternalPackage(specifier: string): boolean {
-  if (specifier.startsWith('.') || specifier.startsWith('/')) return false;
-  if (NODE_BUILTINS.has(specifier)) return false;
-  if (BUNDLED_SCOPES.some(scope => specifier.startsWith(scope))) return false;
-  return true;
-}
 
 function extractRuntimeImports(content: string): string[] {
   const specifiers: string[] = [];

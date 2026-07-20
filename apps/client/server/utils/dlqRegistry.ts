@@ -180,6 +180,12 @@ const DLQ_REGISTRY = [
     application: 'OptiHashiIntegration',
     sourceQueue: 'optihashiRunCompletionQueue',
   },
+  {
+    label: 'data-lake-cleanup',
+    displayName: 'Data Lake Cleanup',
+    application: 'DataLakeManagement',
+    sourceQueue: 'dataLakeCleanupQueue',
+  },
 ] as const satisfies readonly DlqDescriptor[];
 
 /** Valid source queue names - derived from DLQ_REGISTRY so they stay in sync automatically. */

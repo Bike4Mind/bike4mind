@@ -17,6 +17,15 @@ interface ReconcileStuckBatchesAdapters {
     fabFiles: Pick<IFabFileRepository, 'computeDataLakeStats'>;
   };
   logger?: { info: (msg: string, ...args: unknown[]) => void; warn: (msg: string, ...args: unknown[]) => void };
+  /**
+   * Optional metric hooks, wired by the app callers (core can't import the CloudWatch helper).
+   * `emitForcedTerminal` fires once per batch actually forced terminal; `emitStuckGauge` reports
+   * the stuck count and is wired only from the cron (a fixed cadence), never the read-time path.
+   */
+  metrics?: {
+    emitForcedTerminal?: (batchId: string, dataLakeId: string) => void | Promise<void>;
+    emitStuckGauge?: (count: number) => void | Promise<void>;
+  };
 }
 
 /**
@@ -32,7 +41,7 @@ interface ReconcileStuckBatchesAdapters {
 export const reconcileStuckBatches = async (
   batches: IDataLakeBatchDocument[],
   timeoutMs: number,
-  { db, logger }: ReconcileStuckBatchesAdapters,
+  { db, logger, metrics }: ReconcileStuckBatchesAdapters,
   now: number = Date.now()
 ): Promise<string[]> => {
   const forced: string[] = [];
@@ -43,10 +52,22 @@ export const reconcileStuckBatches = async (
     return now - updatedAt > timeoutMs;
   });
 
+  // Gauge the stuck count (no-op unless a caller wires it). Metrics must never break reconcile.
+  try {
+    await metrics?.emitStuckGauge?.(stuck.length);
+  } catch (error) {
+    logger?.warn('Reconciler stuck-gauge emit failed:', error);
+  }
+
   for (const batch of stuck) {
     const won = await db.batches.markTerminalIfActive(batch.id, 'completed_with_errors', 'reconciler');
     if (!won) continue; // a real increment finalized it first - nothing to reconcile.
     forced.push(batch.id);
+    try {
+      await metrics?.emitForcedTerminal?.(batch.id, batch.dataLakeId);
+    } catch (error) {
+      logger?.warn(`Reconciler forced-terminal metric emit failed for batch ${batch.id}:`, error);
+    }
     logger?.warn(`Reconciler forced stuck batch ${batch.id} terminal (idle > ${timeoutMs}ms)`);
     try {
       const lake = await db.dataLakes.findById(batch.dataLakeId);

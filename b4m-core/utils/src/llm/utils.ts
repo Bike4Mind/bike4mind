@@ -633,6 +633,11 @@ export async function processUrlsFromPrompt(
  * Returns a value between -1 and 1, where 1 means identical, 0 means orthogonal, -1 means opposite
  */
 export function computeCosineSimilarity(vector1: number[], vector2: number[]): number {
+  // Vectors of different dimensions cannot be compared: this happens when the
+  // Default Embedding Model changes and old chunks were embedded at another
+  // dimension (e.g. switching between Ollama nomic-embed-text at 768 and OpenAI
+  // at 1536). Score 0 keeps the mismatch out of results instead of returning NaN.
+  if (vector1.length !== vector2.length) return 0;
   const dotProduct = vector1.reduce((sum, value, index) => sum + value * vector2[index], 0);
   const magnitude1 = Math.sqrt(vector1.reduce((sum, value) => sum + value * value, 0));
   const magnitude2 = Math.sqrt(vector2.reduce((sum, value) => sum + value * value, 0));
@@ -896,6 +901,44 @@ export async function processFabFilesServer(
 
             break;
 
+          case ModelBackend.Ollama: {
+            // Vision-capable local models take the image inline. We build the same
+            // Anthropic-style base64 block the Anthropic path uses; the Ollama
+            // backend later maps it into Ollama's images[] field. Enforce the
+            // dimension cap so a large upload does not blow the local context.
+            const rawImageBuffer = await storage.download(file.filePath!);
+            const imageBuffer = await ensureImageWithinDimensionLimit(rawImageBuffer, MAX_IMAGE_DIMENSION_PX, logger);
+            const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
+            const ollamaBase64 = imageBuffer.toString('base64');
+
+            // Soft byte guard paralleling the Anthropic/Gemini path above: even after
+            // the dimension cap, a heavy image inflates the prompt and can overflow a
+            // small local model's context window. Warn (do not drop) so the operator
+            // can shrink the upload if the model then misbehaves.
+            const OLLAMA_IMAGE_WARN_MB = 3.5;
+            const ollamaImageSizeMB = imageBuffer.byteLength / (1024 * 1024);
+            if (ollamaImageSizeMB > OLLAMA_IMAGE_WARN_MB) {
+              const warnMsg = `Image "${file.fileName}" (${ollamaImageSizeMB.toFixed(1)}MB) is large for a local model and may exceed its context window.`;
+              logger.warn(`[processFabFilesServer] ${warnMsg}`);
+              await sendStatusUpdate(warnMsg);
+            }
+
+            imageContent.push({
+              type: 'image',
+              source: {
+                type: 'base64',
+                media_type: ollamaMimeType,
+                data: ollamaBase64,
+              },
+            });
+            // Add filename and fabFileId as text context to prevent hallucinated filenames.
+            imageContent.push({
+              type: 'text',
+              text: `Image URL: ${fileUrl}\nFile: "${file.fileName}" (fabFileId: ${file.id})\nWhen referencing this file, use the exact filename "${file.fileName}". Do not rename based on image content.`,
+            });
+            break;
+          }
+
           default:
             logger.error(`Unsupported backend for model ${modelInfo.id} backend ${modelInfo?.backend ?? 'undefined'}`);
             break;
@@ -1134,115 +1177,6 @@ export function includeImagePromptSystemMessage(messages: IMessage[], userPrompt
   }
 }
 
-export function includeArtifactSystemMessage(messages: IMessage[], userPrompt: string): IMessage[] {
-  const artifactTriggerKeywords = [
-    'component',
-    'react',
-    'todo',
-    'calculator',
-    'dashboard',
-    'interface',
-    'interactive',
-    'widget',
-    'app',
-    'application',
-    'develop',
-    'code',
-    'program',
-    'script',
-    'html',
-    'javascript',
-    'jsx',
-    'tsx',
-    'demo',
-    'prototype',
-    'showcase',
-    // Long-form / shareable content requests: the model tends to emit a full HTML
-    // document for these, so steer it to wrap that in a text/html artifact instead of
-    // returning raw markup that renders as a wall of source in the chat.
-    'article',
-    'blog',
-    'essay',
-    'newsletter',
-    'web page',
-    'webpage',
-    'landing page',
-    'poster',
-    'brochure',
-    'flyer',
-    'infographic',
-  ];
-
-  const hasArtifactRequest = artifactTriggerKeywords.some(keyword =>
-    userPrompt.toLowerCase().includes(keyword.toLowerCase())
-  );
-
-  if (hasArtifactRequest) {
-    const artifactSystemMessage: IMessage = {
-      role: 'system',
-      content: `When creating interactive content like React components, HTML pages, or SVG graphics, use Claude-style artifact syntax to make them displayable and executable:
-
-For React components, wrap your code like this:
-<artifact identifier="unique-id" type="application/vnd.ant.react" title="Component Title">
-// Your React component code here
-import React, { useState } from 'react';
-
-function MyComponent() {
-  // Component logic
-  return (
-    <div>
-      // JSX content
-    </div>
-  );
-}
-
-export default MyComponent;
-</artifact>
-
-For HTML pages:
-<artifact identifier="unique-id" type="text/html" title="Page Title">
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Title</title>
-  <style>
-    /* CSS styles */
-  </style>
-</head>
-<body>
-  <!-- HTML content -->
-  <script>
-    // JavaScript code
-  </script>
-</body>
-</html>
-</artifact>
-
-For SVG graphics:
-<artifact identifier="unique-id" type="image/svg+xml" title="SVG Title">
-<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
-  <!-- SVG content -->
-</svg>
-</artifact>
-
-Rules:
-1. Use descriptive, kebab-case identifiers
-2. Keep components self-contained with no external dependencies except React hooks
-3. For React: Only use core React hooks (useState, useEffect, useMemo, useCallback)
-4. Use Tailwind CSS classes only (no custom CSS or arbitrary values)
-5. Make components functional and interactive
-6. Always export default for React components
-7. Provide clear, descriptive titles
-
-This artifact syntax makes your creations immediately executable and previewable for users.`,
-    };
-
-    return [artifactSystemMessage, ...messages];
-  }
-
-  return messages;
-}
-
 // Priority order for message retention (lower number = higher priority)
 const MESSAGE_PRIORITY = {
   system: 0, // Keep all system prompts
@@ -1465,9 +1399,11 @@ export async function buildAndSortMessages(
     fabMessages = includeImagePromptSystemMessage(fabMessages, userPromptContent);
   }
 
-  if (getSettingsValue('EnableArtifacts', settings)) {
-    fabMessages = includeArtifactSystemMessage(fabMessages, userPromptContent);
-  }
+  // Artifact guidance comes from the admin-editable `ArtifactEmissionPrompt` system message that the
+  // caller injects (see ChatCompletionProcess). A legacy hardcoded artifact prompt used to be injected
+  // here too and CONFLICTED with it - it demonstrated `import React, { useState }`, mandated "Tailwind
+  // CSS classes only", and said nothing about publishing - so the model followed it and produced
+  // non-publishable artifacts. It has been removed so ArtifactEmissionPrompt is the single source of truth.
 
   for (const message of fabMessages.filter(message => message.role === 'system')) {
     const content = (message.content as string) || '';

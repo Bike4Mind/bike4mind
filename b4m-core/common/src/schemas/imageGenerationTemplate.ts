@@ -89,3 +89,20 @@ export type ImageGenerationTemplateInputType = z.infer<typeof ImageGenerationTem
  */
 export const ImageGenerationTemplateUpdateInput = ImageGenerationTemplateInput.omit({ model: true }).partial();
 export type ImageGenerationTemplateUpdateInputType = z.infer<typeof ImageGenerationTemplateUpdateInput>;
+
+/**
+ * Stable serialization of a settings blob for equality checks - used by BOTH the
+ * server-side save dedup and the client "current settings match this template"
+ * indicator, so they must agree. Keys sorted; null/undefined dropped (an absent
+ * field and an explicitly-null one compare equal). Stored and compared blobs both
+ * pass through the same Zod parse, so their key sets are consistent.
+ */
+export function canonicalizeTemplateSettings(settings: unknown): string {
+  const obj = (settings ?? {}) as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) {
+    const v = obj[key];
+    if (v !== undefined && v !== null) out[key] = v;
+  }
+  return JSON.stringify(out);
+}

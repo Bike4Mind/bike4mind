@@ -12,6 +12,14 @@ vi.mock('./firecrawlApp', () => ({
     scrapeUrl = scrapeUrl;
   },
   resolveFirecrawlApp: (x: unknown) => x,
+  // Default: Firecrawl is configured -> return an app whose scrapeUrl is the mock above.
+  // The keyless-fallback tests override this to return null.
+  createFirecrawlApp: vi.fn(() => ({ scrapeUrl })),
+}));
+
+// Keyless fallback reader, exercised when createFirecrawlApp returns null.
+vi.mock('./plainFetch', () => ({
+  plainFetchScrape: vi.fn(async () => ({ markdown: 'plain-markdown-content', title: 'Plain Title' })),
 }));
 
 // The llms.txt probe runs an SSRF guard that resolves DNS; default every host to a public IP so
@@ -20,6 +28,11 @@ const dnsLookup = vi.fn(async () => [{ address: '93.184.216.34', family: 4 }]);
 vi.mock('node:dns/promises', () => ({ lookup: (...args: unknown[]) => dnsLookup(...args) }));
 
 import { firecrawlFetch, truncationMarker, webFetchBody, webFetchTool } from './index';
+import { createFirecrawlApp } from './firecrawlApp';
+import { plainFetchScrape } from './plainFetch';
+
+const mockCreateApp = vi.mocked(createFirecrawlApp);
+const mockPlainFetch = vi.mocked(plainFetchScrape);
 import type { ToolContext } from '../../base/types';
 import type { CitableSource } from '@bike4mind/common';
 import { aggregateWebFetchContentTelemetry } from '../../../../telemetry';
@@ -75,6 +88,8 @@ beforeEach(() => {
   fetchMock.mockImplementation(async () => fetchRes(404));
   dnsLookup.mockClear();
   dnsLookup.mockImplementation(async () => [{ address: '93.184.216.34', family: 4 }]);
+  mockCreateApp.mockClear();
+  mockPlainFetch.mockClear();
 });
 
 describe('truncationMarker', () => {
@@ -370,5 +385,73 @@ describe('web_fetch truncation boundary corpus (marker + citable + telemetry)', 
     expect(telemetry.truncatedInvocationCount).toBe(truncated ? 1 : 0);
     expect(telemetry.maxExtractedChars).toBe(Math.min(size, CAP));
     expect(telemetry.totalExtractedChars).toBe(Math.min(size, CAP));
+  });
+});
+
+describe('firecrawlFetch Firecrawl config threading', () => {
+  it('constructs the Firecrawl app from the resolved apiKey and apiUrl', async () => {
+    scrapeMarkdown = 'x'.repeat(100);
+    const threadedAdapters = {
+      db: {
+        adminSettings: {
+          findBySettingName: async (name: string) =>
+            name === 'FirecrawlApiKey'
+              ? { settingValue: 'fc-key' }
+              : name === 'FirecrawlApiUrl'
+                ? { settingValue: 'https://firecrawl.local' }
+                : null,
+        },
+      },
+    } as unknown as Parameters<typeof firecrawlFetch>[0];
+
+    await firecrawlFetch(threadedAdapters, 'https://example.com/doc');
+    expect(mockCreateApp).toHaveBeenCalledWith({ apiKey: 'fc-key', apiUrl: 'https://firecrawl.local' });
+  });
+});
+
+describe('firecrawlFetch keyless plain-fetch fallback', () => {
+  it('falls back to plainFetchScrape when Firecrawl is not configured', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+
+    expect(mockPlainFetch).toHaveBeenCalledWith(
+      'https://example.com/doc',
+      expect.objectContaining({ timeoutMs: expect.any(Number) })
+    );
+    expect(scrapeUrl).not.toHaveBeenCalled();
+    expect(res.markdown).toBe('plain-markdown-content');
+    expect(res.title).toBe('Plain Title');
+    expect(res.truncated).toBe(false);
+  });
+
+  it('applies the same windowing to the plain-fetch result (truncates past the cap)', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockResolvedValueOnce({ markdown: 'y'.repeat(120_000), title: 'Big' });
+
+    const res = await firecrawlFetch(adapters, 'https://example.com/doc');
+
+    expect(res.originalChars).toBe(120_000);
+    expect(res.extractedChars).toBe(CAP);
+    expect(res.truncated).toBe(true);
+  });
+
+  // A blocked redirect (redirect:'error') surfaces as TypeError('fetch failed') whose cause names
+  // the redirect - the tool must match the cause and degrade to the friendly web_search hint rather
+  // than rethrowing a hard error the agent cannot recover from.
+  it('degrades a blocked-redirect fetch to the friendly web_search message', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    const redirectError = new TypeError('fetch failed');
+    (redirectError as { cause?: unknown }).cause = new Error('unexpected redirect');
+    mockPlainFetch.mockRejectedValueOnce(redirectError);
+
+    const { result } = await runTool('https://example.com/doc');
+    expect(result).toContain('web_search');
+  });
+
+  it('still rethrows an unexpected keyless error with no matching pattern/cause', async () => {
+    mockCreateApp.mockReturnValueOnce(null);
+    mockPlainFetch.mockRejectedValueOnce(new Error('totally unexpected parse failure'));
+
+    await expect(runTool('https://example.com/doc')).rejects.toThrow('totally unexpected parse failure');
   });
 });

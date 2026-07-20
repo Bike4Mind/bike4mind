@@ -1,6 +1,7 @@
 import { dataLakeBatchRepository, dataLakeRepository, fabFileRepository } from '@bike4mind/database';
 import { dataLakeService } from '@bike4mind/services';
 import type { IDataLakeBatchDocument } from '@bike4mind/common';
+import { recordBatchCompletion } from '@server/utils/cloudwatch';
 
 /**
  * Guarded batch finalization shared by the chunk and vectorize handlers. When the
@@ -16,11 +17,13 @@ export async function finalizeBatchIfComplete(
   if (!batch) return;
   if (batch.vectorizedFiles + batch.failedFiles + batch.skippedFiles < batch.totalFiles) return;
 
-  const finalized = await dataLakeBatchRepository.markTerminalIfActive(
-    batch.id,
-    batch.failedFiles > 0 ? 'completed_with_errors' : 'completed'
-  );
+  const outcome = batch.failedFiles > 0 ? 'completed_with_errors' : 'completed';
+  const finalized = await dataLakeBatchRepository.markTerminalIfActive(batch.id, outcome);
   if (!finalized) return; // another handler finalized first — don't double-recompute.
+
+  // Parity with the reconciler's forced-terminal metric: record the normal completion once, from
+  // the single guarded winner. Emitter never throws (see cloudwatch.ts), belt-and-suspenders .catch.
+  await recordBatchCompletion(outcome).catch(() => {});
 
   try {
     const lake = await dataLakeRepository.findById(batch.dataLakeId);

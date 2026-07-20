@@ -3,11 +3,15 @@ import { safeHostname, serpApiSearch, performWebSearch, WEB_SEARCH_NOT_CONFIGURE
 
 vi.mock('../../../../apiKeyService', () => ({
   getSerperKey: vi.fn(),
+  getSearxngUrl: vi.fn(),
+  getWebSearchProviderSetting: vi.fn(),
 }));
 
-import { getSerperKey } from '../../../../apiKeyService';
+import { getSerperKey, getSearxngUrl, getWebSearchProviderSetting } from '../../../../apiKeyService';
 
 const mockGetSerperKey = vi.mocked(getSerperKey);
+const mockGetSearxngUrl = vi.mocked(getSearxngUrl);
+const mockGetProvider = vi.mocked(getWebSearchProviderSetting);
 const mockAdapters = {} as Parameters<typeof serpApiSearch>[0];
 
 describe('serpApiSearch — missing key', () => {
@@ -20,9 +24,11 @@ describe('serpApiSearch — missing key', () => {
   });
 });
 
-describe('performWebSearch — missing key', () => {
-  it('returns a clear not-configured message and empty citables when no API key is configured', async () => {
+describe('performWebSearch - no provider configured', () => {
+  it('returns a clear not-configured message and empty citables when no provider resolves', async () => {
     mockGetSerperKey.mockResolvedValue(null);
+    mockGetSearxngUrl.mockResolvedValue(null);
+    mockGetProvider.mockResolvedValue(null);
 
     const result = await performWebSearch(mockAdapters, { query: 'test query' });
 

@@ -73,6 +73,14 @@ describe('ImageGenerationTemplateModel repository', () => {
     expect(list.map(t => t.name)).toEqual(['High', 'Low']);
   });
 
+  it('listByModel scopes to the user and the given model', async () => {
+    await seed('u1', { model: 'flux-pro-1.1', name: 'A' });
+    await seed('u1', { model: 'gpt-image-1', name: 'B' });
+    await seed('u2', { model: 'flux-pro-1.1', name: 'C' });
+    const list = await imageGenerationTemplateRepository.listByModel('u1', 'flux-pro-1.1');
+    expect(list.map(t => t.name)).toEqual(['A']);
+  });
+
   it('incrementUsage bumps only a template owned by the caller', async () => {
     const mine = await seed('u1', { usageCount: 2 });
     expect(await imageGenerationTemplateRepository.incrementUsage(mine.id, 'u2')).toBeNull();

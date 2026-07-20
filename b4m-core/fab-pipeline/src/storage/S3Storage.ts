@@ -27,8 +27,15 @@ export class S3Storage extends BaseStorage {
   ) {
     super();
 
+    // A custom S3 endpoint (self-host MinIO, localstack) is addressed path-style
+    // (endpoint/bucket/key). The default virtual-hosted style (bucket.endpoint-host) has no
+    // DNS there, so downloads/uploads fail with ENOTFOUND bucket.host. Real S3 sets no custom
+    // endpoint and keeps the default virtual-hosted addressing, so hosted is unchanged.
+    const endpoint = process.env.AWS_ENDPOINT_URL_S3;
+
     this.s3 = new S3Client({
       region: this.region,
+      ...(endpoint ? { endpoint, forcePathStyle: true } : {}),
       maxAttempts: 3,
       retryMode: 'standard',
       requestHandler: new NodeHttpHandler({

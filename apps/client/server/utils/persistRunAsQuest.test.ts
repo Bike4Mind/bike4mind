@@ -123,3 +123,34 @@ describe('persistRunAsQuest finishReason (#293)', () => {
     });
   });
 });
+
+describe('persistRunAsQuest creditsUsed persistence', () => {
+  it('copies execution.totalCreditsUsed into the $set on the update branch', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+    stubExecution({ totalCreditsUsed: 42 });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [, update] = findOneAndUpdateMock.mock.calls[0];
+    expect(update.$set.creditsUsed).toBe(42);
+  });
+
+  it('copies execution.totalCreditsUsed onto the created doc', async () => {
+    findOneAndUpdateMock.mockResolvedValue(null);
+    stubExecution({ totalCreditsUsed: 42 });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [doc] = createMock.mock.calls[0];
+    expect(doc.creditsUsed).toBe(42);
+  });
+
+  it('defaults to 0 when the execution has no recorded credits', async () => {
+    findOneAndUpdateMock.mockResolvedValue({ _id: 'q1' });
+
+    await persistRunAsQuest(EXECUTION_ID, 'reply', logger);
+
+    const [, update] = findOneAndUpdateMock.mock.calls[0];
+    expect(update.$set.creditsUsed).toBe(0);
+  });
+});

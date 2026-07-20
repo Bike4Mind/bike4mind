@@ -48,15 +48,16 @@ describe('classifyToolPermission', () => {
     expect(classifyToolPermission('mermaid_chart', [], [])).toBe('allowed');
   });
 
-  it('treats all four OptiHashi tools as always-safe', () => {
+  it('treats all five OptiHashi tools as always-safe', () => {
     // Same risk surface (LLM/solver call + /opti-gated, undoable __uiSideEffect; no stored-data
     // mutation or external call) - must stay grouped so agent mode doesn't auto-run one while
-    // pausing its twin, and so the autonomous decompose -> formulate -> schedule loop isn't
+    // pausing its twin, and so the autonomous decompose -> formulate -> solve/schedule loop isn't
     // interrupted by an approval prompt at every step.
     expect(classifyToolPermission('optihashi_decompose', [], [])).toBe('allowed');
     expect(classifyToolPermission('optihashi_formulate', [], [])).toBe('allowed');
     expect(classifyToolPermission('optihashi_edit_problem', [], [])).toBe('allowed');
     expect(classifyToolPermission('optihashi_schedule', [], [])).toBe('allowed');
+    expect(classifyToolPermission('optihashi_solve', [], [])).toBe('allowed');
   });
 
   it('returns needs_approval for MCP tools', () => {

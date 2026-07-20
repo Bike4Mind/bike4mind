@@ -1,7 +1,6 @@
 import { accessibleBy } from '@casl/mongoose';
-import { IFabFile, IFabFileDocument, IShareableDocument, Permission } from '@bike4mind/common';
+import { IFabFile, IFabFileDocument, Permission } from '@bike4mind/common';
 import { Ability } from '@server/auth/ability';
-import { updateSharing } from '@server/managers/sharingManager';
 import { BadRequestError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
 import { mongoose, FabFile } from '@bike4mind/database';
@@ -119,6 +118,3 @@ export const getVector = async (embeddingProvider: EmbeddingService, text: strin
   const response = await generateSafeEmbedding(embeddingProvider, text);
   return response;
 };
-
-export const updateFileSharingState = (id: string, sharingData: Partial<IShareableDocument>, ability: Ability) =>
-  updateSharing(FabFile, id, sharingData, ability);

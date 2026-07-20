@@ -16,6 +16,7 @@ import {
 } from '@mui/joy';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { UNCLASSIFIED_SOURCE } from '@bike4mind/common';
 import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatCredits, formatUsd, numberCell } from '../utils/format';
@@ -48,8 +49,8 @@ const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], da
 
 /**
  * Per-organization AI spend: a credits burn chart over the selected window plus
- * member / model / feature breakdowns. Scoped to spend billed to the org's
- * credit pool (ownerType=Organization). See /api/admin/org-usage.
+ * member / model / feature / API key / source breakdowns. Scoped to spend billed
+ * to the org's credit pool (ownerType=Organization). See /api/admin/org-usage.
  */
 export const OrgUsageDashboard: React.FC = () => {
   const theme = useTheme();
@@ -267,6 +268,45 @@ export const OrgUsageDashboard: React.FC = () => {
                       <td colSpan={5}>
                         <Typography level="body-sm" color="neutral">
                           No API-token usage in this window.
+                        </Typography>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </Table>
+            </Sheet>
+          </Box>
+
+          <Box>
+            <Typography level="title-sm" sx={{ mb: 1 }}>
+              By source
+            </Typography>
+            <Typography level="body-xs" color="neutral" sx={{ mb: 1 }}>
+              Where this org&apos;s spend originated (from the ledger; credits only, no COGS). &quot;Unclassified&quot;
+              is usage with no source recorded on the ledger row.
+            </Typography>
+            <Sheet sx={{ maxHeight: 320, overflow: 'auto' }}>
+              <Table stickyHeader hoverRow size="sm" data-testid="org-usage-source-table">
+                <thead>
+                  <tr>
+                    <th>Source</th>
+                    <th style={{ textAlign: 'right' }}>Requests</th>
+                    <th style={{ textAlign: 'right' }}>Credits</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(data?.bySource ?? []).map(s => (
+                    <tr key={s.source}>
+                      <td>{s.source === UNCLASSIFIED_SOURCE ? 'Unclassified' : s.source}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{s.requests.toLocaleString()}</td>
+                      <td style={{ textAlign: 'right', ...numberCell }}>{formatCredits(s.creditsSpent)}</td>
+                    </tr>
+                  ))}
+                  {(data?.bySource ?? []).length === 0 && (
+                    <tr>
+                      <td colSpan={3}>
+                        <Typography level="body-sm" color="neutral">
+                          No usage in this window.
                         </Typography>
                       </td>
                     </tr>

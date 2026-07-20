@@ -28,21 +28,15 @@ describe('executeToolsBatch', () => {
       const log: Array<{ id: string; event: string; time: number }> = [];
       const tasks = [timedTask('A', 50, log), timedTask('B', 50, log), timedTask('C', 50, log)];
 
-      const startTime = Date.now();
       const outcomes = await executeToolsBatch(tasks, { parallel: true });
-      const elapsed = Date.now() - startTime;
 
       // All should succeed
       expect(outcomes).toHaveLength(3);
       expect(outcomes.every(o => o.ok)).toBe(true);
 
-      // Concurrent execution should be significantly faster than sequential (3x50ms = 150ms).
-      // 140ms still strictly separates concurrent (~50ms + overhead) from sequential while
-      // absorbing CI timer jitter (this flaked at 122ms vs a 120ms bound on a loaded runner).
-      // The interleaving assertion below is the jitter-immune concurrency proof.
-      expect(elapsed).toBeLessThan(140);
-
-      // All tasks should have started before any finished
+      // Concurrency is proven by interleaving, not wall-clock: all tasks start before any ends,
+      // which is impossible under sequential execution. A wall-clock bound only looks tighter but
+      // flakes on loaded CI runners (it did, at 142ms vs a 140ms bound), so we don't assert one.
       const starts = log.filter(e => e.event === 'start');
       const ends = log.filter(e => e.event === 'end');
       const lastStart = Math.max(...starts.map(e => e.time));

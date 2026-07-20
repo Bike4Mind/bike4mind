@@ -277,4 +277,51 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     await expect(api.get('/api/mcp-servers')).rejects.toBeTruthy();
     expect(replace).not.toHaveBeenCalled();
   });
+
+  // --- #627: interceptors must be live BEFORE ApiProvider mounts ---
+  // The auth interceptors are registered at module scope, not in ApiProvider's
+  // useEffect. This is what closes the cold-load race: a query gated on the
+  // synchronously-rehydrated persisted `currentUser` (e.g. useGetOwnSessions) can
+  // fire through `api` on the very first render, before any effect has run. If the
+  // interceptors only existed after mount, that request would go out with no token,
+  // 401, and never refresh-retry - leaving the sidebar/UI empty until a manual
+  // reload. These two tests deliberately do NOT render <ApiProvider>, exercising
+  // exactly that pre-mount window; they fail on the old useEffect-registered code.
+
+  it('attaches the bearer token to a request fired WITHOUT mounting ApiProvider (#627)', async () => {
+    useAccessToken.setState({ accessToken: 'tok-abc', refreshToken: 'refresh', expired: false, mfaPending: false });
+    let seenAuth: string | undefined;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      seenAuth = config.headers?.Authorization as string | undefined;
+      return Promise.resolve(ok(config, { ok: true }));
+    }) as AxiosAdapter;
+
+    // No render(<ApiProvider>) - this is the cold-load window before any effect runs.
+    const res = await api.get('/api/sessions');
+
+    expect(res.data).toEqual({ ok: true });
+    expect(seenAuth).toBe('Bearer tok-abc');
+  });
+
+  it('refresh-retries a 401 fired WITHOUT mounting ApiProvider, so the cold-load query self-heals (#627)', async () => {
+    useAccessToken.setState({ accessToken: 'stale', refreshToken: 'refresh', expired: false, mfaPending: false });
+    let dataCalls = 0;
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => {
+      if (config.url === '/api/auth/refreshToken') {
+        return Promise.resolve(ok(config, { accessToken: 'new-access', refreshToken: 'new-refresh' }));
+      }
+      dataCalls += 1;
+      // First call 401s (token stale); the post-refresh retry succeeds with real data.
+      return dataCalls === 1
+        ? Promise.reject(make401(config))
+        : Promise.resolve(ok(config, { data: [{ id: 's1' }], hasMore: false }));
+    }) as AxiosAdapter;
+
+    // Again, no ApiProvider mount.
+    const res = await api.get('/api/sessions');
+
+    expect(res.data).toEqual({ data: [{ id: 's1' }], hasMore: false });
+    expect(replace).not.toHaveBeenCalled();
+    expect(useAccessToken.getState().accessToken).toBe('new-access');
+  });
 });

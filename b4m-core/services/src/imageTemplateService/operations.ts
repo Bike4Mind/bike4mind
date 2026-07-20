@@ -4,7 +4,12 @@ import type {
   ImageGenerationTemplateInputType,
   ImageGenerationTemplateUpdateInputType,
 } from '@bike4mind/common';
-import { IMAGE_TEMPLATES_PER_USER_MAX, NotFoundError, UnprocessableEntityError } from '@bike4mind/common';
+import {
+  IMAGE_TEMPLATES_PER_USER_MAX,
+  NotFoundError,
+  UnprocessableEntityError,
+  canonicalizeTemplateSettings,
+} from '@bike4mind/common';
 import type { ImageTemplateServiceAdapters } from './ports';
 import { assertAuthenticated, assertInteractive } from './access';
 
@@ -46,6 +51,15 @@ export async function saveTemplate(
 ): Promise<IImageGenerationTemplateDocument> {
   assertAuthenticated(caller);
   assertInteractive(caller);
+
+  // Reject an exact-settings duplicate for this model (regardless of name), so the
+  // same config isn't saved twice under different names.
+  const incoming = canonicalizeTemplateSettings(input.settings);
+  const siblings = await db.templates.listByModel(caller.id, input.model);
+  const duplicate = siblings.find(t => canonicalizeTemplateSettings(t.settings) === incoming);
+  if (duplicate) {
+    throw new UnprocessableEntityError(`You already have a template with these settings ("${duplicate.name}").`);
+  }
 
   // Soft cap: count-then-create is not atomic, so tightly-concurrent creates can
   // briefly overshoot the cap. Acceptable for M1 (bounded by the create rate
@@ -93,34 +107,18 @@ export async function deleteTemplate(
 }
 
 /**
- * Apply an owned template: exact-model backstop, then bump usageCount and return
- * the fresh doc for the client to load into LLMContext.
- *
- * EXACT-MODEL: if `targetModel` is provided and differs from the template's bound
- * model, reject - a template only applies under its own model (the picker also
- * hides mismatches; this is the server-side backstop). 422 rather than a silent
- * partial apply.
+ * Record a use of an owned template: bump usageCount. Called when a prompt is
+ * sent with the template's settings (matched client-side), so usageCount reflects
+ * actual usage rather than merely applying a template. Applying is purely
+ * client-side (load its settings), so there is no server apply endpoint.
  */
-export async function applyTemplate(
+export async function recordUse(
   caller: IImageTemplateCaller,
   { db }: ImageTemplateServiceAdapters,
-  id: string,
-  targetModel?: string
-): Promise<IImageGenerationTemplateDocument> {
+  id: string
+): Promise<void> {
   assertAuthenticated(caller);
   assertInteractive(caller);
-
-  const tpl = await db.templates.findOwned(id, caller.id);
-  if (!tpl) throw new NotFoundError('Template not found');
-
-  if (targetModel && targetModel !== tpl.model) {
-    throw new UnprocessableEntityError(
-      `This template is for "${tpl.model}" and cannot be applied to "${targetModel}".`
-    );
-  }
-
   const updated = await db.templates.incrementUsage(id, caller.id);
-  // Lost the row between findOwned and increment (deleted concurrently) - treat as gone.
   if (!updated) throw new NotFoundError('Template not found');
-  return updated;
 }

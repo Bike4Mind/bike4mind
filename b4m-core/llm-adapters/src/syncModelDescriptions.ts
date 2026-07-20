@@ -71,6 +71,7 @@ class SyncModelDescriptions {
     [ModelBackend.BFL]: 'bflBackend.ts',
     [ModelBackend.XAI]: 'xaiBackend.ts',
     [ModelBackend.AWS]: 'awsBackend.ts',
+    [ModelBackend.LocalImage]: 'localImageBackend.ts',
   } as const;
 
   constructor(

@@ -9,6 +9,7 @@ import {
   ChatModels,
   LLMModelConfig,
   B4MLLMToolsList,
+  IImageGenerationTemplateDocument,
   LEGACY_IMAGE_MODEL_MAP,
   isImageModel,
 } from '@bike4mind/common';
@@ -52,6 +53,10 @@ export interface LLMContextProps {
   width: number | undefined;
   height: number | undefined;
   aspect_ratio: string | undefined;
+  /** Apply a saved image template: load its model + settings into the store.
+   *  The applied-template indicator is DERIVED from a settings match in the UI,
+   *  not tracked here (see ImageTemplateControls). */
+  applyImageTemplate: (template: IImageGenerationTemplateDocument) => void;
   thinking?: {
     enabled: boolean;
     budget_tokens: number;
@@ -166,6 +171,29 @@ const DEFAULTS = {
   disableAutoRouteForThisSession: false,
 };
 
+// The image-mode setting fields an image template's `settings` blob can carry.
+// KEEP IN SYNC with ImageTemplateSettingsSchema (b4m-core/common).
+const IMAGE_SETTING_KEYS = [
+  'size',
+  'quality',
+  'style',
+  'safety_tolerance',
+  'prompt_upsampling',
+  'seed',
+  'output_format',
+  'width',
+  'height',
+  'aspect_ratio',
+  'n',
+] as const satisfies readonly (keyof LLMContextProps)[];
+
+// Defaults for the image-setting fields, so applying a template can reset the
+// fields its blob omits (making apply reproduce the snapshot deterministically
+// rather than merging over the user's stale values).
+const IMAGE_SETTINGS_DEFAULTS = Object.fromEntries(
+  IMAGE_SETTING_KEYS.map(k => [k, DEFAULTS[k]])
+) as Partial<LLMContextProps>;
+
 export const useLLM = create(
   persist<LLMContextProps>(
     (set, get) => ({
@@ -203,6 +231,19 @@ export const useLLM = create(
 
           return newState;
         });
+      },
+      applyImageTemplate: (template: IImageGenerationTemplateDocument) => {
+        set(prev => ({
+          ...prev,
+          // Reset image settings to defaults first, THEN overlay the template's
+          // blob, so a template with a partial `settings` reproduces its snapshot
+          // rather than inheriting the user's prior (unrelated) values.
+          ...IMAGE_SETTINGS_DEFAULTS,
+          model: template.model,
+          imageModel: template.model,
+          lastUsedImageModel: template.model,
+          ...(template.settings as Partial<LLMContextProps>),
+        }));
       },
       setResearchMode: (mode: Partial<ResearchModeState>) => {
         set(state => ({

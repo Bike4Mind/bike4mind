@@ -37,6 +37,8 @@ export interface IImageGenerationTemplateRepository extends IBaseRepository<IIma
   listOwned(userId: string, limit: number, skip?: number): Promise<IImageGenerationTemplateDocument[]>;
   /** Count of the caller's non-deleted templates (for the per-user cap). */
   countOwned(userId: string): Promise<number>;
+  /** The caller's non-deleted templates bound to a given model (for duplicate detection). */
+  listByModel(userId: string, model: string): Promise<IImageGenerationTemplateDocument[]>;
   /** A single template by id, only if owned by the caller. Null otherwise - never another user's. */
   findOwned(id: string, userId: string): Promise<IImageGenerationTemplateDocument | null>;
   /** Update a template only if owned by the caller. Returns null if not owned. */

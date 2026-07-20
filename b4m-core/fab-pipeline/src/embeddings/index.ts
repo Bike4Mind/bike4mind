@@ -3,4 +3,5 @@ export * from './EmbeddingService';
 export * from './providers/BedrockEmbeddingService';
 export * from './providers/OpenAIEmbeddingService';
 export * from './providers/VoyageAIEmbeddingService';
+export * from './providers/OllamaEmbeddingService';
 export * from './getProviderFromModel';

@@ -8,8 +8,12 @@ import {
   formatHandoffOutput,
   buildHandoffSystemMessage,
   injectHandoffMessage,
+  injectWorkflowStateMessage,
   isInjectedHandoff,
+  isInjectedWorkflowState,
+  isInjectedContinuity,
   HANDOFF_MARKER,
+  WORKFLOW_STATE_MARKER,
   SHORT_SESSION_THRESHOLD,
   buildLocalHandoff,
   renderLocalHandoffMarkdown,
@@ -398,6 +402,123 @@ describe('handoff', () => {
       expect(result[0].content).not.toContain('OLD');
       expect(result.some(m => m.id === 'old-handoff')).toBe(false);
       expect(result.some(m => m.id === 'sum')).toBe(true);
+    });
+
+    it('strips a prior injected workflow-state message so the two never co-exist', () => {
+      const priorState: Message = {
+        id: 'state',
+        role: 'user',
+        content: `${WORKFLOW_STATE_MARKER}\n\nRecent decisions:\n- something`,
+        timestamp: 'old',
+      };
+      const messages: Message[] = [priorState, createMessage('user', 'hi', 0)];
+
+      const result = injectHandoffMessage(messages, createHandoff({ summary: 'NEW' }));
+
+      expect(result).toHaveLength(2);
+      expect(result[0].content).toContain('NEW');
+      expect(result.some(m => m.id === 'state')).toBe(false);
+    });
+  });
+
+  describe('isInjectedWorkflowState / isInjectedContinuity', () => {
+    const stateMsg = (content: string, role: Message['role'] = 'user'): Message => ({
+      id: '1',
+      role,
+      content,
+      timestamp: 'now',
+    });
+
+    it('recognizes a workflow-state message only when marked and role=user', () => {
+      expect(isInjectedWorkflowState(stateMsg(`${WORKFLOW_STATE_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedWorkflowState(stateMsg(`${WORKFLOW_STATE_MARKER}`, 'assistant'))).toBe(false);
+      expect(isInjectedWorkflowState(stateMsg('plain message'))).toBe(false);
+    });
+
+    it('isInjectedContinuity covers both handoff and workflow-state markers', () => {
+      expect(isInjectedContinuity(stateMsg(`${HANDOFF_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedContinuity(stateMsg(`${WORKFLOW_STATE_MARKER}\n\nx`))).toBe(true);
+      expect(isInjectedContinuity(stateMsg('plain'))).toBe(false);
+    });
+  });
+
+  describe('injectWorkflowStateMessage', () => {
+    const workflow = (overrides: Partial<WorkflowState> = {}): WorkflowState => ({
+      decisions: [{ id: 'd1', timestamp: 'now', summary: 'chose SSE', rationale: 'simplest' }],
+      blockers: [{ id: 'b1', createdAt: 'now', description: 'need API key', status: 'open' }],
+      ...overrides,
+    });
+
+    it('prepends a marked workflow-state user message rendering open decisions and blockers', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].role).toBe('user');
+      expect(result[0].content.startsWith(WORKFLOW_STATE_MARKER)).toBe(true);
+      expect(result[0].content).toContain('chose SSE');
+      expect(result[0].content).toContain('need API key');
+      expect(result[1]).toBe(messages[0]);
+    });
+
+    it('injects nothing when there is no open state (returns the list unchanged in content)', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+
+      expect(injectWorkflowStateMessage(messages, { decisions: [], blockers: [] })).toEqual(messages);
+      expect(injectWorkflowStateMessage(messages, undefined)).toEqual(messages);
+    });
+
+    it('does not render resolved blockers', () => {
+      const result = injectWorkflowStateMessage([createMessage('user', 'hi', 0)], {
+        decisions: [],
+        blockers: [{ id: 'b1', createdAt: 'now', description: 'was blocked', status: 'resolved' }],
+      });
+
+      // Only a resolved blocker and no decisions => nothing to surface.
+      expect(result).toHaveLength(1);
+    });
+
+    it('replaces a prior workflow-state injection instead of stacking', () => {
+      const prior: Message = {
+        id: 'prev-state',
+        role: 'user',
+        content: `${WORKFLOW_STATE_MARKER}\n\nRecent decisions:\n- old`,
+        timestamp: 'old',
+      };
+      const messages: Message[] = [prior, createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].id).not.toBe('prev-state');
+      expect(result[0].content).toContain('chose SSE');
+      expect(result.some(m => m.id === 'prev-state')).toBe(false);
+    });
+
+    it('strips a prior injected handoff so the two never co-exist', () => {
+      const priorHandoff: Message = {
+        id: 'handoff',
+        role: 'user',
+        content: buildHandoffSystemMessage(createHandoff({ summary: 'OLD HANDOFF' })),
+        timestamp: 'old',
+      };
+      const messages: Message[] = [priorHandoff, createMessage('user', 'hi', 0)];
+
+      const result = injectWorkflowStateMessage(messages, workflow());
+
+      expect(result).toHaveLength(2);
+      expect(result[0].content.startsWith(WORKFLOW_STATE_MARKER)).toBe(true);
+      expect(result.some(m => m.id === 'handoff')).toBe(false);
+    });
+
+    it('does not mutate the input array', () => {
+      const messages: Message[] = [createMessage('user', 'hi', 0)];
+      const original = [...messages];
+
+      injectWorkflowStateMessage(messages, workflow());
+
+      expect(messages).toEqual(original);
     });
   });
 

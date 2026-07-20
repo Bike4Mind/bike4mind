@@ -23,6 +23,23 @@ export interface ArtifactParseResult {
 }
 
 /**
+ * A "graphically empty" SVG has no drawable content - only the root <svg> wrapper
+ * around whitespace and/or comments. Small local models sometimes emit such a stub
+ * as a placeholder (e.g. `<svg ...><!-- fish illustration goes here --></svg>`),
+ * which would otherwise render/persist as a blank canvas. Deliberately conservative:
+ * only whitespace/comments count as empty, so it never drops an SVG with a real
+ * element (it does miss rarer stubs like an empty `<g></g>`, which is acceptable).
+ * Exported for tests.
+ */
+export function isSvgGraphicallyEmpty(svg: string): boolean {
+  const withoutComments = svg.replace(/<!--[\s\S]*?-->/g, '');
+  // Self-closing root, e.g. `<svg .../>`, has no children.
+  if (/^\s*<svg\b[^>]*\/>\s*$/i.test(withoutComments)) return true;
+  const inner = withoutComments.replace(/^\s*<svg\b[^>]*>/i, '').replace(/<\/svg\s*>\s*$/i, '');
+  return inner.trim().length === 0;
+}
+
+/**
  * Parses Claude-style artifact syntax from text content
  *
  * Example syntax:
@@ -89,7 +106,9 @@ export function parseArtifacts(content: string): ArtifactParseResult {
     });
 
   return {
-    artifacts,
+    // Drop graphically-empty SVG placeholders (markup already stripped above) so a
+    // small model's blank `<svg>` stub never renders/persists as a blank artifact.
+    artifacts: artifacts.filter(a => !(a.type === 'svg' && isSvgGraphicallyEmpty(a.content))),
     cleanedContent: cleanedContent.trim(),
   };
 }
@@ -207,9 +226,104 @@ ${codeContent.trim()}
     }
   });
 
+  content = promoteToolCallJsonArtifact(content);
+
   content = promoteBareHtmlDocument(content);
 
   return content;
+}
+
+/**
+ * Promotes an artifact that a small local model emitted as a hallucinated tool
+ * call instead of an <artifact> tag or ```html fence. Such models invent a
+ * builder tool (e.g. build_html, which is not a real tool anywhere) and return
+ * its call as JSON: a name plus an arguments object carrying the HTML as a
+ * string. The call never executes, so the raw JSON would otherwise render as a
+ * code block. Recognized strictly (tool-call shape AND an HTML-string argument)
+ * so ordinary JSON is left alone.
+ *
+ * NOTE: this runs inside convertCodeBlocksToArtifacts, which EVERY backend (cloud
+ * included) flows through, not just local/Ollama. The strict recognition - an
+ * invented builder-tool name AND an HTML-string argument - is what keeps a cloud
+ * model that merely SHOWS such tool-call JSON as an example from having it
+ * swallowed and re-rendered as an artifact.
+ *
+ * MUST STAY IN SYNC with the twin copy in apps/client/app/utils/artifactParser.ts
+ * so client render and server persistence never diverge.
+ */
+function promoteToolCallJsonArtifact(content: string): string {
+  // Fence labels a model uses for a tool call; a ```html fence is handled above.
+  // The negative lookahead stops ```tool matching inside ```tool_calls etc.
+  const fenceRegex = /```(?:json|tool_code|tool)(?![a-z0-9_])\s*([\s\S]*?)```/gi;
+  const afterFences = content.replace(fenceRegex, (match, body) => toolCallJsonToArtifact(body) ?? match);
+  if (afterFences !== content) return afterFences;
+
+  // A model may also return the bare object as its entire reply (no fence).
+  const trimmed = content.trim();
+  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
+    const artifact = toolCallJsonToArtifact(trimmed);
+    if (artifact) return content.replace(trimmed, () => artifact);
+  }
+  return content;
+}
+
+/**
+ * Parse one candidate as a tool call whose arguments carry an HTML string and
+ * return the equivalent <artifact> markup, or null if it is not that shape.
+ * Accepts the name/arguments key aliases small models improvise.
+ */
+function toolCallJsonToArtifact(candidate: string): string | null {
+  const trimmed = candidate.trim();
+  if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const obj = parsed as Record<string, unknown>;
+
+  let name: unknown;
+  let args: unknown;
+  const fn = obj.function;
+  if (fn && typeof fn === 'object') {
+    name = (fn as Record<string, unknown>).name;
+    args = (fn as Record<string, unknown>).arguments;
+  } else {
+    name = obj.name ?? obj.function ?? obj.tool ?? obj.tool_name;
+  }
+  if (args === undefined) args = obj.arguments ?? obj.parameters ?? obj.args ?? obj.input;
+  // Promote only an invented artifact-builder tool name (build_html, create_webpage,
+  // render_page, generate_ui...). A real tool whose args merely include HTML, e.g.
+  // send_html_email, must be left alone. Anchored so the leading verb is the tool's
+  // purpose, not an "html" substring buried mid-name.
+  if (
+    typeof name !== 'string' ||
+    !/^(build|create|render|make|generate|write)[-_]?(html|artifact|page|webpage|website|ui)/i.test(name) ||
+    !args ||
+    typeof args !== 'object'
+  )
+    return null;
+
+  const html = Object.values(args as Record<string, unknown>).find(
+    (v): v is string => typeof v === 'string' && looksLikeHtml(v)
+  );
+  if (!html) return null;
+
+  // Strip quotes from the model-controlled title before interpolating it into
+  // title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no escape
+  // mechanism, so an embedded quote would silently truncate the attribute.
+  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/["']/g, '') || 'HTML Page';
+  const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
+  return `<artifact identifier="${identifier}" type="text/html" title="${title}">
+${html.trim()}
+</artifact>`;
+}
+
+/** Full-document marker or at least one HTML element tag. */
+function looksLikeHtml(value: string): boolean {
+  return /<!DOCTYPE\s+html/i.test(value) || /<[a-z][a-z0-9]*[\s/>]/i.test(value);
 }
 
 /**

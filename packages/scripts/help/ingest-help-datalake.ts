@@ -83,10 +83,12 @@ async function main(opts: Options): Promise<number> {
     getSettingsByNames,
   });
   const provider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null } = {};
+  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
+    {};
   // Only OpenAI and Voyage embeddings need an API key. Bedrock (e.g.
   // amazon.titan-embed-text-v2:0) and other IAM/keyless providers must NOT be
   // blocked by a key guard; require the key only for the providers that use one.
+  // Ollama needs a base URL (self-host), not a secret.
   if (provider === 'openai') {
     embeddingConfig.openaiApiKey = apiKeyTable?.openai;
     if (!embeddingConfig.openaiApiKey) {
@@ -96,6 +98,11 @@ async function main(opts: Options): Promise<number> {
     embeddingConfig.voyageApiKey = apiKeyTable?.voyageai;
     if (!embeddingConfig.voyageApiKey) {
       throw new Error(`No Voyage API key resolved for user ${opts.userId}; cannot embed chunks.`);
+    }
+  } else if (provider === 'ollama') {
+    embeddingConfig.ollamaBaseUrl = apiKeyTable?.ollama;
+    if (!embeddingConfig.ollamaBaseUrl) {
+      throw new Error(`No Ollama base URL resolved for user ${opts.userId}; cannot embed chunks.`);
     }
   }
   const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);

@@ -1,14 +1,19 @@
-// List all invites associated with a user
-// GET /api/invites
+// Get or cancel a particular invite
+// GET/DELETE /api/invites/[id]
 
-import { IGroupDocument, InviteType, IShareableDocument } from '@bike4mind/common';
-import { FabFile, Group, Invite, Organization, Project } from '@bike4mind/database';
-import { Session } from '@bike4mind/database/auth';
+import {
+  Invite,
+  inviteRepository,
+  fabFileRepository,
+  sessionRepository,
+  projectRepository,
+  organizationRepository,
+  Group,
+} from '@bike4mind/database';
 import { getInviteDetails } from '@server/managers/inviteManager';
-import { cancelInvite } from '@server/managers/sharingManager';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
-import { NotFoundError } from '@server/utils/errors';
+import { sharingService } from '@bike4mind/services';
 
 const handler = baseApi()
   /**
@@ -31,7 +36,9 @@ const handler = baseApi()
     })
   )
   /**
-   * Delete a particular invite
+   * Delete (cancel) a particular invite by its invite id. Share-scoped auth lives
+   * in the service, which loads the invite, resolves its document, and checks the
+   * caller's share access before cancelling.
    */
   .delete(
     asyncHandler<{}, unknown, unknown, { id?: string }>(async (req, res) => {
@@ -41,41 +48,20 @@ const handler = baseApi()
         return res.status(400).json({ message: 'Invalid delete invite request' });
       }
 
-      const invite = await Invite.findById(id);
-      if (!invite) {
-        return res.status(404).json({ message: 'Invite not found' });
-      }
-      const { type, documentId } = invite;
-
-      let doc: IGroupDocument | IShareableDocument | null = null;
-      switch (type) {
-        case InviteType.FabFile:
-          doc = await FabFile.findById(documentId);
-          break;
-        case InviteType.Session:
-          doc = await Session.findById(documentId);
-          break;
-        case InviteType.Organization:
-          doc = await Organization.findById(documentId);
-          break;
-        case InviteType.Group:
-          doc = await Group.findById(documentId);
-          break;
-        case InviteType.Project:
-          doc = await Project.findById(documentId);
-          break;
-        default:
-          break;
-      }
-
-      if (!doc) {
-        throw new NotFoundError(`${type} not found`);
-      }
-
-      const updatedInvite = await cancelInvite(doc, id, req.ability!);
-      if (!updatedInvite) {
-        return res.status(404).json({ message: 'Invite not found' });
-      }
+      const updatedInvite = await sharingService.cancelInviteById(
+        req.user,
+        { id },
+        {
+          db: {
+            invites: inviteRepository,
+            fabFiles: fabFileRepository,
+            sessions: sessionRepository,
+            projects: projectRepository,
+            organizations: organizationRepository,
+            groups: Group,
+          },
+        }
+      );
 
       return res.json(updatedInvite);
     })

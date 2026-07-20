@@ -8,7 +8,13 @@ import {
   ALLOWED_MIME_EXACT,
   type UploadUrlResponse,
 } from '@bike4mind/common';
-import { checkScopePermission, resolveVisibility, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import {
+  checkScopePermission,
+  resolveVisibility,
+  checkPublishQuota,
+  mintDraftUploadUrl,
+  type PublishUser,
+} from '@server/services/publish';
 
 /**
  * POST /api/publish/artifact/upload-url - step 1 of the 3-step publish flow.
@@ -138,11 +144,16 @@ const handler = baseApi().post(async (req, res) => {
     ContentType: 'application/json',
   });
 
+  // Hosted -> presigned S3 PUT; self-host -> same-origin proxy URL (draftUploadUrl.ts).
   const uploadUrls: UploadUrlResponse['uploadUrls'] = await Promise.all(
     body.files.map(async file => {
-      const url = await storage.getSignedUrl(`${draftPrefix}${file.path}`, 'put', {
+      const url = await mintDraftUploadUrl({
+        storage,
+        key: `${draftPrefix}${file.path}`,
+        draftId,
+        path: file.path,
+        mimeType: file.mimeType,
         expiresIn: PRESIGNED_URL_EXPIRY_SECONDS,
-        ContentType: file.mimeType,
       });
       return { path: file.path, url, expiresAt };
     })

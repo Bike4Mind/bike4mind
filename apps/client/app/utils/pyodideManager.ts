@@ -54,6 +54,9 @@ class PyodideManager {
 
   private worker: Worker | null = null;
   private initPromise: Promise<void> | null = null;
+  // Optional Pyodide mirror (PYODIDE_BASE_URL), forwarded to the worker at initialize.
+  // Undefined keeps the worker's default public CDN.
+  private baseUrl?: string;
   private executeResolver: ((result: ExecutionResult) => void) | null = null;
   private executeRejecter: ((error: Error) => void) | null = null;
   private listeners: Set<(state: PyodideManagerState) => void> = new Set();
@@ -133,6 +136,14 @@ class PyodideManager {
   }
 
   /**
+   * Point Pyodide at a self-hosted mirror instead of the default public CDN.
+   * Must be called before initialize() to take effect for that worker.
+   */
+  configure(baseUrl?: string): void {
+    this.baseUrl = baseUrl;
+  }
+
+  /**
    * Initialize Pyodide (lazy-loaded singleton)
    */
   async initialize(): Promise<void> {
@@ -164,7 +175,7 @@ class PyodideManager {
         }
       };
 
-      const message: PyodideWorkerMessage = { type: 'initialize' };
+      const message: PyodideWorkerMessage = { type: 'initialize', baseUrl: this.baseUrl };
       this.worker.postMessage(message);
     });
 

@@ -277,6 +277,41 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'generic_deduct',
 ] as const;
 
+/** Deduct types that move credits without being a model call. */
+const NON_AI_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = ['transfer_credit', 'generic_deduct'];
+
+/**
+ * The subset of deduct types that represent AI spend, i.e. what a usage
+ * breakdown should count. Derived from CREDIT_DEDUCT_TRANSACTION_TYPES rather
+ * than listed, so a new `*_usage` type joins the by-source cut automatically:
+ * only a deduct type that is *not* a model call needs adding above.
+ */
+export const AI_USAGE_TRANSACTION_TYPES: CreditTransactionType[] = CREDIT_DEDUCT_TRANSACTION_TYPES.filter(
+  t => !NON_AI_DEDUCT_TRANSACTION_TYPES.includes(t)
+);
+
+/**
+ * Bucket key for ledger rows carrying no `source`. Not a CompletionSource: it
+ * is the residual, and the UI pins it last rather than ranking it against real
+ * surfaces. `source` is optional on the write path, so this covers both rows
+ * predating source tracking and any path that omits it.
+ */
+export const UNCLASSIFIED_SOURCE = 'unclassified';
+
+/** A source bucket, or the residual for rows carrying no source. */
+export type SourceUsageKey = CompletionSource | typeof UNCLASSIFIED_SOURCE;
+
+/**
+ * An owner's AI spend for one origin surface. Credits only: the ledger carries
+ * no COGS, and token counts exist only on text rows, so summing them across a
+ * bucket that mixes image/video/voice would undercount against `requests`.
+ */
+export interface ISourceUsage {
+  source: SourceUsageKey;
+  requests: number;
+  creditsSpent: number;
+}
+
 /**
  * Credit transaction as returned by the API
  */
@@ -392,4 +427,12 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
    * {ownerId, ownerType, createdAt} index; biggest spender first.
    */
   apiKeyUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<IApiKeyUsage[]>;
+
+  /**
+   * An owner's AI spend over the trailing N days (default 30) grouped by the
+   * surface it originated from, from AI_USAGE_TRANSACTION_TYPES ledger rows.
+   * Rows carrying no `source` land in an `unclassified` bucket, which sorts
+   * last so the buckets still sum to the owner's ledger spend.
+   */
+  sourceUsageForOwner(ownerId: string, ownerType: CreditHolderType, days?: number): Promise<ISourceUsage[]>;
 }

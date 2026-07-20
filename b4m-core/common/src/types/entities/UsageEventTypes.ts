@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { IBaseRepository } from './BaseTypes';
 import { IMongoDocument } from './common';
 import { CreditHolderType } from './CreditHolderTypes';
-import { NamedApiKeyUsage } from './CreditTransactionTypes';
+import { NamedApiKeyUsage, ISourceUsage } from './CreditTransactionTypes';
 
 /**
  * Which product surface generated the provider call.
@@ -199,6 +199,12 @@ export interface IOrgUsageDashboardResponse {
   byFeature: IOwnerSpendFeature[];
   /** API-token spend grouped by key (from the ledger; only completion_api_usage carries a key). */
   byApiKey: NamedApiKeyUsage[];
+  /**
+   * Spend grouped by originating surface (from the ledger, the only source
+   * carrying `source`; credits only, no COGS). Sums to the org's ledger AI
+   * spend, which can drift from `totals` - that comes from UsageEvent.
+   */
+  bySource: ISourceUsage[];
   totals: IUsageSpendBucket;
 }
 

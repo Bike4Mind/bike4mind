@@ -12,7 +12,8 @@
  * first-iteration query. It mirrors the guards used by
  * `publishMementoCompletion`:
  *
- * - `enableMementos !== true` -> no retrieval (user/admin disabled).
+ * - the user is on NEITHER pipeline. V2 (if the user opted in) is tried first and is mutually
+ *   exclusive with V1; V1 additionally requires `enableMementos` (user/admin).
  * - `parentExecutionId` set -> no retrieval. Subagent / DAG-child executions
  *   inherit the parent's materialized context via the existing handoff path
  *   and must not re-fetch (parity with the publish side).
@@ -30,6 +31,8 @@
 
 import type { Logger } from '@bike4mind/observability';
 import type { IAgentExecution } from '@bike4mind/database';
+import { buildMemoryContext } from '@bike4mind/common';
+import { recallMementosV2 } from '@server/memory/recallMementosV2';
 import type { IApiKeyRepository, IMementoRepository, IAdminSettingsRepository } from '@bike4mind/common';
 import { mementoService } from '@bike4mind/services';
 
@@ -70,15 +73,45 @@ export interface MementosPreambleResult {
 
 const EMPTY_RESULT: MementosPreambleResult = Object.freeze({ preamble: '', mementoIds: [] as string[] });
 
+/**
+ * The V2 preamble - the same friend-who-remembers framing chat mode's V2 path uses (buildMemoryContext).
+ * Takes raw facts, not pre-decorated lines: a "% relevant" score is exactly the retrieval-metadata that
+ * makes the model recite its memory instead of using it. The V1 path below keeps its own legacy format.
+ */
+const buildV2Preamble = (facts: string[]): string => {
+  const context = buildMemoryContext(facts.map(sanitizeSummary));
+  return context ? `\n\n${context}` : '';
+};
+
 export async function getFirstIterationMementosPreamble(
   execution: MementoRetrievalExecution,
   adapters: MementoRetrievalAdapters,
   logger: Logger
 ): Promise<MementosPreambleResult> {
-  if (!execution.enableMementos) return EMPTY_RESULT;
   if (execution.parentExecutionId) return EMPTY_RESULT;
 
   try {
+    // Mementos V2: the two pipelines are mutually exclusive, exactly as in chat (MementoFeature). A V2
+    // user's memory must reach agent mode too - gating this on `enableMementos` alone is what left a
+    // V2-only user running un-personalized in agent mode while chat knew them perfectly well.
+    //
+    // V2 returns null for a user who is NOT on V2, which is what falls through to the V1 path below.
+    const v2 = await recallMementosV2(execution.userId, execution.query);
+    if (v2 !== null) {
+      if (v2.length === 0) {
+        logger.info('[Mementos V2] No relevant beliefs for first iteration', { executionId: execution.id });
+        return EMPTY_RESULT;
+      }
+      logger.info('[Mementos V2] Injected beliefs into first-iteration context', {
+        executionId: execution.id,
+        count: v2.length,
+      });
+      // V2 beliefs are not V1 mementos and have no memento id to track; `mementoIds` stays empty.
+      return { preamble: buildV2Preamble(v2.map(({ fact }) => fact)), mementoIds: [] };
+    }
+
+    if (!execution.enableMementos) return EMPTY_RESULT;
+
     const relevantMementos = await mementoService.getRelevantMementos(
       execution.userId,
       execution.query,
@@ -106,7 +139,7 @@ export async function getFirstIterationMementosPreamble(
     });
 
     const preamble =
-      `\n\n[KNOWN FACTS ABOUT THE USER — Use these to personalize your response when relevant. ` +
+      `\n\n[KNOWN FACTS ABOUT THE USER - Use these to personalize your response when relevant. ` +
       `Do not mention this list explicitly unless asked.]\n${lines.join('\n')}`;
 
     return { preamble, mementoIds };
