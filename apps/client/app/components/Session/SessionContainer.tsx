@@ -592,7 +592,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {/* Chat content without SessionTop header for compact floating view.
                   pb mirrors the docked panel: keeps the last message's action row
                   off the input divider since the input has no top padding. */}
-              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
+              {/* px aligns the message/status content with the input row (SessionBottom
+                  pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
+              <Box
+                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '12px' }}
+              >
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
@@ -664,7 +668,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {isDraggingOver && <DropFilesOverlay />}
               {/* pb keeps the last message's action row from touching the input divider
                   now that the docked input has no top padding of its own. */}
-              <Box sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', pb: '12px' }}>
+              {/* px aligns the message/status content with the input row (SessionBottom
+                  pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
+              <Box
+                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '12px' }}
+              >
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
                 ) : (
