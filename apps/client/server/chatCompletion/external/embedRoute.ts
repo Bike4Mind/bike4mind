@@ -18,7 +18,7 @@ import {
   executeCompletion,
   assertOwnerHasCredits,
   assertKeySpendWithinCap,
-  InsufficientCreditsError,
+  resolveQuestErrorCode,
 } from '@bike4mind/services';
 import {
   connectDB,
@@ -342,11 +342,8 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       });
       if (streaming) {
         // Classify billing/policy failures so the embedding client can branch on
-        // `code` instead of parsing message text. The reservation error carries its
-        // classifier on `.code` (not `additionalInfo`), so getQuestErrorCode alone
-        // would drop it - same disambiguation the quest path uses.
-        const code = error instanceof InsufficientCreditsError ? error.code : getQuestErrorCode(error);
-        write(serializeSSEEvent(formatSSEError(error, requestId, code)));
+        // `code` instead of parsing message text.
+        write(serializeSSEEvent(formatSSEError(error, requestId, resolveQuestErrorCode(error))));
         if (!res.writableEnded) res.end();
       } else if (!res.headersSent) {
         res.status(500).json({ error: 'internal_error', error_description: 'Failed to process embed chat request' });

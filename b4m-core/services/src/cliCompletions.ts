@@ -568,13 +568,13 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
   // stochastic settlement value as the ledger adjustment and UsageEvent above, so
   // the per-key total reconciles with what was charged. Deliberately independent
   // of enforceCredits: the cap must trip on real usage cost even when the platform
-  // toggle is off (the normal embed case). Fail-open: the completion already
-  // streamed, so a lost increment (slight under-count) beats breaking the response.
+  // toggle is off (the normal embed case). Fire-and-forget like recordUsageEvent:
+  // the completion already streamed, so a lost increment (slight under-count)
+  // beats delaying the response close on an extra round trip.
   if (modelInfo && apiKeyInfo?.keyId && db.userApiKeys && finalCredits > 0) {
-    try {
-      await db.userApiKeys.incrementSpend(apiKeyInfo.keyId, finalCredits);
-    } catch (err) {
-      logger?.warn?.('[CLI_CREDITS] Failed to increment per-key spend', { keyId: apiKeyInfo.keyId, err });
-    }
+    const keyId = apiKeyInfo.keyId;
+    db.userApiKeys
+      .incrementSpend(keyId, finalCredits)
+      .catch(err => logger?.warn?.('[CLI_CREDITS] Failed to increment per-key spend', { keyId, err }));
   }
 }

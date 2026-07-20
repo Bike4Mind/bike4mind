@@ -18,7 +18,7 @@ const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockAssertOwnerHasCredits = vi.hoisted(() => vi.fn());
 const mockAssertKeySpendWithinCap = vi.hoisted(() => vi.fn());
 // Stand-in for the real class (the whole services module is mocked): same
-// `.code` carrier + instanceof identity the route's disambiguation relies on.
+// `.code` carrier the services-side resolver reads.
 const MockInsufficientCreditsError = vi.hoisted(
   () =>
     class MockInsufficientCreditsError extends Error {
@@ -30,12 +30,19 @@ const MockInsufficientCreditsError = vi.hoisted(
       }
     }
 );
-vi.mock('@bike4mind/services', () => ({
-  executeCompletion: mockExecuteCompletion,
-  assertOwnerHasCredits: mockAssertOwnerHasCredits,
-  assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
-  InsufficientCreditsError: MockInsufficientCreditsError,
-}));
+vi.mock('@bike4mind/services', async () => {
+  // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
+  // tagged 422s to the REAL getQuestErrorCode so classification stays end-to-end.
+  const { getQuestErrorCode } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    executeCompletion: mockExecuteCompletion,
+    assertOwnerHasCredits: mockAssertOwnerHasCredits,
+    assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
+    InsufficientCreditsError: MockInsufficientCreditsError,
+    resolveQuestErrorCode: (error: unknown) =>
+      error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
+  };
+});
 
 const mockAgentFindById = vi.hoisted(() => vi.fn());
 const mockOrgFindById = vi.hoisted(() => vi.fn());
