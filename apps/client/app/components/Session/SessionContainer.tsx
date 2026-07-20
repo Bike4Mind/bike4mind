@@ -595,7 +595,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {/* px aligns the message/status content with the input row (SessionBottom
                   pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
               <Box
-                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '12px' }}
+                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}
               >
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
@@ -671,7 +671,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
               {/* px aligns the message/status content with the input row (SessionBottom
                   pads 16px) so nothing hugs the narrow docked/floating panel edges. */}
               <Box
-                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '12px' }}
+                sx={{ flex: 1, overflow: 'hidden', display: 'flex', flexDirection: 'column', px: '16px', pb: '24px' }}
               >
                 {!currentSessionId ? (
                   customSplash || <NotebookSplash />
