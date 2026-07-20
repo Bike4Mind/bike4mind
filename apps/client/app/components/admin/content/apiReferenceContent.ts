@@ -151,10 +151,16 @@ GET /api/quests/[id]
     "sources": [],
     "artifacts": []
   },
+  "images": ["a1b2c3.png"],
+  "imageUrls": ["https://cdn.example.com/generated/a1b2c3.png"],
   "createdAt": "2025-01-15T10:30:00Z",
   "completedAt": "2025-01-15T10:30:05Z"
 }
 \`\`\`
+
+For image/file-generating quests, \`images\` lists the generated file basenames and \`imageUrls\`
+lists the same files as ready-to-use CDN URLs (empty until \`status\` is \`done\`). Prefer
+\`imageUrls\` - it saves you having to know the CDN path convention.
 
 #### Get Quest Files
 
@@ -601,6 +607,38 @@ POST /api/ai/llm
 | temperature | number | No | Sampling temperature |
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
+
+#### Image Generation (async)
+
+\`\`\`
+POST /api/ai/generate-image
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| prompt | string | Yes | Image description |
+| model | string | No | Image model identifier |
+| n | number | No | Number of images (1-10) |
+| size | string | No | Image dimensions (e.g. \`1024x1024\`) |
+| sessionId | string | No | Existing session; a new one is created if omitted |
+
+Generation is asynchronous - the request enqueues work and returns immediately with a quest
+(no image yet). It never blocks on generation, so it is not subject to the API-gateway request
+timeout. Retrieve the result by polling \`GET /api/quests/{id}\` until \`status\` is \`done\`, then
+read \`imageUrls\` (see [Poll Quest Status](#poll-quest-status)).
+
+**Response:**
+
+\`\`\`json
+{
+  "quest": { "id": "quest_abc123", "status": "pending" },
+  "session": { "id": "sess_xyz789" }
+}
+\`\`\`
 
 #### AI Endpoints Summary
 

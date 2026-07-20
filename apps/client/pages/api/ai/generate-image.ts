@@ -3,7 +3,7 @@ import { getImageGeneration } from '@server/queueHandlers/imageGeneration';
 
 import { Request } from 'express';
 import { z } from 'zod';
-import { GenerateImageRequestBodySchema, GenerateImageIvokeParams } from '@bike4mind/common';
+import { GenerateImageRequestBodySchema, GenerateImageIvokeParams, ApiKeyScope } from '@bike4mind/common';
 import { getOrCreateSession } from '@server/managers/sessionManager';
 import { questRepository } from '@bike4mind/database';
 import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@server/utils/resolveImagePrompt';
@@ -11,7 +11,11 @@ import { resolveImagePrompt, HISTORY_LOOKBACK, type PromptResolution } from '@se
 type GenerateImageRequestBody = z.infer<typeof GenerateImageRequestBodySchema>;
 type GenerateImageRequest = Request<unknown, unknown, GenerateImageRequestBody>;
 
-const handler = baseApi().post(async (req: GenerateImageRequest, res) => {
+// Gate API-key callers on `ai:generate` so this billable action is auditable and a
+// least-privilege image-only key can drive the whole POST -> poll GET /api/quests/{id} flow
+// (the poll endpoint already accepts ai:generate). Scope checks apply only to API-key
+// requests; browser/JWT sessions fall through untouched (see apiKeyAuth).
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req: GenerateImageRequest, res) => {
   req.logger.updateMetadata({
     userId: req.user?.id,
     userEmail: req.user?.email,

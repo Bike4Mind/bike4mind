@@ -34,12 +34,23 @@ const handler = baseApi({
     throw new NotFoundError('Quest not found');
   }
 
+  // `quest.images` holds bare generated-file basenames (e.g. `<uuid>.png`) served from the CDN
+  // under `/generated`. Programmatic pollers shouldn't have to know that path convention, so we
+  // derive ready-to-use URLs server-side - the single source of truth - mirroring the web client
+  // (PromptReplies.tsx). `images` (raw basenames) is kept for parity with the WebSocket payload.
+  // Skip URL building when no CDN is configured rather than emit a misleading relative path.
+  const cdnUrl = process.env.NEXT_PUBLIC_CDN_URL || '';
+  const images = quest.images ?? [];
+  const imageUrls = cdnUrl ? images.map(name => `${cdnUrl}/generated/${name}`) : [];
+
   return res.json({
     id: quest.id,
     status: quest.status,
     sessionId: quest.sessionId,
     reply: quest.reply,
     replies: quest.replies,
+    images,
+    imageUrls,
     createdAt: quest.createdAt,
     updatedAt: quest.updatedAt,
     promptMeta: quest.promptMeta,

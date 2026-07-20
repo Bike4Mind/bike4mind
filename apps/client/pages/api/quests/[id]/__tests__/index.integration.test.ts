@@ -161,4 +161,35 @@ describe('GET /api/quests/[id] (integration — scope enforcement via real middl
     expect(res._getStatusCode()).toBe(200);
     expect(mockValidate).not.toHaveBeenCalled();
   });
+
+  it('derives ready-to-use CDN imageUrls from quest.images basenames', async () => {
+    const prev = process.env.NEXT_PUBLIC_CDN_URL;
+    process.env.NEXT_PUBLIC_CDN_URL = 'https://cdn.example.com';
+    mockQuestFindById.mockResolvedValue({
+      id: 'quest-1',
+      sessionId: 'sess-1',
+      status: 'done',
+      reply: {},
+      replies: [],
+      promptMeta: {},
+      images: ['a1b2c3.png', 'doc.xlsx'],
+    });
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({
+      images: ['a1b2c3.png', 'doc.xlsx'],
+      imageUrls: ['https://cdn.example.com/generated/a1b2c3.png', 'https://cdn.example.com/generated/doc.xlsx'],
+    });
+    process.env.NEXT_PUBLIC_CDN_URL = prev;
+  });
+
+  it('returns empty images/imageUrls when the quest generated nothing', async () => {
+    validateWithScopes([ApiKeyScope.AI_GENERATE]);
+    const { req, res } = fire();
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toMatchObject({ images: [], imageUrls: [] });
+  });
 });
