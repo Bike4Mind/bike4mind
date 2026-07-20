@@ -14,7 +14,12 @@ import {
   type IMessage,
 } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
-import { executeCompletion, assertOwnerHasCredits, assertKeySpendWithinCap } from '@bike4mind/services';
+import {
+  executeCompletion,
+  assertOwnerHasCredits,
+  assertKeySpendWithinCap,
+  InsufficientCreditsError,
+} from '@bike4mind/services';
 import {
   connectDB,
   mongoose,
@@ -336,7 +341,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
         error: error instanceof Error ? error.message : String(error),
       });
       if (streaming) {
-        write(serializeSSEEvent(formatSSEError(error, requestId)));
+        // Classify billing/policy failures so the embedding client can branch on
+        // `code` instead of parsing message text. The reservation error carries its
+        // classifier on `.code` (not `additionalInfo`), so getQuestErrorCode alone
+        // would drop it - same disambiguation the quest path uses.
+        const code = error instanceof InsufficientCreditsError ? error.code : getQuestErrorCode(error);
+        write(serializeSSEEvent(formatSSEError(error, requestId, code)));
         if (!res.writableEnded) res.end();
       } else if (!res.headersSent) {
         res.status(500).json({ error: 'internal_error', error_description: 'Failed to process embed chat request' });

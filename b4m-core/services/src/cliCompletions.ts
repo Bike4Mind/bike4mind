@@ -233,7 +233,7 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
       const member = organization!.userDetails?.find(u => u.id === userId);
       const usedCredits = member?.usedCredits ?? 0;
       if (usedCredits + reservedCredits > organization!.maxCreditsPerMember) {
-        throw new InsufficientCreditsError('Organization member credit limit reached');
+        throw new InsufficientCreditsError('Organization member credit limit reached', 'insufficient_credits');
       }
     }
 
@@ -248,7 +248,8 @@ export async function executeCompletion(params: CompletionParams): Promise<void>
         billToOrg
           ? `Your organization does not have enough credits. It has ${actualBalance} credits, but this request requires approximately ${reservedCredits}. Please contact your organization administrator to add more credits.`
           : `Insufficient credits. You have ${actualBalance} credits, but this request requires approximately ${reservedCredits} credits. ` +
-              `Try using a smaller model or reducing the prompt size.`
+              `Try using a smaller model or reducing the prompt size.`,
+        'insufficient_credits'
       );
     }
 

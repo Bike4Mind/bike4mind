@@ -17,10 +17,24 @@ vi.mock('@bike4mind/observability', () => ({
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockAssertOwnerHasCredits = vi.hoisted(() => vi.fn());
 const mockAssertKeySpendWithinCap = vi.hoisted(() => vi.fn());
+// Stand-in for the real class (the whole services module is mocked): same
+// `.code` carrier + instanceof identity the route's disambiguation relies on.
+const MockInsufficientCreditsError = vi.hoisted(
+  () =>
+    class MockInsufficientCreditsError extends Error {
+      constructor(
+        message: string,
+        readonly code?: string
+      ) {
+        super(message);
+      }
+    }
+);
 vi.mock('@bike4mind/services', () => ({
   executeCompletion: mockExecuteCompletion,
   assertOwnerHasCredits: mockAssertOwnerHasCredits,
   assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
+  InsufficientCreditsError: MockInsufficientCreditsError,
 }));
 
 const mockAgentFindById = vi.hoisted(() => vi.fn());
@@ -413,6 +427,28 @@ describe('POST /api/embed/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain('"type":"error"');
+    // Unclassified failure: the frame must carry no code key at all.
+    expect(text).not.toContain('"code"');
+  });
+
+  it('classifies a mid-stream credit-reservation failure on the SSE frame (.code carrier)', async () => {
+    mockExecuteCompletion.mockRejectedValue(
+      new MockInsufficientCreditsError('org out of credits', 'insufficient_credits')
+    );
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"error"');
+    expect(text).toContain('"code":"insufficient_credits"');
+  });
+
+  it('classifies a mid-stream tagged 422 on the SSE frame (additionalInfo carrier)', async () => {
+    mockExecuteCompletion.mockRejectedValue(spendCapExceededError('key hit its cap mid-run'));
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"error"');
+    expect(text).toContain('"code":"spend_cap_exceeded"');
   });
 
   it('returns a 500 JSON fallback when a pre-stream step throws (no gate handled it)', async () => {
