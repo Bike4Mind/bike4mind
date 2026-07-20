@@ -235,6 +235,23 @@ export function isOriginUnderHost(origin: string, host: string): boolean {
   return originHost === h || originHost.endsWith(`.${h}`);
 }
 
+/**
+ * Request-time origin gate shared by both embed surfaces (the Next mint-route
+ * CORS middleware and the Fargate chat route's in-handler CORS), so both decide
+ * "is this browser Origin approved?" identically. Normalizes the incoming raw
+ * Origin via `parseEmbedOrigin` and checks exact membership against the key's
+ * stored `allowedOrigins` (already normalized at write time). An unparseable
+ * origin or an empty/absent allow-list yields false. Note (per the AC): a
+ * non-browser client can forge Origin, so this is defense-in-depth for real
+ * browsers, not the security boundary - the embed key/token is.
+ */
+export function isOriginPermitted(rawOrigin: string | undefined, allowedOrigins: string[] | undefined): boolean {
+  if (!rawOrigin || !allowedOrigins?.length) return false;
+  const normalized = parseEmbedOrigin(rawOrigin);
+  if (!normalized) return false;
+  return allowedOrigins.includes(normalized);
+}
+
 /** Field schema: an array of pre-normalized exact https origins, deduped, capped.
  *  The authoritative host-exclusion check is applied server-side at write time. */
 export const EmbedOriginsSchema = z

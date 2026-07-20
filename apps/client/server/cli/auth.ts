@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken';
 import { Config } from '@server/utils/config';
-import { IUserDocument, ApiKeyScope, type ApiKeyBillingOwnerType, type CompletionSource } from '@bike4mind/common';
+import {
+  IUserDocument,
+  ApiKeyScope,
+  CreditHolderType,
+  type ApiKeyBillingOwnerType,
+  type CompletionSource,
+} from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
@@ -26,6 +32,10 @@ export interface ApiKeyInfo {
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose pool this key bills, present iff billingOwnerType is Organization. */
   organizationId?: string;
+  /** Agent an embed key is bound to, present iff scopes include `embed:chat`. */
+  agentId?: string;
+  /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
+  allowedOrigins?: string[];
 }
 
 /**
@@ -86,6 +96,33 @@ export interface VerifyApiKeyOptions {
 const DEFAULT_COMPLETION_SCOPES: ApiKeyScope[] = [ApiKeyScope.AI_GENERATE, ApiKeyScope.AI_CHAT];
 
 /**
+ * Project a (post-guard) validation result into an ApiKeyInfo. Single source for the
+ * doc->info mapping, shared by verifyApiKey and verifyEmbedKeyById so the two can't
+ * drift. Callers MUST have already asserted keyId/userId/scopes/rateLimit are present.
+ */
+function toApiKeyInfo(v: {
+  keyId?: string;
+  userId?: string;
+  scopes?: ApiKeyScope[];
+  rateLimit?: { requestsPerMinute: number; requestsPerDay: number };
+  billingOwnerType?: ApiKeyBillingOwnerType;
+  organizationId?: string;
+  agentId?: string;
+  allowedOrigins?: string[];
+}): ApiKeyInfo {
+  return {
+    keyId: v.keyId!,
+    userId: v.userId!,
+    scopes: v.scopes!,
+    rateLimit: v.rateLimit!,
+    billingOwnerType: v.billingOwnerType,
+    organizationId: v.organizationId,
+    agentId: v.agentId,
+    allowedOrigins: v.allowedOrigins,
+  };
+}
+
+/**
  * Verify API key from headers
  * @throws Error if API key is invalid, expired, or missing required scope
  */
@@ -116,14 +153,7 @@ export async function verifyApiKey(
       throw new Error(`API key does not have permission for this endpoint (requires ${list})`);
     }
 
-    return {
-      keyId: validation.keyId,
-      userId: validation.userId,
-      scopes: validation.scopes,
-      rateLimit: validation.rateLimit,
-      billingOwnerType: validation.billingOwnerType,
-      organizationId: validation.organizationId,
-    };
+    return toApiKeyInfo(validation);
   } catch (error) {
     if (error instanceof Error) {
       throw error;
@@ -139,6 +169,63 @@ export async function verifyApiKey(
  */
 export async function verifyBridgeApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
   return verifyApiKey(headers, { requiredScopes: [ApiKeyScope.CC_BRIDGE] });
+}
+
+/**
+ * The two properties of the embed credential class, enforced on every embed
+ * surface (session mint and chat) so neither can be reached with a key that
+ * lacks them:
+ *   - org-only: usage bills a bounded Organization pool, never a user's pool.
+ *   - a bound agent: the key resolves exactly one agent; without it there is no
+ *     persona/tenant to run, so fail closed.
+ */
+function assertEmbedCredential(info: ApiKeyInfo): void {
+  if (info.billingOwnerType !== CreditHolderType.Organization || !info.organizationId) {
+    throw new Error('Embed keys must be organization-owned');
+  }
+  if (!info.agentId) {
+    throw new Error('Embed key is not bound to an agent');
+  }
+}
+
+/**
+ * Verify an API key that authorizes the public embed completion surface (the
+ * raw-key path: X-API-Key / Authorization). Requires the EMBED_CHAT scope plus
+ * the embed credential-class properties above.
+ * @throws Error if the key lacks EMBED_CHAT, is not org-owned, or has no agent.
+ */
+export async function verifyEmbedApiKey(headers: Record<string, string | undefined>): Promise<ApiKeyInfo> {
+  const info = await verifyApiKey(headers, { requiredScopes: [ApiKeyScope.EMBED_CHAT] });
+  assertEmbedCredential(info);
+  return info;
+}
+
+/**
+ * Resolve an embed key by its id (the session-token path, where the raw secret
+ * is not in hand). Re-loads the live key doc and re-applies the ACTIVE-status,
+ * scope, and credential-class checks, so a session token cannot outlive a key
+ * that was revoked/disabled within its short TTL - the revocation-safety the
+ * token itself cannot provide.
+ * @throws Error if the key is missing, not active, or not a valid embed key.
+ */
+export async function verifyEmbedKeyById(keyId: string): Promise<ApiKeyInfo> {
+  // Share the exact post-lookup gates (status, expiry, last-used, projection) with
+  // the raw-key path via validateUserApiKeyById, so a future gate added to key
+  // validation propagates to the session-token path automatically.
+  const validation = await userApiKeyService.validateUserApiKeyById(keyId, {
+    db: { userApiKeys: userApiKeyRepository },
+  });
+
+  if (!validation.isValid || !validation.userId || !validation.keyId || !validation.scopes || !validation.rateLimit) {
+    throw new Error(validation.reason ? `Invalid embed key: ${validation.reason}` : 'Invalid or expired embed key');
+  }
+  if (!validation.scopes.includes(ApiKeyScope.EMBED_CHAT)) {
+    throw new Error('API key does not have permission for this endpoint (requires embed:chat)');
+  }
+
+  const info = toApiKeyInfo(validation);
+  assertEmbedCredential(info);
+  return info;
 }
 
 /**

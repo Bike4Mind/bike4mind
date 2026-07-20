@@ -7,6 +7,7 @@ import {
   SupportedEmbeddingModel,
 } from '@bike4mind/common';
 import { createTokenizer, getProviderFromModel, getSettingsByNames, type ITokenizer } from '@bike4mind/utils';
+import { filterRetrievalExcluded } from '@bike4mind/utils/retrievalExclusion';
 import type { Logger } from '@bike4mind/observability';
 import { getDynamicDataLakeAccess } from '../../../../dataLakeService/getDynamicDataLakeTags';
 import { semanticDataLakeSearch, SemanticChunkResult } from '../../../../dataLakeService/semanticDataLakeSearch';
@@ -96,6 +97,8 @@ async function trySemanticKbSearch(
         dataLakeTags,
         dataLakeTagPrefixes,
         scopedTagPrefixes,
+        // Retrieval exclusion (opt-in) - agree with the surface's listing predicate. No-op when unset.
+        retrievalFilter: context.retrievalFilter,
         logger: context.logger,
       },
       { db: { fabfiles: context.db.fabfiles, fabfilechunks: chunkRepo } }
@@ -280,6 +283,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
               dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
               scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
               excludeContent: true, // Search only needs metadata — content fetched via retrieve tool
+              // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
+              ...(context.retrievalFilter ?? {}),
             }
           );
 
@@ -302,7 +307,8 @@ export const knowledgeBaseSearchTool: ToolDefinition = {
             return queryTerms.reduce((n, term) => (hay.includes(term) ? n + 1 : n), 0);
           };
           const seen = new Set<string>();
-          const rankedResults = searchResults.data
+          // Authoritative exclusion pass on top of the DB pre-filter (see filterRetrievalExcluded).
+          const rankedResults = filterRetrievalExcluded(searchResults.data, context.retrievalFilter ?? {})
             .filter((f: IFabFileDocument) => {
               // Dedup by fileName, not id: the lake's duplicates are separate FabFile docs
               // (re-uploads) with the SAME fileName but DIFFERENT ids, so an id-key misses them.
