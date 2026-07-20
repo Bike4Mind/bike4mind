@@ -1,0 +1,75 @@
+# =====================================================================
+# .env.selfhost additions / changes for PUBLIC exposure via the bundled
+# Caddy proxy (PATH B in SELF_HOST.md).
+#
+# Reminder from the top of .env.selfhost: docker compose reads these values
+# VERBATIM - never put a comment on the same line as a value (it becomes part
+# of the value). The comments below are on their own lines, which is fine.
+# =====================================================================
+
+# -- Public domain (required for the Caddy proxy) --
+# Your fully-qualified public hostname. A DNS A record (and AAAA if you have
+# IPv6) for this name must point at this host's public IP. Caddy uses it as the
+# site address and auto-provisions a TLS cert for it.
+B4M_DOMAIN=chat.example.com
+
+# Optional: email for Let's Encrypt expiry notices. If you set this, also add a
+# global options block to selfhost/caddy/Caddyfile (see the note at its top):
+#   { email you@example.com }
+# B4M_ACME_EMAIL=you@example.com
+
+# -- Realtime WebSocket over TLS (required change) --
+# The browser now reaches the ws gateway THROUGH Caddy at wss://<domain>/ws
+# (Caddy proxies the /ws path to the ws service). Change this from the default
+# ws://localhost:3001. The path MUST be /ws to match the Caddyfile route.
+# (Old default was: WEBSOCKET_URL=ws://localhost:3001)
+WEBSOCKET_URL=wss://chat.example.com/ws
+
+# DO NOT change WEBSOCKET_MANAGEMENT_ENDPOINT - it is an internal, compose-network
+# address the app + fanout push to, never reached from the browser. Leave as:
+# WEBSOCKET_MANAGEMENT_ENDPOINT=http://ws:3001
+
+# -- MinIO / S3 credentials (required: change off the dev default) --
+# The example ships the conventional local default (minioadmin). Change it before
+# exposing. IMPORTANT: the app's S3 client authenticates to MinIO using the AWS_*
+# keys, so MINIO_ROOT_USER must equal AWS_ACCESS_KEY_ID and MINIO_ROOT_PASSWORD
+# must equal AWS_SECRET_ACCESS_KEY. Change all four together to the same values.
+# Generate a strong secret with: openssl rand -hex 24
+# (MinIO requires the access key >= 3 chars and the secret key >= 8 chars.)
+MINIO_ROOT_USER=b4m-REPLACE-with-unique-name
+MINIO_ROOT_PASSWORD=REPLACE-with-openssl-rand-hex-24
+AWS_ACCESS_KEY_ID=b4m-REPLACE-with-unique-name
+AWS_SECRET_ACCESS_KEY=REPLACE-with-openssl-rand-hex-24
+
+# -- Real SMTP (required for remote users) --
+# Mailpit is local-only, so friends off the host cannot read their sign-in codes
+# from it. Point MAIL_* at a real SMTP provider. Use 587 (STARTTLS) or 465
+# (implicit TLS). MAIL_FROM should be an address your provider lets you send as.
+# (Defaults were MAIL_HOST=mail / MAIL_PORT=1025 pointing at Mailpit.)
+MAIL_HOST=smtp.your-provider.example
+MAIL_PORT=587
+MAIL_USERNAME=REPLACE-with-smtp-username
+MAIL_PASSWORD=REPLACE-with-smtp-password
+MAIL_FROM=bike4mind@chat.example.com
+
+# -- Optional: expose the low-level completions API / CLI publicly --
+# Only if you want the CLI or a third-party API client to reach your stack from
+# OUTSIDE. Requires also uncommenting the /api/ai/v1/* route in the Caddyfile.
+# Leave commented to keep completions internal (the web app does not need it).
+# CHAT_COMPLETION_PUBLIC_URL=https://chat.example.com
+
+# -- Optional: SearXNG secret (only if you run the `search` profile) --
+# Change from the local-dev default for a real deployment.
+# Generate with: openssl rand -hex 32
+# SEARXNG_SECRET=REPLACE-with-openssl-rand-hex-32
+
+# =====================================================================
+# Also make sure these were already set to strong random values during your
+# initial setup (they are NOT exposure-specific, but must not be left as the
+# change-me placeholders on a public instance):
+#   JWT_SECRET, SESSION_SECRET, SECRET_ENCRYPTION_KEY,
+#   INTERNAL_WS_SECRET, INTERNAL_S3_WEBHOOK_SECRET, CHAT_COMPLETION_INTERNAL_SECRET
+# Each: openssl rand -hex 32
+# BACK UP SECRET_ENCRYPTION_KEY somewhere safe - it is write-once and cannot be
+# rotated in place; losing it makes DB-encrypted secrets unrecoverable.
+# =====================================================================

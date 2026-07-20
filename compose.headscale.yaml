@@ -1,0 +1,60 @@
+# Bike4Mind self-host: self-hosted tailnet control plane (Headscale) - OPT-IN override.
+#
+# The Tailscale sidecar (compose.tailscale.yaml) is the low-setup path, but it uses
+# Tailscale's HOSTED control plane (a third-party account coordinates auth, keys,
+# MagicDNS, and cert issuance; only the data path is direct WireGuard). Headscale is
+# an open-source re-implementation of that control server you run YOURSELF, so the
+# same Tailscale clients join a tailnet with NO Tailscale account and no third party.
+#
+# The trade is real: you now host the coordination server, and Tailscale clients
+# require the control server over HTTPS, so Headscale needs a PUBLIC https endpoint
+# that remote clients can reach (its built-in Let's Encrypt via a domain, or behind
+# the bundled Caddy). That is the same public-reachability requirement as the Caddy
+# path, plus running this service. Use it when you specifically want a private mesh
+# with no third party; use hosted Tailscale (compose.tailscale.yaml) for less setup.
+#
+# Usage (with the Tailscale sidecar as the joining client):
+#   docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml \
+#     -f compose.headscale.yaml --env-file .env.selfhost \
+#     --profile tailnet --profile headscale up -d
+#
+# Bring-up order (see "Share your instance with friends" in SELF_HOST.md):
+#   1. Set HEADSCALE_SERVER_URL to your public https URL in selfhost/headscale/config.yaml
+#      (server_url) and give Headscale TLS - either its built-in ACME
+#      (tls_letsencrypt_hostname in config.yaml, publish 80/443) or front it with Caddy.
+#   2. Create a user and a pre-auth key:
+#        docker compose ... exec headscale headscale users create b4m
+#        docker compose ... exec headscale headscale preauthkeys create -u b4m --reusable --expiration 24h
+#   3. Put that key in TS_AUTHKEY and point the sidecar at your server:
+#        TS_AUTHKEY=<preauthkey>
+#        TS_EXTRA_ARGS=--login-server=https://<your-headscale-domain>
+
+name: bike4mind-selfhost
+
+services:
+  headscale:
+    image: ${HEADSCALE_IMAGE:-headscale/headscale:0.23.0}
+    profiles: ['headscale']
+    command: serve
+    restart: unless-stopped
+    volumes:
+      # Control-server config. Edit server_url + TLS before exposing to real clients.
+      - ./selfhost/headscale/config.yaml:/etc/headscale/config.yaml:ro
+      # SQLite DB, noise key, DERP key - must persist across restarts.
+      - headscale-data:/var/lib/headscale
+    # Control API is loopback-published by default (override HEADSCALE_HOST_PORT). For
+    # remote clients to join you must make the HTTPS server_url publicly reachable
+    # (ACME on 80/443, or via Caddy). The embedded DERP STUN port aids NAT traversal.
+    ports:
+      - '127.0.0.1:${HEADSCALE_HOST_PORT:-8080}:8080'
+      - '${HEADSCALE_STUN_PORT:-3478}:3478/udp'
+
+# The Tailscale sidecar (compose.tailscale.yaml) joins THIS control server instead of
+# the hosted one when you set, in .env.selfhost:
+#   TS_EXTRA_ARGS=--login-server=https://<your-headscale-domain>
+#   TS_AUTHKEY=<headscale preauthkey>
+# and pass all three -f files together (selfhost + tailscale + headscale). The sidecar
+# needs the public https server_url to register; the internal compose name is not enough.
+
+volumes:
+  headscale-data:
