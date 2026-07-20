@@ -107,8 +107,8 @@ describe('formatPluginList', () => {
       { valid: false, name: 'b4m-plugin-broken', packageDir: '/x', reason: 'entry is required' },
     ];
     const out = formatPluginList(descriptors, { features: { on: true } } as unknown as CliConfig);
-    expect(out).toContain('b4m-plugin-on@1.0.0 — ✅ Enabled');
-    expect(out).toContain('b4m-plugin-off@1.0.0 — ⏸️ Disabled');
+    expect(out).toContain('b4m-plugin-on@1.0.0 - ✅ Enabled');
+    expect(out).toContain('b4m-plugin-off@1.0.0 - ⏸️ Disabled');
     expect(out).toContain('⚠️ entry is required');
   });
 });

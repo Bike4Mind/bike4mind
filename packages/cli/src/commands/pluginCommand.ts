@@ -87,13 +87,13 @@ export function formatPluginList(descriptors: PluginDescriptor[], config: CliCon
     if (descriptor.valid) {
       const enabled = config.features?.[descriptor.configKey] === true;
       lines.push(
-        `• ${descriptor.name}@${descriptor.version} — ${enabled ? '✅ Enabled' : '⏸️ Disabled'} (key: ${descriptor.configKey})`
+        `• ${descriptor.name}@${descriptor.version} - ${enabled ? '✅ Enabled' : '⏸️ Disabled'} (key: ${descriptor.configKey})`
       );
       if (descriptor.description) {
         lines.push(`  ${descriptor.description}`);
       }
     } else {
-      lines.push(`• ${descriptor.name} — ⚠️ ${descriptor.reason}`);
+      lines.push(`• ${descriptor.name} - ⚠️ ${descriptor.reason}`);
     }
   }
   return lines.join('\n');
@@ -143,7 +143,7 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
     if (code === 'ENOENT') {
       console.error('❌ npm is required to install plugins. Install Node.js/npm and retry.');
     } else {
-      console.error(`❌ Install failed for ${spec} — see npm output above.`);
+      console.error(`❌ Install failed for ${spec} - see npm output above.`);
     }
     process.exit(1);
   }
@@ -153,7 +153,7 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
 
   if (added.length === 0) {
     console.log(`✅ Installed ${spec}.`);
-    console.warn('⚠️ No new b4m-plugin package was detected — it will not load as a plugin.');
+    console.warn('⚠️ No new b4m-plugin package was detected - it will not load as a plugin.');
     return;
   }
 
@@ -198,7 +198,7 @@ export async function handleRemove(name: string, pluginsDir: string, configStore
     if (code === 'ENOENT') {
       console.error('❌ npm is required to remove plugins. Install Node.js/npm and retry.');
     } else {
-      console.error(`❌ Uninstall failed for ${plugin.name} — see npm output above.`);
+      console.error(`❌ Uninstall failed for ${plugin.name} - see npm output above.`);
     }
     process.exit(1);
   }
