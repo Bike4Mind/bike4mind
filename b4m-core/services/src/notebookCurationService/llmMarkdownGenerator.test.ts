@@ -94,4 +94,17 @@ describe('parseConsolidatedNarrative', () => {
     expect(parsed.insights).toBe('');
     expect(parsed.decisions).toBe('Decision text.');
   });
+
+  it('does not split on a delimiter echoed inline inside a section body', () => {
+    const text = [
+      SUMMARY_DELIMITER,
+      `We considered using ${INSIGHTS_DELIMITER} as an inline marker but rejected it.`,
+      INSIGHTS_DELIMITER,
+      '- the real insight',
+    ].join('\n');
+    const parsed = parseConsolidatedNarrative(text);
+    // The inline echo stays in the summary; only the line-anchored delimiter splits.
+    expect(parsed.summary).toContain('rejected it.');
+    expect(parsed.insights).toBe('- the real insight');
+  });
 });
