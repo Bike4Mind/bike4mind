@@ -636,6 +636,47 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
     // camelCase SVG attributes must survive the cheerio round-trip, or the SVG renders broken.
     expect(svg).toContain('viewBox');
   });
+
+  it('maps ?a=0 and ?a=1 to the correct artifact when a reply embeds two HTML artifacts', async () => {
+    const twoReply = htmlReply({
+      publicId: 'r2',
+      slug: 'r2',
+      title: 'Two artifacts',
+      renderedBody:
+        '<artifact type="text/html" title="First"><body><h1>FIRST_ARTIFACT</h1></body></artifact>\n' +
+        '<artifact type="text/html" title="Second"><body><h1>SECOND_ARTIFACT</h1></body></artifact>',
+    });
+    mockArtifactFindOne.mockReturnValue(twoReply);
+
+    const { res: pageRes, promise: pagePromise } = run(['r', 'r2']);
+    await pagePromise;
+    const page = pageRes._getData() as string;
+    expect(page).toContain('src="/p/r/r2?a=0"');
+    expect(page).toContain('src="/p/r/r2?a=1"');
+
+    // Artifacts render in DOCUMENT order (extractViewerArtifacts sorts by startIndex), and the
+    // viewer + handler share that ordering, so ?a=0 is the first artifact and ?a=1 the second.
+    const { res: a0, promise: p0 } = run(['r', 'r2'], { a: '0' });
+    await p0;
+    const doc0 = a0._getData() as string;
+    expect(doc0).toContain('FIRST_ARTIFACT');
+    expect(doc0).not.toContain('SECOND_ARTIFACT');
+
+    const { res: a1, promise: p1 } = run(['r', 'r2'], { a: '1' });
+    await p1;
+    const doc1 = a1._getData() as string;
+    expect(doc1).toContain('SECOND_ARTIFACT');
+    expect(doc1).not.toContain('FIRST_ARTIFACT');
+  });
+
+  it('treats an empty ?a= as the normal page render, not artifact index 0', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml'], { a: '' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    // Fell through to the page (which frames artifact 0), rather than serving artifact 0's srcdoc.
+    expect(res._getData() as string).toContain('src="/p/r/rhtml?a=0"');
+  });
 });
 
 describe('GET /api/publish/serve - reply/fabfile organization visibility', () => {
