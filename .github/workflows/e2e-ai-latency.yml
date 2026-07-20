@@ -68,7 +68,7 @@ jobs:
   # single-cell and all-specs dispatch modes — those use the dispatch-selected model.
   discover-models:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_full_matrix)
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 30
     permissions:
       contents: read
@@ -183,7 +183,7 @@ jobs:
     needs: [discover-models]
     # Run even when discover-models is skipped (single-cell / all-specs modes don't need it).
     if: always()
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     outputs:
       spec_files: ${{ steps.matrix.outputs.spec_files }}
       ai_models: ${{ steps.matrix.outputs.ai_models }}
@@ -229,7 +229,7 @@ jobs:
     # skip this job under the default `success()` condition. Gate explicitly on setup-matrix
     # succeeding so the matrix runs whenever it produced a valid spec/model list.
     if: ${{ always() && needs.setup-matrix.result == 'success' }}
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     name: '${{ matrix.spec_file }} — ${{ matrix.ai_model }}'
     timeout-minutes: 90
     permissions:
@@ -424,7 +424,7 @@ jobs:
   notify:
     needs: [setup-matrix, e2e-ai-latency]
     if: always()
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
 
     steps:
       - name: Resolve environment URL

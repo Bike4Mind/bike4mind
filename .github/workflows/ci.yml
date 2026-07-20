@@ -354,7 +354,7 @@ jobs:
     # which is capped at 10 concurrent org-wide. The test shard fan-out was a
     # dominant consumer of those 10 slots; moving it off frees the cap and cuts cost.
     # Matches polaris's test runner (_test.yml).
-    runs-on: ${{ vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL_HEAVY || 'ubuntu-latest-m' }}
     name: Run Tests (${{ matrix.shard.name }})
     timeout-minutes: 20
     permissions:
@@ -462,7 +462,7 @@ jobs:
     # shards were skipped, so this aggregator skips too — a skipped required
     # check counts as passing, instead of failing on skipped shards.
     if: always() && needs.changes.outputs.deployable == 'true'
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     permissions:
       contents: read
     steps:
@@ -488,7 +488,7 @@ jobs:
     needs: core-build
     # Standard runner: builds the CLI and runs the bundle-baseline harness — a
     # light, I/O-bound leg. Off the capped ubuntu-latest-m pool to free a slot.
-    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    runs-on: ${{ vars.RUNNER_LABEL_MEDIUM || vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     timeout-minutes: 15
     permissions:
       contents: read
