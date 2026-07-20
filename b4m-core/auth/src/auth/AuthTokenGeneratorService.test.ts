@@ -1,4 +1,4 @@
-import { AuthTokenGeneratorService, isTokenVersionCurrent } from './AuthTokenGeneratorService';
+import { AuthTokenGeneratorService, isTokenVersionCurrent, isTokenTypeAcceptable } from './AuthTokenGeneratorService';
 import jwt from 'jsonwebtoken';
 
 const makeService = () =>
@@ -157,6 +157,29 @@ describe('AuthTokenGeneratorService', () => {
       const result = svc.verifyRefreshToken(refreshToken);
       expect(result).not.toBeNull();
       expect(result!.tokenVersion).toBe(3);
+    });
+  });
+
+  describe('isTokenTypeAcceptable', () => {
+    it('accepts a token whose typ matches the expected path', () => {
+      expect(isTokenTypeAcceptable('access', 'access')).toBe(true);
+      expect(isTokenTypeAcceptable('refresh', 'refresh')).toBe(true);
+    });
+
+    it('rejects a token whose typ is the wrong path (the confusion guard)', () => {
+      expect(isTokenTypeAcceptable('access', 'refresh')).toBe(false);
+      expect(isTokenTypeAcceptable('refresh', 'access')).toBe(false);
+    });
+
+    // A token with no typ (issued before the claim existed) is honored on either path
+    // so live sessions aren't logged out - it ages out within its TTL.
+    it('accepts a typ-less legacy token on either path (self-expiring grace)', () => {
+      expect(isTokenTypeAcceptable(undefined, 'access')).toBe(true);
+      expect(isTokenTypeAcceptable(undefined, 'refresh')).toBe(true);
+    });
+
+    it('rejects an unexpected typ value', () => {
+      expect(isTokenTypeAcceptable('bogus', 'access')).toBe(false);
     });
   });
 

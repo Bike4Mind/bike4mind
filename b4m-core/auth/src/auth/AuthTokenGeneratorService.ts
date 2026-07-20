@@ -13,6 +13,20 @@ export function isTokenVersionCurrent(payloadVersion?: number, userVersion?: num
   return (payloadVersion ?? 0) === (userVersion ?? 0);
 }
 
+/**
+ * Pure enforcement check for the access/refresh token-type separation.
+ *
+ * A token is acceptable on a given path when its `typ` matches the expected type -
+ * OR when it carries no `typ` at all. Tokens minted before the claim existed have no
+ * `typ` and are honored (self-expiring grace), so no live session is logged out; they
+ * age out within their TTL. Mirrors isTokenVersionCurrent's "missing normalizes to
+ * valid" shape. Shared by the refresh path (verifyRefreshToken) and the access path
+ * (the passport JWT strategy) so both enforce identically.
+ */
+export function isTokenTypeAcceptable(tokenType: unknown, expected: 'access' | 'refresh'): boolean {
+  return tokenType === undefined || tokenType === expected;
+}
+
 export class AuthTokenGeneratorService {
   constructor(
     private readonly options: {
@@ -82,9 +96,8 @@ export class AuthTokenGeneratorService {
       const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload;
       if (payload.mfaPending) return null;
       // Reject a token minted for a different path (e.g. an access token replayed here).
-      // Tokens minted before the typ claim existed carry no typ and are still accepted -
-      // a self-expiring grace: they age out within their TTL, no forced logout.
-      if (payload.typ && payload.typ !== 'refresh') return null;
+      // Missing typ = legacy pre-claim token, accepted (self-expiring grace). See helper.
+      if (!isTokenTypeAcceptable(payload.typ, 'refresh')) return null;
       return { userId: payload.id, tokenVersion: payload.tokenVersion };
     };
     try {
