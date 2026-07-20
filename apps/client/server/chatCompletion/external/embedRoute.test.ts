@@ -524,13 +524,26 @@ describe('POST /api/embed/chat - server-side tools', () => {
     expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
   });
 
-  it('tool names never appear on the SSE wire (no-op callbacks, text-only chunks)', async () => {
+  it('tool telemetry is stripped from the SSE wire even when the backend reports it', async () => {
     hydrateWith({ allowedTools: ['web_search'] });
+    // Real backends report toolsUsed (name + model-chosen arguments) on tool turns;
+    // the route must strip it so the anonymous client sees text and tokens only.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['', ''], {
+          toolsUsed: [{ name: 'search_knowledge_base', arguments: { query: 'internal query' }, id: 't1' }],
+        });
+        await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
     const res = await post(CHAT);
     const text = await res.text();
 
     expect(text).toContain('hello from the agent');
     expect(text).not.toContain('search_knowledge_base');
+    expect(text).not.toContain('internal query');
+    expect(text).not.toContain('tool_use');
     expect(text).not.toContain('web_search');
   });
 

@@ -70,6 +70,11 @@ import { z } from 'zod';
  *
  * Stateless: end-user turns are never persisted to any owner's session history -
  * the route never passes a sessionId and never calls persistRunAsQuest.
+ *
+ * Tools: server-side execution with a hard gate. KB retrieval is on by default but
+ * confined to the bound agent's Project file set (kbScope, fail-closed to empty);
+ * everything else is opt-in from a curated universe, deny wins. See
+ * buildEmbedServerTools below and embedToolResolver.ts.
  */
 
 const EMBED_CHAT_ENDPOINT = '/api/embed/chat';
@@ -423,7 +428,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
           source: 'api',
           logger,
           onChunk: async (text, info) => {
-            write(serializeSSEEvent(buildSSEEvent(text, info)));
+            // Strip tool telemetry before the event is built: backends report
+            // info.toolsUsed (tool names + model-chosen arguments) on tool turns, and
+            // buildSSEEvent would surface it as event.tools. An anonymous embed client
+            // gets text and token counts only - internal tool metadata stays server-side.
+            const { toolsUsed: _toolsUsed, ...clientInfo } = info ?? {};
+            write(serializeSSEEvent(buildSSEEvent(text, info ? clientInfo : undefined)));
           },
         });
         write(SSE_DONE_SIGNAL);
