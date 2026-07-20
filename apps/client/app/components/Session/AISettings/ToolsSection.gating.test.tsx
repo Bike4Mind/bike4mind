@@ -268,4 +268,8 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
     expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('SearXNG');
     expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('Firecrawl');
   });
+
+  it('names the local Ollama embedder alternative for the knowledge base', () => {
+    expect(MISSING_KEY_TOOLTIPS.search_knowledge_base).toContain('OLLAMA_BASE_URL');
+  });
 });

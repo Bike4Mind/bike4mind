@@ -6,7 +6,7 @@ import {
   IOrganizationDocument,
   Permission,
   SettingKey,
-  OpenAIEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -1314,7 +1314,7 @@ export class ChatCompletionProcess {
       const historyStartTime = Date.now();
       this.sendStatusUpdate(quest, 'Reviewing previous messages...', { statusAt: new Date() });
 
-      const finalEmbeddingModel = embeddingModel || OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+      const finalEmbeddingModel = embeddingModel || defaultEmbeddingModelForEnv();
 
       // Give the factory only the credential the chosen model's provider needs.
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.

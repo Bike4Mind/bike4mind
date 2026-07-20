@@ -5,6 +5,26 @@ import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '..
 // Must stay in sync with OllamaEmbeddingModel (common). contextWindow is used by
 // SmartChunker to size chunks and by the vectorize skip logic.
 export const OLLAMA_EMBEDDING_MODEL_MAP: Record<OllamaEmbeddingModel, EmbeddingModelInfo<OllamaEmbeddingModel>> = {
+  // Qwen3-Embedding dimensions per the model card (0.6B=1024, 4B=2560, 8B=4096). contextWindow
+  // capped at 8192 (the models support 32k) to keep RAG chunks retrieval-sized.
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B,
+    contextWindow: 8192,
+    dimensions: [1024],
+  },
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_4B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_4B,
+    contextWindow: 8192,
+    dimensions: [2560],
+  },
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_8B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_8B,
+    contextWindow: 8192,
+    dimensions: [4096],
+  },
   [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: {
     provider: EmbeddingModelProvider.OLLAMA,
     model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT,

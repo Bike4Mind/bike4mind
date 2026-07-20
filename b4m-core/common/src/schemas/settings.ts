@@ -1,7 +1,13 @@
 import { z } from 'zod';
 import { CREDITS_PER_USD_COST } from '../pricing';
 import { CHAT_MODELS, ChatModels } from '../models';
-import { BedrockEmbeddingModel, OllamaEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
+import {
+  BedrockEmbeddingModel,
+  defaultEmbeddingModelForEnv,
+  OllamaEmbeddingModel,
+  OpenAIEmbeddingModel,
+  VoyageAIEmbeddingModel,
+} from './embedding';
 import { SreAgentConfigSchema, SRE_SECRET_PLACEHOLDER, type SreAgentConfig } from '../types/entities/SreTypes';
 import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
 
@@ -2714,7 +2720,9 @@ export const settingsMap = {
   defaultEmbeddingModel: makeStringSetting({
     key: 'defaultEmbeddingModel',
     name: 'Default Embedding Model',
-    defaultValue: OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002,
+    // Self-host with a local Ollama server and no cloud key defaults to a local embedder so RAG
+    // works keyless out of the box; cloud deployments keep the OpenAI default. See embedding.ts.
+    defaultValue: defaultEmbeddingModelForEnv(),
     description: 'The default embedding model to use',
     category: 'AI',
     group: API_SERVICE_GROUPS.EMBEDDING.id,

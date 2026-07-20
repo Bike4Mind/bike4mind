@@ -24,10 +24,34 @@ export enum BedrockEmbeddingModel {
 // Ollama model tags (must match what OLLAMA_PULL_MODELS pulls). Dimensions and
 // context windows live in OLLAMA_EMBEDDING_MODEL_MAP (fab-pipeline) and must stay in sync.
 export enum OllamaEmbeddingModel {
+  // Qwen3-Embedding: the recommended self-host default. 0.6b fits any GPU or CPU; 4b/8b need a
+  // bigger card. Hardware table in .env.selfhost.example.
+  QWEN3_EMBEDDING_0_6B = 'qwen3-embedding:0.6b',
+  QWEN3_EMBEDDING_4B = 'qwen3-embedding:4b',
+  QWEN3_EMBEDDING_8B = 'qwen3-embedding:8b',
+  // nomic-embed-text: the cheap, tiny option (~0.3 GB) when you want the smallest footprint.
   NOMIC_EMBED_TEXT = 'nomic-embed-text',
   MXBAI_EMBED_LARGE = 'mxbai-embed-large',
   BGE_M3 = 'bge-m3',
   SNOWFLAKE_ARCTIC_EMBED = 'snowflake-arctic-embed',
+}
+
+/**
+ * The default embedding model for the current deployment. On self-host with a local Ollama
+ * server and no cloud embedding key, this is a local embedder, so RAG / knowledge search work
+ * out of the box with no AWS/OpenAI/Voyage credential; otherwise it is the cloud default. Read
+ * by the `defaultEmbeddingModel` admin-setting default and by the query-embedding fallback, so
+ * an operator who never opens admin settings still gets a working, keyless embedder instead of
+ * an unconfigured cloud model that fails with an opaque "security token" error.
+ */
+export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
+  const selfHost = process.env.B4M_SELF_HOST === 'true';
+  const hasOllama = !!process.env.OLLAMA_BASE_URL?.trim();
+  const hasCloudEmbeddingKey = !!process.env.OPENAI_API_KEY?.trim();
+  if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
+    return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
+  }
+  return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
 }
 
 export const SupportedEmbeddingModelSchema = z.union([
@@ -189,6 +213,9 @@ const EMBEDDING_MODEL_PRICE_PER_TOKEN: Partial<Record<SupportedEmbeddingModel, n
   [BedrockEmbeddingModel.TITAN_TEXT_EMBEDDINGS_V2]: 0.02 / 1_000_000,
   // Ollama embedders run on the operator's own hardware: no per-token cost.
   // Explicit 0 (not absent) so getEmbeddingModelCost stays quiet instead of alarming.
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B]: 0,
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_4B]: 0,
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_8B]: 0,
   [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: 0,
   [OllamaEmbeddingModel.MXBAI_EMBED_LARGE]: 0,
   [OllamaEmbeddingModel.BGE_M3]: 0,
