@@ -21,10 +21,9 @@ export async function loadPlugin(descriptor: ValidPluginDescriptor, ctx: PluginC
   }
 
   // CJS interop can leave the factory at default.default.
-  const moduleRecord = imported as { default?: unknown };
-  let factory = moduleRecord.default;
-  if (factory && typeof factory === 'object' && 'default' in (factory as Record<string, unknown>)) {
-    factory = (factory as { default?: unknown }).default;
+  let factory: unknown = (imported as { default?: unknown }).default;
+  if (factory && typeof factory === 'object' && 'default' in factory) {
+    factory = factory.default;
   }
   if (typeof factory !== 'function') {
     return { error: 'entry module must default-export a factory function' };

@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { Box, Text, useInput } from 'ink';
 import type { CliConfig } from '../storage';
 import type { ModelInfo } from '@bike4mind/common';
-import type { PluginDescriptor } from '../plugins/PluginStore';
+import { isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore';
 
 /**
  * Configuration item types
@@ -238,7 +238,7 @@ function buildConfigItems(availableModels: ModelInfo[], pluginDescriptors: Plugi
       key: `featuresPlugin:${descriptor.configKey}`,
       label: `Plugin: ${descriptor.name}`,
       type: 'boolean' as const,
-      getValue: config => config.features?.[descriptor.configKey] ?? false,
+      getValue: config => isFeatureEnabled(config.features, descriptor.configKey),
       setValue: (config, value) => ({
         ...config,
         features: {

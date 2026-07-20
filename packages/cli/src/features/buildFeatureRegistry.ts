@@ -2,22 +2,9 @@ import { FeatureModuleRegistry } from './FeatureModuleRegistry.js';
 import type { ICliFeatureModule } from './ICliFeatureModule.js';
 import type { CliConfig } from '../storage/types.js';
 import type { Logger } from '../utils/Logger.js';
-import type { PluginDescriptor } from '../plugins/PluginStore.js';
+import { isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore.js';
 import { findModuleProblem, makeScopedLogger } from './pluginContract.js';
 import { loadPlugin } from './loadPlugin.js';
-
-/**
- * A feature is enabled only by an OWN key set to exactly true. Guards against a
- * configKey that names an Object.prototype member (e.g. 'constructor') reading
- * back as truthy through the prototype chain - PluginStore already rejects such
- * keys, this is defense in depth on the gate itself.
- */
-function isFeatureEnabled(features: CliConfig['features'], configKey: string): boolean {
-  if (!features || !Object.prototype.hasOwnProperty.call(features, configKey)) {
-    return false;
-  }
-  return features[configKey] === true;
-}
 
 export interface BuildFeatureRegistryResult {
   registry: FeatureModuleRegistry;

@@ -82,6 +82,23 @@ export function getDefaultPluginsDir(): string {
   return path.join(homedir(), '.bike4mind', 'plugins');
 }
 
+/**
+ * A plugin is enabled only by an OWN features key set to exactly true. The
+ * own-property + strict check guards against a configKey that names an
+ * Object.prototype member (e.g. 'constructor') reading back truthy through the
+ * prototype chain. Single source of truth for the loader gate, the config
+ * editor toggle, and `b4m plugin list`.
+ */
+export function isFeatureEnabled(
+  features: Record<string, boolean | undefined> | undefined,
+  configKey: string
+): boolean {
+  if (!features || !Object.prototype.hasOwnProperty.call(features, configKey)) {
+    return false;
+  }
+  return features[configKey] === true;
+}
+
 function formatZodIssues(error: z.ZodError): string {
   return error.issues
     .map(issue => (issue.path.length ? `${issue.path.join('.')}: ${issue.message}` : issue.message))
@@ -106,18 +123,23 @@ export class PluginStore {
    * package name across roots and by configKey across plugins.
    */
   async discover(): Promise<PluginDescriptor[]> {
+    // npm flat-hoists a plugin's transitive deps into the same node_modules, so
+    // most entries are not plugins. Parse them concurrently (Promise.all keeps
+    // array order, so the first-wins dedup below stays deterministic).
+    const packageDirs: string[] = [];
+    for (const root of this.candidateRoots()) {
+      packageDirs.push(...(await this.enumeratePackageDirs(root)));
+    }
+    const parsed = await Promise.all(packageDirs.map(dir => this.parseManifest(dir)));
+
     const descriptors: PluginDescriptor[] = [];
     const seenPackages = new Set<string>();
-
-    for (const root of this.candidateRoots()) {
-      for (const packageDir of await this.enumeratePackageDirs(root)) {
-        const descriptor = await this.parseManifest(packageDir);
-        if (!descriptor || seenPackages.has(descriptor.name)) {
-          continue;
-        }
-        seenPackages.add(descriptor.name);
-        descriptors.push(descriptor);
+    for (const descriptor of parsed) {
+      if (!descriptor || seenPackages.has(descriptor.name)) {
+        continue;
       }
+      seenPackages.add(descriptor.name);
+      descriptors.push(descriptor);
     }
 
     return this.dedupeConfigKeys(descriptors);

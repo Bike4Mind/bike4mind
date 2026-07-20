@@ -10,12 +10,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import { ConfigStore } from '../storage/ConfigStore.js';
 import type { CliConfig } from '../storage/types.js';
-import {
-  PluginStore,
-  getDefaultPluginsDir,
-  type PluginDescriptor,
-  type ValidPluginDescriptor,
-} from '../plugins/PluginStore.js';
+import { PluginStore, getDefaultPluginsDir, isFeatureEnabled, type PluginDescriptor } from '../plugins/PluginStore.js';
 
 interface PluginCommandArgs {
   _: (string | number)[];
@@ -85,7 +80,7 @@ export function formatPluginList(descriptors: PluginDescriptor[], config: CliCon
   const lines: string[] = [];
   for (const descriptor of descriptors) {
     if (descriptor.valid) {
-      const enabled = config.features?.[descriptor.configKey] === true;
+      const enabled = isFeatureEnabled(config.features, descriptor.configKey);
       lines.push(
         `• ${descriptor.name}@${descriptor.version} - ${enabled ? '✅ Enabled' : '⏸️ Disabled'} (key: ${descriptor.configKey})`
       );
@@ -99,17 +94,32 @@ export function formatPluginList(descriptors: PluginDescriptor[], config: CliCon
   return lines.join('\n');
 }
 
-function runNpm(args: string[], cwd: string): void {
-  // Arg-vector form: user-supplied specs never touch a shell on posix. The
-  // npm shim on Windows is npm.cmd and needs a shell; validatePluginSpec's
-  // metacharacter rejection is the guard that keeps that path safe.
-  const isWindows = process.platform === 'win32';
-  execFileSync(isWindows ? 'npm.cmd' : 'npm', args, {
-    cwd,
-    stdio: 'inherit',
-    timeout: NPM_TIMEOUT_MS,
-    shell: isWindows,
-  });
+/**
+ * Run npm with the given args, or print a friendly message and exit. `action`
+ * ('install'/'remove') only shapes the error text.
+ */
+function runNpmOrExit(args: string[], cwd: string, action: string, target: string): void {
+  try {
+    // Arg-vector form: user-supplied specs never touch a shell on posix. The
+    // npm shim on Windows is npm.cmd and needs a shell; validatePluginSpec's
+    // metacharacter rejection is the guard that keeps that path safe.
+    const isWindows = process.platform === 'win32';
+    execFileSync(isWindows ? 'npm.cmd' : 'npm', args, {
+      cwd,
+      stdio: 'inherit',
+      timeout: NPM_TIMEOUT_MS,
+      shell: isWindows,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      console.error(`❌ npm is required to ${action} plugins. Install Node.js/npm and retry.`);
+    } else {
+      console.error(
+        `❌ ${action === 'install' ? 'Install' : 'Uninstall'} failed for ${target} - see npm output above.`
+      );
+    }
+    process.exit(1);
+  }
 }
 
 async function ensurePluginsDir(pluginsDir: string): Promise<void> {
@@ -136,17 +146,7 @@ export async function handleAdd(spec: string, pluginsDir: string, configStore: C
   const store = new PluginStore({ pluginsDir });
   const before = new Set((await store.discover()).map(d => d.name));
 
-  try {
-    runNpm(['install', '--prefix', pluginsDir, '--no-fund', '--no-audit', spec], pluginsDir);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      console.error('❌ npm is required to install plugins. Install Node.js/npm and retry.');
-    } else {
-      console.error(`❌ Install failed for ${spec} - see npm output above.`);
-    }
-    process.exit(1);
-  }
+  runNpmOrExit(['install', '--prefix', pluginsDir, '--no-fund', '--no-audit', spec], pluginsDir, 'install', spec);
 
   const after = await store.discover();
   const added = after.filter(d => !before.has(d.name));
@@ -191,17 +191,7 @@ export async function handleRemove(name: string, pluginsDir: string, configStore
     return; // unreachable; keeps the type narrowing honest under tests that stub exit
   }
 
-  try {
-    runNpm(['uninstall', '--prefix', pluginsDir, plugin.name], pluginsDir);
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') {
-      console.error('❌ npm is required to remove plugins. Install Node.js/npm and retry.');
-    } else {
-      console.error(`❌ Uninstall failed for ${plugin.name} - see npm output above.`);
-    }
-    process.exit(1);
-  }
+  runNpmOrExit(['uninstall', '--prefix', pluginsDir, plugin.name], pluginsDir, 'remove', plugin.name);
 
   if (plugin.valid) {
     const config = await configStore.load();
@@ -255,6 +245,3 @@ export async function handlePluginCommand(subcommand: string, argv: PluginComman
       process.exit(1);
   }
 }
-
-/** Exported for tests; resolves the plugin-name mapping helpers above. */
-export type { PluginCommandArgs, ValidPluginDescriptor };
