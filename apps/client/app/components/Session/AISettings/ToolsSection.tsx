@@ -153,11 +153,13 @@ interface ToolLabelProps {
   name: string;
   description: string;
   dim?: boolean;
+  // Blue accent line under the description, e.g. to flag an agent-only integration.
+  agentOnlyNote?: string;
 }
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -183,8 +185,23 @@ const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
     >
       {description}
     </Typography>
+    {agentOnlyNote && (
+      <Typography
+        level="body-xs"
+        data-testid="tool-agent-only-note"
+        sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
+      >
+        {agentOnlyNote}
+      </Typography>
+    )}
   </Box>
 );
+
+// MCP servers reachable only through agent delegation, not plain chat. Must stay in
+// sync with the built-in agents that claim them via exclusiveMcpServers:
+// GithubManagerAgent ('github') and ProjectManagerAgent ('atlassian').
+const AGENT_ONLY_MCP_SERVERS = ['github', 'atlassian'];
+const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
 
 interface ToolsSectionProps {
   tools?: B4MLLMTools[];
@@ -738,7 +755,11 @@ const ToolsSection = ({
                       sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                     />
                   )}
-                  <ToolLabel name={getMcpServerLabel(server.name)} description={getMcpServerDescription(server.name)} />
+                  <ToolLabel
+                    name={getMcpServerLabel(server.name)}
+                    description={getMcpServerDescription(server.name)}
+                    agentOnlyNote={AGENT_ONLY_MCP_SERVERS.includes(server.name) ? AGENT_ONLY_MCP_NOTE : undefined}
+                  />
                 </Box>
                 <SquareSlideToggle
                   onChange={() => toggleMcpServer(server.name)}
