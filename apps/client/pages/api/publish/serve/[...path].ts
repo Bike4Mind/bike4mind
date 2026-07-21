@@ -1228,6 +1228,10 @@ function renderViewerPage(
       // trims cleanedContent, so use the raw body to preserve leading/trailing whitespace).
       contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
     } else {
+      // All non-artifact text collapses into one <pre> rendered BEFORE the artifact frames (same
+      // shape as the reply branch's article-then-blocks). So text interleaved between multiple
+      // artifacts loses document order; the common case (prose then one trailing artifact) is fine.
+      // Revisit if fabfiles ever need interleaved text/artifact authoring.
       const pre = cleanedContent ? `<pre class="b4m-pre">${escapeHtml(cleanedContent)}</pre>` : '';
       const blocks = artifacts.map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts)).join('\n');
       contentHtml = `${pre}${blocks}`;
