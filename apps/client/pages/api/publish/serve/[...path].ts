@@ -35,6 +35,7 @@ import {
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
 import {
+  parseArtifacts,
   parseArtifactsWithFallback,
   type ParsedArtifact,
   type ArtifactParseResult,
@@ -356,18 +357,18 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // -- Reply / fabfile: render the snapshot body to a sanitized viewer page. --
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
-    // Reply artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
+    // Reply/fabfile artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
     // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the
     // response's `sandbox allow-scripts` CSP forces an opaque origin (NO allow-same-origin)
     // even on a direct top-level navigation, so it can never read the app origin's token -
-    // the same isolation the bundle path relies on. Reply-only, and the viewer only emits
-    // `?a` for html/svg artifacts, so an out-of-range or non-embeddable index is a 404. The
-    // visibility gate already ran above, so this reads only content the caller is authorized for.
-    // Require a non-empty `a` so `?a=` doesn't coerce to index 0 (Number('') === 0); an empty
-    // value falls through to the normal page render instead.
-    if (artifact.source.kind === 'reply' && typeof req.query.a === 'string' && req.query.a !== '') {
+    // the same isolation the bundle path relies on. The viewer only emits `?a` for html/svg
+    // artifacts, so an out-of-range or non-embeddable index is a 404. The visibility gate already
+    // ran above, so this reads only content the caller is authorized for. Require a non-empty `a`
+    // so `?a=` doesn't coerce to index 0 (Number('') === 0); an empty value falls through to the
+    // normal page render instead.
+    if (typeof req.query.a === 'string' && req.query.a !== '') {
       const idx = Number(req.query.a);
-      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '');
+      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '', artifact.source.kind);
       const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
       if (!target || (target.type !== 'html' && target.type !== 'svg')) {
         return res.status(404).json({ error: 'Not found' });
@@ -404,8 +405,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     }
     // Base URL this page was reached at, so the embedded-artifact iframes point back to the
     // same route (`/p/r|f/{publicId}` or the `/a/{token}` share) carrying the same authorization.
-    // selfPath + canFrameArtifacts are consumed only by the reply render below; the fabfile branch
-    // of renderViewerPage ignores them (it emits an escaped <pre>, no artifact frames).
+    // Both the reply and fabfile branches of renderViewerPage consume selfPath + canFrameArtifacts
+    // to frame embedded html/svg artifacts (fabfile keeps its non-artifact text as escaped <pre>).
     const sourcePrefix = artifact.source.kind === 'reply' ? 'r' : 'f';
     const selfPath = isShare ? `/a/${encodeURIComponent(shareToken)}` : `/p/${sourcePrefix}/${artifact.publicId}`;
     // Whether an embedded artifact can be framed via its `?a=` sub-document. The artifact iframe
@@ -1139,15 +1140,19 @@ function sendRawArtifact(
 }
 
 /**
- * parseArtifactsWithFallback, but with artifacts in DOCUMENT order. `parseArtifacts` returns them
- * reverse-sorted by position (a side effect of its back-to-front tag-removal pass), which would
- * otherwise render a multi-artifact reply bottom-up. Sorting by `startIndex` restores document
- * order for the common case (explicit `<artifact>` tags share one coordinate space). The viewer
- * render and the `?a=` sub-document handler BOTH extract via this helper, so an iframe's `?a={i}`
- * always indexes the same artifact the viewer framed at slot i.
+ * Extract embedded artifacts for the viewer, in DOCUMENT order. Parser choice is kind-dependent:
+ * - reply: `parseArtifactsWithFallback` also promotes fenced code / bare-HTML docs to artifacts,
+ *   matching the in-app render of agent markdown.
+ * - fabfile: `parseArtifacts` (explicit `<artifact>` blocks ONLY). A fabfile is literal file text,
+ *   so a ```code``` fence in an uploaded markdown file is file content, not an artifact, and must
+ *   stay verbatim in the <pre> - fence promotion would wrongly hoist it into a card.
+ * Both parsers return artifacts reverse-sorted by position (a side effect of the back-to-front
+ * tag-removal pass); sorting by `startIndex` restores document order. The viewer render and the
+ * `?a=` sub-document handler BOTH extract via this helper with the SAME kind, so an iframe's
+ * `?a={i}` always indexes the same artifact the viewer framed at slot i.
  */
-function extractViewerArtifacts(body: string): ArtifactParseResult {
-  const result = parseArtifactsWithFallback(body);
+function extractViewerArtifacts(body: string, kind: string): ArtifactParseResult {
+  const result = kind === 'fabfile' ? parseArtifacts(body) : parseArtifactsWithFallback(body);
   return { ...result, artifacts: [...result.artifacts].sort((a, b) => a.startIndex - b.startIndex) };
 }
 
@@ -1189,8 +1194,9 @@ function renderArtifactBlock(artifact: ParsedArtifact, index: number, selfPath: 
  * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
  * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
  * and each HTML/SVG artifact renders in its own sandboxed `?a=` iframe (non-embeddable types get
- * a placeholder card). Fabfiles render as escaped <pre>. The PAGE is served with script-src 'none'
- * so injected markup cannot execute; artifact JS runs only inside the sandboxed sub-document.
+ * a placeholder card). Fabfiles render their literal text as an escaped <pre>, with only explicit
+ * embedded `<artifact>` blocks extracted and framed the same way. The PAGE is served with
+ * script-src 'none' so injected markup cannot execute; artifact JS runs only inside the sandbox.
  */
 function renderViewerPage(
   artifact: PublishedArtifactLean,
@@ -1202,7 +1208,7 @@ function renderViewerPage(
   let contentHtml: string;
   let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
   if (artifact.source.kind === 'reply') {
-    const { artifacts, cleanedContent } = extractViewerArtifacts(body);
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body, 'reply');
     const article = cleanedContent
       ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
       : '';
@@ -1210,7 +1216,23 @@ function renderViewerPage(
     contentHtml = `${article}${blocks}`;
     displayTitle = cleanViewerTitle(artifact.title, artifacts);
   } else {
-    contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+    // Fabfile: a file is literal text, not markdown prose, so the non-artifact remainder stays an
+    // escaped <pre> (no marked). Only EXPLICIT <artifact> blocks are extracted (parseArtifacts via
+    // extractViewerArtifacts('fabfile')) - a code fence in an uploaded file is file content, not an
+    // artifact. Embedded html/svg artifacts frame via the same sandboxed `?a=` path as the reply
+    // branch, and the SAME parser+kind runs here and in the `?a=` handler, so `?a={i}` resolves to
+    // the block rendered at index i.
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body, 'fabfile');
+    if (artifacts.length === 0) {
+      // No embedded artifacts: render the file body exactly as before, verbatim (parseArtifacts
+      // trims cleanedContent, so use the raw body to preserve leading/trailing whitespace).
+      contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+    } else {
+      const pre = cleanedContent ? `<pre class="b4m-pre">${escapeHtml(cleanedContent)}</pre>` : '';
+      const blocks = artifacts.map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts)).join('\n');
+      contentHtml = `${pre}${blocks}`;
+    }
+    displayTitle = cleanViewerTitle(artifact.title, artifacts);
   }
   const titleHtml = escapeHtml(displayTitle);
   const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
