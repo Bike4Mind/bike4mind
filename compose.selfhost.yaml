@@ -350,7 +350,7 @@ services:
         condition: service_healthy
     environment:
       OLLAMA_HOST: http://ollama:11434
-      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen2.5-coder:7b}
+      OLLAMA_PULL_MODELS: ${OLLAMA_PULL_MODELS:-qwen3.5:2b-q4_K_M}
     entrypoint:
       - /bin/sh
       - -c
