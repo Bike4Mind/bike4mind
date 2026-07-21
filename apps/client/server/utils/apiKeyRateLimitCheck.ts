@@ -29,6 +29,35 @@ export interface RateLimitContext {
 }
 
 /**
+ * Single source of truth for the rate-limit cache key format. Both the
+ * enforcer (checkApiKeyRateLimit) and the reset (resetApiKeyRateLimit) must
+ * derive keys from here so they can never desync.
+ */
+export function buildRateLimitKeys(keyId: string): { minuteKey: string; dayKey: string } {
+  return {
+    minuteKey: `api-key-rate-limit:${keyId}:minute`,
+    dayKey: `api-key-rate-limit:${keyId}:day`,
+  };
+}
+
+/**
+ * Clear a key's minute and day rate-limit counters. Deleting the cache docs
+ * also discards each window's stored expiresAt, so the next request opens a
+ * fresh fixed window - the intended "reset" semantics. deleteByKey is an
+ * exact-match deleteOne, so unrelated cache keys are never touched, and
+ * deleting a missing doc is a no-op (idempotent).
+ *
+ * Note: embed keys additionally have per-session counters
+ * (`embed-session-rate-limit:{sessionId}`, see middlewares/embedSessionRateLimit)
+ * which this deliberately does not clear.
+ */
+export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
+  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  await cacheRepository.deleteByKey(minuteKey);
+  await cacheRepository.deleteByKey(dayKey);
+}
+
+/**
  * Atomically increment a rate-limit counter ONLY if under limit, using
  * FIXED-WINDOW semantics: the window opens on the first request and closes
  * deterministically `ttlMs` later. Crucially the expiry is NOT pushed forward
@@ -77,8 +106,7 @@ export async function checkApiKeyRateLimit(
   const { requestsPerMinute, requestsPerDay } = rateLimit;
 
   try {
-    const minuteKey = `api-key-rate-limit:${keyId}:minute`;
-    const dayKey = `api-key-rate-limit:${keyId}:day`;
+    const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
 
     // Step 1: Atomically try to increment the minute counter (only if under
     // limit). The returned expiresAt is the real window end -> exact Retry-After.

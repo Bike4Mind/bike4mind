@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { checkApiKeyRateLimit, extractApiKeyFromHeaders } from './apiKeyRateLimitCheck';
+import {
+  buildRateLimitKeys,
+  checkApiKeyRateLimit,
+  extractApiKeyFromHeaders,
+  resetApiKeyRateLimit,
+} from './apiKeyRateLimitCheck';
 import { cacheRepository } from '@bike4mind/database';
 import { logEvent } from '@server/utils/analyticsLog';
 
@@ -8,6 +13,7 @@ vi.mock('@bike4mind/database', () => ({
   cacheRepository: {
     tryIncrementWithinLimitFixedWindow: vi.fn(),
     decrementCounter: vi.fn(),
+    deleteByKey: vi.fn(),
   },
 }));
 
@@ -289,6 +295,34 @@ describe('apiKeyRateLimitCheck', () => {
           }),
         })
       );
+    });
+  });
+
+  describe('resetApiKeyRateLimit', () => {
+    it('deletes exactly the minute and day counter keys', async () => {
+      vi.mocked(cacheRepository.deleteByKey).mockResolvedValue(undefined);
+
+      await resetApiKeyRateLimit(mockKeyId);
+
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledTimes(2);
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:minute`);
+      expect(cacheRepository.deleteByKey).toHaveBeenCalledWith(`api-key-rate-limit:${mockKeyId}:day`);
+    });
+
+    it('uses the same keys the enforcer passes to the fixed-window increment', async () => {
+      // Desync guard: if the enforcer's key construction ever diverges from
+      // buildRateLimitKeys, this cross-check fails.
+      vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
+        .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(MINUTE_MS) })
+        .mockResolvedValueOnce({ success: true, count: 1, expiresAt: future(DAY_MS) });
+
+      await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext);
+
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
+      const enforcerKeys = vi
+        .mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
+        .mock.calls.map(call => call[0]);
+      expect(enforcerKeys).toEqual([minuteKey, dayKey]);
     });
   });
 
