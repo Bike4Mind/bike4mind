@@ -94,7 +94,7 @@ export class RepeatedCallGuard {
   private readonly enabled: boolean;
   private readonly warnThreshold: number;
   private readonly blockThreshold: number;
-  private readonly history = new Map<string, { count: number; resultHash: number }>();
+  private readonly history = new Map<string, { count: number; resultHash: number; isReadOnly: boolean }>();
 
   constructor(options: RepeatedCallGuardOptions = {}) {
     this.enabled = options.enabled ?? true;
@@ -131,15 +131,31 @@ export class RepeatedCallGuard {
   /**
    * Record an executed call's result. Increments the repeat count when the
    * result is identical to the previous call with the same signature; resets to
-   * 1 when the result changed (genuine progress).
+   * 1 when the result changed (genuine progress). `isReadOnly` marks whether the
+   * call had side effects, so `invalidateReadOnly()` can later clear only the
+   * observation-style entries a subsequent mutation may have staled.
    */
-  record(signature: string, result: string): RepeatedCallRecord {
+  record(signature: string, result: string, isReadOnly = true): RepeatedCallRecord {
     if (!this.enabled) return { count: 1, warn: false };
     const hash = hashResult(result);
     const entry = this.history.get(signature);
     const count = entry && entry.resultHash === hash ? entry.count + 1 : 1;
-    this.history.set(signature, { count, resultHash: hash });
+    this.history.set(signature, { count, resultHash: hash, isReadOnly });
     return { count, warn: count >= this.warnThreshold };
+  }
+
+  /**
+   * Drop the tracked history for read-only calls. Call after a mutating tool
+   * runs: a write may have changed state that earlier reads sampled, so their
+   * counts (and any block) must not carry over and wrongly suppress a follow-up
+   * re-read of the thing that just changed. Mutating-call counts are preserved,
+   * so a genuine write-spin (same write, same result, repeated) is still caught.
+   */
+  invalidateReadOnly(): void {
+    if (!this.enabled) return;
+    for (const [signature, entry] of this.history) {
+      if (entry.isReadOnly) this.history.delete(signature);
+    }
   }
 }
 

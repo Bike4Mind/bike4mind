@@ -73,6 +73,39 @@ describe('RepeatedCallGuard escalation', () => {
     }
   });
 
+  it('recovers a blocked read after a mutation invalidates read-only history', () => {
+    const guard = new RepeatedCallGuard({ warnThreshold: 2, blockThreshold: 3 });
+    const read = RepeatedCallGuard.signature('file_read', '{"path":"a.ts"}');
+
+    // Read the same file until it blocks.
+    guard.record(read, 'old contents', true);
+    guard.record(read, 'old contents', true);
+    guard.record(read, 'old contents', true);
+    expect(guard.shouldBlock(read)).toBe(true);
+
+    // A mutation runs (e.g. the file was edited) -> read history is invalidated.
+    const edit = RepeatedCallGuard.signature('edit_file', '{"path":"a.ts"}');
+    guard.record(edit, 'edited', false);
+    guard.invalidateReadOnly();
+
+    // The follow-up re-read is no longer blocked and sees the new content.
+    expect(guard.shouldBlock(read)).toBe(false);
+    expect(guard.record(read, 'new contents', true).count).toBe(1);
+  });
+
+  it('still catches a write-spin: invalidateReadOnly keeps mutating-call counts', () => {
+    const guard = new RepeatedCallGuard({ warnThreshold: 2, blockThreshold: 3 });
+    const write = RepeatedCallGuard.signature('edit_file', '{"path":"a.ts","content":"x"}');
+
+    // Same write, same result, repeated - each mutation invalidates reads but
+    // must not wipe its own counter.
+    for (let i = 0; i < 3; i++) {
+      guard.record(write, 'written', false);
+      guard.invalidateReadOnly();
+    }
+    expect(guard.shouldBlock(write)).toBe(true);
+  });
+
   it('resets all history on reset()', () => {
     const guard = new RepeatedCallGuard({ warnThreshold: 2, blockThreshold: 2 });
     const sig = RepeatedCallGuard.signature('t', '{}');
