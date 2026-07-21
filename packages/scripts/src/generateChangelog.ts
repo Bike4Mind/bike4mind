@@ -85,29 +85,49 @@ function parseConventionalCommit(message: string): ParsedCommit {
 }
 
 /**
- * Extract PR numbers from commits
- * Looks for patterns like:
- * - "Merge pull request #N"
- * - "(#N)"
- * - "PR #N"
+ * Extract the PR number a commit belongs to.
+ *
+ * Only the SUBJECT (first line) is inspected, and only the two canonical forms
+ * GitHub writes when a PR lands are matched:
+ *   - Merge-commit workflow:  "Merge pull request #N from ..."
+ *   - Squash-merge workflow:  "feat(x): thing (#N)"  (trailing "(#N)" suffix)
+ *
+ * Anything in the commit BODY is deliberately ignored. Bodies carry issue,
+ * epic, and prose references ("Closes #627", "epic #41 - Phase B.1", "ranked
+ * #1") that are NOT the PR this commit shipped under - scraping them polluted
+ * the release "Pull Requests" list with issues/epics/arbitrary numbers. The old
+ * whitespace-anchored regex also silently MISSED the "(#N)" squash suffix (the
+ * char before "#" is "(", not whitespace), dropping real PRs. Matching only the
+ * trailing "(#N)" group also ignores an inner "(epic #41)" earlier in a subject.
+ *
+ * Exported for testing.
+ */
+export function extractPRNumber(message: string): number | null {
+  const subject = message.split('\n')[0];
+
+  const mergeMatch = subject.match(/^Merge pull request #(\d+)/i);
+  if (mergeMatch) {
+    return parseInt(mergeMatch[1], 10);
+  }
+
+  const squashMatch = subject.match(/\(#(\d+)\)\s*$/);
+  if (squashMatch) {
+    return parseInt(squashMatch[1], 10);
+  }
+
+  return null;
+}
+
+/**
+ * Extract the set of PR numbers shipped by a list of commits, sorted ascending.
  */
 function extractPRNumbers(commits: GitHubCommit[]): number[] {
   const prNumbers = new Set<number>();
 
   for (const commit of commits) {
-    const message = commit.message;
-
-    // Match "Merge pull request #N"
-    const mergeMatch = message.match(/Merge pull request #(\d+)/i);
-    if (mergeMatch) {
-      prNumbers.add(parseInt(mergeMatch[1], 10));
-      continue;
-    }
-
-    // Match "(#N)" or "PR #N" or "pr: #N"
-    const prMatches = message.matchAll(/(?:^|\s|PR:?\s*)#(\d+)/gi);
-    for (const match of prMatches) {
-      prNumbers.add(parseInt(match[1], 10));
+    const prNumber = extractPRNumber(commit.message);
+    if (prNumber !== null) {
+      prNumbers.add(prNumber);
     }
   }
 
