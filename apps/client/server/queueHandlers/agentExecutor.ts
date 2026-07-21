@@ -1248,7 +1248,7 @@ async function processExecution(
     // formulate/solve calls redirect to "write the final summary"). Without the latter the agent
     // -- which has no reliable memory of which steps it finished -- re-does solved families until
     // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
-    const planProgress: PlanProgressState = { needed: null, solved: {} };
+    const planProgress: PlanProgressState = { steps: null, solved: {}, results: {} };
     // Outermost: give the loop the real active brief in-context (#57) so it passes the exact
     // problem to solve/edit instead of reconstructing it. Wraps the guarded tools last, so it
     // augments real tool observations and leaves guard redirects (non-envelope strings) untouched.
