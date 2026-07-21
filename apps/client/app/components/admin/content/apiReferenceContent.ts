@@ -151,10 +151,20 @@ GET /api/quests/[id]
     "sources": [],
     "artifacts": []
   },
+  "images": ["a1b2c3.png"],
+  "files": [
+    { "name": "a1b2c3.png", "url": "https://cdn.example.com/generated/a1b2c3.png", "isImage": true }
+  ],
   "createdAt": "2025-01-15T10:30:00Z",
   "completedAt": "2025-01-15T10:30:05Z"
 }
 \`\`\`
+
+For file-generating quests (image generation, editing, etc.), \`images\` lists the raw generated
+file basenames and \`files\` lists each as a descriptor with a ready-to-use CDN \`url\` and an
+\`isImage\` flag (empty until \`status\` is \`done\`). Prefer \`files\` - it saves you knowing the CDN
+path convention, and \`isImage\` lets you pick out renderable images (not every generated file is
+one, e.g. a spreadsheet export).
 
 #### Get Quest Files
 
@@ -601,6 +611,38 @@ POST /api/ai/llm
 | temperature | number | No | Sampling temperature |
 | maxTokens | number | No | Max output tokens |
 | systemPrompt | string | No | System prompt override |
+
+#### Image Generation (async)
+
+\`\`\`
+POST /api/ai/generate-image
+\`\`\`
+
+**Required API-key scope:** \`ai:generate\`.
+
+**Request Body:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| prompt | string | Yes | Image description |
+| model | string | Yes | Image model identifier (e.g. \`gpt-image-1\`); a request without a supported model is rejected \`422\` |
+| n | number | No | Number of images (1-10) |
+| size | string | No | Image dimensions (e.g. \`1024x1024\`) |
+| sessionId | string | No | Existing session; a new one is created if omitted |
+
+Generation is asynchronous - the request enqueues work and returns immediately with a quest
+(no image yet). It never blocks on generation, so it is not subject to the API-gateway request
+timeout. Retrieve the result by polling \`GET /api/quests/{id}\` until \`status\` is \`done\`, then
+read \`files\` (see [Poll Quest Status](#poll-quest-status)).
+
+**Response:**
+
+\`\`\`json
+{
+  "quest": { "id": "quest_abc123", "status": "pending" },
+  "session": { "id": "sess_xyz789" }
+}
+\`\`\`
 
 #### AI Endpoints Summary
 
