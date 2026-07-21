@@ -38,3 +38,4 @@ export {
 } from './contextLoader';
 export { formatStep } from './formatStep';
 export { matchModel, type ModelMatch } from './matchModel';
+export { resolveModelCommand, type ModelCommandResult } from './resolveModelCommand';

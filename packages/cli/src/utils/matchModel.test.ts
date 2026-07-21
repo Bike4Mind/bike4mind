@@ -25,6 +25,11 @@ describe('matchModel', () => {
     expect(result).toEqual({ kind: 'single', model: models[2] });
   });
 
+  it('ignores surrounding whitespace on the query', () => {
+    expect(matchModel(models, '  opus  ')).toEqual({ kind: 'single', model: models[0] });
+    expect(matchModel(models, '\tclaude sonnet 5\n')).toEqual({ kind: 'single', model: models[1] });
+  });
+
   it('matches an exact name case-insensitively', () => {
     const result = matchModel(models, 'claude sonnet 5');
     expect(result).toEqual({ kind: 'single', model: models[1] });

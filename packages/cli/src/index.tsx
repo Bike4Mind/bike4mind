@@ -51,7 +51,7 @@ import {
   parseApiUrl,
   processFileReferences,
   formatStep,
-  matchModel,
+  resolveModelCommand,
 } from './utils';
 import { getTokenCounter } from './utils/tokenCounter.js';
 import { ConversationContext, reconstructTurnBlocks } from './context/ConversationContext.js';
@@ -3453,40 +3453,38 @@ function CliApp() {
       }
 
       case 'model': {
-        const models = state.availableModels ?? [];
-        if (models.length === 0) {
-          console.log('No models available. Check your API connection and try again.');
+        // A switch mutates agent.context.model and the LLM backend, and
+        // ReActAgent re-reads context.model every loop iteration, so switching
+        // mid-run would split a single multi-step response across two models
+        // with inconsistent token accounting. Block until the run finishes.
+        if (useCliStore.getState().isThinking) {
+          console.log('Agent is busy - wait for the current response to finish before switching models.');
           break;
         }
 
         const currentModel = useCliStore.getState().session?.model ?? state.config?.defaultModel;
-
-        // No argument: open the interactive picker.
-        if (args.length === 0) {
-          setState(prev => ({ ...prev, showModelPicker: true }));
-          break;
+        const result = resolveModelCommand(state.availableModels ?? [], args, currentModel);
+        switch (result.kind) {
+          case 'no-models':
+            console.log('No models available. Check your API connection and try again.');
+            break;
+          case 'open-picker':
+            setState(prev => ({ ...prev, showModelPicker: true }));
+            break;
+          case 'no-match':
+            console.log(`No model matches "${result.query}". Run /model to browse available models.`);
+            break;
+          case 'ambiguous':
+            console.log(`"${args.join(' ')}" matches ${result.models.length} models - be more specific:`);
+            result.models.forEach(m => console.log(`  ${m.name} (${m.id})`));
+            break;
+          case 'already-current':
+            console.log(`Already using ${result.model.name} (${result.model.id}).`);
+            break;
+          case 'switch':
+            await applyModelSwitch(result.model);
+            break;
         }
-
-        // Argument: match against id/name and switch if unambiguous.
-        const arg = args.join(' ');
-        const match = matchModel(models, arg);
-        if (match.kind === 'none') {
-          console.log(`No model matches "${arg}". Run /model to browse available models.`);
-          break;
-        }
-        if (match.kind === 'multiple') {
-          console.log(`"${arg}" matches ${match.models.length} models - be more specific:`);
-          match.models.forEach(m => console.log(`  ${m.name} (${m.id})`));
-          break;
-        }
-
-        const target = match.model;
-        if (target.id === currentModel) {
-          console.log(`Already using ${target.name} (${target.id}).`);
-          break;
-        }
-        await handleSaveConfig({ ...(state.config as CliConfig), defaultModel: target.id });
-        console.log(`✅ Switched to ${target.name} (${target.id})`);
         break;
       }
 
@@ -3594,30 +3592,62 @@ function CliApp() {
       return { ...prev, ...updates };
     });
 
-    // If the model changed, update the session model in the store (single source of truth)
+    // Propagate a config-driven model change to the live session. `/model`
+    // drives its own session switch via applyModelSwitch (it must fire even
+    // when config.defaultModel already equals the target), so here we react
+    // only to an actual change in the saved config field.
     if (modelChanged) {
-      const currentSession = useCliStore.getState().session;
-      if (currentSession) {
-        setStoreSession({
-          ...currentSession,
-          model: updatedConfig.defaultModel,
-          updatedAt: new Date().toISOString(),
-        });
+      applyModelToSession(updatedConfig.defaultModel);
+    }
+  };
 
-        // Update the agent's model (context is private, but we can access it)
-        if (state.agent) {
-          (state.agent as any).context.model = updatedConfig.defaultModel;
-        }
+  /**
+   * Point the live session, agent context, and LLM backend at `modelId`. The
+   * single source of truth for the active model, shared by the config editor
+   * save path and the `/model` command. Idempotent: re-applying the current
+   * model is a no-op, so callers can invoke it defensively.
+   */
+  const applyModelToSession = (modelId: string): void => {
+    const currentSession = useCliStore.getState().session;
+    if (currentSession && currentSession.model !== modelId) {
+      setStoreSession({
+        ...currentSession,
+        model: modelId,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Update the agent's model (context is private, but we can access it)
+      if (state.agent) {
+        (state.agent as any).context.model = modelId;
       }
     }
 
-    // Update LLM backend's model if it changed
-    // The LLM backend is stored in the agent's context
-    if (modelChanged && state.agent) {
+    // Keep the LLM backend (stored in the agent's context) in sync
+    if (state.agent) {
       const backend = (state.agent as any).context.llm as ServerLlmBackend | WebSocketLlmBackend | MultiLlmBackend;
       if (backend) {
-        backend.currentModel = updatedConfig.defaultModel;
+        backend.currentModel = modelId;
       }
+    }
+  };
+
+  /**
+   * Persist and apply a `/model` switch. Both the argument dispatcher and the
+   * interactive picker funnel through here so the config save, session apply,
+   * success message, and save-failure handling live in one place.
+   *
+   * handleSaveConfig only propagates to the session when the saved config field
+   * changes, so we force the session onto the target afterwards: `/model X`
+   * must still switch when config.defaultModel already equalled X but the live
+   * session had diverged (fresh session / `--resume`).
+   */
+  const applyModelSwitch = async (model: ModelInfo): Promise<void> => {
+    try {
+      await handleSaveConfig({ ...(state.config as CliConfig), defaultModel: model.id });
+      applyModelToSession(model.id);
+      console.log(`✅ Switched to ${model.name} (${model.id})`);
+    } catch (error) {
+      console.error(`Failed to switch model: ${error instanceof Error ? error.message : String(error)}`);
     }
   };
 
@@ -3715,9 +3745,7 @@ function CliApp() {
             console.log(`Already using ${model.name} (${model.id}).`);
             return;
           }
-          void handleSaveConfig({ ...(state.config as CliConfig), defaultModel: model.id }).then(() => {
-            console.log(`✅ Switched to ${model.name} (${model.id})`);
-          });
+          void applyModelSwitch(model);
         }}
         onCancel={() => setState(prev => ({ ...prev, showModelPicker: false }))}
       />
