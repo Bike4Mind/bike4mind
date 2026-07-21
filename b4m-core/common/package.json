@@ -72,12 +72,15 @@
     "typecheck:native": "tsgo --noEmit --types node",
     "typecheck:fast": "tsgo --noEmit --types node || tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "openapi:generate": "tsx src/openapi/generate.ts"
   },
   "devDependencies": {
+    "@asteasolutions/zod-to-openapi": "^9.1.0",
     "@types/react": "^19.2.17",
     "react": "^19.2.7",
     "tsdown": "^0.22.3",
+    "tsx": "4.23.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
   },
