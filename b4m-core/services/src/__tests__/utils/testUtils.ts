@@ -138,6 +138,7 @@ export const createMockUserRepository = (): MockedObject<IUserRepository> =>
     findByStripeCustomerId: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    incrementTokenVersion: vi.fn(),
     findBySlackUserId: vi.fn(),
     findByIdWithNotionToken: vi.fn(),
     findByIdWithMfaSecrets: vi.fn(),
@@ -157,6 +158,7 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findIdsAdministeredBy: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
+    incrementTokenVersion: vi.fn(),
     findByIdAndUserId: vi.fn(),
     updateUserDetails: vi.fn(),
   });

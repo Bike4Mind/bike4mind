@@ -441,6 +441,11 @@ export class UserRepository extends BaseRepository<IUserDocument> implements IUs
     );
   }
 
+  async incrementTokenVersion(userId: string): Promise<number> {
+    const updated = await this.model.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } }, { new: true });
+    return updated?.tokenVersion ?? 0;
+  }
+
   /**
    * Atomically append a moderation hit to a user's record and bump the counters.
    * The `moderation.hits` log is kept newest-first and capped at `MODERATION_HITS_RETAINED`.
