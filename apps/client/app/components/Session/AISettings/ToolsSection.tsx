@@ -1082,7 +1082,9 @@ const ToolsSection = ({
             </ToolContainer>
           </Grid>
           <Grid xs={12} className="tool-item tool-item-thinking">
-            <ToolContainer sx={toolContainerSx}>
+            {/* flexWrap + responsive order let the budget input drop to its own line on
+                mobile (so it stops cropping the description) while staying inline on desktop. */}
+            <ToolContainer sx={{ ...(toolContainerSx as object | undefined), flexWrap: 'wrap', rowGap: '12px' }}>
               <Box
                 className="tool-content"
                 sx={{
@@ -1111,47 +1113,62 @@ const ToolsSection = ({
                 />
               </Box>
               {(thinking?.enabled ?? true) && modelSupportsThinking && (
-                <Tooltip title="Number of tokens allocated for thinking">
-                  <Input
-                    sx={commonInputStyles}
-                    size="sm"
-                    variant="outlined"
-                    color="primary"
-                    type="number"
-                    value={thinking?.budget_tokens ?? 16000}
-                    onChange={e => {
-                      const newValue = parseInt(e.target.value);
-                      if (newValue >= 1000 && newValue <= 32000) {
-                        setLLM({
-                          thinking: {
-                            enabled: thinking?.enabled ?? true,
-                            budget_tokens: newValue,
-                          },
-                        });
-                      }
-                    }}
-                    slotProps={{
-                      input: {
-                        min: 1000,
-                        max: 32000,
-                        step: 1000,
-                      },
-                    }}
-                  />
-                </Tooltip>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    // Mobile: order after the toggle + full basis => wraps to its own line.
+                    // Desktop: sits inline between the label and the toggle.
+                    order: { xs: 2, sm: 1 },
+                    flexBasis: { xs: '100%', sm: 'auto' },
+                    // Indent under the label on mobile (icon width 25 + 12 gap) so title,
+                    // description and input line up together.
+                    ml: { xs: '37px', sm: 0 },
+                  }}
+                >
+                  <Tooltip title="Number of tokens allocated for thinking">
+                    <Input
+                      sx={commonInputStyles}
+                      size="sm"
+                      variant="outlined"
+                      color="primary"
+                      type="number"
+                      value={thinking?.budget_tokens ?? 16000}
+                      onChange={e => {
+                        const newValue = parseInt(e.target.value);
+                        if (newValue >= 1000 && newValue <= 32000) {
+                          setLLM({
+                            thinking: {
+                              enabled: thinking?.enabled ?? true,
+                              budget_tokens: newValue,
+                            },
+                          });
+                        }
+                      }}
+                      slotProps={{
+                        input: {
+                          min: 1000,
+                          max: 32000,
+                          step: 1000,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                </Box>
               )}
-              <SquareSlideToggle
-                onChange={e =>
-                  setLLM({
-                    thinking: {
-                      enabled: e.target.checked,
-                      budget_tokens: thinking?.budget_tokens ?? 16000,
-                    },
-                  })
-                }
-                checked={thinking?.enabled ?? false}
-                disabled={!modelSupportsThinking}
-              />
+              <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, order: { xs: 1, sm: 2 } }}>
+                <SquareSlideToggle
+                  onChange={e =>
+                    setLLM({
+                      thinking: {
+                        enabled: e.target.checked,
+                        budget_tokens: thinking?.budget_tokens ?? 16000,
+                      },
+                    })
+                  }
+                  checked={thinking?.enabled ?? false}
+                  disabled={!modelSupportsThinking}
+                />
+              </Box>
             </ToolContainer>
           </Grid>
           {/* Quest Master */}
