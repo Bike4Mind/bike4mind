@@ -14,6 +14,7 @@ import {
   withTransaction,
 } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
+import { filterInviteRecipientsToSelf } from '@server/managers/inviteManager';
 import { sendToClient } from '@server/websocket/utils';
 import { InviteType, ProjectEvents } from '@bike4mind/common';
 import { logEvent } from '@server/utils/analyticsLog';
@@ -135,7 +136,8 @@ const handler = baseApi().post(async (req, res) => {
     status: 'Accepted invite',
   });
 
-  return res.json(invite);
+  // Invitee-facing: strip co-recipients' emails from the returned invite.
+  return res.json(filterInviteRecipientsToSelf(invite, req.user.email));
 });
 
 export const config = {

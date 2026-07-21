@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Box,
   Button,
@@ -54,11 +54,34 @@ export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
-  const [viewingLake, setViewingLake] = useState<{ id: string; name: string; tagPrefix: string } | null>(null);
-  const [editingLake, setEditingLake] = useState<EditableLake | null>(null);
+  const [viewingLake, setViewingLake] = useState<{
+    id: string;
+    name: string;
+    tagPrefix: string;
+    canManage: boolean;
+  } | null>(null);
+  const [editingLakeId, setEditingLakeId] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [showDeleted, setShowDeleted] = useState(false);
   const [purgeTarget, setPurgeTarget] = useState<{ id: string; name: string } | null>(null);
+
+  // Derive the lake being edited from the LIVE list (by id) rather than a snapshot, so a
+  // visibility mutation's cache refresh flows into the settings modal instead of leaving the
+  // Visibility control showing stale pre-mutation state.
+  const editingLake = useMemo<EditableLake | null>(() => {
+    const l = dataLakes?.find(d => d.id === editingLakeId);
+    return l
+      ? {
+          id: l.id,
+          name: l.name,
+          description: l.description ?? '',
+          requiredUserTag: l.requiredUserTag ?? '',
+          requiredEntitlement: l.requiredEntitlement ?? '',
+          organizationId: l.organizationId ?? '',
+          isPublic: l.isPublic ?? false,
+        }
+      : null;
+  }, [dataLakes, editingLakeId]);
 
   const archiveLake = useArchiveDataLake();
   const unarchiveLake = useUnarchiveDataLake();
@@ -113,7 +136,14 @@ export default function DataLakeListPanel() {
                 variant="outlined"
                 data-testid={`datalake-card-${lake.id}`}
                 sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                onClick={() => setViewingLake({ id: lake.id, name: lake.name, tagPrefix: lake.fileTagPrefix })}
+                onClick={() =>
+                  setViewingLake({
+                    id: lake.id,
+                    name: lake.name,
+                    tagPrefix: lake.fileTagPrefix,
+                    canManage: !!lake.canManage,
+                  })
+                }
               >
                 <Stack direction="row" alignItems="center" gap={1.5}>
                   <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
@@ -132,62 +162,62 @@ export default function DataLakeListPanel() {
                       )}
                     </Stack>
                   </Box>
-                  <Tooltip title="Add files" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="primary"
-                      data-testid={`datalake-addfiles-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        openWizardForLake({
-                          id: lake.id,
-                          slug: lake.slug,
-                          name: lake.name,
-                          fileTagPrefix: lake.fileTagPrefix,
-                          requiredUserTag: lake.requiredUserTag,
-                          requiredEntitlement: lake.requiredEntitlement,
-                        });
-                      }}
-                    >
-                      <AddIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Settings" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="neutral"
-                      data-testid={`datalake-settings-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        setEditingLake({
-                          id: lake.id,
-                          name: lake.name,
-                          description: lake.description ?? '',
-                          requiredUserTag: lake.requiredUserTag ?? '',
-                          requiredEntitlement: lake.requiredEntitlement ?? '',
-                          organizationId: lake.organizationId ?? '',
-                        });
-                      }}
-                    >
-                      <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
-                  <Tooltip title="Archive" size="sm">
-                    <IconButton
-                      size="sm"
-                      variant="plain"
-                      color="warning"
-                      data-testid={`datalake-archive-btn-${lake.id}`}
-                      onClick={e => {
-                        stop(e);
-                        archiveLake.mutate(lake.id);
-                      }}
-                    >
-                      <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Tooltip>
+                  {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                      enforces the same rule). The list surfaces other users' read-only public
+                      lakes, so render these only when the caller may manage this lake. */}
+                  {lake.canManage && (
+                    <>
+                      <Tooltip title="Add files" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="primary"
+                          data-testid={`datalake-addfiles-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            openWizardForLake({
+                              id: lake.id,
+                              slug: lake.slug,
+                              name: lake.name,
+                              fileTagPrefix: lake.fileTagPrefix,
+                              requiredUserTag: lake.requiredUserTag,
+                              requiredEntitlement: lake.requiredEntitlement,
+                            });
+                          }}
+                        >
+                          <AddIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Settings" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="neutral"
+                          data-testid={`datalake-settings-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            setEditingLakeId(lake.id);
+                          }}
+                        >
+                          <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                      <Tooltip title="Archive" size="sm">
+                        <IconButton
+                          size="sm"
+                          variant="plain"
+                          color="warning"
+                          data-testid={`datalake-archive-btn-${lake.id}`}
+                          onClick={e => {
+                            stop(e);
+                            archiveLake.mutate(lake.id);
+                          }}
+                        >
+                          <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                        </IconButton>
+                      </Tooltip>
+                    </>
+                  )}
                 </Stack>
               </Card>
             ))}
@@ -268,7 +298,7 @@ export default function DataLakeListPanel() {
       </Box>
 
       {/* Settings editor */}
-      <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLake(null)} />
+      <DataLakeSettingsModal lake={editingLake} onClose={() => setEditingLakeId(null)} />
 
       {/* Viewer modal */}
       <Modal open={!!viewingLake} onClose={() => setViewingLake(null)}>
@@ -286,6 +316,7 @@ export default function DataLakeListPanel() {
               dataLakeId={viewingLake.id}
               dataLakeName={viewingLake.name}
               tagPrefix={viewingLake.tagPrefix}
+              canManage={viewingLake.canManage}
               onClose={() => setViewingLake(null)}
             />
           )}
@@ -330,6 +361,8 @@ interface EditableLake {
   requiredEntitlement: string;
   /** Current org scope ('' = personal/private). Drives the Visibility control. */
   organizationId: string;
+  /** Public opt-in. With organizationId, derives the tri-state Visibility control. */
+  isPublic: boolean;
 }
 
 /**
@@ -348,8 +381,17 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const activeOrg = selectedAccount && !selectedAccount.personal ? selectedAccount : undefined;
   const belongsToOrg = accounts.some(account => !account.personal);
   const canShareToOrg = !!activeOrg;
-  // Current visibility is derived from the lake's org scope (Public/Common is a later phase).
-  const visibility: 'private' | 'organization' = lake?.organizationId ? 'organization' : 'private';
+  // Tri-state visibility derived from the lake: public wins, else org scope, else private.
+  const visibility: 'private' | 'organization' | 'public' = lake?.isPublic
+    ? 'public'
+    : lake?.organizationId
+      ? 'organization'
+      : 'private';
+  // A gated lake can't be published (the server refuses it) - a PHI/entitlement boundary must
+  // not be exposed app-wide. Keyed off the PERSISTED gate, matching the server guardrail.
+  const hasGate = !!(lake?.requiredUserTag || lake?.requiredEntitlement);
+  // Publishing exposes every file in the lake to all users, so it takes an explicit confirm.
+  const [confirmPublicOpen, setConfirmPublicOpen] = useState(false);
   // The org the lake is CURRENTLY scoped to - which for a multi-org owner may not be the
   // active switcher org. Name it from the account list so the "Shared" copy is unambiguous.
   const lakeOrgName = lake?.organizationId
@@ -360,7 +402,9 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   const [requiredUserTag, setRequiredUserTag] = useState('');
   const [requiredEntitlement, setRequiredEntitlement] = useState('');
 
-  // Re-seed the form whenever a different lake is opened for editing.
+  // Seed the form once per opened lake, keyed on id (NOT the object): `lake` is now derived
+  // from the live list, so it changes identity on every refetch - keying on id keeps a
+  // background refresh (e.g. after a visibility change) from clobbering in-progress edits.
   useEffect(() => {
     if (lake) {
       setName(lake.name);
@@ -368,7 +412,17 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
       setRequiredUserTag(lake.requiredUserTag);
       setRequiredEntitlement(lake.requiredEntitlement);
     }
-  }, [lake]);
+    // Intentional id-keying: seed once per lake, not on every live-object refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lake?.id]);
+
+  // Close the publish-confirm whenever the edited lake changes or clears, so it can never
+  // linger over a stale/nulled lake if the parent resets selection while it is open.
+  useEffect(() => {
+    // Reset-on-lake-change is the intent, so the setState here is deliberate.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setConfirmPublicOpen(false);
+  }, [lake?.id]);
 
   // A gate can be set or changed but not cleared (the backend rejects empty values). If the
   // user blanks a previously-set gate, the Save silently keeps the old value - surface that
@@ -414,103 +468,153 @@ export function DataLakeSettingsModal({ lake, onClose }: { lake: EditableLake | 
   };
 
   return (
-    <Modal open={!!lake} onClose={onClose}>
-      <ModalDialog data-testid="datalake-settings-modal" sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}>
-        <DialogTitle>Data lake settings</DialogTitle>
-        <DialogContent>
-          <Stack gap={2} sx={{ mt: 1 }}>
-            <FormControl required>
-              <FormLabel>Name</FormLabel>
-              <Input value={name} onChange={e => setName(e.target.value)} data-testid="datalake-settings-name" />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Description</FormLabel>
-              <Textarea
-                minRows={2}
-                maxRows={5}
-                value={description}
-                onChange={e => setDescription(e.target.value)}
-                data-testid="datalake-settings-description"
-              />
-            </FormControl>
-            <FormControl>
-              <FormLabel>Visibility</FormLabel>
-              <RadioGroup
-                orientation="horizontal"
-                value={visibility}
-                onChange={e => {
-                  if (!lake) return;
-                  const next = e.target.value as 'private' | 'organization';
-                  if (next === visibility) return;
-                  setVisibility.mutate({ id: lake.id, visibility: next });
-                }}
-                data-testid="datalake-settings-visibility"
-              >
-                <Radio value="private" label="Private" disabled={setVisibility.isPending} />
-                <Radio
-                  value="organization"
-                  label="Organization"
-                  disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
-                  data-testid="datalake-settings-visibility-org"
+    <>
+      <Modal open={!!lake} onClose={onClose}>
+        <ModalDialog
+          data-testid="datalake-settings-modal"
+          sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}
+        >
+          <DialogTitle>Data lake settings</DialogTitle>
+          <DialogContent>
+            <Stack gap={2} sx={{ mt: 1 }}>
+              <FormControl required>
+                <FormLabel>Name</FormLabel>
+                <Input value={name} onChange={e => setName(e.target.value)} data-testid="datalake-settings-name" />
+              </FormControl>
+              <FormControl>
+                <FormLabel>Description</FormLabel>
+                <Textarea
+                  minRows={2}
+                  maxRows={5}
+                  value={description}
+                  onChange={e => setDescription(e.target.value)}
+                  data-testid="datalake-settings-description"
                 />
-              </RadioGroup>
-              <FormHelperText>
-                {visibility === 'organization'
-                  ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
-                  : canShareToOrg
-                    ? `Not shared with your organization. Sharing will scope it to “${activeOrg?.name}”.`
-                    : belongsToOrg
-                      ? 'Switch to your team account (top-left account switcher) to share this lake with your organization.'
-                      : 'Not shared with an organization. Join one to share a lake with your team.'}
-              </FormHelperText>
-            </FormControl>
-            <FormControl error={clearingUserTag}>
-              <FormLabel>Access tag</FormLabel>
-              <Input
-                value={requiredUserTag}
-                onChange={e => setRequiredUserTag(e.target.value)}
-                placeholder="e.g. Opti"
-                data-testid="datalake-settings-usertag"
-              />
-              <FormHelperText>
-                {clearingUserTag
-                  ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
-                  : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
-              </FormHelperText>
-            </FormControl>
-            <FormControl error={clearingEntitlement}>
-              <FormLabel>Required entitlement</FormLabel>
-              <Input
-                value={requiredEntitlement}
-                onChange={e => setRequiredEntitlement(e.target.value)}
-                placeholder="e.g. product:pro"
-                data-testid="datalake-settings-entitlement"
-              />
-              <FormHelperText>
-                {clearingEntitlement
-                  ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
-                  : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
-              </FormHelperText>
-            </FormControl>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button
-            variant="solid"
-            color="primary"
-            loading={updateLake.isPending}
-            disabled={!name.trim()}
-            onClick={handleSave}
-            data-testid="datalake-settings-save-btn"
-          >
-            Save
-          </Button>
-          <Button variant="plain" color="neutral" onClick={onClose}>
-            Cancel
-          </Button>
-        </DialogActions>
-      </ModalDialog>
-    </Modal>
+              </FormControl>
+              <FormControl>
+                <FormLabel>Visibility</FormLabel>
+                <RadioGroup
+                  orientation="horizontal"
+                  value={visibility}
+                  onChange={e => {
+                    if (!lake) return;
+                    const next = e.target.value as 'private' | 'organization' | 'public';
+                    if (next === visibility) return;
+                    // Publishing exposes every file app-wide, so gate it behind an explicit
+                    // confirm instead of firing the mutation straight from the radio.
+                    if (next === 'public') {
+                      setConfirmPublicOpen(true);
+                      return;
+                    }
+                    setVisibility.mutate({ id: lake.id, visibility: next });
+                  }}
+                  data-testid="datalake-settings-visibility"
+                >
+                  <Radio value="private" label="Private" disabled={setVisibility.isPending} />
+                  <Radio
+                    value="organization"
+                    label="Organization"
+                    disabled={setVisibility.isPending || (!canShareToOrg && visibility !== 'organization')}
+                    data-testid="datalake-settings-visibility-org"
+                  />
+                  <Radio
+                    value="public"
+                    label="Public"
+                    disabled={setVisibility.isPending || (hasGate && visibility !== 'public')}
+                    data-testid="datalake-settings-visibility-public"
+                  />
+                </RadioGroup>
+                <FormHelperText>
+                  {visibility === 'public'
+                    ? 'Public — readable by everyone across the app. Only you can manage or add files.'
+                    : hasGate
+                      ? 'This lake has an access gate, so it can’t be made public. Choose Private or Organization.'
+                      : visibility === 'organization'
+                        ? `Shared with everyone in ${lakeOrgName ?? 'your organization'}.`
+                        : canShareToOrg
+                          ? `Private. “Organization” scopes it to “${activeOrg?.name}”; “Public” exposes it to everyone.`
+                          : belongsToOrg
+                            ? 'Private. Switch to your team account (top-left account switcher) to share with your organization, or make it public.'
+                            : 'Private. Make it public to share with everyone, or join an organization to share with a team.'}
+                </FormHelperText>
+              </FormControl>
+              <FormControl error={clearingUserTag}>
+                <FormLabel>Access tag</FormLabel>
+                <Input
+                  value={requiredUserTag}
+                  onChange={e => setRequiredUserTag(e.target.value)}
+                  placeholder="e.g. Opti"
+                  data-testid="datalake-settings-usertag"
+                />
+                <FormHelperText>
+                  {clearingUserTag
+                    ? 'A gate can’t be cleared here — saving keeps the current tag. Change it instead, or contact an admin to remove it.'
+                    : 'Users must hold this tag to access the lake. Can be set or changed, not cleared.'}
+                </FormHelperText>
+              </FormControl>
+              <FormControl error={clearingEntitlement}>
+                <FormLabel>Required entitlement</FormLabel>
+                <Input
+                  value={requiredEntitlement}
+                  onChange={e => setRequiredEntitlement(e.target.value)}
+                  placeholder="e.g. product:pro"
+                  data-testid="datalake-settings-entitlement"
+                />
+                <FormHelperText>
+                  {clearingEntitlement
+                    ? 'A gate can’t be cleared here — saving keeps the current entitlement. Change it instead, or contact an admin to remove it.'
+                    : 'Namespaced key (e.g. "product:pro"). Can be set or changed, not cleared.'}
+                </FormHelperText>
+              </FormControl>
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="primary"
+              loading={updateLake.isPending}
+              disabled={!name.trim()}
+              onClick={handleSave}
+              data-testid="datalake-settings-save-btn"
+            >
+              Save
+            </Button>
+            <Button variant="plain" color="neutral" onClick={onClose}>
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
+      <Modal open={confirmPublicOpen} onClose={() => setConfirmPublicOpen(false)}>
+        <ModalDialog role="alertdialog" data-testid="datalake-publish-confirm" sx={{ maxWidth: '28rem' }}>
+          <DialogTitle>Make this data lake public?</DialogTitle>
+          <DialogContent>
+            Every file in <b>{lake?.name}</b> becomes readable by all users across the app, in every organization. You
+            stay the only person who can manage or add files, and you can switch it back to private at any time.
+          </DialogContent>
+          <DialogActions>
+            <Button
+              variant="solid"
+              color="danger"
+              loading={setVisibility.isPending}
+              data-testid="datalake-publish-confirm-btn"
+              onClick={() => {
+                if (!lake) return;
+                setVisibility.mutate(
+                  { id: lake.id, visibility: 'public' },
+                  { onSuccess: () => setConfirmPublicOpen(false) }
+                );
+              }}
+            >
+              Make public
+            </Button>
+            <Button variant="plain" color="neutral" onClick={() => setConfirmPublicOpen(false)}>
+              Cancel
+            </Button>
+          </DialogActions>
+        </ModalDialog>
+      </Modal>
+    </>
   );
 }
 

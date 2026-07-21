@@ -65,16 +65,18 @@ type RunOpts = {
   cookie?: string;
   userAgent?: string;
   embed?: boolean;
+  a?: string;
 };
 const run = (
   segments: string[],
-  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed }: RunOpts = {}
+  { user, host = 'app.bike4mind.com', raw, v, uc, format, cookie, userAgent, embed, a }: RunOpts = {}
 ) => {
   const query: Record<string, unknown> = { path: segments };
   if (raw) query.raw = '1';
   if (v) query.v = v;
   if (format) query.format = format;
   if (embed) query.embed = '1';
+  if (a !== undefined) query.a = a;
   const effectiveHost = uc ? `${uc}.usercontent.app.bike4mind.com` : host;
   if (uc) query.__uc = '1';
   const headers: Record<string, string> = { host: effectiveHost };
@@ -475,6 +477,205 @@ describe('GET /api/publish/serve - reply/fabfile path is unchanged', () => {
     expect(data).not.toContain('<iframe'); // reply path does not use the sandbox iframe
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'none'");
+  });
+});
+
+describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
+  const HTML_ARTIFACT =
+    '<artifact identifier="tip" type="text/html" title="Tip Calculator">' +
+    '<!DOCTYPE html><html><head><title>Tip</title></head>' +
+    '<body><label>Bill</label><input><script>window.ok=1</script></body></html>' +
+    '</artifact>';
+
+  const htmlReply = (over: Record<string, unknown> = {}) => ({
+    publicId: 'rhtml',
+    // Simulates the #708 title bug on an EXISTING row: the reply led with the artifact, so
+    // deriveTitle snapshotted the raw wrapper tag as the title.
+    title: '<artifact identifier="tip" type="text/html" title="Tip Calculator">',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'reply' },
+    renderedBody: HTML_ARTIFACT,
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'rhtml',
+    ...over,
+  });
+
+  it('renders the reply page with a sandboxed iframe pointing at the ?a= sub-document, not raw markup', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain('src="/p/r/rhtml?a=0"');
+    // The artifact's inner markup must NOT leak into the reply page as text.
+    expect(data).not.toContain('<label>Bill</label>');
+    // Page itself stays script-free; the frame is permitted via frame-src.
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("frame-src 'self'");
+  });
+
+  it('recovers a sensible <title> when the stored title is the raw <artifact> tag', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml']);
+    await promise;
+
+    const data = res._getData() as string;
+    expect(data).toContain('<title>Tip Calculator</title>');
+    expect(data).not.toContain('<title>&lt;artifact');
+  });
+
+  it('serves the ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml'], { a: '0' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toContain('text/html');
+    const data = res._getData() as string;
+    expect(data).toContain('window.ok=1'); // author script preserved (runs in the sandbox)
+    expect(data).toContain('Bill');
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    // Opaque origin even on direct nav; author inline JS allowed only inside the sandbox.
+    expect(csp).toContain('sandbox allow-scripts');
+    expect(csp).toContain("script-src 'unsafe-inline'");
+    expect(csp).not.toContain("script-src 'none'");
+  });
+
+  it('404s an out-of-range ?a= index', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml'], { a: '7' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('renders a placeholder card (no iframe) for a non-embeddable artifact type, and 404s its ?a=', async () => {
+    const reactReply = htmlReply({
+      publicId: 'rreact',
+      slug: 'rreact',
+      title: 'React demo',
+      renderedBody:
+        '<artifact identifier="c" type="application/vnd.ant.react" title="Counter">export default function C(){return null}</artifact>',
+    });
+    mockArtifactFindOne.mockReturnValue(reactReply);
+
+    const { res: pageRes, promise: pagePromise } = run(['r', 'rreact']);
+    await pagePromise;
+    const page = pageRes._getData() as string;
+    expect(page).toContain('b4m-artifact-card');
+    expect(page).not.toContain('<iframe');
+
+    const { res: subRes, promise: subPromise } = run(['r', 'rreact'], { a: '0' });
+    await subPromise;
+    expect(subRes._getStatusCode()).toBe(404);
+  });
+
+  it('renders a placeholder card (not a frame) for a Bearer-gated org reply, since the iframe could not authorize', async () => {
+    // An org-visibility reply authorizes off req.user (Bearer). An artifact iframe navigation
+    // cannot send that header, so framing would dead-end at a nested loader shell - render the
+    // card instead. (Public + share + passphrase-cookie cases still frame; covered elsewhere.)
+    const gated = htmlReply({
+      publicId: 'r-org-html',
+      slug: 'r-org-html',
+      visibility: 'organization',
+      tier: 'organization',
+      scopeId: 'org_42',
+    });
+    mockArtifactFindOne.mockReturnValue(gated);
+    const { res, promise } = run(['r', 'r-org-html'], { user: { id: 'member', organizationId: 'org_42' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('b4m-artifact-card');
+    expect(data).not.toContain('<iframe');
+  });
+
+  it('frames the artifact on a /a/{token} share, pointing the iframe back at the token path', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply({ publicId: 'r-shared', slug: 'r-shared' }));
+
+    const { res: pageRes, promise: pagePromise } = run(['a', 'tokshare']);
+    await pagePromise;
+    expect(pageRes._getStatusCode()).toBe(200);
+    const page = pageRes._getData() as string;
+    expect(page).toContain('src="/a/tokshare?a=0"');
+
+    const { res: subRes, promise: subPromise } = run(['a', 'tokshare'], { a: '0' });
+    await subPromise;
+    expect(subRes._getStatusCode()).toBe(200);
+    expect(subRes._getData() as string).toContain('window.ok=1');
+  });
+
+  it('serves an embedded SVG artifact sub-document with its markup (viewBox case preserved)', async () => {
+    const svgReply = htmlReply({
+      publicId: 'rsvg',
+      slug: 'rsvg',
+      title: 'A drawing',
+      renderedBody:
+        '<artifact identifier="s" type="image/svg+xml" title="Circle">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="40"/></svg>' +
+        '</artifact>',
+    });
+    mockArtifactFindOne.mockReturnValue(svgReply);
+
+    const { res: pageRes, promise: pagePromise } = run(['r', 'rsvg']);
+    await pagePromise;
+    expect(pageRes._getData() as string).toContain('src="/p/r/rsvg?a=0"');
+
+    const { res: subRes, promise: subPromise } = run(['r', 'rsvg'], { a: '0' });
+    await subPromise;
+    expect(subRes._getStatusCode()).toBe(200);
+    const svg = subRes._getData() as string;
+    expect(svg).toContain('<circle');
+    // camelCase SVG attributes must survive the cheerio round-trip, or the SVG renders broken.
+    expect(svg).toContain('viewBox');
+  });
+
+  it('maps ?a=0 and ?a=1 to the correct artifact when a reply embeds two HTML artifacts', async () => {
+    const twoReply = htmlReply({
+      publicId: 'r2',
+      slug: 'r2',
+      title: 'Two artifacts',
+      renderedBody:
+        '<artifact type="text/html" title="First"><body><h1>FIRST_ARTIFACT</h1></body></artifact>\n' +
+        '<artifact type="text/html" title="Second"><body><h1>SECOND_ARTIFACT</h1></body></artifact>',
+    });
+    mockArtifactFindOne.mockReturnValue(twoReply);
+
+    const { res: pageRes, promise: pagePromise } = run(['r', 'r2']);
+    await pagePromise;
+    const page = pageRes._getData() as string;
+    expect(page).toContain('src="/p/r/r2?a=0"');
+    expect(page).toContain('src="/p/r/r2?a=1"');
+
+    // Artifacts render in DOCUMENT order (extractViewerArtifacts sorts by startIndex), and the
+    // viewer + handler share that ordering, so ?a=0 is the first artifact and ?a=1 the second.
+    const { res: a0, promise: p0 } = run(['r', 'r2'], { a: '0' });
+    await p0;
+    const doc0 = a0._getData() as string;
+    expect(doc0).toContain('FIRST_ARTIFACT');
+    expect(doc0).not.toContain('SECOND_ARTIFACT');
+
+    const { res: a1, promise: p1 } = run(['r', 'r2'], { a: '1' });
+    await p1;
+    const doc1 = a1._getData() as string;
+    expect(doc1).toContain('SECOND_ARTIFACT');
+    expect(doc1).not.toContain('FIRST_ARTIFACT');
+  });
+
+  it('treats an empty ?a= as the normal page render, not artifact index 0', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlReply());
+    const { res, promise } = run(['r', 'rhtml'], { a: '' });
+    await promise;
+    expect(res._getStatusCode()).toBe(200);
+    // Fell through to the page (which frames artifact 0), rather than serving artifact 0's srcdoc.
+    expect(res._getData() as string).toContain('src="/p/r/rhtml?a=0"');
   });
 });
 

@@ -89,6 +89,32 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 
+  it('(a2) forwards spendCap alongside the other embed fields', async () => {
+    const { req, res } = post({
+      name: 'capped widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      spendCap: 5000,
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ agentId: 'agent-1', spendCap: 5000 }),
+      expect.anything()
+    );
+  });
+
+  it('(c2) a non-embed key carrying only spendCap still forwards it (service rejects, no silent drop)', async () => {
+    const { req, res } = post({
+      name: 'plain-capped',
+      scopes: ['notebooks:read'],
+      spendCap: 5000,
+    });
+    await mockRefs.postHandler!(req, res);
+    expect(createUserApiKey).toHaveBeenCalledWith('u1', expect.objectContaining({ spendCap: 5000 }), expect.anything());
+  });
+
   it('(c) regression guard: a non-embed key carrying allowedOrigins forwards them, not drops', async () => {
     const { req, res } = post({
       name: 'plain',

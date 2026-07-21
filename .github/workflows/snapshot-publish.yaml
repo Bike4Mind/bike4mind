@@ -235,7 +235,16 @@ jobs:
 
             # Retry only the transient registry race; surface anything else immediately.
             if ! grep -qiE 'E409|409 Conflict|packument' /tmp/publish-attempt.txt; then
-              echo "::error::changeset publish failed with a non-transient error (not an npm E409 packument race) — not retrying"
+              # ENEEDAUTH means npm had NO usable credential for the package. Since
+              # publishing is OIDC-only (no token, see release.yaml), this is almost
+              # always a missing npm Trusted Publisher on that package. Translate the
+              # cryptic error into the exact fix instead of a bare "non-transient" note.
+              if grep -qi 'ENEEDAUTH' /tmp/publish-attempt.txt; then
+                MISSING=$(grep -i 'ENEEDAUTH' /tmp/publish-attempt.txt | grep -oE '@bike4mind/[a-z-]+' | sort -u | tr '\n' ' ')
+                echo "::error title=npm Trusted Publisher missing::OIDC publish failed with ENEEDAUTH (no credential) for: ${MISSING:-one or more packages}. Publishing is OIDC-only with no token fallback, so each package needs a Trusted Publisher at npmjs.com/package/<pkg>/access -> Trusted Publisher: Organization=Bike4Mind, Repository=bike4mind, Workflow=release.yaml, Environment=blank."
+              else
+                echo "::error::changeset publish failed with a non-transient error (not an npm E409 packument race) — not retrying"
+              fi
               break
             fi
 

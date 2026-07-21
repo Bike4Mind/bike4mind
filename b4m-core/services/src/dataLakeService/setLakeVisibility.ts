@@ -1,8 +1,11 @@
 import type { IDataLakeDocument, IDataLakeRepository } from '@bike4mind/common';
 import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
-/** Private = owner-only (no org); organization = scoped to the actor's own org. */
-export type LakeVisibility = 'private' | 'organization';
+/**
+ * Private = owner-only (no org, not public); organization = scoped to the actor's own org;
+ * public = readable app-wide (directory-listed, cross-org). The three are mutually exclusive.
+ */
+export type LakeVisibility = 'private' | 'organization' | 'public';
 
 interface SetLakeVisibilityAdapters {
   db: {
@@ -11,14 +14,20 @@ interface SetLakeVisibilityAdapters {
 }
 
 /**
- * Promote a personal lake to org-scoped, or demote it back to private. The target org is
- * `actor.organizationId` - the caller's active-switcher org, which the route already
- * authorization-validated (resolveActiveOrg) to be one they belong to, so a user can't plant
- * a lake into an org they're not a member of (same rule as createDataLake). Owner/admin only.
+ * Set a lake's visibility across the tri-state private | organization | public. Org promotion
+ * targets `actor.organizationId` - the caller's active-switcher org, which the route already
+ * authorization-validated (resolveActiveOrg) to be one they belong to, so a user can't plant a
+ * lake into an org they're not a member of (same rule as createDataLake).
  *
- * Keeps the existing `datalakeTag` (an opaque join key - nothing parses it for org), so no
- * file re-tag/migration is needed; both access paths already scope by the organizationId
- * field. Only the lake's `organizationId` changes.
+ * Any promotion that EXPOSES the lake beyond the owner (org OR public) is owner-only: a platform
+ * admin must not share/expose someone else's lake on their behalf. Demotion to private stays
+ * owner/admin (it only removes exposure). Publishing is refused for a gated lake - a gate
+ * (PHI/entitlement boundary) must never be exposed app-wide; gated cross-org sharing already
+ * exists via `requiredEntitlement`, so `public` here means truly open/gate-less.
+ *
+ * Keeps the existing `datalakeTag` (an opaque join key - nothing parses it for org), so no file
+ * re-tag/migration is needed; the access paths scope by the `organizationId`/`isPublic` fields.
+ * Only those two fields change.
  */
 export const setLakeVisibility = async (
   actor: { userId: string; isAdmin: boolean; organizationId?: string },
@@ -33,40 +42,54 @@ export const setLakeVisibility = async (
   if (!actor.isAdmin && existing.createdByUserId !== actor.userId) {
     throw new BadRequestError('Only the creator can change a data lake’s visibility');
   }
-  // Promotion targets the ACTOR's own org, so only the owner may promote - otherwise a
-  // platform admin acting on someone else's lake would pull it into the admin's org. Demotion
-  // to private stays owner/admin (it only removes scope, never moves the lake into an org).
-  if (visibility === 'organization' && existing.createdByUserId !== actor.userId) {
-    throw new BadRequestError('Only the lake’s owner can share it to an organization.');
+  const exposes = visibility === 'organization' || visibility === 'public';
+  // Exposing (org or public) targets the ACTOR's own scope, so only the owner may do it -
+  // otherwise a platform admin acting on someone else's lake would expose it without consent
+  // (and org promotion would pull it into the admin's org). Demotion to private stays owner/admin.
+  if (exposes && existing.createdByUserId !== actor.userId) {
+    throw new BadRequestError('Only the lake’s owner can change how it is shared.');
   }
   if (visibility === 'organization' && !actor.organizationId) {
     throw new BadRequestError('You are not part of an organization, so this lake can’t be shared to one.');
   }
-
-  const targetOrg = visibility === 'organization' ? actor.organizationId : undefined;
-  const currentOrg = existing.organizationId || undefined;
-  if (currentOrg === targetOrg) {
-    return existing; // already in the requested visibility - no-op
-  }
-
-  // Slug uniqueness is scoped by (organizationId, slug). Moving into the target scope would
-  // violate that unique index if a DIFFERENT lake already holds this slug there - surface a
-  // clear error instead of a raw E11000. (Same scope shape as createDataLake's disambiguation.)
-  const scope = targetOrg ? { organizationId: targetOrg } : { organizationId: { $in: [null, ''] } };
-  const clashes = await db.dataLakes.find({ ...scope, slug: existing.slug });
-  if (clashes.some(l => l.id !== existing.id)) {
+  // PHI/access-gate guardrail: a gated lake must not be exposed app-wide. Refuse to publish it -
+  // gated cross-org sharing is the `requiredEntitlement` path, not `public`.
+  if (visibility === 'public' && (existing.requiredUserTag || existing.requiredEntitlement)) {
     throw new BadRequestError(
-      `A data lake with the slug “${existing.slug}” already exists in the target scope — rename one first.`
+      'A data lake with an access tag or required entitlement can’t be made public. Remove the gate first, or share it through the entitlement instead.'
     );
   }
 
-  // null (not undefined) clears the field: Mongoose $set skips undefined but writes null, and
-  // the access queries treat null/'' as org-less. Cast: organizationId is typed optional-string.
+  const targetIsPublic = visibility === 'public';
+  const targetOrg = visibility === 'organization' ? actor.organizationId : undefined;
+  const currentIsPublic = !!existing.isPublic;
+  const currentOrg = existing.organizationId || undefined;
+  if (currentIsPublic === targetIsPublic && currentOrg === targetOrg) {
+    return existing; // already in the requested visibility - no-op
+  }
+
+  // Slug uniqueness is scoped by (organizationId, slug). Only a scope MOVE (org change) can
+  // introduce a collision; flipping isPublic within the same org scope cannot. Guard the move
+  // and surface a clear error instead of a raw E11000. (Same scope shape as createDataLake.)
+  if (currentOrg !== targetOrg) {
+    const scope = targetOrg ? { organizationId: targetOrg } : { organizationId: { $in: [null, ''] } };
+    const clashes = await db.dataLakes.find({ ...scope, slug: existing.slug });
+    if (clashes.some(l => l.id !== existing.id)) {
+      throw new BadRequestError(
+        `A data lake with the slug “${existing.slug}” already exists in the target scope — rename one first.`
+      );
+    }
+  }
+
+  // null (not undefined) clears organizationId: Mongoose $set skips undefined but writes null,
+  // and the access queries treat null/'' as org-less. isPublic is always set explicitly (false
+  // on demotion clears a prior publish). Cast: organizationId is typed optional-string.
   let updated: IDataLakeDocument | null;
   try {
     updated = await db.dataLakes.update({
       id: dataLakeId,
       organizationId: targetOrg ?? null,
+      isPublic: targetIsPublic,
     } as Partial<IDataLakeDocument>);
   } catch (err) {
     // A concurrent create/rename can win the (organizationId, slug) unique index between the

@@ -16,6 +16,7 @@ vi.mock('@bike4mind/observability', () => ({
 
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockAssertOwnerHasCredits = vi.hoisted(() => vi.fn());
+const mockAssertKeySpendWithinCap = vi.hoisted(() => vi.fn());
 // Sentinel tool materializer: returns one stub tool per requested name so tests can
 // assert exactly WHICH names the route asked to build (the resolver's output).
 const mockBuildSharedTools = vi.hoisted(() =>
@@ -26,12 +27,34 @@ const mockBuildSharedTools = vi.hoisted(() =>
     }))
   )
 );
-vi.mock('@bike4mind/services', () => ({
-  executeCompletion: mockExecuteCompletion,
-  assertOwnerHasCredits: mockAssertOwnerHasCredits,
-  buildSharedTools: mockBuildSharedTools,
-  apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
-}));
+// Stand-in for the real class (the whole services module is mocked): same
+// `.code` carrier the services-side resolver reads.
+const MockInsufficientCreditsError = vi.hoisted(
+  () =>
+    class MockInsufficientCreditsError extends Error {
+      constructor(
+        message: string,
+        readonly code?: string
+      ) {
+        super(message);
+      }
+    }
+);
+vi.mock('@bike4mind/services', async () => {
+  // Mirror the real resolveQuestErrorCode against the stand-in class, delegating
+  // tagged 422s to the REAL getQuestErrorCode so classification stays end-to-end.
+  const { getQuestErrorCode } = await vi.importActual<typeof import('@bike4mind/common')>('@bike4mind/common');
+  return {
+    executeCompletion: mockExecuteCompletion,
+    assertOwnerHasCredits: mockAssertOwnerHasCredits,
+    assertKeySpendWithinCap: mockAssertKeySpendWithinCap,
+    InsufficientCreditsError: MockInsufficientCreditsError,
+    resolveQuestErrorCode: (error: unknown) =>
+      error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
+    buildSharedTools: mockBuildSharedTools,
+    apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
+  };
+});
 
 vi.mock('@bike4mind/llm-adapters', () => ({
   getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
@@ -47,6 +70,7 @@ const mockAgentFindById = vi.hoisted(() => vi.fn());
 const mockOrgFindById = vi.hoisted(() => vi.fn());
 const mockProjectFindById = vi.hoisted(() => vi.fn());
 const mockUserFindById = vi.hoisted(() => vi.fn());
+const mockUserApiKeyRepository = vi.hoisted(() => ({ incrementSpend: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
   mongoose: { connection: { readyState: 1 } },
@@ -57,6 +81,7 @@ vi.mock('@bike4mind/database', () => ({
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
   agentRepository: { findById: mockAgentFindById },
+  userApiKeyRepository: mockUserApiKeyRepository,
   projectRepository: { findById: mockProjectFindById },
   fabFileRepository: {},
   fabFileChunkRepository: {},
@@ -85,6 +110,7 @@ vi.mock('./embedAgentHydration', () => ({ hydrateEmbedAgent: mockHydrate }));
 vi.mock('@server/utils/config', () => ({ Config: { MONGODB_URI: 'mongodb://x/%STAGE%', STAGE: 'test' } }));
 
 import { registerEmbedRoutes } from './embedRoute';
+import { spendCapExceededError } from '@bike4mind/common';
 
 const VALID_INFO = {
   keyId: 'key-1',
@@ -118,6 +144,7 @@ beforeEach(() => {
   mockAgentFindById.mockResolvedValue({ id: 'agent-1', organizationId: 'org-1', deletedAt: undefined });
   mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100 });
   mockAssertOwnerHasCredits.mockReturnValue(undefined);
+  mockAssertKeySpendWithinCap.mockReturnValue(undefined);
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
   mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
@@ -171,6 +198,14 @@ describe('POST /api/embed/chat', () => {
 
     // No agent internals leak into the stream.
     expect(text).not.toContain('AGENT PERSONA PROMPT');
+  });
+
+  it('wires the UserApiKey repo into executeCompletion for per-key spend metering', async () => {
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const params = mockExecuteCompletion.mock.calls[0][0];
+    expect(params.db.userApiKeys).toBe(mockUserApiKeyRepository);
+    expect(params.apiKeyInfo).toEqual({ keyId: 'key-1', keyName: 'embed' });
   });
 
   it('rejects an invalid/missing embed key with 401', async () => {
@@ -290,6 +325,37 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
+  it('passes the key spend snapshot from the credential to the spend-cap gate', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, spendCap: 500, currentSpend: 120 });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    expect(mockAssertKeySpendWithinCap).toHaveBeenCalledWith({ spendCap: 500, currentSpend: 120 });
+  });
+
+  it('returns 422 spend_cap_exceeded as pre-flight JSON (not an SSE frame) when the key is at its cap', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, spendCap: 500, currentSpend: 500 });
+    mockAssertKeySpendWithinCap.mockImplementation(() => {
+      throw spendCapExceededError('This embed key has reached its spend cap');
+    });
+    const res = await post(CHAT);
+    expect(res.status).toBe(422);
+    // Rejected before flushHeaders: a JSON envelope with the classifier, never a stream.
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect(await res.json()).toEqual({
+      error: 'spend_cap_exceeded',
+      error_description: 'This embed key has reached its spend cap',
+      code: 'spend_cap_exceeded',
+    });
+    expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+
+  it('does not gate a key with no cap configured', async () => {
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    // VALID_INFO carries no spendCap; the gate still runs but with undefined cap.
+    expect(mockAssertKeySpendWithinCap).toHaveBeenCalledWith({ spendCap: undefined, currentSpend: undefined });
+  });
+
   it('returns 429 when the per-key rate limit is exceeded', async () => {
     mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: false, retryAfter: 30, error: 'too many' });
     const res = await post(CHAT);
@@ -400,6 +466,32 @@ describe('POST /api/embed/chat', () => {
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).toContain('"type":"error"');
+    // Unclassified failure: the frame must carry no code key at all.
+    expect(text).not.toContain('"code"');
+  });
+
+  it('classifies a mid-stream credit-reservation failure on the SSE frame (.code carrier)', async () => {
+    mockExecuteCompletion.mockRejectedValue(
+      new MockInsufficientCreditsError('org out of credits', 'insufficient_credits')
+    );
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"error"');
+    expect(text).toContain('"code":"insufficient_credits"');
+  });
+
+  it('classifies a mid-stream tagged 422 on the SSE frame (additionalInfo carrier)', async () => {
+    // Wiring test, not current prod behavior: today the spend cap only rejects
+    // pre-flight (enforcement is deliberately passive), so executeCompletion never
+    // throws spendCapExceededError itself. This pins that IF a tagged 422 ever
+    // surfaces mid-stream (e.g. a future in-loop cap check), it arrives classified.
+    mockExecuteCompletion.mockRejectedValue(spendCapExceededError('key hit its cap mid-run'));
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+    const text = await res.text();
+    expect(text).toContain('"type":"error"');
+    expect(text).toContain('"code":"spend_cap_exceeded"');
   });
 
   it('returns a 500 JSON fallback when a pre-stream step throws (no gate handled it)', async () => {

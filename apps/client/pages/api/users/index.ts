@@ -74,6 +74,18 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     const { page, limit, search, publicView, sortField, sortOrder, orgSearch, tags, downloadAll, projectId } =
       querySchema.parse(qs.parse(req.query));
 
+    // publicView is the limited directory search used by invite/member pickers; it
+    // bypasses CASL by design (regular users have no read grant on User). Keep it
+    // usable for targeted search, but not as a bulk-export or full-directory dump for
+    // non-admins: downloadAll (unbounded) is admin-only, and the publicView page size
+    // is capped. (Return 403 directly - the surrounding try/catch turns throws into 500.)
+    const isAdmin = !!req.user?.isAdmin;
+    if (downloadAll && !isAdmin) {
+      return res.status(403).json({ message: 'Bulk user export is admin-only' });
+    }
+    const PUBLIC_VIEW_MAX_LIMIT = 50;
+    const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let query: mongoose.FilterQuery<any> = publicView
       ? User.find().getQuery()
@@ -239,7 +251,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
       results = await executeFacetCompatible(User, convertedBasePipeline, {
         totalCount: [{ $count: 'count' }],
-        paginatedResults: [{ $skip: (page - 1) * limit }, { $limit: limit }],
+        paginatedResults: [{ $skip: (page - 1) * effectiveLimit }, { $limit: effectiveLimit }],
       });
 
       const total = results[0].totalCount[0]?.count || 0;
@@ -250,7 +262,7 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
       return res.json({
         users: users.map((user: IUserObject) => User.hydrate(user)),
         currentPage: page,
-        totalPages: Math.ceil(total / limit),
+        totalPages: Math.ceil(total / effectiveLimit),
         totalUsers: total,
       });
     } else {

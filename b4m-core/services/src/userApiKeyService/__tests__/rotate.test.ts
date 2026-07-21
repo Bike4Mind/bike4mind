@@ -66,6 +66,32 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
     expect(result.keyId).toBe('key-1');
   });
 
+  it('rotation preserves spendCap and accumulated spend (rotating the secret must not reset the meter)', async () => {
+    const { repo, getStored } = makeSyncedRepo();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const adapters = { db: { userApiKeys: repo as any } };
+
+    await createUserApiKey(
+      'sys-1',
+      {
+        name: 'embed-key',
+        scopes: [ApiKeyScope.EMBED_CHAT],
+        metadata: { createdFrom: 'dashboard' as const },
+        agentId: 'agent-1',
+        spendCap: 5000,
+      },
+      { ...adapters, systemUserId: 'sys-1' }
+    );
+
+    // Simulate spend accumulated before the rotation
+    getStored()!.usage.totalSpendCredits = 4200;
+
+    await rotateUserApiKey('sys-1', { keyId: 'key-1' }, adapters);
+
+    expect(getStored()!.spendCap).toBe(5000);
+    expect(getStored()!.usage.totalSpendCredits).toBe(4200);
+  });
+
   it('original key is invalid after rotation', async () => {
     const { repo } = makeSyncedRepo();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

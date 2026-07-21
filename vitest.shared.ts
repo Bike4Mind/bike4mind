@@ -41,4 +41,20 @@ if (raw && maxWorkers === undefined) {
   );
 }
 
-export const sharedTest = maxWorkers !== undefined ? { maxWorkers, minWorkers: 1 } : {};
+// vitest's defaults (5s per test, 10s per hook) suit pure unit tests but are too tight for
+// the I/O-bound suites - real MongoMemoryServer via createMongoServer, solver benchmarks -
+// once CI shards the matrix and VITEST_MAX_WORKERS packs several packages onto the same
+// cores. Under that contention a trivial DB seed can stall past 5s purely on CPU starvation,
+// not because anything is wrong, which surfaces as a spurious timeout failure (a flaky red).
+// Raise the floor so contention shows up as slowness rather than failure; a genuinely hung
+// test still fails, just after a longer wait. Because every package spreads `sharedTest`
+// FIRST, any package needing a different value (e.g. `@bike4mind/database`'s hookTimeout:
+// 60000 for the one-time Mongo binary download) overrides it by setting the key afterward.
+const TEST_TIMEOUT_MS = 15_000;
+const HOOK_TIMEOUT_MS = 30_000;
+
+export const sharedTest = {
+  testTimeout: TEST_TIMEOUT_MS,
+  hookTimeout: HOOK_TIMEOUT_MS,
+  ...(maxWorkers !== undefined ? { maxWorkers, minWorkers: 1 } : {}),
+};

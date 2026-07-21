@@ -55,7 +55,7 @@ export type SessionProps = {
  * Single source of truth: the streamed-action Zod enum in `schemas/actions.ts`
  * derives its values from this tuple, so the two can never drift.
  */
-export const QUEST_ERROR_CODES = ['insufficient_credits'] as const;
+export const QUEST_ERROR_CODES = ['insufficient_credits', 'spend_cap_exceeded'] as const;
 export type QuestErrorCode = (typeof QUEST_ERROR_CODES)[number];
 
 export interface IChatHistoryItem {

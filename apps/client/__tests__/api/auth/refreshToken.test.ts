@@ -1,11 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// Mock baseApi to unwrap the handler function (idiom from rotate-token.test.ts)
-vi.mock('@server/middlewares/baseApi', () => ({
-  baseApi: () => ({
-    post: (fn: any) => fn,
-  }),
+// Mock baseApi to unwrap the handler function (idiom from rotate-token.test.ts).
+// The builder must be chainable: the handler now does .use(...).use(...).post(fn).
+vi.mock('@server/middlewares/baseApi', () => {
+  const builder: any = { use: () => builder, post: (fn: any) => fn };
+  return { baseApi: () => builder };
+});
+
+// Pass-through the auth middlewares so importing the handler doesn't pull their real
+// transitive chains (rateLimit -> @bike4mind/utils -> Bedrock -> @bike4mind/common), which
+// would break the minimal @bike4mind/common mock below. The baseApi mock ignores .use()
+// args anyway, so these only need to exist to satisfy the import.
+vi.mock('@server/middlewares/checkBlockedIP', () => ({
+  checkBlockedIP: () => (_req: any, _res: any, next: any) => next(),
+}));
+vi.mock('@server/middlewares/rateLimit', () => ({
+  rateLimit: () => (_req: any, _res: any, next: any) => next(),
 }));
 
 // Real kill-switch comparison so the test exercises the actual enforcement,

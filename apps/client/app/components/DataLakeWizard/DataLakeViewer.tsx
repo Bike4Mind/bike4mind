@@ -59,6 +59,12 @@ interface DataLakeViewerProps {
   dataLakeId: string;
   dataLakeName: string;
   tagPrefix: string;
+  /**
+   * Whether the caller may manage this lake (admin or creator). Gates the per-file
+   * management actions (Re-process, Remove) - the lake list surfaces other users'
+   * read-only public lakes. Absent -> read-only (fail-safe).
+   */
+  canManage?: boolean;
   onClose?: () => void;
   onAskAbout?: (prompt: string) => void;
 }
@@ -67,6 +73,7 @@ export default function DataLakeViewer({
   dataLakeId,
   dataLakeName,
   tagPrefix,
+  canManage,
   onClose,
   onAskAbout,
 }: DataLakeViewerProps) {
@@ -142,6 +149,7 @@ export default function DataLakeViewer({
           file={selectedFile}
           onAskAbout={onAskAbout}
           dataLakeId={dataLakeId}
+          canManage={canManage}
           onRemoved={() => setSelectedFile(null)}
         />
       </Box>
@@ -371,11 +379,13 @@ function ArticlePanel({
   file,
   onAskAbout,
   dataLakeId,
+  canManage,
   onRemoved,
 }: {
   file: IFabFileDocument | null;
   onAskAbout?: (prompt: string) => void;
   dataLakeId: string;
+  canManage?: boolean;
   onRemoved?: () => void;
 }) {
   const { data: content, isLoading } = useGetFabFileContent(file);
@@ -422,34 +432,40 @@ function ArticlePanel({
           <Typography level="h4" sx={{ flex: 1, minWidth: 0 }}>
             {title}
           </Typography>
-          <Tooltip title="Re-run chunking + vectorization" size="sm">
-            <Button
-              size="sm"
-              variant="outlined"
-              color="neutral"
-              data-testid={`datalake-reprocess-btn-${file.id}`}
-              startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
-              loading={reprocess.isPending}
-              onClick={() => reprocess.mutate(file.id)}
-              sx={{ flexShrink: 0, fontSize: '13px' }}
-            >
-              Re-process
-            </Button>
-          </Tooltip>
-          <Tooltip title="Remove this file from the data lake" size="sm">
-            <Button
-              size="sm"
-              variant="outlined"
-              color="danger"
-              data-testid={`datalake-removefile-btn-${file.id}`}
-              startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
-              loading={removeFile.isPending}
-              onClick={() => setConfirmRemove(true)}
-              sx={{ flexShrink: 0, fontSize: '13px' }}
-            >
-              Remove
-            </Button>
-          </Tooltip>
+          {/* Re-process and Remove mutate lake content, so they are owner-or-admin only
+              (the backend enforces the same). Hidden when viewing a read-only lake. */}
+          {canManage && (
+            <>
+              <Tooltip title="Re-run chunking + vectorization" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="neutral"
+                  data-testid={`datalake-reprocess-btn-${file.id}`}
+                  startDecorator={<RefreshIcon sx={{ fontSize: 16 }} />}
+                  loading={reprocess.isPending}
+                  onClick={() => reprocess.mutate(file.id)}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Re-process
+                </Button>
+              </Tooltip>
+              <Tooltip title="Remove this file from the data lake" size="sm">
+                <Button
+                  size="sm"
+                  variant="outlined"
+                  color="danger"
+                  data-testid={`datalake-removefile-btn-${file.id}`}
+                  startDecorator={<DeleteOutlineIcon sx={{ fontSize: 16 }} />}
+                  loading={removeFile.isPending}
+                  onClick={() => setConfirmRemove(true)}
+                  sx={{ flexShrink: 0, fontSize: '13px' }}
+                >
+                  Remove
+                </Button>
+              </Tooltip>
+            </>
+          )}
         </Box>
         {/* Surfaced from the chunk-pipeline hardening: files that extracted no text are flagged. */}
         {file.notes && (

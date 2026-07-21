@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createUserApiKey } from '../create';
+import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS } from '../create';
 import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
@@ -214,6 +214,53 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     const tooMany = Array.from({ length: 6 }, (_, i) => `https://site${i}.example.com`);
     await expect(createUserApiKey('user1', { ...embedParams, allowedOrigins: tooMany }, adapters())).rejects.toThrow();
     expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('persists and echoes spendCap on an embed key', async () => {
+    const result = await createUserApiKey('user1', { ...embedParams, spendCap: 5000 }, adapters());
+    expect(result.spendCap).toBe(5000);
+    expect(repo.create).toHaveBeenCalledWith(expect.objectContaining({ spendCap: 5000 }));
+  });
+
+  it('allows an embed key with no spendCap (uncapped)', async () => {
+    const result = await createUserApiKey('user1', embedParams, adapters());
+    expect(result.spendCap).toBeUndefined();
+  });
+
+  it('rejects spendCap without the embed:chat scope', async () => {
+    await expect(
+      createUserApiKey(
+        'user1',
+        {
+          name: 'x',
+          scopes: [ApiKeyScope.AI_CHAT],
+          metadata: { createdFrom: 'dashboard' as const },
+          spendCap: 5000,
+        },
+        adapters()
+      )
+    ).rejects.toThrow(/require the embed:chat scope/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['zero', 0],
+    ['negative', -100],
+    ['fractional', 10.5],
+    ['above the ceiling', EMBED_SPEND_CAP_MAX_CREDITS + 1],
+    ['a non-number', '100' as unknown as number],
+  ])('rejects a spendCap that is %s', async (_label, spendCap) => {
+    await expect(createUserApiKey('user1', { ...embedParams, spendCap }, adapters())).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a spendCap at exactly the ceiling', async () => {
+    const result = await createUserApiKey(
+      'user1',
+      { ...embedParams, spendCap: EMBED_SPEND_CAP_MAX_CREDITS },
+      adapters()
+    );
+    expect(result.spendCap).toBe(EMBED_SPEND_CAP_MAX_CREDITS);
   });
 
   it('allows an embed:chat key with no origins, and with an explicit empty array', async () => {

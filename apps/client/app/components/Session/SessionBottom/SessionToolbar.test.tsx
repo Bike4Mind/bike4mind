@@ -9,17 +9,15 @@ import { getThemeConfig } from '@client/app/utils/themes';
  *
  * Agent Mode is admin-gated. A prior P1 fixed SessionToolbar bypassing the admin
  * gate by reading `experimentalFeatures.agentMode` directly; it now resolves the
- * Layer-1 gate via `useFeatureEnabled('agentMode')` (SessionToolbar.tsx:148-149),
- * and both gate wrappers - the bolt (AgentModeToggleButton) and the chip - mount
- * their children only when that gate is true (SessionToolbar.tsx:339, :387).
+ * Layer-1 gate via `useFeatureEnabled('agentMode')` (SessionToolbar.tsx:147-148),
+ * and the toggle wrapper (AgentModeToggleButton) mounts only when that gate is
+ * true (SessionToolbar.tsx:338).
  *
- * Scope: both children are stubbed to always-rendering divs, so these assertions
- * prove the gate *wrapper* condition, not that a user sees a chip. The real
- * AgentModeChip returns null unless agent mode is actively toggled on, so a gated
- * admin sees the bolt and no chip until they flip it.
+ * Scope: the toggle is stubbed to an always-rendering div, so these assertions
+ * prove the gate *wrapper* condition, not the toggle's own on/off styling.
  *
- * This test locks the consumer behavior: the gated children mount when the gate is
- * on and are absent when the admin kill switch is off. It fails if the render
+ * This test locks the consumer behavior: the gated toggle mounts when the gate is
+ * on and is absent when the admin kill switch is off. It fails if the render
  * condition is swapped back to a raw `experimentalFeatures.agentMode` read, because
  * the mock only controls the resolved `isFeatureEnabled('agentMode')` value.
  */
@@ -53,13 +51,10 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 }));
 
 // Stub every child SessionToolbar imports so only its own gate markup renders and
-// no child pulls in its own context/`@/`-alias chain. The two agent-mode children
-// keep their testids so the gate is observable without mounting LLMContext.
+// no child pulls in its own context/`@/`-alias chain. The agent-mode toggle keeps
+// its testid so the gate is observable without mounting LLMContext.
 vi.mock('@client/app/components/Session/SessionBottom/AgentModeToggleButton', () => ({
   default: () => <div data-testid="agent-mode-toggle-btn" />,
-}));
-vi.mock('@client/app/components/Session/SessionBottom/AgentModeChip', () => ({
-  default: () => <div data-testid="agent-mode-chip" />,
 }));
 vi.mock('@client/app/components/Session/AttachFileButton', () => ({ default: () => null }));
 vi.mock('@client/app/components/Session/AISettings/FilesSection', () => ({ default: () => null }));
@@ -141,13 +136,11 @@ describe('SessionToolbar - Agent Mode admin kill switch', () => {
     mocks.agentModeFlag.value = true; // admin gate ON
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     expect(screen.getByTestId('agent-mode-toggle-btn')).toBeInTheDocument();
-    expect(screen.getByTestId('agent-mode-chip')).toBeInTheDocument();
   });
 
   it('does NOT render the Agent-mode bolt when the admin kill switch is off', () => {
     mocks.agentModeFlag.value = false; // admin kill switch OFF
     render(<SessionToolbar {...baseProps} />, { wrapper: Wrapper });
     expect(screen.queryByTestId('agent-mode-toggle-btn')).toBeNull();
-    expect(screen.queryByTestId('agent-mode-chip')).toBeNull();
   });
 });

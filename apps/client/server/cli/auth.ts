@@ -36,6 +36,10 @@ export interface ApiKeyInfo {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
+  spendCap?: number;
+  /** Cumulative settled spend in credits at validation time; embed keys only. */
+  currentSpend?: number;
 }
 
 /**
@@ -109,6 +113,8 @@ function toApiKeyInfo(v: {
   organizationId?: string;
   agentId?: string;
   allowedOrigins?: string[];
+  spendCap?: number;
+  currentSpend?: number;
 }): ApiKeyInfo {
   return {
     keyId: v.keyId!,
@@ -119,6 +125,8 @@ function toApiKeyInfo(v: {
     organizationId: v.organizationId,
     agentId: v.agentId,
     allowedOrigins: v.allowedOrigins,
+    spendCap: v.spendCap,
+    currentSpend: v.currentSpend,
   };
 }
 

@@ -20,7 +20,6 @@ import FilesSection from '@client/app/components/Session/AISettings/FilesSection
 import AdvancedAISettings from '@client/app/components/Session/AdvancedAISettings';
 import RephraseButton from '@client/app/components/Session/RephraseButton';
 import AgentModeToggleButton from '@client/app/components/Session/SessionBottom/AgentModeToggleButton';
-import AgentModeChip from '@client/app/components/Session/SessionBottom/AgentModeChip';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import VoiceRecordButton, { VoiceRecordButtonRef } from '@client/app/components/common/VoiceRecordButton';
 import VoiceInlineButton, {
@@ -143,8 +142,8 @@ export function SessionToolbar(props: SessionToolbarProps) {
   // Layer-1 admin gate via `useFeatureEnabled('agentMode')` - honors the
   // EnableAgentMode / EnableAgentModeDefault admin settings, not just the raw
   // per-user pref, so the org-wide kill switch and admin default both reach the
-  // composer. When false, the toggle button and indicator chip render nothing -
-  // non-gated users see zero change to the composer surface.
+  // composer. When false, the toggle button renders nothing - non-gated users
+  // see zero change to the composer surface.
   const { isFeatureEnabled } = useFeatureEnabled();
   const agentModeFeatureEnabled = isFeatureEnabled('agentMode');
 
@@ -381,10 +380,6 @@ export function SessionToolbar(props: SessionToolbarProps) {
               {(!chatInputValue || chatInputValue.trim() === '') && (
                 <ConversationalVoiceButton currentSessionId={currentSessionId} reasoningModelId={model} />
               )}
-              {/* Agent-mode chip - sits next to send so the user can verify
-                  the routing mode at glance before submitting. Layer-1 gated
-                  to match the toggle visibility. Renders null when off. */}
-              {agentModeFeatureEnabled && <AgentModeChip />}
               {shouldShowStopButton ? (
                 <Tooltip title="Stop Generation">
                   <Button

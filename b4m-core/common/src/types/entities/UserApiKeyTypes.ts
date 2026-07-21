@@ -39,6 +39,12 @@ export interface IUserApiKeyUsage {
   lastRequest?: Date;
   requestsToday: number;
   requestsThisMinute: number;
+  /**
+   * Cumulative settled spend in credits, accumulated atomically per completion -
+   * the counter that `spendCap` (IUserApiKey) is enforced against. Written only
+   * via IUserApiKeyRepository.incrementSpend, never via updateUsage.
+   */
+  totalSpendCredits?: number;
 }
 
 export interface IUserApiKeyBaseline {
@@ -125,6 +131,12 @@ export interface IUserApiKey {
   allowedOrigins?: string[];
   /** Optional white-label config for an embed key (see {@link IEmbedBranding}). */
   branding?: IEmbedBranding;
+  /**
+   * Lifetime spend ceiling for an embed key, in whole credits. Absent = uncapped.
+   * A present 0 is a real cap (blocks all spend), so enforcement guards with
+   * `spendCap !== undefined`, never a truthy check.
+   */
+  spendCap?: number;
 }
 
 /**
@@ -140,6 +152,12 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   findByUserId: (userId: string) => Promise<IUserApiKeyDocument[]>;
   findByUserIdAndId: (userId: string, id: string) => Promise<IUserApiKeyDocument | null>;
   updateUsage: (id: string, usage: Partial<IUserApiKeyUsage>) => Promise<void>;
+  /** Atomically adds settled credits to `usage.totalSpendCredits`. No-op for non-finite or <= 0 amounts. */
+  incrementSpend: (id: string, credits: number) => Promise<void>;
+  /** Sets the spend ceiling; `null` clears it ($unset), so the key becomes uncapped. */
+  setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
+  /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
+  resetSpend: (id: string) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;

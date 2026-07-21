@@ -27,10 +27,7 @@ describe('buildDlqAlarmSpecs', () => {
   });
 
   it('builds the exact message-age alarm shape deployed from infra/dlqAlarms.ts', () => {
-    const [, age] = buildDlqAlarmSpecs(
-      { label: 'sre-job', displayName: 'SRE Job', application: 'SreAgent' },
-      NAMING
-    );
+    const [, age] = buildDlqAlarmSpecs({ label: 'sre-job', displayName: 'SRE Job', application: 'SreAgent' }, NAMING);
     expect(age.kind).toBe('age');
     expect(age.resourceName).toBe('dlq-sre-job-age');
     expect(age.args).toEqual({
@@ -68,11 +65,11 @@ describe('buildDlqAlarmSpecs', () => {
   });
 
   it('accepts custom defaults', () => {
-    const [messages, age] = buildDlqAlarmSpecs(
-      { label: 'q', displayName: 'Q', application: 'App' },
-      NAMING,
-      { ...DLQ_ALARM_DEFAULTS, messagePeriod: 120, agePeriod: 600 }
-    );
+    const [messages, age] = buildDlqAlarmSpecs({ label: 'q', displayName: 'Q', application: 'App' }, NAMING, {
+      ...DLQ_ALARM_DEFAULTS,
+      messagePeriod: 120,
+      agePeriod: 600,
+    });
     expect(messages.args.period).toBe(120);
     expect(age.args.period).toBe(600);
   });

@@ -37,7 +37,7 @@ function mocks(user: unknown, id: string) {
 describe('GET /api/users/[id]/collections - ownership gate', () => {
   beforeEach(() => searchUserCollection.mockClear());
 
-  it('rejects reading another user\'s collections without calling the service', async () => {
+  it("rejects reading another user's collections without calling the service", async () => {
     const { req, res } = mocks({ id: 'me', isAdmin: false }, 'someone-else');
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/not authorized/i);
     expect(searchUserCollection).not.toHaveBeenCalled();
@@ -50,7 +50,7 @@ describe('GET /api/users/[id]/collections - ownership gate', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('allows an admin to read any user\'s collections', async () => {
+  it("allows an admin to read any user's collections", async () => {
     const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'someone-else');
     await mockRefs.getHandler!(req, res);
     expect(searchUserCollection).toHaveBeenCalledTimes(1);

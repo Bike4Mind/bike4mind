@@ -1,8 +1,9 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomUUID } from 'node:crypto';
-import { Quest, PublishedArtifact } from '@bike4mind/database';
+import { Quest, PublishedArtifact, Session } from '@bike4mind/database';
 import { PublishReplyRequestSchema, type PublishResult } from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
+import { parseArtifactsWithFallback } from '@client/app/utils/artifactParser';
 
 /**
  * POST /api/publish/reply - publish a single assistant reply as a public viewer
@@ -68,14 +69,13 @@ const handler = baseApi().post(async (req, res) => {
   const body = parsed.data;
   const userId = String(req.user.id);
 
-  // Load the message (a Quest) and verify ownership. The streamed answer lives in
-  // `replies[]` (authoritative), falling back to the flat `reply`, then to text
-  // blocks in `structuredReplies` - mirror the UI's extractReplies so a published
-  // reply matches what the user sees on screen.
+  // Load the message (a Quest). The streamed answer lives in `replies[]`
+  // (authoritative), falling back to the flat `reply`, then to text blocks in
+  // `structuredReplies` - mirror the UI's extractReplies so a published reply
+  // matches what the user sees on screen.
   const quest = await Quest.findOne({ _id: body.messageId, sessionId: body.sessionId })
-    .select('userId reply replies structuredReplies')
+    .select('reply replies structuredReplies')
     .lean<{
-      userId: string;
       reply?: string | null;
       replies?: string[] | null;
       structuredReplies?: Array<{ content?: unknown }> | null;
@@ -83,7 +83,15 @@ const handler = baseApi().post(async (req, res) => {
   if (!quest) {
     return res.status(404).json({ error: 'Reply not found' });
   }
-  if (quest.userId !== userId && !req.user.isAdmin) {
+
+  // Ownership lives on the Session, not the Quest: ChatHistoryItemSchema has no
+  // top-level userId, so read the owner from the parent session (userId is
+  // required there). Reading it off the Quest silently 403s every non-admin.
+  const session = await Session.findById(body.sessionId).select('userId').lean<{ userId: string } | null>();
+  if (!session) {
+    return res.status(404).json({ error: 'Reply not found' });
+  }
+  if (String(session.userId) !== userId && !req.user.isAdmin) {
     return res.status(403).json({ error: 'You can only publish your own replies' });
   }
   const markdown = extractReplyMarkdown(quest);
@@ -180,18 +188,27 @@ const handler = baseApi().post(async (req, res) => {
   return res.status(200).json(response);
 });
 
-/** First non-empty markdown line (stripped of leading #/*), capped, as a title. */
-function deriveTitle(markdown: string): string {
-  const firstLine =
-    markdown
-      .split('\n')
-      .map(l => l.trim())
-      .find(Boolean) ?? 'Shared reply';
-  const cleaned = firstLine
-    .replace(/^#+\s*/, '')
-    .replace(/^[*_>-]+\s*/, '')
-    .slice(0, 120);
-  return cleaned || 'Shared reply';
+/**
+ * First non-empty markdown line (stripped of leading #/*), capped, as a title. Embedded
+ * `<artifact>` blocks are removed first so a reply that LEADS with an artifact doesn't take
+ * the raw `<artifact ...>` wrapper tag as its title (#708); if the reply is nothing but an
+ * artifact, fall back to the artifact's own title attribute.
+ */
+export function deriveTitle(markdown: string): string {
+  const { artifacts, cleanedContent } = parseArtifactsWithFallback(markdown);
+  const firstLine = cleanedContent
+    .split('\n')
+    .map(l => l.trim())
+    .find(Boolean);
+  if (firstLine) {
+    const cleaned = firstLine
+      .replace(/^#+\s*/, '')
+      .replace(/^[*_>-]+\s*/, '')
+      .slice(0, 120);
+    if (cleaned) return cleaned;
+  }
+  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return named?.title?.slice(0, 120) || 'Shared reply';
 }
 
 export const config = {

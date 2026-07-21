@@ -8,7 +8,9 @@ import { restoreDeletedDataLake } from './restoreDeletedDataLake';
 import { cleanupDeletedDataLake } from './cleanupDeletedDataLake';
 import { removeFileFromDataLake } from './removeFileFromDataLake';
 import { setLakeVisibility } from './setLakeVisibility';
+import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
+import { listDataLakes } from './listDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -65,6 +67,26 @@ describe('canAccessLake — the single access gate rule', () => {
     // collection paths enforce, so a guessed-slug private lake can't be reached.
     expect(canAccessLake(priv, ctx())).toBe(false);
     expect(canAccessLake(priv, ctx({ organizationId: 'orgA', userTags: ['anything'] }))).toBe(false);
+  });
+
+  it('Public: an isPublic lake is readable by any caller, cross-org, bypassing Private-by-default', () => {
+    // isPublic with NO org and NO gate would be Private-by-default; the public arm must run
+    // first so it is readable by everyone, in any org, regardless of tags/keys.
+    const pub = lake({ isPublic: true, createdByUserId: 'alice' });
+    expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
+    expect(canAccessLake(pub, ctx({ userId: 'stranger', organizationId: 'orgB' }))).toBe(true);
+  });
+
+  it('Public + a (post-publish) gate still enforces the gate — defense in depth', () => {
+    // Publishing a gated lake is refused by setLakeVisibility, but if a gate is added AFTER
+    // publishing, the read gate must still hold: only a key-holder reads it, and org is bypassed.
+    const pubGated = lake({ isPublic: true, requiredEntitlement: 'product:pro', createdByUserId: 'alice' });
+    expect(canAccessLake(pubGated, ctx({ userId: 'stranger' }))).toBe(false);
+    expect(canAccessLake(pubGated, ctx({ userId: 'stranger', entitlementKeys: ['product:pro'] }))).toBe(true);
+    // Cross-org key-holder still reads it: public bypasses the org prerequisite.
+    expect(
+      canAccessLake(pubGated, ctx({ userId: 'stranger', organizationId: 'orgB', entitlementKeys: ['product:pro'] }))
+    ).toBe(true);
   });
 
   it('an entitlement-gated lake is NOT swept up as private — the private rule keys off field PRESENCE', () => {
@@ -225,6 +247,48 @@ describe('canManageLake — the single write/manage rule (creator or admin)', ()
     expect(canAccessLake(gated, ctx({ userId: 'reader', userTags: ['opti'] }))).toBe(true);
     expect(canManageLake(gated, { userId: 'reader', isAdmin: false })).toBe(false);
   });
+
+  it('denies a stranger on a PUBLIC lake — the read-can-write asymmetry now that public grants read', () => {
+    // A public lake grants READ to any caller (canAccessLake true), but managing it stays
+    // owner/admin only. Pins the asymmetry for the new public surface.
+    const pub = lake({ createdByUserId: 'alice', isPublic: true });
+    expect(canAccessLake(pub, ctx({ userId: 'stranger' }))).toBe(true);
+    expect(canManageLake(pub, { userId: 'stranger', isAdmin: false })).toBe(false);
+  });
+});
+
+describe('listDataLakes - per-lake canManage flag for the UI', () => {
+  it("marks the caller's own lakes manageable and strangers' (public) lakes read-only", async () => {
+    const mine = lake({ id: 'mine', slug: 'mine', createdByUserId: 'me' });
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other', isPublic: true });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([mine, theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me' }), { db });
+
+    expect(result.find(l => l.id === 'mine')?.canManage).toBe(true);
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(false);
+  });
+
+  it('marks every DB lake manageable for an admin', async () => {
+    const theirs = lake({ id: 'theirs', slug: 'theirs', createdByUserId: 'other' });
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([theirs]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'admin', isAdmin: true }), { db });
+
+    expect(result.find(l => l.id === 'theirs')?.canManage).toBe(true);
+  });
+
+  it('marks built-in fallback lakes read-only even for their access holders', async () => {
+    // No DB lakes; the Opti-gated fallback surfaces because the caller holds the tag. It has no
+    // backing document (assertLakeWritable refuses it), so it must never be manageable.
+    const db = { dataLakes: { findAccessible: vi.fn().mockResolvedValue([]), find: vi.fn() } };
+
+    const result = await listDataLakes(ctx({ userId: 'me', userTags: ['Opti'] }), { db });
+    const fallback = result.find(l => l.id === 'opti-knowledge');
+
+    expect(fallback).toBeDefined();
+    expect(fallback?.canManage).toBe(false);
+  });
 });
 
 describe('assertLakeWriteAccess — read-then-manage gate for the upload doors', () => {
@@ -250,6 +314,12 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
     ).rejects.toThrow(/creator/i);
   });
 
+  it('manage-denied for a stranger on a PUBLIC lake — read passes the gate, write must not', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), findBySlug: vi.fn() } };
+    await expect(assertLakeWriteAccess('lake1', ctx({ userId: 'stranger' }), { db })).rejects.toThrow(/creator/i);
+  });
+
   it('refuses a fallback lake as read-only even for an admin (no document to write into)', async () => {
     const db = {
       dataLakes: {
@@ -258,6 +328,27 @@ describe('assertLakeWriteAccess — read-then-manage gate for the upload doors',
       },
     };
     await expect(assertLakeWriteAccess('opti-knowledge', ctx({ isAdmin: true }), { db })).rejects.toThrow(/read-only/i);
+  });
+});
+
+describe('updateDataLake — gate-after-publish guardrail', () => {
+  it('refuses adding a required tag or entitlement to a public lake (mirrors setLakeVisibility)', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn();
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { requiredUserTag: 'Opti' }, { db })
+    ).rejects.toThrow(/public/i);
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('allows a metadata-only update (rename) on a public lake', async () => {
+    const l = lake({ createdByUserId: 'owner', isPublic: true });
+    const update = vi.fn().mockImplementation(async (d: Partial<IDataLakeDocument>) => ({ ...l, ...d }));
+    const db = { dataLakes: { findById: vi.fn().mockResolvedValue(l), update } };
+    await expect(
+      updateDataLake({ userId: 'owner', isAdmin: false }, 'lake1', { name: 'Renamed' }, { db })
+    ).resolves.toMatchObject({ name: 'Renamed' });
   });
 });
 
@@ -741,5 +832,66 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
         db,
       } as any)
     ).rejects.toThrow(/already exists/i);
+  });
+
+  it('publishes a private lake: sets isPublic=true and clears org (no slug-collision round-trip)', async () => {
+    const db = makeDb(); // existing lake is org-less, not public
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: undefined }, 'lake1', 'public', {
+      db,
+    } as any);
+    // private -> public keeps the same (org-less) slug scope, so no collision query is needed.
+    expect(db.dataLakes.find).not.toHaveBeenCalled();
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written.isPublic).toBe(true);
+    expect(written.organizationId).toBeNull();
+  });
+
+  it('un-publishes: public -> private writes isPublic=false', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: undefined }, 'lake1', 'private', {
+      db,
+    } as any);
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written.isPublic).toBe(false);
+    expect(written.organizationId).toBeNull();
+  });
+
+  it('promoting to org clears any prior public flag (mutually exclusive tri-state)', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false, organizationId: 'orgA' }, 'lake1', 'organization', {
+      db,
+    } as any);
+    const written = db.dataLakes.update.mock.calls[0][0];
+    expect(written).toMatchObject({ organizationId: 'orgA', isPublic: false });
+  });
+
+  it('refuses to publish a lake gated by a required tag (PHI/access-gate guardrail)', async () => {
+    const db = makeDb({ requiredUserTag: 'Opti' });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/can’t be made public/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses to publish a lake gated by a required entitlement', async () => {
+    const db = makeDb({ requiredEntitlement: 'product:pro' });
+    await expect(
+      setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/can’t be made public/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('blocks a non-owner admin from PUBLISHING (no exposing someone else’s lake app-wide)', async () => {
+    const db = makeDb(); // lake owned by 'owner'
+    await expect(
+      setLakeVisibility({ userId: 'admin', isAdmin: true, organizationId: 'orgZ' }, 'lake1', 'public', { db } as any)
+    ).rejects.toThrow(/owner/i);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op when already public (no update)', async () => {
+    const db = makeDb({ isPublic: true });
+    await setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any);
+    expect(db.dataLakes.update).not.toHaveBeenCalled();
   });
 });
