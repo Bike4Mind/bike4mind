@@ -24,7 +24,7 @@ process.stdin.on('end', async () => {
         channelId: B4M_HEARTH_CHANNEL,
         kind: 'presence',
         human: { text, format: 'text' },
-        machine: { schema: 'hearth.claude-code-hook@1', payload: hook },
+        machine: { schema: 'hearth.claude-code-hook@1', payload: { hook_event_name: eventName, session_id: hook.session_id ?? null } },
         refs: {},
       }),
       // Bounded so a hung request can never stall the session past 3s.
