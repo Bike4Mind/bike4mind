@@ -50,6 +50,7 @@ import {
   UserReasoningEffort,
   isGPTImage2Model,
   isGPTImageModel,
+  isKontextModel as isKontextImageModel,
 } from '@bike4mind/common';
 import { INFINITE_VALUE } from '@client/app/components/FibonacciSlider';
 import { ResearchModeConfiguration, ResearchModeState } from '@client/app/types/ResearchMode';
@@ -1676,7 +1677,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
   const isPopular = getTopUsedModelsFromStats(stats?.popularity ?? {}, 3).includes(modelInfo?.id ?? '');
   const isResearchModeFeatureEnabled = userSettings.experimentalFeatures?.enableResearchMode === true;
 
-  const isKontextModel = model === ImageModels.FLUX_KONTEXT_PRO || model === ImageModels.FLUX_KONTEXT_MAX;
+  const isKontextModel = isKontextImageModel(model);
 
   const { maxContextWindow, maxTokens } = useMemo(() => {
     if (!modelInfoRepo) return { maxContextWindow: 0, maxTokens: 0 };

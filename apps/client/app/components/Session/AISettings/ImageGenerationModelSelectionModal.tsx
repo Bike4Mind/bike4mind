@@ -33,6 +33,7 @@ import {
   OpenAIImageStyle,
   isGPTImageModel,
   isGPTImage2Model,
+  isKontextModel as isKontextImageModel,
 } from '@bike4mind/common';
 import { useModelInfo } from '@client/app/hooks/data/useModelInfo';
 
@@ -252,8 +253,7 @@ const ImageGenerationModelSelectionModal: React.FC<ImageGenerationModelSelection
     if ((BFL_IMAGE_MODELS as readonly string[]).includes(modelId)) return 'BFL';
     return 'GPT_IMAGE_1';
   };
-  const isKontextModel =
-    contextImageModel === ImageModels.FLUX_KONTEXT_PRO || contextImageModel === ImageModels.FLUX_KONTEXT_MAX;
+  const isKontextModel = isKontextImageModel(contextImageModel);
   const getAvailableSizes = (modelId: string) => {
     if (isGPTImage2Model(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_2.sizes;
     if (isGPTImageModel(modelId)) return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;

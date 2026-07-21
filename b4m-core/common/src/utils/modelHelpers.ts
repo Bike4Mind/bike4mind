@@ -69,10 +69,10 @@ export function isKontextModel(model?: string | null): boolean {
  * base image + mask).
  *
  * Broader than `isKontextModel` (Fill requires an image but is dispatched through a
- * different path), and distinct from `ModelInfo.supportsImageVariation`, which marks
- * models that *optionally* accept an image. All `requiresImageInput` models also
- * support it. Do NOT use this set to detect the Kontext transform branch - use
- * `isKontextModel` for that, or Fill will be misrouted through Kontext's transform.
+ * different path), and orthogonal to `ModelInfo.supportsImageVariation`, which marks
+ * models that *optionally* accept an image: Kontext sets it, but Fill does NOT despite
+ * mandating an input image. Do NOT use this set to detect the Kontext transform branch -
+ * use `isKontextModel` for that, or Fill will be misrouted through Kontext's transform.
  */
 const REQUIRES_IMAGE_INPUT_MODELS: ReadonlySet<string> = new Set([
   ImageModels.FLUX_KONTEXT_PRO,
