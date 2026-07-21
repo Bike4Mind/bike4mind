@@ -8,6 +8,11 @@ import {
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
+import {
+  assertTtsCreditsAvailable,
+  deductTtsCredits,
+  InsufficientTtsCreditsError,
+} from '@server/utils/deductTtsCredits';
 
 const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
 
@@ -52,6 +57,20 @@ const handler = baseApi().post(async (req, res) => {
     throw error;
   }
 
+  // Pre-flight credit gate: reject before incurring provider cost. userId is
+  // guaranteed here (resolveTtsProvider throws without one).
+  const userId = req.user?.id;
+  if (userId) {
+    try {
+      await assertTtsCreditsAvailable(userId);
+    } catch (error) {
+      if (error instanceof InsufficientTtsCreditsError) {
+        return res.status(402).json({ error: error.message, provider: vendor });
+      }
+      throw error;
+    }
+  }
+
   try {
     const result = await aiVoiceService(vendor, resolved.apiKey, req.logger).synthesize(text, {
       voice: resolved.voice,
@@ -60,6 +79,19 @@ const handler = baseApi().post(async (req, res) => {
       stability,
       similarityBoost,
     });
+
+    // Charge for the successful synthesis. Done before the size guard below
+    // because the provider cost is already incurred regardless of whether we
+    // can return the bytes over this endpoint.
+    if (userId) {
+      await deductTtsCredits({
+        userId,
+        vendor,
+        model: result.model,
+        characters: result.characters,
+        logger: req.logger,
+      });
+    }
 
     // Serverless response-size guard: a buffered audio body over ~4MB exceeds the
     // Lambda/API Gateway payload cap and would fail as an opaque CloudFront 502.

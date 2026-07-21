@@ -9,6 +9,11 @@ const MAX_INPUT_CHARS = TTS_MAX_INPUT_CHARS.elevenlabs;
 // caller supplies no voice and the user has no active voice (parallels OpenAI's
 // 'alloy' default).
 const DEFAULT_VOICE = '21m00Tcm4TlvDq8ikWAM';
+// When the caller sends no model_id, ElevenLabs applies its server-side default
+// (multilingual v2). We don't send model_id in that case (preserving behavior),
+// but we must bill *something*, so we attribute the call to this model. It is
+// also the higher-priced tier, so an unspecified model bills conservatively.
+const DEFAULT_BILLING_MODEL = 'eleven_multilingual_v2';
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly
@@ -54,6 +59,12 @@ export class ElevenLabsVoiceService extends AIVoiceService {
     });
 
     const audio = Buffer.from(response.data, 'binary');
-    return { audio, contentType: CONTENT_TYPE_BY_FORMAT[format], format };
+    return {
+      audio,
+      contentType: CONTENT_TYPE_BY_FORMAT[format],
+      format,
+      model: options.model ?? DEFAULT_BILLING_MODEL,
+      characters: text.length,
+    };
   }
 }

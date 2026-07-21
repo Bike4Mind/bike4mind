@@ -48,6 +48,9 @@ describe('OpenAIVoiceService', () => {
     expect(result.contentType).toBe('audio/mpeg');
     expect(result.format).toBe('mp3');
     expect(result.audio).toEqual(Buffer.from([1, 2, 3]));
+    // Billing fields: resolved model + input char count.
+    expect(result.model).toBe('tts-1');
+    expect(result.characters).toBe('hello'.length);
   });
 
   it('rejects input longer than the OpenAI 4096-char limit before calling the API', async () => {
@@ -79,13 +82,16 @@ describe('ElevenLabsVoiceService', () => {
   it('falls back to the premade default voice when none is supplied', async () => {
     mockedPost.mockResolvedValue({ data: new Uint8Array([1]).buffer });
 
-    await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hi');
+    const result = await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hi');
 
     expect(mockedPost).toHaveBeenCalledWith(
       'https://api.elevenlabs.io/v1/text-to-speech/21m00Tcm4TlvDq8ikWAM',
       expect.any(Object),
       expect.any(Object)
     );
+    // Bills the default model when the caller sends none (ElevenLabs' own default).
+    expect(result.model).toBe('eleven_multilingual_v2');
+    expect(result.characters).toBe('hi'.length);
   });
 
   it('rejects input longer than the ElevenLabs 10000-char limit before posting', async () => {

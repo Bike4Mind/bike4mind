@@ -4,6 +4,11 @@ import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
+import {
+  assertTtsCreditsAvailable,
+  deductTtsCredits,
+  InsufficientTtsCreditsError,
+} from '@server/utils/deductTtsCredits';
 
 // Legacy ElevenLabs TTS adapter. Kept as a thin, contract-stable wrapper over
 // the unified aiVoiceService (#724): body { message } -> { audio: base64 }.
@@ -22,12 +27,30 @@ const handler = baseApi().post(
       throw error;
     }
 
+    const userId = req.user?.id;
+    if (userId) {
+      try {
+        await assertTtsCreditsAvailable(userId);
+      } catch (error) {
+        if (error instanceof InsufficientTtsCreditsError) {
+          return res.status(402).json({ error: error.message });
+        }
+        throw error;
+      }
+    }
+
     try {
-      const { audio } = await aiVoiceService('elevenlabs', resolved.apiKey, req.logger).synthesize(message, {
-        voice: resolved.voice,
-        stability: 0,
-        similarityBoost: 0,
-      });
+      const { audio, model, characters } = await aiVoiceService('elevenlabs', resolved.apiKey, req.logger).synthesize(
+        message,
+        {
+          voice: resolved.voice,
+          stability: 0,
+          similarityBoost: 0,
+        }
+      );
+      if (userId) {
+        await deductTtsCredits({ userId, vendor: 'elevenlabs', model, characters, logger: req.logger });
+      }
       if (exceedsTtsResponseLimit(audio.length)) {
         return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
       }

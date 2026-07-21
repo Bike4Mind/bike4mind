@@ -49,6 +49,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
         'tool_usage',
         'completion_api_usage',
         'speech_to_text_usage',
+        'text_to_speech_usage',
         'transfer_credit',
         'received_credit',
       ],

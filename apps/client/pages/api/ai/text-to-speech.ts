@@ -3,6 +3,11 @@ import * as z from 'zod';
 import { aiVoiceService } from '@bike4mind/utils';
 import { resolveTtsProvider, TtsProviderNotConfiguredError } from '@server/utils/resolveTtsProvider';
 import { exceedsTtsResponseLimit, TTS_RESPONSE_TOO_LARGE_MESSAGE } from '@server/utils/ttsResponseLimit';
+import {
+  assertTtsCreditsAvailable,
+  deductTtsCredits,
+  InsufficientTtsCreditsError,
+} from '@server/utils/deductTtsCredits';
 
 // Legacy OpenAI TTS adapter. Kept as a thin, contract-stable wrapper over the
 // unified aiVoiceService (#724): body { text, voice? } -> raw audio/mpeg bytes.
@@ -30,12 +35,28 @@ const handler = baseApi().post(async (req, res) => {
     throw error;
   }
 
+  const userId = req.user?.id;
+  if (userId) {
+    try {
+      await assertTtsCreditsAvailable(userId);
+    } catch (error) {
+      if (error instanceof InsufficientTtsCreditsError) {
+        return res.status(402).json({ error: error.message });
+      }
+      throw error;
+    }
+  }
+
   try {
-    const { audio } = await aiVoiceService('openai', resolved.apiKey, req.logger).synthesize(text, {
+    const { audio, model, characters } = await aiVoiceService('openai', resolved.apiKey, req.logger).synthesize(text, {
       voice: resolved.voice,
       model: 'tts-1', // standard model for faster response
       format: 'mp3',
     });
+
+    if (userId) {
+      await deductTtsCredits({ userId, vendor: 'openai', model, characters, logger: req.logger });
+    }
 
     if (exceedsTtsResponseLimit(audio.length)) {
       return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });

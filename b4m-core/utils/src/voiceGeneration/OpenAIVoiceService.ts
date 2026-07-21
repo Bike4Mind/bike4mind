@@ -14,10 +14,11 @@ export class OpenAIVoiceService extends AIVoiceService {
     }
 
     const format = options.format ?? DEFAULT_FORMAT;
+    const model = options.model ?? DEFAULT_MODEL;
     const openai = new OpenAI({ apiKey: this.apiKey });
 
     const response = await openai.audio.speech.create({
-      model: options.model ?? DEFAULT_MODEL,
+      model,
       // OpenAI ships a fixed set of voice names; the caller-supplied string is
       // validated by OpenAI (400 on an unknown voice) rather than by us, so the
       // supported set stays owned by the SDK.
@@ -27,6 +28,6 @@ export class OpenAIVoiceService extends AIVoiceService {
     });
 
     const audio = Buffer.from(await response.arrayBuffer());
-    return { audio, contentType: CONTENT_TYPE_BY_FORMAT[format], format };
+    return { audio, contentType: CONTENT_TYPE_BY_FORMAT[format], format, model, characters: text.length };
   }
 }

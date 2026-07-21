@@ -17,6 +17,11 @@ export interface VoiceSynthesisResult {
   // e.g. 'audio/mpeg' - the HTTP Content-Type for the returned bytes.
   contentType: string;
   format: VoiceOutputFormat;
+  // Provider model resolved for this call - the billing key, since TTS is
+  // priced per model. May differ from options.model when a default was applied.
+  model: string;
+  // Input character count - the billable unit for per-character TTS pricing.
+  characters: number;
 }
 
 // Content-Type for each supported output format, shared by all vendor
