@@ -104,18 +104,25 @@ describe('POST /api/ai/sound-effects', () => {
     expect(subtractCredits).toHaveBeenCalledTimes(1);
     const [params] = subtractCredits.mock.calls[0];
     expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, ownerId: 'u1' });
-    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'sound_effects', creditsCharged: 12 }));
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'sound_effects', creditsCharged: 12, costUsd: 0.006, status: 'ok' })
+    );
   });
 
-  it('does NOT charge when enforceCredits is off', async () => {
+  it('does NOT charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {
     getSettingsValue.mockReturnValue(false);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
 
-    const { res, promise } = run({ text: 'rain' });
+    const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(estimateSoundCredits).not.toHaveBeenCalled();
     expect(subtractCredits).not.toHaveBeenCalled();
+    // Analytics is decoupled from billing: the event still fires with the true
+    // provider COGS and zero credits charged.
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'sound_effects', creditsCharged: 0, costUsd: 0.006, status: 'ok' })
+    );
   });
 
   it('rejects with 422 (insufficient_credits) before generating when the balance is short', async () => {
@@ -129,6 +136,7 @@ describe('POST /api/ai/sound-effects', () => {
     expect(res._getStatusCode()).toBe(422);
     expect(generate).not.toHaveBeenCalled();
     expect(subtractCredits).not.toHaveBeenCalled();
+    expect(recordUsage).not.toHaveBeenCalled();
   });
 
   it('returns 401 when no provider key resolves (no charge)', async () => {
@@ -161,5 +169,9 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(502);
     expect(subtractCredits).not.toHaveBeenCalled();
+    // A failed generation still logs an analytics event, as an error with no cost.
+    expect(recordUsage).toHaveBeenCalledWith(
+      expect.objectContaining({ feature: 'sound_effects', status: 'error', creditsCharged: 0, costUsd: 0 })
+    );
   });
 });

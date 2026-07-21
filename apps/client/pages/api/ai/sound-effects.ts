@@ -45,12 +45,13 @@ const handler = baseApi().post(async (req, res) => {
   const settings = await getSettingsMap({ adminSettings: adminSettingsRepository }, { names: ['enforceCredits'] });
   const enforceCredits = getSettingsValue('enforceCredits', settings);
 
-  // The credit cost is deterministic from the request (duration-driven), so the
-  // pre-check estimate is also the exact amount charged after success.
-  let requiredCredits = 0;
-  let usdCost = 0;
+  // Cost is deterministic from the request (duration-driven), so the same
+  // estimate drives the (optional) balance pre-check, the charge, and the
+  // usage-event COGS - it's computed regardless of enforceCredits so analytics
+  // capture true provider cost even on credits-off / self-host deployments.
+  const { requiredCredits, usdCost } = estimateSoundCredits(provider, { durationSeconds });
+
   if (enforceCredits) {
-    ({ requiredCredits, usdCost } = estimateSoundCredits(provider, { durationSeconds }));
     const user = await userRepository.findById(userId);
     if (!user) throw new BadRequestError('User not found');
     if ((user.currentCredits ?? 0) < requiredCredits) {
@@ -59,6 +60,33 @@ const handler = baseApi().post(async (req, res) => {
       );
     }
   }
+
+  const sessionId = `sound-effects-${userId}-${Date.now()}`;
+
+  // Analytics is never part of the billing path: one usage event per provider
+  // call (ok or error), independent of enforceCredits and of whether the charge
+  // succeeds. Fire-and-forget; a logging failure never affects the response.
+  const recordUsage = (status: 'ok' | 'error', creditsCharged: number, costUsdValue: number) =>
+    usageEventRepository
+      .record({
+        requestId: sessionId,
+        userId,
+        ownerId: userId,
+        ownerType: CreditHolderType.User,
+        sessionId,
+        feature: 'sound_effects',
+        provider,
+        model: provider,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedInputTokens: 0,
+        cacheWriteTokens: 0,
+        units: durationSeconds ?? 0,
+        costUsd: costUsdValue,
+        creditsCharged,
+        status,
+      })
+      .catch(err => req.logger.warn('Failed to record sound-effects usage event', { err }));
 
   let audio: Buffer;
   let contentType: string;
@@ -70,13 +98,16 @@ const handler = baseApi().post(async (req, res) => {
       provider,
       error: error instanceof Error ? error.message : 'Unknown error',
     });
+    // A failed generation incurs no provider cost and no charge.
+    recordUsage('error', 0, 0);
     return res.status(502).json({ error: 'Sound generation failed' });
   }
 
-  // Charge only after a successful generation. A billing failure here is
-  // non-fatal (the audio was produced) but logged so a missed charge is visible.
+  // Charge after a successful generation, gated on enforceCredits. A billing
+  // failure is non-fatal (the audio was produced) but logged so a missed charge
+  // is visible; the usage event still records the actual creditsCharged.
+  let creditsCharged = 0;
   if (enforceCredits && requiredCredits > 0) {
-    const sessionId = `sound-effects-${userId}-${Date.now()}`;
     try {
       await creditService.subtractCredits(
         {
@@ -89,28 +120,7 @@ const handler = baseApi().post(async (req, res) => {
         },
         { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
       );
-
-      // Dual-write a usage event for analytics; never billing, never fatal.
-      usageEventRepository
-        .record({
-          requestId: sessionId,
-          userId,
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
-          sessionId,
-          feature: 'sound_effects',
-          provider,
-          model: provider,
-          inputTokens: 0,
-          outputTokens: 0,
-          cachedInputTokens: 0,
-          cacheWriteTokens: 0,
-          units: durationSeconds ?? 0,
-          costUsd: usdCost,
-          creditsCharged: requiredCredits,
-          status: 'ok',
-        })
-        .catch(err => req.logger.warn('Failed to record sound-effects usage event', { err }));
+      creditsCharged = requiredCredits;
     } catch (err) {
       req.logger.error('Sound-effects credit deduction failed - billing may be missed', {
         userId,
@@ -118,6 +128,8 @@ const handler = baseApi().post(async (req, res) => {
       });
     }
   }
+
+  recordUsage('ok', creditsCharged, usdCost);
 
   res.setHeader('Content-Type', contentType);
   res.setHeader('Content-Length', audio.length);
