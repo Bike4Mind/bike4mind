@@ -1,0 +1,998 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Bike4Mind API",
+    "version": "3.0.0",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n\nPer-operation required scopes are published on each operation via the `x-required-scopes` extension.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "contact": {
+      "name": "Bike4Mind",
+      "url": "https://your-deployment.example.com"
+    },
+    "license": {
+      "name": "Proprietary"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://your-deployment.example.com",
+      "description": "Production"
+    },
+    {
+      "url": "https://staging.your-deployment.example.com",
+      "description": "Staging"
+    },
+    {
+      "url": "http://localhost:3000",
+      "description": "Local dev"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Canonical auth. Send `Authorization: Bearer b4m_live_<key>`. A JWT access token is also accepted in this header; a token beginning with `b4m_` is treated as an API key, anything else as a JWT."
+      },
+      "apiKeyAuth": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "Legacy auth. Send `x-api-key: b4m_live_<key>`. Equivalent to `bearerAuth` for API keys."
+      }
+    },
+    "schemas": {
+      "CompletionMessage": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "user",
+              "assistant",
+              "system"
+            ]
+          },
+          "content": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {}
+              }
+            ]
+          },
+          "cache": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ]
+      },
+      "CompletionTool": {
+        "type": "object",
+        "properties": {
+          "toolSchema": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "object"
+                    ]
+                  },
+                  "properties": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "additionalProperties": {
+                    "type": "boolean"
+                  },
+                  "required": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "additionalProperties": {}
+              },
+              "strict": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "parameters"
+            ]
+          },
+          "_isMcpTool": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "toolSchema"
+        ]
+      },
+      "ResponseFormat": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "json_schema"
+                ]
+              },
+              "json_schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "schema": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  },
+                  "strict": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                },
+                "required": [
+                  "name",
+                  "schema"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "json_schema"
+            ]
+          }
+        ]
+      },
+      "CompletionRequest": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "assistant",
+                    "system"
+                  ]
+                },
+                "content": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "array",
+                      "items": {}
+                    }
+                  ]
+                },
+                "cache": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "role",
+                "content"
+              ]
+            }
+          },
+          "response_format": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "json_schema"
+                    ]
+                  },
+                  "json_schema": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "schema": {
+                        "type": "object",
+                        "additionalProperties": {}
+                      },
+                      "strict": {
+                        "type": "boolean",
+                        "default": true
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "schema"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "json_schema"
+                ]
+              }
+            ]
+          },
+          "stream": {
+            "type": "boolean"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "toolSchema": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "object"
+                          ]
+                        },
+                        "properties": {
+                          "type": "object",
+                          "additionalProperties": {}
+                        },
+                        "additionalProperties": {
+                          "type": "boolean"
+                        },
+                        "required": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": {}
+                    },
+                    "strict": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "description",
+                    "parameters"
+                  ]
+                },
+                "_isMcpTool": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "toolSchema"
+              ]
+            }
+          },
+          "temperature": {
+            "type": "number"
+          },
+          "max_tokens": {
+            "type": "number"
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "temperature": {
+                "type": "number"
+              },
+              "maxTokens": {
+                "type": "number"
+              },
+              "stream": {
+                "type": "boolean"
+              },
+              "tools": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "toolSchema": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "object"
+                              ]
+                            },
+                            "properties": {
+                              "type": "object",
+                              "additionalProperties": {}
+                            },
+                            "additionalProperties": {
+                              "type": "boolean"
+                            },
+                            "required": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              }
+                            }
+                          },
+                          "required": [
+                            "type"
+                          ],
+                          "additionalProperties": {}
+                        },
+                        "strict": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "description",
+                        "parameters"
+                      ]
+                    },
+                    "_isMcpTool": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "toolSchema"
+                  ]
+                }
+              },
+              "response_format": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "text"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type"
+                    ]
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "json_schema"
+                        ]
+                      },
+                      "json_schema": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "schema": {
+                            "type": "object",
+                            "additionalProperties": {}
+                          },
+                          "strict": {
+                            "type": "boolean",
+                            "default": true
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "schema"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "json_schema"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "model",
+          "messages"
+        ],
+        "description": "OpenAI-compatible completion request. Top-level `response_format`, `stream`, `tools`, `temperature`, and `max_tokens` are also accepted nested under `options` (legacy shape).",
+        "example": {
+          "model": "claude-opus-4-8",
+          "messages": [
+            {
+              "role": "system",
+              "content": "You are a support agent."
+            },
+            {
+              "role": "user",
+              "content": "How do I reset my password?"
+            }
+          ],
+          "temperature": 0.7,
+          "max_tokens": 500
+        }
+      },
+      "CompletionStreamEvent": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/CompletionMetaEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CompletionContentEvent"
+          },
+          {
+            "$ref": "#/components/schemas/CompletionSseErrorEvent"
+          }
+        ],
+        "description": "One `data:` event in the `text/event-stream` response. Order: one `meta`, then one or more `content`/`tool_use` events, terminated by the literal line `data: [DONE]`. Comment lines (`: keep-alive`) are interleaved as heartbeats and carry no event.",
+        "example": {
+          "type": "content",
+          "text": "To reset your password, click 'Forgot password' on the login screen.",
+          "usage": {
+            "inputTokens": 42,
+            "outputTokens": 12
+          },
+          "credits": {
+            "used": 1,
+            "usdCost": 0.00037
+          }
+        }
+      },
+      "CompletionMetaEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "meta"
+            ]
+          },
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "requestId"
+        ],
+        "description": "First non-keepalive event; carries the correlation id for log lookup."
+      },
+      "CompletionContentEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "content",
+              "tool_use"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "tools": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "arguments": {
+                  "type": "string"
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          },
+          "usage": {
+            "type": "object",
+            "properties": {
+              "inputTokens": {
+                "type": "number"
+              },
+              "outputTokens": {
+                "type": "number"
+              },
+              "cacheReadInputTokens": {
+                "type": "number"
+              },
+              "cacheCreationInputTokens": {
+                "type": "number"
+              }
+            }
+          },
+          "credits": {
+            "type": "object",
+            "properties": {
+              "used": {
+                "type": "number"
+              },
+              "usdCost": {
+                "type": "number"
+              }
+            }
+          },
+          "responseFormatMode": {
+            "type": "string",
+            "enum": [
+              "native",
+              "tool_use",
+              "best-effort"
+            ]
+          },
+          "thinking": {
+            "type": "array",
+            "items": {}
+          }
+        },
+        "required": [
+          "type",
+          "text"
+        ],
+        "description": "A streamed chunk of assistant output; `usage`/`credits` ride on the final chunks."
+      },
+      "CompletionSseErrorEvent": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "type": "string",
+            "enum": [
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "message"
+        ],
+        "description": "In-band stream error. The completions endpoint reports failures as this SSE event (HTTP status stays 200 once the stream has opened), terminating the stream."
+      },
+      "ToolExecutionRequest": {
+        "type": "object",
+        "properties": {
+          "toolName": {
+            "type": "string",
+            "enum": [
+              "weather_info",
+              "web_search",
+              "web_fetch"
+            ]
+          },
+          "input": {
+            "type": "object",
+            "additionalProperties": {}
+          }
+        },
+        "required": [
+          "toolName",
+          "input"
+        ],
+        "description": "Server-side tool execution request. Not the same shape as a completion `tools` entry.",
+        "example": {
+          "toolName": "web_search",
+          "input": {
+            "query": "how to reset a password"
+          }
+        }
+      },
+      "ToolExecutionResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "result": {},
+          "error": {
+            "type": "string"
+          },
+          "errorType": {
+            "type": "string"
+          },
+          "executionTimeMs": {
+            "type": "number"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "success",
+          "request_id"
+        ],
+        "description": "Tool execution result. `success: false` carries `error`; `request_id` echoes X-Request-ID.",
+        "example": {
+          "success": true,
+          "result": {
+            "summary": "Top results for the query."
+          },
+          "executionTimeMs": 842,
+          "request_id": "abc-123"
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Human-readable error message."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlation id, mirrors the X-Request-ID header."
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "example": {
+          "error": "Missing or invalid toolName",
+          "request_id": "abc-123"
+        }
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/ai/v1/completions": {
+      "post": {
+        "operationId": "createCompletion",
+        "summary": "Create a chat completion",
+        "description": "OpenAI-compatible completion. The response is ALWAYS an SSE stream (`text/event-stream`), regardless of the `stream` flag: a `meta` event, then `content`/`tool_use` events carrying `usage`/`credits`, terminated by `data: [DONE]`. Once the stream has opened the HTTP status stays 200 and failures arrive as an in-band `error` event. Authenticate with an API key (`b4m_live_`) or a JWT.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompletionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "SSE stream of completion events (see CompletionStreamEvent).",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompletionStreamEvent"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body (rejected before the stream opens).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/ai/v1/completions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"claude-opus-4-8\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I reset my password?\"}],\"max_tokens\":500}'"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n},\n    stream=True,\n)"
+          }
+        ]
+      }
+    },
+    "/api/ai/v1/tools": {
+      "post": {
+        "operationId": "executeTool",
+        "summary": "Execute a server-side tool",
+        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
+        "tags": [
+          "AI"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "apiKeyAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ToolExecutionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Tool executed successfully (`success` is always true here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExecutionResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/invalid `toolName` or `input`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Tool execution failed; body carries `success: false` with `error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ToolExecutionResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          }
+        },
+        "x-required-scopes": [
+          "ai:chat",
+          "ai:generate"
+        ],
+        "x-codeSamples": [
+          {
+            "lang": "curl",
+            "label": "curl",
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"toolName\":\"web_search\",\"input\":{\"query\":\"how to reset a password\"}}'"
+          },
+          {
+            "lang": "JavaScript",
+            "label": "fetch",
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/tools\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}),\n});"
+          },
+          {
+            "lang": "Python",
+            "label": "requests",
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n},\n)"
+          }
+        ]
+      }
+    }
+  },
+  "webhooks": {},
+  "tags": [
+    {
+      "name": "AI",
+      "description": "Completions and server-side tool execution."
+    }
+  ]
+}
