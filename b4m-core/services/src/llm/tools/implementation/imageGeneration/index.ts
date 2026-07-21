@@ -2,12 +2,12 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   ApiKeyType,
-  BFL_IMAGE_MODELS,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
   XAI_IMAGE_MODELS,
-  GEMINI_IMAGE_MODELS,
   GenerateImageToolCall,
+  isBflImageModel,
+  isGeminiImageModel,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -196,9 +196,9 @@ export const imageGenerationTool: ToolDefinition = {
       const seed = imageConfig?.seed;
 
       // Determine which service to use based on the model
-      const isBFLModel = BFL_IMAGE_MODELS.includes(model as any);
-      const isXAIModel = XAI_IMAGE_MODELS.includes(model as any);
-      const isGeminiModel = GEMINI_IMAGE_MODELS.includes(model as any);
+      const isBFLModel = isBflImageModel(model);
+      const isXAIModel = (XAI_IMAGE_MODELS as readonly string[]).includes(model);
+      const isGeminiModel = isGeminiImageModel(model);
       // Self-hosted Stable-Diffusion models are namespaced `local-image/<checkpoint>`.
       const isLocalImageModel = model.startsWith('local-image/');
       // Real provider for the moderation incident audit record - more accurate
@@ -230,8 +230,7 @@ export const imageGenerationTool: ToolDefinition = {
 
         const images = await service.generate(prompt, {
           n,
-          model: model as any,
-          size: size as any,
+          model,
           user: context.userId,
           safety_tolerance,
         });
@@ -252,7 +251,9 @@ export const imageGenerationTool: ToolDefinition = {
         try {
           const images = await service.generate(prompt, {
             n,
-            model: bflModel as any,
+            // generate() only accepts the generation FLUX variants; in practice only those
+            // reach this branch (fill/Kontext are edit models), so narrow to satisfy it.
+            model: bflModel as ImageModels.FLUX_PRO | ImageModels.FLUX_PRO_1_1 | ImageModels.FLUX_PRO_ULTRA,
             width: width ?? 1024,
             height: height ?? 768,
             aspect_ratio: aspect_ratio,
@@ -363,7 +364,7 @@ export const imageGenerationTool: ToolDefinition = {
           images = await service.generate(prompt, {
             n,
             quality,
-            size: size as any,
+            size: size as ImageGenerateParams['size'],
             model,
             user: context.userId,
             safety_tolerance,

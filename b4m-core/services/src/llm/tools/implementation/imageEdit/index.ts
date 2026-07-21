@@ -2,12 +2,13 @@ import { Logger } from '@bike4mind/observability';
 import { ToolContext, ToolDefinition } from '../../base/types';
 import {
   ApiKeyType,
-  BFL_IMAGE_MODELS,
   ImageModels,
   BFL_SAFETY_TOLERANCE,
   GEMINI_IMAGE_MODELS,
   GenerateImageToolCall,
   isImageServeable,
+  isBflImageModel,
+  isGeminiImageModel,
 } from '@bike4mind/common';
 import {
   OpenAIImageService,
@@ -78,7 +79,7 @@ export async function getImageFromFileId(fileId: string, context: ToolContext): 
     );
   }
 
-  const fabFile = await (context.db as any).fabfiles?.findById(fileId);
+  const fabFile = await context.db.fabfiles?.findById(fileId);
   if (!fabFile) {
     throw new NotFoundError(`File with ID ${fileId} not found`);
   }
@@ -293,8 +294,8 @@ export const imageEditTool: ToolDefinition = {
 
       if (!editModel) {
         // Fallback logic based on generation model provider
-        const isGenBFLModel = BFL_IMAGE_MODELS.includes(generationModel as any);
-        const isGenGeminiModel = GEMINI_IMAGE_MODELS.includes(generationModel as any);
+        const isGenBFLModel = isBflImageModel(generationModel);
+        const isGenGeminiModel = isGeminiImageModel(generationModel);
 
         if (isGenBFLModel) {
           editModel = ImageModels.FLUX_PRO_FILL; // BFL requires FLUX_PRO_FILL for mask editing
@@ -310,7 +311,7 @@ export const imageEditTool: ToolDefinition = {
       }
 
       // Validate that the edit model supports editing
-      if (!EDIT_SUPPORTED_MODELS.includes(editModel as any)) {
+      if (!(EDIT_SUPPORTED_MODELS as readonly string[]).includes(editModel)) {
         return `Error: Model ${editModel} does not support image editing. Supported models for editing: ${EDIT_SUPPORTED_MODELS.join(', ')}.
 
 Please select a supported edit model in your image settings modal.`;
@@ -328,8 +329,8 @@ Please select a supported edit model in your image settings modal.`;
       const guidance = toolGuidance || 60;
 
       // Determine which service to use based on the EDIT model (not generation model)
-      const isBFLModel = BFL_IMAGE_MODELS.includes(editModel as any);
-      const isGeminiModel = GEMINI_IMAGE_MODELS.includes(editModel as any);
+      const isBFLModel = isBflImageModel(editModel);
+      const isGeminiModel = isGeminiImageModel(editModel);
       // Real provider for the moderation incident audit record - more accurate
       // than a generic lookup since the branch below already knows which backend is used.
       const provider = isBFLModel ? 'bfl' : isGeminiModel ? 'gemini' : 'openai';
