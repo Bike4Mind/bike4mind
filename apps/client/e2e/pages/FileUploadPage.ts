@@ -99,10 +99,12 @@ export class FileUploadPage extends BasePage {
     await expect(row).toBeVisible({ timeout: TIMEOUTS.ELEMENT_STATE });
 
     const actionBtn = this.page.getByTestId(actionBtnTestId);
-    // Retry click - row selection can fail if React re-renders between click and state update
+    // Retry click - row selection can fail if React re-renders between click and state update.
+    // Bound the click (see renameFile): with no suite-level actionTimeout an unbounded click
+    // would hang on the stability check instead of throwing, starving this retry loop.
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await row.click();
       try {
+        await row.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await expect(actionBtn).toBeEnabled({ timeout: 2_000 });
         return;
       } catch {
@@ -128,9 +130,13 @@ export class FileUploadPage extends BasePage {
 
     // Menu items can be detached by React re-renders, or the click may not register.
     // Retry the full open-menu -> click-rename -> wait-for-input sequence.
+    // Every click MUST carry an explicit timeout: the suite sets no `actionTimeout`, so an
+    // unbounded click() waits forever for actionability. If a background list refetch re-renders
+    // the row mid-click, the stability check never resolves and the click hangs until the whole
+    // test times out - defeating this retry loop. A bounded click throws so the retry can fire.
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        await menuButton.click();
+        await menuButton.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await renameItem.click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await expect(renameInput).toBeVisible({ timeout: TIMEOUTS.POST_ACTION });
         break;
@@ -141,9 +147,9 @@ export class FileUploadPage extends BasePage {
     }
 
     const renameTextbox = renameInput.getByRole('textbox');
-    await renameTextbox.clear();
-    await renameTextbox.fill(newName);
-    await this.page.getByTestId('file-browser-rename-save-btn').click();
+    await renameTextbox.clear({ timeout: TIMEOUTS.ELEMENT_STATE });
+    await renameTextbox.fill(newName, { timeout: TIMEOUTS.ELEMENT_STATE });
+    await this.page.getByTestId('file-browser-rename-save-btn').click({ timeout: TIMEOUTS.ELEMENT_STATE });
     // Wait for rename API or the inline input to disappear (rename complete)
     await this.waitForResponseOrUI(
       response =>
