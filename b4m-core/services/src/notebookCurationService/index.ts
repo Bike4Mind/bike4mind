@@ -49,6 +49,13 @@ export interface NotebookCurationAdapters {
 const CURATION_HASH_VERSION = 'v1';
 
 /**
+ * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form
+ * items carry but the interface omits (used only as an id fallback in the hash).
+ * Every other field the hash reads already lives on `IChatHistoryItem`.
+ */
+type CurationHashMessage = IChatHistoryItem & { _id?: { toString(): string } };
+
+/**
  * Stable hash of everything that determines the curated output: the hash version,
  * the curation type, the include/format options, and the conversation content. An
  * unchanged re-curation produces the same hash, letting curateNotebook reuse the
@@ -59,7 +66,7 @@ const CURATION_HASH_VERSION = 'v1';
  * - session.name: curation is a point-in-time snapshot, so a rename alone should
  *   not force a full (paid) re-curation just to refresh the header title.
  */
-export function computeCurationContentHash(messages: any[], options: CurationOptions): string {
+export function computeCurationContentHash(messages: CurationHashMessage[], options: CurationOptions): string {
   const hash = createHash('sha256');
   hash.update(`ver:${CURATION_HASH_VERSION}`);
   hash.update(`|type:${options.curationType || 'transcript'}`);
