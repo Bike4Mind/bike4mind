@@ -13,6 +13,8 @@ vi.mock('@bike4mind/database', () => ({
 }));
 
 vi.mock('@bike4mind/services', () => ({
+  // Real kill-switch comparison so the tests exercise actual enforcement (not a stub).
+  isTokenVersionCurrent: (a?: number, b?: number) => (a ?? 0) === (b ?? 0),
   userApiKeyService: { validateUserApiKey: vi.fn(), validateUserApiKeyById: vi.fn() },
   cacheService: {
     get: vi.fn(async ({ key }: { key: string }) => {
@@ -199,6 +201,32 @@ describe('verifyJwtToken (P0-B policy consent gate)', () => {
 
   it('accepts a system account regardless of acceptance (service users never attest)', async () => {
     vi.mocked(User.findById).mockResolvedValue(mockUser({ isSystem: true, aupAcceptedVersion: undefined }));
+    await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
+  });
+
+  it('rejects a first-factor-only (mfaPending) token before hitting the DB', async () => {
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', mfaPending: true }, 'test-secret'))).rejects.toThrow(
+      'MFA verification required'
+    );
+    expect(User.findById).not.toHaveBeenCalled();
+  });
+
+  it('rejects a token whose tokenVersion is stale relative to the user (revocation kill-switch)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', tokenVersion: 3 }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', tokenVersion: 1 }, 'test-secret'))).rejects.toThrow(
+      'Session expired'
+    );
+  });
+
+  it('accepts a token whose tokenVersion matches the user', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1', tokenVersion: 3 }));
+    await expect(verifyJwtToken(jwt.sign({ id: 'u1', tokenVersion: 3 }, 'test-secret'))).resolves.toMatchObject({
+      id: 'u1',
+    });
+  });
+
+  it('accepts a legacy token with no tokenVersion against a v0 user (self-expiring grace)', async () => {
+    vi.mocked(User.findById).mockResolvedValue(mockUser({ aupAcceptedVersion: 'v1' }));
     await expect(verifyJwtToken(sign('u1'))).resolves.toMatchObject({ id: 'u1' });
   });
 });

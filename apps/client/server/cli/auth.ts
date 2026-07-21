@@ -8,7 +8,7 @@ import {
   type CompletionSource,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
-import { userApiKeyService, cacheService } from '@bike4mind/services';
+import { userApiKeyService, cacheService, isTokenVersionCurrent } from '@bike4mind/services';
 import { extractApiKeyFromHeaders, checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { hasAcceptedPolicy } from '@server/auth/consentGate';
 import { z } from 'zod';
@@ -52,14 +52,33 @@ export async function verifyJwtToken(token: string | undefined): Promise<Verifie
   }
 
   try {
-    const decoded = jwt.verify(token, Config.JWT_SECRET) as {
+    // Pin HS256 to match the REST strategy / verifyRefreshToken (no algorithm-confusion surface).
+    const decoded = jwt.verify(token, Config.JWT_SECRET, { algorithms: ['HS256'] }) as {
       id: string;
+      tokenVersion?: number;
+      mfaPending?: boolean;
     };
+
+    // Reject a first-factor-only token: the mfaPending access token (issued pre-2FA, before the
+    // second factor) must NOT drive these LLM/CLI surfaces. Mirrors the REST strategy's mfaPending
+    // gate; without it, the second factor is bypassable on every surface this primitive backs.
+    if (decoded.mfaPending) {
+      throw new Error('MFA verification required');
+    }
 
     // Fetch the user from database to ensure they still exist
     const user = await User.findById(decoded.id);
     if (!user) {
       throw new Error('User not found');
+    }
+
+    // Server-side kill switch: honor tokenVersion here too. Without it, a revoked session
+    // (logout / admin force-logout / MFA or security bump) keeps working on these surfaces until
+    // its natural TTL - the REST strategy + WS connect enforce this, this primitive did not.
+    // Legacy tokens carry no version and normalize to 0 (no mass logout on deploy). Token-TYPE
+    // (typ) enforcement is added once the shared helper lands (tracked internally).
+    if (!isTokenVersionCurrent(decoded.tokenVersion, user.tokenVersion)) {
+      throw new Error('Session expired');
     }
 
     // P0-B abuse gate: the REST consent middleware (auth.ts) only guards baseApi routes,
