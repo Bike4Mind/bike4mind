@@ -102,3 +102,31 @@ describe('UserApiKeyModel embed fields (round-trip)', () => {
     expect(hasAgentIndex).toBe(true);
   });
 });
+
+describe('UserApiKeyRepository.findByAgentId', () => {
+  it('returns only ACTIVE keys for the agent, newest first', async () => {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_agent001',
+      agentId: 'agent-9',
+      createdAt: new Date('2026-01-01'),
+    });
+    await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_agent002',
+      agentId: 'agent-9',
+      createdAt: new Date('2026-02-01'),
+    });
+    await UserApiKey.create({ ...base, keyPrefix: 'b4m_live_agent003', agentId: 'agent-9', status: 'disabled' });
+    await UserApiKey.create({ ...base, keyPrefix: 'b4m_live_other001', agentId: 'agent-other' });
+
+    const keys = await userApiKeyRepository.findByAgentId('agent-9');
+    expect(keys.map(k => k.keyPrefix)).toEqual(['b4m_live_agent002', 'b4m_live_agent001']);
+  });
+
+  it('returns empty for an agent with no keys', async () => {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    await expect(userApiKeyRepository.findByAgentId('agent-none')).resolves.toEqual([]);
+  });
+});

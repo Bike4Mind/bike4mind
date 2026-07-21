@@ -46,7 +46,7 @@ import { z } from 'zod';
  * ChatCompletion service (Fargate) so the SSE stream isn't bounded by a Lambda
  * timeout. Runs a *configured agent* (persona hydrated from AgentModel) for an
  * anonymous end-user, billing the embed key's organization. Reachable by
- * browsers only via CloudFront (M6 wires the route + Origin/OPTIONS forwarding).
+ * browsers only via CloudFront (the router forwards the route + Origin/OPTIONS).
  *
  * Unlike the CLI completions route, all auth/origin/balance/rate-limit gates run
  * BEFORE any SSE bytes flush, so a rejection returns a real HTTP status (401/403/

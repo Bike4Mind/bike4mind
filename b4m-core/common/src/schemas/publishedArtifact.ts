@@ -236,9 +236,10 @@ export function isOriginUnderHost(origin: string, host: string): boolean {
 }
 
 /**
- * Request-time origin gate shared by both embed surfaces (the Next mint-route
- * CORS middleware and the Fargate chat route's in-handler CORS), so both decide
- * "is this browser Origin approved?" identically. Normalizes the incoming raw
+ * Request-time origin membership check shared by both embed surfaces (the Next
+ * mint route and the Fargate chat route reach it through the app layer's
+ * isEmbedOriginAllowed composition, which adds the first-party exemption), so
+ * both decide "is this browser Origin approved?" identically. Normalizes the incoming raw
  * Origin via `parseEmbedOrigin` and checks exact membership against the key's
  * stored `allowedOrigins` (already normalized at write time). An unparseable
  * origin or an empty/absent allow-list yields false. Note (per the AC): a

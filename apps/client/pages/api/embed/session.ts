@@ -1,11 +1,11 @@
 /**
  * POST /api/embed/session
  *
- * Mints a short-lived embed session token from a long-lived embed:chat API key,
- * so the key secret never has to reach the browser. The caller presents the
- * embed key (server-to-server, or from the embedding site's backend); this
- * verifies it, then returns a token the widget forwards to POST /api/embed/chat.
- * The token - not the key - is the browser-held, rate-limited, revocable handle.
+ * Mints a short-lived embed session token from a long-lived embed:chat API key.
+ * The caller presents the embed key (the served /embed/* widget page, or the
+ * embedding site's backend); this verifies it, then returns a token the widget
+ * forwards to POST /api/embed/chat, so the key itself never rides the per-turn
+ * chat requests. The token is the rate-limited, revocable handle.
  *
  * Unauthenticated at the baseApi layer (auth:false): the embed key is verified
  * in-handler via verifyEmbedApiKey, NOT the apiKeyAuth middleware (which would
