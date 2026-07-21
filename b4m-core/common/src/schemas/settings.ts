@@ -3279,15 +3279,17 @@ export const settingsMap = {
   HardwareComputeMaxUsdPerRun: makeNumberSetting({
     key: 'HardwareComputeMaxUsdPerRun',
     name: 'Hardware Compute: Max USD per run',
-    defaultValue: 100,
+    defaultValue: 300,
     min: 1,
     max: 10_000,
     description:
       'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
       'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist; raise it here without a deploy ' +
-      'if a legitimately pricier target needs to be reachable.',
+      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
+      '2026-07-21) to admit the High-fidelity quality tier, whose debias-aware reservation runs roughly ' +
+      '16x the Standard tier; raise further here without a deploy if a legitimately pricier target needs ' +
+      'to be reachable.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -3312,14 +3314,16 @@ export const settingsMap = {
   HardwareComputeMaxUsdPerUserPerDay: makeNumberSetting({
     key: 'HardwareComputeMaxUsdPerUserPerDay',
     name: 'Hardware Compute: Max USD per user per day',
-    defaultValue: 200,
+    defaultValue: 600,
     min: 1,
     max: 100_000,
     description:
       "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
       'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raise it here without a deploy as real usage patterns emerge.',
+      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21) to admit a single ' +
+      'High-fidelity-tier run per day at the raised per-run ceiling; raise further here without a deploy ' +
+      'as real usage patterns emerge.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
