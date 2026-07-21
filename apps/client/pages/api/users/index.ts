@@ -10,7 +10,10 @@ import { Request } from 'express';
 const querySchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default(1),
   limit: z.string().regex(/^\d+$/).transform(Number).default(10),
-  search: z.string().optional(),
+  search: z
+    .string()
+    .optional()
+    .transform(val => val?.trim()),
   sortField: z.string().default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
   orgSearch: z.array(z.string()).default(['all']),
@@ -81,7 +84,9 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
     if (publicView && !isAdmin) {
-      if (!search || search.trim().length < 3) {
+      // projectId-scoped requests show members of one specific project — not a full-directory
+      // enumeration path — so they are exempt from the search-term minimum.
+      if (!projectId && (!search || search.length < 3)) {
         return res.status(400).json({ message: 'A search term of at least 3 characters is required.' });
       }
       if (downloadAll) {

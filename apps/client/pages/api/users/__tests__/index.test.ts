@@ -27,7 +27,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
-  User: { find: () => ({ getQuery: () => ({}) }), populate: vi.fn().mockResolvedValue(undefined), hydrate: (u: any) => u, aggregate: vi.fn().mockResolvedValue([]) },
+  User: {
+    find: () => ({ getQuery: () => ({}) }),
+    populate: vi.fn().mockResolvedValue(undefined),
+    hydrate: (u: any) => u,
+    aggregate: vi.fn().mockResolvedValue([]),
+  },
   Project: { findById: vi.fn() },
   executeFacetCompatible: (_m: any, _p: any, facet: any) => {
     mockRefs.facet = facet;
@@ -53,7 +58,10 @@ describe('GET /api/users - publicView enumeration guards', () => {
   });
 
   it('rejects downloadAll for a non-admin with 403', async () => {
-    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', downloadAll: 'true' });
+    const { req, res } = mocks(
+      { id: 'u1', isAdmin: false },
+      { publicView: 'true', downloadAll: 'true', search: 'abc' }
+    );
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(403);
     // Never reached the aggregation.
@@ -67,7 +75,7 @@ describe('GET /api/users - publicView enumeration guards', () => {
   });
 
   it('caps the publicView page size for a non-admin (limit 1000 -> 50)', async () => {
-    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', limit: '1000' });
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', limit: '1000', search: 'abc' });
     await mockRefs.getHandler!(req, res);
     expect(res._getStatusCode()).toBe(200);
     const limitStage = mockRefs.facet.paginatedResults.find((s: any) => '$limit' in s);
@@ -79,5 +87,33 @@ describe('GET /api/users - publicView enumeration guards', () => {
     await mockRefs.getHandler!(req, res);
     const limitStage = mockRefs.facet.paginatedResults.find((s: any) => '$limit' in s);
     expect(limitStage.$limit).toBe(1000);
+  });
+
+  it('returns 400 when non-admin publicView has no search term', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.facet).toBeUndefined();
+  });
+
+  it('returns 400 when non-admin publicView has a 2-char search term', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'ab' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(400);
+    expect(mockRefs.facet).toBeUndefined();
+  });
+
+  it('returns 200 when non-admin publicView has a 3-char search term', async () => {
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', search: 'abc' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
+
+  it('allows non-admin publicView with no search when projectId is provided', async () => {
+    // projectId-scoped requests (e.g. project member list) are not a full-directory
+    // enumeration path, so they are exempt from the 3-char search minimum.
+    const { req, res } = mocks({ id: 'u1', isAdmin: false }, { publicView: 'true', projectId: 'proj1' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
   });
 });
