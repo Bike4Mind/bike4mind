@@ -33,22 +33,30 @@ export const useHelpContent = (slug: string) => {
   const entry = index?.entries.find(e => e.slug === slug);
   const filePath = entry?.filePath;
 
+  // The bundled content lives under `<locale>/<filePath>` when this entry is a
+  // translation (marked by the index), else at the English `<filePath>`. filePath
+  // itself stays locale-agnostic so relative-link resolution is unaffected.
+  const contentPath = entry?.locale ? `${entry.locale}/${filePath}` : filePath;
+
   const query = useQuery({
-    queryKey: ['help-content', slug],
+    // contentPath keys the cache so switching language refetches the right file.
+    queryKey: ['help-content', slug, contentPath],
     queryFn: () => {
-      if (!filePath) {
+      if (!contentPath) {
         throw new Error(`No help entry found for slug: ${slug}`);
       }
-      return fetchHelpContent(filePath);
+      return fetchHelpContent(contentPath);
     },
-    enabled: !!filePath,
+    enabled: !!contentPath,
     staleTime: 5 * 60 * 1000, // 5 minutes
     gcTime: 30 * 60 * 1000, // 30 minutes
   });
 
   // Expose the resolved file path so callers can resolve relative links against
   // the article's file path rather than its slug (index pages drop "/index").
-  return { ...query, filePath };
+  // articleLocale is the locale the CONTENT is actually in (undefined = English),
+  // which the UI uses to flag English fallbacks.
+  return { ...query, filePath, articleLocale: entry?.locale };
 };
 
 export default useHelpContent;

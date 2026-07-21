@@ -4,6 +4,7 @@ import passport from 'passport';
 import fs from 'fs';
 import path from 'path';
 import type { Request, Response, NextFunction } from 'express';
+import { sanitizeLocale, firstQueryValue } from '@server/help/localeParam';
 
 /**
  * Help Index API Endpoint
@@ -74,23 +75,45 @@ const handler = baseApi({ auth: false })
   .use(optionalAuth)
   .get(async (req, res) => {
     try {
-      const indexPath = path.join(process.cwd(), 'app/generated/help-index.json');
+      const generatedDir = path.join(process.cwd(), 'app/generated');
+
+      // Resolve the requested locale to a generated index file. `en` (and any
+      // unbuilt locale) serves the canonical help-index.json; a built locale
+      // serves help-index.<locale>.json, whose entries fall back to English
+      // per-article. The locale is sanitized to a strict allowlist so it can
+      // never escape the generated directory.
+      const requestedLocale = sanitizeLocale(firstQueryValue(req.query.locale));
+      const localeIndexPath =
+        requestedLocale === 'en'
+          ? path.join(generatedDir, 'help-index.json')
+          : path.join(generatedDir, `help-index.${requestedLocale}.json`);
 
       let indexContent: string;
+      let servedLocale = requestedLocale;
       try {
-        indexContent = await fs.promises.readFile(indexPath, 'utf-8');
+        indexContent = await fs.promises.readFile(localeIndexPath, 'utf-8');
       } catch {
-        res.status(404).json({
-          error: 'Help index not found. Run pnpm help:build-index to generate it.',
-        });
-        return;
+        // Locale not built yet: fall back to the English index rather than 404.
+        if (requestedLocale !== 'en') {
+          try {
+            indexContent = await fs.promises.readFile(path.join(generatedDir, 'help-index.json'), 'utf-8');
+            servedLocale = 'en';
+          } catch {
+            res.status(404).json({ error: 'Help index not found. Run pnpm help:build-index to generate it.' });
+            return;
+          }
+        } else {
+          res.status(404).json({ error: 'Help index not found. Run pnpm help:build-index to generate it.' });
+          return;
+        }
       }
 
       const helpIndex: HelpIndex = JSON.parse(indexContent);
       const isAdmin = !!req.user?.isAdmin;
 
-      // Generate role-aware ETag for conditional requests
-      const etag = `"${helpIndex.version}-${isAdmin ? 'admin' : 'public'}"`;
+      // ETag is role- AND locale-aware so a language switch can't serve a stale
+      // 304 from a different language's cached response.
+      const etag = `"${helpIndex.version}-${isAdmin ? 'admin' : 'public'}-${servedLocale}"`;
 
       const clientEtag = req.headers['if-none-match'];
       if (clientEtag === etag) {

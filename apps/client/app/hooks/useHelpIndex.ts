@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query';
 import type { HelpIndex, HelpIndexEntry, HelpCategory } from '@bike4mind/scripts/help/types';
 import { useAccessToken } from './useAccessToken';
+import { useLanguage } from '@client/app/contexts/TranslationProvider';
 
 /**
  * Simple non-reversible hash for cache key derivation.
@@ -22,9 +23,10 @@ function hashForCacheKey(str: string): string {
  * Load help index from API with proper cache handling.
  * Sends auth headers so the server can return admin-only entries for admin users.
  */
-const loadHelpIndex = async (accessToken: string | null): Promise<HelpIndex> => {
+const loadHelpIndex = async (accessToken: string | null, locale: string): Promise<HelpIndex> => {
   try {
-    const response = await fetch('/api/help', {
+    const query = locale && locale !== 'en' ? `?locale=${encodeURIComponent(locale)}` : '';
+    const response = await fetch(`/api/help${query}`, {
       credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
@@ -59,13 +61,15 @@ const loadHelpIndex = async (accessToken: string | null): Promise<HelpIndex> => 
  */
 export const useHelpIndex = () => {
   const accessToken = useAccessToken(state => state.accessToken);
+  const language = useLanguage(state => state.language);
   // Hash the token for a session-unique cache key that busts immediately on login/logout
   // without exposing the JWT in React Query DevTools or telemetry
   const sessionKey = accessToken ? hashForCacheKey(accessToken) : 'anonymous';
 
   return useQuery({
-    queryKey: ['help-index', sessionKey],
-    queryFn: () => loadHelpIndex(accessToken),
+    // Language is part of the key so switching UI language refetches the localized index.
+    queryKey: ['help-index', sessionKey, language],
+    queryFn: () => loadHelpIndex(accessToken, language),
     staleTime: 5 * 60 * 1000, // 5 minutes - matches server cache
     gcTime: 30 * 60 * 1000, // 30 minutes
     refetchOnMount: 'always',

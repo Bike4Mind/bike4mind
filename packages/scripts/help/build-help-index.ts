@@ -200,7 +200,10 @@ async function buildHelpIndex(): Promise<void> {
 
   const locales = discoverLocales().filter(l => l !== DEFAULT_LOCALE);
   for (const locale of locales) {
-    const localeEntries = entriesFromArticles(await loadHelpArticles(locale));
+    // Stamp each translated entry with its locale so the client knows to fetch
+    // the bundled content from `<locale>/<filePath>`. Fallback (English) entries
+    // stay unstamped and resolve to the English content path.
+    const localeEntries = entriesFromArticles(await loadHelpArticles(locale)).map(e => ({ ...e, locale }));
     const merged = applyLocaleFallback(enEntries, localeEntries);
     const translated = localeEntries.length;
     const outPath = localeIndexPath(locale);

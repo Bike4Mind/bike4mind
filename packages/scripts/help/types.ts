@@ -18,8 +18,12 @@ export interface HelpIndexEntry {
   sidebarPosition: number; // From frontmatter, for ordering
   tags: string[]; // From frontmatter (optional)
   headings: HelpHeading[]; // Extracted from content
-  filePath: string; // Relative path to the markdown file
+  filePath: string; // Locale-agnostic relative path to the markdown file (e.g. "features/x.md")
   accessLevel: HelpAccessLevel; // 'public' for user docs, 'admin' for admin-only docs
+  // Set only in a locale index when THIS entry's content is a translation bundled
+  // under `<locale>/<filePath>`. Absent means English (either the English index or
+  // a per-article fallback), so the client fetches the English content path.
+  locale?: string;
 }
 
 export interface HelpCategory {

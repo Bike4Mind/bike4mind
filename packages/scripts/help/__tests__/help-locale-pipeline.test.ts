@@ -50,4 +50,13 @@ describe('applyLocaleFallback', () => {
     const merged = applyLocaleFallback(en, localized);
     expect(merged.map(e => e.title)).toEqual(['A', 'B', 'C']);
   });
+
+  it('preserves the locale marker on translated entries and leaves fallbacks unmarked', () => {
+    // Mirrors buildHelpIndex stamping each translated entry with its locale.
+    const localized = [{ ...entry('features/b', 'B (es)'), locale: 'es' }];
+    const merged = applyLocaleFallback(en, localized);
+    const bySlug = Object.fromEntries(merged.map(e => [e.slug, e]));
+    expect(bySlug['features/b'].locale).toBe('es'); // client fetches es/features/b.md
+    expect(bySlug['features/a'].locale).toBeUndefined(); // fallback -> English content path
+  });
 });

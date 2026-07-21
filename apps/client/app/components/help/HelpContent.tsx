@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Accordion, AccordionDetails, AccordionSummary, Box, CircularProgress, Typography } from '@mui/joy';
+import { Accordion, AccordionDetails, AccordionSummary, Box, Chip, CircularProgress, Typography } from '@mui/joy';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
@@ -8,6 +8,7 @@ import type { Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
 import { useHelpContent } from '@client/app/hooks/useHelpContent';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
+import { useLanguage } from '@client/app/contexts/TranslationProvider';
 import { toAnchor, resolveRelativePath } from '@bike4mind/scripts/help/utils';
 import { CodeBlock } from '@client/app/components/common/CodeBlock';
 import HelpFeedbackWidget from './HelpFeedbackWidget';
@@ -233,8 +234,13 @@ export const markdownComponents = {
 };
 
 const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
-  const { data: content, isLoading, error, filePath } = useHelpContent(slug);
+  const { data: content, isLoading, error, filePath, articleLocale } = useHelpContent(slug);
+  const language = useLanguage(state => state.language);
   const contentRef = useRef<HTMLDivElement>(null);
+
+  // The user picked a non-English UI language but this article isn't translated
+  // yet, so we're serving the English original (per-article fallback). Flag it.
+  const showEnglishFallback = language !== 'en' && !articleLocale;
 
   // Keep the store's current file path in sync with the displayed article so
   // relative-link resolution (handleLinkClick) can use the file path instead of
@@ -404,6 +410,11 @@ const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
         },
       }}
     >
+      {showEnglishFallback && (
+        <Chip size="sm" variant="soft" color="neutral" data-testid="help-english-fallback-chip" sx={{ mb: 1.5 }}>
+          Shown in English (not yet translated)
+        </Chip>
+      )}
       <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
         {content}
       </ReactMarkdown>
