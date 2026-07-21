@@ -7,9 +7,10 @@ import {
   ExtractedArtifact,
   NotebookCurationError,
 } from '@bike4mind/common';
-import type { LLMContext } from './llmMarkdownGenerator';
+import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
 import { createFabFile } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
+import { createHash } from 'crypto';
 
 export interface NotebookCurationAdapters {
   sessionRepository: any; // ISessionRepository
@@ -22,6 +23,64 @@ export interface NotebookCurationAdapters {
   llmService?: LLMContext; // Optional: Required for executive summary generation (Option 2)
   llmModelId?: string; // Optional: Model ID to use for LLM operations (e.g., 'gpt-4o-mini', 'claude-3-5-sonnet-bedrock')
   onProgress?: (progress: CurationProgress) => Promise<void>;
+}
+
+/**
+ * Bump when anything that changes the produced document but is NOT captured by the
+ * hashed inputs changes materially, so previously cached sessions re-curate instead
+ * of serving pre-change output. This includes: the curation prompts, the output
+ * format, the operations model (an admin runtime swap, not code), and
+ * sampleConversation's selection logic.
+ */
+const CURATION_HASH_VERSION = 'v1';
+
+/**
+ * Stable hash of everything that determines the curated output: the hash version,
+ * the curation type, the include/format options, and the conversation content. An
+ * unchanged re-curation produces the same hash, letting curateNotebook reuse the
+ * stored file and skip the LLM + credit charge (issue #91).
+ *
+ * Intentionally NOT hashed:
+ * - options.tokenBudget: affects only the base credit deduction, not the document.
+ * - session.name: curation is a point-in-time snapshot, so a rename alone should
+ *   not force a full (paid) re-curation just to refresh the header title.
+ */
+export function computeCurationContentHash(messages: any[], options: CurationOptions): string {
+  const hash = createHash('sha256');
+  hash.update(`ver:${CURATION_HASH_VERSION}`);
+  hash.update(`|type:${options.curationType || 'transcript'}`);
+  hash.update(`|fmt:${options.exportFormat || 'markdown'}`);
+  hash.update(`|name:${options.customNotebookName || ''}`);
+  hash.update(
+    `|inc:${options.includeCode}${options.includeDiagrams}${options.includeDataViz}` +
+      `${options.includeQuestMaster}${options.includeResearch}${options.includeImages}`
+  );
+  // Field-separated so content shifting between fields can't collide (e.g.
+  // prompt "foo"+reply "bar" must not hash the same as prompt "fooba"+reply "r").
+  // MUST cover every message field that artifactExtractor.extractArtifactsFromMessage
+  // reads - including ones mutated AFTER message creation (deepResearchState is set
+  // when a Deep Research tool finishes, images/questMasterPlanId land later) - or an
+  // unchanged prompt/reply would mask a real content change and serve a stale doc.
+  for (const message of messages) {
+    hash.update('|m:');
+    hash.update(message.id || message._id?.toString() || '');
+    hash.update('|p:');
+    hash.update(message.prompt || '');
+    hash.update('|r:');
+    hash.update(message.reply || '');
+    hash.update('|rs:');
+    // JSON.stringify (not join) so ['a','b'] and ['a b'] cannot collide.
+    if (Array.isArray(message.replies)) hash.update(JSON.stringify(message.replies));
+    hash.update('|q:');
+    hash.update(message.questMasterReply || '');
+    hash.update('|qmp:');
+    hash.update(message.questMasterPlanId || '');
+    hash.update('|drs:');
+    if (message.deepResearchState) hash.update(JSON.stringify(message.deepResearchState));
+    hash.update('|img:');
+    if (Array.isArray(message.images)) hash.update(JSON.stringify(message.images));
+  }
+  return hash.digest('hex');
 }
 
 /**
@@ -109,6 +168,53 @@ export class NotebookCurationService {
         artifactsFound: artifacts.length,
       });
 
+      // Cache check runs AFTER artifact extraction (above) on purpose: extraction
+      // is cheap (no LLM) and keeps artifactCount accurate in the cache-hit return.
+      // If this session was already curated with the same inputs (content + type +
+      // options), reuse the stored file and skip the LLM, storage, and credit
+      // charge entirely. The hash is stored on the session after a successful
+      // curation below.
+      const contentHash = computeCurationContentHash(messages, options);
+      if (session.curatedNotebookFileId && session.curationContentHash === contentHash) {
+        // Only reuse if the stored file still exists. The curated FabFile may have
+        // been deleted since the last run; if so, fall through and regenerate
+        // rather than return a dangling id (download would 404).
+        const existingFile = await this.adapters.fabFileRepository.findById(session.curatedNotebookFileId);
+        if (existingFile) {
+          // curatedAt is intentionally NOT refreshed on a cache hit - it records
+          // when the document was actually produced, which has not changed.
+          this.adapters.logger.info('Curation cache hit - reusing existing file, skipping LLM and credit charge', {
+            sessionId,
+            curatedFileId: session.curatedNotebookFileId,
+            contentHash,
+          });
+
+          await this.sendProgress({
+            stage: 'storing',
+            percentage: 100,
+            message: 'Reused existing curation (no changes since last run)',
+          });
+
+          return {
+            success: true,
+            curatedFileId: session.curatedNotebookFileId,
+            // Mirror the regenerate path's result shape so consumers see the same
+            // fields on a cache hit as on a fresh curation.
+            fileName: existingFile.fileName,
+            fileSize: existingFile.fileSize,
+            artifactCount: artifacts.length,
+            messageCount: messages.length,
+            tokensProcessed: totalTokens,
+            tokensDeducted: 0,
+          };
+        }
+
+        this.adapters.logger.info('Curation content unchanged but stored file is missing - regenerating', {
+          sessionId,
+          curatedFileId: session.curatedNotebookFileId,
+        });
+      }
+
       // Stage 4: Generate markdown document
       await this.sendProgress({
         stage: 'generating',
@@ -116,17 +222,18 @@ export class NotebookCurationService {
         message: 'Generating curated document...',
       });
 
-      const { markdown, tokensUsed: llmTokensUsed } = await this.generateMarkdown(
-        session,
-        messages,
-        artifacts,
-        options
-      );
+      const {
+        markdown,
+        tokensUsed: llmTokensUsed,
+        tokenUsage: llmTokenUsage,
+      } = await this.generateMarkdown(session, messages, artifacts, options);
 
       this.adapters.logger.info('Generated markdown', {
         sessionId,
         markdownSize: markdown.length,
         llmTokensUsed,
+        llmInputTokens: llmTokenUsage.inputTokens,
+        llmOutputTokens: llmTokenUsage.outputTokens,
       });
 
       await this.sendProgress({
@@ -163,11 +270,13 @@ export class NotebookCurationService {
         throw new NotebookCurationError('Failed to store curated file', 'STORAGE_FAILED');
       }
 
-      // Stage 6: Update session metadata
+      // Stage 6: Update session metadata (store the content hash so an unchanged
+      // re-curation hits the cache above and skips the LLM next time)
       await this.adapters.sessionRepository.update({
         id: sessionId,
         curatedNotebookFileId: fileId,
         curatedAt: new Date(),
+        curationContentHash: contentHash,
       });
 
       this.adapters.logger.info('Updated session metadata', { sessionId, curatedFileId: fileId });
@@ -346,7 +455,7 @@ export class NotebookCurationService {
     messages: any[],
     artifacts: ExtractedArtifact[],
     options: CurationOptions
-  ): Promise<{ markdown: string; tokensUsed: number }> {
+  ): Promise<{ markdown: string; tokensUsed: number; tokenUsage: CurationTokenUsage }> {
     // Route by curation type
     if (options.curationType === CurationType.EXECUTIVE_SUMMARY) {
       // Option 2: AI-powered executive summary
@@ -375,7 +484,6 @@ export class NotebookCurationService {
           includeTimestamps: false, // Executive summaries don't need timestamps
           includeMetadata: true,
           includeTableOfContents: true,
-          maxSummaryLength: 2000,
         }
       );
 
@@ -408,6 +516,7 @@ export class NotebookCurationService {
       return {
         markdown,
         tokensUsed: 0, // Template-based doesn't use LLM tokens
+        tokenUsage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
       };
     }
   }

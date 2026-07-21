@@ -73,6 +73,7 @@ const SessionSchema = new Schema<ISession, ISessionModel, {}>(
     lastUsedModel: { type: String, required: false },
     curatedNotebookFileId: { type: String, required: false }, // Points to the latest curated markdown file
     curatedAt: { type: Date, required: false }, // When the notebook was last curated
+    curationContentHash: { type: String, required: false }, // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
     messageCount: { type: Number, required: false }, // Lazy-loaded count of messages - calculated on first read
     slackMetadata: {
       type: {

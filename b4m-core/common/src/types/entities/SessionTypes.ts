@@ -586,6 +586,7 @@ export interface ISession {
   summaryModelId?: ChatModelName;
   curatedNotebookFileId?: string; // Points to the latest curated markdown file
   curatedAt?: Date; // When the notebook was last curated
+  curationContentHash?: string; // Hash of the last curation's inputs (content + type + options); lets an unchanged re-curation reuse the file and skip the LLM
   messageCount?: number; // Lazy-loaded count of messages in this session - calculated on first read
   slackMetadata?: {
     channelId: string;

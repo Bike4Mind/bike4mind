@@ -10,14 +10,12 @@ export interface LLMMarkdownGeneratorOptions {
   includeTimestamps: boolean;
   includeMetadata: boolean;
   includeTableOfContents: boolean;
-  maxSummaryLength?: number; // Max tokens for summary generation
 }
 
 const DEFAULT_OPTIONS: LLMMarkdownGeneratorOptions = {
   includeTimestamps: false, // Executive summaries don't need timestamps
   includeMetadata: true,
   includeTableOfContents: true,
-  maxSummaryLength: 2000, // ~2000 tokens for summary
 };
 
 /**
@@ -32,6 +30,27 @@ export interface LLMContext {
   ) => Promise<void>;
 }
 
+/** Per-curation token usage, split so savings are measurable (issue #91 AC#1). */
+export interface CurationTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+}
+
+/**
+ * Generates text from the LLM and reports the input/output token split for that
+ * call. The streaming complete() interface does not surface real provider usage,
+ * so counts are estimated (chars/4); keeping input and output separate is what
+ * makes the before/after comparison meaningful.
+ */
+type GenerateTextFn = (prompt: string) => Promise<{ text: string; inputTokens: number; outputTokens: number }>;
+
+// Delimiters for the single consolidated narrative call. The model emits all
+// three sections in one response; we split them back apart by these markers.
+export const SUMMARY_DELIMITER = '===EXECUTIVE_SUMMARY===';
+export const INSIGHTS_DELIMITER = '===KEY_INSIGHTS===';
+export const DECISIONS_DELIMITER = '===DECISIONS_AND_ACTIONS===';
+
 /**
  * Generate Option 2: LLM-powered executive summary
  *
@@ -42,6 +61,10 @@ export interface LLMContext {
  * - Action Items
  * - Code & Artifacts (with AI-generated descriptions)
  * - Learnings & Takeaways
+ *
+ * The summary, insights and decisions come from a SINGLE LLM call that sends the
+ * conversation sample once (previously three calls each re-embedded the same
+ * ~5000-char sample). Artifact descriptions remain a separate batched call.
  */
 export async function generateExecutiveSummaryMarkdown(
   session: any,
@@ -50,13 +73,13 @@ export async function generateExecutiveSummaryMarkdown(
   llmContext: LLMContext,
   model: string,
   options: Partial<LLMMarkdownGeneratorOptions> = {}
-): Promise<{ markdown: string; tokensUsed: number }> {
+): Promise<{ markdown: string; tokensUsed: number; tokenUsage: CurationTokenUsage }> {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const sections: string[] = [];
-  let totalTokensUsed = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
 
-  // Helper to generate text from LLM
-  const generateText = async (prompt: string): Promise<string> => {
+  const generateText: GenerateTextFn = async (prompt: string) => {
     let result = '';
     await llmContext.complete(
       model,
@@ -66,7 +89,7 @@ export async function generateExecutiveSummaryMarkdown(
         result += chunks[0] || '';
       }
     );
-    return result;
+    return { text: result, inputTokens: estimateTokens(prompt), outputTokens: estimateTokens(result) };
   };
 
   // Header
@@ -77,36 +100,35 @@ export async function generateExecutiveSummaryMarkdown(
     sections.push(generateExecutiveTOC());
   }
 
-  // Generate AI-powered Executive Summary
-  const summaryResult = await generateAIExecutiveSummary(session, messages, generateText, opts.maxSummaryLength);
-  sections.push(summaryResult.markdown);
-  totalTokensUsed += summaryResult.tokensUsed;
-
-  // Generate AI-powered Key Insights
-  const insightsResult = await generateAIKeyInsights(messages, generateText);
-  sections.push(insightsResult.markdown);
-  totalTokensUsed += insightsResult.tokensUsed;
-
-  // Generate AI-powered Decisions & Actions
-  const decisionsResult = await generateAIDecisionsAndActions(messages, generateText);
-  sections.push(decisionsResult.markdown);
-  totalTokensUsed += decisionsResult.tokensUsed;
+  // Single consolidated call: summary + insights + decisions from one sample.
+  // Skip any section the model left empty (e.g. the no-delimiter fallback puts
+  // everything in summary) rather than emit a bare heading.
+  const narrative = await generateAIConsolidatedNarrative(session, messages, generateText);
+  if (narrative.summary) sections.push(`## Executive Summary\n\n${narrative.summary}`);
+  if (narrative.insights) sections.push(`## Key Insights\n\n${narrative.insights}`);
+  if (narrative.decisions) sections.push(`## Decisions & Actions\n\n${narrative.decisions}`);
+  inputTokens += narrative.inputTokens;
+  outputTokens += narrative.outputTokens;
 
   // Code & Artifacts (with AI-generated descriptions)
   if (artifacts.length > 0) {
     const artifactsResult = await generateAIArtifactsSection(artifacts, messages, generateText);
     sections.push(artifactsResult.markdown);
-    totalTokensUsed += artifactsResult.tokensUsed;
+    inputTokens += artifactsResult.inputTokens;
+    outputTokens += artifactsResult.outputTokens;
   }
+
+  const totalTokens = inputTokens + outputTokens;
 
   // Metadata Footer
   if (opts.includeMetadata) {
-    sections.push(generateExecutiveMetadata(session, messages, artifacts, totalTokensUsed));
+    sections.push(generateExecutiveMetadata(session, messages, artifacts, totalTokens));
   }
 
   return {
     markdown: sections.filter(Boolean).join('\n\n---\n\n'),
-    tokensUsed: totalTokensUsed,
+    tokensUsed: totalTokens,
+    tokenUsage: { inputTokens, outputTokens, totalTokens },
   };
 }
 
@@ -142,18 +164,20 @@ function generateExecutiveTOC(): string {
 }
 
 /**
- * Generate AI-powered executive summary
+ * Generate the executive summary, key insights, and decisions/actions in a
+ * SINGLE LLM call. Previously three separate calls each re-embedded the same
+ * ~5000-char conversation sample, paying for that context three times (issue
+ * #91). Here the sample is sent once and the model returns three delimited
+ * sections, which parseConsolidatedNarrative splits back apart.
  */
-async function generateAIExecutiveSummary(
+async function generateAIConsolidatedNarrative(
   session: any,
   messages: any[],
-  generateText: (prompt: string) => Promise<string>,
-  maxTokens?: number
-): Promise<{ markdown: string; tokensUsed: number }> {
-  // Prepare conversation context (sample key messages)
-  const conversationSample = sampleConversation(messages, 5000); // ~5000 tokens max
+  generateText: GenerateTextFn
+): Promise<{ summary: string; insights: string; decisions: string; inputTokens: number; outputTokens: number }> {
+  const conversationSample = sampleConversation(messages, 5000); // ~5000 chars max
 
-  const prompt = `You are an AI assistant helping to curate a notebook conversation into an executive summary.
+  const prompt = `You are curating a notebook conversation into an executive summary for knowledge sharing.
 
 Session: ${session.name}
 Total Messages: ${messages.length}
@@ -161,86 +185,74 @@ Total Messages: ${messages.length}
 Conversation Sample:
 ${conversationSample}
 
-Generate a comprehensive executive summary that:
-1. Explains what the conversation was about (1-2 paragraphs)
-2. Highlights the main topics discussed
-3. Describes the outcome or final state
+Produce THREE sections. Introduce each with its exact delimiter line below, on its own line, and add no other top-level headings.
 
-Write in a professional, concise style suitable for knowledge sharing.`;
+${SUMMARY_DELIMITER}
+A comprehensive executive summary: explain what the conversation was about (1-2 paragraphs), highlight the main topics discussed, and describe the outcome or final state. Professional, concise style.
 
-  const text = await generateText(prompt);
-  const tokensUsed = estimateTokens(prompt + text);
-
-  return {
-    markdown: `## Executive Summary\n\n${text}`,
-    tokensUsed,
-  };
-}
-
-/**
- * Generate AI-powered key insights
- */
-async function generateAIKeyInsights(
-  messages: any[],
-  generateText: (prompt: string) => Promise<string>
-): Promise<{ markdown: string; tokensUsed: number }> {
-  const conversationSample = sampleConversation(messages, 5000);
-
-  const prompt = `Analyze this conversation and extract the top 5-7 key insights or learnings.
-
-Conversation:
-${conversationSample}
-
-Format your response as a bullet list of key insights. Each insight should be:
-- Concise (1-2 sentences)
-- Actionable or informative
-- Focused on technical or strategic learnings
-
-Example format:
+${INSIGHTS_DELIMITER}
+The top 5-7 key insights or learnings as a bullet list. Each bullet concise (1-2 sentences), actionable or informative, focused on technical or strategic learnings. Example:
 - **Understanding of X**: Brief explanation
 - **Decision on Y**: What was decided and why
-- **Technical approach for Z**: Key technical insight`;
 
-  const text = await generateText(prompt);
-  const tokensUsed = estimateTokens(prompt + text);
+${DECISIONS_DELIMITER}
+Two markdown subsections:
+### Decisions Made
+List 3-5 major decisions with brief rationale.
+### Action Items
+List any next steps or TODOs mentioned.`;
 
-  return {
-    markdown: `## Key Insights\n\n${text}`,
-    tokensUsed,
-  };
+  const { text, inputTokens, outputTokens } = await generateText(prompt);
+  const parsed = parseConsolidatedNarrative(text);
+
+  return { ...parsed, inputTokens, outputTokens };
 }
 
 /**
- * Generate AI-powered decisions and actions
+ * Split the consolidated response into its three sections by delimiter. Tolerant
+ * by design: if the model omits the delimiters entirely, the whole response falls
+ * back into the summary so no content is lost. Delimiters are located by position
+ * and each section runs to the next delimiter, so any ordering the model emits is
+ * handled (not just summary -> insights -> decisions).
  */
-async function generateAIDecisionsAndActions(
-  messages: any[],
-  generateText: (prompt: string) => Promise<string>
-): Promise<{ markdown: string; tokensUsed: number }> {
-  const conversationSample = sampleConversation(messages, 5000);
-
-  const prompt = `Analyze this conversation and identify key decisions made and action items.
-
-Conversation:
-${conversationSample}
-
-Create two sections:
-
-### Decisions Made
-List 3-5 major decisions with brief rationale
-
-### Action Items
-List any next steps or TODOs mentioned
-
-Format as markdown with bullet points.`;
-
-  const text = await generateText(prompt);
-  const tokensUsed = estimateTokens(prompt + text);
-
-  return {
-    markdown: `## Decisions & Actions\n\n${text}`,
-    tokensUsed,
+export function parseConsolidatedNarrative(text: string): { summary: string; insights: string; decisions: string } {
+  // Match a delimiter only when it is alone on its own line, so a delimiter
+  // string echoed inside a section body cannot split the response wrongly.
+  // The delimiters contain no regex-special characters.
+  const findDelim = (delim: string): number => {
+    const match = new RegExp(`^${delim}[ \\t]*$`, 'm').exec(text);
+    return match ? match.index : -1;
   };
+
+  type Key = 'summary' | 'insights' | 'decisions';
+  const marks = (
+    [
+      { key: 'summary', delim: SUMMARY_DELIMITER },
+      { key: 'insights', delim: INSIGHTS_DELIMITER },
+      { key: 'decisions', delim: DECISIONS_DELIMITER },
+    ] as { key: Key; delim: string }[]
+  )
+    .map(m => ({ ...m, idx: findDelim(m.delim) }))
+    .filter(m => m.idx !== -1)
+    .sort((a, b) => a.idx - b.idx);
+
+  const result: Record<Key, string> = { summary: '', insights: '', decisions: '' };
+
+  // No delimiters at all -> keep the whole response rather than lose it.
+  if (marks.length === 0) {
+    result.summary = text.trim();
+    return result;
+  }
+
+  // Each section spans from the end of its delimiter to the start of the next one
+  // (in document order), so out-of-order delimiters still slice cleanly.
+  for (let i = 0; i < marks.length; i++) {
+    const start = marks[i].idx + marks[i].delim.length;
+    const end = i + 1 < marks.length ? marks[i + 1].idx : text.length;
+    result[marks[i].key] = text.slice(start, end).trim();
+  }
+
+  return result;
 }
 
 /**
@@ -250,10 +262,9 @@ Format as markdown with bullet points.`;
 async function generateAIArtifactsSection(
   artifacts: ExtractedArtifact[],
   messages: any[],
-  generateText: (prompt: string) => Promise<string>
-): Promise<{ markdown: string; tokensUsed: number }> {
+  generateText: GenerateTextFn
+): Promise<{ markdown: string; inputTokens: number; outputTokens: number }> {
   const sections: string[] = ['## Code & Artifacts\n'];
-  let totalTokensUsed = 0;
 
   // Group artifacts by type
   const typeGroups = groupArtifactsByType(artifacts);
@@ -275,7 +286,6 @@ async function generateAIArtifactsSection(
 
   // OPTIMIZATION: Generate all artifact descriptions in a single batched LLM call
   const batchDescriptionResult = await generateBatchedArtifactDescriptions(artifacts, messages, generateText);
-  totalTokensUsed += batchDescriptionResult.tokensUsed;
 
   // Create a map of artifact index to description for quick lookup
   const descriptionMap = new Map<number, string>();
@@ -303,7 +313,8 @@ async function generateAIArtifactsSection(
 
   return {
     markdown: sections.join('\n'),
-    tokensUsed: totalTokensUsed,
+    inputTokens: batchDescriptionResult.inputTokens,
+    outputTokens: batchDescriptionResult.outputTokens,
   };
 }
 
@@ -314,11 +325,11 @@ async function generateAIArtifactsSection(
 async function generateBatchedArtifactDescriptions(
   artifacts: ExtractedArtifact[],
   messages: any[],
-  generateText: (prompt: string) => Promise<string>
-): Promise<{ descriptions: string[]; tokensUsed: number }> {
+  generateText: GenerateTextFn
+): Promise<{ descriptions: string[]; inputTokens: number; outputTokens: number }> {
   // If no artifacts, return empty
   if (artifacts.length === 0) {
-    return { descriptions: [], tokensUsed: 0 };
+    return { descriptions: [], inputTokens: 0, outputTokens: 0 };
   }
 
   // Build a single prompt with all artifacts
@@ -350,15 +361,15 @@ Example format:
 
 Provide descriptions for all ${artifacts.length} artifacts:`;
 
-  const text = await generateText(batchPrompt);
-  const tokensUsed = estimateTokens(batchPrompt + text);
+  const { text, inputTokens, outputTokens } = await generateText(batchPrompt);
 
   // Parse the numbered list response into individual descriptions
   const descriptions = parseNumberedListResponse(text, artifacts.length);
 
   return {
     descriptions,
-    tokensUsed,
+    inputTokens,
+    outputTokens,
   };
 }
 
