@@ -48,7 +48,7 @@ export function buildRateLimitKeys(keyId: string): { minuteKey: string; dayKey: 
  * deleting a missing doc is a no-op (idempotent).
  *
  * Note: embed keys additionally have per-session counters
- * (`embed-session-rate-limit:{sessionId}`, see middlewares/embedSessionRateLimit)
+ * (`embed-session-rate-limit:{sessionId}:minute|:day`, see ./embedSessionRateLimit)
  * which this deliberately does not clear.
  */
 export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
