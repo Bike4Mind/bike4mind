@@ -679,6 +679,166 @@ describe('GET /api/publish/serve - reply embedded HTML artifact (#708)', () => {
   });
 });
 
+describe('GET /api/publish/serve - fabfile embedded HTML artifact (#722)', () => {
+  // A fabfile is literal file text (kept as escaped <pre>), but an embedded <artifact> block frames
+  // via the same sandboxed ?a= path as the reply viewer. The leading text uses markdown syntax to
+  // prove the fabfile branch does NOT marked-render it.
+  const FAB_BODY =
+    '# My File\n' +
+    '<artifact identifier="w" type="text/html" title="Widget">' +
+    '<!DOCTYPE html><html><body><h1>FAB_WIDGET</h1><script>window.fab=1</script></body></html>' +
+    '</artifact>';
+
+  const htmlFab = (over: Record<string, unknown> = {}) => ({
+    publicId: 'fhtml',
+    title: 'notes.md',
+    visibility: 'public',
+    ownerId: 'owner1',
+    source: { kind: 'fabfile' },
+    renderedBody: FAB_BODY,
+    storageKeyPrefix: '',
+    manifest: [],
+    tier: 'user',
+    scopeId: 's',
+    slug: 'fhtml',
+    ...over,
+  });
+
+  it('frames the embedded artifact and keeps the remaining fabfile text as literal escaped <pre> (not markdown)', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlFab());
+    const { res, promise } = run(['f', 'fhtml']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('sandbox="allow-scripts"');
+    expect(data).toContain('src="/p/f/fhtml?a=0"');
+    // Non-artifact text stays literal in a <pre>: the markdown heading is NOT rendered to <h1>.
+    expect(data).toContain('<pre class="b4m-pre">');
+    expect(data).toContain('# My File');
+    expect(data).not.toContain('<h1>My File</h1>');
+    // The artifact's inner markup must NOT leak into the page (it lives in the iframe sub-doc).
+    expect(data).not.toContain('FAB_WIDGET');
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain("script-src 'none'");
+    expect(csp).toContain("frame-src 'self'");
+  });
+
+  it('serves the fabfile ?a= sub-document as a sandboxed HTML doc that runs the artifact JS in isolation', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlFab());
+    const { res, promise } = run(['f', 'fhtml'], { a: '0' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(res.getHeader('Content-Type')).toContain('text/html');
+    expect(res._getData() as string).toContain('window.fab=1');
+    const csp = res.getHeader('Content-Security-Policy') as string;
+    expect(csp).toContain('sandbox allow-scripts');
+    expect(csp).not.toContain("script-src 'none'");
+  });
+
+  it('404s an out-of-range fabfile ?a= index', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlFab());
+    const { res, promise } = run(['f', 'fhtml'], { a: '7' });
+    await promise;
+    expect(res._getStatusCode()).toBe(404);
+  });
+
+  it('renders a placeholder card (no iframe) for a non-embeddable fabfile artifact type, and 404s its ?a=', async () => {
+    const reactFab = htmlFab({
+      publicId: 'freact',
+      slug: 'freact',
+      renderedBody:
+        '<artifact identifier="c" type="application/vnd.ant.react" title="Counter">export default function C(){return null}</artifact>',
+    });
+    mockArtifactFindOne.mockReturnValue(reactFab);
+
+    const { res: pageRes, promise: pagePromise } = run(['f', 'freact']);
+    await pagePromise;
+    const page = pageRes._getData() as string;
+    expect(page).toContain('b4m-artifact-card');
+    expect(page).not.toContain('<iframe');
+
+    const { res: subRes, promise: subPromise } = run(['f', 'freact'], { a: '0' });
+    await subPromise;
+    expect(subRes._getStatusCode()).toBe(404);
+  });
+
+  it('renders a placeholder card (not a frame) for a Bearer-gated org fabfile', async () => {
+    const gated = htmlFab({
+      publicId: 'f-org-html',
+      slug: 'f-org-html',
+      visibility: 'organization',
+      tier: 'organization',
+      scopeId: 'org_42',
+    });
+    mockArtifactFindOne.mockReturnValue(gated);
+    const { res, promise } = run(['f', 'f-org-html'], { user: { id: 'member', organizationId: 'org_42' } });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('b4m-artifact-card');
+    expect(data).not.toContain('<iframe');
+  });
+
+  it('frames the fabfile artifact on a /a/{token} share, pointing the iframe back at the token path', async () => {
+    mockArtifactFindOne.mockReturnValue(htmlFab({ publicId: 'f-shared', slug: 'f-shared' }));
+
+    const { res: pageRes, promise: pagePromise } = run(['a', 'ftok']);
+    await pagePromise;
+    expect(pageRes._getStatusCode()).toBe(200);
+    expect(pageRes._getData() as string).toContain('src="/a/ftok?a=0"');
+
+    const { res: subRes, promise: subPromise } = run(['a', 'ftok'], { a: '0' });
+    await subPromise;
+    expect(subRes._getStatusCode()).toBe(200);
+    expect(subRes._getData() as string).toContain('window.fab=1');
+  });
+
+  it('renders a plain-text fabfile (no artifact) as an escaped <pre>, unchanged - no iframe', async () => {
+    const plain = htmlFab({
+      publicId: 'fplain',
+      slug: 'fplain',
+      renderedBody: 'line one\nif (a < b && c) {}\nline three',
+    });
+    mockArtifactFindOne.mockReturnValue(plain);
+    const { res, promise } = run(['f', 'fplain']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<pre class="b4m-pre">');
+    expect(data).not.toContain('<iframe');
+    // Special chars are HTML-escaped, so the literal text is safe and preserved.
+    expect(data).toContain('a &lt; b &amp;&amp; c');
+  });
+
+  it('keeps a ```-fenced code block in a fabfile VERBATIM in the <pre> (no fence promotion to a card)', async () => {
+    // A fabfile is literal file text: a code fence in an uploaded markdown file is content, not an
+    // artifact. Fabfiles parse with parseArtifacts (explicit <artifact> only), so - unlike a reply -
+    // the fence is NOT hoisted into an "open in the app" card and must stay in the escaped <pre>.
+    const fenced = htmlFab({
+      publicId: 'ffence',
+      slug: 'ffence',
+      renderedBody: '# Cheatsheet\n\n```python\nimport numpy as np\ndef go():\n    print("hi")\n```\n',
+    });
+    mockArtifactFindOne.mockReturnValue(fenced);
+    const { res, promise } = run(['f', 'ffence']);
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    const data = res._getData() as string;
+    expect(data).toContain('<pre class="b4m-pre">');
+    expect(data).not.toContain('<iframe');
+    // The card CLASS is always in the page CSS; assert no card ELEMENT was emitted.
+    expect(data).not.toContain('<div class="b4m-artifact-card"');
+    // The fenced code stays literal in the <pre> (escaped), not extracted into an artifact.
+    expect(data).toContain('import numpy as np');
+    expect(data).toContain('```python');
+  });
+});
+
 describe('GET /api/publish/serve - reply/fabfile organization visibility', () => {
   // Org-tier reply/fabfile records store the org id as scopeId; the gate authorizes a viewer
   // whose organizationId matches. This is the path #174 re-enables for reply/fabfile shares.
