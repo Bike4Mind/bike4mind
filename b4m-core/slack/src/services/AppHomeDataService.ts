@@ -2,6 +2,34 @@ import { Logger } from '@bike4mind/observability';
 import { getSlackDb } from '../di/registry';
 
 /**
+ * Minimal structural view of the Mongoose models this service queries. The
+ * slack DI layer intentionally types its models as `unknown` (to stay decoupled
+ * from mongoose); this captures just the query surface used here so the calls
+ * are typed without pulling in the full model types.
+ */
+interface LeanQuery<T> {
+  select(fields: string): LeanQuery<T>;
+  sort(spec: Record<string, 1 | -1>): LeanQuery<T>;
+  limit(n: number): LeanQuery<T>;
+  lean(): Promise<T[]>;
+}
+interface QueryableModel {
+  find<T>(filter: Record<string, unknown>): LeanQuery<T>;
+  countDocuments(filter: Record<string, unknown>): Promise<number>;
+}
+
+/** Lean shape when only `_id` is projected (count-by-find queries and id collection). */
+interface IdOnlyDoc {
+  _id: { toString(): string };
+}
+/** Lean shape of the Session fields read for a notebook card. */
+interface NotebookLeanDoc extends IdOnlyDoc {
+  name: string;
+  lastUpdated: Date;
+  messageCount?: number;
+}
+
+/**
  * Notebook data for App Home display
  */
 export interface AppHomeNotebook {
@@ -42,13 +70,12 @@ export class AppHomeDataService {
    * Fetch all personalized data for App Home
    */
   async fetchAppHomeData(userId: string): Promise<AppHomeData> {
-    const { Session } = getSlackDb();
+    const Session = getSlackDb().Session as QueryableModel;
     // Parallel fetch: notebooks for display + lightweight count queries
     // Using find().select('_id') for counts to avoid DocumentDB countDocuments quirk
     const [notebooks, notebookIds, messagesThisWeek, projectIds] = await Promise.all([
       this.fetchRecentNotebooks(userId, 5),
-      (Session as any)
-        .find({ userId, deletedAt: { $exists: false } })
+      Session.find<IdOnlyDoc>({ userId, deletedAt: { $exists: false } })
         .select('_id')
         .lean(),
       this.countMessagesThisWeek(userId),
@@ -70,15 +97,14 @@ export class AppHomeDataService {
    */
   async fetchRecentNotebooks(userId: string, limit: number = 5): Promise<AppHomeNotebook[]> {
     try {
-      const { Session } = getSlackDb();
-      const sessions = await (Session as any)
-        .find({ userId, deletedAt: { $exists: false } })
+      const Session = getSlackDb().Session as QueryableModel;
+      const sessions = await Session.find<NotebookLeanDoc>({ userId, deletedAt: { $exists: false } })
         .select('name lastUpdated messageCount')
         .sort({ lastUpdated: -1 })
         .limit(limit)
         .lean();
 
-      return sessions.map((session: any) => ({
+      return sessions.map(session => ({
         id: session._id.toString(),
         name: session.name,
         lastUpdated: session.lastUpdated,
@@ -112,8 +138,8 @@ export class AppHomeDataService {
    * Count total notebooks for user
    */
   private async countTotalNotebooks(userId: string): Promise<number> {
-    const { Session } = getSlackDb();
-    return (Session as any).countDocuments({ userId, deletedAt: { $exists: false } });
+    const Session = getSlackDb().Session as QueryableModel;
+    return Session.countDocuments({ userId, deletedAt: { $exists: false } });
   }
 
   /**
@@ -123,20 +149,21 @@ export class AppHomeDataService {
     const oneWeekAgo = new Date();
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
 
-    const { Session, Quest } = getSlackDb();
+    const db = getSlackDb();
+    const Session = db.Session as QueryableModel;
+    const Quest = db.Quest as QueryableModel;
     // First get user's session IDs (exclude deleted)
-    const sessions = await (Session as any)
-      .find({ userId, deletedAt: { $exists: false } })
+    const sessions = await Session.find<IdOnlyDoc>({ userId, deletedAt: { $exists: false } })
       .select('_id')
       .lean();
-    const sessionIds = sessions.map((s: { _id: { toString(): string } }) => s._id.toString());
+    const sessionIds = sessions.map(s => s._id.toString());
 
     if (sessionIds.length === 0) {
       return 0;
     }
 
     // Count messages in those sessions from the last week
-    return (Quest as any).countDocuments({
+    return Quest.countDocuments({
       sessionId: { $in: sessionIds },
       timestamp: { $gte: oneWeekAgo },
     });
@@ -146,17 +173,16 @@ export class AppHomeDataService {
    * Count active projects for user (owner or member)
    */
   private async countActiveProjects(userId: string): Promise<number> {
-    const { Project } = getSlackDb();
+    const Project = getSlackDb().Project as QueryableModel;
     // Using find().select('_id') to avoid DocumentDB countDocuments quirk
-    const projects = await (Project as any)
-      .find({
-        $or: [
-          { userId }, // User is owner
-          // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
-          { 'users.userId': userId }, // User is member
-        ],
-        deletedAt: { $exists: false },
-      })
+    const projects = await Project.find<IdOnlyDoc>({
+      $or: [
+        { userId }, // User is owner
+        // Membership rows store userId (sharingService pushShareable); path is users.userId, not users.id.
+        { 'users.userId': userId }, // User is member
+      ],
+      deletedAt: { $exists: false },
+    })
       .select('_id')
       .lean();
 
