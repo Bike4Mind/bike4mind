@@ -89,10 +89,11 @@ describe('POST /api/embed/session - mint embed session token', () => {
     // The /embed/* widget page mints from our own host; its same-origin POST
     // still carries an Origin header. Deleting the first-party exemption in the
     // gate must fail this test - the widget would be dead on every deployment.
+    // vitest.setup pins SERVER_DOMAIN, so PUBLISH_HOST is app.bike4mind.com here
+    // and this exercises the branded-deployment branch (the production path).
     const { req, res } = makeReq({
       'x-api-key': 'b4m_live_embed',
-      origin: 'https://app.selfhost.example',
-      host: 'app.selfhost.example',
+      origin: 'https://app.bike4mind.com',
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (handler as any)(req, res);

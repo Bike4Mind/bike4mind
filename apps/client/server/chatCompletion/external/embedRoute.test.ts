@@ -256,7 +256,9 @@ describe('POST /api/embed/chat', () => {
     // The /embed/* widget page posts same-origin from our own host, which still
     // sends an Origin header; the key's allow-list can never contain the app
     // host. Deleting the first-party exemption in the gate must fail this test.
-    const res = await post(CHAT, { origin: baseUrl });
+    // PUBLISH_HOST is app.bike4mind.com under vitest.setup, so this exercises
+    // the branded-deployment branch a real deploy takes.
+    const res = await post(CHAT, { origin: 'https://app.bike4mind.com' });
     expect(res.status).toBe(200);
     expect(mockExecuteCompletion).toHaveBeenCalledTimes(1);
   });
