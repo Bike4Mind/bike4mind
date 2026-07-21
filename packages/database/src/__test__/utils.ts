@@ -49,7 +49,10 @@ export async function setupMongoTest() {
 
     // Force the models to be registered by accessing them
     await Promise.resolve([researchTaskRepository, taskScheduleRepository, researchAgentRepository]);
-  }, 30000); // Increase timeout for index creation and MongoDB startup
+    // 60s (not 30s): under parallel shards a cold mongodb-memory-server start - binary
+    // resolution plus the port-collision retry loop in createMongoServer - can exceed
+    // 30s and time the hook out (a transient red, not a real failure).
+  }, 60000);
 
   afterAll(async () => {
     if (mongoServer) {
