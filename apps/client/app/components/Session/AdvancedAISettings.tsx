@@ -1,6 +1,6 @@
 import { ChangeEvent, FC, useEffect, useState } from 'react';
 
-import { Box, IconButton, Input, Tooltip } from '@mui/joy';
+import { Badge, Box, IconButton, Input, Tooltip } from '@mui/joy';
 
 import { ImageModels, ISessionDocument, isGPTImageModel } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -21,6 +21,10 @@ import AgentsButton from './AISettings/AgentsButton';
 import BriefcaseButton from './AISettings/BriefcaseButton';
 import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
 import { ImageTemplateControls } from './ImageTemplates/ImageTemplateControls';
+import { PromptBuilderModal } from './PromptBuilder/PromptBuilderModal';
+import { isImageGenerationModel } from './PromptBuilder/models';
+import { usePromptBuilderFirstRun } from './PromptBuilder/usePromptBuilderFirstRun';
+import { AutoAwesome as PromptBuilderIcon } from '@mui/icons-material';
 
 // Re-export store for consumers that import from this file
 export { useAdvancedAISettings } from './AISettings/useAdvancedAISettingsStore';
@@ -50,14 +54,16 @@ const AISettings: FC<AISettingsProps> = ({
   onRollDice,
   currentSession,
 }) => {
-  const [showAdvancedSettings, setShowAdvancedSettings] = useAdvancedAISettings(
-    useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings])
+  const [showAdvancedSettings, setShowAdvancedSettings, setPromptBuilderOpen] = useAdvancedAISettings(
+    useShallow(state => [state.showAdvancedSettings, state.setShowAdvancedSettings, state.setPromptBuilderOpen])
   );
 
   const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
   const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
   const isImageTemplatesEnabled = isAdminFeatureEnabled('EnableImageTemplates');
+  const isPromptBuilderEnabled = isAdminFeatureEnabled('EnablePromptBuilder');
+  const { showHint: showPromptBuilderHint, markSeen: markPromptBuilderSeen } = usePromptBuilderFirstRun();
 
   const tools = useLLM(state => state.tools);
   const toolMode = useLLM(state => state.toolMode);
@@ -207,6 +213,34 @@ const AISettings: FC<AISettingsProps> = ({
         {/* Image Templates (save/apply reusable image-mode settings) */}
         {isImageTemplatesEnabled && isImageModel(model) && <ImageTemplateControls />}
 
+        {/* Prompt Builder (guided prompt construction; generation models only) */}
+        {isPromptBuilderEnabled && isImageGenerationModel(model) && (
+          <Tooltip title={showPromptBuilderHint ? 'New: build image prompts here' : 'Prompt Builder'}>
+            <Badge
+              size="sm"
+              color="primary"
+              variant="solid"
+              badgeInset="4px"
+              invisible={!showPromptBuilderHint}
+              data-testid="prompt-builder-hint-badge"
+            >
+              <IconButton
+                data-testid="prompt-builder-open-btn"
+                variant="outlined"
+                color="neutral"
+                size="sm"
+                sx={{ height: '32px', width: '32px', borderRadius: '6px' }}
+                onClick={() => {
+                  markPromptBuilderSeen();
+                  setPromptBuilderOpen(true);
+                }}
+              >
+                <PromptBuilderIcon sx={{ fontSize: '16px' }} />
+              </IconButton>
+            </Badge>
+          </Tooltip>
+        )}
+
         {!isTablet && (
           <>
             {/* Dice Roll Icon */}
@@ -249,6 +283,8 @@ const AISettings: FC<AISettingsProps> = ({
         voiceOver={voiceOver || false}
         onRollDice={onRollDice}
       />
+
+      {isPromptBuilderEnabled && <PromptBuilderModal />}
     </>
   );
 };

@@ -1177,13 +1177,10 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                     gap: '20px',
                   }}
                 >
-                  {setting.tooltip ? (
-                    <Tooltip title={setting.tooltip}>
-                      <Typography level="body-sm">{setting.label}</Typography>
-                    </Tooltip>
-                  ) : (
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                     <Typography level="body-sm">{setting.label}</Typography>
-                  )}
+                    {setting.tooltip && <FieldTooltip ariaLabel={`Help: ${setting.label}`} content={setting.tooltip} />}
+                  </Box>
                   <Box sx={{ minWidth: '120px' }}>
                     {setting.type === 'select' && (
                       <Select
@@ -1230,11 +1227,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title="Enhances prompt quality for better image generation">
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Prompt Upsampling
                       </Typography>
-                    </Tooltip>
+                      <FieldTooltip ariaLabel="Help: Prompt Upsampling" content={FIELD_TOOLTIPS.promptEnhancement} />
+                    </Box>
                     <Box sx={{ minWidth: '120px' }}>
                       <Switch
                         checked={prompt_upsampling ?? false}
@@ -1255,11 +1253,12 @@ const SelectedModelDetails: React.FC<SelectedModelDetailsProps> = ({
                       gap: '20px',
                     }}
                   >
-                    <Tooltip title="Controls content filtering: 0=Strictest, 2=Most permissive (hard-capped)">
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                       <Typography level="body-sm" sx={{ textAlign: 'right' }}>
                         Safety Tolerance: {safety_tolerance ?? BFL_SAFETY_TOLERANCE.DEFAULT}
                       </Typography>
-                    </Tooltip>
+                      <FieldTooltip ariaLabel="Help: Safety Tolerance" content={FIELD_TOOLTIPS.safetyTolerance} />
+                    </Box>
                     <Box sx={{ minWidth: '120px' }}>
                       <Input
                         sx={commonInputStyles(mode || 'light')}
@@ -1747,10 +1746,12 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
               value: size || IMAGE_SIZE_CONSTRAINTS[getModelConstraintKey(model)].defaultSize,
               onChange: (value: OpenAIImageSize | null) => value && setLLM({ size: value }),
               options: getAvailableSizes(model).map(s => ({ value: s, label: s })),
+              tooltip: FIELD_TOOLTIPS.imageSize,
             },
           ]),
       {
         label: 'Quality',
+        tooltip: FIELD_TOOLTIPS.imageQuality,
         type: 'select' as const,
         value: quality,
         onChange: (value: OpenAIImageQuality | null) => value && setLLM({ quality: value }),
@@ -1785,7 +1786,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'input' as const,
         value: seed?.toString() ?? '',
         onChange: (value: number | null) => setLLM({ seed: value }),
-        tooltip: 'Set a specific seed for reproducible images (leave empty for random)',
+        tooltip: FIELD_TOOLTIPS.imageSeed,
         inputProps: { type: 'number', placeholder: 'Random' },
       },
       // Width/Height are BFL-specific parameters; GPT Image models use the Image Size dropdown instead
@@ -1822,7 +1823,7 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         type: 'select' as const,
         value: aspect_ratio?.toString() ?? '',
         onChange: (value: string | null) => setLLM({ aspect_ratio: value ? value : undefined }),
-        tooltip: 'Aspect ratio (some models only)',
+        tooltip: FIELD_TOOLTIPS.aspectRatio,
         options: [
           { value: '', label: 'Auto' },
           { value: '16:9', label: '16:9' },
@@ -2092,9 +2093,11 @@ export const AdvancedAIModal: React.FC<AdvancedAIModalProps> = ({
         <ModalDialog
           data-testid="model-details-dialog"
           sx={{
-            width: isMobile ? '100vw' : 'min(640px, 92vw)',
+            // Image models render a 2-column settings grid with per-field info
+            // icons; give them a bit more room so labels don't squish.
+            width: isMobile ? '100vw' : isImageModel(model) ? 'min(720px, 94vw)' : 'min(640px, 92vw)',
             height: isMobile ? '100dvh' : 'auto',
-            maxWidth: isMobile ? '100vw' : '92vw',
+            maxWidth: isMobile ? '100vw' : isImageModel(model) ? '94vw' : '92vw',
             maxHeight: isMobile ? '100dvh' : '85vh',
             margin: 0,
             borderRadius: isMobile ? 0 : 'lg',

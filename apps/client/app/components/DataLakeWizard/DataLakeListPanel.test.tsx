@@ -1,19 +1,20 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeListPanel, { DataLakeSettingsModal } from './DataLakeListPanel';
 
 const updateMutate = vi.fn();
+const visibilityMutate = vi.fn();
 const warn = vi.fn();
 
 vi.mock('@client/app/hooks/data/dataLakes', () => {
   const mutation = () => ({ mutate: vi.fn(), isPending: false });
   return {
     useUpdateDataLake: () => ({ mutate: updateMutate, isPending: false }),
-    useSetLakeVisibility: () => ({ mutate: vi.fn(), isPending: false }),
+    useSetLakeVisibility: () => ({ mutate: visibilityMutate, isPending: false }),
     useArchiveDataLake: mutation,
     useUnarchiveDataLake: mutation,
     useRestoreDeletedDataLake: mutation,
@@ -24,8 +25,9 @@ vi.mock('@client/app/hooks/data/dataLakes', () => {
   };
 });
 
+const useDataLakes = vi.fn(() => ({ data: [] as unknown[], isLoading: false }));
 vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
-  useDataLakes: () => ({ data: [], isLoading: false }),
+  useDataLakes: () => useDataLakes(),
 }));
 
 // Default (flag on) is established per-describe; tests override per-case.
@@ -61,6 +63,17 @@ const gatedLake = {
   requiredUserTag: 'Opti',
   requiredEntitlement: '',
   organizationId: '',
+  isPublic: false,
+};
+
+const openLake = {
+  id: 'lake-2',
+  name: 'Open Lake',
+  description: 'desc',
+  requiredUserTag: '',
+  requiredEntitlement: '',
+  organizationId: '',
+  isPublic: false,
 };
 
 describe('DataLakeSettingsModal — clearing an access gate', () => {
@@ -128,6 +141,54 @@ describe('DataLakeSettingsModal — clearing an access gate', () => {
   });
 });
 
+describe('DataLakeSettingsModal — public visibility', () => {
+  beforeEach(() => {
+    visibilityMutate.mockReset();
+  });
+
+  it('disables the Public option for a gated lake (a gate can’t be exposed app-wide)', () => {
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={gatedLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+    expect(screen.getByRole('radio', { name: 'Public' })).toBeDisabled();
+  });
+
+  it('selecting Public opens an explicit confirm and does NOT publish until confirmed', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByRole('radio', { name: 'Public' }));
+    // The radio only arms the confirm dialog - it must not fire the mutation on its own.
+    expect(visibilityMutate).not.toHaveBeenCalled();
+    expect(screen.getByTestId('datalake-publish-confirm')).toBeInTheDocument();
+
+    await user.click(screen.getByTestId('datalake-publish-confirm-btn'));
+    expect(visibilityMutate).toHaveBeenCalledTimes(1);
+    expect(visibilityMutate.mock.calls[0][0]).toMatchObject({ id: 'lake-2', visibility: 'public' });
+  });
+
+  it('cancelling the confirm leaves the lake unpublished', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeSettingsModal lake={openLake} onClose={vi.fn()} />
+      </Wrapper>
+    );
+
+    await user.click(screen.getByRole('radio', { name: 'Public' }));
+    const confirm = screen.getByTestId('datalake-publish-confirm');
+    await user.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+
+    expect(visibilityMutate).not.toHaveBeenCalled();
+  });
+});
+
 describe('DataLakeListPanel - EnableDataLakes gating', () => {
   beforeEach(() => {
     isFeatureEnabled.mockReset();
@@ -157,5 +218,59 @@ describe('DataLakeListPanel - EnableDataLakes gating', () => {
     // is a dead end - so the panel must not render at all, mirroring
     // SendToDataLakeModal's render guard.
     expect(screen.queryByTestId('datalake-list-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeListPanel - management affordances gate on canManage', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    useDataLakes.mockReset();
+  });
+
+  const listLake = (over: Record<string, unknown>) => ({
+    id: 'lk',
+    name: 'Lake',
+    slug: 'lake',
+    fileTagPrefix: 'lk:',
+    datalakeTag: 'datalake:lake',
+    ...over,
+  });
+
+  it('shows Add files / Settings / Archive on a lake the caller can manage', () => {
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'mine', name: 'Mine', canManage: true })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    expect(screen.getByTestId('datalake-addfiles-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-settings-btn-mine')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-archive-btn-mine')).toBeInTheDocument();
+  });
+
+  it("hides all three on a lake the caller cannot manage (someone else's public lake)", () => {
+    useDataLakes.mockReturnValue({
+      data: [listLake({ id: 'theirs', name: 'Theirs', isPublic: true, canManage: false })],
+      isLoading: false,
+    });
+
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    // The read-only row still renders (and opens the viewer on click) - only the
+    // management affordances are gated.
+    expect(screen.getByTestId('datalake-card-theirs')).toBeInTheDocument();
+    expect(screen.queryByTestId('datalake-addfiles-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-settings-btn-theirs')).toBeNull();
+    expect(screen.queryByTestId('datalake-archive-btn-theirs')).toBeNull();
   });
 });

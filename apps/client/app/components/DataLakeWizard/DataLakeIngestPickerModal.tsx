@@ -31,6 +31,9 @@ interface DataLakeIngestPickerModalProps {
  */
 export default function DataLakeIngestPickerModal({ open, files, onClose }: DataLakeIngestPickerModalProps) {
   const { data: lakes, isLoading } = useDataLakes();
+  // Only lakes the caller can write into are valid ingest targets - the list also carries
+  // other users' read-only public lakes, which the write path would reject.
+  const manageableLakes = lakes?.filter(l => l.canManage);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
   const setFiles = useDataLakeWizardStore(s => s.setFiles);
   const setStep = useDataLakeWizardStore(s => s.setStep);
@@ -68,7 +71,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
                 <Skeleton key={i} variant="rectangular" height={48} sx={{ borderRadius: 'md' }} />
               ))}
             </Stack>
-          ) : !lakes || lakes.length === 0 ? (
+          ) : !manageableLakes || manageableLakes.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
               <StorageIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
               <Typography level="body-sm" color="neutral">
@@ -77,7 +80,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
             </Box>
           ) : (
             <List sx={{ '--ListItem-paddingY': '8px', maxHeight: '40vh', overflow: 'auto' }}>
-              {lakes.map(lake => (
+              {manageableLakes.map(lake => (
                 <ListItemButton
                   key={lake.id}
                   data-testid={`datalake-ingest-option-${lake.id}`}

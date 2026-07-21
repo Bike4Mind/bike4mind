@@ -43,6 +43,9 @@ export default function SendToDataLakeModal() {
   // EnableDataLakes is off. The flag defaults closed while settings load, so no fetch races in.
   const { isFeatureEnabled } = useAdminSettingsCache();
   const { data: lakes, isLoading } = useDataLakes(isOpen && isFeatureEnabled('EnableDataLakes'));
+  // Sending a file tags it into the lake - a write - so only lakes the caller can manage are
+  // valid targets. The list also carries other users' read-only public lakes; exclude them.
+  const manageableLakes = lakes?.filter(l => l.canManage);
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -59,7 +62,7 @@ export default function SendToDataLakeModal() {
 
   const handleSend = async () => {
     if (sendingRef.current) return;
-    const lake = lakes?.find(l => l.id === selectedId);
+    const lake = manageableLakes?.find(l => l.id === selectedId);
     if (!lake) return;
     sendingRef.current = true;
     setSubmitting(true);
@@ -113,16 +116,16 @@ export default function SendToDataLakeModal() {
                 <Skeleton key={i} variant="rectangular" height={48} sx={{ borderRadius: 'md' }} />
               ))}
             </Stack>
-          ) : !lakes || lakes.length === 0 ? (
+          ) : !manageableLakes || manageableLakes.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
               <StorageIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
               <Typography level="body-sm" color="neutral">
-                No data lakes yet. Create one first from Files → Data Lakes.
+                No data lakes you can add to. Create one first from Files → Data Lakes.
               </Typography>
             </Box>
           ) : (
             <List sx={{ '--ListItem-paddingY': '8px', maxHeight: '40vh', overflow: 'auto' }}>
-              {lakes.map(lake => (
+              {manageableLakes.map(lake => (
                 <ListItemButton
                   key={lake.id}
                   data-testid={`send-to-datalake-option-${lake.id}`}

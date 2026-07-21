@@ -41,7 +41,7 @@ function mocks(user: unknown, id: string) {
 describe('GET /api/users/[id]/friends - ownership gate', () => {
   beforeEach(() => listFriends.mockClear());
 
-  it('rejects reading another user\'s friends without calling the service', async () => {
+  it("rejects reading another user's friends without calling the service", async () => {
     const { req, res } = mocks({ id: 'me', isAdmin: false }, 'someone-else');
     await expect(mockRefs.getHandler!(req, res)).rejects.toThrow(/not authorized/i);
     expect(listFriends).not.toHaveBeenCalled();
@@ -54,7 +54,7 @@ describe('GET /api/users/[id]/friends - ownership gate', () => {
     expect(res._getStatusCode()).toBe(200);
   });
 
-  it('allows an admin to read any user\'s friends', async () => {
+  it("allows an admin to read any user's friends", async () => {
     const { req, res } = mocks({ id: 'admin1', isAdmin: true }, 'someone-else');
     await mockRefs.getHandler!(req, res);
     expect(listFriends).toHaveBeenCalledTimes(1);

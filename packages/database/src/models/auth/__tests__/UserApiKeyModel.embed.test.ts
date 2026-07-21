@@ -51,7 +51,7 @@ describe('UserApiKeyModel embed fields (round-trip)', () => {
     expect(json.keyPrefix).toBe('b4m_live_embed01');
   });
 
-  it('does not materialize empty allowedOrigins / branding on a non-embed key', async () => {
+  it('does not materialize empty allowedOrigins / branding / spendCap on a non-embed key', async () => {
     const created = await UserApiKey.create({
       ...base,
       scopes: [ApiKeyScope.AI_CHAT],
@@ -61,6 +61,32 @@ describe('UserApiKeyModel embed fields (round-trip)', () => {
     expect(loaded?.agentId).toBeUndefined();
     expect(loaded?.allowedOrigins).toBeUndefined();
     expect(loaded?.branding).toBeUndefined();
+    expect(loaded?.spendCap).toBeUndefined();
+  });
+
+  it('persists spendCap on an embed key', async () => {
+    const created = await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_capped01',
+      agentId: 'agent-42',
+      spendCap: 5000,
+    });
+    const loaded = await UserApiKey.findById(created.id);
+    expect(loaded?.spendCap).toBe(5000);
+  });
+
+  it('persists spendCap: 0 distinctly from an absent cap', async () => {
+    const created = await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_capzero1',
+      agentId: 'agent-42',
+      spendCap: 0,
+    });
+    const loaded = await UserApiKey.findById(created.id);
+    // 0 must survive as a real value - a `default: undefined` field that clobbered
+    // 0 would silently turn "block all spend" into "uncapped".
+    expect(loaded?.spendCap).toBe(0);
+    expect(loaded?.spendCap).not.toBeUndefined();
   });
 
   it('builds the sparse { agentId, status } compound index', async () => {

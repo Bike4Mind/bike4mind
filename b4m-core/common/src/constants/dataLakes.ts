@@ -30,6 +30,20 @@ export interface DataLakeConfig {
    * from the list endpoint (it seeds the form from the list, not the per-lake detail).
    */
   description?: string;
+  /**
+   * Public opt-in (see IDataLake.isPublic). Surfaced so the Settings form can derive the
+   * tri-state visibility (private | organization | public) from the list endpoint.
+   */
+  isPublic?: boolean;
+  /**
+   * Whether the requesting caller may WRITE/MANAGE this lake (add files, edit settings,
+   * archive, remove files). Server-computed per request from the manage rule (admin or
+   * creator; fallback lakes are read-only for everyone) - the SAME predicate the write
+   * paths enforce (see canManageLake). The client renders it, never decides it: the list
+   * now surfaces other users' public lakes (read-only), so management affordances gate on
+   * this. Absent on projections that don't resolve an actor (e.g. tag-only lookups).
+   */
+  canManage?: boolean;
 }
 
 /**
@@ -118,6 +132,7 @@ export function toDataLakeConfig(dl: {
   datalakeTag: string;
   organizationId?: string;
   description?: string;
+  isPublic?: boolean;
 }): DataLakeConfig {
   return {
     id: dl.id,
@@ -129,6 +144,7 @@ export function toDataLakeConfig(dl: {
     datalakeTag: dl.datalakeTag,
     organizationId: dl.organizationId,
     description: dl.description,
+    isPublic: dl.isPublic,
   };
 }
 

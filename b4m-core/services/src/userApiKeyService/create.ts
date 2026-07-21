@@ -13,6 +13,11 @@ import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
 
+// Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
+// fat-finger/overflow values, not a product limit. Shared with the spend-cap update
+// path (setEmbedKeySpendCap).
+export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
+
 const embedBrandingSchema = z.object({
   primaryColor: z.string().optional(),
   logoUrl: z.string().optional(),
@@ -32,6 +37,10 @@ const createUserApiKeySchema = z.object({
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
   branding: embedBrandingSchema.optional(),
+  // Spend settles in whole credits, so a fractional cap has no resolution.
+  // `.positive()` rejects a 0 cap at mint (a dead-on-arrival key), but enforcement
+  // still honors a stored 0 as a real cap.
+  spendCap: z.number().int().positive().max(EMBED_SPEND_CAP_MAX_CREDITS).optional(),
   rateLimit: z
     .object({
       requestsPerMinute: z.number().min(1).max(10_000).prefault(60),
@@ -90,6 +99,7 @@ export interface CreateUserApiKeyResult {
   agentId?: string;
   allowedOrigins?: string[];
   branding?: IEmbedBranding;
+  spendCap?: number;
   createdAt: Date;
 }
 
@@ -126,9 +136,12 @@ export const createUserApiKey = async (
   }
   if (
     !isEmbedKey &&
-    (params.agentId !== undefined || params.allowedOrigins !== undefined || params.branding !== undefined)
+    (params.agentId !== undefined ||
+      params.allowedOrigins !== undefined ||
+      params.branding !== undefined ||
+      params.spendCap !== undefined)
   ) {
-    throw new BadRequestError('agentId, allowedOrigins, and branding require the embed:chat scope');
+    throw new BadRequestError('agentId, allowedOrigins, branding, and spendCap require the embed:chat scope');
   }
 
   // Billing-target invariant: Organization iff organizationId is set. Keys bill a
@@ -191,6 +204,7 @@ export const createUserApiKey = async (
     agentId: params.agentId,
     allowedOrigins: params.allowedOrigins,
     branding: params.branding,
+    spendCap: params.spendCap,
   });
 
   return {
@@ -210,6 +224,7 @@ export const createUserApiKey = async (
     agentId: apiKeyDocument.agentId,
     allowedOrigins: apiKeyDocument.allowedOrigins,
     branding: apiKeyDocument.branding,
+    spendCap: apiKeyDocument.spendCap,
     createdAt: apiKeyDocument.createdAt,
   };
 };

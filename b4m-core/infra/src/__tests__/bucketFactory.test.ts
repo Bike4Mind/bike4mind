@@ -30,9 +30,9 @@ describe('retainedBucketName', () => {
   });
 
   it('honors custom retained stages', () => {
-    expect(
-      retainedBucketName({ stage: 'staging', appName: 'b4m', suffix: 'x', retainedStages: ['staging'] })
-    ).toBe('staging-b4m-buckets-x');
+    expect(retainedBucketName({ stage: 'staging', appName: 'b4m', suffix: 'x', retainedStages: ['staging'] })).toBe(
+      'staging-b4m-buckets-x'
+    );
   });
 });
 

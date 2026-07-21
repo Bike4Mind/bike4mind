@@ -10,6 +10,9 @@ interface State {
   // panel live). Lifted here so the composer Templates button can open it directly.
   modelDetailsOpen: boolean;
   setModelDetailsOpen: (open: boolean) => void;
+  // The guided prompt-builder modal, opened from the composer settings-bar icon.
+  promptBuilderOpen: boolean;
+  setPromptBuilderOpen: (open: boolean) => void;
   historyLines: number;
   setHistoryLines: (historyLines: number) => void;
   activeTab: 'ai-settings' | 'research-mode';
@@ -28,6 +31,8 @@ export const useAdvancedAISettings = create<State>(set => ({
   setShowAdvancedSettings: showAdvancedSettings => set({ showAdvancedSettings }),
   modelDetailsOpen: false,
   setModelDetailsOpen: modelDetailsOpen => set({ modelDetailsOpen }),
+  promptBuilderOpen: false,
+  setPromptBuilderOpen: promptBuilderOpen => set({ promptBuilderOpen }),
   historyLines: INFINITE_VALUE,
   setHistoryLines: historyLines => set({ historyLines }),
   activeTab: 'ai-settings',

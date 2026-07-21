@@ -34,6 +34,11 @@ import {
   isAppWrapperHost,
 } from '@server/services/publish/viewerSecurity';
 import { buildShareFooterHtml } from '@client/app/utils/shareFooter';
+import {
+  parseArtifactsWithFallback,
+  type ParsedArtifact,
+  type ArtifactParseResult,
+} from '@client/app/utils/artifactParser';
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
 import type { PublishScopeTier, PublishVisibility } from '@bike4mind/common';
@@ -351,6 +356,40 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
 
   // -- Reply / fabfile: render the snapshot body to a sanitized viewer page. --
   if (artifact.source.kind === 'reply' || artifact.source.kind === 'fabfile') {
+    // Reply artifact sub-document (`?a={index}`): serve one embedded HTML/SVG artifact as a
+    // standalone SANDBOXED document for the viewer page's iframe. Author JS runs, but the
+    // response's `sandbox allow-scripts` CSP forces an opaque origin (NO allow-same-origin)
+    // even on a direct top-level navigation, so it can never read the app origin's token -
+    // the same isolation the bundle path relies on. Reply-only, and the viewer only emits
+    // `?a` for html/svg artifacts, so an out-of-range or non-embeddable index is a 404. The
+    // visibility gate already ran above, so this reads only content the caller is authorized for.
+    // Require a non-empty `a` so `?a=` doesn't coerce to index 0 (Number('') === 0); an empty
+    // value falls through to the normal page render instead.
+    if (artifact.source.kind === 'reply' && typeof req.query.a === 'string' && req.query.a !== '') {
+      const idx = Number(req.query.a);
+      const { artifacts } = extractViewerArtifacts(artifact.renderedBody ?? '');
+      const target = Number.isInteger(idx) && idx >= 0 ? artifacts[idx] : undefined;
+      if (!target || (target.type !== 'html' && target.type !== 'svg')) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+      const docOrigin = resolveDocOrigin(req.headers.host, req.headers['x-forwarded-proto']);
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: target.content,
+        urlBase: '',
+        origin: docOrigin,
+        visibility: effectiveVisibility,
+        // Self-contained artifact (no manifest assets): inline mode with an empty asset
+        // map only absolutizes blessed-lib scripts and drops any stray relative refs.
+        assetMode: 'inline',
+      });
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Content-Security-Policy', buildReplyArtifactCsp(req));
+      res.setHeader('Cache-Control', isShare ? SHARE_CACHE_CONTROL : cacheControlFor(effectiveVisibility));
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      // No bumpViewCount here: this sub-document is a sub-resource of the reply page (the iframe),
+      // which already counted the view; counting again would double every framed-artifact view.
+      return res.status(200).send(srcdoc);
+    }
     if (isFormatRaw) {
       if (!isOpenPublic) {
         return res.status(404).json({ error: 'Not found' });
@@ -363,10 +402,25 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         req.headers['user-agent']
       );
     }
-    const page = renderViewerPage(artifact, isShare);
+    // Base URL this page was reached at, so the embedded-artifact iframes point back to the
+    // same route (`/p/r|f/{publicId}` or the `/a/{token}` share) carrying the same authorization.
+    // selfPath + canFrameArtifacts are consumed only by the reply render below; the fabfile branch
+    // of renderViewerPage ignores them (it emits an escaped <pre>, no artifact frames).
+    const sourcePrefix = artifact.source.kind === 'reply' ? 'r' : 'f';
+    const selfPath = isShare ? `/a/${encodeURIComponent(shareToken)}` : `/p/${sourcePrefix}/${artifact.publicId}`;
+    // Whether an embedded artifact can be framed via its `?a=` sub-document. The artifact iframe
+    // is a fresh same-origin request that carries only what the browser attaches automatically:
+    // an open-public page has no gate, a `/a/{token}` share re-authorizes by the token IN the
+    // path, and a passphrase gate re-verifies from the same-origin proof COOKIE. A Bearer-gated
+    // reply (org/domain visibility) authorizes off `req.user` from the Authorization header, which
+    // an iframe navigation cannot send - so it would dead-end at a nested loader shell. For those
+    // we render the placeholder card instead of a frame that can never load.
+    const canFrameArtifacts = isOpenPublic || isShare || passphraseVerified;
+    const page = renderViewerPage(artifact, isShare, selfPath, canFrameArtifacts);
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    // No scripts are needed for a rendered text/markdown page; 'none' neutralizes
-    // any markup that slipped through, so this page can't execute injected JS.
+    // The page itself stays script-free (`script-src 'none'` neutralizes any markup that
+    // slipped past the sanitizer); embedded artifacts run only inside their own sandboxed
+    // `?a=` iframe, permitted via `frame-src`/`child-src 'self'` (child-src for older UAs).
     res.setHeader(
       'Content-Security-Policy',
       [
@@ -375,6 +429,8 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
         "style-src 'unsafe-inline'",
         withAppHost("img-src 'self' data:"),
         "font-src 'self' https://fonts.gstatic.com",
+        "frame-src 'self'",
+        "child-src 'self'",
         "base-uri 'self'",
         "form-action 'none'",
         "frame-ancestors 'self'",
@@ -922,6 +978,32 @@ function buildWrapperCsp(req: Request, artifactHost?: string, embedOrigins: stri
   ].join('; ');
 }
 
+/**
+ * CSP for a reply's embedded-artifact sub-document (`/p/r/{publicId}?a={i}`). Author inline JS
+ * is ALLOWED here (an HTML/SVG artifact is meant to run), but the `sandbox allow-scripts`
+ * directive forces an OPAQUE origin with NO `allow-same-origin` - so even a DIRECT navigation
+ * to this URL can never read the app origin's token/cookies (the sandbox, not script-src, is the
+ * ATO boundary, exactly as on the bundle path). Blessed libs load from their absolute app-host
+ * URLs (renderSandboxedBundle absolutizes them); everything else is self-contained/data:.
+ */
+function buildReplyArtifactCsp(req: Request): string {
+  const blessedScriptSrc = buildBundleScriptSrc(req.headers.host, req.headers['x-forwarded-proto']);
+  return [
+    "default-src 'none'",
+    `script-src 'unsafe-inline' ${blessedScriptSrc}`.trim(),
+    withAppHost("style-src 'unsafe-inline'") + ' https://fonts.googleapis.com',
+    withAppHost("img-src 'self' data:"),
+    withAppHost("media-src 'self' data:"),
+    withAppHost("font-src 'self'") + ' https://fonts.gstatic.com',
+    "connect-src 'self'",
+    "base-uri 'self'",
+    "form-action 'none'",
+    "frame-ancestors 'self'",
+    // Opaque origin even on direct navigation; allow-scripts re-enables the artifact's own JS.
+    'sandbox allow-scripts',
+  ].join('; ');
+}
+
 // -- Types ---------------------------------------------------------------------
 interface PublishedArtifactLean {
   publicId: string;
@@ -1057,17 +1139,80 @@ function sendRawArtifact(
 }
 
 /**
- * Render a reply/fabfile snapshot to a standalone HTML page. Replies are
- * markdown (rendered via marked); fabfiles render as escaped <pre>. Served with
- * script-src 'none' so injected markup cannot execute.
+ * parseArtifactsWithFallback, but with artifacts in DOCUMENT order. `parseArtifacts` returns them
+ * reverse-sorted by position (a side effect of its back-to-front tag-removal pass), which would
+ * otherwise render a multi-artifact reply bottom-up. Sorting by `startIndex` restores document
+ * order for the common case (explicit `<artifact>` tags share one coordinate space). The viewer
+ * render and the `?a=` sub-document handler BOTH extract via this helper, so an iframe's `?a={i}`
+ * always indexes the same artifact the viewer framed at slot i.
  */
-function renderViewerPage(artifact: PublishedArtifactLean, noindex: boolean): string {
+function extractViewerArtifacts(body: string): ArtifactParseResult {
+  const result = parseArtifactsWithFallback(body);
+  return { ...result, artifacts: [...result.artifacts].sort((a, b) => a.startIndex - b.startIndex) };
+}
+
+/**
+ * Clean a snapshot title for display. A reply that LEADS with an `<artifact ...>` tag was
+ * snapshotted with the raw wrapper tag as its title (deriveTitle took the first line); recover
+ * a sensible title from the first named embedded artifact, else the neutral fallback. New
+ * publishes no longer hit this (deriveTitle now skips artifact tags), but existing rows do.
+ */
+function cleanViewerTitle(rawTitle: string | undefined, artifacts: ParsedArtifact[]): string {
+  const t = (rawTitle ?? '').trim();
+  if (t && !/^<artifact\b/i.test(t)) return t;
+  const named = artifacts.find(a => a.title && a.title !== 'Untitled Artifact');
+  return named?.title || SHARED_FALLBACK_TITLE;
+}
+
+/**
+ * Render one embedded artifact as viewer markup. An HTML/SVG artifact renders in its own
+ * SANDBOXED iframe pointed at the `?a={index}` sub-document (so its JS runs isolated on an
+ * opaque origin, never on the script-free reply page) - but ONLY when `canFrame` says the
+ * sub-request will authorize (see the call site); a Bearer-gated reply falls back to the card so
+ * we never emit a frame that dead-ends at a loader shell. Every other type (react/code/python/
+ * mermaid/recharts) needs the app runtime the static viewer can't provide, so it also gets a
+ * clean placeholder card instead of leaking raw markup. `index` MUST match the position in the
+ * same parseArtifactsWithFallback result the `?a` handler indexes into.
+ */
+function renderArtifactBlock(artifact: ParsedArtifact, index: number, selfPath: string, canFrame: boolean): string {
+  const title = escapeHtml(artifact.title || 'Artifact');
+  if (canFrame && selfPath && (artifact.type === 'html' || artifact.type === 'svg')) {
+    const src = escapeHtml(`${selfPath}?a=${index}`);
+    return `<iframe class="b4m-artifact" sandbox="allow-scripts" loading="lazy" title="${title}" src="${src}"></iframe>`;
+  }
+  return `<div class="b4m-artifact-card"><strong>${title}</strong><span>${escapeHtml(
+    artifact.type
+  )} artifact - open in the app to view</span></div>`;
+}
+
+/**
+ * Render a reply/fabfile snapshot to a standalone HTML page. Replies are markdown (rendered via
+ * marked) with any embedded `<artifact>` blocks extracted: the surrounding prose renders inline,
+ * and each HTML/SVG artifact renders in its own sandboxed `?a=` iframe (non-embeddable types get
+ * a placeholder card). Fabfiles render as escaped <pre>. The PAGE is served with script-src 'none'
+ * so injected markup cannot execute; artifact JS runs only inside the sandboxed sub-document.
+ */
+function renderViewerPage(
+  artifact: PublishedArtifactLean,
+  noindex: boolean,
+  selfPath = '',
+  canFrameArtifacts = false
+): string {
   const body = artifact.renderedBody ?? '';
-  const titleHtml = escapeHtml(artifact.title || SHARED_FALLBACK_TITLE);
-  const contentHtml =
-    artifact.source.kind === 'reply'
-      ? sanitizeRenderedHtml(marked.parse(body, { async: false }) as string)
-      : `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+  let contentHtml: string;
+  let displayTitle = artifact.title || SHARED_FALLBACK_TITLE;
+  if (artifact.source.kind === 'reply') {
+    const { artifacts, cleanedContent } = extractViewerArtifacts(body);
+    const article = cleanedContent
+      ? sanitizeRenderedHtml(marked.parse(cleanedContent, { async: false }) as string)
+      : '';
+    const blocks = artifacts.map((a, i) => renderArtifactBlock(a, i, selfPath, canFrameArtifacts)).join('\n');
+    contentHtml = `${article}${blocks}`;
+    displayTitle = cleanViewerTitle(artifact.title, artifacts);
+  } else {
+    contentHtml = `<pre class="b4m-pre">${escapeHtml(body)}</pre>`;
+  }
+  const titleHtml = escapeHtml(displayTitle);
   const noindexHead = noindex ? `\n${SHARE_NOINDEX_META}` : '';
 
   return `<!doctype html>
@@ -1078,7 +1223,7 @@ function renderViewerPage(artifact: PublishedArtifactLean, noindex: boolean): st
 <!-- CSP as a meta so the no-JS posture survives when this page is injected as the loader
      shell's iframe srcdoc (a srcdoc carries no HTTP CSP header, and the shell's iframe is
      sandbox="allow-scripts"). Mirrors the direct-serve HTTP header's script-src 'none'. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost("img-src 'self' data:")}; font-src 'self' https://fonts.gstatic.com; base-uri 'self'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; ${withAppHost("img-src 'self' data:")}; font-src 'self' https://fonts.gstatic.com; frame-src 'self'; child-src 'self'; base-uri 'self'; form-action 'none'">
 <meta property="og:title" content="${titleHtml}">
 <meta property="og:description" content="${escapeHtml(SHARED_FALLBACK_TITLE)}">
 <title>${titleHtml}</title>
@@ -1091,6 +1236,11 @@ function renderViewerPage(artifact: PublishedArtifactLean, noindex: boolean): st
   pre.b4m-pre, pre { background: rgba(127,127,127,.12); padding: 1rem; border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-wrap: break-word; }
   code { background: rgba(127,127,127,.15); padding: .15em .35em; border-radius: 4px; }
   img { max-width: 100%; height: auto; }
+  iframe.b4m-artifact { display: block; width: 100%; height: 600px; margin: 1.5rem 0; border: 1px solid rgba(127,127,127,.3);
+         border-radius: 8px; background: #fff; }
+  .b4m-artifact-card { display: flex; flex-direction: column; gap: .25rem; margin: 1.5rem 0; padding: 1rem 1.25rem;
+         border: 1px solid rgba(127,127,127,.3); border-radius: 8px; background: rgba(127,127,127,.08); }
+  .b4m-artifact-card span { font-size: .85rem; opacity: .75; }
   .b4m-footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid rgba(127,127,127,.3); font-size: .85rem; opacity: .7; }
 </style>
 </head>

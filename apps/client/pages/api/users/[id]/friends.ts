@@ -10,7 +10,7 @@ const handler = baseApi().get<Request<{}, {}, {}, { id: string }>>(async (req, r
   // A user's friend list resolves to full user records (including email), so
   // only the user themselves or an admin may read it.
   if (userId !== req.user.id && !req.user.isAdmin) {
-    throw new ForbiddenError('Not authorized to view this user\'s friends');
+    throw new ForbiddenError("Not authorized to view this user's friends");
   }
 
   const friends = await friendshipService.listFriends(

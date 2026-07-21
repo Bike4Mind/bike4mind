@@ -283,6 +283,17 @@ export class InsufficientCreditsError extends Error {
 }
 
 /**
+ * Resolve the machine-readable classifier off any thrown error. The two carriers
+ * differ: InsufficientCreditsError stores its code on `.code`, while tagged 422s
+ * (insufficientCreditsError / spendCapExceededError helpers) store it on
+ * `additionalInfo.errorCode`, read by getQuestErrorCode. Single home for that
+ * invariant - every SSE/quest error path resolves through here.
+ */
+export function resolveQuestErrorCode(error: unknown): QuestErrorCode | undefined {
+  return error instanceof InsufficientCreditsError ? error.code : getQuestErrorCode(error);
+}
+
+/**
  * Prompt marker that, on preview/E2E deploys only (never production), forces the primary
  * model to simulate a sustained outage so the provider/model fallback path can be exercised
  * end-to-end by QA. See the gated check in the completion loop and the Guide for Testers.
@@ -3822,7 +3833,7 @@ export class ChatCompletionProcess {
       // Classifier for the client's "Add Credits" CTA. Chat reservation throws
       // InsufficientCreditsError (code unset by the dispute-pending fraud gates);
       // mid-turn generation tools throw a getQuestErrorCode-tagged 422.
-      const questErrorCode = err instanceof InsufficientCreditsError ? err.code : getQuestErrorCode(err);
+      const questErrorCode = resolveQuestErrorCode(err);
       if (questErrorCode) {
         quest.errorCode = questErrorCode;
       }
