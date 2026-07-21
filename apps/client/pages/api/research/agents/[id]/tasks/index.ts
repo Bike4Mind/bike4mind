@@ -60,11 +60,7 @@ const handler = baseApi({ auth: true })
       const body = taskCreateBodySchema.parse(req.body);
       const result = await researchTaskService.create(
         req.user as any,
-        {
-          ...body,
-          researchAgentId: id,
-          isPublic: true, // In b4m all files are public for research tasks
-        },
+        { ...body, researchAgentId: id },
         {
           db: {
             transaction: withTransaction,
