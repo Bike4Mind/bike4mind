@@ -79,8 +79,11 @@ async function sourceFabFileBody(file: {
   }
   if (file.filePath) {
     try {
-      const buf = await getFilesStorage().download(file.filePath);
-      return { ok: true, body: buf.toString('utf-8') };
+      const decoded = (await getFilesStorage().download(file.filePath)).toString('utf-8');
+      // Only accept a non-empty object; a 0-byte/whitespace-only download falls through to
+      // file.text (else 422) rather than publishing an empty <pre>. Returns the untrimmed body
+      // so real content keeps its exact whitespace.
+      if (decoded.trim()) return { ok: true, body: decoded };
     } catch {
       // Storage miss/expired object: fall through to any already-extracted text.
     }
@@ -163,6 +166,10 @@ const handler = baseApi().post(async (req, res) => {
 
   const id = existing?.publicId ?? publicId();
   const slug = existing?.slug ?? `f-${id}`;
+  // Sourcing runs before the quota check because quota needs the sourced byte length
+  // (Buffer.byteLength below). The whole object is read into memory here; acceptable since the
+  // caller can only publish a file they own (checked above) - revisit if publish ever accepts
+  // files not owned by the caller.
   const sourced = await sourceFabFileBody(file);
   if (!sourced.ok) {
     return res.status(sourced.status).json({ error: sourced.error });
