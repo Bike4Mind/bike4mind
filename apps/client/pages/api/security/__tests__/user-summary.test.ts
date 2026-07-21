@@ -49,7 +49,7 @@ describe('GET /api/security/user-summary - email leak strip', () => {
     repo.getSuspiciousPatternsTargetingUser.mockClear();
   });
 
-  it('drops the emails array and only exposes the caller\'s own usernames', async () => {
+  it("drops the emails array and only exposes the caller's own usernames", async () => {
     const { req, res } = createMocks({ method: 'GET', query: {} });
     (req as any).user = { email: 'me@example.com', username: 'me' };
     await mockRefs.getHandler!(req, res);

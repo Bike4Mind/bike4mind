@@ -77,6 +77,84 @@ export interface SemanticDataLakeSearchAdapters {
   };
 }
 
+/** Shape both entrypoints need from a scoped file's metadata. */
+interface RankableFile {
+  fileName: string;
+  tags?: { name: string }[];
+}
+
+/**
+ * Shared ranking core: embed the query, bulk-load vector-bearing chunks for the given
+ * files, cosine-rank, and shape the result. File-source-agnostic - the two entrypoints
+ * below differ ONLY in how they resolve { fileIds, fileById } (tag-scoped browse vs an
+ * explicit allow-list), so the embedding/provider handling can never drift between them.
+ */
+async function rankChunksForFiles(args: {
+  query: string;
+  fileIds: string[];
+  fileById: Map<string, RankableFile>;
+  topK: number;
+  minScore: number;
+  embeddingModel: SupportedEmbeddingModel;
+  apiKeyTable: SemanticDataLakeSearchParams['apiKeyTable'];
+  chunkLoadCap: number;
+  logger?: Logger;
+  fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
+}): Promise<SemanticDataLakeSearchResult> {
+  const { query, fileIds, fileById, topK, minScore, embeddingModel, apiKeyTable, chunkLoadCap, logger } = args;
+
+  // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
+  const provider = getProviderFromModel(embeddingModel);
+  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
+    {};
+  if (provider === 'openai') {
+    if (!apiKeyTable?.openai) throw new Error('OpenAI API key required for semantic search but not found.');
+    embeddingConfig.openaiApiKey = apiKeyTable.openai;
+  } else if (provider === 'voyageai') {
+    if (!apiKeyTable?.voyageai) throw new Error('VoyageAI API key required for semantic search but not found.');
+    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
+  } else if (provider === 'ollama') {
+    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
+    if (!apiKeyTable?.ollama) throw new Error('Ollama base URL required for semantic search but not found.');
+    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
+  }
+  const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
+  const queryEmbedding = await embeddingService.generateEmbedding(query);
+  const queryDim = queryEmbedding.length;
+
+  // --- Bulk-load vector-bearing chunks (single indexed query) and cosine-rank ---
+  const chunks = await args.fabfilechunks.findVectorsByFabFileIds(fileIds, chunkLoadCap);
+
+  const scored: SemanticChunkResult[] = [];
+  for (const chunk of chunks as FabFileChunkVector[]) {
+    if (!chunk.vector || chunk.vector.length !== queryDim) continue; // skip dim mismatches (model changed)
+    const score = computeCosineSimilarity(queryEmbedding, chunk.vector);
+    if (score < minScore) continue;
+    const file = fileById.get(chunk.fabFileId);
+    if (!file) continue;
+    scored.push({
+      chunkId: chunk.id,
+      fileId: chunk.fabFileId,
+      fileName: file.fileName,
+      fileTags: file.tags?.map(t => t.name) ?? [],
+      chunkText: chunk.text ?? '',
+      score,
+    });
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  logger?.debug?.(
+    `[semanticSearch] ${fileIds.length} files, ${chunks.length} chunks → ${scored.length} above min ${minScore}, top score ${scored[0]?.score?.toFixed(3) ?? 'n/a'}`
+  );
+
+  return {
+    results: scored.slice(0, topK),
+    totalChunksSearched: chunks.length,
+    filesInScope: fileIds.length,
+    embeddingModel,
+  };
+}
+
 export async function semanticDataLakeSearch(
   params: SemanticDataLakeSearchParams,
   adapters: SemanticDataLakeSearchAdapters
@@ -108,25 +186,6 @@ export async function semanticDataLakeSearch(
 
   if (!query.trim() || dataLakeTags.length === 0) return empty;
 
-  // --- Embed the query (reuse EmbeddingFactory; pick the provider the model needs) ---
-  const provider = getProviderFromModel(embeddingModel);
-  const embeddingConfig: { openaiApiKey?: string | null; voyageApiKey?: string | null; ollamaBaseUrl?: string | null } =
-    {};
-  if (provider === 'openai') {
-    if (!apiKeyTable?.openai) throw new Error('OpenAI API key required for semantic search but not found.');
-    embeddingConfig.openaiApiKey = apiKeyTable.openai;
-  } else if (provider === 'voyageai') {
-    if (!apiKeyTable?.voyageai) throw new Error('VoyageAI API key required for semantic search but not found.');
-    embeddingConfig.voyageApiKey = apiKeyTable.voyageai;
-  } else if (provider === 'ollama') {
-    // apiKeyTable.ollama carries the Ollama base URL (no secret) in self-host.
-    if (!apiKeyTable?.ollama) throw new Error('Ollama base URL required for semantic search but not found.');
-    embeddingConfig.ollamaBaseUrl = apiKeyTable.ollama;
-  }
-  const embeddingService = new EmbeddingFactory(embeddingConfig).createEmbeddingService(embeddingModel);
-  const queryEmbedding = await embeddingService.generateEmbedding(query);
-  const queryDim = queryEmbedding.length;
-
   // --- Scope the files (metadata only) within the accessible data lakes ---
   const fileSearch = await adapters.db.fabfiles.search(
     userId,
@@ -153,37 +212,92 @@ export async function semanticDataLakeSearch(
   const scopedFiles = filterRetrievalExcluded(fileSearch.data, retrievalFilter);
   const fileIds = scopedFiles.map(f => f.id);
   if (fileIds.length === 0) return empty;
-  const fileById = new Map(scopedFiles.map(f => [f.id, f]));
+  const fileById = new Map<string, RankableFile>(scopedFiles.map(f => [f.id, f]));
 
-  // --- Bulk-load vector-bearing chunks (single indexed query) and cosine-rank ---
-  const chunks = await adapters.db.fabfilechunks.findVectorsByFabFileIds(fileIds, chunkLoadCap);
+  return rankChunksForFiles({
+    query,
+    fileIds,
+    fileById,
+    topK,
+    minScore,
+    embeddingModel,
+    apiKeyTable,
+    chunkLoadCap,
+    logger,
+    fabfilechunks: adapters.db.fabfilechunks,
+  });
+}
 
-  const scored: SemanticChunkResult[] = [];
-  for (const chunk of chunks as FabFileChunkVector[]) {
-    if (!chunk.vector || chunk.vector.length !== queryDim) continue; // skip dim mismatches (model changed)
-    const score = computeCosineSimilarity(queryEmbedding, chunk.vector);
-    if (score < minScore) continue;
-    const file = fileById.get(chunk.fabFileId);
-    if (!file) continue;
-    scored.push({
-      chunkId: chunk.id,
-      fileId: chunk.fabFileId,
-      fileName: file.fileName,
-      fileTags: file.tags?.map(t => t.name) ?? [],
-      chunkText: chunk.text ?? '',
-      score,
-    });
-  }
+export interface FileScopedSemanticSearchParams {
+  /** Natural-language query - embedded and cosine-matched against chunk vectors. */
+  query: string;
+  /**
+   * The EXACT files to search - a trusted, server-resolved allow-list (e.g. an agent's
+   * kbScope). Empty means scoped-to-nothing and returns an empty result; this function
+   * never widens beyond the list (no tags, no sharing, no data-lake resolution).
+   */
+  fileIds: string[];
+  topK?: number;
+  minScore?: number;
+  embeddingModel: SupportedEmbeddingModel;
+  apiKeyTable: SemanticDataLakeSearchParams['apiKeyTable'];
+  chunkLoadCap?: number;
+  logger?: Logger;
+}
 
-  scored.sort((a, b) => b.score - a.score);
-  logger?.debug?.(
-    `[semanticDataLakeSearch] ${fileIds.length} files, ${chunks.length} chunks → ${scored.length} above min ${minScore}, top score ${scored[0]?.score?.toFixed(3) ?? 'n/a'}`
-  );
+export interface FileScopedSemanticSearchAdapters {
+  db: {
+    fabfiles: Pick<IFabFileRepository, 'getAccessibleFiles'>;
+    fabfilechunks: Pick<IFabFileChunkRepository, 'findVectorsByFabFileIds'>;
+  };
+}
 
-  return {
-    results: scored.slice(0, topK),
-    totalChunksSearched: chunks.length,
-    filesInScope: fileIds.length,
+/**
+ * File-first sibling of semanticDataLakeSearch for allow-list-scoped retrieval (agent KB
+ * scope). Skips the tag-based file resolution entirely: the caller's fileIds ARE the scope,
+ * so there is no dataLakeTags gate and no fabfiles.search. Metadata comes from
+ * getAccessibleFiles (invalid-id-safe, content-projected) filtered to live files only, so
+ * deleted/archived files curated into a scope contribute nothing.
+ */
+export async function fileScopedSemanticSearch(
+  params: FileScopedSemanticSearchParams,
+  adapters: FileScopedSemanticSearchAdapters
+): Promise<SemanticDataLakeSearchResult> {
+  const {
+    query,
+    fileIds,
+    topK = 10,
+    minScore = 0,
+    embeddingModel,
+    apiKeyTable,
+    chunkLoadCap = 10_000,
+    logger,
+  } = params;
+
+  const empty: SemanticDataLakeSearchResult = {
+    results: [],
+    totalChunksSearched: 0,
+    filesInScope: 0,
     embeddingModel,
   };
+
+  if (!query.trim() || fileIds.length === 0) return empty;
+
+  const files = await adapters.db.fabfiles.getAccessibleFiles(fileIds, { deletedAt: null, archivedAt: null });
+  if (files.length === 0) return empty;
+  const liveIds = files.map(f => f.id);
+  const fileById = new Map<string, RankableFile>(files.map(f => [f.id, f]));
+
+  return rankChunksForFiles({
+    query,
+    fileIds: liveIds,
+    fileById,
+    topK,
+    minScore,
+    embeddingModel,
+    apiKeyTable,
+    chunkLoadCap,
+    logger,
+    fabfilechunks: adapters.db.fabfilechunks,
+  });
 }

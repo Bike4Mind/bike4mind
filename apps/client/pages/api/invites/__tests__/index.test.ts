@@ -52,7 +52,7 @@ describe('GET /api/invites', () => {
     expect(listOwnPendingInvites).toHaveBeenCalledWith(req.user, { limit: 1000, page: 1 }, expect.any(Object));
   });
 
-  it('strips co-recipients from each invite, keeping the caller\'s own entry', async () => {
+  it("strips co-recipients from each invite, keeping the caller's own entry", async () => {
     listOwnPendingInvites.mockResolvedValue({
       data: [{ id: 'i1', recipients: { pending: ['me@x.com', 'other@x.com'], accepted: [], refused: [] } }],
       total: 1,

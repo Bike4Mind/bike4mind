@@ -302,7 +302,8 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       type?: 'text' | 'pdf' | 'url' | 'image' | 'excel' | 'word' | 'json' | 'csv' | 'markdown' | 'code';
       shared?: boolean;
       curated?: boolean;
-      fileIds?: string[];
+      fileIds?: string[]; // EXCLUDE these ids ($nin)
+      restrictToFileIds?: string[]; // ALLOW-list ($in); present (incl. []) = hard restriction, [] matches nothing
     },
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },
@@ -314,6 +315,7 @@ export interface IFabFileRepository extends IBaseRepository<IFabFileDocument> {
       dataLakeTagPrefixes?: string[]; // OPEN static-registry prefixes (e.g. 'opti:') — ownership-bypass by design
       scopedTagPrefixes?: string[]; // SCOPED dynamic-lake prefixes — matched ONLY within owner/org/shared access
       restrictToDataLake?: boolean; // Single-lake view: return ONLY this lake's files, not all owned files
+      skipOwnership?: boolean; // Allow-list-as-authority: skip the ownership predicate; ignored unless restrictToFileIds is present
       excludeContent?: boolean; // Exclude heavy fields (content, chunks, vector) for list queries
       excludeFilenameMarkers?: string[]; // Generic retrieval exclusion: leading word-boundary marker match (see @bike4mind/utils/retrievalExclusion)
       vectorizedOnly?: boolean; // Restrict to vectorized files only (excludes unvectorized)

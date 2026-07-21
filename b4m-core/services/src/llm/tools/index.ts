@@ -163,7 +163,11 @@ export const generateTools = (
   // entitlementKeys below) on purpose: this function already takes 18 positionals across 4
   // call sites, and adding a 19th is the fragile pattern the deps-object avoids. New optional
   // inputs should keep going here.
-  { db, retrievalFilter }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter'] },
+  {
+    db,
+    retrievalFilter,
+    kbScope,
+  }: { db: ToolContext['db']; retrievalFilter?: ToolContext['retrievalFilter']; kbScope?: ToolContext['kbScope'] },
   storage: BaseStorage,
   imageGenerateStorage: BaseStorage,
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>,
@@ -197,6 +201,7 @@ export const generateTools = (
     allowedDirectories,
     entitlementKeys,
     retrievalFilter,
+    kbScope,
     codeMinifier,
     availableModels,
   };

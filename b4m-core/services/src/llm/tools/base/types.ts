@@ -27,6 +27,18 @@ import {
  */
 export type CodeMinifier = (source: string, ext: string) => Promise<string | null>;
 
+/**
+ * Agent-scoped knowledge-base restriction, honored by the KB tools (search + retrieve).
+ * Tri-state contract - presence of the OBJECT is the scoping signal, so emptiness stays
+ * meaningful (a bare string[] would collapse "unscoped" and "scoped-to-nothing"):
+ *   - undefined          => UNSCOPED: normal KB behavior (owner + shared + data lakes).
+ *   - { fileIds: [...] } => HARD-SCOPED to exactly those files; never widens beyond them.
+ *   - { fileIds: [] }    => SCOPED-TO-NOTHING: KB returns nothing, never falls back owner-wide.
+ */
+export interface KbScope {
+  fileIds: string[];
+}
+
 export interface ToolContext {
   userId: string;
   user: IUserDocument; // Full user document for tools that need user data (e.g., blog integration)
@@ -82,6 +94,20 @@ export interface ToolContext {
    * session or the knowledge tools fail OPEN. Absent = no exclusion (default).
    */
   retrievalFilter?: RetrievalExclusionOptions;
+  /**
+   * Agent-scoped KB restriction (see KbScope). Set server-side from trusted agent config
+   * (never from request input) and threaded down via the tool-builder deps like
+   * retrievalFilter. When present, the KB tools read ONLY the listed files and must never
+   * consult owner-wide access (getDynamicDataLakeAccess). Absent on all non-agent paths.
+   *
+   * INVARIANT: any NEW tool that reads db.fabfiles / db.fabfilechunks must honor kbScope
+   * (reject / restrict to scope.fileIds) - today only search_knowledge_base and
+   * retrieve_knowledge_content do, and the embed surface stays safe only because its tool
+   * resolver excludes every other fabfiles-reading tool. Enforcement is per-tool, not
+   * per-repository, so a new fabfiles tool added to a scoped surface without this handling
+   * would silently read unscoped.
+   */
+  kbScope?: KbScope;
   storage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   imageGenerateStorage: Pick<BaseStorage, 'upload' | 'getSignedUrl' | 'getPublicUrl'>;
   statusUpdate: (q: Partial<IChatHistoryItemDocument>, status?: string) => Promise<void>;

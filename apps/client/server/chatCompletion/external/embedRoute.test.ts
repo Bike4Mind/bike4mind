@@ -17,6 +17,16 @@ vi.mock('@bike4mind/observability', () => ({
 const mockExecuteCompletion = vi.hoisted(() => vi.fn());
 const mockAssertOwnerHasCredits = vi.hoisted(() => vi.fn());
 const mockAssertKeySpendWithinCap = vi.hoisted(() => vi.fn());
+// Sentinel tool materializer: returns one stub tool per requested name so tests can
+// assert exactly WHICH names the route asked to build (the resolver's output).
+const mockBuildSharedTools = vi.hoisted(() =>
+  vi.fn((_deps: unknown, _cbs: unknown, opts: { enabledTools?: string[] }) =>
+    (opts.enabledTools ?? []).map(name => ({
+      toolSchema: { name, description: name, parameters: { type: 'object', properties: {} } },
+      toolFn: async () => `${name} result`,
+    }))
+  )
+);
 // Stand-in for the real class (the whole services module is mocked): same
 // `.code` carrier the services-side resolver reads.
 const MockInsufficientCreditsError = vi.hoisted(
@@ -41,11 +51,25 @@ vi.mock('@bike4mind/services', async () => {
     InsufficientCreditsError: MockInsufficientCreditsError,
     resolveQuestErrorCode: (error: unknown) =>
       error instanceof MockInsufficientCreditsError ? error.code : getQuestErrorCode(error),
+    buildSharedTools: mockBuildSharedTools,
+    apiKeyService: { getEffectiveLLMApiKeys: vi.fn().mockResolvedValue({ openai: 'k' }) },
   };
 });
 
+vi.mock('@bike4mind/llm-adapters', () => ({
+  getAvailableModels: vi.fn().mockResolvedValue([{ id: 'test-model', backend: 'anthropic' }]),
+  getLlmByModel: vi.fn(() => ({ currentModel: '', complete: vi.fn() })),
+}));
+
+vi.mock('@server/utils/storage', () => ({
+  getFilesStorage: vi.fn(() => ({})),
+  getGeneratedImageStorage: vi.fn(() => ({})),
+}));
+
 const mockAgentFindById = vi.hoisted(() => vi.fn());
 const mockOrgFindById = vi.hoisted(() => vi.fn());
+const mockProjectFindById = vi.hoisted(() => vi.fn());
+const mockUserFindById = vi.hoisted(() => vi.fn());
 const mockUserApiKeyRepository = vi.hoisted(() => ({ incrementSpend: vi.fn() }));
 vi.mock('@bike4mind/database', () => ({
   connectDB: vi.fn().mockResolvedValue(undefined),
@@ -53,11 +77,15 @@ vi.mock('@bike4mind/database', () => ({
   adminSettingsRepository: {},
   apiKeyRepository: {},
   creditTransactionRepository: {},
-  userRepository: {},
+  userRepository: { findById: mockUserFindById },
   usageEventRepository: { record: vi.fn() },
   organizationRepository: { findById: mockOrgFindById },
   agentRepository: { findById: mockAgentFindById },
   userApiKeyRepository: mockUserApiKeyRepository,
+  projectRepository: { findById: mockProjectFindById },
+  fabFileRepository: {},
+  fabFileChunkRepository: {},
+  dataLakeRepository: {},
 }));
 
 const mockVerifyEmbedApiKey = vi.hoisted(() => vi.fn());
@@ -119,6 +147,10 @@ beforeEach(() => {
   mockAssertKeySpendWithinCap.mockReturnValue(undefined);
   mockCheckApiKeyRateLimit.mockResolvedValue({ allowed: true });
   mockCheckEmbedSessionRateLimit.mockResolvedValue({ allowed: true });
+  mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-1', fileIds: ['f1', 'f2'], deletedAt: null });
+  mockUserFindById.mockResolvedValue({ id: 'user-1', groups: [] });
+  // Org membership lives on the org doc (userDetails), not the user doc.
+  mockOrgFindById.mockResolvedValue({ id: 'org-1', currentCredits: 100, userId: 'admin-1', userDetails: [] });
   mockHydrate.mockReturnValue({
     model: 'test-model',
     systemPrompt: 'AGENT PERSONA PROMPT',
@@ -467,5 +499,192 @@ describe('POST /api/embed/chat', () => {
     const res = await post(CHAT);
     expect(res.status).toBe(500);
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/embed/chat - server-side tools', () => {
+  function hydrateWith(overrides: Record<string, unknown> = {}) {
+    mockHydrate.mockReturnValue({
+      model: 'test-model',
+      systemPrompt: 'AGENT PERSONA PROMPT',
+      temperature: 0.5,
+      maxTokens: 100,
+      allowedTools: [],
+      deniedTools: [],
+      projectId: 'proj-1',
+      ...overrides,
+    });
+  }
+
+  function builtToolNames(): string[] {
+    const call = mockBuildSharedTools.mock.calls[0];
+    return call ? (call[2] as { enabledTools: string[] }).enabledTools : [];
+  }
+
+  function executeParams() {
+    return mockExecuteCompletion.mock.calls[0][0];
+  }
+
+  it('KB is on by default, scoped to the agent project file set, with a capped tool loop', async () => {
+    hydrateWith();
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    expect(builtToolNames()).toEqual(['search_knowledge_base', 'retrieve_knowledge_content']);
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown; entitlementKeys: string[] };
+    expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
+    expect(deps.entitlementKeys).toEqual([]);
+
+    const params = executeParams();
+    expect(params.serverTools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name)).toEqual([
+      'search_knowledge_base',
+      'retrieve_knowledge_content',
+    ]);
+    expect(params.maxToolCalls).toBe(5);
+    expect(params.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('a tool outside the curated universe never materializes, even when explicitly allowed', async () => {
+    hydrateWith({ allowedTools: ['image_generation', 'delegate_to_agent', 'skill'] });
+    await post(CHAT);
+
+    expect(builtToolNames()).toEqual(['search_knowledge_base', 'retrieve_knowledge_content']);
+    const names = executeParams().serverTools.map((t: { toolSchema: { name: string } }) => t.toolSchema.name);
+    expect(names).not.toContain('image_generation');
+    expect(names).not.toContain('delegate_to_agent');
+    expect(names).not.toContain('skill');
+  });
+
+  it('an opted-in curated tool is materialized alongside the KB defaults', async () => {
+    hydrateWith({ allowedTools: ['web_search'] });
+    await post(CHAT);
+    expect(builtToolNames()).toEqual(['search_knowledge_base', 'retrieve_knowledge_content', 'web_search']);
+  });
+
+  it("deniedTools ['*'] turns tools off entirely: no build, no serverTools param", async () => {
+    hydrateWith({ deniedTools: ['*'] });
+    const res = await post(CHAT);
+    expect(res.status).toBe(200);
+
+    expect(mockBuildSharedTools).not.toHaveBeenCalled();
+    const params = executeParams();
+    expect(params.serverTools).toBeUndefined();
+    expect(params.maxToolCalls).toBeUndefined();
+  });
+
+  it('no projectId resolves to an EMPTY kbScope without querying projects', async () => {
+    hydrateWith({ projectId: undefined });
+    await post(CHAT);
+
+    expect(mockProjectFindById).not.toHaveBeenCalled();
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: [] });
+  });
+
+  it('an org-owned agent accepts a project owned by an org TEAMMATE (org-scoped grant)', async () => {
+    hydrateWith();
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f9'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-TEAMMATE' }],
+    });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: ['f9'] });
+  });
+
+  it('a project owned by a user OUTSIDE the org resolves to an empty kbScope (cross-org fail-closed)', async () => {
+    hydrateWith();
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-FOREIGN', fileIds: ['f1'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-1' }], // user-FOREIGN is not a member
+    });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: [] });
+  });
+
+  it("a PERSONAL agent never inherits a teammate's project (org clause requires an org agent)", async () => {
+    hydrateWith();
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', userId: 'user-1', deletedAt: undefined });
+    mockProjectFindById.mockResolvedValue({ id: 'proj-1', userId: 'user-TEAMMATE', fileIds: ['f1'], deletedAt: null });
+    mockOrgFindById.mockResolvedValue({
+      id: 'org-1',
+      currentCredits: 100,
+      userId: 'admin-1',
+      userDetails: [{ id: 'user-TEAMMATE' }],
+    });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: [] });
+  });
+
+  it('a deleted or missing project resolves to an empty kbScope', async () => {
+    hydrateWith();
+    mockProjectFindById.mockResolvedValue(null);
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: [] });
+  });
+
+  it('no orchestration deps are ever wired into the tool builder', async () => {
+    hydrateWith({ allowedTools: ['*'] });
+    await post(CHAT);
+
+    const deps = mockBuildSharedTools.mock.calls[0][0] as Record<string, unknown>;
+    expect(deps.agentStore).toBeUndefined();
+    expect(deps.dagDispatcher).toBeUndefined();
+    expect(deps.getCurrentExecutionId).toBeUndefined();
+  });
+
+  it('request-body fields cannot influence the tool set (schema strips them)', async () => {
+    hydrateWith();
+    await post({ ...CHAT, allowedTools: ['image_generation'], tools: [{ name: 'evil' }], kbScope: { fileIds: ['x'] } });
+
+    expect(builtToolNames()).toEqual(['search_knowledge_base', 'retrieve_knowledge_content']);
+    const deps = mockBuildSharedTools.mock.calls[0][0] as { kbScope: unknown };
+    expect(deps.kbScope).toEqual({ fileIds: ['f1', 'f2'] });
+  });
+
+  it('tool telemetry is stripped from the SSE wire even when the backend reports it', async () => {
+    hydrateWith({ allowedTools: ['web_search'] });
+    // Real backends report toolsUsed (name + model-chosen arguments) on tool turns;
+    // the route must strip it so the anonymous client sees text and tokens only.
+    mockExecuteCompletion.mockImplementation(
+      async (params: { onChunk: (t: string[], i?: unknown) => Promise<void> }) => {
+        await params.onChunk(['', ''], {
+          toolsUsed: [{ name: 'search_knowledge_base', arguments: { query: 'internal query' }, id: 't1' }],
+        });
+        await params.onChunk(['', 'hello from the agent'], { outputTokens: 5 });
+      }
+    );
+
+    const res = await post(CHAT);
+    const text = await res.text();
+
+    expect(text).toContain('hello from the agent');
+    expect(text).not.toContain('search_knowledge_base');
+    expect(text).not.toContain('internal query');
+    expect(text).not.toContain('tool_use');
+    expect(text).not.toContain('web_search');
+  });
+
+  it('a missing key owner runs the completion persona-only instead of failing', async () => {
+    hydrateWith();
+    mockUserFindById.mockResolvedValue(null);
+    const res = await post(CHAT);
+
+    expect(res.status).toBe(200);
+    expect(mockBuildSharedTools).not.toHaveBeenCalled();
+    expect(executeParams().serverTools).toBeUndefined();
   });
 });

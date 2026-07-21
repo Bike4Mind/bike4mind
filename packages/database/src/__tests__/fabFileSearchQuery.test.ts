@@ -452,6 +452,51 @@ describe('buildFabFileSearchQuery', () => {
     });
   });
 
+  // ── 14b. restrictToFileIds allow-list ─────────────────────────────
+  describe('restrictToFileIds allow-list', () => {
+    it('adds _id $in filter (never $nin) for the allow-list', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { restrictToFileIds: ['id1', 'id2'] } }));
+      expect(result.filter._id).toEqual({ $in: ['id1', 'id2'] });
+    });
+
+    it('an empty allow-list restricts to nothing ($in: []) rather than dropping the restriction', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { restrictToFileIds: [] } }));
+      expect(result.filter._id).toEqual({ $in: [] });
+    });
+
+    it('leaves _id unset when the allow-list is undefined', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: {} }));
+      expect(result.filter._id).toBeUndefined();
+    });
+
+    it('composes with the fileIds exclusion so both apply', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ filters: { fileIds: ['ex1'], restrictToFileIds: ['id1', 'id2'] } })
+      );
+      expect(result.filter._id).toEqual({ $nin: ['ex1'], $in: ['id1', 'id2'] });
+    });
+
+    it('applies alongside the owner filter when includeShared is false', () => {
+      const result = buildFabFileSearchQuery(makeParams({ filters: { restrictToFileIds: ['id1'] } }));
+      expect(result.filter.userId).toBe('user123');
+      expect(result.filter._id).toEqual({ $in: ['id1'] });
+    });
+
+    it('skipOwnership drops the ownership predicate when the allow-list is present', () => {
+      const result = buildFabFileSearchQuery(
+        makeParams({ filters: { restrictToFileIds: ['id1'] }, options: { skipOwnership: true } })
+      );
+      expect(result.filter.userId).toBeUndefined();
+      expect(result.filter._id).toEqual({ $in: ['id1'] });
+    });
+
+    it('skipOwnership is IGNORED without an allow-list - it can never widen an unrestricted search', () => {
+      const result = buildFabFileSearchQuery(makeParams({ options: { skipOwnership: true } }));
+      expect(result.filter.userId).toBe('user123');
+      expect(result.filter._id).toBeUndefined();
+    });
+  });
+
   // ── 15. fileSize sort ─────────────────────────────────────────────
   describe('fileSize sort', () => {
     it('adds fileSize existence check to andConditions', () => {

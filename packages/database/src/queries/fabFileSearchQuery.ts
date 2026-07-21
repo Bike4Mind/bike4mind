@@ -259,6 +259,13 @@ export interface FabFileSearchParams {
     shared?: boolean;
     curated?: boolean;
     fileIds?: string[];
+    /**
+     * File-id ALLOW-list (contrast fileIds above, which EXCLUDES). Fail-closed contract:
+     * undefined = no restriction; present (including []) = results restricted to these ids,
+     * and an empty array matches nothing. Never client-supplied - derived server-side
+     * (e.g. a project's file set or an agent's KB scope).
+     */
+    restrictToFileIds?: string[];
   };
   pagination: { page: number; limit: number };
   order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' };
@@ -273,6 +280,15 @@ export interface FabFileSearchParams {
     scopedTagPrefixes?: string[];
     /** Single-lake view: return only this lake's files, not all owned files - see buildOwnershipConditions. */
     restrictToDataLake?: boolean;
+    /**
+     * Treat the restrictToFileIds allow-list as the SOLE authorization: skip the
+     * ownership/sharing predicate entirely, so files curated into a server-resolved
+     * scope match even when owned by another user (curation is the grant - the KB
+     * scoped arms' contract, mirroring getAccessibleFiles on the semantic side).
+     * Ignored unless restrictToFileIds is present, so it can never widen an
+     * unrestricted search.
+     */
+    skipOwnership?: boolean;
     excludeContent?: boolean;
     /**
      * Generic retrieval-exclusion: keep documents whose filename begins with one of these
@@ -345,6 +361,14 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     baseFilter._id = { $nin: filters.fileIds };
   }
 
+  // File ID allow-list (restriction). Deliberately NO length guard: presence of the field -
+  // even as [] - means "restrict", and { $in: [] } matches nothing (fail-closed empty scope).
+  // Merges with the exclusion above so both apply (a file must be in $in AND not in $nin).
+  if (filters.restrictToFileIds !== undefined) {
+    const existing = (baseFilter._id as Record<string, unknown> | undefined) ?? {};
+    baseFilter._id = { ...existing, $in: filters.restrictToFileIds };
+  }
+
   // MIME type filter
   if (filters.type) {
     Object.assign(baseFilter, getMimeTypeFilter(filters.type));
@@ -364,6 +388,10 @@ export function buildFabFileSearchQuery(params: FabFileSearchParams): FabFileSea
     andConditions.push({
       tags: { $elemMatch: { name: 'curated-notebook' } },
     });
+  } else if (options?.skipOwnership === true && filters.restrictToFileIds !== undefined) {
+    // Allow-list-as-authority: no ownership predicate. Only reachable with a present
+    // restrictToFileIds (see the option's doc), so results are still hard-bounded to
+    // the server-resolved id set composed above.
   } else if (options?.includeShared === true) {
     const ownershipConds = buildOwnershipConditions(userId, {
       userGroups: options.userGroups,

@@ -128,6 +128,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       shared?: boolean;
       curated?: boolean;
       fileIds?: string[];
+      restrictToFileIds?: string[];
     },
     pagination: { page: number; limit: number },
     order: { by: 'createdAt' | 'fileName' | 'fileSize'; direction: 'asc' | 'desc' },
@@ -139,6 +140,7 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       dataLakeTagPrefixes?: string[];
       scopedTagPrefixes?: string[];
       restrictToDataLake?: boolean;
+      skipOwnership?: boolean;
       excludeContent?: boolean;
       excludeFilenameMarkers?: string[];
       vectorizedOnly?: boolean;

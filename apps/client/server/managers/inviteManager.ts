@@ -62,9 +62,7 @@ export function filterInviteRecipientsToSelf<T>(invite: T, userEmail?: string | 
   const raw = invite as unknown as { toJSON?: () => Record<string, unknown> } & Record<string, unknown>;
   const plain: Record<string, unknown> = typeof raw.toJSON === 'function' ? raw.toJSON() : { ...raw };
   const recipients = plain.recipients as
-    | { pending?: string[]; accepted?: string[]; refused?: string[] }
-    | null
-    | undefined;
+    { pending?: string[]; accepted?: string[]; refused?: string[] } | null | undefined;
   if (recipients) {
     const self = userEmail?.toLowerCase();
     const keepSelf = (arr?: string[]) =>

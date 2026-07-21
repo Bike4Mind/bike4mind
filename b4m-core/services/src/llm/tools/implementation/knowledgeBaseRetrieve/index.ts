@@ -13,6 +13,18 @@ interface KnowledgeBaseRetrieveParams {
 const DEFAULT_MAX_CHARS = 8000;
 const ABSOLUTE_MAX_CHARS = 16000;
 
+/**
+ * A directly-fetched file is eligible for retrieval only when it is live (not deleted/
+ * archived) and not retrieval-excluded. Fail-closed: any excluded file reads as
+ * not-found so a direct id probe leaks no existence. Shared by both direct-fetch sites.
+ */
+function isLiveVisibleFile(
+  file: IFabFileDocument | null | undefined,
+  retrievalFilter: Parameters<typeof isRetrievalExcluded>[1]
+): file is IFabFileDocument {
+  return !!file && !file.deletedAt && !file.archivedAt && !isRetrievalExcluded(file, retrievalFilter);
+}
+
 export const knowledgeBaseRetrieveTool: ToolDefinition = {
   name: 'retrieve_knowledge_content',
   implementation: context => {
@@ -59,77 +71,119 @@ export const knowledgeBaseRetrieveTool: ToolDefinition = {
         // by a direct id probe on either the owned or shared branch. Fail-closed.
         const retrievalFilter = context.retrievalFilter ?? {};
 
+        // Agent-scoped KB restriction (see KbScope). One shared not-found message for
+        // out-of-scope, excluded, and genuinely-missing ids: distinguishing them would be an
+        // existence oracle for files outside the scope (tool params arrive from the
+        // conversation, so an end-user can probe arbitrary ids through the model).
+        const scope = context.kbScope;
+        const notFoundMsg = (id: string) =>
+          `No document found with ID "${id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
+        if (scope && scope.fileIds.length === 0) {
+          return file_id ? notFoundMsg(file_id) : 'No documents found matching your request in your knowledge base.';
+        }
+
         try {
           let files: IFabFileDocument[] = [];
 
           // Path A: direct file_id lookup
           if (file_id) {
-            // Try owned file first (fast path)
-            const ownedFile = await context.db.fabfiles.findByIdAndUserId(file_id, context.userId);
-            if (ownedFile) {
-              // An excluded owned file is treated as not-found (falls through to the :92 message),
-              // so a direct id probe leaks nothing - not even that the file exists.
-              if (!isRetrievalExcluded(ownedFile, retrievalFilter)) {
-                files = [ownedFile];
+            if (scope) {
+              // Positive membership assertion BEFORE any DB lookup: an out-of-scope id never
+              // touches the database, and the owner/shared access machinery below (including
+              // getDynamicDataLakeAccess) is unreachable on this branch. Scope membership IS
+              // the authorization - the agent owner curated these files for this audience.
+              if (!scope.fileIds.includes(file_id)) {
+                return notFoundMsg(file_id);
+              }
+              const scopedFile = await context.db.fabfiles.findById(file_id);
+              if (isLiveVisibleFile(scopedFile, retrievalFilter)) {
+                files = [scopedFile];
               }
             } else {
-              // Fallback: file may be accessible via data lake or sharing - fetch by ID
-              // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
-              const sharedFile = await context.db.fabfiles.findById(file_id);
-              // Exclude archived (data-lake archived), deleted, and retrieval-excluded files from direct fetch.
-              if (
-                sharedFile &&
-                !sharedFile.deletedAt &&
-                !sharedFile.archivedAt &&
-                !isRetrievalExcluded(sharedFile, retrievalFilter)
-              ) {
-                const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
-                const fileTags = sharedFile.tags?.map(t => t.name) || [];
-                const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
-                const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
-                const hasShareAccess = sharedFile.users?.some(
-                  (u: { userId: string; permissions: string[] }) =>
-                    u.userId === context.userId && u.permissions?.some(p => p === 'read' || p === 'write')
-                );
-                const userGroups = context.user.groups || [];
-                const hasGroupAccess =
-                  userGroups.length > 0 &&
-                  sharedFile.groups?.some(
-                    (g: { groupId: string; permissions: string[] }) =>
-                      userGroups.includes(g.groupId) && g.permissions?.some(p => p === 'read' || p === 'write')
+              // Try owned file first (fast path)
+              const ownedFile = await context.db.fabfiles.findByIdAndUserId(file_id, context.userId);
+              if (ownedFile) {
+                // An excluded owned file is treated as not-found (falls through to the message
+                // below), so a direct id probe leaks nothing - not even that the file exists.
+                if (!isRetrievalExcluded(ownedFile, retrievalFilter)) {
+                  files = [ownedFile];
+                }
+              } else {
+                // Fallback: file may be accessible via data lake or sharing - fetch by ID
+                // without ownership filter, then verify access via data lake tags, prefixes, or group sharing
+                const sharedFile = await context.db.fabfiles.findById(file_id);
+                if (isLiveVisibleFile(sharedFile, retrievalFilter)) {
+                  const { dataLakeTags, dataLakeTagPrefixes } = await getDynamicDataLakeAccess(context);
+                  const fileTags = sharedFile.tags?.map(t => t.name) || [];
+                  const hasMetaTagAccess = dataLakeTags.some(dlt => fileTags.includes(dlt));
+                  const hasPrefixAccess = dataLakeTagPrefixes.some(p => fileTags.some(t => t.startsWith(p)));
+                  const hasShareAccess = sharedFile.users?.some(
+                    (u: { userId: string; permissions: string[] }) =>
+                      u.userId === context.userId && u.permissions?.some(p => p === 'read' || p === 'write')
                   );
-                if (hasMetaTagAccess || hasPrefixAccess || hasShareAccess || hasGroupAccess) {
-                  files = [sharedFile];
+                  const userGroups = context.user.groups || [];
+                  const hasGroupAccess =
+                    userGroups.length > 0 &&
+                    sharedFile.groups?.some(
+                      (g: { groupId: string; permissions: string[] }) =>
+                        userGroups.includes(g.groupId) && g.permissions?.some(p => p === 'read' || p === 'write')
+                    );
+                  if (hasMetaTagAccess || hasPrefixAccess || hasShareAccess || hasGroupAccess) {
+                    files = [sharedFile];
+                  }
                 }
               }
             }
 
             if (files.length === 0) {
-              return `No document found with ID "${file_id}". The file may not exist or you may not have access to it. Try using search_knowledge_base to find the correct file ID.`;
+              return notFoundMsg(file_id);
             }
           }
 
           // Path B: tag/query-based search
           if (files.length === 0 && (tags?.length || query)) {
-            const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
-            const searchResults = await context.db.fabfiles.search(
-              context.userId,
-              query || '',
-              { tags: tags || [], shared: false },
-              { page: 1, limit: 5 },
-              { by: 'fileName', direction: 'asc' },
-              {
-                textSearch: true,
-                includeShared: true,
-                userGroups: context.user.groups || [],
-                dataLakeTags,
-                dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
-                scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
-                excludeContent: true, // Content fetched via chunks below, not the document field
-                // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
-                ...retrievalFilter,
-              }
-            );
+            let searchResults;
+            if (scope) {
+              // Scoped: restrictToFileIds is the sole authority (skipOwnership - curated
+              // files match even when owned by another user, matching Path A's
+              // membership-is-authorization). No owner/shared/org expansion and no
+              // data-lake resolution on this branch.
+              searchResults = await context.db.fabfiles.search(
+                context.userId,
+                query || '',
+                { tags: tags || [], shared: false, restrictToFileIds: scope.fileIds },
+                { page: 1, limit: 5 },
+                { by: 'fileName', direction: 'asc' },
+                {
+                  textSearch: true,
+                  includeShared: false,
+                  userGroups: [],
+                  skipOwnership: true,
+                  excludeContent: true, // Content fetched via chunks below, not the document field
+                  ...retrievalFilter,
+                }
+              );
+            } else {
+              const { dataLakeTags, dataLakeTagPrefixes, scopedTagPrefixes } = await getDynamicDataLakeAccess(context);
+              searchResults = await context.db.fabfiles.search(
+                context.userId,
+                query || '',
+                { tags: tags || [], shared: false },
+                { page: 1, limit: 5 },
+                { by: 'fileName', direction: 'asc' },
+                {
+                  textSearch: true,
+                  includeShared: true,
+                  userGroups: context.user.groups || [],
+                  dataLakeTags,
+                  dataLakeTagPrefixes, // Static-registry (open) prefixes — match shared KB files
+                  scopedTagPrefixes, // Dynamic-lake prefixes — matched only within owner/org access
+                  excludeContent: true, // Content fetched via chunks below, not the document field
+                  // Retrieval exclusion (opt-in) - best-effort DB pre-filter; authoritative pass below. No-op when unset.
+                  ...retrievalFilter,
+                }
+              );
+            }
             // Authoritative exclusion pass on top of the DB pre-filter (see filterRetrievalExcluded).
             files = filterRetrievalExcluded(searchResults.data, retrievalFilter);
 

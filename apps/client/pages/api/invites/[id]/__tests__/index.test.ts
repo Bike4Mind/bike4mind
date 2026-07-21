@@ -77,7 +77,7 @@ describe('DELETE /api/invites/[id]', () => {
 describe('GET /api/invites/[id] - recipient email strip', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('keeps only the caller\'s own recipient entry, dropping co-invitees', async () => {
+  it("keeps only the caller's own recipient entry, dropping co-invitees", async () => {
     (Invite.findById as any).mockResolvedValue({ id: 'inv-1' });
     getInviteDetails.mockResolvedValue({
       id: 'inv-1',

@@ -27,7 +27,12 @@ vi.mock('@server/middlewares/baseApi', () => {
 });
 
 vi.mock('@bike4mind/database', () => ({
-  User: { find: () => ({ getQuery: () => ({}) }), populate: vi.fn().mockResolvedValue(undefined), hydrate: (u: any) => u, aggregate: vi.fn().mockResolvedValue([]) },
+  User: {
+    find: () => ({ getQuery: () => ({}) }),
+    populate: vi.fn().mockResolvedValue(undefined),
+    hydrate: (u: any) => u,
+    aggregate: vi.fn().mockResolvedValue([]),
+  },
   Project: { findById: vi.fn() },
   executeFacetCompatible: (_m: any, _p: any, facet: any) => {
     mockRefs.facet = facet;
