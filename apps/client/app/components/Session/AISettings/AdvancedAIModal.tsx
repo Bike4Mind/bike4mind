@@ -149,8 +149,7 @@ const getAvailableSizes = (model: string) => {
   } else if (isGPTImageModel(model)) {
     return IMAGE_SIZE_CONSTRAINTS.GPT_IMAGE_1.sizes;
   } else if (isBflImageModel(model)) {
-    const isKontext = model === ImageModels.FLUX_KONTEXT_PRO || model === ImageModels.FLUX_KONTEXT_MAX;
-    if (isKontext) return [];
+    if (isKontextImageModel(model)) return [];
     return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;
   }
   return IMAGE_SIZE_CONSTRAINTS.BFL.sizes;

@@ -1,6 +1,7 @@
 import {
   canonicalizeTemplateSettings,
   isBflImageModel,
+  isKontextModel,
   ImageModels,
   type ImageTemplateSettingsType,
   type IImageGenerationTemplateDocument,
@@ -39,7 +40,7 @@ export type ImageSettingsSource = Pick<
  */
 export function imageTemplateSettingsSnapshot(model: string, s: ImageSettingsSource): ImageTemplateSettingsType {
   const isBfl = isBflImageModel(model);
-  const isKontext = model === ImageModels.FLUX_KONTEXT_PRO || model === ImageModels.FLUX_KONTEXT_MAX;
+  const isKontext = isKontextModel(model);
   const isGpt1 = model === ImageModels.GPT_IMAGE_1;
   return {
     size: isKontext ? undefined : s.size,
