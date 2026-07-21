@@ -91,6 +91,7 @@ export enum AdminTab {
   AgentExecutions = 53,
   PublishedPages = 54,
   PartnerSignupRules = 55,
+  EmbedKeys = 57,
 }
 
 /**
@@ -195,6 +196,7 @@ export const SIDEBAR_SECTIONS: SidebarSection[] = [
       { Icon: AutoAwesomeIcon, tab: AdminTab.AgentOps, label: 'Agent Operations' },
       { Icon: CleaningServicesIcon, tab: AdminTab.AgentExecutions, label: 'Stuck Agent Executions' },
       { Icon: BuildIcon, tab: AdminTab.ToolDefinitions, label: 'Tool Definitions' },
+      { Icon: ApiIcon, tab: AdminTab.EmbedKeys, label: 'Embed Keys', testid: 'admin-embed-keys-btn' },
       { Icon: DescriptionIcon, tab: AdminTab.SystemPrompts, label: 'System Prompts' },
       { Icon: SettingsSuggestIcon, tab: AdminTab.ManageGears, label: 'Manage Gears' },
       { Icon: SpeedIcon, tab: AdminTab.RapidReply, label: 'Rapid Reply' },
