@@ -196,6 +196,12 @@ export const TextToSpeechUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
 });
 
+export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('sound_effects_usage'),
+  model: z.string(),
+  sessionId: z.string(),
+});
+
 export const TransferCreditTransaction = BaseCreditTransaction.extend({
   type: z.literal('transfer_credit'),
   recipientId: z.string(),
@@ -227,6 +233,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   CompletionApiUsageTransaction,
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
+  SoundEffectsUsageTransaction,
   TransferCreditTransaction,
   ReceivedCreditTransaction,
 ]);
@@ -252,6 +259,7 @@ export type IToolUsageTransaction = z.infer<typeof ToolUsageTransaction>;
 export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTransaction>;
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
 export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
+export type ISoundEffectsUsageTransaction = z.infer<typeof SoundEffectsUsageTransaction>;
 export type ITransferCreditTransaction = z.infer<typeof TransferCreditTransaction>;
 export type IReceivedCreditTransaction = z.infer<typeof ReceivedCreditTransaction>;
 

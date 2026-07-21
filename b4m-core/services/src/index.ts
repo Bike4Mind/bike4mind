@@ -34,6 +34,7 @@ export * as mfaService from './mfaService';
 export * as adminSettingsService from './adminSettingsService';
 export * as creditService from './creditService';
 export * from './billing';
+export * from './soundCost';
 export * as emailIngestionService from './emailIngestionService';
 export * as emailAnalysisService from './emailAnalysisService';
 export * as mementoService from './mementoService';

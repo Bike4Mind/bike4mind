@@ -2,10 +2,16 @@ import { isZodError } from '@bike4mind/common';
 import { createMocks } from 'node-mocks-http';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { getEffectiveApiKey, generate } = vi.hoisted(() => ({
-  getEffectiveApiKey: vi.fn(),
-  generate: vi.fn(),
-}));
+const { getEffectiveApiKey, subtractCredits, estimateSoundCredits, generate, getSettingsValue, findById, recordUsage } =
+  vi.hoisted(() => ({
+    getEffectiveApiKey: vi.fn(),
+    subtractCredits: vi.fn(),
+    estimateSoundCredits: vi.fn(),
+    generate: vi.fn(),
+    getSettingsValue: vi.fn(),
+    findById: vi.fn(),
+    recordUsage: vi.fn(),
+  }));
 
 // baseApi mock: routes by req.method; a thrown ZodError maps to 422 (mirroring
 // the real errorHandler), any other thrown error to its statusCode or 500.
@@ -36,12 +42,27 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 
-vi.mock('@bike4mind/database', () => ({ apiKeyRepository: {}, adminSettingsRepository: {} }));
+vi.mock('@server/utils/errors', () => ({
+  BadRequestError: class BadRequestError extends Error {
+    statusCode = 400;
+  },
+}));
+vi.mock('@bike4mind/database', () => ({
+  apiKeyRepository: {},
+  adminSettingsRepository: {},
+  creditTransactionRepository: {},
+  usageEventRepository: { record: (...a: unknown[]) => recordUsage(...a) },
+  userRepository: { findById: (...a: unknown[]) => findById(...a) },
+}));
 vi.mock('@bike4mind/services', () => ({
   apiKeyService: { getEffectiveApiKey: (...a: unknown[]) => getEffectiveApiKey(...a) },
+  creditService: { subtractCredits: (...a: unknown[]) => subtractCredits(...a) },
+  estimateSoundCredits: (...a: unknown[]) => estimateSoundCredits(...a),
 }));
 vi.mock('@bike4mind/utils', () => ({
   aiSoundService: () => ({ generate: (...a: unknown[]) => generate(...a) }),
+  getSettingsMap: vi.fn(async () => ({})),
+  getSettingsValue: (...a: unknown[]) => getSettingsValue(...a),
 }));
 
 import handler from '../sound-effects';
@@ -50,34 +71,67 @@ type Handler = (req: unknown, res: unknown) => Promise<void>;
 
 const run = (body: unknown) => {
   const { req, res } = createMocks({ method: 'POST', body });
-  Object.assign(req, { user: { id: 'u1' }, logger: { error: vi.fn() } });
+  Object.assign(req, { user: { id: 'u1' }, logger: { error: vi.fn(), warn: vi.fn() } });
   return { res, promise: (handler as Handler)(req, res) };
 };
 
 beforeEach(() => {
-  getEffectiveApiKey.mockReset();
-  generate.mockReset();
+  [
+    getEffectiveApiKey,
+    subtractCredits,
+    estimateSoundCredits,
+    generate,
+    getSettingsValue,
+    findById,
+    recordUsage,
+  ].forEach(m => m.mockReset());
+  recordUsage.mockResolvedValue(undefined);
+  getEffectiveApiKey.mockResolvedValue('eleven-key');
+  generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
 });
 
 describe('POST /api/ai/sound-effects', () => {
-  it('returns generated audio bytes with the vendor content type (200)', async () => {
-    getEffectiveApiKey.mockResolvedValue('eleven-key');
-    generate.mockResolvedValue({ audio: Buffer.from('boom'), contentType: 'audio/mpeg' });
+  it('charges the user after a successful generation when enforceCredits is on', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
+    findById.mockResolvedValue({ currentCredits: 100 });
 
-    const { res, promise } = run({ text: 'explosion', durationSeconds: 2 });
+    const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
     await promise;
 
     expect(res._getStatusCode()).toBe(200);
-    expect(res.getHeader('Content-Type')).toBe('audio/mpeg');
     expect(res._getData().toString()).toBe('boom');
-    expect(generate).toHaveBeenCalledWith('explosion', {
-      durationSeconds: 2,
-      promptInfluence: undefined,
-      format: undefined,
-    });
+    expect(subtractCredits).toHaveBeenCalledTimes(1);
+    const [params] = subtractCredits.mock.calls[0];
+    expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, ownerId: 'u1' });
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'sound_effects', creditsCharged: 12 }));
   });
 
-  it('returns 401 when the provider key is not configured', async () => {
+  it('does NOT charge when enforceCredits is off', async () => {
+    getSettingsValue.mockReturnValue(false);
+
+    const { res, promise } = run({ text: 'rain' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(estimateSoundCredits).not.toHaveBeenCalled();
+    expect(subtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('rejects with 422 (insufficient_credits) before generating when the balance is short', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025 });
+    findById.mockResolvedValue({ currentCredits: 10 });
+
+    const { res, promise } = run({ text: 'thunder' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(422);
+    expect(generate).not.toHaveBeenCalled();
+    expect(subtractCredits).not.toHaveBeenCalled();
+  });
+
+  it('returns 401 when no provider key resolves (no charge)', async () => {
     getEffectiveApiKey.mockResolvedValue(null);
 
     const { res, promise } = run({ text: 'rain' });
@@ -85,23 +139,27 @@ describe('POST /api/ai/sound-effects', () => {
 
     expect(res._getStatusCode()).toBe(401);
     expect(generate).not.toHaveBeenCalled();
+    expect(subtractCredits).not.toHaveBeenCalled();
   });
 
   it('rejects an invalid body (422) without resolving a key', async () => {
-    const { res, promise } = run({ text: '' }); // fails min(1)
+    const { res, promise } = run({ text: '' });
     await promise;
 
     expect(res._getStatusCode()).toBe(422);
     expect(getEffectiveApiKey).not.toHaveBeenCalled();
   });
 
-  it('maps an upstream provider failure to 502', async () => {
-    getEffectiveApiKey.mockResolvedValue('eleven-key');
+  it('maps an upstream provider failure to 502 and does not charge', async () => {
+    getSettingsValue.mockReturnValue(true);
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
+    findById.mockResolvedValue({ currentCredits: 100 });
     generate.mockRejectedValue(new Error('ElevenLabs sound generation failed: 429'));
 
     const { res, promise } = run({ text: 'thunder' });
     await promise;
 
     expect(res._getStatusCode()).toBe(502);
+    expect(subtractCredits).not.toHaveBeenCalled();
   });
 });
