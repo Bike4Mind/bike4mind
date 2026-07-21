@@ -1581,9 +1581,15 @@ export class ChatCompletionProcess {
         .filter(([serverName]) => !agentOnlyMcpServers.includes(serverName))
         .flatMap(([, tools]) => tools);
 
+      // Gate the blog workflow prompt on blog_draft surviving into the final tool set.
+      // The auto-add flag alone is not enough: local (Ollama) models have blog_draft
+      // trimmed from their schemas above, and telling a model to call a tool it does not
+      // have makes it emit the call as leaked JSON text in the reply.
+      const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: hasContentTransform ?? false,
+        hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
         userTimezone,
