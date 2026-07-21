@@ -54,7 +54,7 @@ function post(query: Record<string, unknown>, user?: Record<string, unknown>) {
   const { req, res } = createMocks({ method: 'POST', query });
   if (user) (req as any).user = user;
   (req as any).ability = {};
-  (req as any).logger = { info: vi.fn() };
+  (req as any).logger = { info: vi.fn(), warn: vi.fn() };
   return { req, res };
 }
 
@@ -112,6 +112,18 @@ describe('POST /api/admin/user-api-keys/[id]/reset-rate-limit', () => {
       },
       { ability: (req as any).ability }
     );
+  });
+
+  it('still succeeds when the audit event write fails (orphaned-key owner)', async () => {
+    // logEvent throws NotFoundError when the key owner's user doc is gone -
+    // the reset already happened, so the request must not fail after the fact.
+    logEvent.mockRejectedValueOnce(new Error('User not found'));
+    const { req, res } = post({ id: 'key-1' }, admin);
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(resetApiKeyRateLimit).toHaveBeenCalledWith(storedKey.id);
+    expect((req as any).logger.warn).toHaveBeenCalledWith(expect.stringContaining('key-1'));
   });
 
   it('registers POST only, so next-connect 405s every other verb', () => {

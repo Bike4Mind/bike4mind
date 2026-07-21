@@ -36,6 +36,9 @@ const handler = baseApi({ auth: true })
       await resetApiKeyRateLimit(apiKey.id);
 
       // Attributed to the key owner; resetBy records the acting admin.
+      // Best-effort: the reset already happened, and the counter write throws
+      // for an orphaned key (owner doc deleted) - the exact case an admin
+      // reset exists for. Mirrors the RATE_LIMITED path in apiKeyRateLimitCheck.
       await logEvent(
         {
           userId: apiKey.userId,
@@ -47,7 +50,9 @@ const handler = baseApi({ auth: true })
           },
         },
         { ability: req.ability }
-      );
+      ).catch(error => {
+        req.logger.warn(`Failed to log rate-limit reset event for API key ${apiKey.id}: ${error}`);
+      });
 
       req.logger.info(
         `Admin ${req.user.username} (${req.user.id}) reset rate-limit counters for API key ${apiKey.id} (owner ${apiKey.userId})`
