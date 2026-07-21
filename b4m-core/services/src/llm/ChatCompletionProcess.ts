@@ -2233,12 +2233,16 @@ export class ChatCompletionProcess {
         complexity: queryComplexity as 'simple' | 'contextual' | 'complex',
         // Pass explicit user reasoning effort preference (if not 'auto')
         reasoningEffort: explicitReasoningEffort,
-        thinking: thinking
-          ? {
-              enabled: thinking.enabled,
-              budget_tokens: thinking.budget_tokens ?? 16000,
-            }
-          : undefined,
+        // Gate on can_think so we never ask a non-thinking model to think:
+        // Ollama returns a hard 400 ("does not support thinking") for think:true
+        // on such a model, which would fail the whole completion.
+        thinking:
+          thinking && modelInfo.can_think
+            ? {
+                enabled: thinking.enabled,
+                budget_tokens: thinking.budget_tokens ?? 16000,
+              }
+            : undefined,
         tools: allTools,
       };
 

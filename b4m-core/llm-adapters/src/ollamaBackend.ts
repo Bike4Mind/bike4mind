@@ -94,6 +94,7 @@ export class OllamaBackend implements ICompletionBackend {
             // hardcoded; falls back to false when /api/show is unavailable.
             supportsVision: capabilities.includes('vision'),
             supportsTools: capabilities.includes('tools'),
+            can_think: capabilities.includes('thinking'),
             can_stream: true,
             logoFile: 'Ollama_Logo.svg',
             rank: 1,
@@ -179,6 +180,10 @@ export class OllamaBackend implements ICompletionBackend {
       model,
       messages: this.buildMessages(messages),
       ...(formattedTools.length > 0 && { tools: formattedTools }),
+      // Drive Ollama's reasoning from the Thinking toggle. Gated upstream by
+      // can_think, so think:true only reaches thinking-capable models (a
+      // non-thinking model 400s on think:true; think:false is always accepted).
+      ...(typeof options.thinking?.enabled === 'boolean' && { think: options.thinking.enabled }),
     };
 
     try {
@@ -314,7 +319,7 @@ export class OllamaBackend implements ICompletionBackend {
    * Returns the full text, any native tool calls, and token usage.
    */
   private async runChatRound(
-    baseRequest: { model: string; messages: OllamaMessage[]; tools?: Tool[] },
+    baseRequest: { model: string; messages: OllamaMessage[]; tools?: Tool[]; think?: boolean },
     options: Partial<ICompletionOptions>,
     callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>,
     { buffer }: { buffer: boolean }
@@ -329,20 +334,45 @@ export class OllamaBackend implements ICompletionBackend {
       const response = await this._api.chat({ ...baseRequest, stream: true as const });
       let startedThinking = false;
       let stoppedThinking = false;
+      // Modern Ollama streams reasoning in a separate `thinking` field rather
+      // than inline <think> tags; track whether we've opened a wrapper for it.
+      let thinkingFieldOpen = false;
 
       for await (const chunk of response) {
         if (chunk.message.tool_calls?.length) {
           toolCalls.push(...chunk.message.tool_calls);
         }
 
-        let piece = chunk.message.content || '';
-        startedThinking = startedThinking || piece.includes('<think>');
-        stoppedThinking = stoppedThinking || piece.includes('</think>');
-        // Close a thinking block only if the model actually opened one but never
-        // closed it. Non-reasoning models (e.g. qwen2.5-coder) emit no <think>
-        // at all, so appending </think> unconditionally left a stray closing tag.
-        if (chunk.done && startedThinking && !stoppedThinking) {
+        let piece = '';
+        // Wrap the separate thinking field in <think>..</think> so the consumer
+        // (which parses those tags) renders it as reasoning, then the answer.
+        const thinkPiece = chunk.message.thinking || '';
+        if (thinkPiece) {
+          if (!thinkingFieldOpen) {
+            piece += '<think>';
+            thinkingFieldOpen = true;
+          }
+          piece += thinkPiece;
+        }
+        const contentPiece = chunk.message.content || '';
+        if (contentPiece) {
+          if (thinkingFieldOpen) {
+            piece += '</think>';
+            thinkingFieldOpen = false;
+          }
+          // Legacy: older models emit <think> inline in content instead.
+          startedThinking = startedThinking || contentPiece.includes('<think>');
+          stoppedThinking = stoppedThinking || contentPiece.includes('</think>');
+          piece += contentPiece;
+        }
+
+        // Close an unterminated reasoning block at end of stream, whether it came
+        // from the thinking field or an inline <think> the model never closed.
+        // Non-reasoning models (e.g. qwen2.5-coder) emit neither, so nothing is
+        // appended for them.
+        if (chunk.done && (thinkingFieldOpen || (startedThinking && !stoppedThinking))) {
           piece = `${piece}</think>`;
+          thinkingFieldOpen = false;
         }
 
         content += piece;
@@ -361,7 +391,10 @@ export class OllamaBackend implements ICompletionBackend {
       if (response.message.tool_calls?.length) {
         toolCalls.push(...response.message.tool_calls);
       }
-      content = response.message.content || '';
+      // Prepend reasoning (from the separate thinking field) as a <think> block
+      // so it renders consistently with the streaming path.
+      const think = response.message.thinking || '';
+      content = (think ? `<think>${think}</think>` : '') + (response.message.content || '');
       inputTokens = response.prompt_eval_count || 0;
       outputTokens = response.eval_count || 0;
       doneReason = response.done_reason;
