@@ -33,6 +33,7 @@ import {
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
+import { isFirstPartyEmbedOrigin } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
@@ -179,9 +180,16 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
       // treat that like an absent Origin (let the credential decide) rather than a
       // hard 403 that would break a legitimate embed without stopping a real attacker
-      // (who can just omit the header anyway).
+      // (who can just omit the header anyway). Our own serving origin is implicitly
+      // permitted: the /embed/* widget page posts from the app host, which can never
+      // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
+      // with the mint gate in pages/api/embed/session.ts.
       const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (requestOrigin && !isOriginPermitted(requestOrigin, ctx.allowedOrigins)) {
+      if (
+        requestOrigin &&
+        !isFirstPartyEmbedOrigin(requestOrigin, headers.host) &&
+        !isOriginPermitted(requestOrigin, ctx.allowedOrigins)
+      ) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 

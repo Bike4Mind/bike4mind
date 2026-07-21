@@ -21,6 +21,7 @@ import { isOriginPermitted } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
+import { isFirstPartyEmbedOrigin } from '@server/embed/firstPartyOrigin';
 
 /** Per-IP flood backstop on this unauth mint surface. */
 const MINT_RATE_LIMIT = 60;
@@ -44,9 +45,11 @@ const handler = baseApi({ auth: false })
     // allow-list. A non-browser caller (no Origin) is gated by the key alone.
     // `Origin: null` (sandboxed iframe) is treated as absent, matching the chat
     // route - the credential is the boundary, so a hard 403 here would only break
-    // a legitimate sandboxed embed without stopping anyone.
+    // a legitimate sandboxed embed without stopping anyone. Our own serving
+    // origin is implicitly permitted: the /embed/* widget page mints from the app
+    // host, which can never appear on an allow-list (see firstPartyOrigin.ts).
     const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-    if (origin && !isOriginPermitted(origin, info.allowedOrigins)) {
+    if (origin && !isFirstPartyEmbedOrigin(origin, headers.host) && !isOriginPermitted(origin, info.allowedOrigins)) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 
