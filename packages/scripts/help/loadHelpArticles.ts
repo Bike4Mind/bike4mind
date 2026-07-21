@@ -23,8 +23,42 @@ import { stripMarkdownFormatting, toAnchor } from './utils.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/** Absolute path to the docs-site content root. */
+/** Absolute path to the docs-site content root (canonical English source). */
 export const DOCS_ROOT = path.resolve(__dirname, '../../../docs-site/docs');
+
+/**
+ * Root for translated content trees. Each locale mirrors the English category
+ * layout, e.g. `docs-site/i18n/es/features/notebooks.md`. English is NEVER
+ * duplicated here — it lives in DOCS_ROOT and is the fallback for any article a
+ * locale hasn't translated. Populated by the `help:translate` script.
+ */
+export const I18N_ROOT = path.resolve(__dirname, '../../../docs-site/i18n');
+
+/** The canonical source locale. Its content lives at DOCS_ROOT, not under I18N_ROOT. */
+export const DEFAULT_LOCALE = 'en';
+
+/** Resolve the content root for a locale: DOCS_ROOT for English, else the i18n overlay. */
+export function localeContentRoot(locale: string): string {
+  return locale === DEFAULT_LOCALE ? DOCS_ROOT : path.join(I18N_ROOT, locale);
+}
+
+/**
+ * Locales that have content on disk, always starting with English. A locale
+ * counts as present once its directory exists under I18N_ROOT (created by
+ * `help:translate`). With no i18n tree, this returns just `['en']`, so the whole
+ * pipeline degrades to the original single-locale behavior.
+ */
+export function discoverLocales(): string[] {
+  const locales = [DEFAULT_LOCALE];
+  try {
+    for (const entry of fs.readdirSync(I18N_ROOT, { withFileTypes: true })) {
+      if (entry.isDirectory()) locales.push(entry.name);
+    }
+  } catch {
+    // No i18n tree yet — English only.
+  }
+  return locales;
+}
 
 /**
  * Categories to include as user-facing help content.
@@ -101,9 +135,13 @@ export function extractHeadings(content: string): HelpHeading[] {
   return headings;
 }
 
-/** Generate a slug from an absolute file path (mirrors runtime routing). */
-export function filePathToSlug(filePath: string): string {
-  const relativePath = path.relative(DOCS_ROOT, filePath);
+/**
+ * Generate a slug from an absolute file path (mirrors runtime routing). `root`
+ * defaults to the English source; pass a locale root so a translated file yields
+ * the SAME slug as its English original.
+ */
+export function filePathToSlug(filePath: string, root: string = DOCS_ROOT): string {
+  const relativePath = path.relative(root, filePath);
   let slug = relativePath.replace(/\.md$/, '');
 
   // Remove index from the slug (e.g., "features/index" -> "features")
@@ -117,9 +155,9 @@ export function filePathToSlug(filePath: string): string {
   return slug.replace(/\\/g, '/');
 }
 
-/** Get the category (first directory) from an absolute file path. */
-export function getCategory(filePath: string): string {
-  const relativePath = path.relative(DOCS_ROOT, filePath);
+/** Get the category (first directory) from an absolute file path, relative to `root`. */
+export function getCategory(filePath: string, root: string = DOCS_ROOT): string {
+  const relativePath = path.relative(root, filePath);
   const parts = relativePath.split(path.sep);
 
   // Return the first directory, or 'root' for top-level files
@@ -134,13 +172,13 @@ export function getCategory(filePath: string): string {
  * file exclusion. Preserves glob traversal order (per-category), which the index
  * builder relies on as the stable tie-break for equal sidebar positions.
  */
-export async function findHelpArticleFiles(): Promise<string[]> {
+export async function findHelpArticleFiles(root: string = DOCS_ROOT): Promise<string[]> {
   const categoryPatterns = INCLUDED_CATEGORIES.map(cat => `${cat}/**/*.md`);
 
   const files: string[] = [];
   for (const pattern of categoryPatterns) {
     const categoryFiles = await glob(pattern, {
-      cwd: DOCS_ROOT,
+      cwd: root,
       absolute: true,
       ignore: ['**/node_modules/**'],
     });
@@ -149,7 +187,7 @@ export async function findHelpArticleFiles(): Promise<string[]> {
 
   return files.filter(file => {
     if (EXCLUDED_FILES.includes(path.basename(file))) return false;
-    const segments = path.relative(DOCS_ROOT, file).split(path.sep);
+    const segments = path.relative(root, file).split(path.sep);
     return !segments.some(seg => EXCLUDED_DIRS.includes(seg));
   });
 }
@@ -159,8 +197,9 @@ export async function findHelpArticleFiles(): Promise<string[]> {
  * skip articles missing a title - that check is left to consumers (the validator
  * reports it as an error; the index builder skips it).
  */
-export async function loadHelpArticles(): Promise<LoadedHelpArticle[]> {
-  const files = await findHelpArticleFiles();
+export async function loadHelpArticles(locale: string = DEFAULT_LOCALE): Promise<LoadedHelpArticle[]> {
+  const root = localeContentRoot(locale);
+  const files = await findHelpArticleFiles(root);
   const articles: LoadedHelpArticle[] = [];
 
   for (const filePath of files) {
@@ -170,13 +209,15 @@ export async function loadHelpArticles(): Promise<LoadedHelpArticle[]> {
       content: string;
     };
 
-    const category = getCategory(filePath);
+    const category = getCategory(filePath, root);
     const topCategory = category.split('/')[0];
 
     articles.push({
       filePath,
-      relativePath: path.relative(DOCS_ROOT, filePath),
-      slug: filePathToSlug(filePath),
+      // relativePath stays locale-agnostic (e.g. "features/notebooks.md") so an
+      // article and its translations share it — consumers key off it directly.
+      relativePath: path.relative(root, filePath),
+      slug: filePathToSlug(filePath, root),
       category,
       accessLevel: CATEGORY_ACCESS_LEVELS[topCategory] ?? 'public',
       frontmatter,

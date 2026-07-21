@@ -15,6 +15,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { HelpIndex } from './types.js';
+import { DEFAULT_LOCALE, discoverLocales, loadHelpArticles, localeContentRoot } from './loadHelpArticles.js';
 
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -57,8 +58,84 @@ function isUpToDate(destPath: string, sourcePath: string): boolean {
   }
 }
 
+/** Running tallies threaded through the copy helper. */
+interface BundleCounters {
+  copied: number;
+  skipped: number;
+  errors: number;
+}
+
 /**
- * Main bundle function
+ * Copy one source markdown file to its bundle destination, recording the path in
+ * `expectedFiles` (so cleanup won't reap it) and updating counters. Missing
+ * sources and up-to-date destinations are handled without a rewrite.
+ */
+function bundleFile(
+  sourcePath: string,
+  destPath: string,
+  label: string,
+  expectedFiles: Set<string>,
+  counters: BundleCounters
+): void {
+  expectedFiles.add(destPath);
+
+  const destDir = path.dirname(destPath);
+  if (!fs.existsSync(destDir)) {
+    fs.mkdirSync(destDir, { recursive: true });
+  }
+
+  if (!fs.existsSync(sourcePath)) {
+    console.error(`Source file not found: ${sourcePath}`);
+    counters.errors++;
+    return;
+  }
+
+  if (isUpToDate(destPath, sourcePath)) {
+    counters.skipped++;
+    return;
+  }
+
+  try {
+    copyFile(sourcePath, destPath);
+    counters.copied++;
+    console.log(`  Copied: ${label}`);
+  } catch (error) {
+    console.error(`Error copying ${label}:`, error);
+    counters.errors++;
+  }
+}
+
+/**
+ * Bundle translated markdown for one locale into `<OUTPUT_DIR>/<locale>/`.
+ * Only files that (a) actually exist in the locale tree and (b) correspond to an
+ * indexed English slug are copied; untranslated articles are intentionally NOT
+ * duplicated here — the runtime falls back to the English path on a 404.
+ */
+async function bundleLocale(
+  locale: string,
+  indexedSlugs: Set<string>,
+  expectedFiles: Set<string>,
+  counters: BundleCounters
+): Promise<number> {
+  const root = localeContentRoot(locale);
+  const articles = await loadHelpArticles(locale);
+  let count = 0;
+  for (const article of articles) {
+    if (!article.frontmatter.title || !indexedSlugs.has(article.slug)) continue;
+    const sourcePath = path.join(root, article.relativePath);
+    const destPath = path.join(OUTPUT_DIR, locale, article.relativePath);
+    bundleFile(sourcePath, destPath, `${locale}/${article.relativePath}`, expectedFiles, counters);
+    count++;
+  }
+  return count;
+}
+
+/**
+ * Main bundle function.
+ *
+ * English content is copied flat into OUTPUT_DIR (unchanged); each translated
+ * locale is copied under `OUTPUT_DIR/<locale>/`. A single cleanup pass at the end
+ * reaps anything not (re)written this run, across English and all locales.
  */
 async function bundleHelpContent(): Promise<void> {
   console.log('Bundling help content (file copies)...');
@@ -77,6 +154,7 @@ async function bundleHelpContent(): Promise<void> {
 
   // Get list of files to bundle from the index
   const filesToBundle = helpIndex.entries.map(entry => entry.filePath);
+  const indexedSlugs = new Set(helpIndex.entries.map(entry => entry.slug));
 
   console.log(`Found ${filesToBundle.length} files in help index`);
 
@@ -87,42 +165,18 @@ async function bundleHelpContent(): Promise<void> {
 
   // Track what files should exist in output
   const expectedFiles = new Set<string>();
-  let copiedCount = 0;
-  let skippedCount = 0;
-  let errorCount = 0;
+  const counters: BundleCounters = { copied: 0, skipped: 0, errors: 0 };
 
+  // English: flat copy into OUTPUT_DIR (original layout, preserved for back-compat).
   for (const file of filesToBundle) {
-    const sourcePath = path.join(DOCS_ROOT, file);
-    const destPath = path.join(OUTPUT_DIR, file);
-    expectedFiles.add(destPath);
+    bundleFile(path.join(DOCS_ROOT, file), path.join(OUTPUT_DIR, file), file, expectedFiles, counters);
+  }
 
-    // Ensure destination directory exists
-    const destDir = path.dirname(destPath);
-    if (!fs.existsSync(destDir)) {
-      fs.mkdirSync(destDir, { recursive: true });
-    }
-
-    // Check if source file exists
-    if (!fs.existsSync(sourcePath)) {
-      console.error(`Source file not found: ${sourcePath}`);
-      errorCount++;
-      continue;
-    }
-
-    // Check if dest is already an up-to-date copy
-    if (isUpToDate(destPath, sourcePath)) {
-      skippedCount++;
-      continue;
-    }
-
-    try {
-      copyFile(sourcePath, destPath);
-      copiedCount++;
-      console.log(`  Copied: ${file}`);
-    } catch (error) {
-      console.error(`Error copying ${file}:`, error);
-      errorCount++;
-    }
+  // Translated locales: copy under OUTPUT_DIR/<locale>/ (only what's actually translated).
+  const locales = discoverLocales().filter(l => l !== DEFAULT_LOCALE);
+  for (const locale of locales) {
+    const n = await bundleLocale(locale, indexedSlugs, expectedFiles, counters);
+    console.log(`  Locale ${locale}: ${n} translated files`);
   }
 
   // Clean up stale files (files/symlinks that exist but aren't in the index)
@@ -155,13 +209,13 @@ async function bundleHelpContent(): Promise<void> {
   cleanupDirectory(OUTPUT_DIR);
 
   console.log(`\nSummary:`);
-  console.log(`  Copied: ${copiedCount} files`);
-  console.log(`  Skipped: ${skippedCount} (already up-to-date)`);
+  console.log(`  Copied: ${counters.copied} files`);
+  console.log(`  Skipped: ${counters.skipped} (already up-to-date)`);
   console.log(`  Removed: ${removedCount} stale files`);
-  if (errorCount > 0) {
-    console.log(`  Errors: ${errorCount}`);
+  if (counters.errors > 0) {
+    console.log(`  Errors: ${counters.errors}`);
   }
-  console.log(`  Total: ${filesToBundle.length} files in index`);
+  console.log(`  English: ${filesToBundle.length} in index; locales: ${locales.join(', ') || 'none'}`);
 }
 
 bundleHelpContent().catch(error => {

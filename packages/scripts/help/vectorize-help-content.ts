@@ -21,6 +21,7 @@ import { EmbeddingFactory } from '@bike4mind/fab-pipeline';
 import { OpenAIEmbeddingModel } from '@bike4mind/common';
 import type { HelpEmbeddingChunk, HelpEmbeddingsIndex, HelpIndex, HelpAccessLevel } from './types.js';
 import { chunkByHeadings, estimateTokenCount, truncateAndNormalize } from './utils.js';
+import { INCLUDED_CATEGORIES } from './loadHelpArticles.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -85,10 +86,17 @@ async function buildChunks(): Promise<ChunkData[]> {
   const accessLevelMap = loadAccessLevelMap();
   const chunks: ChunkData[] = [];
 
-  const files = await glob('**/*.md', {
-    cwd: HELP_CONTENT_ROOT,
-    absolute: true,
-  });
+  // Only embed English content. Translated locales live in `<locale>/` subdirs of
+  // the bundle; restricting the glob to the known top-level categories excludes
+  // them, so this stays a single-locale (English) embeddings index. Per-locale
+  // vectorization is a separate, cost-bearing step (help i18n, Phase 3).
+  const files = await glob(
+    INCLUDED_CATEGORIES.map(cat => `${cat}/**/*.md`),
+    {
+      cwd: HELP_CONTENT_ROOT,
+      absolute: true,
+    }
+  );
 
   console.log(`Found ${files.length} markdown files in help-content`);
 

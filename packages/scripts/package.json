@@ -36,6 +36,7 @@
     "help:validate": "tsx help/validate-help-content.ts",
     "help:coverage": "tsx help/help-coverage-report.ts",
     "help:bundle-content": "tsx help/bundle-help-content.ts",
+    "help:translate": "tsx help/translate-help-content.ts",
     "help:vectorize": "tsx help/vectorize-help-content.ts",
     "help:regenerate": "pnpm help:build-index && pnpm help:bundle-content && pnpm help:vectorize",
     "test:seed-context-summary": "tsx seedContextSummary.ts",
