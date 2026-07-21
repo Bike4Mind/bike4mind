@@ -14,6 +14,7 @@
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { escapeAttr } from './htmlEscape';
 
 const SITE_URL = WEBSITE_URL;
 
@@ -36,8 +37,6 @@ export interface ShareFooterOptions {
    */
   reportPublicId?: string;
 }
-
-import { escapeAttr } from './htmlEscape';
 
 /**
  * Wordmark for the share footer. The inline SVG in b4mLogo.ts is the project's
