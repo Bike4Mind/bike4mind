@@ -64,14 +64,33 @@ function isToolSuccess(result: string): boolean {
 }
 
 /**
- * Pull a compact "<problem title>: <winner + objective>" digest out of a schedule/solve result
- * (both render a `### Winner: <solver> (<objective>: N)` line). Null if no winner line is present.
+ * The schedule/solve tools return a JSON envelope ({ __uiSideEffect, type, payload, displayMessage })
+ * whose `displayMessage` carries the results markdown. Unwrap it so the digest regex matches against
+ * real markdown (real newlines, unescaped quotes) rather than the escaped JSON string. Falls back to
+ * the raw input when it isn't that envelope (e.g. a plain-markdown or error string).
+ */
+function resultMarkdown(result: string): string {
+  try {
+    const parsed = JSON.parse(result) as { displayMessage?: unknown };
+    if (typeof parsed?.displayMessage === 'string') return parsed.displayMessage;
+  } catch {
+    // not JSON -- treat the input as raw markdown
+  }
+  return result;
+}
+
+/**
+ * Pull the "<winner + objective>" digest out of a schedule/solve result (both render a
+ * `### Winner: <solver> (<objective>: N)` line in their `displayMessage` markdown). Null if no
+ * winner line is present (e.g. a single-solver run, which emits no Winner header, or an error).
+ * The per-step label is supplied by the plan (see `buildPlanCompleteMsg`), so this stays scoped to
+ * the outcome.
  */
 export function extractResultDigest(result: string): string | null {
-  const winner = result.match(/Winner:\s*([^\n#]+?)\s*(?:###|\n|$)/i)?.[1]?.trim();
-  if (!winner) return null;
-  const title = result.match(/Results for\s*"([^"]+)"/i)?.[1]?.trim();
-  return title ? `${title} -- ${winner}` : winner;
+  const winner = resultMarkdown(result)
+    .match(/Winner:\s*([^\n#]+?)\s*(?:###|\n|$)/i)?.[1]
+    ?.trim();
+  return winner || null;
 }
 
 /**
@@ -99,7 +118,7 @@ export function planIsComplete(state: PlanProgressState): boolean {
 export function buildPlanCompleteMsg(state: PlanProgressState): string {
   const lines = (state.steps ?? []).map((step, i) => {
     const digest = state.results[step.family];
-    return `${i + 1}. ${step.family}${digest ? ` -- ${digest}` : ' -- solved (see result in your history above)'}`;
+    return `${i + 1}. ${step.title}${digest ? ` -- ${digest}` : ' -- solved (see result in your history above)'}`;
   });
   return [
     'All planned steps for this run have been solved. Do NOT formulate, schedule, or solve anything',

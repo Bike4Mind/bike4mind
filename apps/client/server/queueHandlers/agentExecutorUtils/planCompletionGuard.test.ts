@@ -19,10 +19,29 @@ const planResult = (families: string[]) =>
     displayMessage: 'Loaded step 1',
   });
 
-const scheduleResult = '## Scheduling Results for "Sequencing" ### Winner: Simulated Annealing (makespan: 130) ###';
+// The schedule/solve tools return a JSON envelope carrying the results markdown in `displayMessage`
+// (see quantumSchedule/quantumSolve). Mirror that exact shape so the guard + digest extractor are
+// exercised against what they actually receive in production -- escaped quotes, escaped newlines --
+// rather than a raw-markdown string the tools never emit.
+const envelope = (displayMessage: string, familyId?: string) =>
+  JSON.stringify({
+    __uiSideEffect: true,
+    type: familyId ? 'populateFamilyProblem' : 'populateProblem',
+    payload: familyId ? { familyId, problem: {} } : {},
+    displayMessage,
+  });
+
+const scheduleResult = envelope(
+  ['## Scheduling Results for "Sequencing"', 'Problem: 4 jobs, 4 machines', '', '### Winner: Simulated Annealing (makespan: 130)', '', '### Simulated Annealing'].join(
+    '\n'
+  )
+);
 const solveResultFor = (p?: unknown) => {
   const fam = (p as { problem?: { family?: string } })?.problem?.family ?? 'selection';
-  return `## Results for "${fam} problem" (${fam}) ### Winner: Tabu Search (score: 42) ###`;
+  return envelope(
+    [`## Results for "${fam} problem" (${fam})`, '', '### Winner: Tabu Search (score: 42)', '', '### Tabu Search'].join('\n'),
+    fam
+  );
 };
 
 function fakeTool(
@@ -79,9 +98,14 @@ describe('pure helpers', () => {
     expect(familyForSolveCall('optihashi_solve', {})).toBeNull();
   });
 
-  it('extractResultDigest pulls the title and winner+objective; null when no winner line', () => {
-    expect(extractResultDigest(scheduleResult)).toBe('Sequencing -- Simulated Annealing (makespan: 130)');
+  it('extractResultDigest unwraps the JSON envelope and pulls the winner+objective cleanly', () => {
+    // Real production shape: markdown lives in displayMessage. No trailing whitespace/newline artifact.
+    expect(extractResultDigest(scheduleResult)).toBe('Simulated Annealing (makespan: 130)');
+    expect(extractResultDigest(solveResultFor({ problem: { family: 'routing' } }))).toBe('Tabu Search (score: 42)');
+    // Falls back to raw markdown for callers/strings that aren't the envelope.
     expect(extractResultDigest('### Winner: Greedy (bins: 4)')).toBe('Greedy (bins: 4)');
+    // No winner line (single-solver run emits no Winner header) or an error -> null.
+    expect(extractResultDigest(envelope(['## Results for "X" (routing)', '', '### Concorde', 'tour: 88'].join('\n'), 'routing'))).toBeNull();
     expect(extractResultDigest('Error: invalid problem')).toBeNull();
   });
 
@@ -97,19 +121,28 @@ describe('pure helpers', () => {
     expect(planIsComplete({ steps, solved: { scheduling: 1, routing: 1 }, results: {} })).toBe(true);
   });
 
-  it('buildPlanCompleteMsg lists every step in order with its captured result', () => {
+  it('buildPlanCompleteMsg labels each step by its plan title, in order, with its captured result', () => {
     const state: PlanProgressState = {
       steps: [
-        { family: 'scheduling', title: 'seq' },
-        { family: 'routing', title: 'route' },
+        { family: 'scheduling', title: 'Sequence packing stations' },
+        { family: 'routing', title: 'Route delivery vans' },
       ],
       solved: { scheduling: 1, routing: 1 },
-      results: { scheduling: 'Seq -- SA (makespan: 130)', routing: 'Route -- Tabu (84 km)' },
+      results: { scheduling: 'SA (makespan: 130)', routing: 'Tabu (84 km)' },
     };
     const msg = buildPlanCompleteMsg(state);
     expect(msg).toMatch(/FINAL SUMMARY/i);
-    expect(msg).toContain('1. scheduling -- Seq -- SA (makespan: 130)');
-    expect(msg).toContain('2. routing -- Route -- Tabu (84 km)');
+    expect(msg).toContain('1. Sequence packing stations -- SA (makespan: 130)');
+    expect(msg).toContain('2. Route delivery vans -- Tabu (84 km)');
+  });
+
+  it('buildPlanCompleteMsg falls back for a step with no captured digest', () => {
+    const state: PlanProgressState = {
+      steps: [{ family: 'routing', title: 'Route vans' }],
+      solved: { routing: 1 },
+      results: {},
+    };
+    expect(buildPlanCompleteMsg(state)).toContain('1. Route vans -- solved (see result in your history above)');
   });
 });
 
@@ -129,15 +162,16 @@ describe('guardPlanCompletion', () => {
     expect(await run(g.optihashi_solve, { problem: { family: 'routing' } })).toMatch(/Results for/);
     expect(onComplete).toHaveBeenCalledTimes(1); // all 3 covered
 
-    // results captured per family for the summary
-    expect(state.results.scheduling).toContain('Simulated Annealing (makespan: 130)');
-    expect(state.results.routing).toContain('routing problem');
+    // results captured per family (winner + objective, unwrapped from the envelope -- no artifact)
+    expect(state.results.scheduling).toBe('Simulated Annealing (makespan: 130)');
+    expect(state.results.routing).toBe('Tabu Search (score: 42)');
 
-    // Further loop-drivers are redirected; the redirect carries every step's result.
+    // Further loop-drivers are redirected; the redirect labels each step by its plan title and
+    // carries its captured result, in plan order.
     const redirect = await run(g.optihashi_formulate);
     expect(redirect).toMatch(/FINAL SUMMARY/i);
-    expect(redirect).toContain('1. scheduling');
-    expect(redirect).toContain('3. routing');
+    expect(redirect).toContain('1. scheduling step -- Simulated Annealing (makespan: 130)');
+    expect(redirect).toContain('3. routing step -- Tabu Search (score: 42)');
     expect(await run(g.optihashi_schedule)).toMatch(/FINAL SUMMARY/i);
     expect(calls.schedule).toHaveLength(1); // real schedule ran only once
     expect(calls.formulate).toHaveLength(0); // formulate never ran post-completion
