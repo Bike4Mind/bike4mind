@@ -168,4 +168,7 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   countActiveByProductId: (productId: string) => Promise<number>;
   /** All keys billed to an organization's credit pool (any status), newest first. */
   findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
+  /** Active keys bound to an agent (embed keys), newest first; uses the sparse
+   *  { agentId, status } index. */
+  findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
 }

@@ -113,6 +113,10 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
   }
 
+  findByAgentId(agentId: string) {
+    return this.model.find({ agentId, status: ApiKeyStatus.ACTIVE }).sort({ createdAt: -1 }).exec();
+  }
+
   async countActiveByProductId(productId: string): Promise<number> {
     return this.model.countDocuments({
       productId,
