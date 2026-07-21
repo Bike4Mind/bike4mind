@@ -823,7 +823,7 @@
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n},\n    stream=True,\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/completions\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"model\": \"claude-opus-4-8\",\n        \"messages\": [\n            {\n                \"role\": \"user\",\n                \"content\": \"How do I reset my password?\"\n            }\n        ],\n        \"max_tokens\": 500\n    },\n    stream=True,\n)"
           }
         ]
       }
@@ -982,7 +982,7 @@
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n},\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
           }
         ]
       }
