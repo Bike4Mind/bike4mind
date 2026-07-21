@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, creditTransactionRepository, userApiKeyRepository } from '@bike4mind/database';
 import { CreditHolderType, type IOrgUsageDashboardResponse, type NamedApiKeyUsage } from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { resolveUserNames } from '@server/utils/resolveUserNames';
 import { z } from 'zod';
 
@@ -21,13 +22,17 @@ const QuerySchema = z.object({
  * and fills in as org-billed traffic lands. Reads UsageEventModel (not the
  * ledger) because it is the only source carrying per-member attribution (userId)
  * alongside frozen COGS + credits.
+ *
+ * Access: platform admins (cross-org) plus the org's own owner/manager, via
+ * verifyOrgAccess - which pins non-admins to their org and 404s the rest.
  */
 const handler = baseApi().get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+  if (!req.user) {
+    throw new ForbiddenError('Authentication required');
   }
 
   const { organizationId, days = 30 } = QuerySchema.parse(req.query);
+  await verifyOrgAccess(req.user, organizationId);
 
   // Usage cuts come from UsageEventModel (frozen COGS + per-member attribution);
   // by-API-key and by-source come from the ledger, the only source carrying

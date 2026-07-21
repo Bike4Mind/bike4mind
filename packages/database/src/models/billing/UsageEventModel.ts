@@ -294,7 +294,10 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
     };
   }
 
-  async sessionUsageSummary(sessionId: string): Promise<ISessionUsageSummary> {
+  async sessionUsageSummary(
+    sessionId: string,
+    owner?: { ownerId: string; ownerType: CreditHolderType }
+  ): Promise<ISessionUsageSummary> {
     // Every cut shares the same sums (spend + token quantities), so define once.
     const sums = {
       requests: { $sum: 1 },
@@ -318,7 +321,7 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: ISessionModelUsage[];
       totals: IUsageSpendWithTokens[];
     }>([
-      { $match: { sessionId } },
+      { $match: owner ? { sessionId, ownerId: owner.ownerId, ownerType: owner.ownerType } : { sessionId } },
       {
         $facet: {
           byQuest: [
@@ -349,6 +352,13 @@ export class UsageEventRepository extends BaseRepository<IUsageEventDocument> im
       byModel: result?.byModel ?? [],
       totals: result?.totals?.[0] ?? emptyTotals,
     };
+  }
+
+  async sessionBelongsToOwner(sessionId: string, ownerId: string, ownerType: CreditHolderType): Promise<boolean> {
+    // Existence-only probe; the { sessionId, createdAt } index bounds the scan to
+    // the session's events (ownerId/ownerType are then matched in memory).
+    const doc = await this.model.exists({ sessionId, ownerId, ownerType });
+    return doc !== null;
   }
 }
 

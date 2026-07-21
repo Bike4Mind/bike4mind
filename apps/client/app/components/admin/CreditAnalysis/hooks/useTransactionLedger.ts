@@ -1,6 +1,5 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
-import { useUser } from '@client/app/contexts/UserContext';
 import { IAdminLedgerResponse, CreditTransactionType, CompletionSource } from '@bike4mind/common';
 
 export interface LedgerFilters {
@@ -14,8 +13,9 @@ export interface LedgerFilters {
 
 /**
  * One filtered, paginated page of an organization's credit-transaction ledger.
- * Admin-gated; disabled until an org is selected. Keeps the previous page while
- * fetching the next so paging/filtering doesn't flash empty.
+ * Disabled until an org is selected; access is enforced server-side (admins
+ * cross-org; an org's owner/manager scoped to their org). Keeps the previous
+ * page while fetching the next so paging/filtering doesn't flash empty.
  */
 export const useTransactionLedger = (
   organizationId: string | null,
@@ -23,8 +23,6 @@ export const useTransactionLedger = (
   page: number,
   limit: number
 ) => {
-  const isAdmin = useUser(s => s.isAdmin);
-
   return useQuery({
     queryKey: ['admin-ledger', organizationId, filters, page, limit],
     queryFn: async () => {
@@ -36,7 +34,7 @@ export const useTransactionLedger = (
       const { data } = await api.get<IAdminLedgerResponse>('/api/admin/transactions', { params });
       return data;
     },
-    enabled: isAdmin && !!organizationId,
+    enabled: !!organizationId,
     placeholderData: keepPreviousData,
     staleTime: 1000 * 60,
   });

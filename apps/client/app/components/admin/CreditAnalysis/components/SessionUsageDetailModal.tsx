@@ -26,12 +26,14 @@ const num = (n: number) => n.toLocaleString();
  * (from usage events) plus each agent execution's per-model iteration billing.
  * Opened from a Ledger row's session link. See /api/admin/session-usage.
  */
-export const SessionUsageDetailModal: React.FC<{ sessionId: string | null; onClose: () => void }> = ({
-  sessionId,
-  onClose,
-}) => {
+export const SessionUsageDetailModal: React.FC<{
+  sessionId: string | null;
+  onClose: () => void;
+  /** Fixed org for the owner/manager surface; the server requires it for non-admins. */
+  organizationId?: string;
+}> = ({ sessionId, onClose, organizationId }) => {
   const navigate = useNavigate();
-  const { data, isLoading, error } = useSessionUsage(sessionId);
+  const { data, isLoading, error } = useSessionUsage(sessionId, organizationId);
   const usage = data?.usage;
 
   return (

@@ -1,29 +1,73 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { usageEventRepository, agentExecutionRepository } from '@bike4mind/database';
-import type { ISessionAgentExecution, ISessionAgentModelUsage, ISessionUsageResponse } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  type ISessionAgentExecution,
+  type ISessionAgentModelUsage,
+  type ISessionUsageResponse,
+} from '@bike4mind/common';
 import { ForbiddenError } from '@server/utils/errors';
+import { NotFoundError } from '@bike4mind/utils';
+import { verifyOrgAccess } from '@server/utils/orgAccess';
 import { z } from 'zod';
 
 const QuerySchema = z.object({
   sessionId: z.string().min(1),
+  // Required for non-admins: the org the session's spend was billed to. Admins
+  // read any session cross-org and may omit it.
+  organizationId: z.string().min(1).optional(),
 });
 
 /**
- * Admin endpoint: one session's usage detail - spend rolled up by quest and by
- * model (from UsageEventModel, which carries frozen COGS), plus each agent
- * execution that ran in the session with its per-model iteration billing.
- * Answers "why did this session cost what it did?".
+ * One session's usage detail - spend rolled up by quest and by model (from
+ * UsageEventModel, which carries frozen COGS), plus each agent execution that
+ * ran in the session with its per-model iteration billing. Answers "why did
+ * this session cost what it did?".
+ *
+ * Access: platform admins read any session, cross-org. A non-admin must pass
+ * the org they can access (verifyOrgAccess) AND the session's spend must be
+ * billed to that org - sessions carry no org of their own, so ownership is
+ * proven off the usage events. Mismatches 404 (same as no access, to avoid
+ * enumeration).
+ *
+ * A single session can carry spend billed to more than one owner (the billing
+ * owner is resolved per-request, not pinned to the session - e.g. a session
+ * that starts personal and later runs under an org). So a non-admin's view is
+ * scoped to their org: they see only their org's slice, never another owner's.
+ * Admins keep the full cross-org rollup.
  */
 const handler = baseApi().get(async (req, res) => {
-  if (!req.user?.isAdmin) {
-    throw new ForbiddenError('Admin access required');
+  if (!req.user) {
+    throw new ForbiddenError('Authentication required');
   }
 
-  const { sessionId } = QuerySchema.parse(req.query);
+  const { sessionId, organizationId } = QuerySchema.parse(req.query);
+
+  // Undefined for admins (whole session, cross-org); set for a non-admin so
+  // both the usage rollup and the execution list return only their org's slice.
+  let orgScope: string | undefined;
+  if (!req.user.isAdmin) {
+    if (!organizationId) {
+      throw new ForbiddenError('Admin access required');
+    }
+    await verifyOrgAccess(req.user, organizationId);
+    const belongsToOrg = await usageEventRepository.sessionBelongsToOwner(
+      sessionId,
+      organizationId,
+      CreditHolderType.Organization
+    );
+    if (!belongsToOrg) {
+      throw new NotFoundError('Session not found');
+    }
+    orgScope = organizationId;
+  }
 
   const [usage, execDocs] = await Promise.all([
-    usageEventRepository.sessionUsageSummary(sessionId),
-    agentExecutionRepository.findBillingBySessionId(sessionId),
+    usageEventRepository.sessionUsageSummary(
+      sessionId,
+      orgScope ? { ownerId: orgScope, ownerType: CreditHolderType.Organization } : undefined
+    ),
+    agentExecutionRepository.findBillingBySessionId(sessionId, orgScope),
   ]);
 
   const executions: ISessionAgentExecution[] = execDocs.map(exec => {

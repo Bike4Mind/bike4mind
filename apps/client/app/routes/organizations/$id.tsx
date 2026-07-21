@@ -3,6 +3,7 @@ import Breadcrumbs from '@client/app/components/common/Breadcrumbs';
 import OrganizationMembers from '@client/app/components/organizations/Member';
 import OrganizationBillingSection from '@client/app/components/organizations/OrganizationBillingSection';
 import OrganizationSettingsSection from '@client/app/components/organizations/OrganizationSettingsSection';
+import OrganizationUsageSection from '@client/app/components/organizations/OrganizationUsageSection';
 import OrgSlackIntegration from '@client/app/components/organizations/OrgSlackIntegration';
 import OrgWebhookConfig from '@client/app/components/organizations/OrgWebhookConfig';
 import OrgGitHubConnectionTab from '@client/app/components/organizations/OrgGitHubConnectionTab';
@@ -36,6 +37,7 @@ import StorageOutlinedIcon from '@mui/icons-material/StorageOutlined';
 import EventAvailableOutlinedIcon from '@mui/icons-material/EventAvailableOutlined';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import ExtensionOutlinedIcon from '@mui/icons-material/ExtensionOutlined';
+import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import { useParams, useSearch } from '@tanstack/react-router';
 import { FC, useMemo, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -43,6 +45,7 @@ import { useTranslation } from 'react-i18next';
 enum OrganizationTabs {
   Overview = 'overview',
   Members = 'members',
+  Usage = 'usage',
   Billing = 'billing',
   Integrations = 'integrations',
   GitHub = 'github',
@@ -78,19 +81,31 @@ const OrganizationPage: FC = () => {
     return userPermissions.includes(Permission.share) || userPermissions.includes(Permission.update);
   }, [userPermissions]);
 
+  // Who may see the org's usage/spend dashboards. Mirrors the server gate
+  // (verifyOrgAccess): platform admins, the org owner, or the team manager -
+  // NOT every member with manage permissions, so the tab never shows to someone
+  // the API would 404.
+  const canViewUsage = useMemo(() => {
+    if (!currentUser || !organization) return false;
+    if (currentUser.isAdmin) return true;
+    if (currentUser.id === organization.userId) return true;
+    return organization.managerId === currentUser.id;
+  }, [currentUser, organization]);
+
   // Redirect non-admin users if they try to access restricted tabs
   useEffect(() => {
-    if (
-      !canManageOrg &&
-      (selectedTab === OrganizationTabs.Billing ||
-        selectedTab === OrganizationTabs.Integrations ||
-        selectedTab === OrganizationTabs.GitHub ||
-        selectedTab === OrganizationTabs.Webhooks ||
-        selectedTab === OrganizationTabs.Settings)
-    ) {
+    const managePinnedTab =
+      selectedTab === OrganizationTabs.Billing ||
+      selectedTab === OrganizationTabs.Integrations ||
+      selectedTab === OrganizationTabs.GitHub ||
+      selectedTab === OrganizationTabs.Webhooks ||
+      selectedTab === OrganizationTabs.Settings;
+    if (!canManageOrg && managePinnedTab) {
+      setSelectedTab(OrganizationTabs.Overview);
+    } else if (!canViewUsage && selectedTab === OrganizationTabs.Usage) {
       setSelectedTab(OrganizationTabs.Overview);
     }
-  }, [canManageOrg, selectedTab]);
+  }, [canManageOrg, canViewUsage, selectedTab]);
 
   useDocumentTitle(organization?.name, ' | Organization');
 
@@ -166,6 +181,12 @@ const OrganizationPage: FC = () => {
               <GroupOutlinedIcon sx={{ fontSize: 16 }} />
               Members
             </Tab>
+            {canViewUsage && (
+              <Tab value={OrganizationTabs.Usage} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <InsightsOutlinedIcon sx={{ fontSize: 16 }} />
+                Usage
+              </Tab>
+            )}
             {canManageOrg && (
               <>
                 <Tab value={OrganizationTabs.Billing} sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -202,6 +223,14 @@ const OrganizationPage: FC = () => {
               </Typography>
               {currentUser && <OrganizationMembers organization={organization} userPermissions={userPermissions} />}
             </TabPanel>
+            {canViewUsage && (
+              <TabPanel value={OrganizationTabs.Usage}>
+                <Typography level="title-lg" startDecorator={<InsightsOutlinedIcon />} sx={{ mb: 3 }}>
+                  Usage & Spend
+                </Typography>
+                <OrganizationUsageSection organization={organization} />
+              </TabPanel>
+            )}
             {canManageOrg && (
               <>
                 <TabPanel value={OrganizationTabs.Billing}>

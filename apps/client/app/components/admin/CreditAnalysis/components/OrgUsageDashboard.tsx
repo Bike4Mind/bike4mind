@@ -51,30 +51,39 @@ const buildBurnSeries = (overTime: { day: string; creditsCharged: number }[], da
  * Per-organization AI spend: a credits burn chart over the selected window plus
  * member / model / feature / API key / source breakdowns. Scoped to spend billed
  * to the org's credit pool (ownerType=Organization). See /api/admin/org-usage.
+ *
+ * With `organizationId` the org is fixed and the picker is hidden - this is the
+ * org owner/manager surface (their org only). Without it, an admin picks any org.
  */
-export const OrgUsageDashboard: React.FC = () => {
+export const OrgUsageDashboard: React.FC<{ organizationId?: string }> = ({ organizationId: fixedOrgId }) => {
   const theme = useTheme();
   const [selectedOrg, setSelectedOrg] = useState<OrgOption | null>(null);
   const [days, setDays] = useState<DayRange>(30);
+
+  const activeOrgId = fixedOrgId ?? selectedOrg?.id ?? null;
 
   // Debounce so typing a name fires one request per pause, not one per keystroke.
   const { debouncedValue: orgSearch, setValue: setOrgSearch } = useDebounceValue('', 500);
 
   // Team orgs only: personal orgs are single-user and not the point of an org dashboard.
-  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations({
-    page: 1,
-    limit: 20,
-    search: orgSearch,
-    filters: { personal: false },
-    orderBy: { by: 'name', direction: 'asc' },
-  });
+  // Skipped entirely in fixed-org mode - the picker is hidden and non-admins can't list orgs.
+  const { data: orgResult, isLoading: orgsLoading } = useSearchOrganizations(
+    {
+      page: 1,
+      limit: 20,
+      search: orgSearch,
+      filters: { personal: false },
+      orderBy: { by: 'name', direction: 'asc' },
+    },
+    { enabled: !fixedOrgId }
+  );
 
   const orgOptions: OrgOption[] = useMemo(
     () => (orgResult?.data ?? []).map(o => ({ id: String(o.id), name: o.name })),
     [orgResult]
   );
 
-  const { data, isLoading, isFetching, error, refetch } = useOrgUsage(selectedOrg?.id ?? null, days);
+  const { data, isLoading, isFetching, error, refetch } = useOrgUsage(activeOrgId, days);
 
   const hasUsage = (data?.totals.requests ?? 0) > 0;
   const chartData = useMemo(() => buildBurnSeries(data?.overTime ?? [], days), [data, days]);
@@ -88,18 +97,22 @@ export const OrgUsageDashboard: React.FC = () => {
         spacing={1}
         sx={{ mb: 1 }}
       >
-        <Autocomplete
-          placeholder="Select an organization"
-          options={orgOptions}
-          getOptionLabel={o => o.name}
-          isOptionEqualToValue={(o, v) => o.id === v.id}
-          value={selectedOrg}
-          onChange={(_, value) => setSelectedOrg(value)}
-          onInputChange={(_, value) => setOrgSearch(value)}
-          loading={orgsLoading}
-          sx={{ minWidth: 260 }}
-          data-testid="org-usage-org-select"
-        />
+        {fixedOrgId ? (
+          <Box />
+        ) : (
+          <Autocomplete
+            placeholder="Select an organization"
+            options={orgOptions}
+            getOptionLabel={o => o.name}
+            isOptionEqualToValue={(o, v) => o.id === v.id}
+            value={selectedOrg}
+            onChange={(_, value) => setSelectedOrg(value)}
+            onInputChange={(_, value) => setOrgSearch(value)}
+            loading={orgsLoading}
+            sx={{ minWidth: 260 }}
+            data-testid="org-usage-org-select"
+          />
+        )}
         <Stack direction="row" spacing={1} alignItems="center">
           <ToggleButtonGroup
             size="sm"
@@ -116,7 +129,7 @@ export const OrgUsageDashboard: React.FC = () => {
           <IconButton
             size="sm"
             onClick={() => refetch()}
-            disabled={!selectedOrg || isFetching}
+            disabled={!activeOrgId || isFetching}
             data-testid="org-usage-refresh-btn"
           >
             <RefreshIcon />
@@ -136,7 +149,7 @@ export const OrgUsageDashboard: React.FC = () => {
         </Alert>
       )}
 
-      {!selectedOrg ? (
+      {!activeOrgId ? (
         <Box sx={{ p: 4, textAlign: 'center' }}>
           <Typography level="body-sm" color="neutral">
             Select an organization to see its spend.

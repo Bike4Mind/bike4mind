@@ -825,14 +825,20 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * All executions in a session, projected to just the billing fields, for the
    * per-session usage-detail view. Uses the {sessionId, status} index; oldest
    * first so the trace reads top to bottom.
+   *
+   * Pass organizationId to scope to executions billed to that org - a session's
+   * executions can span multiple owners (billing owner is resolved per-request,
+   * not pinned to the session), so a non-admin caller must scope to their org
+   * or they would see another owner's executions in the same session.
    */
   async findBillingBySessionId(
-    sessionId: string
+    sessionId: string,
+    organizationId?: string
   ): Promise<
     Array<Pick<IAgentExecution, 'id' | 'status' | 'parentExecutionId' | 'totalCreditsUsed' | 'iterationBilling'>>
   > {
     const results = await this.model
-      .find({ sessionId })
+      .find(organizationId ? { sessionId, organizationId } : { sessionId })
       .select('status parentExecutionId totalCreditsUsed iterationBilling')
       .sort({ createdAt: 1 });
     return results.map(doc => doc.toObject());
