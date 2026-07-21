@@ -27,11 +27,13 @@ import {
   Functions as WolframIcon,
   TableChart as ExcelIcon,
   ShowChart as FinanceIcon,
+  Close as CloseIcon,
 } from '@mui/icons-material';
 import { Box, Grid, Input, Tooltip, Typography, IconButton } from '@mui/joy';
 import type { BoxProps } from '@mui/joy';
 import SwitchSelector from '@client/app/components/common/fields/SwitchSelector';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
+import { HEADER_ICON_BUTTON_SX } from './headerIconButtonSx';
 import { PropsWithChildren, useEffect, useMemo, useState, useCallback, createContext, useContext } from 'react';
 import { B4MLLMTools, IMcpServerDocument, classifyQueryComplexity } from '@bike4mind/common';
 import SquareSlideToggle from '@client/app/components/SquareSlideToggle';
@@ -154,11 +156,13 @@ interface ToolLabelProps {
   name: string;
   description: string;
   dim?: boolean;
+  // Blue accent line under the description, e.g. to flag an agent-only integration.
+  agentOnlyNote?: string;
 }
 
 // Two-line label (name + inline description) used in place of the old
 // name-plus-(i)-tooltip pattern, so users can read what a tool does without hovering.
-const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
+const ToolLabel = ({ name, description, dim = false, agentOnlyNote }: ToolLabelProps) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
     <Typography
       level="body-sm"
@@ -166,6 +170,7 @@ const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
       sx={{
         color: theme => (dim ? theme.palette.text.secondary : theme.palette.text.primary),
         lineHeight: 1.2,
+        mb: 0.5, // match the agent name -> tags gap
       }}
     >
       {name}
@@ -173,7 +178,7 @@ const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
     <Typography
       level="body-xs"
       sx={{
-        color: 'text.tertiary',
+        color: 'text.primary50', // match the agent tags color
         fontSize: '0.7rem',
         lineHeight: 1.3,
         display: '-webkit-box',
@@ -184,8 +189,37 @@ const ToolLabel = ({ name, description, dim = false }: ToolLabelProps) => (
     >
       {description}
     </Typography>
+    {agentOnlyNote && (
+      <Typography
+        level="body-xs"
+        data-testid="tool-agent-only-note"
+        sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3, mt: '12px' }}
+      >
+        {agentOnlyNote}
+      </Typography>
+    )}
   </Box>
 );
+
+// MCP servers reachable only through agent delegation, not plain chat. Must stay in
+// sync with the built-in agents that claim them via exclusiveMcpServers:
+// GithubManagerAgent ('github') and ProjectManagerAgent ('atlassian').
+const AGENT_ONLY_MCP_SERVERS = ['github', 'atlassian'];
+const AGENT_ONLY_MCP_NOTE = 'Agent mode only - mention an @agent to use it in chat';
+
+// Tools rendered under the "Fun & Novelty" section. They count toward that section's
+// own pinned tally, not the Individual tools one. Must stay in sync with the tools
+// rendered in that section below.
+const FUN_NOVELTY_TOOLS: string[] = [
+  'chess_engine',
+  'dice_roll',
+  'iss_tracker',
+  'moon_phase',
+  'planet_visibility',
+  'sunrise_sunset',
+  'weather_info',
+  'wikipedia_on_this_day',
+];
 
 interface ToolsSectionProps {
   tools?: B4MLLMTools[];
@@ -195,6 +229,7 @@ interface ToolsSectionProps {
   columns?: number;
   onModalOpenChange?: (isOpen: boolean) => void;
   toolContainerSx?: BoxProps['sx'];
+  onClose?: () => void;
 }
 
 const ToolsSection = ({
@@ -203,6 +238,7 @@ const ToolsSection = ({
   columns = 2,
   onModalOpenChange,
   toolContainerSx,
+  onClose,
 }: ToolsSectionProps = {}) => {
   // Use props if provided, otherwise use context
   const contextTools = useLLM(state => state.tools);
@@ -526,53 +562,159 @@ const ToolsSection = ({
     );
   }
 
-  const pinnedCount = tools.length;
+  // Enabled MCP servers (integrations) count toward the pinned tally like any other
+  // tool. Agent-only ones (see AGENT_ONLY_MCP_SERVERS) are labeled per-row rather
+  // than excluded here, so the number reflects everything the user has toggled on.
+  const enabledMcpServerCount = visibleMcpServers.filter(server => isMcpServerEnabled(server.name)).length;
+  // Feature-gated switches that live outside the `tools` array (each has its own LLM
+  // state flag) but appear in this panel, so they count like any other tool. Must stay
+  // in sync with the same tally in AdvancedAISettings' otherActiveToolsCount.
+  const specialToolsCount =
+    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
+    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
+  // Fun & Novelty tools count toward their own section's tally, not Individual tools.
+  const funPinnedCount = tools.filter(t => FUN_NOVELTY_TOOLS.includes(t)).length;
+  const individualToolsCount = tools.length - funPinnedCount;
+  const pinnedCount = individualToolsCount + enabledMcpServerCount + specialToolsCount;
+
+  // Second line appended to the Smart tools description in Smart mode, only when Agent-mode
+  // routing would ignore the Smart Tools below; null otherwise so it stays a single line.
+  // (Fast mode has its own dedicated two-line description - see the master switch below.)
+  const agentModeNote =
+    toolMode === 'smart' && agentWillRunFixedToolset
+      ? agentModeActive
+        ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
+        : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
+      : null;
 
   return (
     <>
-      {/* Top descriptor + help link */}
-      <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
-        <Typography
-          level="body-xs"
-          sx={{ color: 'text.secondary', flex: 1, lineHeight: 1.3 }}
-          data-testid="smart-tools-descriptor"
+      {/* Sticky header (dropdown only): title + help on the left, close on the right.
+          Mirrors AgentsSection's header so the two dropdowns stay visually consistent.
+          The -8px margins break out of the container's 8px padding (same convention as
+          the unsupported-model message above) so the bottom border runs edge to edge.
+          Only rendered when onClose is provided (the dropdown); the AdvancedAIModal
+          embed omits it and keeps the inline help button below instead. */}
+      {onClose && (
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 1,
+            p: '8px 12px',
+            mx: '-8px',
+            mt: '-8px',
+            mb: '20px',
+            borderBottom: '1px solid',
+            borderColor: 'border.soft',
+            position: 'sticky',
+            top: '-8px',
+            backgroundColor: theme => theme.palette.background.body,
+            // Above SwitchSelector's internal z-index (1/2) so scrolling tabs pass under it.
+            zIndex: 10,
+          }}
         >
-          Enable tools the AI can use during this conversation.
-        </Typography>
-        <ContextHelpButton
-          helpId="features/smart-tools"
-          tooltipText="Learn about Smart Tools"
-          data-testid="help-button-smart-tools"
-        />
-      </Box>
+          <Typography sx={{ color: 'text.primary', fontSize: '14px' }}>Tools</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <ContextHelpButton
+              helpId="features/smart-tools"
+              tooltipText="Learn about Smart Tools"
+              data-testid="help-button-smart-tools"
+              size="sm"
+              sx={HEADER_ICON_BUTTON_SX}
+            />
+            <IconButton
+              variant="plain"
+              size="sm"
+              onClick={onClose}
+              data-testid="tools-header-close-btn"
+              sx={HEADER_ICON_BUTTON_SX}
+            >
+              <CloseIcon sx={{ fontSize: '16px' }} />
+            </IconButton>
+          </Box>
+        </Box>
+      )}
 
-      {/* Fast / Smart mode tabs */}
-      <Box sx={{ mb: 0.5 }}>
-        <SwitchSelector
-          options={[
-            { value: 'smart', label: 'Smart', tooltip: 'AI picks the right tools as needed' },
-            { value: 'fast', label: 'Fast', tooltip: 'No tools — fastest possible response' },
-          ]}
-          value={toolMode}
-          onChange={value => setLLM({ toolMode: value as 'fast' | 'smart' })}
-          width="100%"
-        />
-      </Box>
+      {/* Modal embed (no header) keeps a descriptor + inline help; the dropdown drops
+          it in favor of the header's help button. */}
+      {!onClose && (
+        <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1, mb: 1 }}>
+          <Typography
+            level="body-xs"
+            sx={{ color: 'text.primary50', flex: 1, lineHeight: 1.3 }}
+            data-testid="smart-tools-descriptor"
+          >
+            Enable tools the AI can use during this conversation.
+          </Typography>
+          <ContextHelpButton
+            helpId="features/smart-tools"
+            tooltipText="Learn about Smart Tools"
+            data-testid="help-button-smart-tools"
+          />
+        </Box>
+      )}
 
-      {/* Mode caption: explains what each mode does and resolves the Smart-mode toggle ambiguity */}
-      <Typography
-        level="body-xs"
-        sx={{ color: 'text.secondary', mb: 1, lineHeight: 1.35 }}
-        data-testid={`tool-mode-caption-${toolMode}`}
+      {/* Smart tools master switch. On = Smart (enabled tools + prompt-based auto-recommend),
+          Off = Fast (no tools). No surface2 frame so it reads as a master control, not a tool.
+          The description gains a second line only when there's non-obvious context to add
+          (Fast mode, or Agent-mode routing that would ignore the Smart Tools below). */}
+      <Box
+        sx={{
+          display: 'flex',
+          // Center the toggle against the multi-line text on desktop; keep it top-aligned on mobile.
+          alignItems: { xs: 'flex-start', sm: 'center' },
+          justifyContent: 'space-between',
+          gap: '24px',
+          mb: '20px',
+          pl: '4px',
+          pr: '12px',
+        }}
       >
-        {toolMode === 'smart'
-          ? agentWillRunFixedToolset
-            ? agentModeActive
-              ? 'Agent mode is on. It runs a fixed toolset; greyed-out Smart Tools below are ignored while Agent mode is active.'
-              : 'This request may auto-route to Agent mode, which runs a fixed toolset. Greyed-out Smart Tools below would then be ignored.'
-            : 'AI uses any enabled tools as needed. Toggle one off to disallow it.'
-          : 'No tools are used. AI replies as quickly as possible.'}
-      </Typography>
+        <Box sx={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+          <Typography level="body-sm" sx={{ color: 'text.primary', lineHeight: 1.2, mb: 0.5, fontWeight: 600 }}>
+            Smart tools
+          </Typography>
+          {toolMode === 'fast' ? (
+            <>
+              <Typography
+                level="body-xs"
+                data-testid="tool-mode-caption-fast"
+                sx={{ color: 'primary.500', fontSize: '0.7rem', lineHeight: 1.3 }}
+              >
+                No tools are currently used. AI replies are as quick as possible.
+              </Typography>
+              <Typography
+                level="body-xs"
+                sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3, mt: 0.25 }}
+              >
+                Turn on Smart tools to let the AI use your enabled tools.
+              </Typography>
+            </>
+          ) : (
+            <Typography
+              level="body-xs"
+              sx={{ color: 'text.primary50', fontSize: '0.7rem', lineHeight: 1.3 }}
+              data-testid={agentModeNote ? 'tool-mode-caption-smart' : undefined}
+            >
+              AI uses enabled tools as needed. Turn off for the fastest reply.
+              {agentModeNote && (
+                <>
+                  <br />
+                  {agentModeNote}
+                </>
+              )}
+            </Typography>
+          )}
+        </Box>
+        <SquareSlideToggle
+          onChange={() => setLLM({ toolMode: toolMode === 'smart' ? 'fast' : 'smart' })}
+          checked={toolMode === 'smart'}
+          data-testid="tool-mode-toggle"
+        />
+      </Box>
 
       {/* Collapsible individual tools header (default expanded; collapse state persisted per-user) */}
       <Box
@@ -590,25 +732,31 @@ const ToolsSection = ({
         sx={{
           display: 'flex',
           alignItems: 'center',
+          width: 'fit-content',
           cursor: 'pointer',
           py: 0.5,
           mb: showIndividualTools ? 1 : 0,
           userSelect: 'none',
-          '&:hover': { opacity: 0.8 },
+          '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
         }}
       >
-        <ExpandMoreIcon
-          sx={{
-            fontSize: '1rem',
-            transition: 'transform 0.2s',
-            transform: showIndividualTools ? 'rotate(0deg)' : 'rotate(-90deg)',
-            color: 'text.secondary',
-            mr: 0.5,
-          }}
-        />
-        <Typography level="body-xs" sx={{ color: 'text.secondary', flex: 1 }}>
+        <Typography
+          className="tools-collapsible-title"
+          level="body-xs"
+          sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+        >
           Individual tools{pinnedCount > 0 ? ` (${pinnedCount} pinned)` : ''}
         </Typography>
+        <ExpandMoreIcon
+          className="tools-collapsible-chevron"
+          sx={{
+            fontSize: '1rem',
+            transition: 'transform 0.2s, color 0.3s',
+            transform: showIndividualTools ? 'rotate(180deg)' : 'rotate(0deg)',
+            color: 'text.tertiary',
+            ml: '8px',
+          }}
+        />
       </Box>
 
       {/* Tool grid (collapsible). Per-tool availability (Fast/Agent mode) is
@@ -623,7 +771,6 @@ const ToolsSection = ({
             gridTemplateColumns: `repeat(${columns}, 1fr)`,
             gap: columns,
             width: '100%',
-            overflow: { xs: 'auto', sm: 'initial' },
           }}
         >
           {/* Web Search */}
@@ -739,7 +886,11 @@ const ToolsSection = ({
                       sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
                     />
                   )}
-                  <ToolLabel name={getMcpServerLabel(server.name)} description={getMcpServerDescription(server.name)} />
+                  <ToolLabel
+                    name={getMcpServerLabel(server.name)}
+                    description={getMcpServerDescription(server.name)}
+                    agentOnlyNote={AGENT_ONLY_MCP_SERVERS.includes(server.name) ? AGENT_ONLY_MCP_NOTE : undefined}
+                  />
                 </Box>
                 <SquareSlideToggle
                   onChange={() => toggleMcpServer(server.name)}
@@ -932,7 +1083,9 @@ const ToolsSection = ({
             </ToolContainer>
           </Grid>
           <Grid xs={12} className="tool-item tool-item-thinking">
-            <ToolContainer sx={toolContainerSx}>
+            {/* flexWrap + responsive order let the budget input drop to its own line on
+                mobile (so it stops cropping the description) while staying inline on desktop. */}
+            <ToolContainer sx={{ ...(toolContainerSx as object | undefined), flexWrap: 'wrap', rowGap: '12px' }}>
               <Box
                 className="tool-content"
                 sx={{
@@ -961,47 +1114,62 @@ const ToolsSection = ({
                 />
               </Box>
               {(thinking?.enabled ?? true) && modelSupportsThinking && (
-                <Tooltip title="Number of tokens allocated for thinking">
-                  <Input
-                    sx={commonInputStyles}
-                    size="sm"
-                    variant="outlined"
-                    color="primary"
-                    type="number"
-                    value={thinking?.budget_tokens ?? 16000}
-                    onChange={e => {
-                      const newValue = parseInt(e.target.value);
-                      if (newValue >= 1000 && newValue <= 32000) {
-                        setLLM({
-                          thinking: {
-                            enabled: thinking?.enabled ?? true,
-                            budget_tokens: newValue,
-                          },
-                        });
-                      }
-                    }}
-                    slotProps={{
-                      input: {
-                        min: 1000,
-                        max: 32000,
-                        step: 1000,
-                      },
-                    }}
-                  />
-                </Tooltip>
+                <Box
+                  sx={{
+                    display: 'flex',
+                    // Mobile: order after the toggle + full basis => wraps to its own line.
+                    // Desktop: sits inline between the label and the toggle.
+                    order: { xs: 2, sm: 1 },
+                    flexBasis: { xs: '100%', sm: 'auto' },
+                    // Indent under the label on mobile (icon width 25 + 12 gap) so title,
+                    // description and input line up together.
+                    ml: { xs: '37px', sm: 0 },
+                  }}
+                >
+                  <Tooltip title="Number of tokens allocated for thinking">
+                    <Input
+                      sx={commonInputStyles}
+                      size="sm"
+                      variant="outlined"
+                      color="primary"
+                      type="number"
+                      value={thinking?.budget_tokens ?? 16000}
+                      onChange={e => {
+                        const newValue = parseInt(e.target.value);
+                        if (newValue >= 1000 && newValue <= 32000) {
+                          setLLM({
+                            thinking: {
+                              enabled: thinking?.enabled ?? true,
+                              budget_tokens: newValue,
+                            },
+                          });
+                        }
+                      }}
+                      slotProps={{
+                        input: {
+                          min: 1000,
+                          max: 32000,
+                          step: 1000,
+                        },
+                      }}
+                    />
+                  </Tooltip>
+                </Box>
               )}
-              <SquareSlideToggle
-                onChange={e =>
-                  setLLM({
-                    thinking: {
-                      enabled: e.target.checked,
-                      budget_tokens: thinking?.budget_tokens ?? 16000,
-                    },
-                  })
-                }
-                checked={thinking?.enabled ?? false}
-                disabled={!modelSupportsThinking}
-              />
+              <Box sx={{ display: 'flex', alignItems: 'center', flexShrink: 0, order: { xs: 1, sm: 2 } }}>
+                <SquareSlideToggle
+                  onChange={e =>
+                    setLLM({
+                      thinking: {
+                        enabled: e.target.checked,
+                        budget_tokens: thinking?.budget_tokens ?? 16000,
+                      },
+                    })
+                  }
+                  checked={thinking?.enabled ?? false}
+                  disabled={!modelSupportsThinking}
+                />
+              </Box>
             </ToolContainer>
           </Grid>
           {/* Quest Master */}
@@ -1198,223 +1366,224 @@ const ToolsSection = ({
         </Box>
       </ToolGateContext.Provider>
 
-      {/* Collapsible Fun & Novelty tools section (hidden by default for FTUE) */}
-      {showIndividualTools && (
-        <>
-          <Box
-            role="button"
-            tabIndex={0}
-            aria-expanded={showFunTools}
-            data-testid="tools-fun-toggle"
-            onClick={toggleFunTools}
-            onKeyDown={e => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                toggleFunTools();
-              }
-            }}
+      {/* Collapsible Fun & Novelty section - independent of the Individual tools collapse,
+          so collapsing one no longer hides the other. */}
+      <>
+        <Box
+          role="button"
+          tabIndex={0}
+          aria-expanded={showFunTools}
+          data-testid="tools-fun-toggle"
+          onClick={toggleFunTools}
+          onKeyDown={e => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              toggleFunTools();
+            }
+          }}
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            width: 'fit-content',
+            cursor: 'pointer',
+            py: 0.5,
+            mt: '20px',
+            mb: showFunTools ? 1 : '12px',
+            userSelect: 'none',
+            '&:hover .tools-collapsible-title, &:hover .tools-collapsible-chevron': { color: 'text.primary' },
+          }}
+        >
+          <Typography
+            className="tools-collapsible-title"
+            level="body-xs"
+            sx={{ fontSize: '13px', color: 'text.tertiary', transition: 'color 0.3s', ml: '4px' }}
+          >
+            Fun & Novelty{funPinnedCount > 0 ? ` (${funPinnedCount} pinned)` : ''}
+          </Typography>
+          <ExpandMoreIcon
+            className="tools-collapsible-chevron"
             sx={{
-              display: 'flex',
-              alignItems: 'center',
-              cursor: 'pointer',
-              py: 0.5,
-              mt: 1,
-              mb: showFunTools ? 1 : 0,
-              userSelect: 'none',
-              '&:hover': { opacity: 0.8 },
+              fontSize: '1rem',
+              transition: 'transform 0.2s, color 0.3s',
+              transform: showFunTools ? 'rotate(180deg)' : 'rotate(0deg)',
+              color: 'text.tertiary',
+              ml: '8px',
+            }}
+          />
+        </Box>
+
+        <ToolGateContext.Provider value={getToolGate}>
+          <Box
+            className="tools-section-fun-grid"
+            sx={{
+              display: showFunTools ? 'grid' : 'none',
+              gridTemplateColumns: `repeat(${columns}, 1fr)`,
+              gap: columns,
+              width: '100%',
             }}
           >
-            <ExpandMoreIcon
-              sx={{
-                fontSize: '1rem',
-                transition: 'transform 0.2s',
-                transform: showFunTools ? 'rotate(0deg)' : 'rotate(-90deg)',
-                color: 'text.secondary',
-                mr: 0.5,
-              }}
-            />
-            <Typography level="body-xs" sx={{ color: 'text.secondary', flex: 1 }}>
-              Fun & Novelty
-            </Typography>
+            {/* Chess Engine */}
+            <Grid xs={12} className="tool-item tool-item-chess-engine">
+              <ToolContainer sx={toolContainerSx} toolId="chess_engine">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <ChessIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('chess_engine')}
+                    description={getToolDescription('chess_engine')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('chess_engine')}
+                  checked={tools.includes('chess_engine')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* Dice Roll */}
+            <Grid xs={12} className="tool-item tool-item-dice">
+              <ToolContainer sx={toolContainerSx} toolId="dice_roll">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <DiceIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel name={getToolDisplayName('dice_roll')} description={getToolDescription('dice_roll')} />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('dice_roll')}
+                  checked={tools.includes('dice_roll')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* Weather Info */}
+            <Grid xs={12} className="tool-item tool-item-weather">
+              <ToolContainer sx={toolContainerSx} toolId="weather_info">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <WeatherIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('weather_info')}
+                    description={getToolDescription('weather_info')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('weather_info')}
+                  checked={tools.includes('weather_info')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* On This Day (Wikipedia) */}
+            <Grid xs={12} className="tool-item tool-item-wikipedia-on-this-day">
+              <ToolContainer sx={toolContainerSx} toolId="wikipedia_on_this_day">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <HistoryIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('wikipedia_on_this_day')}
+                    description={getToolDescription('wikipedia_on_this_day')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('wikipedia_on_this_day')}
+                  checked={tools.includes('wikipedia_on_this_day')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* ISS Tracker */}
+            <Grid xs={12} className="tool-item tool-item-iss-tracker">
+              <ToolContainer sx={toolContainerSx} toolId="iss_tracker">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <SatelliteIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel name={getToolDisplayName('iss_tracker')} description={getToolDescription('iss_tracker')} />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('iss_tracker')}
+                  checked={tools.includes('iss_tracker')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* Sunrise/Sunset */}
+            <Grid xs={12} className="tool-item tool-item-sunrise-sunset">
+              <ToolContainer sx={toolContainerSx} toolId="sunrise_sunset">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <SunriseIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('sunrise_sunset')}
+                    description={getToolDescription('sunrise_sunset')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('sunrise_sunset')}
+                  checked={tools.includes('sunrise_sunset')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* Moon Phase */}
+            <Grid xs={12} className="tool-item tool-item-moon-phase">
+              <ToolContainer sx={toolContainerSx} toolId="moon_phase">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <MoonIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel name={getToolDisplayName('moon_phase')} description={getToolDescription('moon_phase')} />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('moon_phase')}
+                  checked={tools.includes('moon_phase')}
+                />
+              </ToolContainer>
+            </Grid>
+            {/* Planet Visibility */}
+            <Grid xs={12} className="tool-item tool-item-planet-visibility">
+              <ToolContainer sx={toolContainerSx} toolId="planet_visibility">
+                <Box
+                  className="tool-content"
+                  sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
+                >
+                  <PlanetIcon
+                    sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
+                  />
+                  <ToolLabel
+                    name={getToolDisplayName('planet_visibility')}
+                    description={getToolDescription('planet_visibility')}
+                  />
+                </Box>
+                <SquareSlideToggle
+                  onChange={() => handleToggleTool('planet_visibility')}
+                  checked={tools.includes('planet_visibility')}
+                />
+              </ToolContainer>
+            </Grid>
           </Box>
-
-          <ToolGateContext.Provider value={getToolGate}>
-            <Box
-              className="tools-section-fun-grid"
-              sx={{
-                display: showFunTools ? 'grid' : 'none',
-                gridTemplateColumns: `repeat(${columns}, 1fr)`,
-                gap: columns,
-                width: '100%',
-                overflow: { xs: 'auto', sm: 'initial' },
-              }}
-            >
-              {/* Chess Engine */}
-              <Grid xs={12} className="tool-item tool-item-chess-engine">
-                <ToolContainer sx={toolContainerSx} toolId="chess_engine">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <ChessIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('chess_engine')}
-                      description={getToolDescription('chess_engine')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('chess_engine')}
-                    checked={tools.includes('chess_engine')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* Dice Roll */}
-              <Grid xs={12} className="tool-item tool-item-dice">
-                <ToolContainer sx={toolContainerSx} toolId="dice_roll">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <DiceIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel name={getToolDisplayName('dice_roll')} description={getToolDescription('dice_roll')} />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('dice_roll')}
-                    checked={tools.includes('dice_roll')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* Weather Info */}
-              <Grid xs={12} className="tool-item tool-item-weather">
-                <ToolContainer sx={toolContainerSx} toolId="weather_info">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <WeatherIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('weather_info')}
-                      description={getToolDescription('weather_info')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('weather_info')}
-                    checked={tools.includes('weather_info')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* On This Day (Wikipedia) */}
-              <Grid xs={12} className="tool-item tool-item-wikipedia-on-this-day">
-                <ToolContainer sx={toolContainerSx} toolId="wikipedia_on_this_day">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <HistoryIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('wikipedia_on_this_day')}
-                      description={getToolDescription('wikipedia_on_this_day')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('wikipedia_on_this_day')}
-                    checked={tools.includes('wikipedia_on_this_day')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* ISS Tracker */}
-              <Grid xs={12} className="tool-item tool-item-iss-tracker">
-                <ToolContainer sx={toolContainerSx} toolId="iss_tracker">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <SatelliteIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('iss_tracker')}
-                      description={getToolDescription('iss_tracker')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('iss_tracker')}
-                    checked={tools.includes('iss_tracker')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* Sunrise/Sunset */}
-              <Grid xs={12} className="tool-item tool-item-sunrise-sunset">
-                <ToolContainer sx={toolContainerSx} toolId="sunrise_sunset">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <SunriseIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('sunrise_sunset')}
-                      description={getToolDescription('sunrise_sunset')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('sunrise_sunset')}
-                    checked={tools.includes('sunrise_sunset')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* Moon Phase */}
-              <Grid xs={12} className="tool-item tool-item-moon-phase">
-                <ToolContainer sx={toolContainerSx} toolId="moon_phase">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <MoonIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel name={getToolDisplayName('moon_phase')} description={getToolDescription('moon_phase')} />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('moon_phase')}
-                    checked={tools.includes('moon_phase')}
-                  />
-                </ToolContainer>
-              </Grid>
-              {/* Planet Visibility */}
-              <Grid xs={12} className="tool-item tool-item-planet-visibility">
-                <ToolContainer sx={toolContainerSx} toolId="planet_visibility">
-                  <Box
-                    className="tool-content"
-                    sx={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: 0 }}
-                  >
-                    <PlanetIcon
-                      sx={{ color: theme => `${theme.palette.text.primary}80`, fontSize: '1.25rem', flexShrink: 0 }}
-                    />
-                    <ToolLabel
-                      name={getToolDisplayName('planet_visibility')}
-                      description={getToolDescription('planet_visibility')}
-                    />
-                  </Box>
-                  <SquareSlideToggle
-                    onChange={() => handleToggleTool('planet_visibility')}
-                    checked={tools.includes('planet_visibility')}
-                  />
-                </ToolContainer>
-              </Grid>
-            </Box>
-          </ToolGateContext.Provider>
-        </>
-      )}
+        </ToolGateContext.Provider>
+      </>
 
       {/* Deep Research Config Modal */}
       <DeepResearchConfigModal open={deepResearchConfigOpen} onClose={() => setDeepResearchConfigOpen(false)} />

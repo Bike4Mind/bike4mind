@@ -17,6 +17,7 @@ import { isImageModel } from '@client/app/utils/commands';
 import { keyframes } from '@mui/system';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import ToolsButton from './AISettings/ToolsButton';
+import { ICONED_MCP_SERVERS } from '../common/ToolIndicators';
 import AgentsButton from './AISettings/AgentsButton';
 import BriefcaseButton from './AISettings/BriefcaseButton';
 import ResearchModeIndicator from './AISettings/ResearchModeIndicator';
@@ -60,6 +61,8 @@ const AISettings: FC<AISettingsProps> = ({
 
   const { isFeatureEnabled, isAdminFeatureEnabled } = useFeatureEnabled();
   const isAgentsFeatureEnabled = isFeatureEnabled('enableAgents');
+  const isQuestMasterFeatureEnabled = isFeatureEnabled('enableQuestMaster');
+  const isLatticeFeatureEnabled = isFeatureEnabled('enableLattice');
   const isBriefcaseEnabled = isFeatureEnabled('enableBriefcase');
   const isImageTemplatesEnabled = isAdminFeatureEnabled('EnableImageTemplates');
   const isPromptBuilderEnabled = isAdminFeatureEnabled('EnablePromptBuilder');
@@ -77,6 +80,9 @@ const AISettings: FC<AISettingsProps> = ({
   const { data: sessionAgents = [] } = useGetSessionAgents(currentSessionId);
   const activeAgentsCount = currentSessionId ? sessionAgents.length : workBenchAgents.length;
 
+  const isLatticeEnabled = useLLM(state => state.isLatticeEnabled);
+  const isAgentsEnabled = useLLM(state => state.isAgentsEnabled);
+
   const [model, isQuestMasterEnabled, thinking, quality, n] = useLLM(
     useShallow(s => [s.model, s.isQuestMasterEnabled, s.thinking, s.quality, s.n])
   );
@@ -91,10 +97,24 @@ const AISettings: FC<AISettingsProps> = ({
   const primaryTools = ['web_search', 'web_fetch', 'image_generation'] as const;
   const activePrimaryTools = primaryTools.filter(tool => tools.includes(tool as unknown as (typeof tools)[number]));
   const isThinkingActive = thinking?.enabled ?? false;
+  // Enabled integrations without their own icon (e.g. linkedin, notion) roll into the
+  // "+N" badge; iconed ones (ICONED_MCP_SERVERS) are shown as icons and excluded here
+  // so they aren't double-counted. Mirrors ToolIndicators' shouldShowMcpServer logic.
+  const enabledNonIconMcpCount = availableMcpServers.filter(
+    name => !ICONED_MCP_SERVERS.includes(name) && (enabledMcpServers === null || enabledMcpServers.includes(name))
+  ).length;
+  // Feature-gated switches outside the `tools` array (Quest Master, Agent Detection,
+  // Lattice). Must stay in sync with pinnedCount's specialToolsCount in ToolsSection.
+  const specialToolsCount =
+    (isQuestMasterFeatureEnabled && isQuestMasterEnabled ? 1 : 0) +
+    (isAgentsFeatureEnabled && isAgentsEnabled ? 1 : 0) +
+    (isLatticeFeatureEnabled && isLatticeEnabled ? 1 : 0);
   const otherActiveToolsCount =
     tools.filter(
       tool => !primaryTools.includes(tool as unknown as (typeof primaryTools)[number]) && tool !== 'dice_roll'
-    ).length + (isQuestMasterEnabled ? 1 : 0);
+    ).length +
+    specialToolsCount +
+    enabledNonIconMcpCount;
 
   const isMobile = useIsMobile();
   const isTablet = useIsTablet();

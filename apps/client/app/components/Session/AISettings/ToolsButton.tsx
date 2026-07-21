@@ -1,7 +1,7 @@
-import { FC, useMemo, useRef, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
-import { Construction as ConstructionIcon, Close as CloseIcon } from '@mui/icons-material';
+import { Construction as ConstructionIcon } from '@mui/icons-material';
 import { B4MLLMTools } from '@bike4mind/common';
 import ToolsSection from './ToolsSection';
 import ToolIndicators from '../../common/ToolIndicators';
@@ -45,6 +45,21 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   const [open, setOpen] = useState(false);
   const [isDeepResearchModalOpen, setIsDeepResearchModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Mobile: show a bottom fade while there's more to scroll, so it's obvious the
+  // panel scrolls (custom scrollbars are unreliable on touch). Hidden at the end.
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const [showBottomFade, setShowBottomFade] = useState(false);
+  const updateBottomFade = useCallback(() => {
+    const el = mobileScrollRef.current;
+    if (!el) return;
+    const scrollable = el.scrollHeight > el.clientHeight;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+    setShowBottomFade(scrollable && !atBottom);
+  }, []);
+  useEffect(() => {
+    if (open) updateBottomFade();
+  }, [open, updateBottomFade]);
   const { data: modelInfoRepo } = useModelInfo();
   const modelSupportsTools = useMemo(
     () => modelInfoRepo?.find(m => m.id === model)?.supportsTools ?? true,
@@ -58,6 +73,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
     onRollDice,
     columns: 1 as const,
     onModalOpenChange: setIsDeepResearchModalOpen,
+    onClose: () => setOpen(false),
     toolContainerSx: {
       backgroundColor: (theme: { palette: { background: { surface2: string } } }) => theme.palette.background.surface2,
       padding: '12px',
@@ -93,27 +109,36 @@ const ToolsButton: FC<ToolsButtonProps> = ({
         <Modal open={open} onClose={() => !isDeepResearchModalOpen && setOpen(false)}>
           <ModalDialog
             sx={{
-              p: 1,
+              p: 0,
               width: '90dvw',
               height: '90dvh',
               border: 'none',
               backgroundColor: 'background.body',
+              overflow: 'hidden',
+              position: 'relative',
             }}
           >
-            <IconButton
-              onClick={() => setOpen(false)}
-              size="sm"
-              variant="plain"
-              color="neutral"
-              sx={{
-                zIndex: 1,
-                alignSelf: 'flex-end',
-              }}
-              data-testid="tools-modal-close-btn"
+            <Box
+              ref={mobileScrollRef}
+              onScroll={updateBottomFade}
+              sx={{ height: '100%', overflow: 'auto', p: 1, ...scrollbarStyles }}
             >
-              <CloseIcon sx={{ fontSize: 20 }} />
-            </IconButton>
-            <ToolsSection {...toolsSectionProps} />
+              <ToolsSection {...toolsSectionProps} />
+            </Box>
+            {/* Scroll affordance: fades content at the bottom edge while more is below. */}
+            <Box
+              sx={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: '48px',
+                pointerEvents: 'none',
+                opacity: showBottomFade ? 1 : 0,
+                transition: 'opacity 0.2s',
+                background: theme => `linear-gradient(to bottom, transparent, ${theme.vars.palette.background.body})`,
+              }}
+            />
           </ModalDialog>
         </Modal>
       </>
@@ -163,13 +188,18 @@ const ToolsButton: FC<ToolsButtonProps> = ({
               </Typography>
             )}
           </Box>
-          <ToolIndicators
-            activePrimaryTools={activePrimaryTools}
-            isThinkingActive={isThinkingActive}
-            otherActiveToolsCount={otherActiveToolsCount}
-            enabledMcpServers={enabledMcpServers}
-            availableMcpServers={availableMcpServers}
-          />
+          {/* Fast mode sends no tools, so nothing is actually active - hide all
+              indicators (tool icons, count, and thinking). Selections persist and
+              reappear when switching back to Smart. */}
+          {toolMode !== 'fast' && (
+            <ToolIndicators
+              activePrimaryTools={activePrimaryTools}
+              isThinkingActive={isThinkingActive}
+              otherActiveToolsCount={otherActiveToolsCount}
+              enabledMcpServers={enabledMcpServers}
+              availableMcpServers={availableMcpServers}
+            />
+          )}
         </Box>
       </MenuButton>
 
@@ -180,7 +210,7 @@ const ToolsButton: FC<ToolsButtonProps> = ({
         sx={{
           zIndex: 1400,
           ...(modelSupportsTools
-            ? { minWidth: '400px', maxWidth: '400px', p: '8px' }
+            ? { minWidth: '500px', maxWidth: '500px', p: '8px' }
             : { minWidth: 'auto', maxWidth: 'auto', p: '16px' }),
           backgroundColor: theme => theme.palette.background.body,
           border: theme => `1px solid ${theme.vars.palette.neutral.outlinedBorder}`,

@@ -1,5 +1,6 @@
 import React from 'react';
 import { IconButton, Tooltip } from '@mui/joy';
+import type { SxProps } from '@mui/joy/styles/types';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import { openHelpPanel } from '@client/app/hooks/useHelpPanel';
 
@@ -18,6 +19,8 @@ interface ContextHelpButtonProps {
   color?: 'primary' | 'neutral' | 'danger' | 'success' | 'warning';
   /** Additional className */
   className?: string;
+  /** Extra styles merged into the IconButton (e.g. custom color/hover) */
+  sx?: SxProps;
   /** Data test ID for testing */
   'data-testid'?: string;
 }
@@ -42,6 +45,7 @@ const ContextHelpButton: React.FC<ContextHelpButtonProps> = ({
   variant = 'plain',
   color = 'neutral',
   className,
+  sx,
   'data-testid': dataTestId,
 }) => {
   const handleClick = () => {
@@ -59,6 +63,7 @@ const ContextHelpButton: React.FC<ContextHelpButtonProps> = ({
         data-testid={dataTestId || `help-button-${helpId.replace(/\//g, '-')}`}
         sx={{
           '--IconButton-size': size === 'sm' ? '28px' : size === 'md' ? '36px' : '44px',
+          ...sx,
         }}
       >
         <HelpOutlineIcon sx={{ fontSize: size === 'sm' ? 16 : size === 'md' ? 20 : 24 }} />

@@ -10,6 +10,11 @@ import SupportsToolsIcon from '../svgs/SupportsToolsIcon';
 import CountBadge from './CountBadge';
 import { green } from '../../utils/themes/colors';
 
+// MCP servers that render as their own icon here. Enabled servers NOT in this set
+// (e.g. linkedin, notion) have no icon, so they fall into the "+N" count badge
+// instead. Callers computing that count must exclude these to avoid double-counting.
+export const ICONED_MCP_SERVERS = ['github', 'atlassian'];
+
 interface ToolIndicatorsProps {
   activePrimaryTools: string[];
   isThinkingActive: boolean;
@@ -42,7 +47,7 @@ const ToolIndicators = ({
   isThinkingActive,
   otherActiveToolsCount,
   enabledMcpServers = null,
-  availableMcpServers = ['github', 'atlassian'], // Default to all known servers
+  availableMcpServers = ICONED_MCP_SERVERS, // Default to the servers that have icons
   activeColor = green[800],
   iconSize = '16px',
   gap = '8px',
@@ -153,7 +158,7 @@ const ToolIndicators = ({
     indicators.push(
       <CountBadge
         key="count"
-        prefix=""
+        prefix="+"
         count={otherActiveToolsCount}
         color={activeColor}
         margin={iconMargins.counter || '0px 0px 0 0px'}
