@@ -1,5 +1,5 @@
-import { AIImageService, AIImageGenerationOptions, ImageEditResponse } from './AIImageService';
-import { GoogleGenAI, type GenerateImagesConfig } from '@google/genai';
+import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
+import { GoogleGenAI, type GenerateImagesConfig, type GenerateImagesResponse, type Part } from '@google/genai';
 import { Logger } from '@bike4mind/observability';
 import { ImageModels } from '@bike4mind/common';
 import { v4 as uuidv4 } from 'uuid';
@@ -97,7 +97,10 @@ export class GeminiImageService extends AIImageService {
     }
   }
 
-  private extractImageFromGenerateImages(response: any, options: AIImageGenerationOptions): string | null {
+  private extractImageFromGenerateImages(
+    response: GenerateImagesResponse,
+    options: AIImageGenerationOptions
+  ): string | null {
     if (!response?.generatedImages || response.generatedImages.length === 0) {
       return null;
     }
@@ -160,7 +163,7 @@ export class GeminiImageService extends AIImageService {
     }
 
     const textMessage = this.extractTextFromParts(candidate.content.parts);
-    const imagePart = candidate.content.parts.find((part: any) => part.inlineData);
+    const imagePart = candidate.content.parts.find(part => part.inlineData);
     if (!imagePart?.inlineData?.data) {
       this.logger.error('[DEBUG] No image inline data in Gemini generateContent response.', candidate.content.parts);
       if (textMessage) {
@@ -173,7 +176,7 @@ export class GeminiImageService extends AIImageService {
     return `data:${mimeType};base64,${imagePart.inlineData.data}`;
   }
 
-  private extractTextFromParts(parts: any[]): string | null {
+  private extractTextFromParts(parts: Part[]): string | null {
     if (!Array.isArray(parts)) {
       return null;
     }
@@ -265,7 +268,7 @@ export class GeminiImageService extends AIImageService {
     return 'image/png';
   }
 
-  async edit(image: string, prompt: string, options: any): Promise<ImageEditResponse> {
+  async edit(image: string, prompt: string, options: ImageEditOptions): Promise<ImageEditResponse> {
     this.logger.log('Editing image with Gemini...');
 
     try {
@@ -321,7 +324,7 @@ export class GeminiImageService extends AIImageService {
       }
 
       const textMessage = this.extractTextFromParts(candidate.content.parts);
-      const imagePart = candidate.content.parts.find((part: any) => part.inlineData);
+      const imagePart = candidate.content.parts.find(part => part.inlineData);
 
       // Check if Gemini is asking for clarification instead of generating an image
       if (!imagePart || !imagePart.inlineData) {
@@ -362,11 +365,5 @@ export class GeminiImageService extends AIImageService {
 
       throw new Error('Gemini image editing failed with unknown error');
     }
-  }
-
-  async variantions(_image: Buffer, _options: any): Promise<string[]> {
-    throw new Error(
-      'Image variations are not directly supported by Gemini. Use edit() with variation prompts instead.'
-    );
   }
 }

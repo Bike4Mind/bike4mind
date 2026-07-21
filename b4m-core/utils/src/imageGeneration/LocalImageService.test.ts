@@ -219,9 +219,8 @@ describe('LocalImageService.generate', () => {
     await expect(svc.generate('nothing', { model: 'local-image/sd15' })).rejects.toThrow(/no images/i);
   });
 
-  it('edit and variantions are not supported', async () => {
+  it('edit is not supported', async () => {
     const svc = makeService();
     await expect(svc.edit('img', 'prompt', {})).rejects.toThrow(/does not support/i);
-    await expect(svc.variantions(Buffer.from(''), {})).rejects.toThrow(/does not support/i);
   });
 });

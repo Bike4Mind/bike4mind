@@ -1,4 +1,4 @@
-import { AIImageService, AIImageGenerationOptions, ImageEditResponse } from './AIImageService';
+import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import OpenAI from 'openai';
 import { Logger } from '@bike4mind/observability';
 import { ImageModels } from '@bike4mind/common';
@@ -48,11 +48,7 @@ export class XAIImageService extends AIImageService {
     }
   }
 
-  async edit(_image: string, _prompt: string, _options: any): Promise<ImageEditResponse> {
+  async edit(_image: string, _prompt: string, _options: ImageEditOptions): Promise<ImageEditResponse> {
     throw new Error('Image editing is not supported by XAI/Grok models');
-  }
-
-  async variantions(_image: Buffer, _options: any): Promise<string[]> {
-    throw new Error('Image variations are not supported by XAI/Grok models');
   }
 }

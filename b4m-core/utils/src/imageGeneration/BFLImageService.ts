@@ -1,5 +1,5 @@
 import { Logger } from '@bike4mind/observability';
-import { AIImageService } from './AIImageService';
+import { AIImageService, ImageEditOptions, ImageEditResponse } from './AIImageService';
 import axios from 'axios';
 import { ImageModels, BFL_SAFETY_TOLERANCE } from '@bike4mind/common';
 import { redactErrorForLog } from './redactErrorForLog';
@@ -62,7 +62,7 @@ export class BFLImageService extends AIImageService {
       height?: number;
       aspect_ratio?: string;
       image_prompt?: string;
-      [key: string]: any;
+      [key: string]: unknown;
     }
   ): Promise<string[]> {
     try {
@@ -81,7 +81,7 @@ export class BFLImageService extends AIImageService {
             aspect_ratio?: string;
             width?: number;
             height?: number;
-            [key: string]: any;
+            [key: string]: unknown;
           } = {
             prompt,
             safety_tolerance: this.clampSafetyTolerance(safety_tolerance),
@@ -174,17 +174,8 @@ export class BFLImageService extends AIImageService {
       guidance = 60,
       output_format = 'jpeg',
       safety_tolerance = BFL_SAFETY_TOLERANCE.DEFAULT,
-    }: {
-      steps?: number;
-      mask: string | null;
-      model?: ImageModels;
-      prompt_upsampling?: boolean;
-      seed?: number | null;
-      guidance?: number;
-      output_format?: 'jpeg' | 'png';
-      safety_tolerance?: number;
-    }
-  ) {
+    }: ImageEditOptions
+  ): Promise<ImageEditResponse> {
     try {
       // Prepare request body based on model
       const requestBody: {
@@ -195,7 +186,7 @@ export class BFLImageService extends AIImageService {
         output_format: string;
         aspect_ratio?: string;
         guidance?: number;
-        [key: string]: any;
+        [key: string]: unknown;
       } = {
         prompt,
         steps,
@@ -204,8 +195,8 @@ export class BFLImageService extends AIImageService {
         seed,
         image,
         mask,
-        guidance,
-        output_format: output_format,
+        guidance: guidance ?? undefined,
+        output_format: output_format || 'jpeg',
       };
 
       const cleanedBody = this.stripNullFields(requestBody);
@@ -273,7 +264,7 @@ export class BFLImageService extends AIImageService {
       seed?: number | null;
       output_format?: 'jpeg' | 'png';
       aspect_ratio?: string;
-      [key: string]: any;
+      [key: string]: unknown;
     }
   ): Promise<string> {
     Logger.globalInstance.debug(`[DEBUG] === BFL TRANSFORM SERVICE ===`);
@@ -301,7 +292,7 @@ export class BFLImageService extends AIImageService {
         seed: number | null;
         output_format: string;
         aspect_ratio?: string;
-        [key: string]: any;
+        [key: string]: unknown;
       } = {
         prompt,
         input_image: inputImage,
@@ -392,10 +383,6 @@ export class BFLImageService extends AIImageService {
 
       throw error instanceof Error ? error : new Error('BFL Kontext transformation error: Unknown error');
     }
-  }
-
-  async variantions(image: Buffer, options: any): Promise<string[]> {
-    throw new Error('Image variations are not supported by BlackForest Labs API');
   }
 
   private getBackoffInterval(attempt: number, baseInterval: number): number {

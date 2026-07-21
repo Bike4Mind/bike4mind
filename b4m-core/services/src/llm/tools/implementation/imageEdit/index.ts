@@ -475,7 +475,7 @@ Please check your BFL API key in settings and ensure it is configured correctly.
             mask: maskBase64Image,
             model: editModel, // Use the configured edit model
             n,
-            size: size as any,
+            size,
             response_format: 'url',
             user: context.userId,
           });

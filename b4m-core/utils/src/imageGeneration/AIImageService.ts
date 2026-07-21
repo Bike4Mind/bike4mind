@@ -1,4 +1,5 @@
 import { Logger } from '@bike4mind/observability';
+import { OpenAIImageSize } from '@bike4mind/common';
 
 export interface AIImageGenerationOptions {
   width?: number;
@@ -27,6 +28,16 @@ export interface AIImageGenerationOptions {
 }
 
 /**
+ * Generation options plus an optional inpainting mask; each call site passes a
+ * subset. `size` is widened to OpenAIImageSize (`string`) so callers can forward
+ * provider-specific sizes; only OpenAIImageService.edit reads it.
+ */
+export type ImageEditOptions = Omit<AIImageGenerationOptions, 'size'> & {
+  mask?: string | null;
+  size?: OpenAIImageSize;
+};
+
+/**
  * Response type for image editing operations
  * Can be either a successful edit with a data URL, or a clarification request
  */
@@ -41,7 +52,7 @@ export type ImageEditResponse =
       clarificationId: string;
       originalPrompt: string;
       originalImage: string;
-      originalOptions: any;
+      originalOptions: ImageEditOptions;
     };
 
 export abstract class AIImageService {
@@ -52,6 +63,5 @@ export abstract class AIImageService {
   ) {}
 
   abstract generate(prompt: string, options: AIImageGenerationOptions): Promise<string[]>;
-  abstract edit(image: string, prompt: string, options: any): Promise<ImageEditResponse>;
-  abstract variantions(image: Buffer, options: any): Promise<string[]>;
+  abstract edit(image: string, prompt: string, options: ImageEditOptions): Promise<ImageEditResponse>;
 }

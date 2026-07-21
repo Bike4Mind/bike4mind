@@ -1,6 +1,6 @@
 import { Logger } from '@bike4mind/observability';
 import axios from 'axios';
-import { AIImageService, AIImageGenerationOptions, ImageEditResponse } from './AIImageService';
+import { AIImageService, AIImageGenerationOptions, ImageEditOptions, ImageEditResponse } from './AIImageService';
 
 /** Request body for the AUTOMATIC1111-compatible `POST /sdapi/v1/txt2img` endpoint. */
 interface Txt2ImgRequest {
@@ -231,11 +231,7 @@ export class LocalImageService extends AIImageService {
     return { width: DEFAULT_DIMENSION, height: DEFAULT_DIMENSION };
   }
 
-  async edit(_image: string, _prompt: string, _options: unknown): Promise<ImageEditResponse> {
+  async edit(_image: string, _prompt: string, _options: ImageEditOptions): Promise<ImageEditResponse> {
     throw new Error('LocalImageService does not support image editing');
-  }
-
-  async variantions(_image: Buffer, _options: unknown): Promise<string[]> {
-    throw new Error('LocalImageService does not support image variations');
   }
 }
