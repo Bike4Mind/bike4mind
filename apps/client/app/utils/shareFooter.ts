@@ -37,12 +37,7 @@ export interface ShareFooterOptions {
   reportPublicId?: string;
 }
 
-// Escapes &, <, >, " - safe for BOTH attribute values and element inner text
-// (this footer uses it in both: the text-wordmark/CTA spans render the escaped
-// value as inner text). The extra `"` escaping is harmless in a text context.
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+import { escapeAttr } from './htmlEscape';
 
 /**
  * Wordmark for the share footer. The inline SVG in b4mLogo.ts is the project's

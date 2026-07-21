@@ -15,8 +15,8 @@ import {
 } from '@mui/joy';
 import CodeIcon from '@mui/icons-material/Code';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import { toast } from 'sonner';
 import { getAgentEmbedKeys, type AgentEmbedKey } from '@client/app/utils/agentsAPICalls';
+import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import {
   buildIframeSnippet,
   buildScriptSnippet,
@@ -77,14 +77,7 @@ export function EmbedSnippetSection({
     return format === 'script' ? buildScriptSnippet(params) : buildIframeSnippet(params);
   }, [selectedKey, format, pastedKey, agentName]);
 
-  const copySnippet = async () => {
-    try {
-      await navigator.clipboard.writeText(snippet);
-      toast.success('Embed code copied to clipboard!');
-    } catch {
-      toast.error("Couldn't copy - select the code manually");
-    }
-  };
+  const copySnippet = () => copyTextWithToast(snippet, 'Embed code copied to clipboard!');
 
   if (keys === null) return null;
 

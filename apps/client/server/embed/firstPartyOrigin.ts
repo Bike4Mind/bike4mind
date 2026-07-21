@@ -1,4 +1,4 @@
-import { isOriginUnderHost } from '@bike4mind/common';
+import { isOriginPermitted, isOriginUnderHost } from '@bike4mind/common';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 
 /**
@@ -33,4 +33,19 @@ export function isFirstPartyEmbedOrigin(
     return false;
   }
   return originHost === requestHost.trim().toLowerCase();
+}
+
+/**
+ * The full embed origin decision, shared verbatim by the mint gate
+ * (pages/api/embed/session.ts) and the chat gate (embedRoute.ts) so the two
+ * can never drift: a present browser Origin passes when it is our own serving
+ * origin OR on the key's allow-list. Callers handle the absent/null-Origin
+ * case (credential-only) before calling this.
+ */
+export function isEmbedOriginAllowed(
+  origin: string,
+  allowedOrigins: string[] | undefined,
+  requestHost: string | undefined
+): boolean {
+  return isFirstPartyEmbedOrigin(origin, requestHost) || isOriginPermitted(origin, allowedOrigins);
 }

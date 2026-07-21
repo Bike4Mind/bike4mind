@@ -31,13 +31,14 @@ const handler = baseApi().get(async (req, res) => {
     throw new BadRequestError('agentId is required');
   }
 
-  const agent = await agentRepository.findById(id);
+  const callerId = req.user!.id;
+  const [agent, administeredOrgIds] = await Promise.all([
+    agentRepository.findById(id),
+    organizationRepository.findIdsAdministeredBy(callerId),
+  ]);
   if (!agent) {
     throw new NotFoundError('Agent not found');
   }
-
-  const callerId = req.user!.id;
-  const administeredOrgIds = await organizationRepository.findIdsAdministeredBy(callerId);
 
   // Positive allow-list: each grant requires its field SET and matching, so a
   // both-unset row can never pass. 404 (not 403) so a non-owner cannot tell a

@@ -17,8 +17,6 @@ import { EMBED_SSE_PARSER_SRC } from './embedSseParser';
 export interface EmbedWidgetConfig {
   embedKey: string;
   agentId?: string;
-  /** Non-secret key id, exposed for support correlation only. */
-  keyId?: string;
   /** Header title; travels inside the JSON blob and is rendered via textContent. */
   displayName?: string;
   /** Relative so the calls stay same-origin behind CloudFront. */

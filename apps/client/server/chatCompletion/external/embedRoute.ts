@@ -3,7 +3,6 @@ import {
   buildMetaEvent,
   buildSSEEvent,
   formatSSEError,
-  isOriginPermitted,
   resolveRequestId,
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
@@ -33,7 +32,7 @@ import {
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
-import { isFirstPartyEmbedOrigin } from '@server/embed/firstPartyOrigin';
+import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
@@ -185,11 +184,7 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
       // with the mint gate in pages/api/embed/session.ts.
       const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (
-        requestOrigin &&
-        !isFirstPartyEmbedOrigin(requestOrigin, headers.host) &&
-        !isOriginPermitted(requestOrigin, ctx.allowedOrigins)
-      ) {
+      if (requestOrigin && !isEmbedOriginAllowed(requestOrigin, ctx.allowedOrigins, headers.host)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 

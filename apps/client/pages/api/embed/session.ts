@@ -17,11 +17,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
-import { isOriginPermitted } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
-import { isFirstPartyEmbedOrigin } from '@server/embed/firstPartyOrigin';
+import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 
 /** Per-IP flood backstop on this unauth mint surface. */
 const MINT_RATE_LIMIT = 60;
@@ -49,7 +48,7 @@ const handler = baseApi({ auth: false })
     // origin is implicitly permitted: the /embed/* widget page mints from the app
     // host, which can never appear on an allow-list (see firstPartyOrigin.ts).
     const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-    if (origin && !isFirstPartyEmbedOrigin(origin, headers.host) && !isOriginPermitted(origin, info.allowedOrigins)) {
+    if (origin && !isEmbedOriginAllowed(origin, info.allowedOrigins, headers.host)) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 

@@ -5,6 +5,8 @@
  * the served code and the generated snippets cannot drift apart.
  */
 
+import { escapeAttr } from './htmlEscape';
+
 /** Pretty widget-page path (rewritten to /api/embed/serve; key rides `?k=`). */
 export const EMBED_CHAT_PATH = '/embed/chat';
 /** The script-tag loader that injects the floating chat bubble. */
@@ -24,10 +26,6 @@ export interface EmbedSnippetParams {
   position?: EmbedPosition;
   width?: string | number;
   height?: string | number;
-}
-
-function escapeAttr(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 function trimBase(baseUrl: string): string {

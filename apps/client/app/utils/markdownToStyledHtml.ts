@@ -193,9 +193,7 @@ function renderFooter(): string {
   return `<footer class="export-footer">Exported from Bike4Mind on ${date}</footer>`;
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+import { escapeAttr as escapeHtml } from './htmlEscape';
 
 // GitHub-flavored base styling, adapted from the core FormatConverter
 // (b4m-core notebookCurationService/formatConverter.ts) and extended with a

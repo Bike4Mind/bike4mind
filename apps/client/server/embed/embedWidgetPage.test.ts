@@ -4,7 +4,6 @@ import { renderEmbedWidgetHtml, serializeConfigForScript, type EmbedWidgetConfig
 const BASE_CONFIG: EmbedWidgetConfig = {
   embedKey: 'b4m_live_widget_key',
   agentId: 'agent-1',
-  keyId: 'key-1',
 };
 
 describe('serializeConfigForScript', () => {

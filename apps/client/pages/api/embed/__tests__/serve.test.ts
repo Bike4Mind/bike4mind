@@ -16,6 +16,11 @@ vi.mock('@server/cli/auth', () => ({
   verifyEmbedApiKey: (...a: unknown[]) => mockVerifyEmbedApiKey(...a),
 }));
 
+const mockAgentFindById = vi.hoisted(() => vi.fn());
+vi.mock('@bike4mind/database', () => ({
+  agentRepository: { findById: mockAgentFindById },
+}));
+
 // Real parseEmbedOrigin from @bike4mind/common - the CSP filter is exercised
 // against the actual canonicalizer, not a stub.
 import handler from '../serve';
@@ -56,6 +61,17 @@ describe('GET /api/embed/serve - public widget page', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO });
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+  });
+
+  it('renders the agent name into the page config and survives a failed lookup', async () => {
+    const named = await run({ k: 'b4m_live_good' });
+    expect(named._getData()).toContain('Sales Bot');
+
+    mockAgentFindById.mockRejectedValue(new Error('db down'));
+    const fallback = await run({ k: 'b4m_live_good' });
+    expect(fallback._getStatusCode()).toBe(200);
+    expect(fallback._getData()).not.toContain('Sales Bot');
   });
 
   it('serves the page with frame-ancestors granting exactly the allow-listed origin', async () => {

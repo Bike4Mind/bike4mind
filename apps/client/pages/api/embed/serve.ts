@@ -23,6 +23,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
+import { agentRepository } from '@bike4mind/database';
 import { parseEmbedOrigin } from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
 
@@ -82,9 +83,10 @@ const handler = baseApi({ auth: false })
       return sendErrorPage(res, 404, 'Not found.');
     }
 
-    // Read-time re-screen: only canonical pre-validated origins may enter the
-    // CSP header. Fails closed on any legacy/corrupt row that predates
-    // validateEmbedKeyOrigins.
+    // Guard the header-interpolation boundary: stored origins are write-time
+    // validated, but these strings go INTO a CSP header, so re-screen at the one
+    // site where a malformed value would become header text rather than merely
+    // failing a membership check.
     const origins = (info.allowedOrigins ?? []).filter(o => parseEmbedOrigin(o) === o);
     if (origins.length === 0) {
       // Only reachable with a valid key in hand, so this is a config signal for
@@ -99,11 +101,15 @@ const handler = baseApi({ auth: false })
     // The URL carries the key; never leak it via Referer or index it.
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    // Cosmetic only - the chat route re-hydrates the agent itself; a missing
+    // name (or a failed lookup) just falls back to the page's default header.
+    const agent = info.agentId ? await agentRepository.findById(info.agentId).catch(() => null) : null;
     return res.status(200).send(
       renderEmbedWidgetHtml({
         embedKey: k,
         agentId: info.agentId,
-        keyId: info.keyId,
+        displayName: agent?.name,
+        poweredByLabel: process.env.APP_NAME ? `Powered by ${process.env.APP_NAME}` : undefined,
       })
     );
   });
