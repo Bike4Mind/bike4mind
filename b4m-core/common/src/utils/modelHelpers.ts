@@ -47,18 +47,40 @@ export function isGPTImage2Model(model?: string | null): boolean {
 }
 
 /**
- * Image models that REQUIRE an input image (text-to-image only is not supported).
- * Currently only Flux Kontext models - they exclusively perform image-to-image transformations.
+ * Flux Kontext models - image-to-image *transformation* models dispatched through
+ * the Kontext `transform` path. This is deliberately narrower than
+ * `REQUIRES_IMAGE_INPUT_MODELS`: "is Kontext" selects a specific dispatch branch,
+ * so Fill (which also requires an input image but is an inpainting model routed
+ * through ImageEdit, not a Kontext transform) must NOT be included here.
+ */
+const KONTEXT_MODELS = new Set<string>([ImageModels.FLUX_KONTEXT_PRO, ImageModels.FLUX_KONTEXT_MAX]);
+
+/** Returns true for Flux Kontext transformation models; gates the Kontext transform dispatch. */
+export function isKontextModel(model: string): model is ImageModels.FLUX_KONTEXT_PRO | ImageModels.FLUX_KONTEXT_MAX;
+export function isKontextModel(model?: string | null): boolean;
+export function isKontextModel(model?: string | null): boolean {
+  if (!model) return false;
+  return KONTEXT_MODELS.has(model);
+}
+
+/**
+ * Image models that REQUIRE an input image (text-to-image only is not supported):
+ * Flux Kontext (image-to-image transform) and Flux Pro Fill (inpainting - needs a
+ * base image + mask).
  *
- * Note: this is distinct from `ModelInfo.supportsImageVariation`, which marks models that
- * *accept* an image input (optional). All `requiresImageInput` models also support it.
+ * Broader than `isKontextModel` (Fill requires an image but is dispatched through a
+ * different path), and distinct from `ModelInfo.supportsImageVariation`, which marks
+ * models that *optionally* accept an image. All `requiresImageInput` models also
+ * support it. Do NOT use this set to detect the Kontext transform branch - use
+ * `isKontextModel` for that, or Fill will be misrouted through Kontext's transform.
  */
 const REQUIRES_IMAGE_INPUT_MODELS: ReadonlySet<string> = new Set([
   ImageModels.FLUX_KONTEXT_PRO,
   ImageModels.FLUX_KONTEXT_MAX,
+  ImageModels.FLUX_PRO_FILL,
 ]);
 
-/** Returns true for image models that mandate an input image (e.g. Flux Kontext transformations). */
+/** Returns true for image models that mandate an input image (Flux Kontext transforms and Fill inpainting). */
 export function requiresImageInput(model?: string | null): boolean {
   if (!model) return false;
   return REQUIRES_IMAGE_INPUT_MODELS.has(model);
