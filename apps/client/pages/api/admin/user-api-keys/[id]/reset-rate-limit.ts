@@ -23,7 +23,7 @@ const handler = baseApi({ auth: true })
         throw new ForbiddenError('Unauthorized. Admin access required.');
       }
 
-      const { id } = req.query;
+      const { id } = req.query as { id?: string | string[] };
       if (typeof id !== 'string' || !id) {
         throw new BadRequestError('Invalid API key ID');
       }
