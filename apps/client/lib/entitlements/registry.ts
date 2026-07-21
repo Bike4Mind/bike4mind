@@ -140,6 +140,10 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // the tag->entitlement cutover (M3.5 migration). Call sites still use the legacy
   // tag predicates until M3.5 migrates them to `requestHasTavernAccess`.
   { tag: 'tavern', entitlements: ['tavern:pro'] },
+  // [DELETION-FOOTPRINT] Bob comp grant: the `bob` tag bridges to `bob:pro`, which
+  // gates Bob's `/bob` route and its nav entry (the premium-bob overlay). No Stripe
+  // price yet; granted-only initially. Removed when Bob is extracted.
+  { tag: 'bob', entitlements: ['bob:pro'] },
 ];
 
 /**
