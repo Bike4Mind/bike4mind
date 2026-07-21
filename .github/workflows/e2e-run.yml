@@ -21,6 +21,7 @@ on:
       artifact_suffix:    { type: string,  required: false, default: '' }
       timeout_minutes:    { type: number,  required: false, default: 35 }
       stamp_promotable:   { type: boolean, required: true }
+      wait_for_deploy:    { type: boolean, required: false, default: false }
       show_credits:       { type: boolean, required: false, default: false }
       trigger_label:      { type: string,  required: true }
       concurrency_group:  { type: string,  required: true }
@@ -33,7 +34,7 @@ env:
 jobs:
   e2e-run:
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
-    name: E2E ${{ inputs.suite_name }} Tests
+    name: ${{ inputs.suite_name && format('E2E {0} Tests', inputs.suite_name) || 'E2E Tests' }}
     timeout-minutes: ${{ inputs.timeout_minutes }}
     permissions:
       contents: read
@@ -155,7 +156,11 @@ jobs:
       # out. dev/staging only (a preview has its own env). Best-effort: warns +
       # proceeds on timeout so a stuck status can't hang the job forever.
       - name: Wait for staging deploy to settle (no deploy in flight)
-        if: ${{ inputs.stamp_promotable }}
+        # Decoupled from stamp_promotable: every dev/staging run (any scoped manual
+        # dispatch too) should wait out an in-flight deploy, but only the promotable
+        # frontier stamps a status. Callers pass `pr_number == ''` to restore the
+        # original per-file wait semantics.
+        if: ${{ inputs.wait_for_deploy }}
         continue-on-error: true
         uses: actions/github-script@v8
         with:
@@ -206,7 +211,12 @@ jobs:
           # E2E_CLEANUP_SECRET is read from SST (Resource.E2E_CLEANUP_SECRET.value) via the
           # `sst shell` wrapper below — no GitHub-secret env override (issue #251).
           E2E_TEST_ID: ${{ inputs.e2e_test_id }}
-          SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES }}
+          # Only wire the credits webhook for suites that report credits (show_credits).
+          # Core runs the notebook project too, but must NOT post the in-process AI
+          # Credits report (global-teardown -> notifyCreditsReport) to the slow-responses
+          # channel on every deploy gate — leaving this empty short-circuits that post,
+          # matching the pre-extraction Core behavior.
+          SLACK_WEBHOOK_URL_SLOW_RESPONSES: ${{ inputs.show_credits && secrets.SLACK_WEBHOOK_URL_SLOW_RESPONSES || '' }}
           AI_LATENCY_RUN: 'false'
           PW_WORKERS: '3'
           CI: 'true'
@@ -438,7 +448,7 @@ jobs:
                   "type": "section",
                   "text": {
                     "type": "mrkdwn",
-                    "text": "*Run Summary*\n${{ steps.results.outputs.spec_summary }}"
+                    "text": "*${{ inputs.suite_name && format('{0} Run Summary', inputs.suite_name) || 'Test Run Summary' }}*\n${{ steps.results.outputs.spec_summary }}"
                   }
                 }${{ steps.credits.outputs.credits_block }},
                 {
@@ -454,6 +464,11 @@ jobs:
               ]
             }
 
+      # Asymmetry by design: this fails the job only on a real test failure, but the
+      # commit-status step above also posts `failure` when not_started > 0 (specs
+      # registered but never executed). So the run conclusion can be green while the
+      # status (e2e/core, e2e/smoke) is red. Consumers MUST read the commit status,
+      # never poll this run's conclusion.
       - name: Fail if E2E tests failed
         if: steps.results.outputs.failed != '0'
         run: exit 1

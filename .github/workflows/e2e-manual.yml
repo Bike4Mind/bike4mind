@@ -145,6 +145,7 @@ jobs:
       artifact_suffix:    ''
       timeout_minutes:    35
       stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
+      wait_for_deploy:    ${{ github.event_name == 'schedule' || inputs.pr_number == '' }}
       show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}
       trigger_label:      ${{ needs.prep.outputs.trigger_label }}
       concurrency_group:  ${{ needs.prep.outputs.concurrency_group }}

@@ -51,6 +51,7 @@ jobs:
       artifact_suffix:    'core'
       timeout_minutes:    25
       stamp_promotable:   ${{ inputs.pr_number == '' }}
+      wait_for_deploy:    ${{ inputs.pr_number == '' }}
       show_credits:       false
       trigger_label:      ${{ inputs.gate_run == 'true' && 'Run via Deployer' || 'Run via Dispatch' }}
       concurrency_group:  ${{ inputs.gate_run == 'true' && 'e2e-core-gate' || format('e2e-core-{0}', inputs.pr_number || inputs.stage || 'dev') }}
