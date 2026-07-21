@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { PermissionDeniedError, type IMessage, type MessageContent, type ICacheStrategy } from '@bike4mind/common';
-import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { ICompletionOptionTools, CompletionInfo } from '@bike4mind/llm-adapters';
 import { isContextLimitError } from './errors';
 import type {
   AgentCheckpoint,
@@ -40,6 +40,56 @@ const CANCELLED_TOOL_RESULT = 'Tool call cancelled before execution (run aborted
  * consecutive user messages mid-conversation; a mid-list system message is
  * not portable across provider adapters.
  */
+/** Per-iteration snapshot of the run-level token/credit counters, taken before the LLM call. */
+export type CompletionFoldBaselines = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  credits: number;
+};
+
+/**
+ * Fold a streamed completion frame's CUMULATIVE token/credit counts onto the
+ * per-iteration baselines (assign-not-add, #657).
+ *
+ * Streaming backends invoke the completion callback once per chunk, each time
+ * carrying the running CUMULATIVE total (see `buildCompletionInfo` in
+ * bedrockBackend/base.ts and the contract note in cliCompletions.ts). So each
+ * field is `baseline + latest-cumulative`, NEVER `+=` - the prior `+=` re-added
+ * the whole prompt-token count on every chunk and multiplied a single
+ * iteration's input tokens by the chunk count. Every field guards on VALUE
+ * presence (not object presence) so a trailing token-less frame - or a
+ * cacheStats object with a zero sub-field - can't zero a running total; absent
+ * fields return `current` unchanged.
+ *
+ * Extracted so the two identical fold sites (`run()` and `runIteration()`) -
+ * which carried the original `+=` bug in both places - share one implementation.
+ */
+export function foldCompletionInfo(
+  info: Pick<CompletionInfo, 'inputTokens' | 'outputTokens' | 'creditsUsed' | 'cacheStats'>,
+  baselines: CompletionFoldBaselines,
+  current: CompletionFoldBaselines
+): CompletionFoldBaselines & { totalTokens: number } {
+  const inputTokens = info.inputTokens ? baselines.inputTokens + info.inputTokens : current.inputTokens;
+  const outputTokens = info.outputTokens ? baselines.outputTokens + info.outputTokens : current.outputTokens;
+  const cacheReadTokens = info.cacheStats?.cacheReadTokens
+    ? baselines.cacheReadTokens + info.cacheStats.cacheReadTokens
+    : current.cacheReadTokens;
+  const cacheWriteTokens = info.cacheStats?.cacheWriteTokens
+    ? baselines.cacheWriteTokens + info.cacheStats.cacheWriteTokens
+    : current.cacheWriteTokens;
+  const credits = info.creditsUsed ? baselines.credits + info.creditsUsed : current.credits;
+  return {
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheWriteTokens,
+    credits,
+    totalTokens: inputTokens + outputTokens,
+  };
+}
+
 export const WORKFLOW_REMINDER_MARKER = '[Workflow state reminder]';
 
 /** True when a message is a previously-injected workflow reminder. */
@@ -347,8 +397,6 @@ export class ReActAgent extends EventEmitter {
         const processedToolIds = new Set<string>(); // Track which tool calls we've already processed
         let hadToolCalls = false; // Track if this iteration had any tool calls
         let thoughtEmitted = false; // Dedupe per-iteration thought step across multi-frame streaming
-        const iterStartInputTokens = this.totalInputTokens;
-        const iterStartOutputTokens = this.totalOutputTokens;
 
         // Drop the previous iteration's workflow reminder BEFORE trimming so
         // it is never counted as an iteration boundary and never stacks; a
@@ -420,38 +468,38 @@ export class ReActAgent extends EventEmitter {
 
               // Handle completion info (includes tool calls and token usage)
               if (completionInfo) {
-                // ASSIGN-NOT-ADD: the callback fires per streamed chunk with the
-                // CUMULATIVE running total (see bedrockBackend/base.ts
-                // `buildCompletionInfo` and the contract in cliCompletions.ts), so
-                // fold as baseline + latest-cumulative rather than `+=` - the prior
-                // `+=` multiplied the count by the streamed-chunk count (#657). Guard
-                // on presence so a trailing token-less frame can't zero the total.
-                if (completionInfo.inputTokens) {
-                  this.totalInputTokens = preCallTotalInputTokens + completionInfo.inputTokens;
-                }
-                if (completionInfo.outputTokens) {
-                  this.totalOutputTokens = preCallTotalOutputTokens + completionInfo.outputTokens;
-                }
-                this.totalTokens = this.totalInputTokens + this.totalOutputTokens;
+                // ASSIGN-NOT-ADD (#657): fold each field as baseline +
+                // latest-cumulative, never `+=`. See foldCompletionInfo.
+                // TODO: creditsUsed from the completion callback is effectively
+                // always empty; deprecate it in favor of token-derived credits.
+                const folded = foldCompletionInfo(
+                  completionInfo,
+                  {
+                    inputTokens: preCallTotalInputTokens,
+                    outputTokens: preCallTotalOutputTokens,
+                    cacheReadTokens: preCallCacheReadTokens,
+                    cacheWriteTokens: preCallCacheWriteTokens,
+                    credits: preCallTotalCredits,
+                  },
+                  {
+                    inputTokens: this.totalInputTokens,
+                    outputTokens: this.totalOutputTokens,
+                    cacheReadTokens: this.totalCacheReadTokens,
+                    cacheWriteTokens: this.totalCacheWriteTokens,
+                    credits: this.totalCredits,
+                  }
+                );
+                this.totalInputTokens = folded.inputTokens;
+                this.totalOutputTokens = folded.outputTokens;
+                this.totalTokens = folded.totalTokens;
+                this.totalCacheReadTokens = folded.cacheReadTokens;
+                this.totalCacheWriteTokens = folded.cacheWriteTokens;
+                this.totalCredits = folded.credits;
 
                 // Preserve the last non-null stop reason (see lastStopReason).
                 // Early streaming frames carry none; the final frame does.
                 if (completionInfo.stopReason != null) {
                   this.lastStopReason = completionInfo.stopReason;
-                }
-
-                // Accumulate cache stats if available
-                if (completionInfo.cacheStats) {
-                  this.totalCacheReadTokens = preCallCacheReadTokens + (completionInfo.cacheStats.cacheReadTokens || 0);
-                  this.totalCacheWriteTokens =
-                    preCallCacheWriteTokens + (completionInfo.cacheStats.cacheWriteTokens || 0);
-                }
-
-                // Update credit usage
-                // TODO: deprecate creditsUsed from complete callback as this is always empty
-                // Instead compute used credits base on input and output tokens or total tokens
-                if (completionInfo.creditsUsed) {
-                  this.totalCredits = preCallTotalCredits + completionInfo.creditsUsed;
                 }
 
                 // Handle tool calls.
@@ -598,8 +646,11 @@ export class ReActAgent extends EventEmitter {
         if (!hadToolCalls && currentText.trim()) {
           finalAnswer = currentText.trim();
 
-          const iterInputTokens = this.totalInputTokens - iterStartInputTokens;
-          const iterOutputTokens = this.totalOutputTokens - iterStartOutputTokens;
+          // preCall* is the pre-LLM-call snapshot; nothing mutates the token
+          // counters between iteration start and the call, so it doubles as the
+          // iteration-start baseline for this step's token delta.
+          const iterInputTokens = this.totalInputTokens - preCallTotalInputTokens;
+          const iterOutputTokens = this.totalOutputTokens - preCallTotalOutputTokens;
 
           const finalStep: AgentStep = {
             type: 'final_answer',
@@ -1170,36 +1221,40 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
           }
 
           if (completionInfo) {
-            // ASSIGN-NOT-ADD: backends emit CUMULATIVE running totals on every
-            // streamed callback (see the contract in cliCompletions.ts and
-            // bedrockBackend/base.ts `buildCompletionInfo`), so fold each field as
-            // baseline + latest-cumulative, not `+=`. The prior `+=` re-added the
-            // whole prompt-token count once per streamed chunk, inflating a single
+            // ASSIGN-NOT-ADD (#657): fold each field as baseline +
+            // latest-cumulative, never `+=`. The prior `+=` re-added the whole
+            // prompt-token count once per streamed chunk, inflating a single
             // iteration's input tokens by the chunk count (~49M on long
-            // tool-observation runs) and over-charging COGS/credits (#657). Guard on
-            // presence so a trailing token-less frame can't zero the running total.
-            if (completionInfo.inputTokens) {
-              this.totalInputTokens = iterStartInputTokens + completionInfo.inputTokens;
-            }
-            if (completionInfo.outputTokens) {
-              this.totalOutputTokens = iterStartOutputTokens + completionInfo.outputTokens;
-            }
-            this.totalTokens = this.totalInputTokens + this.totalOutputTokens;
+            // tool-observation runs) and over-charging COGS/credits. See
+            // foldCompletionInfo for the shared contract.
+            const folded = foldCompletionInfo(
+              completionInfo,
+              {
+                inputTokens: iterStartInputTokens,
+                outputTokens: iterStartOutputTokens,
+                cacheReadTokens: iterStartCacheReadTokens,
+                cacheWriteTokens: iterStartCacheWriteTokens,
+                credits: iterStartCredits,
+              },
+              {
+                inputTokens: this.totalInputTokens,
+                outputTokens: this.totalOutputTokens,
+                cacheReadTokens: this.totalCacheReadTokens,
+                cacheWriteTokens: this.totalCacheWriteTokens,
+                credits: this.totalCredits,
+              }
+            );
+            this.totalInputTokens = folded.inputTokens;
+            this.totalOutputTokens = folded.outputTokens;
+            this.totalTokens = folded.totalTokens;
+            this.totalCacheReadTokens = folded.cacheReadTokens;
+            this.totalCacheWriteTokens = folded.cacheWriteTokens;
+            this.totalCredits = folded.credits;
 
             // Preserve the last non-null stop reason (see lastStopReason).
             // A prior tool_use turn is overwritten by the final completion.
             if (completionInfo.stopReason != null) {
               this.lastStopReason = completionInfo.stopReason;
-            }
-
-            if (completionInfo.cacheStats) {
-              this.totalCacheReadTokens = iterStartCacheReadTokens + (completionInfo.cacheStats.cacheReadTokens || 0);
-              this.totalCacheWriteTokens =
-                iterStartCacheWriteTokens + (completionInfo.cacheStats.cacheWriteTokens || 0);
-            }
-
-            if (completionInfo.creditsUsed) {
-              this.totalCredits = iterStartCredits + completionInfo.creditsUsed;
             }
 
             // Handle tool calls.
