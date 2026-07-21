@@ -47,7 +47,10 @@ export enum OllamaEmbeddingModel {
 export function defaultEmbeddingModelForEnv(): SupportedEmbeddingModel {
   const selfHost = process.env.B4M_SELF_HOST === 'true';
   const hasOllama = !!process.env.OLLAMA_BASE_URL?.trim();
-  const hasCloudEmbeddingKey = !!process.env.OPENAI_API_KEY?.trim();
+  // "Has a cloud embedding key" must match serverConfig.ts hasEmbeddingKey (OpenAI OR VoyageAI):
+  // a self-host that configured a cloud embedder should keep the cloud default, not be silently
+  // switched to the local embedder.
+  const hasCloudEmbeddingKey = !!process.env.OPENAI_API_KEY?.trim() || !!process.env.VOYAGE_API_KEY?.trim();
   if (selfHost && hasOllama && !hasCloudEmbeddingKey) {
     return OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
   }

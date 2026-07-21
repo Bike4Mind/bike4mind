@@ -42,11 +42,12 @@ services:
       - ./selfhost/headscale/config.yaml:/etc/headscale/config.yaml:ro
       # SQLite DB, noise key, DERP key - must persist across restarts.
       - headscale-data:/var/lib/headscale
-    # Control API is loopback-published by default (override HEADSCALE_HOST_PORT). For
+    # Control API is loopback-published by default (override HEADSCALE_HOST_PORT). Defaults
+    # to 8089 to avoid colliding with SEARXNG_HOST_PORT (8080) when both profiles run. For
     # remote clients to join you must make the HTTPS server_url publicly reachable
     # (ACME on 80/443, or via Caddy). The embedded DERP STUN port aids NAT traversal.
     ports:
-      - '127.0.0.1:${HEADSCALE_HOST_PORT:-8080}:8080'
+      - '127.0.0.1:${HEADSCALE_HOST_PORT:-8089}:8080'
       - '${HEADSCALE_STUN_PORT:-3478}:3478/udp'
 
 # The Tailscale sidecar (compose.tailscale.yaml) joins THIS control server instead of

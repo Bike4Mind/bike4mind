@@ -1,5 +1,6 @@
 import {
   BedrockEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
@@ -20,6 +21,21 @@ export type EmbeddingConfig = {
   // Base URL of a local Ollama server for offline embeddings; enables the Ollama provider.
   ollamaBaseUrl?: string | null;
 };
+
+/**
+ * The Ollama model this factory defaults to. MUST equal the admin-setting / query-embedding
+ * default (defaultEmbeddingModelForEnv) so processFabFilesServer embeds the RAG query with the
+ * same model the corpus was stored under - keying the query vector under a different model makes
+ * the per-file lookup miss and retrieval is silently skipped ("No user vector found").
+ * defaultEmbeddingModelForEnv can resolve to a cloud model outside keyless self-host, so fall back
+ * to the local default when it does (the Ollama branch only runs when no cloud key is configured).
+ */
+function resolveLocalOllamaDefault(): OllamaEmbeddingModel {
+  const envDefault = defaultEmbeddingModelForEnv();
+  return Object.values(OllamaEmbeddingModel).includes(envDefault as OllamaEmbeddingModel)
+    ? (envDefault as OllamaEmbeddingModel)
+    : OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B;
+}
 
 /**
  * Factory class for creating and managing embedding services.
@@ -137,7 +153,7 @@ export class EmbeddingFactory {
 
   /**
    * Automatically selects the best available embedding model based on configured API keys
-   * Priority: OpenAI > VoyageAI > Bedrock
+   * Priority: OpenAI > VoyageAI > Ollama (local self-host) > Bedrock
    * @returns The recommended embedding model name
    */
   public getDefaultEmbeddingModel(): SupportedEmbeddingModel {
@@ -153,7 +169,7 @@ export class EmbeddingFactory {
 
     // Priority 3: Ollama (offline self-host) when a base URL is configured
     if (this.config.ollamaBaseUrl) {
-      return OllamaEmbeddingModel.NOMIC_EMBED_TEXT;
+      return resolveLocalOllamaDefault();
     }
 
     // Priority 4: Bedrock (always available - uses AWS credentials)
@@ -196,7 +212,7 @@ export class EmbeddingFactory {
     if (this.config.ollamaBaseUrl) {
       this.providers.set(
         EmbeddingModelProvider.OLLAMA,
-        new OllamaEmbeddingService(this.config.ollamaBaseUrl, OllamaEmbeddingModel.NOMIC_EMBED_TEXT)
+        new OllamaEmbeddingService(this.config.ollamaBaseUrl, resolveLocalOllamaDefault())
       );
     }
 

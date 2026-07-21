@@ -6,11 +6,11 @@
 # - current working directory
 
 # The url clients will connect to.
-# Typically this will be a domain like:
+# EDIT THIS before exposing to real clients: it must be the public HTTPS URL that
+# clients (and the Tailscale sidecar) reach this control server at. DERP below requires
+# https here (see derp.server comment), so the plain-http default is not runnable as-is.
 #
-# https://myheadscale.example.com:443
-#
-server_url: http://headscale:8080
+server_url: https://headscale.example.com  # EDIT: your public https URL
 
 # Address to listen to / bind to on the server
 #
@@ -106,8 +106,10 @@ derp:
 
     # For better connection stability (especially when using an Exit-Node and DNS is not working),
     # it is possible to optionally add the public IPv4 and IPv6 address to the Derp-Map using:
-    ipv4: 1.2.3.4
-    ipv6: 2001:db8::1
+    # (Left commented on purpose: uncommenting with these placeholders advertises a bogus relay
+    # in the DERP map. Set them to THIS server's real public IPs before uncommenting.)
+    # ipv4: 1.2.3.4
+    # ipv6: 2001:db8::1
 
   # List of externally available DERP maps encoded in JSON
   urls:

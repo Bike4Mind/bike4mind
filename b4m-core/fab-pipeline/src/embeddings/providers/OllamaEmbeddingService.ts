@@ -78,7 +78,8 @@ export class OllamaEmbeddingService implements EmbeddingService {
     this.model = model;
     // Unload the embedder promptly after each call by default so it does not pin
     // VRAM on small (e.g. 4GB) GPUs shared with the chat model. Override via env.
-    this.keepAlive = process.env.OLLAMA_EMBED_KEEP_ALIVE ?? '0';
+    // Use || not ??: a declared-but-empty var ('') is an invalid Ollama duration.
+    this.keepAlive = process.env.OLLAMA_EMBED_KEEP_ALIVE || '0';
   }
 
   private validateModel(model: OllamaEmbeddingModel): void {

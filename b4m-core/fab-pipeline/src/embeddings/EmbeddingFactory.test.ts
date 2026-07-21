@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   BedrockEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   VoyageAIEmbeddingModel,
@@ -115,11 +116,11 @@ describe('EmbeddingFactory', () => {
     expect(OpenAIEmbeddingService).toHaveBeenCalledWith('sk-new', OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
   });
 
-  it('initializes Ollama provider when ollamaBaseUrl is provided', () => {
+  it('initializes Ollama provider with the local default embedder when ollamaBaseUrl is provided', () => {
     new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
     expect(OllamaEmbeddingService).toHaveBeenCalledWith(
       'http://localhost:11434',
-      OllamaEmbeddingModel.NOMIC_EMBED_TEXT
+      OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B
     );
   });
 
@@ -139,8 +140,33 @@ describe('EmbeddingFactory', () => {
     expect(() => factory.createEmbeddingService(OllamaEmbeddingModel.NOMIC_EMBED_TEXT)).toThrow(/Ollama base URL/);
   });
 
-  it('getDefaultEmbeddingModel prefers nomic-embed-text when only Ollama is configured', () => {
+  it('getDefaultEmbeddingModel returns the local default embedder when only Ollama is configured', () => {
     const factory = new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
-    expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.NOMIC_EMBED_TEXT);
+    expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  // Regression: the Ollama factory default MUST equal defaultEmbeddingModelForEnv() (the
+  // admin-setting / KB-tool / ChatCompletion-fallback default). Otherwise processFabFilesServer
+  // embeds the @-attached-file query with a different model than the corpus was stored under, the
+  // per-file vector lookup misses, and RAG silently returns nothing on keyless self-host.
+  it('agrees with defaultEmbeddingModelForEnv on keyless self-host (one effective default)', () => {
+    const saved = {
+      B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+      OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    try {
+      process.env.B4M_SELF_HOST = 'true';
+      process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
+      delete process.env.OPENAI_API_KEY;
+      const factory = new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
+      expect(factory.getDefaultEmbeddingModel()).toBe(defaultEmbeddingModelForEnv());
+      expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    }
   });
 });
