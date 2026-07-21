@@ -76,6 +76,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   it('sources a text file body from S3 (filePath), not the empty file.text', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
+      moderationStatus: 'clean',
       fileName: 'notes.md',
       text: '', // "Save as Text" leaves this empty; real content is in S3
       mimeType: 'text/markdown',
@@ -92,6 +93,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   it('falls back to file.text when the S3 download fails', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
+      moderationStatus: 'clean',
       mimeType: 'text/plain',
       text: 'already extracted text',
       filePath: 'user/fab1/x.txt',
@@ -106,6 +108,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   it('rejects a non-text (binary) file with no extracted text (415)', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
+      moderationStatus: 'clean',
       mimeType: 'application/pdf',
       text: '',
       filePath: 'user/fab1/doc.pdf',
@@ -120,6 +123,7 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   it('publishes a binary file using its already-extracted text when present', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
+      moderationStatus: 'clean',
       mimeType: 'application/pdf',
       text: 'text extracted from the pdf at ingest',
       filePath: 'user/fab1/doc.pdf',
@@ -135,12 +139,43 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
   it('rejects a text file that has neither filePath nor text (422)', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
+      moderationStatus: 'clean',
       mimeType: 'text/markdown',
       text: '',
     });
 
     const res = await run(makeReq());
     expect(res.statusCode).toBe(422);
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  // Hold-until-scanned: never publish (serve) a file that has not cleared moderation.
+  it('refuses to publish a file still being scanned (409)', async () => {
+    mocks.fileLean.mockResolvedValue({
+      userId: OWNER,
+      moderationStatus: 'pending',
+      mimeType: 'text/markdown',
+      text: 'content',
+      filePath: 'user/fab1/notes.md',
+    });
+
+    const res = await run(makeReq());
+    expect(res.statusCode).toBe(409);
+    expect(mocks.download).not.toHaveBeenCalled();
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses to publish a moderation-blocked file (403)', async () => {
+    mocks.fileLean.mockResolvedValue({
+      userId: OWNER,
+      moderationStatus: 'blocked',
+      mimeType: 'text/markdown',
+      text: 'content',
+      filePath: 'user/fab1/notes.md',
+    });
+
+    const res = await run(makeReq());
+    expect(res.statusCode).toBe(403);
     expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
   });
 });
