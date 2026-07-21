@@ -260,8 +260,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // Per-key spend-cap gate, the second billing-class check: the org may be
       // solvent while this key has exhausted its own budget. Reads the validation-
       // time snapshot off ctx (no fresh query - the auth layer just loaded the
-      // key); the in-flight race this leaves open is bounded and accepted, since
-      // the cap is a leaked-key backstop, not exact accounting.
+      // key); the race this leaves open is bounded and accepted, since the cap is
+      // a leaked-key backstop, not exact accounting. Not only N parallel streams:
+      // settlement is a fire-and-forget write after the stream closes (see
+      // cliCompletions.ts), so even back-to-back sequential requests from a fast
+      // client can pass this gate before the prior increment lands.
       try {
         assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {
