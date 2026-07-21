@@ -363,17 +363,21 @@ Resolve a digest for a tag you have pulled with `docker image inspect <image> --
 
 ## Offline RAG (file search / knowledge base)
 
-Self-host can embed and search your uploaded files fully offline, using a local Ollama embedder - no OpenAI/Voyage key required. To turn it on:
+Self-host can embed and search your uploaded files fully offline, using a local Ollama embedder - no OpenAI/Voyage key required. With a local Ollama server and no cloud embedding key, self-host defaults the embedding model to `qwen3-embedding:0.6b` automatically, so this works out of the box:
 
-1. **Pull an embedder.** The default `OLLAMA_PULL_MODELS` already includes `nomic-embed-text`; if you customized it, add an embedder tag (see the embedder table in `.env.selfhost.example`) and re-run `up`.
-2. **Set the embedding model.** In the app, go to **Settings -> AI -> Default Embedding Model** and pick your pulled embedder (e.g. `nomic-embed-text`). The Ollama embedders only appear in this list in self-host.
+1. **Pull an embedder.** The default `OLLAMA_PULL_MODELS` already includes `qwen3-embedding:0.6b`; if you customized it, add an embedder tag (see the embedder table in `.env.selfhost.example`) and re-run `up`.
+2. **(Optional) Switch the embedding model.** The default is auto-selected; to use a different one, go to **Settings -> AI -> Default Embedding Model** and pick another pulled embedder. The Ollama embedders only appear in this list in self-host.
 3. **Leave auto-chunk on.** The **Enable Auto Chunk** admin setting (on by default in self-host) makes uploads chunk + embed automatically.
 4. **Upload a file**, then watch its chunk/vector counts climb (the file card shows progress). Behind the scenes: MinIO notifies the app on upload -> the file is chunked -> chunks are embedded by the `worker` service.
 5. **Ask a knowledge-base question** in chat, or use file search - retrieval now runs against the local embeddings.
 
+### Choosing an embedder (quality vs hardware)
+
+`qwen3-embedding` leads retrieval benchmarks; the `0.6b` default fits any GPU or CPU. On a bigger card the `4b`/`8b` variants score higher. `nomic-embed-text` is the smallest, cheapest option. A self-host box often runs a chat model, an image model, and the embedder on ONE GPU, so size matters - see the embedder table in `.env.selfhost.example` for downloads, dimensions, and VRAM.
+
 Notes:
 
-- **Dimensions / re-indexing.** Each embedding model has its own vector dimensions (e.g. `nomic-embed-text` = 768, OpenAI = 1536). If you change the Default Embedding Model, previously embedded files stay on their old dimensions and are simply skipped in search until re-processed - re-embed them via **/api/files/reprocess** (or re-upload). Mixed dimensions never error; they just don't match.
+- **Dimensions / re-indexing.** Each embedding model has its own vector dimensions (e.g. `qwen3-embedding:0.6b` = 1024, `nomic-embed-text` = 768, OpenAI = 1536). If you change the Default Embedding Model, previously embedded files stay on their old dimensions and are simply skipped in search until re-processed - re-embed them via **/api/files/reprocess** (or re-upload). Mixed dimensions never error; they just don't match.
 - **Small GPUs (4 GB).** The embedder is unloaded promptly after each call (`OLLAMA_EMBED_KEEP_ALIVE` defaults to `0`) so it doesn't pin VRAM alongside your chat model. Raise it (e.g. `5m`) if you embed constantly and have VRAM to spare.
 
 ## Background worker
@@ -422,6 +426,149 @@ The stack is configured for **local, single-host use**: the backing services (Mo
 When you put the app behind a reverse proxy, forward the original `Host` header and set `X-Forwarded-Proto` (e.g. `https` once TLS is terminated at the proxy). The published-artifact viewer derives each page's Content-Security-Policy origin and scheme from those headers, so getting them right is what lets published artifact bundles load their assets over your real origin.
 
 Publishing stages each bundle under a temporary `drafts/` prefix in the artifacts bucket and promotes it on finalize; a finalized publish deletes its own draft. The `createbuckets` one-shot sets a MinIO lifecycle rule that expires anything left under `drafts/` after 7 days, so abandoned or failed publishes do not accumulate. If you point object storage at a different S3 backend, add an equivalent lifecycle rule (or a periodic cleanup) on the `drafts/` prefix yourself - only the bundled MinIO gets the rule automatically.
+
+## Share your instance with friends (secure internet exposure)
+
+The self-host stack is built for local, single-host use: it comes up on `localhost` with no authentication on its backing services. To let a few trusted people reach it, you have two supported paths (and a no-third-party variant of the first):
+
+- **Path A - Tailscale (least setup).** A private, encrypted WireGuard network between your machines; nothing is published to the public internet. Tradeoff to know: hosted Tailscale uses a third-party control plane - a Tailscale account coordinates auth, keys, MagicDNS, and cert issuance (only the data path is direct WireGuard). For a private mesh with NO third party, run the bundled **Headscale** control server instead (the same Tailscale clients, your own coordination) - see the Headscale variant below.
+- **Path B - a public domain with the bundled Caddy proxy.** A real DNS name with automatic HTTPS, reachable by anyone with the link (gated by invite-only sign-up). Fully self-contained: your DNS, your box, a Let's Encrypt cert, no proprietary service in the connectivity path. Use this when you want a normal `https://chat.example.com`-style address.
+
+Plain WireGuard also works if you want a fully manual, zero-third-party tunnel - you handle key management and a reachable endpoint yourself.
+
+> **Remote browsers need HTTPS, not plain HTTP.** The app uses browser crypto APIs (for example `crypto.randomUUID`) that browsers only expose in a "secure context" - HTTPS, or `localhost`. A remote browser opening `http://<host>:3000` (a bare IP or a hostname over plain HTTP) will fail to load the app. Both paths below serve the app over HTTPS, which satisfies this. This is also why you cannot simply hand a friend your LAN IP and port.
+
+Whichever path you choose, do the checklist first.
+
+### Before you expose anything
+
+- [ ] **Change the MinIO credentials off the dev default.** `.env.selfhost.example` ships `minioadmin` / `minioadmin`. The app's S3 client authenticates to MinIO with the `AWS_*` keys, so set `MINIO_ROOT_USER` = `AWS_ACCESS_KEY_ID` and `MINIO_ROOT_PASSWORD` = `AWS_SECRET_ACCESS_KEY` to the same fresh values (generate the secret with `openssl rand -hex 24`).
+- [ ] **Keep the backing services on loopback, and know the Docker/ufw footgun.** Mongo (27017), MinIO (9000/9001), ElasticMQ (9324/9325), and Mailpit (8025) have **no authentication** and are already bound to `127.0.0.1` in `compose.selfhost.yaml` - never publish them. Be aware that on Linux, **Docker's published ports bypass `ufw`/`firewalld`**: Docker DNATs published ports through its own iptables chain before the filter table, so a "deny incoming" ufw policy does **not** block `3000`/`3001`/`8788`. Fixes: bind to `127.0.0.1` in compose (Path B's override does this for you), add `DOCKER-USER` iptables rules, use the `ufw-docker` helper, or - cleanest on a cloud VM - a provider security group that allows only inbound `80`/`443`. **Verify from a SECOND machine** (localhost always sees them), for example:
+
+  ```bash
+  # Run this from a DIFFERENT computer, against your host's public IP.
+  nmap -Pn -p 22,80,443,3000,3001,8788,27017,9000,9324,8025 <your-host-public-ip>
+  # Path B expectation: only 22 (if you use SSH), 80, and 443 open; everything
+  # else closed/filtered. Tailscale-only expectation: none of these open publicly.
+  ```
+
+- [ ] **Use a real SMTP provider.** Mailpit is local-only, so remote friends cannot read their sign-in codes from it. Point `MAIL_*` at a real provider (port 587 STARTTLS or 465 implicit TLS).
+- [ ] **Keep sign-up invite-only and cap per-user usage.** Registration is invite-only by default (`allowOpenRegistration` is OFF; the first account created becomes admin). Leave it off and invite friends explicitly from the admin settings. Self-host also defaults credit enforcement OFF - as admin, turn on **Enforce Credits** and give each friend a finite credit budget so a runaway (or a shared key) cannot burn your LLM spend. Per-key API rate limits default to 60/min and 1000/day.
+- [ ] **Back up `SECRET_ENCRYPTION_KEY`.** It is write-once (it encrypts other secrets in the database) and cannot be rotated in place - losing it makes that data unrecoverable.
+
+### Path A: Tailscale tailnet (recommended for friends)
+
+Tailscale puts your host and your friends' devices on one private encrypted network. You expose **nothing** to the public internet; only tailnet members can reach the app. This is the best fit when the host is a home server, a laptop, or any box that should not have a public presence. The stack bundles an opt-in `tailscale` sidecar (under the `tailnet` profile) that joins the tailnet and serves the app over tailnet HTTPS for you.
+
+**1. Prepare your tailnet** (one-time, in the Tailscale admin console): enable **MagicDNS** and **HTTPS Certificates** (DNS settings), then create an **auth key** (Settings -> Keys; a reusable, ephemeral key suits a container).
+
+**2. Set the auth key** in `.env.selfhost`:
+
+```bash
+TS_AUTHKEY=tskey-auth-...            # from the admin console
+# TS_HOSTNAME=bike4mind              # optional; the tailnet name for this node
+```
+
+**3. Bring the stack up with the `tailnet` profile** (add your other profiles, e.g. `ollama`, as usual):
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml \
+  --env-file .env.selfhost --profile tailnet up -d
+```
+
+The sidecar runs in userspace mode (no extra host capabilities), joins your tailnet, and serves `/` -> the app and `/ws` -> the realtime gateway over HTTPS (see `selfhost/tailscale/serve.json`).
+
+**4. Point the app's WebSocket URL at the tailnet name.** Find the node's MagicDNS name (`docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml logs tailscale`, or the admin console), then in `.env.selfhost` set `WEBSOCKET_URL` to it over `wss` with the `/ws` path and re-up so browsers get it:
+
+```bash
+WEBSOCKET_URL=wss://<your-node>.tailXXXX.ts.net/ws
+```
+
+**5. Invite your friends.** They install the Tailscale client, sign in, and accept your invite to the tailnet (or you share the specific node from the admin console). They open `https://<your-node>.tailXXXX.ts.net` in a browser.
+
+Notes:
+
+- Nothing is published to the public internet - no ports are opened. Tailscale connects outbound (UDP) and traverses NAT, so a home box behind a router works without port-forwarding.
+- **If this host also has a public IP** (for example a cloud VM), the tailnet sidecar does not close the base stack's `0.0.0.0` publishes of `3000`/`3001`/`8788`. Firewall those (see the checklist) or use Path B (Caddy) instead.
+- **Published artifacts over the tailnet:** the app, chat, notebooks, and realtime run over the sidecar, but published artifact bundles derive their Content-Security-Policy from the `Host` header and `X-Forwarded-Proto`, and whether the sidecar's serve forwards those as the viewer needs is not verified. If a published `/p/` page fails to load its assets on the tailnet, use Path B (Caddy), which is verified correct on that header contract.
+- **Prefer a host install?** Instead of the sidecar you can install Tailscale on the host (`curl -fsSL https://tailscale.com/install.sh | sh`, `sudo tailscale up`) and run `tailscale serve` yourself to proxy `/` to `127.0.0.1:3000` and `/ws` to `127.0.0.1:3001`. Same result; run `tailscale serve --help` for the current flag syntax.
+
+### Path A variant: Headscale (self-hosted tailnet, no Tailscale account)
+
+Headscale is an open-source re-implementation of the Tailscale control server, bundled as an opt-in `headscale` profile (`compose.headscale.yaml` + `selfhost/headscale/config.yaml`). Your Tailscale clients join a tailnet coordinated entirely by you - no Tailscale account, no third party. The tradeoff: you run the control plane, and Tailscale clients require it over HTTPS, so Headscale needs a public HTTPS endpoint your clients (and off-network friends) can reach - the same public-reachability requirement as Path B, plus running this service. Use it when you specifically want a private mesh with no third party; use hosted Tailscale for less setup.
+
+**1. Give Headscale a public HTTPS URL.** Set `server_url` in `selfhost/headscale/config.yaml` to your domain, then give it TLS: either enable its built-in Let's Encrypt (`tls_letsencrypt_hostname` in the config, publish 80/443) or front it with the Caddy proxy. HTTPS is required both for the embedded DERP relay and for clients to register.
+
+**2. Bring it up** with the Tailscale sidecar as the joining client:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.tailscale.yaml -f compose.headscale.yaml \
+  --env-file .env.selfhost --profile tailnet --profile headscale up -d
+```
+
+**3. Create a user and a reusable pre-auth key:**
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.headscale.yaml exec headscale headscale users create b4m
+docker compose -f compose.selfhost.yaml -f compose.headscale.yaml exec headscale headscale preauthkeys create -u b4m --reusable --expiration 24h
+```
+
+**4. Point the sidecar at your Headscale** in `.env.selfhost`, then re-up:
+
+```bash
+TS_AUTHKEY=<the pre-auth key from step 3>
+TS_EXTRA_ARGS=--login-server=https://<your-headscale-domain>
+```
+
+Set `WEBSOCKET_URL` to the node's tailnet name as in Path A. Friends install the Tailscale client and run `tailscale up --login-server=https://<your-headscale-domain>` with a pre-auth key you issue them. The published-artifact CSP caveat from Path A applies here too.
+
+### Path B: public domain with the bundled Caddy proxy
+
+For a real public address, the repo ships an opt-in Caddy reverse proxy (`compose.caddy.yaml` + `selfhost/caddy/Caddyfile`) that terminates TLS with automatic certificates and proxies to the app and the realtime gateway.
+
+**1. Point DNS at your host.** Create an `A` record (and `AAAA` if you have IPv6) for your domain, for example `chat.example.com`, pointing at the host's public IP. No domain to spare? Use a free wildcard-DNS host that maps a name to your IP - `<your-public-ip>.sslip.io` (or `nip.io`) resolves to that IP and is a real hostname Caddy can get a Let's Encrypt cert for, so `B4M_DOMAIN=<your-public-ip>.sslip.io` works with no registrar.
+
+**2. Open only 80 and 443.** Caddy needs 80 for the ACME certificate challenge and the HTTP-to-HTTPS redirect, and 443 for HTTPS. Everything else stays on loopback / the compose network. (The override binds the app/ws/chatcompletion host ports to `127.0.0.1` for you; still keep a cloud security group allowing only `80`/`443` as defense in depth.)
+
+**3. Set the exposure env vars** in `.env.selfhost` (see `selfhost/env-additions.txt` for the full copy-pasteable block). At minimum:
+
+```bash
+B4M_DOMAIN=chat.example.com
+WEBSOCKET_URL=wss://chat.example.com/ws
+```
+
+The `WEBSOCKET_URL` path must be `/ws` to match the Caddyfile route: the browser uses `WEBSOCKET_URL` verbatim (plus a `?token=` query), and Caddy proxies `/ws` to the ws gateway, which accepts the upgrade on any path. No app-side change is needed.
+
+**4. Bring the stack up with the `proxy` profile:**
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.caddy.yaml \
+  --env-file .env.selfhost --profile proxy up -d
+```
+
+Caddy provisions a Let's Encrypt certificate for `B4M_DOMAIN` on first start (this needs port 80/443 reachable and DNS resolving correctly), then serves `https://chat.example.com`. Certificates persist in a named volume, so restarts do not re-request them. You can stack other profiles too, for example `--profile proxy --profile ollama`.
+
+**5. Verify.** From a second machine, browse to `https://chat.example.com` and run the `nmap` check from the checklist (expect only 80/443 open). Watch Caddy if a cert does not appear:
+
+```bash
+docker compose -f compose.selfhost.yaml -f compose.caddy.yaml logs -f caddy
+```
+
+**Optional: expose the completions API / CLI publicly.** By default only the web app is reachable; the low-level `/api/ai/v1/completions` endpoint (served by the `chatcompletion` container) stays internal. If you want the CLI or a third-party API client to reach your stack from outside, uncomment the `/api/ai/v1/*` route in `selfhost/caddy/Caddyfile` and set `CHAT_COMPLETION_PUBLIC_URL=https://chat.example.com` in `.env.selfhost`.
+
+**Running on a non-standard port (80/443 already in use).** The standard 80/443 above is recommended whenever it is available - it gets an auto-renewing trusted cert with no browser warning. If another service already owns 80/443 on this host (or your router forwards them elsewhere), you can run Caddy on a spare port instead, with a cert tradeoff: Let's Encrypt's HTTP-01 and TLS-ALPN-01 challenges only answer on the standard 80/443 of the domain's IP, so on a spare port you cannot get an auto cert that way.
+
+1. Forward a spare external port to this box (for example external `8443` -> host `8443`).
+2. In `selfhost/caddy/Caddyfile` change the site address from `{$B4M_DOMAIN}` to `{$B4M_DOMAIN}:8443`, and in `compose.caddy.yaml` publish `8443:8443` instead of `80:80`/`443:443`. Set `WEBSOCKET_URL=wss://<host>:8443/ws`.
+3. Get a cert one of two ways:
+   - **Self-signed** (`tls internal` in the Caddyfile): works immediately and is a valid secure context (the app loads), but every visitor gets a one-time browser warning. Fine for personal use, not for sharing widely.
+   - **A real trusted cert via the ACME DNS-01 challenge**, which validates over a DNS record instead of a port and so works on any port. This needs a domain whose DNS provider Caddy has an API module for (see Caddy's `tls`/`acme_dns` docs); the `sslip.io` shortcut does not support DNS-01.
+
+### What the bundled Caddy proxy does and does not do
+
+It **does**: run Caddy on 80/443, obtain and renew TLS certificates automatically, proxy HTTPS to the app and (on `/ws`) to the realtime gateway, forward the original `Host` header and set `X-Forwarded-Proto=https` (which the published-artifact viewer needs to build the correct Content-Security-Policy origin), and rebind the app/ws/chatcompletion host ports to loopback so only Caddy is publicly reachable.
+
+It **does not**: enable Mongo authentication, change your MinIO credentials, configure SMTP, add application-level access control beyond the app's own invite-only sign-up, or replace a firewall. Do those yourself per the checklist. If you swap in your own reverse proxy instead of the bundled one, you must forward the original `Host` header and set `X-Forwarded-Proto=https`, and proxy both the app and the ws gateway (upgrading the WebSocket), or realtime and published artifacts will break.
 
 ## What you get (and don't)
 

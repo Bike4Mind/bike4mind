@@ -6,7 +6,7 @@ import {
   IOrganizationDocument,
   Permission,
   SettingKey,
-  OpenAIEmbeddingModel,
+  defaultEmbeddingModelForEnv,
   QueryComplexityType,
   getTextModelCost,
   CACHE_READ_MULTIPLIER,
@@ -1327,7 +1327,7 @@ export class ChatCompletionProcess {
       const historyStartTime = Date.now();
       this.sendStatusUpdate(quest, 'Reviewing previous messages...', { statusAt: new Date() });
 
-      const finalEmbeddingModel = embeddingModel || OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
+      const finalEmbeddingModel = embeddingModel || defaultEmbeddingModelForEnv();
 
       // Give the factory only the credential the chosen model's provider needs.
       // apiKeyTable.ollama carries the Ollama base URL (self-host); no secret.
@@ -1597,9 +1597,15 @@ export class ChatCompletionProcess {
         .filter(([serverName]) => !agentOnlyMcpServers.includes(serverName))
         .flatMap(([, tools]) => tools);
 
+      // Gate the blog workflow prompt on blog_draft surviving into the final tool set.
+      // The auto-add flag alone is not enough: local (Ollama) models have blog_draft
+      // trimmed from their schemas above, and telling a model to call a tool it does not
+      // have makes it emit the call as leaked JSON text in the reply.
+      const blogDraftAvailable = allTools?.some(t => t.toolSchema.name === 'blog_draft') ?? false;
+
       const toolPromptMessage = await toolBuilder.buildToolPrompt({
         toolPromptId,
-        hasContentTransform: hasContentTransform ?? false,
+        hasContentTransform: (hasContentTransform ?? false) && blogDraftAvailable,
         hasChessEngine: enabledTools.includes('chess_engine'),
         hasCurrentDateTime: enabledTools.includes('current_datetime'),
         userTimezone,

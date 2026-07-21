@@ -1,0 +1,13 @@
+{
+  "TCP": {
+    "443": { "HTTPS": true }
+  },
+  "Web": {
+    "${TS_CERT_DOMAIN}:443": {
+      "Handlers": {
+        "/": { "Proxy": "http://app:3000" },
+        "/ws": { "Proxy": "http://ws:3001" }
+      }
+    }
+  }
+}

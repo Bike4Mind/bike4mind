@@ -37,6 +37,18 @@ describe('OllamaEmbeddingService', () => {
     expect(body).toMatchObject({ model: 'nomic-embed-text', input: 'hello', keep_alive: '0' });
   });
 
+  it('sizes num_ctx to the model context window and caps num_batch to bound VRAM', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse([[0]]));
+    const svc = new OllamaEmbeddingService('http://localhost:11434', OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+
+    await svc.generateEmbedding('x');
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    // num_ctx covers the chunk window; num_batch capped at 512 (Ollama sub-batches longer
+    // inputs) so the embedder's compute buffer stays small on a 4GB GPU.
+    expect(body.options).toEqual({ num_ctx: 2048, num_batch: 512 });
+  });
+
   it('honors OLLAMA_EMBED_KEEP_ALIVE override', async () => {
     process.env.OLLAMA_EMBED_KEEP_ALIVE = '5m';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(okResponse([[0]]));

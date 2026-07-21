@@ -41,6 +41,9 @@ const mocks = vi.hoisted(() => {
   const liveAI = { value: true }; // useAdvancedAISettings(state => state.liveAI); default on
   // serverConfig.toolAvailability from useConfig(); undefined = not yet loaded (never gates).
   const toolAvailability = { value: undefined as Record<string, boolean> | undefined };
+  // Admin feature flags (isAdminFeatureEnabled); default all off so rows behind a flag
+  // (e.g. the Knowledge Base row) stay hidden unless a test opts in.
+  const adminFeatureFlags = { value: {} as Record<string, boolean> };
   return {
     state,
     useLLM,
@@ -50,6 +53,7 @@ const mocks = vi.hoisted(() => {
     chatDraft,
     liveAI,
     toolAvailability,
+    adminFeatureFlags,
   };
 });
 
@@ -75,7 +79,7 @@ vi.mock('@client/app/contexts/UserSettingsContext', () => ({
 vi.mock('@client/app/hooks/useFeatureEnabled', () => ({
   useFeatureEnabled: () => ({
     isFeatureEnabled: (feature: string) => (feature === 'agentMode' ? mocks.agentModeFeatureFlag.value : false),
-    isAdminFeatureEnabled: () => false,
+    isAdminFeatureEnabled: (feature: string) => mocks.adminFeatureFlags.value[feature] ?? false,
   }),
 }));
 vi.mock('@client/app/hooks/data/useModelInfo', () => ({
@@ -118,6 +122,7 @@ beforeEach(() => {
   mocks.chatDraft.value = '';
   mocks.liveAI.value = true;
   mocks.toolAvailability.value = undefined;
+  mocks.adminFeatureFlags.value = {};
 });
 
 // A draft that scores 'complex' (3 indicators: analytical verb + why/because +
@@ -256,6 +261,22 @@ describe('ToolsSection missing-key gating', () => {
     const { container } = render(<ToolsSection />, { wrapper: Wrapper });
     expect(gated(container, 'tool-item-wolfram-alpha')).toBeTruthy();
   });
+
+  // The KB tool's server availability boolean (search_knowledge_base) must actually drive the
+  // dimming, not just the tooltip wording - a keyless self-host resolves it via the local Ollama
+  // embedder (isLocalEmbedderAvailable), so a true value must leave the row enabled.
+  it('dims the knowledge base when search_knowledge_base is false, and leaves it enabled when true', () => {
+    // The KB row is behind the EnableKnowledgeBaseSearch admin flag; turn it on so it renders.
+    mocks.adminFeatureFlags.value = { EnableKnowledgeBaseSearch: true };
+
+    mocks.toolAvailability.value = { search_knowledge_base: false };
+    const { container: disabled } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(disabled, 'tool-item-knowledge-base')).toBeTruthy();
+
+    mocks.toolAvailability.value = { search_knowledge_base: true };
+    const { container: enabled } = render(<ToolsSection />, { wrapper: Wrapper });
+    expect(gated(enabled, 'tool-item-knowledge-base')).toBeFalsy();
+  });
 });
 
 // LOCK-STEP with computeToolAvailability in pages/api/settings/serverConfig.ts: web_search and
@@ -267,5 +288,9 @@ describe('MISSING_KEY_TOOLTIPS lock-step wording', () => {
     expect(MISSING_KEY_TOOLTIPS.web_search).toContain('Serper');
     expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('SearXNG');
     expect(MISSING_KEY_TOOLTIPS.deep_research).toContain('Firecrawl');
+  });
+
+  it('names the local Ollama embedder alternative for the knowledge base', () => {
+    expect(MISSING_KEY_TOOLTIPS.search_knowledge_base).toContain('OLLAMA_BASE_URL');
   });
 });

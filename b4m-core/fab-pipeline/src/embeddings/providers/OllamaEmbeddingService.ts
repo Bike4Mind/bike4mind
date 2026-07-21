@@ -5,6 +5,27 @@ import { EmbeddingModelInfo, EmbeddingModelProvider, EmbeddingService } from '..
 // Must stay in sync with OllamaEmbeddingModel (common). contextWindow is used by
 // SmartChunker to size chunks and by the vectorize skip logic.
 export const OLLAMA_EMBEDDING_MODEL_MAP: Record<OllamaEmbeddingModel, EmbeddingModelInfo<OllamaEmbeddingModel>> = {
+  // Qwen3-Embedding dimensions per the model card (0.6B=1024, 4B=2560, 8B=4096). contextWindow
+  // kept at a retrieval size (2048), not the models' 32k: it sizes chunks (SmartChunker) and the
+  // Ollama num_ctx in embed() below, and a large window balloons embedder VRAM for no RAG gain.
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B,
+    contextWindow: 2048,
+    dimensions: [1024],
+  },
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_4B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_4B,
+    contextWindow: 2048,
+    dimensions: [2560],
+  },
+  [OllamaEmbeddingModel.QWEN3_EMBEDDING_8B]: {
+    provider: EmbeddingModelProvider.OLLAMA,
+    model: OllamaEmbeddingModel.QWEN3_EMBEDDING_8B,
+    contextWindow: 2048,
+    dimensions: [4096],
+  },
   [OllamaEmbeddingModel.NOMIC_EMBED_TEXT]: {
     provider: EmbeddingModelProvider.OLLAMA,
     model: OllamaEmbeddingModel.NOMIC_EMBED_TEXT,
@@ -57,7 +78,8 @@ export class OllamaEmbeddingService implements EmbeddingService {
     this.model = model;
     // Unload the embedder promptly after each call by default so it does not pin
     // VRAM on small (e.g. 4GB) GPUs shared with the chat model. Override via env.
-    this.keepAlive = process.env.OLLAMA_EMBED_KEEP_ALIVE ?? '0';
+    // Use || not ??: a declared-but-empty var ('') is an invalid Ollama duration.
+    this.keepAlive = process.env.OLLAMA_EMBED_KEEP_ALIVE || '0';
   }
 
   private validateModel(model: OllamaEmbeddingModel): void {
@@ -72,12 +94,20 @@ export class OllamaEmbeddingService implements EmbeddingService {
       headers.Authorization = this.authHeader;
     }
 
+    // Size Ollama's context/batch to this model's window. Ollama's embedding defaults
+    // (num_ctx 4096, num_ubatch 2048) reserve a ~1.2GB compute buffer that inflates a
+    // 0.6B embedder to ~2.3GB and spills it to CPU on a 4GB card. num_ctx must cover the
+    // chunk (else truncation); num_batch stays small since Ollama sub-batches longer inputs
+    // with no meaningful change to the embedding (verified: cosine ~0.9997 vs one batch).
+    const { contextWindow } = OLLAMA_EMBEDDING_MODEL_MAP[this.model];
+    const options = { num_ctx: contextWindow, num_batch: Math.min(512, contextWindow) };
+
     let response: Response;
     try {
       response = await fetch(`${this.baseUrl}/api/embed`, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: this.model, input, keep_alive: this.keepAlive }),
+        body: JSON.stringify({ model: this.model, input, keep_alive: this.keepAlive, options }),
       });
     } catch (error) {
       const code = (error as { cause?: { code?: string } })?.cause?.code;

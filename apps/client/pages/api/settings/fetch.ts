@@ -46,6 +46,22 @@ const handler = baseApi({ auth: true }).get(async (req, res) => {
     return setting;
   });
 
+  // defaultEmbeddingModel's default is env-dependent on self-host (a local Ollama embedder when
+  // no cloud key, else the cloud default - see defaultEmbeddingModelForEnv). The client cannot
+  // re-derive it: OLLAMA_BASE_URL is not inlined into the browser bundle, so a browser fallback
+  // resolves to the cloud default and then flags every locally-embedded file as a model mismatch
+  // (useEmbeddingMismatchStatus). When no admin override is stored, surface the server-resolved
+  // effective default so client and server agree. Hosted is unaffected (same cloud default).
+  if (
+    !redacted.some(s => s.settingName === 'defaultEmbeddingModel') &&
+    permittedKeys.includes('defaultEmbeddingModel')
+  ) {
+    redacted.push({
+      settingName: 'defaultEmbeddingModel',
+      settingValue: settingsMap.defaultEmbeddingModel.defaultValue,
+    } as (typeof redacted)[number]);
+  }
+
   // Ensure the bootstrap completes before the handler returns (Lambda freeze - see above).
   // Swallowed internally, so this never fails the read.
   await bootstrap;

@@ -1,0 +1,73 @@
+# Bike4Mind self-host reverse proxy (Caddy v2).
+#
+# Mounted read-only at /etc/caddy/Caddyfile by compose.caddy.yaml. Fronts the
+# stack with automatic HTTPS on your public domain. Full walkthrough:
+# SELF_HOST.md, "Share your instance with friends (secure internet exposure)".
+#
+# {$B4M_DOMAIN} is read from the container environment (compose.caddy.yaml sets
+# it from B4M_DOMAIN in .env.selfhost). Caddy provisions and renews a TLS
+# certificate for that name automatically (Let's Encrypt, with ZeroSSL as a
+# fallback) and redirects http -> https for you. To receive certificate-expiry
+# notices, add a global options block above the site: `{ email you@example.com }`.
+
+{$B4M_DOMAIN} {
+	# --- Realtime WebSocket gateway ------------------------------------------
+	# The browser opens the realtime socket at:  wss://{$B4M_DOMAIN}/ws?token=...
+	# so WEBSOCKET_URL in .env.selfhost MUST be:  wss://<your-domain>/ws
+	# (see selfhost/env-additions.txt). The client (react-use-websocket) uses WEBSOCKET_URL
+	# verbatim and only appends "?token=<accessToken>", so whatever path you put
+	# in WEBSOCKET_URL is exactly the path the browser connects to - hence the
+	# dedicated /ws path routed here to the ws gateway.
+	#
+	# The self-host ws gateway (selfhost/ws-gateway/gateway.mjs) starts its
+	# WebSocketServer with NO path filter, so it accepts the upgrade on /ws as-is
+	# and reads the token from the query string. No path rewrite is needed here,
+	# and NO app-side change is required. Caddy detects the "Upgrade: websocket"
+	# header and transparently proxies the upgraded connection - unlike nginx it
+	# needs no explicit Connection/Upgrade header plumbing.
+	@ws path /ws /ws/*
+	# handle blocks are mutually exclusive and ordered, so /ws is routed to the ws
+	# gateway before the app catch-all below. A bare "reverse_proxy @ws" plus a
+	# catch-all "reverse_proxy app" does NOT guarantee this and lets the catch-all
+	# swallow /ws (realtime then 404s).
+	handle @ws {
+		reverse_proxy ws:3001
+	}
+
+	# --- Everything else -> the app (Next.js API + Tanstack SPA) -------------
+	# Caddy's defaults are already exactly what this app needs, so no header
+	# plumbing is added here (adding an explicit "header_up X-Forwarded-Proto"
+	# just makes Caddy warn that it is redundant). Specifically, Caddy:
+	#   - PRESERVES the incoming Host header (passes the client's Host upstream
+	#     unchanged - it does NOT rewrite it to "app:3000" the way nginx would),
+	#   - auto-sets X-Forwarded-Proto (https for TLS requests; port-80 requests
+	#     are redirected to https first, so the app only ever sees https),
+	#   - auto-sets X-Forwarded-For / X-Forwarded-Host.
+	#
+	# WHY THIS MATTERS: the published-artifact viewer derives each page's
+	# Content-Security-Policy origin and scheme from the Host header and
+	# X-Forwarded-Proto. See resolveDocOrigin / buildBundleScriptSrc in
+	# apps/client/pages/api/publish/serve/[...path].ts (used by buildWrapperCsp /
+	# buildIsolatedBundleCsp). If a proxy rewrote Host or dropped X-Forwarded-Proto,
+	# published artifacts would build a CSP for the wrong origin/scheme and fail to
+	# load their own assets. If you swap in a different proxy, you MUST forward the
+	# original Host and set X-Forwarded-Proto=https yourself.
+	handle {
+		reverse_proxy app:3000
+	}
+}
+
+# --- Optional: expose the low-level completions API / CLI publicly -----------
+# By default the chatcompletion service (/api/ai/v1/completions and
+# /api/ai/v1/ws-completions) is NOT reachable from the internet - only the web
+# app is. If you want the CLI or a third-party API client to reach your stack
+# from outside, uncomment the block below AND set CHAT_COMPLETION_PUBLIC_URL to
+# https://<your-domain> in .env.selfhost. It routes just those two paths to the
+# chatcompletion container (which listens on :8080); Caddy handles the WebSocket
+# upgrade on ws-completions automatically.
+#
+# {$B4M_DOMAIN} {
+# 	@completions path /api/ai/v1/completions /api/ai/v1/ws-completions
+# 	reverse_proxy @completions chatcompletion:8080
+# 	... (keep the /ws and app routes above as well; merge into one site block) ...
+# }

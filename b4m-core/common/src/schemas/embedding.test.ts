@@ -1,5 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
-import { getEmbeddingModelCost, OllamaEmbeddingModel, OpenAIEmbeddingModel, VoyageAIEmbeddingModel } from './embedding';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
+import {
+  defaultEmbeddingModelForEnv,
+  getEmbeddingModelCost,
+  OllamaEmbeddingModel,
+  OpenAIEmbeddingModel,
+  VoyageAIEmbeddingModel,
+} from './embedding';
 
 describe('getEmbeddingModelCost', () => {
   it('prices a known OpenAI model at its per-token rate', () => {
@@ -31,5 +37,76 @@ describe('getEmbeddingModelCost', () => {
     expect(getEmbeddingModelCost(OllamaEmbeddingModel.NOMIC_EMBED_TEXT, 1_000_000)).toBe(0);
     expect(spy).not.toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe('defaultEmbeddingModelForEnv', () => {
+  const saved = {
+    B4M_SELF_HOST: process.env.B4M_SELF_HOST,
+    OLLAMA_BASE_URL: process.env.OLLAMA_BASE_URL,
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    VOYAGE_API_KEY: process.env.VOYAGE_API_KEY,
+  };
+  beforeEach(() => {
+    delete process.env.B4M_SELF_HOST;
+    delete process.env.OLLAMA_BASE_URL;
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.VOYAGE_API_KEY;
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
+
+  it('returns the cloud default on hosted (B4M_SELF_HOST unset)', () => {
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('returns a local embedder on keyless self-host with Ollama', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    expect(defaultEmbeddingModelForEnv()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('keeps the cloud default on self-host when an OpenAI key is set', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.OPENAI_API_KEY = 'sk-test';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('keeps the cloud default on self-host when no Ollama URL is configured', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('keeps the cloud default on self-host when a VoyageAI key is set (aligned with serverConfig)', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.VOYAGE_API_KEY = 'pa-test';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('treats a whitespace-only Ollama URL as unconfigured (cloud default)', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = '   ';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
+  it('ignores a whitespace-only cloud key and still resolves the local embedder', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.OPENAI_API_KEY = '   ';
+    process.env.VOYAGE_API_KEY = '   ';
+    expect(defaultEmbeddingModelForEnv()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('only exactly "true" enables self-host (a "1" value keeps the cloud default)', () => {
+    process.env.B4M_SELF_HOST = '1';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
   });
 });

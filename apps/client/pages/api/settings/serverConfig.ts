@@ -96,6 +96,18 @@ export function isLocalImageBackendAvailable(): boolean {
 }
 
 /**
+ * A self-hosted local Ollama embedder (OLLAMA_BASE_URL) needs no provider API key, so the
+ * Knowledge Base tool is usable whenever one is configured under B4M_SELF_HOST - same shape as
+ * isLocalImageBackendAvailable. Without this, KB stays disabled on a keyless self-host box even
+ * though offline RAG embeds and retrieves locally, so the model never receives the tool's
+ * instructions. Lenient by design (see the under-gate-KB note below): if an admin picks a cloud
+ * embedder with no key, KB still shows and degrades to keyword search.
+ */
+export function isLocalEmbedderAvailable(): boolean {
+  return process.env.B4M_SELF_HOST === 'true' && !!process.env.OLLAMA_BASE_URL?.trim();
+}
+
+/**
  * Resolves which key-gated tools are usable, mirroring the same key getters the
  * tools themselves use so the picker never disables a tool that would actually
  * work (and vice versa). Only booleans are returned - never the key values.
@@ -170,7 +182,8 @@ export async function computeToolAvailability(userId: string | undefined): Promi
       image_generation: hasImageKey || isLocalImageBackendAvailable(),
       // Only search_knowledge_base needs an embeddings key; retrieve_knowledge_content
       // is a direct file/keyword lookup that needs no external key, so it isn't gated.
-      search_knowledge_base: hasEmbeddingKey,
+      // Available with a cloud embeddings key OR a self-hosted local Ollama embedder (keyless).
+      search_knowledge_base: hasEmbeddingKey || isLocalEmbedderAvailable(),
     };
   } catch (err) {
     // Fail open: an availability lookup error should not disable working tools.
