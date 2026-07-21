@@ -5,7 +5,7 @@ import { AutoAwesome as SuggestIcon } from '@mui/icons-material';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { useLLM } from '@client/app/contexts/LLMContext';
 import { useAdvancedAISettings } from '../AISettings/useAdvancedAISettingsStore';
-import { recommendAspectRatio } from './recommendations';
+import { recommendOrientation } from './recommendations';
 import {
   assemblePrompt,
   EMPTY_SELECTIONS,
@@ -24,7 +24,9 @@ export const PromptBuilderModal: FC = () => {
   const open = useAdvancedAISettings(s => s.promptBuilderOpen);
   const setOpen = useAdvancedAISettings(s => s.setPromptBuilderOpen);
   const setChatInputValue = useChatInput(s => s.setChatInputValue);
+  const model = useLLM(s => s.model);
   const aspectRatio = useLLM(s => s.aspect_ratio);
+  const size = useLLM(s => s.size);
   const setLLM = useLLM(s => s.setLLM);
 
   const [selections, setSelections] = useState<PromptSelections>(EMPTY_SELECTIONS);
@@ -32,10 +34,12 @@ export const PromptBuilderModal: FC = () => {
 
   const preview = useMemo(() => assemblePrompt(selections, extras.join(', ')), [selections, extras]);
 
-  // M3: recommend an aspect ratio from prompt keywords; show only when it differs
-  // from the current setting.
-  const recommendation = useMemo(() => recommendAspectRatio(preview), [preview]);
-  const showRecommendation = recommendation && recommendation.aspectRatio !== aspectRatio;
+  // M3: recommend an orientation setting from prompt keywords, model-aware
+  // (aspect_ratio for most models, size for GPT-Image). Show only when the
+  // recommended value differs from the model's current relevant setting.
+  const recommendation = useMemo(() => recommendOrientation(preview, model), [preview, model]);
+  const currentValue = recommendation?.settingKey === 'size' ? size : aspectRatio;
+  const showRecommendation = recommendation && recommendation.value !== currentValue;
 
   const toggleChip = (key: PromptCategoryKey, value: string) =>
     setSelections(prev => {
@@ -134,16 +138,17 @@ export const PromptBuilderModal: FC = () => {
           >
             <SuggestIcon sx={{ fontSize: 16 }} />
             <Typography level="body-xs" sx={{ flex: 1 }}>
-              This looks like a {recommendation.label} image. Set the aspect ratio to {recommendation.aspectRatio}?
+              This looks like a {recommendation.label} image. Set the{' '}
+              {recommendation.settingKey === 'size' ? 'size' : 'aspect ratio'} to {recommendation.value}?
             </Typography>
             <Button
               size="sm"
               variant="solid"
               color="primary"
-              data-testid="prompt-builder-apply-aspect-btn"
-              onClick={() => setLLM({ aspect_ratio: recommendation.aspectRatio })}
+              data-testid="prompt-builder-apply-recommendation-btn"
+              onClick={() => setLLM({ [recommendation.settingKey]: recommendation.value })}
             >
-              Use {recommendation.aspectRatio}
+              Use {recommendation.value}
             </Button>
           </Sheet>
         )}

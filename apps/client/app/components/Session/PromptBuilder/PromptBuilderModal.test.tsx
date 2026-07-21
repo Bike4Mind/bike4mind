@@ -62,10 +62,26 @@ describe('PromptBuilderModal', () => {
     fireEvent.click(screen.getByTestId('pb-chip-a portrait of a person'));
     const rec = screen.getByTestId('prompt-builder-recommendation');
     expect(rec).toHaveTextContent('portrait');
+    expect(rec).toHaveTextContent('aspect ratio');
 
-    fireEvent.click(screen.getByTestId('prompt-builder-apply-aspect-btn'));
+    fireEvent.click(screen.getByTestId('prompt-builder-apply-recommendation-btn'));
     expect(useLLM.getState().aspect_ratio).toBe('3:4');
     // Once applied, the recommendation (which only shows on a mismatch) disappears.
+    expect(screen.queryByTestId('prompt-builder-recommendation')).toBeNull();
+  });
+
+  it('recommends a size (not aspect ratio) on a GPT-Image model and applies it (M3)', () => {
+    // GPT-Image steers orientation via size; default size 1024x1024, so a portrait
+    // subject should recommend 1024x1536 as a size change.
+    useLLM.getState().setLLM({ model: 'gpt-image-1' });
+    renderModal();
+    fireEvent.click(screen.getByTestId('pb-chip-a portrait of a person'));
+    const rec = screen.getByTestId('prompt-builder-recommendation');
+    expect(rec).toHaveTextContent('size');
+
+    fireEvent.click(screen.getByTestId('prompt-builder-apply-recommendation-btn'));
+    expect(useLLM.getState().size).toBe('1024x1536');
+    expect(useLLM.getState().aspect_ratio).toBe('16:9'); // aspect_ratio left untouched
     expect(screen.queryByTestId('prompt-builder-recommendation')).toBeNull();
   });
 
