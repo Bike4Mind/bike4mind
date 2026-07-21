@@ -32,6 +32,7 @@ import {
   isGPTImage2Model,
   isGeminiImageModel,
   isImageServeable,
+  isKontextModel,
   requiresImageInput,
   insufficientCreditsError,
   getQuestErrorCode,
@@ -836,13 +837,15 @@ export class ImageGenerationService {
         }
       } else if (BFL_IMAGE_MODELS.includes(model as any)) {
         Logger.globalInstance.debug(`[DEBUG] === BFL IMAGE PROCESSING ===`);
-        // BFL specific options
-        const isKontextModel = requiresImageInput(model);
+        // BFL specific options. Use isKontextModel (not requiresImageInput) so Fill,
+        // which also requires an input image, is never misrouted through the Kontext
+        // transform branch below - Fill inpainting is dispatched via ImageEdit instead.
+        const isKontextModelBranch = isKontextModel(model);
         const isBFLUltraModel = model === ImageModels.FLUX_PRO_ULTRA;
 
         Logger.globalInstance.debug(`[DEBUG] BFL model analysis:`, {
           model,
-          isKontextModel,
+          isKontextModel: isKontextModelBranch,
           isBFLUltraModel,
           width,
           height,
@@ -912,7 +915,7 @@ export class ImageGenerationService {
           Logger.globalInstance.debug(`[DEBUG] ⚠️ No imageUrl available for base64 conversion`);
         }
 
-        if (isKontextModel) {
+        if (isKontextModelBranch) {
           Logger.globalInstance.debug(`[DEBUG] === KONTEXT MODEL PROCESSING ===`);
           Logger.globalInstance.debug(`[DEBUG] Kontext model validation:`, {
             hasBase64Image: !!base64Image,

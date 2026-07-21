@@ -4,18 +4,21 @@ import type { LLMModelConfig } from '../types/entities/LLMTypes';
 import {
   isGPTImageModel,
   isGPTImage2Model,
+  isKontextModel,
   requiresImageInput,
   isModelAccessible,
   isBflImageModel,
 } from './modelHelpers';
 
 describe('requiresImageInput', () => {
-  it('returns true for Flux Kontext models (the only models that mandate image input)', () => {
+  it('returns true for models that mandate image input: Flux Kontext transforms and Fill inpainting', () => {
     expect(requiresImageInput(ImageModels.FLUX_KONTEXT_PRO)).toBe(true);
     expect(requiresImageInput(ImageModels.FLUX_KONTEXT_MAX)).toBe(true);
+    // Fill is inpainting - it needs a base image + mask, so it requires image input too.
+    expect(requiresImageInput(ImageModels.FLUX_PRO_FILL)).toBe(true);
   });
 
-  it('returns false for all other image models', () => {
+  it('returns false for text-to-image models that only optionally accept an image', () => {
     const optional = [
       ImageModels.GPT_IMAGE_1,
       ImageModels.GPT_IMAGE_1_5,
@@ -25,7 +28,6 @@ describe('requiresImageInput', () => {
       ImageModels.FLUX_PRO,
       ImageModels.FLUX_PRO_1_1,
       ImageModels.FLUX_PRO_ULTRA,
-      ImageModels.FLUX_PRO_FILL,
       ImageModels.GROK_IMAGINE_IMAGE_QUALITY,
       ImageModels.GEMINI_2_5_FLASH_IMAGE,
       ImageModels.GEMINI_3_PRO_IMAGE_PREVIEW,
@@ -40,6 +42,28 @@ describe('requiresImageInput', () => {
     expect(requiresImageInput(undefined)).toBe(false);
     expect(requiresImageInput('')).toBe(false);
     expect(requiresImageInput('unknown-model-id')).toBe(false);
+  });
+});
+
+describe('isKontextModel', () => {
+  it('returns true only for Flux Kontext transformation models', () => {
+    expect(isKontextModel(ImageModels.FLUX_KONTEXT_PRO)).toBe(true);
+    expect(isKontextModel(ImageModels.FLUX_KONTEXT_MAX)).toBe(true);
+  });
+
+  it('returns false for Fill - it requires an image but is NOT a Kontext transform (dispatched via ImageEdit)', () => {
+    // Guards the overload regression: Fill must never be routed through the Kontext transform branch.
+    expect(isKontextModel(ImageModels.FLUX_PRO_FILL)).toBe(false);
+    expect(requiresImageInput(ImageModels.FLUX_PRO_FILL)).toBe(true);
+  });
+
+  it('returns false for other image models and empty inputs', () => {
+    expect(isKontextModel(ImageModels.FLUX_PRO)).toBe(false);
+    expect(isKontextModel(ImageModels.GPT_IMAGE_1)).toBe(false);
+    expect(isKontextModel(null)).toBe(false);
+    expect(isKontextModel(undefined)).toBe(false);
+    expect(isKontextModel('')).toBe(false);
+    expect(isKontextModel('unknown-model-id')).toBe(false);
   });
 });
 
