@@ -365,10 +365,18 @@ describe('embed tool loop (real executeCompletion + real KB tools + real Mongo)'
 
     await post('usage metered to the org across the tool loop');
 
-    // Scope to THIS test's org: a prior test's fire-and-forget usage write can land
+    // The route writes the UsageEvent fire-and-forget (not awaited on the response
+    // path), so poll until it lands instead of reading once and racing the write.
+    // Scope to THIS test's org: a prior test's fire-and-forget write can also land
     // after its own dropDatabase, so filter rather than asserting a global count.
-    const events = await UsageEvent.find({ feature: 'completion_api', ownerId: org.id }).lean();
-    expect(events).toHaveLength(1);
+    const events = await vi.waitFor(
+      async () => {
+        const found = await UsageEvent.find({ feature: 'completion_api', ownerId: org.id }).lean();
+        expect(found).toHaveLength(1);
+        return found;
+      },
+      { timeout: 5000, interval: 50 }
+    );
     expect(String(events[0].ownerId)).toBe(org.id);
     expect(events[0].ownerType).toBe('Organization');
     expect(String(events[0].userId)).toBe(owner.id);
