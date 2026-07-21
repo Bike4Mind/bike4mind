@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildOpenApiDocument } from './document';
+import { buildOpenApiDocument, toPythonLiteral } from './document';
 import { ApiKeyScope } from '../types/entities/UserApiKeyTypes';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
@@ -81,6 +81,15 @@ describe('buildOpenApiDocument', () => {
     // Tools is plain JSON: neither.
     expect(sampleSource(tools, 'curl')).not.toContain('-sN');
     expect(sampleSource(tools, 'Python')).not.toContain('stream=True');
+  });
+
+  it('renders Python literals without mangling string values that contain true/false/null', () => {
+    expect(toPythonLiteral(true)).toBe('True');
+    expect(toPythonLiteral(false)).toBe('False');
+    expect(toPythonLiteral(null)).toBe('None');
+    // A string that literally contains those words must survive verbatim.
+    expect(toPythonLiteral({ query: 'is this true or null' })).toContain('"is this true or null"');
+    expect(toPythonLiteral({ query: 'is this true or null' })).not.toContain('True or None');
   });
 
   it('publishes the real ApiKeyScope vocabulary in info.description', () => {
