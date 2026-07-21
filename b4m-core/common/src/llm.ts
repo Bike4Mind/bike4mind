@@ -135,6 +135,8 @@ export const ChatCompletionInvokeParamsSchema = z.object({
   params: ChatCompletionCreateInputSchema,
   /** Whether Quest Master is enabled */
   enableQuestMaster: z.boolean().optional(),
+  /** Whether QuestMaster v5 (node-graph) is enabled */
+  enableQuestMasterV5: z.boolean().optional(),
   /** Whether Mementos is enabled */
   enableMementos: z.boolean().optional(),
   /** Whether Artifacts is enabled */

@@ -16,6 +16,7 @@ const featureMeta: Record<ExperimentalFeature, FeatureMeta> = {
   enableRapidReply: { adminKey: 'EnableRapidReply', defaultKey: 'EnableRapidReplyDefault' },
   enableResearchEngine: { adminKey: 'EnableResearchEngine', defaultKey: 'EnableResearchEngineDefault' },
   enableQuestMaster: { adminKey: 'EnableQuestMaster', defaultKey: 'EnableQuestMasterDefault' },
+  enableQuestMasterV5: { adminKey: 'EnableQuestMasterV5', defaultKey: 'EnableQuestMasterV5Default' },
   enableMementos: { adminKey: 'EnableMementos', defaultKey: 'EnableMementosDefault' },
   // User-controlled only (no admin SettingKey yet) - a per-user opt-in to the Mementos 2.0 ledger,
   // peer to V1. Promote to an admin-gated flag when rolling out org-wide.
