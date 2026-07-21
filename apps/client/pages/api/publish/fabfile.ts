@@ -1,7 +1,12 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { randomUUID } from 'node:crypto';
 import { FabFile, PublishedArtifact } from '@bike4mind/database';
-import { PublishFabFileRequestSchema, SupportedFabFileMimeTypes, type PublishResult } from '@bike4mind/common';
+import {
+  PublishFabFileRequestSchema,
+  SupportedFabFileMimeTypes,
+  isImageServeable,
+  type PublishResult,
+} from '@bike4mind/common';
 import { resolveVisibility, checkScopePermission, checkPublishQuota, type PublishUser } from '@server/services/publish';
 import { getFilesStorage } from '@server/utils/storage';
 
@@ -96,18 +101,32 @@ const handler = baseApi().post(async (req, res) => {
   const body = parsed.data;
   const userId = String(req.user.id);
 
-  const file = await FabFile.findById(body.fabFileId).select('userId fileName text mimeType filePath').lean<{
-    userId: string;
-    fileName?: string;
-    text?: string | null;
-    mimeType?: string;
-    filePath?: string;
-  } | null>();
+  const file = await FabFile.findById(body.fabFileId)
+    .select('userId fileName text mimeType filePath moderationStatus')
+    .lean<{
+      userId: string;
+      fileName?: string;
+      text?: string | null;
+      mimeType?: string;
+      filePath?: string;
+      moderationStatus?: string | null;
+    } | null>();
   if (!file) {
     return res.status(404).json({ error: 'File not found' });
   }
   if (file.userId !== userId && !req.user.isAdmin) {
     return res.status(403).json({ error: 'You can only publish your own files' });
+  }
+  // Hold-until-scanned: publishing serves the file's bytes on a public page, so never publish a
+  // file that has not cleared moderation. isImageServeable is fail-closed on ALL mime types
+  // (serveable only when moderationStatus === 'clean'), so this also covers a mislabeled image.
+  if (!isImageServeable(file)) {
+    const blocked = file.moderationStatus === 'blocked';
+    return res.status(blocked ? 403 : 409).json({
+      error: blocked
+        ? 'This file was blocked by content moderation and cannot be published'
+        : 'This file is still being scanned; try publishing again shortly',
+    });
   }
 
   const tier = body.tier;
