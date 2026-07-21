@@ -1,4 +1,4 @@
-import { FC, useMemo, useRef, useState } from 'react';
+import { FC, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 import { Box, Dropdown, IconButton, Menu, MenuButton, Modal, ModalDialog, Typography } from '@mui/joy';
 import { Construction as ConstructionIcon } from '@mui/icons-material';
@@ -45,6 +45,21 @@ const ToolsButton: FC<ToolsButtonProps> = ({
   const [open, setOpen] = useState(false);
   const [isDeepResearchModalOpen, setIsDeepResearchModalOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Mobile: show a bottom fade while there's more to scroll, so it's obvious the
+  // panel scrolls (custom scrollbars are unreliable on touch). Hidden at the end.
+  const mobileScrollRef = useRef<HTMLDivElement>(null);
+  const [showBottomFade, setShowBottomFade] = useState(false);
+  const updateBottomFade = useCallback(() => {
+    const el = mobileScrollRef.current;
+    if (!el) return;
+    const scrollable = el.scrollHeight > el.clientHeight;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 8;
+    setShowBottomFade(scrollable && !atBottom);
+  }, []);
+  useEffect(() => {
+    if (open) updateBottomFade();
+  }, [open, updateBottomFade]);
   const { data: modelInfoRepo } = useModelInfo();
   const modelSupportsTools = useMemo(
     () => modelInfoRepo?.find(m => m.id === model)?.supportsTools ?? true,
@@ -94,15 +109,36 @@ const ToolsButton: FC<ToolsButtonProps> = ({
         <Modal open={open} onClose={() => !isDeepResearchModalOpen && setOpen(false)}>
           <ModalDialog
             sx={{
-              p: 1,
+              p: 0,
               width: '90dvw',
               height: '90dvh',
               border: 'none',
               backgroundColor: 'background.body',
-              overflow: 'auto',
+              overflow: 'hidden',
+              position: 'relative',
             }}
           >
-            <ToolsSection {...toolsSectionProps} />
+            <Box
+              ref={mobileScrollRef}
+              onScroll={updateBottomFade}
+              sx={{ height: '100%', overflow: 'auto', p: 1, ...scrollbarStyles }}
+            >
+              <ToolsSection {...toolsSectionProps} />
+            </Box>
+            {/* Scroll affordance: fades content at the bottom edge while more is below. */}
+            <Box
+              sx={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: '48px',
+                pointerEvents: 'none',
+                opacity: showBottomFade ? 1 : 0,
+                transition: 'opacity 0.2s',
+                background: theme => `linear-gradient(to bottom, transparent, ${theme.vars.palette.background.body})`,
+              }}
+            />
           </ModalDialog>
         </Modal>
       </>
