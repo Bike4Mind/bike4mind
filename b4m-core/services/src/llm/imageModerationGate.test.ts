@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Logger } from '@bike4mind/observability';
-import { ImageModerationBlockedError, type ImageModerationService, type ModerationLabelHit } from '@bike4mind/utils';
+import {
+  ImageModerationBlockedError,
+  type ImageModerationService,
+  type ModerationLabelHit,
+} from '@bike4mind/utils/imageModeration';
 import { moderateImageOrThrow } from './imageModerationGate';
 
 const labels: ModerationLabelHit[] = [{ name: 'Explicit Nudity', parentName: '', confidence: 97.5 }];

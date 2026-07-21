@@ -29,6 +29,26 @@
         "default": "./dist/artifactParser.cjs"
       }
     },
+    "./imageModeration": {
+      "import": {
+        "types": "./dist/imageModeration/index.d.mts",
+        "default": "./dist/imageModeration/index.mjs"
+      },
+      "require": {
+        "types": "./dist/imageModeration/index.d.cts",
+        "default": "./dist/imageModeration/index.cjs"
+      }
+    },
+    "./imageResize": {
+      "import": {
+        "types": "./dist/imageResize.d.mts",
+        "default": "./dist/imageResize.mjs"
+      },
+      "require": {
+        "types": "./dist/imageResize.d.cts",
+        "default": "./dist/imageResize.cjs"
+      }
+    },
     "./llm/backend": {
       "import": {
         "types": "./dist/llm/backend.d.mts",

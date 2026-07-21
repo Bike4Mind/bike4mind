@@ -39,8 +39,8 @@ import {
   ImageEditResponse,
   BaseStorage,
   getSettingsByNames,
-  ImageModerationService,
 } from '@bike4mind/utils';
+import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { Logger } from '@bike4mind/observability';
 import { MongoAbility } from '@casl/ability';
