@@ -64,6 +64,29 @@ describe('createOptimisticPromptBubble routingSource (live badge)', () => {
   });
 });
 
+// The credits chip reads messageData.creditsUsed. On agent completion the
+// value must ride the reply-append patch so the chip renders in-session,
+// not only after the change-stream Quest replaces the optimistic bubble.
+describe('appendReplyToLatestOptimisticBubble creditsUsed (live chip)', () => {
+  it('patches creditsUsed onto the completed bubble when provided', () => {
+    const qc = seedQueryClient([makeQuest({ id: 'optimistic-quest-1', replies: [] })]);
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1', undefined, 42);
+    expect(readQuests(qc)[0].creditsUsed).toBe(42);
+  });
+
+  it('patches a zero total (genuinely free run) rather than dropping it', () => {
+    const qc = seedQueryClient([makeQuest({ id: 'optimistic-quest-1', replies: [] })]);
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1', undefined, 0);
+    expect(readQuests(qc)[0].creditsUsed).toBe(0);
+  });
+
+  it('leaves creditsUsed unset when no total is provided', () => {
+    const qc = seedQueryClient([makeQuest({ id: 'optimistic-quest-1', replies: [] })]);
+    appendReplyToLatestOptimisticBubble(qc, sessionId, 'the answer', 'exec_1');
+    expect(readQuests(qc)[0].creditsUsed).toBeUndefined();
+  });
+});
+
 describe('swapOptimisticPromptBubbleId', () => {
   it('renames the optimistic bubble to the real id when no collision exists', () => {
     const optimistic = makeQuest({ id: 'optimistic-quest-sess_abc-12345', prompt: 'do the thing' });

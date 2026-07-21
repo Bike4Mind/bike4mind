@@ -155,7 +155,8 @@ export function appendReplyToLatestOptimisticBubble(
   sessionId: string,
   reply: string,
   agentExecutionId?: string,
-  mementoIds?: string[]
+  mementoIds?: string[],
+  creditsUsed?: number
 ): void {
   queryClient.setQueryData<SessionQuestPages>(['quests', 'session', sessionId], current => {
     if (!current?.pages) return current;
@@ -174,11 +175,14 @@ export function appendReplyToLatestOptimisticBubble(
       // users had to refresh to revisit the trace.
       // mementoIds are included here so MementoIndicator renders immediately
       // without waiting for the change-stream to deliver the persisted Quest.
+      // creditsUsed rides the same path so the credits chip appears on
+      // completion instead of only after the change-stream Quest lands.
       const patched: IChatHistoryItemDocument = {
         ...page.data[idx],
         replies: [reply],
         updatedAt: new Date(),
         ...(agentExecutionId ? { agentExecutionId } : {}),
+        ...(typeof creditsUsed === 'number' ? { creditsUsed } : {}),
         ...(mementoIds?.length
           ? {
               promptMeta: {

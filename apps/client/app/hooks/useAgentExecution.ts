@@ -258,12 +258,20 @@ export function useAgentExecutionSubscriptions(): void {
         // optimistic entry; without this patch there's a visible gap between
         // the iteration stream unmounting (on terminal status) and the real
         // Quest arriving (seconds via change-stream).
-        // mementoIds are forwarded so MementoIndicator renders now instead of
-        // waiting for the change-stream (which is silently dropped when the
-        // client-clock-set updatedAt is ahead of the server's value).
+        // mementoIds and totalCreditsUsed are forwarded so the MementoIndicator
+        // and credits chip render now instead of waiting for the change-stream
+        // (which is silently dropped when the client-clock-set updatedAt is
+        // ahead of the server's value).
         const sessionId = store().executions[msg.executionId]?.sessionId;
         if (sessionId && msg.answer) {
-          appendReplyToLatestOptimisticBubble(queryClient, sessionId, msg.answer, msg.executionId, msg.mementoIds);
+          appendReplyToLatestOptimisticBubble(
+            queryClient,
+            sessionId,
+            msg.answer,
+            msg.executionId,
+            msg.mementoIds,
+            msg.totalCreditsUsed
+          );
         }
         // Refresh the Knowledge Base so files a tool generated this run (images, Excel -
         // persisted as FabFiles during the run) appear without a manual reload. The agent
