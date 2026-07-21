@@ -25,7 +25,12 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { parseEmbedOrigin } from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
-import type { NextApiResponse } from 'next';
+
+/** Structural response shape shared by the Express/Next response baseApi hands us. */
+interface HtmlResponse {
+  setHeader(name: string, value: string): unknown;
+  status(code: number): { send(body: string): unknown };
+}
 
 /** Per-IP flood backstop: every request costs a key lookup on an unauth surface. */
 const SERVE_RATE_LIMIT = 60;
@@ -47,7 +52,7 @@ function buildEmbedWidgetCsp(origins: string[]): string {
 }
 
 /** Uniform error page: fail closed (nothing may frame it), never reflect input. */
-function sendErrorPage(res: NextApiResponse, status: number, message: string): void {
+function sendErrorPage(res: HtmlResponse, status: number, message: string): void {
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.setHeader('Content-Security-Policy', "default-src 'none'; frame-ancestors 'none'");
   res.setHeader('Cache-Control', 'no-store');
