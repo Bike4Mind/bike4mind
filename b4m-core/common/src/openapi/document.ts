@@ -51,6 +51,32 @@ function infoDescription(): string {
 }
 
 /**
+ * Render a JS value as a pretty Python literal (dict/list/str/True/False/None).
+ * Built by walking the value rather than regex-rewriting serialized JSON, so a
+ * string value that happens to contain `true`/`false`/`null` is never mangled.
+ */
+export function toPythonLiteral(value: unknown, indent = 1): string {
+  const pad = '    '.repeat(indent + 1);
+  const closePad = '    '.repeat(indent);
+  if (value === null) return 'None';
+  if (typeof value === 'boolean') return value ? 'True' : 'False';
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    if (value.length === 0) return '[]';
+    const items = value.map(v => `${pad}${toPythonLiteral(v, indent + 1)}`).join(',\n');
+    return `[\n${items}\n${closePad}]`;
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (entries.length === 0) return '{}';
+    const items = entries.map(([k, v]) => `${pad}${JSON.stringify(k)}: ${toPythonLiteral(v, indent + 1)}`).join(',\n');
+    return `{\n${items}\n${closePad}}`;
+  }
+  return 'None';
+}
+
+/**
  * curl / JS / Python samples, attached to each operation as `x-codeSamples`.
  * `streaming` toggles the SSE-only affordances (curl `-N`, Python `stream=True`)
  * so the non-streaming tools endpoint does not tell users to stream JSON.
@@ -83,10 +109,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean) {
         `import requests\n\n` +
         `res = requests.post(\n    "${url}",\n` +
         `    headers={"Authorization": "Bearer b4m_live_<key>"},\n` +
-        `    json=${pretty
-          .replace(/\btrue\b/g, 'True')
-          .replace(/\bfalse\b/g, 'False')
-          .replace(/\bnull\b/g, 'None')},${pyStream}\n)`,
+        `    json=${toPythonLiteral(body)},${pyStream}\n)`,
     },
   ];
 }
@@ -122,6 +145,8 @@ const RATE_LIMIT_HEADER_SPEC = {
   },
 };
 
+const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete', 'head', 'options', 'trace']);
+
 /**
  * Build the OpenAPI 3.1 document. `version` is the API version (tie to package
  * semver at the call site). Post-processes the generated doc to attach vendor
@@ -146,11 +171,13 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
 
   doc.tags = [{ name: 'AI', description: 'Completions and server-side tool execution.' }];
 
-  // Attach per-operation vendor extensions + headers by operationId.
+  // Attach per-operation vendor extensions + headers by operationId. Restrict to
+  // HTTP verbs: a Path Item can also carry summary/description/parameters/servers.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- OpenAPI doc is loosely typed for vendor extensions
   const paths = (doc.paths ?? {}) as Record<string, any>;
   for (const pathKey of Object.keys(paths)) {
     for (const method of Object.keys(paths[pathKey])) {
+      if (!HTTP_METHODS.has(method.toLowerCase())) continue;
       const op = paths[pathKey][method];
       const opId = op?.operationId as keyof typeof REQUIRED_SCOPES | undefined;
       if (!opId) continue;
