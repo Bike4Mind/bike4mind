@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-const mockRefs = vi.hoisted(() => ({ getHandler: null as null | ((req: unknown, res: unknown) => unknown) }));
+const mockRefs = vi.hoisted(() => ({
+  getHandler: null as null | ((req: unknown, res: unknown) => unknown),
+  baseApiArgs: [] as unknown[],
+}));
 
 vi.mock('@server/middlewares/baseApi', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -11,7 +14,12 @@ vi.mock('@server/middlewares/baseApi', () => {
       return chain;
     },
   };
-  return { baseApi: () => chain };
+  return {
+    baseApi: (...args: unknown[]) => {
+      mockRefs.baseApiArgs = args;
+      return chain;
+    },
+  };
 });
 
 const listAgentEmbedKeys = vi.hoisted(() => vi.fn());
@@ -56,6 +64,13 @@ describe('GET /api/agents/[id]/embed-keys', () => {
     agentFindById.mockResolvedValue({ id: 'agent-1', userId: 'u1', organizationId: undefined });
     findIdsAdministeredBy.mockResolvedValue([]);
     listAgentEmbedKeys.mockResolvedValue([OWNED_KEY]);
+  });
+
+  it('stays an authenticated surface (never constructed with auth disabled)', () => {
+    // Key metadata + origin lists must never go public; the default baseApi()
+    // (auth: true) is load-bearing here.
+    const [options] = mockRefs.baseApiArgs;
+    expect(options === undefined || (options as { auth?: boolean }).auth !== false).toBe(true);
   });
 
   it('rejects a missing, empty, or array-valued agent id with 400 before any lookup', async () => {

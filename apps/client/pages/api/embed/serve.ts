@@ -10,6 +10,9 @@
  * a browser cannot attach headers there. It is a publishable-class credential
  * already present verbatim in the customer's page source, but the URL still
  * gets Referrer-Policy: no-referrer and noindex so it never leaks further.
+ * Accepted residual: CDN/origin access logs capture the full URL, so log read
+ * access yields a working (revocable) key - scrub `k` from logged URLs if that
+ * ever tightens.
  *
  * The key is re-verified live on every request (verifyEmbedApiKey), so
  * revocation and allowedOrigins edits take effect immediately - which is also

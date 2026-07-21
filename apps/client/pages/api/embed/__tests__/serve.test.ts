@@ -79,9 +79,13 @@ describe('GET /api/embed/serve - public widget page', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(String(res.getHeader('Content-Type'))).toContain('text/html');
     expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://good.example");
-    const csp = String(res.getHeader('Content-Security-Policy'));
-    expect(csp).not.toContain('*');
-    expect(csp).not.toContain('evil.example');
+    // The CSP is this page's primary security control - pin every directive, not
+    // just frame-ancestors, so a loosened connect-src/base-uri cannot slip through.
+    expect(String(res.getHeader('Content-Security-Policy'))).toBe(
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; " +
+        "frame-ancestors 'self' https://good.example"
+    );
   });
 
   it('joins multiple origins as exact hosts, order preserved, no wildcard', async () => {
@@ -138,6 +142,16 @@ describe('GET /api/embed/serve - public widget page', () => {
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO, allowedOrigins: [] });
     const empty = await run({ k: 'b4m_live_noorigins' });
     expect(empty._getStatusCode()).toBe(403);
+  });
+
+  it('refuses a key whose stored origins are all non-canonical (filter empties the list)', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue({
+      ...VALID_INFO,
+      allowedOrigins: ['not-a-valid-origin', 'http://insecure.example'],
+    });
+    const res = await run({ k: 'b4m_live_junkonly' });
+    expect(res._getStatusCode()).toBe(403);
+    expect(String(res.getHeader('Content-Security-Policy'))).toContain("frame-ancestors 'none'");
   });
 
   it('sets the no-leak header set on success', async () => {

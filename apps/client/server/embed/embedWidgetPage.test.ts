@@ -64,6 +64,12 @@ describe('renderEmbedWidgetHtml', () => {
     expect(consumed).toBeGreaterThan(0);
   });
 
+  it('interpolates the SSE parser source into the page script', () => {
+    const html = renderEmbedWidgetHtml(BASE_CONFIG);
+    expect(html).toContain('function createSseParser(');
+    expect(html).toContain('createSseParser({');
+  });
+
   it('embeds the key only inside the escaped config blob', () => {
     const html = renderEmbedWidgetHtml(BASE_CONFIG);
     const occurrences = html.split('b4m_live_widget_key').length - 1;

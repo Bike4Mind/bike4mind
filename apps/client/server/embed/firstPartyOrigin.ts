@@ -24,7 +24,7 @@ export function isFirstPartyEmbedOrigin(
   requestHost: string | undefined,
   publishHost: string = PUBLISH_HOST
 ): boolean {
-  if (publishHost && isOriginUnderHost(origin, publishHost)) return true;
+  if (publishHost) return isOriginUnderHost(origin, publishHost);
   if (!requestHost) return false;
   let originHost: string;
   try {
