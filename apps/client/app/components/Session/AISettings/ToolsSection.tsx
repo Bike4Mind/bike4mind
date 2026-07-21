@@ -770,7 +770,6 @@ const ToolsSection = ({
             gridTemplateColumns: `repeat(${columns}, 1fr)`,
             gap: columns,
             width: '100%',
-            overflow: { xs: 'auto', sm: 'initial' },
           }}
         >
           {/* Web Search */}
@@ -1403,7 +1402,6 @@ const ToolsSection = ({
               gridTemplateColumns: `repeat(${columns}, 1fr)`,
               gap: columns,
               width: '100%',
-              overflow: { xs: 'auto', sm: 'initial' },
             }}
           >
             {/* Chess Engine */}
