@@ -136,6 +136,21 @@ describe('POST /api/publish/fabfile - body sourcing (#722)', () => {
     expect(snapshottedBody()).toBe('text extracted from the pdf at ingest');
   });
 
+  it('rejects a text file whose S3 object is empty and has no fallback text (422)', async () => {
+    mocks.fileLean.mockResolvedValue({
+      userId: OWNER,
+      moderationStatus: 'clean',
+      mimeType: 'text/markdown',
+      text: '',
+      filePath: 'user/fab1/empty.md',
+    });
+    mocks.download.mockResolvedValue(Buffer.from('   \n', 'utf-8')); // 0-byte/whitespace-only object
+
+    const res = await run(makeReq());
+    expect(res.statusCode).toBe(422);
+    expect(mocks.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+
   it('rejects a text file that has neither filePath nor text (422)', async () => {
     mocks.fileLean.mockResolvedValue({
       userId: OWNER,
