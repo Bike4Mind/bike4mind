@@ -7,6 +7,7 @@ import FallbackModelBadge from './FallbackModelBadge';
 import { SendMessageOptions } from '@client/app/utils/llm';
 import { useSubscribeChatCompletion } from '@client/app/hooks/useSubscribeChatCompletion';
 import { flashMessageHighlight, registerScrollToMessageHandler } from '@client/app/utils/chatScroll';
+import { scrollbarStyles } from '@client/app/utils/scrollbarStyles';
 
 // --- Virtuoso context type ---
 // Passed via Virtuoso's `context` prop to stable module-level custom components.
@@ -27,20 +28,8 @@ const VirtuosoScroller = React.forwardRef<HTMLDivElement, React.HTMLAttributes<H
       <Box
         {...props}
         ref={ref}
-        sx={theme => ({
-          '&::-webkit-scrollbar-thumb': {
-            backgroundColor: theme.palette.background.scrollbar,
-            border: `3px solid ${theme.palette.background.scrollbarTrack}`,
-            borderRadius: '20px',
-            minHeight: '100px',
-          },
-          '&::-webkit-scrollbar': {
-            width: 'var(--chat-scrollbar-width, 8px)',
-          },
-          '&::-webkit-scrollbar-track': {
-            backgroundColor: theme.palette.background.scrollbarTrack,
-          },
-        })}
+        // Match the sidebar's scrollbar exactly (thin, same thumb/track).
+        sx={scrollbarStyles}
       />
     );
   }
