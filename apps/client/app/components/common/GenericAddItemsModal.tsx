@@ -11,6 +11,7 @@ import {
   Modal,
   ModalDialog,
   Stack,
+  Typography,
   useTheme,
 } from '@mui/joy';
 import { useMediaQuery } from '@mui/system';
@@ -95,14 +96,24 @@ function GenericAddItemsModal<T>({
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isTablet = useMediaQuery(theme.breakpoints.down('md'));
 
   const handleClose = useCallback(() => {
     setOpen(false);
+    setSearchTerm('');
     if (onSearch) onSearch('');
   }, [onSearch]);
+
+  const handleSearch = useCallback(
+    (value: string) => {
+      setSearchTerm(value);
+      if (onSearch) onSearch(value);
+    },
+    [onSearch]
+  );
 
   const handleSelectAll = useCallback(() => {
     if (selectedIds.length === items.length || selectedIds.length > 0) {
@@ -228,7 +239,7 @@ function GenericAddItemsModal<T>({
                       <Input
                         sx={{ width: '100%' }}
                         placeholder={searchPlaceholder}
-                        onChange={e => onSearch?.(e.target.value)}
+                        onChange={e => handleSearch(e.target.value)}
                         startDecorator={<SearchIcon />}
                       />
                     )}
@@ -240,7 +251,7 @@ function GenericAddItemsModal<T>({
                     className="generic-add-items-modal-search-input"
                     sx={{ width: '100%', pr: { xs: '15px', sm: '30px' } }}
                     placeholder={searchPlaceholder}
-                    onChange={e => onSearch(e.target.value)}
+                    onChange={e => handleSearch(e.target.value)}
                     startDecorator={<SearchIcon />}
                   />
                 )
@@ -275,7 +286,13 @@ function GenericAddItemsModal<T>({
                         color: 'text.secondary',
                       }}
                     >
-                      {t('common.no_results_found', 'No results found')}
+                      <Typography level="body-lg" color="neutral">
+                        {searchTerm.length > 0 && searchTerm.length < 3
+                          ? 'Type at least 3 characters to search.'
+                          : searchTerm
+                            ? t('common.no_results_found', 'No results found')
+                            : t('common.no_results_found', 'No results found')}
+                      </Typography>
                     </Box>
                   )}
                   {isLoadingMore && (

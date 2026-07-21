@@ -310,7 +310,11 @@ function GenericAddItemsModal<T>({
                         py={4}
                       >
                         <Typography className="generic-add-items-empty-message" level="body-lg" color="neutral">
-                          {searchTerm ? 'No results found. Try adjusting your search.' : emptyResultMessage}
+                          {searchTerm.length > 0 && searchTerm.length < 3
+                            ? 'Type at least 3 characters to search.'
+                            : searchTerm
+                              ? 'No results found. Try adjusting your search.'
+                              : emptyResultMessage}
                         </Typography>
                       </Box>
                     ) : (

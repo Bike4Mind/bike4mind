@@ -22,7 +22,7 @@ const ProjectAddMembersModal: FC<{ project: IProjectDocument; ownerId: string; p
   const queryClient = useQueryClient();
 
   const params: IGetUsersParams = useMemo(() => ({ search, page: 1, limit: 10, publicView: true }), [search]);
-  const { data, isFetching } = useGetUsers(params, { enabled: !!search });
+  const { data, isFetching } = useGetUsers(params, { enabled: search.length >= 3 });
 
   const [permissions] = useState<{ value: Permission[]; error?: string | null }>({
     value: [Permission.read, Permission.update],
