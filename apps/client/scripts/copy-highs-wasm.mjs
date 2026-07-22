@@ -12,7 +12,7 @@
  * pnpm postinstall / predev / prebuild so the binary is always present and current.
  */
 
-import { copyFileSync, mkdirSync } from 'fs';
+import { copyFileSync, mkdirSync, existsSync } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
@@ -30,7 +30,14 @@ function resolveHighsWasm() {
   let entry;
   try {
     entry = require.resolve('highs', {
-      paths: [path.join(repoRoot, 'node_modules/.pnpm/node_modules'), repoRoot, __dirname],
+      paths: [
+        path.join(repoRoot, 'node_modules/.pnpm/node_modules'),
+        // The overlay engine is what declares highs; resolve from it too so a change in
+        // hoisting does not silently break the copy.
+        path.join(repoRoot, 'packages/premium/optihashi/engine'),
+        repoRoot,
+        __dirname,
+      ],
     });
   } catch {
     return null; // highs not installed (overlay absent) -> nothing to serve
@@ -41,7 +48,15 @@ function resolveHighsWasm() {
 function main() {
   const source = resolveHighsWasm();
   if (!source) {
-    console.log('[copy-highs-wasm] highs not installed - skipping');
+    // highs is pulled in by the b4m-optihashi overlay. Legitimately absent on open-core
+    // installs (quiet skip). But if the overlay IS present and highs still will not resolve,
+    // that is a real problem - the overlay would boot to a 404 wasm at runtime - so warn loudly.
+    const overlayPresent = existsSync(path.resolve(__dirname, '../../..', 'packages/premium/optihashi'));
+    if (overlayPresent) {
+      console.warn('[copy-highs-wasm] overlay present but highs did not resolve - public/highs.wasm will be MISSING at runtime');
+    } else {
+      console.log('[copy-highs-wasm] highs not installed (no overlay) - skipping');
+    }
     return;
   }
 
