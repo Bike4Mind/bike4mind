@@ -10,7 +10,10 @@ import { Request } from 'express';
 const querySchema = z.object({
   page: z.string().regex(/^\d+$/).transform(Number).default(1),
   limit: z.string().regex(/^\d+$/).transform(Number).default(10),
-  search: z.string().optional(),
+  search: z
+    .string()
+    .optional()
+    .transform(val => val?.trim()),
   sortField: z.string().default('createdAt'),
   sortOrder: z.enum(['asc', 'desc']).default('desc'),
   orgSearch: z.array(z.string()).default(['all']),
@@ -76,12 +79,21 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
 
     // publicView is the limited directory search used by invite/member pickers; it
     // bypasses CASL by design (regular users have no read grant on User). Keep it
-    // usable for targeted search, but not as a bulk-export or full-directory dump for
-    // non-admins: downloadAll (unbounded) is admin-only, and the publicView page size
-    // is capped. (Return 403 directly - the surrounding try/catch turns throws into 500.)
+    // usable for targeted lookup, but not as a bulk-export or full-directory dump:
+    // non-admins require a minimum search term to prevent blind pagination over all
+    // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
-    if (downloadAll && !isAdmin) {
-      return res.status(403).json({ message: 'Bulk user export is admin-only' });
+    if (publicView && !isAdmin) {
+      // projectId-scoped requests show members of one specific project -- not a full-directory
+      // enumeration path -- so they are exempt from the search-term minimum.
+      if (!projectId && (!search || search.length < 3)) {
+        return res.status(400).json({ message: 'A search term of at least 3 characters is required.' });
+      }
+      if (downloadAll) {
+        return res.status(403).json({ message: 'Bulk user export is admin-only.' });
+      }
+    } else if (downloadAll && !isAdmin) {
+      return res.status(403).json({ message: 'Bulk user export is admin-only.' });
     }
     const PUBLIC_VIEW_MAX_LIMIT = 50;
     const effectiveLimit = publicView && !isAdmin ? Math.min(limit, PUBLIC_VIEW_MAX_LIMIT) : limit;
