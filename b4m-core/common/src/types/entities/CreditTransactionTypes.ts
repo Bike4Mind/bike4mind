@@ -99,6 +99,7 @@ export const GenericDeductReasons = [
   'admin_adjustment',
   'refund_adjustment',
   'optihashi_reservation',
+  'optihashi_cost_chargeup',
   'credit_expiry',
 ] as const;
 
