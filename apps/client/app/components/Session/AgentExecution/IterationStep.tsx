@@ -87,47 +87,60 @@ const StandardStep: FC<{ step: IAgentStep; toolName?: string }> = ({ step, toolN
       data-testid={`iteration-step-${step.type}`}
       sx={{
         display: 'flex',
-        flexDirection: 'column',
-        gap: 0.5,
+        gap: 1.5, // 12px between icon and text
+        alignItems: 'flex-start',
         pl: 2,
         py: 0.75,
         borderLeft: theme => `2px solid ${theme.palette.neutral.outlinedBorder}`,
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <Chip size="sm" color={meta.color} startDecorator={meta.icon}>
-          {meta.label}
-        </Chip>
-        {toolName ? (
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            {toolName}
+      {/* Icon on the left, colored by step type. */}
+      <Box sx={{ display: 'flex', flexShrink: 0, mt: '12px', color: `${meta.color}.500` }}>{meta.icon}</Box>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, minWidth: 0, flex: 1 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography level="body-sm" sx={{ fontWeight: 600, color: 'text.primary' }}>
+            {meta.label}
           </Typography>
+          {toolName ? (
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              {toolName}
+            </Typography>
+          ) : null}
+        </Box>
+        <Typography
+          level="body-sm"
+          sx={{
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word',
+            color: 'text.tertiary',
+          }}
+        >
+          {displayed}
+        </Typography>
+        {overflow ? (
+          <Link
+            component="button"
+            level="body-xs"
+            underline="always"
+            onClick={() => setShowFull(s => !s)}
+            // Match the primary (Send) button blue at rest and its darker hover
+            // blue on hover, not Joy's lighter plainColor.
+            sx={{
+              alignSelf: 'flex-start',
+              mt: 2,
+              fontSize: '14px',
+              transition: 'color 0.15s ease',
+              '--variant-plainColor': 'var(--joy-palette-primary-solidBg)',
+              '&:hover': { '--variant-plainColor': 'var(--joy-palette-primary-solidHoverBg)' },
+            }}
+            data-testid={`iteration-step-${step.type}-toggle`}
+          >
+            {showFull
+              ? 'Show less'
+              : `Show full result (${hiddenLineCount} more line${hiddenLineCount === 1 ? '' : 's'})`}
+          </Link>
         ) : null}
       </Box>
-      <Typography
-        level="body-sm"
-        sx={{
-          whiteSpace: 'pre-wrap',
-          wordBreak: 'break-word',
-          color: 'text.secondary',
-        }}
-      >
-        {displayed}
-      </Typography>
-      {overflow ? (
-        <Link
-          component="button"
-          level="body-xs"
-          underline="hover"
-          onClick={() => setShowFull(s => !s)}
-          sx={{ alignSelf: 'flex-start', color: 'text.tertiary' }}
-          data-testid={`iteration-step-${step.type}-toggle`}
-        >
-          {showFull
-            ? 'Show less'
-            : `Show full result (${hiddenLineCount} more line${hiddenLineCount === 1 ? '' : 's'})`}
-        </Link>
-      ) : null}
     </Box>
   );
 };

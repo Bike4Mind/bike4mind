@@ -30,6 +30,33 @@ import PermissionCard from './PermissionCard';
 import SubagentStepNest from './SubagentStepNest';
 import { copyForRunningTool, THINKING_COPY } from './loadingCopy';
 import { useRotatingCopy } from './useRotatingCopy';
+import type { IAgentStep } from '@bike4mind/common';
+
+// TEMP dev preview: mock steps to eyeball every step type in place. REMOVE
+// before commit (paired with the render block guarded by the same comment).
+const TEMP_MOCK_STEPS: IAgentStep[] = [
+  {
+    type: 'thought',
+    content: 'The user wants a summary; I should locate the attached document first.',
+    metadata: { timestamp: 0 },
+  },
+  {
+    type: 'action',
+    content: 'Using tool: retrieve_knowledge_content',
+    metadata: { toolName: 'retrieve_knowledge_content', timestamp: 0 },
+  },
+  {
+    type: 'observation',
+    content:
+      'Retrieved content from 1 of 1 document(s):\n\n### Operations Agenda Week of April 15, 2026.docx\nTags: none\nChunks: 2 | Characters: 8000 (truncated from 30634)\n---\nBody line one\nBody line two\nBody line three\nBody line four\nBody line five\nBody line six\nBody line seven (hidden behind Show full result)',
+    metadata: { timestamp: 0 },
+  },
+  {
+    type: 'final_answer',
+    content: 'Here is a concise summary of the operations agenda for the week.',
+    metadata: { timestamp: 0 },
+  },
+];
 
 interface IterationStreamProps {
   executionId: string;
@@ -219,6 +246,13 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
         borderRadius: '8px',
       }}
     >
+      {/* TEMP mock steps preview - REMOVE before commit. */}
+      <Stack spacing={1}>
+        {TEMP_MOCK_STEPS.map((s, i) => (
+          <IterationStep key={i} step={s} />
+        ))}
+      </Stack>
+
       {/* Status header - suppressed when there's nothing meaningful to show
           yet. For a fresh run with no iteration steps and no abort button,
           rendering a bare "Starting..." chip alone reads as visual noise.
