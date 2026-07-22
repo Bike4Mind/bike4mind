@@ -1,6 +1,7 @@
 import type { IMessage } from '@bike4mind/common';
 import type { Logger } from '@bike4mind/observability';
 import type { ICompletionBackend, ICompletionOptionTools } from '@bike4mind/llm-adapters';
+import type { RepeatedCallGuardOptions } from './repeatedCallGuard';
 
 /** A single message in a user/assistant conversation history */
 export interface ConversationMessage {
@@ -158,6 +159,15 @@ export interface AgentContext {
    * default behavior (no resolver) is unchanged.
    */
   unknownToolResolver?: (toolName: string) => Promise<ICompletionOptionTools | null>;
+  /**
+   * Circuit breaker for non-terminating exploration loops. When the model
+   * re-issues the SAME tool call with the SAME arguments and keeps getting the
+   * SAME result, the guard first warns and then refuses to execute, forcing a
+   * state change instead of spinning. Progress-aware: a changed result resets
+   * the counter, so legitimate "act then re-check" loops are unaffected.
+   * Default: active with built-in thresholds. See RepeatedCallGuardOptions.
+   */
+  repeatedCallGuard?: RepeatedCallGuardOptions;
 }
 
 /**
