@@ -6,20 +6,34 @@ import {
   CurationType,
   ExtractedArtifact,
   NotebookCurationError,
+  ISessionRepository,
+  IFabFileRepository,
+  ICreditTransactionRepository,
+  IUserRepository,
+  ISessionDocument,
+  IChatHistoryItem,
+  IUserDocument,
 } from '@bike4mind/common';
 import type { CurationTokenUsage, LLMContext } from './llmMarkdownGenerator';
-import { createFabFile } from '../fabFileService/create';
+import { createFabFile, CreateFabFileAdapters } from '../fabFileService/create';
 import { FormatConverter } from './formatConverter';
 import { createHash } from 'crypto';
 
+interface ChatHistorySource {
+  find(
+    filter: Record<string, unknown>,
+    options: { skip: number; limit: number; sort: Record<string, 1 | -1> }
+  ): Promise<IChatHistoryItem[]>;
+}
+
 export interface NotebookCurationAdapters {
-  sessionRepository: any; // ISessionRepository
-  chatHistoryRepository: any; // IChatHistoryRepository
-  fabFileRepository: any; // IFabFileRepository
-  fileStorageService: any; // FileStorageService (S3Storage)
-  creditTransactionRepository: any; // ICreditTransactionRepository
-  userRepository: any; // IUserRepository (for creditHolderMethods)
-  logger: any; // Logger
+  sessionRepository: ISessionRepository;
+  chatHistoryRepository: ChatHistorySource;
+  fabFileRepository: IFabFileRepository;
+  fileStorageService: CreateFabFileAdapters['storage'];
+  creditTransactionRepository: ICreditTransactionRepository;
+  userRepository: IUserRepository;
+  logger: Logger;
   llmService?: LLMContext; // Optional: Required for executive summary generation (Option 2)
   llmModelId?: string; // Optional: Model ID to use for LLM operations (e.g., 'gpt-4o-mini', 'claude-3-5-sonnet-bedrock')
   onProgress?: (progress: CurationProgress) => Promise<void>;
@@ -35,6 +49,13 @@ export interface NotebookCurationAdapters {
 const CURATION_HASH_VERSION = 'v1';
 
 /**
+ * The loaded `IChatHistoryItem` plus the mongo `_id` that document/lean-form
+ * items carry but the interface omits (used only as an id fallback in the hash).
+ * Every other field the hash reads already lives on `IChatHistoryItem`.
+ */
+type CurationHashMessage = IChatHistoryItem & { _id?: { toString(): string } };
+
+/**
  * Stable hash of everything that determines the curated output: the hash version,
  * the curation type, the include/format options, and the conversation content. An
  * unchanged re-curation produces the same hash, letting curateNotebook reuse the
@@ -45,7 +66,7 @@ const CURATION_HASH_VERSION = 'v1';
  * - session.name: curation is a point-in-time snapshot, so a rename alone should
  *   not force a full (paid) re-curation just to refresh the header title.
  */
-export function computeCurationContentHash(messages: any[], options: CurationOptions): string {
+export function computeCurationContentHash(messages: CurationHashMessage[], options: CurationOptions): string {
   const hash = createHash('sha256');
   hash.update(`ver:${CURATION_HASH_VERSION}`);
   hash.update(`|type:${options.curationType || 'transcript'}`);
@@ -356,11 +377,13 @@ export class NotebookCurationService {
    * Load conversation history with token-aware batching
    * (Reuses the pattern from notebookExportService)
    */
-  private async loadConversationHistory(sessionId: string): Promise<{ messages: any[]; totalTokens: number }> {
+  private async loadConversationHistory(
+    sessionId: string
+  ): Promise<{ messages: IChatHistoryItem[]; totalTokens: number }> {
     const MAX_MESSAGES_PER_BATCH = 100;
     const MAX_TOKENS_PER_BATCH = 50000;
 
-    const allMessages: any[] = [];
+    const allMessages: IChatHistoryItem[] = [];
     let skip = 0;
     let hasMore = true;
     let totalTokens = 0;
@@ -413,7 +436,7 @@ export class NotebookCurationService {
   /**
    * Estimate token count for a message
    */
-  private estimateTokens(message: any): number {
+  private estimateTokens(message: IChatHistoryItem): number {
     let totalChars = 0;
 
     if (message.prompt) totalChars += message.prompt.length;
@@ -429,7 +452,7 @@ export class NotebookCurationService {
   /**
    * Extract artifacts from messages
    */
-  private async extractArtifacts(messages: any[], options: CurationOptions): Promise<ExtractedArtifact[]> {
+  private async extractArtifacts(messages: IChatHistoryItem[], options: CurationOptions): Promise<ExtractedArtifact[]> {
     const allArtifacts: ExtractedArtifact[] = [];
 
     for (const message of messages) {
@@ -451,8 +474,8 @@ export class NotebookCurationService {
    * Routes to Option 1 (template transcript) or Option 2 (LLM executive summary)
    */
   private async generateMarkdown(
-    session: any,
-    messages: any[],
+    session: ISessionDocument,
+    messages: IChatHistoryItem[],
     artifacts: ExtractedArtifact[],
     options: CurationOptions
   ): Promise<{ markdown: string; tokensUsed: number; tokenUsage: CurationTokenUsage }> {
@@ -564,7 +587,11 @@ export class NotebookCurationService {
           db: {
             fabFiles: this.adapters.fabFileRepository,
             adminSettings: { findAll: async () => [], findBySettingNames: async () => [] },
-            users: { findById: async (id: string) => ({ id }) as any },
+            // Minimal stub - curation never populates users. createFabFile only guards that the
+            // user is non-null, then passes it to the storage-limit check (checkStorageLimitForFile),
+            // which reads storageLimit/currentStorageSize - both undefined on this stub, so they fall
+            // back to defaults and the limit check effectively no-ops for curated notebooks (default 1GB).
+            users: { findById: async (id: string) => ({ id }) as unknown as IUserDocument },
           },
           storage: this.adapters.fileStorageService,
         }
