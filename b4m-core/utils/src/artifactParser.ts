@@ -1,8 +1,9 @@
 import { Logger } from '@bike4mind/observability';
-import { ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
+import { ARTIFACT_ATTRS_PATTERN, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
 
-// Regular expression to match Claude-style artifact syntax
-const ARTIFACT_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
+// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
+// stays in sync with the client parser and PromptReplies truncation detector.
+const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
 
 export interface ParsedArtifact {

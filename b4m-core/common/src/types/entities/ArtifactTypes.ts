@@ -358,6 +358,20 @@ export const ArtifactPayloadSchema = z.object({
 
 export type ArtifactPayload = z.infer<typeof ArtifactPayloadSchema>;
 
+/**
+ * Regex sub-pattern (as a string) that matches the attribute portion of an
+ * `<artifact ...>` opening tag. It handles:
+ *  - newlines inside the attribute list (AI sometimes wraps long tags),
+ *  - `>` characters inside double- or single-quoted attribute values.
+ *
+ * Exported as a string (not a compiled RegExp) so each consumer can
+ * compose it into their own regex with the flags they need, avoiding
+ * shared mutable `lastIndex` state.
+ *
+ * Usage: `new RegExp('<artifact\\s+(' + ARTIFACT_ATTRS_PATTERN + ')>...')`
+ */
+export const ARTIFACT_ATTRS_PATTERN = String.raw`(?:[^>"']|"[^"]*"|'[^']*')*`;
+
 // Claude-style artifact MIME types
 export const ClaudeArtifactMimeTypes = {
   REACT: 'application/vnd.ant.react',

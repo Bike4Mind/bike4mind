@@ -1,8 +1,15 @@
-import { ArtifactPayload, ArtifactOperation, ArtifactType, mapMimeTypeToArtifactType } from '@bike4mind/common';
+import {
+  ARTIFACT_ATTRS_PATTERN,
+  ArtifactPayload,
+  ArtifactOperation,
+  ArtifactType,
+  mapMimeTypeToArtifactType,
+} from '@bike4mind/common';
 import { tryParseChartJSON } from './chartJsonParser';
 
-// Regular expression to match Claude-style artifact syntax
-const ARTIFACT_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
+// Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
+// stays in sync with the core parser and PromptReplies truncation detector.
+const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
 const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
 
 export interface ParsedArtifact {
@@ -199,7 +206,10 @@ export function parseArtifactsWithFallback(
   options?: { rechartsDisplayMode?: 'inline' | 'artifact' }
 ): ArtifactParseResult {
   const parseResult = parseArtifacts(content, options);
-  const contentForConversion = parseResult.cleanedContent || content;
+  // ?? (not ||): cleanedContent is always a string, but when every byte of the
+  // input was inside artifact tags it is "" -- || would fall back to the original
+  // content and re-convert fenced code blocks that live inside those tags.
+  const contentForConversion = parseResult.cleanedContent ?? content;
   const convertedContent = convertCodeBlocksToArtifacts(contentForConversion);
   if (convertedContent === contentForConversion) {
     return parseResult;
@@ -914,6 +924,16 @@ export function getArtifactTimestamp(questOrMessageId: string): number {
 export function generateCompleteArtifactId(type: string, identifier: string, timestamp: number, index: number): string {
   const baseId = identifier || `generated_${timestamp}`;
   return `artifact_${type}_${baseId}_${timestamp}_${index}`;
+}
+
+/**
+ * Returns true when `tail` (the substring from `<artifact` onward) contains
+ * a complete opening tag (i.e. the closing `>` arrived before the stream was
+ * cut). Used by the truncated-artifact detector in PromptReplies to decide
+ * whether to best-effort close the tag or drop the partial.
+ */
+export function hasCompleteOpeningTag(tail: string): boolean {
+  return new RegExp(`^<artifact\\s+${ARTIFACT_ATTRS_PATTERN}>`).test(tail);
 }
 
 // Re-export validation functions from the core utils package
