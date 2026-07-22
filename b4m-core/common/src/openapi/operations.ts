@@ -1,5 +1,5 @@
 import { registry } from './registry';
-import { SECURITY_REQUIREMENT } from './security';
+import { SECURITY_REQUIREMENT, JWT_SECURITY_REQUIREMENT } from './security';
 import {
   CompletionRequest,
   CompletionStreamEvent,
@@ -55,10 +55,11 @@ registry.registerPath({
   summary: 'Execute a server-side tool',
   description:
     'Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and ' +
-    'returns its result as JSON. Rate-limited to 100 requests/hour. `request_id` echoes the ' +
+    'returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT ' +
+    'accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the ' +
     'X-Request-ID response header.',
   tags: ['AI'],
-  security: SECURITY_REQUIREMENT,
+  security: JWT_SECURITY_REQUIREMENT,
   request: {
     body: {
       required: true,
@@ -72,6 +73,14 @@ registry.registerPath({
     },
     400: {
       description: 'Missing/invalid `toolName` or `input`.',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
+    401: {
+      description: 'Missing or invalid JWT (an API key is rejected here).',
+      content: { 'application/json': { schema: ErrorResponse } },
+    },
+    429: {
+      description: 'Rate limit exceeded (100 requests/hour).',
       content: { 'application/json': { schema: ErrorResponse } },
     },
     500: {
