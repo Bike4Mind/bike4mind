@@ -3287,11 +3287,11 @@ export const settingsMap = {
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
       'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
       'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (whose debias-aware ' +
-      'reservation runs ~16x the Standard tier) for SMALL/sparse briefs only; larger 16-qubit High-fidelity ' +
-      'runs reserve well past $300 and are rejected here by design. Raise further without a deploy (up to ' +
-      '$10k) to admit pricier briefs — bounded per-run exposure is the deliberate tradeoff over universal ' +
-      'High-fidelity.',
+      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
+      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
+      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
+      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
+      'deliberate tradeoff over universal High-fidelity.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
