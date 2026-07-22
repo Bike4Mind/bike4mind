@@ -61,6 +61,9 @@ export const MEDIA_SIZE_LIMITS: Record<string, { extensions: string[]; maxBytes:
   image: { extensions: ['.png', '.jpg', '.jpeg', '.svg', '.webp', '.ico'], maxBytes: 1 * 1024 * 1024 },
   gif: { extensions: ['.gif'], maxBytes: 3 * 1024 * 1024 },
   video: { extensions: VIDEO_EXTENSIONS, maxBytes: 10 * 1024 * 1024 },
+  // PDFs aren't rendered inline but ARE bundled when referenced, so they get
+  // a cap too to keep the deploy bundle sane.
+  pdf: { extensions: ['.pdf'], maxBytes: 5 * 1024 * 1024 },
 };
 
 /** Video containers browsers can't reliably play inline - rejected with guidance. */
@@ -287,9 +290,11 @@ export function validateArticles(articles: LoadedHelpArticle[], opts: ValidateOp
       }
 
       if (isExternal(link.target)) {
-        // Media must be committed to the docs tree so it ships on the app CDN
-        // (deterministic performance, no third-party hosts in the Help Center).
-        if (link.isImage || hasAssetExtension(pathPart)) {
+        // EMBEDDED media (image syntax) must be committed to the docs tree so
+        // it ships on the app CDN - no third-party hosts in the Help Center.
+        // Plain hyperlinks to external files ([text](https://.../x.pdf)) are
+        // not embeds and stay allowed like any other external link.
+        if (link.isImage) {
           findings.push({
             ...base,
             type: 'media',

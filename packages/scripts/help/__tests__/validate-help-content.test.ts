@@ -254,13 +254,32 @@ describe('validateArticles — media guards', () => {
     expect(findings[0].message).toContain('.webm');
   });
 
-  it('flags externally hosted media but still skips external document links', () => {
+  it('flags externally hosted embeds but allows plain external hyperlinks, even to files', () => {
     const articles = [
-      makeArticle('features/a.md', '![Demo](https://example.com/demo.gif)\n[docs](https://example.com/page)'),
+      makeArticle(
+        'features/a.md',
+        [
+          '![Demo](https://example.com/demo.gif)', // embed: rejected
+          '[docs](https://example.com/page)', // plain link: allowed
+          '[handout](https://example.com/guide.pdf)', // plain link to a file: allowed
+        ].join('\n')
+      ),
     ];
     const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => false });
     expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings.filter(f => f.type === 'media')[0].line).toBe(1);
     expect(findings.filter(f => f.type === 'link')).toEqual([]);
+  });
+
+  it('caps bundled PDFs like other assets', () => {
+    const articles = [makeArticle('features/a.md', '[Guide](./files/guide.pdf)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/files/guide.pdf']),
+      fileSize: () => MEDIA_SIZE_LIMITS.pdf.maxBytes + 1,
+    });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('pdf');
   });
 
   it('flags an asset path that escapes the docs tree', () => {
