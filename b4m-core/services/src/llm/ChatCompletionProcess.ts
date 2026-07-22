@@ -1841,20 +1841,42 @@ export class ChatCompletionProcess {
           calculateTotalTokenLength(previousMessages, tokenCalcOptions),
           calculateTotalTokenLength([{ role: 'user' as const, content: effectiveUserPrompt }], tokenCalcOptions),
         ]);
-        inputTokens = totalTokens;
+        // Tool schemas ship to the provider as a separate `tools` request param, NOT inside
+        // `messages`, so calculateTotalTokenLength above never counted them - they were previously
+        // hardcoded to 0. Count the serialized schema the provider actually receives (name +
+        // description + JSON-schema parameters) with the same tokenizer, so the input total the
+        // rest of this method relies on (pre-reservation, context-overflow guard, [BILLING_DRIFT]
+        // ratio) reflects what the provider bills instead of under-counting by the tool block.
+        let toolSchemaTokens = 0;
+        if (allTools && allTools.length > 0) {
+          const serializedToolSchemas = allTools
+            .map(t =>
+              JSON.stringify({
+                name: t.toolSchema.name,
+                description: t.toolSchema.description,
+                input_schema: t.toolSchema.parameters,
+              })
+            )
+            .join('');
+          toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+        }
+
+        // Billed input = messages total + tool schemas (a separate param). The system-prompt
+        // remainder below is derived from the messages-only total, since tools are tracked as
+        // their own source rather than folded into systemPrompts.
+        inputTokens = totalTokens + toolSchemaTokens;
         logger.info(
-          `⏱️ [${Date.now() - processStartTime}ms] Token calculation completed (${inputTokens} input tokens) in ${
+          `⏱️ [${Date.now() - processStartTime}ms] Token calculation completed (${inputTokens} input tokens, ${toolSchemaTokens} in tool schemas) in ${
             Date.now() - tokenCalculationStartTime
           }ms`
         );
-        const toolSchemaTokens = 0; // Will be populated in M4 with actual tool schema tokens
 
-        // System prompts = remainder after subtracting all known sources from total.
+        // System prompts = messages remainder after subtracting all known message sources.
         // This avoids double-counting (mementos/project are system-role but tracked separately)
-        // and captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.)
-        const knownSourceTokens =
-          fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens + toolSchemaTokens;
-        const systemPromptTokens = Math.max(0, inputTokens - knownSourceTokens);
+        // and captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
+        // Tool schemas are NOT subtracted here: they are not part of `messages` (see above).
+        const knownSourceTokens = fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens;
+        const systemPromptTokens = Math.max(0, totalTokens - knownSourceTokens);
 
         tokensBySource = {
           systemPrompts: systemPromptTokens,
