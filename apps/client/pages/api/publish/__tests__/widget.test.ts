@@ -108,7 +108,7 @@ describe('publish comment widget', () => {
     const listCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
       c => !String(c[0]).endsWith('/can-comment')
     );
-    // A reload wipes the in-memory justPostedId guard, so a cached pre-comment body
+    // A reload wipes the in-memory justPosted guard, so a cached pre-comment body
     // would make the viewer's own fresh comment appear to vanish.
     expect(listCall?.[1]).toMatchObject({ cache: 'no-store' });
   });

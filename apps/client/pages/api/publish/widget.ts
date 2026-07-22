@@ -320,7 +320,7 @@ const WIDGET_JS = String.raw`(function () {
     // no-store on the INITIAL load only: the list is deliberately cacheable for the
     // polling fan-out, but a reader who just posted (or reloaded right after someone
     // else did) would otherwise be served their own stale pre-comment copy. The
-    // in-memory justPostedId guard below cannot help here - a reload wipes it.
+    // in-memory justPosted guard below cannot help here - a reload wipes it.
     // Polls keep the default cache mode, so the fan-out collapse is preserved.
     return fetch(API, { headers: headers(false), credentials: 'omit', cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); noteServerClock(r); return r.json(); })
