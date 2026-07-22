@@ -160,3 +160,14 @@ export const useAccessToken = create<{
     }
   )
 );
+
+/**
+ * True only when a fully-verified session is active: an access token is present
+ * AND the session is not mid-MFA. App-shell data queries gate their `enabled` on
+ * this so they don't fire the doomed 401 storm during the login mfaPending window
+ * (#804) - the server rejects every non-allowlisted request while mfaPending
+ * (see server/auth/auth.ts). A mfaPending login DOES carry an access token, so a
+ * bare `!!accessToken` check is not enough. Reactive: flips true the instant MFA
+ * verification clears mfaPending, so gated queries auto-run with no manual refetch.
+ */
+export const useIsFullyAuthenticated = (): boolean => useAccessToken(s => !!s.accessToken && !s.mfaPending);
