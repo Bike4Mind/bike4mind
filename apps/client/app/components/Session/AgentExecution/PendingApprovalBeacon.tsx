@@ -70,9 +70,12 @@ const PendingApprovalBeacon = memo(({ sessionId, scrollerRef }: PendingApprovalB
         onClick={handleClick}
         sx={{
           pointerEvents: 'auto',
+          px: 1.5, // 12px sides
+          py: 1, // 8px top/bottom
           borderRadius: 'xl',
           boxShadow: 'md',
           whiteSpace: 'nowrap',
+          transition: 'background-color 0.25s ease', // smooth hover fade
           animation: `${bounce} 4s ease-in-out infinite`,
           '&:hover': { animation: 'none' },
         }}
