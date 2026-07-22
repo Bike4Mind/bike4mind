@@ -18,8 +18,7 @@ function fakeDecompose(): { tool: ToolDefinition; calls: unknown[] } {
   return { tool, calls };
 }
 
-const run = (t: ToolDefinition, params?: unknown) =>
-  t.implementation({} as never, undefined).toolFn(params);
+const run = (t: ToolDefinition, params?: unknown) => t.implementation({} as never, undefined).toolFn(params);
 
 describe('guardDecomposeOnce', () => {
   it('runs the real decompose on the FIRST call', async () => {
@@ -45,7 +44,10 @@ describe('guardDecomposeOnce', () => {
   });
 
   it('returns the map unchanged when there is no optihashi_decompose (non-opti run)', () => {
-    const other = { name: 'web_search', implementation: () => ({ toolFn: async () => 'ok', toolSchema: {} }) } as unknown as ToolDefinition;
+    const other = {
+      name: 'web_search',
+      implementation: () => ({ toolFn: async () => 'ok', toolSchema: {} }),
+    } as unknown as ToolDefinition;
     const map = { web_search: other };
     const guarded = guardDecomposeOnce(map, { used: false });
     expect(guarded).toBe(map);

@@ -44,3 +44,12 @@ export const MAX_PASTE_SIZE = 500_000;
  * Inputs longer than this skip image detection to avoid blocking the event loop.
  */
 export const IMAGE_DETECTION_MAX_LENGTH = 500;
+
+/**
+ * Prefix tag marking a compaction summary message. Lives here (a leaf module)
+ * rather than in compaction.ts so handoff.ts can detect it without importing
+ * compaction.ts, which would form a cycle (compaction.ts imports handoff.ts).
+ * Single source of truth so the summary builder and the handoff detector
+ * cannot drift out of sync.
+ */
+export const COMPACTION_SUMMARY_MARKER = '[Previous conversation summary]';
