@@ -4,6 +4,7 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
+import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 
 const DATA_LAKES_KEY = ['data-lakes'];
 
@@ -49,6 +50,9 @@ export function useCreateDataLake(options?: { onSuccess?: (data: DataLakeConfig)
     },
     onSuccess: data => {
       queryClient.invalidateQueries({ queryKey: DATA_LAKES_KEY });
+      // Reveal the 'datalakes' nav slot immediately rather than after the
+      // gears/status staleTime elapses (#833).
+      invalidateGearsStatusWhileLocked(queryClient, ['datalakes']);
       toast.success(`Data lake "${data.name}" created`);
       options?.onSuccess?.(data);
     },
