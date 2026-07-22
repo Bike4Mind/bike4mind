@@ -39,6 +39,7 @@ import {
   usageEventRepository,
   imageModerationIncidentRepository,
   mcpServerRepository,
+  type IOptiPlanState,
 } from '@bike4mind/database';
 import { registerLambdaErrorHandlers, getSettingsByNames, fetchAgentConversationHistory } from '@bike4mind/utils';
 import { toRetrievalFilter } from '@bike4mind/utils/retrievalExclusion';
@@ -84,7 +85,7 @@ import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecut
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
-import { guardPlanCompletion, type PlanProgressState } from './agentExecutorUtils/planCompletionGuard';
+import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
@@ -1242,30 +1243,39 @@ async function processExecution(
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
     const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
 
-    // Let optihashi_decompose run only ONCE per run (#666). The loop occasionally re-plans
-    // mid-run, which reloads step 1 (a console yank), burns an iteration, and re-sources;
-    // the guard turns any repeat into a no-op redirect that steers the agent back to
-    // advancing its existing plan. Only affects opti runs (decompose isn't offered elsewhere).
-    const decomposeGuard = { used: false };
-    // Two complementary opti-loop guards: #666 stops re-PLANNING (decompose at most once); the
-    // plan-completion guard stops re-SOLVING (once every planned step has a solver result, further
-    // formulate/solve calls redirect to "write the final summary"). Without the latter the agent
-    // -- which has no reliable memory of which steps it finished -- re-does solved families until
-    // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
-    const planProgress: PlanProgressState = { steps: null, solved: {}, results: {} };
-    // Outermost: give the loop the real active brief in-context (#57) so it passes the exact
-    // problem to solve/edit instead of reconstructing it. Wraps the guarded tools last, so it
-    // augments real tool observations and leaves guard redirects (non-envelope strings) untouched.
+    // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
+    // the opti-loop guards survive a continuation Lambda (SQS resume / timeout self-dispatch) -- a
+    // repeat decompose or a re-solve of a finished step cannot slip through after the boundary.
+    // Seed ONLY from the persisted ledger, never from `!isNewExecution` (which would wrongly block a
+    // legitimate first decompose that lands on a continuation). Plain-object copy so the guards
+    // mutate a clean object rather than a Mongoose subdocument. Persisted alongside the checkpoint
+    // (below) so it has the same continuation durability. Inert on non-opti runs (stays empty).
+    const optiPlanState: IOptiPlanState = {
+      decomposeUsed: execution.optiPlanState?.decomposeUsed ?? false,
+      steps: (execution.optiPlanState?.steps ?? []).map(s => ({ family: s.family, title: s.title })),
+      solved: { ...(execution.optiPlanState?.solved ?? {}) },
+      results: { ...(execution.optiPlanState?.results ?? {}) },
+    };
+    // Three complementary opti-loop guards, all reading/writing the one ledger above:
+    // - #666 decompose-once: stops re-PLANNING (decompose at most once, now durable across a resume).
+    // - plan-completion: stops re-SOLVING (once every planned step has a result, formulate/solve
+    //   redirect to "write the final summary"); without it the agent -- which has no reliable memory
+    //   of which steps it finished -- re-does solved families until the iteration ceiling.
+    // - inject brief (outermost, #57): gives the loop the real active brief in-context so it passes
+    //   the exact problem to solve/edit instead of reconstructing it. Wraps last, so it augments real
+    //   tool observations and leaves guard redirects (non-envelope strings) untouched.
     const guardedPremiumTools = injectBriefContext(
       guardPlanCompletion(
-        guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+        guardDecomposeOnce(premiumLlmTools, optiPlanState, () =>
           logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
         ),
-        planProgress,
+        optiPlanState,
         () =>
           logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
       )
     );
+    // True once the loop has a plan in flight; gates ledger persistence so non-opti runs write nothing.
+    const optiPlanActive = () => optiPlanState.decomposeUsed || optiPlanState.steps.length > 0;
 
     const tools = buildSharedTools({ ...toolDeps, optInTools: subagentLatticeTools }, toolCallbacks, {
       // Dedupe: a caller may already have enabled create_mission/mission_status;
@@ -1747,6 +1757,9 @@ async function processExecution(
       if (Date.now() - startTime > deadlineMs) {
         logger.info('[Timeout] Approaching Lambda timeout, triggering self-dispatch');
         const checkpoint = agent.toCheckpoint();
+        // Persist the opti plan ledger BEFORE flipping to `continuing` so the continuation Lambda
+        // rehydrates the latest plan state (decompose-once + solved steps), not a stale one (#680).
+        if (optiPlanActive()) await agentExecutionRepository.updateOptiPlanState(executionId, optiPlanState);
         // Atomic write: persisting checkpoint + status separately could leave the
         // doc in `running` with a fresh checkpoint if Lambda is killed between
         // calls, which would fail the continuation Lambda's CAS and orphan the
@@ -1878,6 +1891,17 @@ async function processExecution(
       //   3. The subagent-handoff path now bills the parent's deciding
       //      iteration, which previously slipped through unbilled.
       await agentExecutionRepository.updateCheckpoint(executionId, iterationResult.checkpoint);
+      // Keep the durable opti ledger fresh at the iteration boundary (#680). Fire-and-forget: the
+      // continuation-critical write is the awaited one at the self-dispatch handoff above; this just
+      // minimizes staleness within an invocation and must not add latency to every iteration.
+      if (optiPlanActive()) {
+        void agentExecutionRepository.updateOptiPlanState(executionId, optiPlanState).catch((err: unknown) => {
+          logger.warn('[opti] failed to persist plan ledger at iteration boundary', {
+            executionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
 
       // Handoff signal: orchestrator-side polling on a sync Lambda-dispatched

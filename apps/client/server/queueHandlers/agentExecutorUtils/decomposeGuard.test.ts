@@ -23,17 +23,17 @@ const run = (t: ToolDefinition, params?: unknown) => t.implementation({} as neve
 describe('guardDecomposeOnce', () => {
   it('runs the real decompose on the FIRST call', async () => {
     const { tool, calls } = fakeDecompose();
-    const state = { used: false };
+    const state = { decomposeUsed: false };
     const guarded = guardDecomposeOnce({ optihashi_decompose: tool }, state);
     const out = await run(guarded.optihashi_decompose, { scenario: 'x' });
     expect(out).toBe('PLAN CREATED');
     expect(calls).toHaveLength(1);
-    expect(state.used).toBe(true);
+    expect(state.decomposeUsed).toBe(true);
   });
 
   it('blocks a SECOND call with the redirect message and does not re-run decompose', async () => {
     const { tool, calls } = fakeDecompose();
-    const state = { used: false };
+    const state = { decomposeUsed: false };
     const onBlocked = vi.fn();
     const guarded = guardDecomposeOnce({ optihashi_decompose: tool }, state, onBlocked);
     await run(guarded.optihashi_decompose); // first - runs
@@ -49,14 +49,14 @@ describe('guardDecomposeOnce', () => {
       implementation: () => ({ toolFn: async () => 'ok', toolSchema: {} }),
     } as unknown as ToolDefinition;
     const map = { web_search: other };
-    const guarded = guardDecomposeOnce(map, { used: false });
+    const guarded = guardDecomposeOnce(map, { decomposeUsed: false });
     expect(guarded).toBe(map);
   });
 
   it('does not mutate the input map', () => {
     const { tool } = fakeDecompose();
     const map = { optihashi_decompose: tool };
-    const guarded = guardDecomposeOnce(map, { used: false });
+    const guarded = guardDecomposeOnce(map, { decomposeUsed: false });
     expect(guarded).not.toBe(map);
     expect(map.optihashi_decompose).toBe(tool); // original entry untouched
   });

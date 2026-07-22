@@ -12,7 +12,9 @@ export type PlanStep = { family: string; title: string };
  * Keep this in the caller's execution closure so it survives tool-map rebuilds.
  */
 export type PlanProgressState = {
-  steps: PlanStep[] | null;
+  // Empty until a plan is captured from a decompose result (was `| null`; now a plain array so it
+  // maps 1:1 onto the durable AgentExecution.optiPlanState ledger, #680).
+  steps: PlanStep[];
   solved: Record<string, number>;
   results: Record<string, string>;
 };
@@ -99,7 +101,7 @@ export function extractResultDigest(result: string): string | null {
  * one; the run is done only when the covered-step count reaches the plan length.
  */
 export function planIsComplete(state: PlanProgressState): boolean {
-  if (!state.steps) return false;
+  if (state.steps.length === 0) return false;
   const needed = neededByFamily(state.steps);
   let planSteps = 0;
   let covered = 0;
@@ -167,7 +169,7 @@ export function guardPlanCompletion(
   const decompose = tools['optihashi_decompose'];
   guarded.optihashi_decompose = wrap(decompose, run => async (parameters, apiKey) => {
     const out = await run(parameters, apiKey);
-    if (!state.steps) {
+    if (state.steps.length === 0) {
       const captured = capturePlan(out);
       if (captured) state.steps = captured;
     }
