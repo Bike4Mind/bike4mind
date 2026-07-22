@@ -99,4 +99,47 @@ describe('renderEmbedWidgetHtml', () => {
     const occurrences = html.split('UNIQUE_NAME_SENTINEL').length - 1;
     expect(occurrences).toBe(1); // inside window.__B4M_EMBED__ only; textContent renders it at runtime
   });
+
+  it('emits the color override style for a valid hex primaryColor', () => {
+    const html = renderEmbedWidgetHtml({ ...BASE_CONFIG, primaryColor: '#AA00FF' });
+    expect(html).toContain('<style>:root{--b4m-primary:#aa00ff}</style>');
+  });
+
+  it('keeps primaryColor out of the config JSON entirely', () => {
+    const html = renderEmbedWidgetHtml({ ...BASE_CONFIG, primaryColor: '#aa00ff' });
+    expect(html).not.toContain('"primaryColor"');
+  });
+
+  it('emits no override style for an invalid primaryColor (render-time re-check)', () => {
+    // Stored data may predate write validation; the renderer must re-validate.
+    const html = renderEmbedWidgetHtml({
+      ...BASE_CONFIG,
+      primaryColor: '#fff;}body{background:url(//evil.example)}',
+    });
+    expect(html).not.toContain(':root{--b4m-primary');
+    expect(html).not.toContain('evil.example');
+  });
+
+  it('emits no override style when primaryColor is absent (unbranded regression)', () => {
+    const html = renderEmbedWidgetHtml(BASE_CONFIG);
+    expect(html).not.toContain(':root{--b4m-primary');
+    // The stylesheet still carries the default via the CSS variable fallback.
+    expect(html).toContain('var(--b4m-primary, #2b6cb0)');
+  });
+
+  it('carries logoUrl inside the config blob only', () => {
+    const html = renderEmbedWidgetHtml({ ...BASE_CONFIG, logoUrl: 'https://logos.example/acme.png' });
+    const occurrences = html.split('https://logos.example/acme.png').length - 1;
+    expect(occurrences).toBe(1);
+    expect(html).toContain('"logoUrl"');
+  });
+
+  it('neutralizes a script-terminator smuggled through logoUrl', () => {
+    const html = renderEmbedWidgetHtml({
+      ...BASE_CONFIG,
+      logoUrl: 'https://logos.example/x</scr' + 'ipt><script>alert(1)</scr' + 'ipt>',
+    });
+    // serializeConfigForScript escapes every `<`; no raw closer can appear.
+    expect(html).not.toContain('x</script>');
+  });
 });
