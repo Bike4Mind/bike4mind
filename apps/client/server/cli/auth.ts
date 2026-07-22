@@ -6,6 +6,7 @@ import {
   CreditHolderType,
   type ApiKeyBillingOwnerType,
   type CompletionSource,
+  type IEmbedBranding,
 } from '@bike4mind/common';
 import { User, userApiKeyRepository, cacheRepository } from '@bike4mind/database';
 import { userApiKeyService, cacheService } from '@bike4mind/services';
@@ -36,6 +37,8 @@ export interface ApiKeyInfo {
   agentId?: string;
   /** Origins an embed key may be used from (defense-in-depth); embed keys only. */
   allowedOrigins?: string[];
+  /** White-label config for an embed key; drives the widget serve route theming. */
+  branding?: IEmbedBranding;
   /** Spend ceiling in credits for an embed key. Present 0 = real cap; absent = uncapped. */
   spendCap?: number;
   /** Cumulative settled spend in credits at validation time; embed keys only. */
@@ -113,6 +116,7 @@ function toApiKeyInfo(v: {
   organizationId?: string;
   agentId?: string;
   allowedOrigins?: string[];
+  branding?: IEmbedBranding;
   spendCap?: number;
   currentSpend?: number;
 }): ApiKeyInfo {
@@ -125,6 +129,7 @@ function toApiKeyInfo(v: {
     organizationId: v.organizationId,
     agentId: v.agentId,
     allowedOrigins: v.allowedOrigins,
+    branding: v.branding,
     spendCap: v.spendCap,
     currentSpend: v.currentSpend,
   };
