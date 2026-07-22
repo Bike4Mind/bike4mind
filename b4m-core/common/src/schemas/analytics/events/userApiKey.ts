@@ -7,6 +7,7 @@ export enum UserApiKeyEvents {
   UPDATED = 'User API Key Updated',
   REVOKED = 'User API Key Revoked',
   RATE_LIMITED = 'User API Key Rate Limited',
+  RATE_LIMIT_RESET = 'User API Key Rate Limit Reset',
   EXPIRED = 'User API Key Expired',
   DELETED = 'User API Key Deleted',
 }
@@ -85,6 +86,16 @@ export interface IUserApiKeyRateLimitedEvent extends IBaseEvent {
   };
 }
 
+export interface IUserApiKeyRateLimitResetEvent extends IBaseEvent {
+  type: UserApiKeyEvents.RATE_LIMIT_RESET;
+  metadata: {
+    keyId: string;
+    name: string;
+    /** The acting admin's user id; the event's userId is the key owner. */
+    resetBy: string;
+  };
+}
+
 export interface IUserApiKeyExpiredEvent extends IBaseEvent {
   type: UserApiKeyEvents.EXPIRED;
   metadata: {
@@ -109,5 +120,6 @@ export type UserApiKeyEventPayload =
   | IUserApiKeyUpdatedEvent
   | IUserApiKeyRevokedEvent
   | IUserApiKeyRateLimitedEvent
+  | IUserApiKeyRateLimitResetEvent
   | IUserApiKeyExpiredEvent
   | IUserApiKeyDeletedEvent;

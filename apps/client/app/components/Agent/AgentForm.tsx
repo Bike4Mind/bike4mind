@@ -36,6 +36,7 @@ import CorePersonalitySection from './CorePersonalitySection';
 import EnhancedPersonalitySection from './EnhancedPersonalitySection';
 import ModelConfigSection from './ModelConfigSection';
 import OrchestrationSection from './OrchestrationSection';
+import EmbedSnippetSection from './EmbedSnippetSection';
 import ImportModal from './ImportModal';
 import ImageBrowserModal from './ImageBrowserModal';
 
@@ -680,6 +681,12 @@ const AgentForm: React.FC<AgentFormProps> = ({
               />
             </Grid>
           </>
+        )}
+
+        {mode === 'edit' && initialData?.id && (
+          <Grid xs={12}>
+            <EmbedSnippetSection agentId={initialData.id} agentName={formState.name} />
+          </Grid>
         )}
       </Box>
 

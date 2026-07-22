@@ -3,7 +3,6 @@ import {
   buildMetaEvent,
   buildPublicSSEEvent,
   formatSSEError,
-  isOriginPermitted,
   resolveRequestId,
   serializeSSEEvent,
   SSE_DONE_SIGNAL,
@@ -48,6 +47,7 @@ import {
 } from '@bike4mind/database';
 import { verifyEmbedApiKey, verifyEmbedKeyById, type ApiKeyInfo } from '@server/cli/auth';
 import { verifyEmbedSessionToken } from '@server/embed/embedSessionToken';
+import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 import { checkApiKeyRateLimit } from '@server/utils/apiKeyRateLimitCheck';
 import { checkEmbedSessionRateLimit } from '@server/utils/embedSessionRateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
@@ -63,7 +63,7 @@ import { z } from 'zod';
  * ChatCompletion service (Fargate) so the SSE stream isn't bounded by a Lambda
  * timeout. Runs a *configured agent* (persona hydrated from AgentModel) for an
  * anonymous end-user, billing the embed key's organization. Reachable by
- * browsers only via CloudFront (M6 wires the route + Origin/OPTIONS forwarding).
+ * browsers only via CloudFront (the router forwards the route + Origin/OPTIONS).
  *
  * Unlike the CLI completions route, all auth/origin/balance/rate-limit gates run
  * BEFORE any SSE bytes flush, so a rejection returns a real HTTP status (401/403/
@@ -311,9 +311,12 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // A sandboxed iframe without allow-same-origin sends the literal `Origin: null`;
       // treat that like an absent Origin (let the credential decide) rather than a
       // hard 403 that would break a legitimate embed without stopping a real attacker
-      // (who can just omit the header anyway).
+      // (who can just omit the header anyway). Our own serving origin is implicitly
+      // permitted: the /embed/* widget page posts from the app host, which can never
+      // appear on an allow-list (see firstPartyOrigin.ts) - must stay in lockstep
+      // with the mint gate in pages/api/embed/session.ts.
       const requestOrigin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-      if (requestOrigin && !isOriginPermitted(requestOrigin, ctx.allowedOrigins)) {
+      if (requestOrigin && !isEmbedOriginAllowed(requestOrigin, ctx.allowedOrigins, headers.host)) {
         return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
       }
 
@@ -384,8 +387,11 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       // Per-key spend-cap gate, the second billing-class check: the org may be
       // solvent while this key has exhausted its own budget. Reads the validation-
       // time snapshot off ctx (no fresh query - the auth layer just loaded the
-      // key); the in-flight race this leaves open is bounded and accepted, since
-      // the cap is a leaked-key backstop, not exact accounting.
+      // key); the race this leaves open is bounded and accepted, since the cap is
+      // a leaked-key backstop, not exact accounting. Not only N parallel streams:
+      // settlement is a fire-and-forget write after the stream closes (see
+      // cliCompletions.ts), so even back-to-back sequential requests from a fast
+      // client can pass this gate before the prior increment lands.
       try {
         assertKeySpendWithinCap({ spendCap: ctx.spendCap, currentSpend: ctx.currentSpend });
       } catch (capErr) {

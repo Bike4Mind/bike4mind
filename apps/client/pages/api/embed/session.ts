@@ -1,11 +1,11 @@
 /**
  * POST /api/embed/session
  *
- * Mints a short-lived embed session token from a long-lived embed:chat API key,
- * so the key secret never has to reach the browser. The caller presents the
- * embed key (server-to-server, or from the embedding site's backend); this
- * verifies it, then returns a token the widget forwards to POST /api/embed/chat.
- * The token - not the key - is the browser-held, rate-limited, revocable handle.
+ * Mints a short-lived embed session token from a long-lived embed:chat API key.
+ * The caller presents the embed key (the served /embed/* widget page, or the
+ * embedding site's backend); this verifies it, then returns a token the widget
+ * forwards to POST /api/embed/chat, so the key itself never rides the per-turn
+ * chat requests. The token is the rate-limited, revocable handle.
  *
  * Unauthenticated at the baseApi layer (auth:false): the embed key is verified
  * in-handler via verifyEmbedApiKey, NOT the apiKeyAuth middleware (which would
@@ -17,10 +17,10 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
-import { isOriginPermitted } from '@bike4mind/common';
 import { randomUUID } from 'crypto';
 import { flattenHeaders } from '@server/utils/flattenHeaders';
 import { signEmbedSessionToken, EMBED_SESSION_TTL_SECONDS } from '@server/embed/embedSessionToken';
+import { isEmbedOriginAllowed } from '@server/embed/firstPartyOrigin';
 
 /** Per-IP flood backstop on this unauth mint surface. */
 const MINT_RATE_LIMIT = 60;
@@ -44,9 +44,11 @@ const handler = baseApi({ auth: false })
     // allow-list. A non-browser caller (no Origin) is gated by the key alone.
     // `Origin: null` (sandboxed iframe) is treated as absent, matching the chat
     // route - the credential is the boundary, so a hard 403 here would only break
-    // a legitimate sandboxed embed without stopping anyone.
+    // a legitimate sandboxed embed without stopping anyone. Our own serving
+    // origin is implicitly permitted: the /embed/* widget page mints from the app
+    // host, which can never appear on an allow-list (see firstPartyOrigin.ts).
     const origin = headers.origin && headers.origin !== 'null' ? headers.origin : undefined;
-    if (origin && !isOriginPermitted(origin, info.allowedOrigins)) {
+    if (origin && !isEmbedOriginAllowed(origin, info.allowedOrigins, headers.host)) {
       return res.status(403).json({ error: 'forbidden', error_description: 'Origin not allowed for this embed key' });
     }
 

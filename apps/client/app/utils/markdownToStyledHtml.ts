@@ -1,6 +1,7 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import Prism from 'prismjs';
+import { escapeAttr as escapeHtml } from './htmlEscape';
 // Side-effect import: registers the repo's Prism language grammars on the shared
 // Prism singleton (HTML/JS/TS/python/bash/sql/...). This is the single source of
 // truth for which languages highlight; the in-app code highlighter
@@ -191,10 +192,6 @@ function renderHeader(title: string): string {
 function renderFooter(): string {
   const date = new Date().toISOString().slice(0, 10);
   return `<footer class="export-footer">Exported from Bike4Mind on ${date}</footer>`;
-}
-
-function escapeHtml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 // GitHub-flavored base styling, adapted from the core FormatConverter

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildMetaEvent, buildPublicSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
+import { buildMetaEvent, buildPublicSSEEvent, buildSSEEvent, formatSSEError, serializeSSEEvent } from './sseEvents';
 
 describe('buildPublicSSEEvent', () => {
   it('passes assistant text and usage/credits through', () => {
@@ -31,6 +31,27 @@ describe('buildPublicSSEEvent', () => {
   it('does not leak the thinking channel when the response channel is empty', () => {
     const e = buildPublicSSEEvent(['internal thinking'], { outputTokens: 1 });
     expect(e.text).toBe('');
+  });
+
+  it('drops usdCost while keeping creditsUsed', () => {
+    const e = buildPublicSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
+    expect(e.credits).toMatchObject({ used: 2 });
+    expect(e.credits?.usdCost).toBeUndefined();
+    // The wire frame must not carry the key at all, not just an undefined value.
+    expect(serializeSSEEvent(e)).not.toContain('usdCost');
+  });
+
+  it('emits no credits block when usdCost is the only credit field', () => {
+    const e = buildPublicSSEEvent(['', 'the answer'], { usdCost: 0.0123 });
+    expect(e.credits).toBeUndefined();
+    expect(serializeSSEEvent(e)).not.toContain('usdCost');
+  });
+});
+
+describe('buildSSEEvent', () => {
+  it('still forwards usdCost to authenticated first-party surfaces', () => {
+    const e = buildSSEEvent(['', 'the answer'], { creditsUsed: 2, usdCost: 0.0123 });
+    expect(e.credits).toMatchObject({ used: 2, usdCost: 0.0123 });
   });
 });
 
