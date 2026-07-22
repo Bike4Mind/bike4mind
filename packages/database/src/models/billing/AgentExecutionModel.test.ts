@@ -289,6 +289,54 @@ describe('AgentExecutionRepository', () => {
     });
   });
 
+  describe('updateOptiPlanState (#680 durable plan ledger)', () => {
+    it('round-trips the plan ledger so a continuation Lambda can rehydrate it', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      expect(exec.optiPlanState).toBeUndefined(); // absent on create (opti-only)
+
+      await agentExecutionRepository.updateOptiPlanState(exec.id, {
+        decomposeUsed: true,
+        steps: [
+          { family: 'scheduling', title: 'Sequence stations' },
+          { family: 'routing', title: 'Route vans' },
+        ],
+        solved: { scheduling: 1 },
+        results: { scheduling: 'Seq -- Simulated Annealing (makespan: 130)' },
+      });
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.optiPlanState?.decomposeUsed).toBe(true);
+      expect(updated?.optiPlanState?.steps.map(s => s.family)).toEqual(['scheduling', 'routing']);
+      expect(updated?.optiPlanState?.solved).toMatchObject({ scheduling: 1 });
+      expect(updated?.optiPlanState?.results).toMatchObject({
+        scheduling: 'Seq -- Simulated Annealing (makespan: 130)',
+      });
+    });
+
+    it('overwrites the ledger on each write (whole-subdoc $set)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      await agentExecutionRepository.updateOptiPlanState(exec.id, {
+        decomposeUsed: true,
+        steps: [{ family: 'scheduling', title: 's' }],
+        solved: { scheduling: 1 },
+        results: {},
+      });
+      await agentExecutionRepository.updateOptiPlanState(exec.id, {
+        decomposeUsed: true,
+        steps: [
+          { family: 'scheduling', title: 's' },
+          { family: 'routing', title: 'r' },
+        ],
+        solved: { scheduling: 1, routing: 1 },
+        results: {},
+      });
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.optiPlanState?.steps).toHaveLength(2);
+      expect(updated?.optiPlanState?.solved).toMatchObject({ scheduling: 1, routing: 1 });
+    });
+  });
+
   describe('setWaitingOnChild / clearWaitingOnChild', () => {
     it('atomically sets waitingOnChild + status + checkpoint', async () => {
       const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));

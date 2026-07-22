@@ -23,13 +23,13 @@ export const DECOMPOSE_ALREADY_DONE_MSG =
  * Returns a NEW map (never mutates the input). If the map has no optihashi_decompose (e.g. a
  * non-opti run where the overlay tool isn't present), it's returned unchanged.
  *
- * `state.used` is the per-execution flag; keep it in the caller's execution closure so it's
- * shared across tool-map rebuilds. In-memory per Lambda invocation: a continuation Lambda
- * resets it, but a re-decompose almost always happens within a single invocation.
+ * `state.decomposeUsed` is the per-execution flag, carried on the durable opti plan ledger
+ * (`AgentExecution.optiPlanState`, #680) so it is rehydrated on a continuation Lambda -- a repeat
+ * decompose is blocked even across a self-dispatch/resume boundary, not just within one invocation.
  */
 export function guardDecomposeOnce(
   tools: Record<string, ToolDefinition>,
-  state: { used: boolean },
+  state: { decomposeUsed: boolean },
   onBlocked?: () => void
 ): Record<string, ToolDefinition> {
   const raw = tools['optihashi_decompose'];
@@ -44,11 +44,11 @@ export function guardDecomposeOnce(
         return {
           ...inner,
           toolFn: (parameters?: unknown, apiKey?: string) => {
-            if (state.used) {
+            if (state.decomposeUsed) {
               onBlocked?.();
               return Promise.resolve(DECOMPOSE_ALREADY_DONE_MSG);
             }
-            state.used = true;
+            state.decomposeUsed = true;
             return run(parameters, apiKey);
           },
         };

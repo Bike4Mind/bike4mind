@@ -91,6 +91,36 @@ export type ConfidenceTelemetrySummary = {
   avgConfidence: number;
 };
 
+// --- Opti Plan Ledger ---
+
+/** One planned sub-problem in an opti decomposition: its family and short title. */
+export interface IOptiPlanStep {
+  family: string;
+  title: string;
+}
+
+/**
+ * Durable ledger for the autonomous optimizer loop (#680). The opti guards previously tracked this
+ * in per-Lambda-invocation memory, so it reset when a run spanned a continuation (SQS resume,
+ * subagent handoff, or timeout self-dispatch) -- letting a repeat decompose or re-solve slip through
+ * after the boundary. Persisting it here (rehydrated per invocation) makes the decompose-once and
+ * plan-completion guards durable across continuations.
+ *
+ * Do NOT reconstruct this from `checkpoint.steps`: that transcript front-trims past ~4 iterations
+ * (ReActAgent trimSteps), so on the long runs that actually continue the early decompose is gone.
+ * Opti-only: absent on non-opti executions (no schema default).
+ */
+export interface IOptiPlanState {
+  /** True once optihashi_decompose has run; blocks a repeat re-plan across continuations. */
+  decomposeUsed: boolean;
+  /** Ordered plan captured from the decompose result (empty until a plan loads). */
+  steps: IOptiPlanStep[];
+  /** Successful schedule/solve calls per family. */
+  solved: Record<string, number>;
+  /** First winning-result digest per family, for the completion summary. */
+  results: Record<string, string>;
+}
+
 // --- Waiting On Subagent ---
 
 /**
@@ -282,6 +312,12 @@ export interface IAgentExecution {
    */
   confidenceTelemetry?: IConfidenceTelemetry;
 
+  /**
+   * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
+   * invocation so the decompose-once / plan-completion guards survive continuation Lambdas.
+   */
+  optiPlanState?: IOptiPlanState;
+
   // Billing
   iterationBilling: IIterationBilling[];
   totalCreditsUsed: number;
@@ -398,6 +434,18 @@ const ConfidenceTelemetrySchema = new mongoose.Schema(
     emittedCount: { type: Number, default: 0 },
     minConfidence: { type: Number, default: 1 },
     confidenceSum: { type: Number, default: 0 },
+  },
+  { _id: false }
+);
+
+const OptiPlanStateSchema = new mongoose.Schema(
+  {
+    decomposeUsed: { type: Boolean, default: false },
+    steps: { type: [new mongoose.Schema({ family: String, title: String }, { _id: false })], default: [] },
+    // Mixed maps (family -> count / digest). Persisted via whole-subdoc $set on change, so Mongoose
+    // deep-change tracking on Mixed is not relied upon.
+    solved: { type: mongoose.Schema.Types.Mixed, default: {} },
+    results: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
   { _id: false }
 );
@@ -563,6 +611,8 @@ const AgentExecutionSchema = new mongoose.Schema(
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
+    // Opti-only; no default so non-opti executions don't carry an empty ledger.
+    optiPlanState: { type: OptiPlanStateSchema, required: false },
 
     // Billing
     iterationBilling: { type: [IterationBillingSchema], default: [] },
@@ -1083,6 +1133,15 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
 
   async updateCheckpoint(id: string, checkpoint: unknown): Promise<void> {
     await this.model.updateOne({ _id: id }, { $set: { checkpoint } });
+  }
+
+  /**
+   * Persist the durable optimizer plan ledger (#680). Written alongside the checkpoint at
+   * iteration boundaries and continuation handoffs so it survives a continuation Lambda with the
+   * same durability guarantee as the checkpoint. Whole-subdoc `$set` (the ledger is tiny).
+   */
+  async updateOptiPlanState(id: string, optiPlanState: IOptiPlanState): Promise<void> {
+    await this.model.updateOne({ _id: id }, { $set: { optiPlanState } });
   }
 
   /**
