@@ -112,7 +112,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
       data-testid={`permission-card-${executionId}`}
       color="warning"
       variant="soft"
-      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1, my: 1 }}
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1, mt: 1 }}
     >
       <Typography level="title-sm">Permission required</Typography>
       <Typography level="body-sm">

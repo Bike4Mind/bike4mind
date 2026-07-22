@@ -205,7 +205,19 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
   return (
     <Box
       data-testid={`iteration-stream-${executionId}`}
-      sx={{ display: 'flex', flexDirection: 'column', gap: 1, py: 1 }}
+      // Framed like an artifact card (ArtifactPreviewCard): outlined border +
+      // surface2 background + 8px radius + 16px inner padding, so the whole
+      // reply reads as one contained block.
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 1,
+        p: 2,
+        border: '1px solid',
+        borderColor: 'neutral.outlinedBorder',
+        backgroundColor: 'background.surface2',
+        borderRadius: '8px',
+      }}
     >
       {/* Status header - suppressed when there's nothing meaningful to show
           yet. For a fresh run with no iteration steps and no abort button,
@@ -233,8 +245,6 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
           <AbortButton executionId={executionId} status={execution.status} />
         </Stack>
       )}
-
-      <PermissionCard executionId={executionId} />
 
       <AccordionGroup size="sm" sx={{ '--ListItem-paddingY': '0.25rem' }}>
         {groups
@@ -272,7 +282,7 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                   </Typography>
                 </AccordionSummary>
                 <AccordionDetails>
-                  <Stack spacing={0.5}>
+                  <Stack spacing={1}>
                     {group.steps.map(s => {
                       const stepKey = `${group.iteration}-${s.receivedAt}`;
                       const nestedChildId = stepToChildId.get(stepKey);
@@ -364,6 +374,12 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
           </Typography>
         </Box>
       ) : null}
+
+      {/* Approval prompt sits at the BOTTOM of the reply - below the iteration
+          trace and any terminal/final-answer block - so it appears next to the
+          latest activity the user is reading instead of detached up top. The
+          card self-gates (renders null unless pendingPermission is set). */}
+      <PermissionCard executionId={executionId} />
     </Box>
   );
 };
