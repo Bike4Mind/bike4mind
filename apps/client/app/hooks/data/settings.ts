@@ -13,7 +13,7 @@ import { z } from 'zod';
 import type { ServerConfig } from '@pages/api/settings/serverConfig';
 import type { ServerConfigPublic } from '@pages/api/settings/serverConfigPublic';
 import { ADMIN_SETTINGS_QUERY_KEY, ADMIN_SETTINGS_ARRAY_QUERY_KEY, BRANDING_SETTINGS_QUERY_KEY } from './queryKeys';
-import { useAccessToken, useIsFullyAuthenticated } from '../useAccessToken';
+import { useAccessToken, useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 
 export function useUpdateSettings() {
   const queryClient = useQueryClient();
