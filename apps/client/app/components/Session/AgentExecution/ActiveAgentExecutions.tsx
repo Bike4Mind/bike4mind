@@ -14,9 +14,10 @@
 
 import { FC, useEffect, useMemo, useRef } from 'react';
 import { useShallow } from 'zustand/react/shallow';
-import { Box, CircularProgress, Stack, Typography } from '@mui/joy';
+import { Box, Stack } from '@mui/joy';
 import { useAgentExecutionStore, selectExecutionIdsForSession } from '@client/app/stores/useAgentExecutionStore';
 import { useAgentExecutionDispatch } from '@client/app/hooks/useAgentExecution';
+import ReplyStatus from '@client/app/components/common/ReplyStatus';
 import IterationStream from './IterationStream';
 import ExecutionStatusBanner from './ExecutionStatusBanner';
 import CreditCounter from './CreditCounter';
@@ -125,19 +126,25 @@ const ActiveAgentExecutions: FC<ActiveAgentExecutionsProps> = ({ sessionId }) =>
   return null;
 };
 
-// Extracted so the rotating-copy hook is unconditional. Spinner + rotating
-// label keep the dispatch wait feeling intentional even on a cold-start
-// (~5-10s on a low-traffic preview env).
+// Extracted so the rotating-copy hook is unconditional. Reuses ReplyStatus (the
+// bicycle-wheel spinner from the normal prompt-send flow), centered, so the
+// dispatch wait matches the main chat loading indicator instead of a bespoke
+// mini-spinner. Rotating copy feeds ReplyStatus's status label.
 const StartingPlaceholder: FC = () => {
   const copy = useRotatingCopy(STARTING_COPY);
   return (
-    <Box data-testid="active-agent-executions-dispatching" sx={{ display: 'flex', flexDirection: 'column', px: 2 }}>
-      <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 1 }}>
-        <CircularProgress size="sm" thickness={2} />
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          {copy}
-        </Typography>
-      </Stack>
+    <Box
+      data-testid="active-agent-executions-dispatching"
+      sx={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '100%',
+        py: 1,
+      }}
+    >
+      <ReplyStatus status={copy} />
     </Box>
   );
 };
