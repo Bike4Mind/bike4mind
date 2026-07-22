@@ -35,11 +35,13 @@ describe('buildOpenApiDocument', () => {
     expect(tools.operationId).toBe('executeTool');
   });
 
-  it('declares both security schemes and requires them per operation', () => {
-    expect(Object.keys(doc.components.securitySchemes).sort()).toEqual(['apiKeyAuth', 'bearerAuth']);
-    for (const op of [completions, tools]) {
-      expect(op.security).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }]);
-    }
+  it('declares the security schemes and requires the right one per operation', () => {
+    expect(Object.keys(doc.components.securitySchemes).sort()).toEqual(['apiKeyAuth', 'bearerAuth', 'jwtAuth']);
+    // Completions accepts an API key (either header) OR a JWT.
+    expect(completions.security).toEqual([{ bearerAuth: [] }, { apiKeyAuth: [] }]);
+    // Tools is JWT-only - its handler rejects b4m_live_ keys, so no apiKeyAuth here.
+    expect(tools.security).toEqual([{ jwtAuth: [] }]);
+    expect(JSON.stringify(tools.security)).not.toContain('apiKeyAuth');
   });
 
   it('models the completions response as an SSE stream referencing the stream-event component', () => {
@@ -65,11 +67,29 @@ describe('buildOpenApiDocument', () => {
     expect(doc.components.schemas.ToolExecutionResponse.example).toBeDefined();
   });
 
-  it('attaches per-operation vendor extensions to BOTH operations', () => {
+  it('attaches x-required-scopes ONLY where scopes are enforced, x-codeSamples on both', () => {
+    // createCompletion enforces scopes (verifyApiKey); executeTool does not (JWT-only).
+    expect(completions['x-required-scopes']).toContain(ApiKeyScope.AI_CHAT);
+    expect(tools['x-required-scopes']).toBeUndefined();
     for (const op of [completions, tools]) {
-      expect(op['x-required-scopes']).toContain(ApiKeyScope.AI_CHAT);
       expect(op['x-codeSamples'].map((s: { lang: string }) => s.lang)).toEqual(['curl', 'JavaScript', 'Python']);
     }
+  });
+
+  it('documents tools 401/429 and JWT-only code samples (matches the JWT-only handler)', () => {
+    expect(tools.responses['401'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    expect(tools.responses['429'].content['application/json'].schema).toEqual(ref('ErrorResponse'));
+    // completions surfaces auth/rate errors as in-band SSE, so it must NOT declare HTTP 401/429.
+    expect(completions.responses['401']).toBeUndefined();
+    expect(completions.responses['429']).toBeUndefined();
+    // Tools code samples must show a JWT bearer, never a b4m_live_ API key.
+    const toolsCurl = tools['x-codeSamples'].find((s: { lang: string }) => s.lang === 'curl').source as string;
+    expect(toolsCurl).toContain('Bearer <access_token>');
+    expect(toolsCurl).not.toContain('b4m_live_');
+  });
+
+  it('documents OR semantics for required scopes in info.description', () => {
+    expect(doc.info.description.toLowerCase()).toContain('any one');
   });
 
   it('emits streaming affordances only for the streaming endpoint', () => {
