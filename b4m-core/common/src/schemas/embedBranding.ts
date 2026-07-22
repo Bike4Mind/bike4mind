@@ -46,8 +46,25 @@ export function parseBrandingLogoUrl(raw: string | undefined): string | null {
   if (url.username || url.password) return null;
   if (url.hash) return null;
   const labels = url.hostname.split('.');
-  if (labels.length < 2) return null; // real dotted host, not a bare label
+  // Real dotted host, not a bare label. The TLD must contain a letter, which
+  // also rejects a trailing dot (empty last label) and a numeric last label /
+  // IPv4 literal - matching parseEmbedOrigin's host rule.
+  if (labels.length < 2) return null;
+  if (!/[a-z]/i.test(labels[labels.length - 1])) return null;
   return url.toString();
+}
+
+/**
+ * Render-time displayName sanitizer: trimmed and length-capped, or null when
+ * blank. Keeps the serve path from trusting a stored value that predates the
+ * write-time cap (the widget renders it via textContent, so this is layout
+ * hygiene, not an XSS guard).
+ */
+export function parseBrandingDisplayName(raw: string | undefined): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return trimmed.slice(0, EMBED_BRANDING_DISPLAY_NAME_MAX);
 }
 
 /**

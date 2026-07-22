@@ -4,6 +4,7 @@ import {
   EMBED_BRANDING_LOGO_URL_MAX,
   EmbedBrandingSchema,
   parseBrandingColor,
+  parseBrandingDisplayName,
   parseBrandingLogoUrl,
 } from './embedBranding';
 
@@ -75,9 +76,7 @@ describe('parseBrandingLogoUrl', () => {
   });
 
   it('keeps an explicit port (must match the CSP origin the browser uses)', () => {
-    expect(parseBrandingLogoUrl('https://cdn.example.com:8443/logo.png')).toBe(
-      'https://cdn.example.com:8443/logo.png'
-    );
+    expect(parseBrandingLogoUrl('https://cdn.example.com:8443/logo.png')).toBe('https://cdn.example.com:8443/logo.png');
   });
 
   it.each([
@@ -87,6 +86,8 @@ describe('parseBrandingLogoUrl', () => {
     ['https://user:pass@example.com/logo.png'],
     ['https://example.com/logo.png#frag'],
     ['https://localhost/logo.png'],
+    ['https://localhost./logo.png'],
+    ['https://192.168.1.1/logo.png'],
     [''],
     ['   '],
   ])('returns null for %s', raw => {
@@ -95,6 +96,21 @@ describe('parseBrandingLogoUrl', () => {
 
   it('returns null for a non-string', () => {
     expect(parseBrandingLogoUrl(undefined)).toBeNull();
+  });
+});
+
+describe('parseBrandingDisplayName', () => {
+  it('trims and returns a real name', () => {
+    expect(parseBrandingDisplayName('  Acme Support  ')).toBe('Acme Support');
+  });
+
+  it('caps an overlong name at the max length', () => {
+    const long = 'a'.repeat(EMBED_BRANDING_DISPLAY_NAME_MAX + 20);
+    expect(parseBrandingDisplayName(long)).toHaveLength(EMBED_BRANDING_DISPLAY_NAME_MAX);
+  });
+
+  it.each([[''], ['   '], [undefined]])('returns null for %s', raw => {
+    expect(parseBrandingDisplayName(raw as string | undefined)).toBeNull();
   });
 });
 

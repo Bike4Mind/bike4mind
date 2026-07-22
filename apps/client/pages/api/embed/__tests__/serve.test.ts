@@ -251,6 +251,20 @@ describe('GET /api/embed/serve - white-label branding (epic #41 Phase D)', () =>
     expect(res._getData()).toContain('Sales Bot');
   });
 
+  it('re-caps a stored displayName that predates the write-time length limit', async () => {
+    const overlong = 'Z'.repeat(200);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: overlong }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).not.toContain(overlong);
+    expect(res._getData()).toContain('Z'.repeat(64));
+  });
+
+  it('short-circuits the owner entitlement lookup when hideBranding is not set', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: 'Acme' }));
+    await run({ k: 'b4m_live_brand' });
+    expect(mockOwnerHasEntitlement).not.toHaveBeenCalled();
+  });
+
   it('widens img-src to exactly the validated logo origin (whole header pinned)', async () => {
     mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ logoUrl: 'https://logos.example/acme.png' }));
     const res = await run({ k: 'b4m_live_brand' });

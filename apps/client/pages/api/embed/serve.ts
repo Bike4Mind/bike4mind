@@ -27,7 +27,12 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { agentRepository } from '@bike4mind/database';
-import { parseBrandingColor, parseBrandingLogoUrl, parseEmbedOrigin } from '@bike4mind/common';
+import {
+  parseBrandingColor,
+  parseBrandingDisplayName,
+  parseBrandingLogoUrl,
+  parseEmbedOrigin,
+} from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
 import { embedKeyOwnerHasEntitlement } from '@server/entitlements/embedKeyEntitlement';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
@@ -107,14 +112,16 @@ const handler = baseApi({ auth: false })
 
     // Effective branding is decided HERE and only the outcome reaches the page:
     // the raw hideBranding flag never crosses to the client. Stored values are
-    // re-sanitized (they may predate write validation), and the entitlement is
-    // resolved live against the key's billing owner, failing closed to "branding
-    // shows" on any lookup error - so an expired plan un-hides on the next load.
+    // re-sanitized (they may predate write validation). The entitlement gate only
+    // matters when a key actually asks to hide branding, so the owner lookup (a
+    // few DB reads on this public no-store path) is short-circuited otherwise; it
+    // is resolved live against the key's billing owner and fails closed to
+    // "branding shows" on any lookup error - so an expired plan un-hides next load.
     const branding = info.branding ?? {};
-    const entitled = await embedKeyOwnerHasEntitlement(info, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false);
-    const showBranding = !(entitled && branding.hideBranding === true);
-    const displayName =
-      (typeof branding.displayName === 'string' && branding.displayName.trim()) || agent?.name || undefined;
+    const showBranding =
+      branding.hideBranding !== true ||
+      !(await embedKeyOwnerHasEntitlement(info, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false));
+    const displayName = parseBrandingDisplayName(branding.displayName) ?? agent?.name ?? undefined;
     const primaryColor = parseBrandingColor(branding.primaryColor) ?? undefined;
     const logoUrl = parseBrandingLogoUrl(branding.logoUrl) ?? undefined;
     // Derived from the SAME sanitized URL the page receives, so the CSP grant
