@@ -32,7 +32,7 @@ export interface RepeatedCallGuardOptions {
   /**
    * Stop executing the call and return only a nudge once the same (tool, args)
    * call has returned the same result this many times. Must be greater than
-   * `warnThreshold`. Default: 6.
+   * `warnThreshold` (the constructor throws otherwise). Default: 6.
    */
   blockThreshold?: number;
 }
@@ -100,6 +100,20 @@ export class RepeatedCallGuard {
     this.enabled = options.enabled ?? true;
     this.warnThreshold = options.warnThreshold ?? DEFAULT_WARN_THRESHOLD;
     this.blockThreshold = options.blockThreshold ?? DEFAULT_BLOCK_THRESHOLD;
+    // Fail fast on a misconfigured active guard: warnThreshold < 1 would warn
+    // from the very first call, and blockThreshold <= warnThreshold makes the
+    // warn phase dead (at 0 it blocks every tool after a single run). A disabled
+    // guard never reads the thresholds, so their values are irrelevant to it.
+    if (this.enabled) {
+      if (this.warnThreshold < 1) {
+        throw new RangeError(`RepeatedCallGuard: warnThreshold must be >= 1 (got ${this.warnThreshold}).`);
+      }
+      if (this.blockThreshold <= this.warnThreshold) {
+        throw new RangeError(
+          `RepeatedCallGuard: blockThreshold (${this.blockThreshold}) must be greater than warnThreshold (${this.warnThreshold}).`
+        );
+      }
+    }
   }
 
   /** Clear all tracked history. Call at the start of every new run. */

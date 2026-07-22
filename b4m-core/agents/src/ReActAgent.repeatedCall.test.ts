@@ -32,6 +32,27 @@ function createLoopingLlm(toolCall: { name: string; arguments?: string }): IComp
   };
 }
 
+/** Mock LLM that emits the SAME batch of tool calls on every iteration. */
+function createLoopingMultiLlm(toolCalls: Array<{ name: string; arguments?: string }>): ICompletionBackend {
+  return {
+    currentModel: 'test-model',
+    getModelInfo: async () => [],
+    complete: async (
+      _model: string,
+      _messages: IMessage[],
+      _options: Partial<ICompletionOptions>,
+      callback: (text: (string | null | undefined)[], completionInfo?: CompletionInfo) => Promise<void>
+    ) => {
+      await callback(['Still exploring...'], {
+        inputTokens: 100,
+        outputTokens: 50,
+        toolsUsed: toolCalls,
+      });
+    },
+    pushToolMessages: vi.fn(),
+  };
+}
+
 /** Mock LLM that emits a scripted tool call per iteration, then a final answer. */
 function createScriptedLlm(script: Array<{ name: string; arguments?: string }>): ICompletionBackend {
   let i = 0;
@@ -223,5 +244,106 @@ describe('ReActAgent repeated-call circuit breaker', () => {
 
     await new ReActAgent(context).run('Read it');
     expect(toolFn).toHaveBeenCalledTimes(8);
+  });
+
+  it('guards calls dispatched through the parallel-execution path', async () => {
+    // Two read-only tools in one turn trips shouldUseParallelExecution, so the
+    // batch runs via executeToolsInParallel rather than the sequential loop.
+    // This locks in that the guard's record/shouldBlock still fire on that path.
+    const readAFn = vi.fn(async () => 'contents of a');
+    const readBFn = vi.fn(async () => 'contents of b');
+    const readA = {
+      toolFn: readAFn,
+      toolSchema: {
+        name: 'read_a',
+        description: 'Read a',
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    };
+    const readB = {
+      toolFn: readBFn,
+      toolSchema: {
+        name: 'read_b',
+        description: 'Read b',
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    };
+
+    const context: AgentContext = {
+      userId: 'test-user',
+      logger: createMockLogger() as unknown as AgentContext['logger'],
+      llm: createLoopingMultiLlm([
+        { name: 'read_a', arguments: '{"path":"a.ts"}' },
+        { name: 'read_b', arguments: '{"path":"b.ts"}' },
+      ]),
+      model: 'test-model',
+      tools: [readA, readB],
+      maxIterations: 12,
+      repeatedCallGuard: { warnThreshold: 3, blockThreshold: 5 },
+    };
+
+    const result = await new ReActAgent(context).run('Read both', { parallelExecution: true });
+
+    // Each signature is tracked independently through the parallel path and
+    // blocks once it has returned the same result blockThreshold (5) times.
+    expect(readAFn).toHaveBeenCalledTimes(5);
+    expect(readBFn).toHaveBeenCalledTimes(5);
+    const observations = result.steps.filter(s => s.type === 'observation').map(s => s.content);
+    expect(observations.some(o => o.includes('Circuit breaker'))).toBe(true);
+  });
+
+  it('keeps a blocked read blocked when a following mutation FAILS', async () => {
+    // The invalidateReadOnly() clear is gated on the write succeeding: a thrown
+    // write did not change state, so an earlier read's "settled" block must
+    // stand. This is the #696 write-spin invariant - contrast with the
+    // successful-edit test above, where the post-edit re-read is allowed to run.
+    const readFn = vi.fn(async () => 'unchanged contents');
+    const readTool = {
+      toolFn: readFn,
+      toolSchema: {
+        name: 'file_read',
+        description: 'Read a file',
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    };
+    const failingWrite = {
+      toolFn: vi.fn(async () => {
+        throw new Error('disk full');
+      }),
+      // 'edit_file' is classified as a write tool by defaultIsReadOnlyTool.
+      toolSchema: {
+        name: 'edit_file',
+        description: 'Edit a file',
+        parameters: { type: 'object' as const, properties: {}, required: [] as string[] },
+      },
+    };
+
+    // Read until the block trips (5 reads at threshold 5), then a FAILED write,
+    // then one more read - which must stay blocked because the write threw.
+    const script = [
+      ...Array.from({ length: 5 }, () => ({ name: 'file_read', arguments: '{"path":"a.ts"}' })),
+      { name: 'edit_file', arguments: '{"path":"a.ts"}' },
+      { name: 'file_read', arguments: '{"path":"a.ts"}' },
+    ];
+
+    const context: AgentContext = {
+      userId: 'test-user',
+      logger: createMockLogger() as unknown as AgentContext['logger'],
+      llm: createScriptedLlm(script),
+      model: 'test-model',
+      tools: [readTool, failingWrite],
+      maxIterations: 12,
+      repeatedCallGuard: { warnThreshold: 3, blockThreshold: 5 },
+    };
+
+    const result = await new ReActAgent(context).run('Edit then verify');
+
+    // Only the 5 pre-write reads ran; the failed write did not invalidate the
+    // read-only history, so the final read was short-circuited (still 5, not 6).
+    expect(readFn).toHaveBeenCalledTimes(5);
+    const readObservations = result.steps
+      .filter(s => s.type === 'observation' && s.metadata?.toolName === 'file_read')
+      .map(s => s.content);
+    expect(readObservations.at(-1)).toContain('Circuit breaker');
   });
 });

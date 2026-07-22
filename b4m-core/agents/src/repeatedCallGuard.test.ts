@@ -107,7 +107,7 @@ describe('RepeatedCallGuard escalation', () => {
   });
 
   it('resets all history on reset()', () => {
-    const guard = new RepeatedCallGuard({ warnThreshold: 2, blockThreshold: 2 });
+    const guard = new RepeatedCallGuard({ warnThreshold: 1, blockThreshold: 2 });
     const sig = RepeatedCallGuard.signature('t', '{}');
     guard.record(sig, 'x');
     guard.record(sig, 'x');
@@ -125,6 +125,25 @@ describe('RepeatedCallGuard disabled', () => {
       expect(guard.record(sig, 'same').warn).toBe(false);
       expect(guard.shouldBlock(sig)).toBe(false);
     }
+  });
+});
+
+describe('RepeatedCallGuard constructor validation', () => {
+  it('throws when blockThreshold is not greater than warnThreshold', () => {
+    expect(() => new RepeatedCallGuard({ warnThreshold: 3, blockThreshold: 3 })).toThrow(RangeError);
+    expect(() => new RepeatedCallGuard({ warnThreshold: 10, blockThreshold: 3 })).toThrow(RangeError);
+  });
+
+  it('throws when blockThreshold is 0 (would block every tool after one run)', () => {
+    expect(() => new RepeatedCallGuard({ blockThreshold: 0 })).toThrow(RangeError);
+  });
+
+  it('throws when warnThreshold is below 1', () => {
+    expect(() => new RepeatedCallGuard({ warnThreshold: 0, blockThreshold: 5 })).toThrow(RangeError);
+  });
+
+  it('does not validate thresholds when disabled (they are never read)', () => {
+    expect(() => new RepeatedCallGuard({ enabled: false, warnThreshold: 1, blockThreshold: 1 })).not.toThrow();
   });
 });
 
