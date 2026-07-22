@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useAccessToken } from './useAccessToken';
+import { renderHook, act } from '@testing-library/react';
+import { useAccessToken, useIsFullyAuthenticated } from './useAccessToken';
 
 describe('useAccessToken store', () => {
   beforeEach(() => {
@@ -96,6 +97,29 @@ describe('useAccessToken store', () => {
       unsubscribe();
 
       expect(writes).toBe(1);
+    });
+  });
+
+  describe('useIsFullyAuthenticated', () => {
+    it('is false during the mfaPending window even though an access token is present', () => {
+      useAccessToken.setState({ accessToken: 'mfa-token', mfaPending: true });
+      const { result } = renderHook(() => useIsFullyAuthenticated());
+      expect(result.current).toBe(false);
+    });
+
+    it('is false with no access token', () => {
+      useAccessToken.setState({ accessToken: null, mfaPending: false });
+      const { result } = renderHook(() => useIsFullyAuthenticated());
+      expect(result.current).toBe(false);
+    });
+
+    it('flips to true the instant MFA verification clears mfaPending (gated queries auto-run)', () => {
+      useAccessToken.setState({ accessToken: 'mfa-token', mfaPending: true });
+      const { result } = renderHook(() => useIsFullyAuthenticated());
+      expect(result.current).toBe(false);
+
+      act(() => useAccessToken.getState().setVerifiedTokens('verified-token', 'refresh'));
+      expect(result.current).toBe(true);
     });
   });
 

@@ -17,6 +17,17 @@ const make401 = (config: InternalAxiosRequestConfig): AxiosError =>
     config,
   } as AxiosResponse);
 
+// A mfaPending 401: the full-auth middleware rejects every non-allowlisted request
+// during the login mfaPending window with this exact { mfaPending: true } marker.
+const makeMfaPending401 = (config: InternalAxiosRequestConfig): AxiosError =>
+  new AxiosError('Unauthorized', 'ERR_BAD_REQUEST', config, {}, {
+    status: 401,
+    statusText: 'Unauthorized',
+    data: { error: 'MFA setup or verification required.', mfaPending: true },
+    headers: {},
+    config,
+  } as AxiosResponse);
+
 const ok = (config: InternalAxiosRequestConfig, data: unknown): AxiosResponse =>
   ({ data, status: 200, statusText: 'OK', headers: {}, config }) as AxiosResponse;
 
@@ -230,6 +241,32 @@ describe('ApiProvider 401 interceptor -> login redirect', () => {
     expect(replace).not.toHaveBeenCalled();
     // No forced teardown either - mfaPending session state must be left alone.
     expect(useAccessToken.getState().mfaPending).toBe(true);
+  });
+
+  it('does NOT console-log a mfaPending 401 (expected mid-MFA rejection), but still logs a normal 401 (#804)', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // mfaPending session: token present, no refresh token - the interceptor's 401
+    // branch no-ops the redirect, and the logging block must stay silent.
+    useAccessToken.setState({
+      expired: false,
+      expiredReason: null,
+      accessToken: 'mfa-token',
+      refreshToken: null,
+      mfaPending: true,
+    });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) =>
+      Promise.reject(makeMfaPending401(config))) as AxiosAdapter;
+
+    await expect(api.get('/api/agents')).rejects.toBeTruthy();
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    // A plain 401 (no mfaPending marker) is a real error and must still be logged.
+    useAccessToken.setState({ accessToken: null, refreshToken: null, expired: true, mfaPending: false });
+    api.defaults.adapter = ((config: InternalAxiosRequestConfig) => Promise.reject(make401(config))) as AxiosAdapter;
+    await expect(api.get('/api/agents')).rejects.toBeTruthy();
+    expect(errorSpy).toHaveBeenCalledWith('Axios Error:', expect.anything());
+
+    errorSpy.mockRestore();
   });
 
   it('fires exactly one redirect when a burst of concurrent 401s are all unrecoverable', async () => {

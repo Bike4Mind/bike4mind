@@ -140,16 +140,28 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
+    // A 401 during the login mfaPending window is expected, not an error: the
+    // server rejects every non-allowlisted request while mid-MFA with
+    // { mfaPending: true } (see server/auth/auth.ts). The app shell fires its
+    // data queries before MFA completes, so logging these would spam ~40 lines
+    // per login and bury real errors (#804). Skip logging them; still let the
+    // 401 handling below run (it already no-ops the redirect for mfaPending).
+    const isMfaPending401 =
+      isAxiosError(error) && error.response?.status === 401 && error.response?.data?.mfaPending === true;
+
+    // Suppress logging for the expected mid-MFA rejection; log everything else.
     // TODO: have graceful toasters for customers vs developers
     // For now just a console.log
-    if (isAxiosError(error)) {
-      if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-        console.error('Network Error: Backend may not be running. Check that SST is started.');
+    if (!isMfaPending401) {
+      if (isAxiosError(error)) {
+        if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+          console.error('Network Error: Backend may not be running. Check that SST is started.');
+        } else {
+          console.error('Axios Error:', error.response?.data || error.message);
+        }
       } else {
-        console.error('Axios Error:', error.response?.data || error.message);
+        console.log('Axios Error', error);
       }
-    } else {
-      console.log('Axios Error', error);
     }
     /*
         toast.error(
