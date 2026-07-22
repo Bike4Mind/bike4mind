@@ -16,7 +16,7 @@ import {
 import CodeIcon from '@mui/icons-material/Code';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { getAgentEmbedKeys, type AgentEmbedKey } from '@client/app/utils/agentsAPICalls';
-import { ModellessAgentAlert } from '@client/app/components/common/ModellessAgentWarning';
+import { isModellessAgent, ModellessAgentAlert } from '@client/app/components/common/ModellessAgentWarning';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import {
   buildIframeSnippet,
@@ -94,9 +94,7 @@ export function EmbedSnippetSection({
         <CodeIcon fontSize="small" />
         <FormLabel sx={{ mb: 0 }}>Embed on your site</FormLabel>
       </Box>
-      {/* Same falsy notion as isModellessAgent; the agent object itself is not
-          in scope here, only the live form value. Mirrors the embed-key modals. */}
-      {!preferredModel && <ModellessAgentAlert testId={`${testIdPrefix}-model-warning`} />}
+      {isModellessAgent({ preferredModel }) && <ModellessAgentAlert testId={`${testIdPrefix}-model-warning`} />}
       {keys === 'error' ? (
         <Typography level="body-sm" color="danger" sx={{ opacity: 0.85 }} data-testid={`${testIdPrefix}-error`}>
           Couldn&apos;t load embed keys for this agent. Please refresh to try again.
