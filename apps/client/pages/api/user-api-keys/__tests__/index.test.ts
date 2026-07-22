@@ -54,9 +54,9 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedVal
 
 import '@pages/api/user-api-keys/index';
 
-function post(body: unknown) {
+function post(body: unknown, opts: { isAdmin?: boolean } = {}) {
   const { req, res } = createMocks({ method: 'POST', body });
-  (req as any).user = { id: 'u1', isAdmin: false };
+  (req as any).user = { id: 'u1', isAdmin: opts.isAdmin ?? false };
   return { req, res };
 }
 
@@ -146,6 +146,55 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
       allowedOrigins: 'https://example.com',
     });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/must be an array/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Org-billed minting authorization. Passing organizationId mints an org-owned key
+ * (billingOwnerType: Organization) - required for embed keys. Only an org admin
+ * (owner/manager) or a platform admin may bill an org; everyone else is rejected.
+ * This branch became reachable from the admin embed-key UI, so lock its contract.
+ */
+describe('POST /api/user-api-keys - org-billed authorization', () => {
+  beforeEach(() => {
+    createUserApiKey.mockClear();
+    findIdsAdministeredBy.mockResolvedValue([]);
+  });
+
+  it('lets a platform admin bill any org, forwarding Organization billing', async () => {
+    findIdsAdministeredBy.mockResolvedValue([]);
+    const { req, res } = post(
+      { name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-9' },
+      { isAdmin: true }
+    );
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ organizationId: 'org-9', billingOwnerType: 'Organization', agentId: 'agent-1' }),
+      expect.anything()
+    );
+  });
+
+  it('lets a non-admin bill an org they administer', async () => {
+    findIdsAdministeredBy.mockResolvedValue(['org-1']);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-1' });
+    await mockRefs.postHandler!(req, res);
+
+    expect(res._getStatusCode()).toBe(201);
+    expect(createUserApiKey).toHaveBeenCalledWith(
+      'u1',
+      expect.objectContaining({ organizationId: 'org-1', billingOwnerType: 'Organization' }),
+      expect.anything()
+    );
+  });
+
+  it('rejects a non-admin billing an org they do not administer, without calling the service', async () => {
+    findIdsAdministeredBy.mockResolvedValue([]);
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1', organizationId: 'org-9' });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/permission/i);
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
 });
