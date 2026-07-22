@@ -10,6 +10,7 @@ import axios from 'axios';
 import { ActualFileObject } from 'filepond';
 import type { fabFilesService } from '@bike4mind/services';
 import { resizeImageFile, isImageFile } from './imageResizer';
+import { uploadFileToUrl } from './uploadFileToUrl';
 
 export const getFabFilesFromServer = async (args?: fabFilesService.SearchFabFilesParameters) => {
   console.log('getFabFilesFromServer', args);
@@ -89,10 +90,9 @@ export const createFabFileOnServerWithUpload = async (
 
     // If the a file has a presigned URL, upload the file to the bucket
     if (newFabFile.presignedUrl) {
-      const putConfig = {
-        headers: {
-          'Content-Type': fileToUpload.type,
-        },
+      // Shared helper routes the self-host proxy path through the authed `api` client and the
+      // hosted S3 presign through raw axios, so this call-site can't drift from the others.
+      await uploadFileToUrl(newFabFile.presignedUrl, fileToUpload, fileToUpload.type, {
         signal: abortSignal,
         onUploadProgress: onProgress
           ? (progressEvent: { total?: number; loaded: number }) => {
@@ -101,15 +101,7 @@ export const createFabFileOnServerWithUpload = async (
               onProgress(loaded, total);
             }
           : undefined,
-      };
-      // Self-host returns a same-origin proxy path (leading '/') that needs the app's auth;
-      // the hosted S3 presign is an absolute, self-authenticating URL. Route the proxy through
-      // the authenticated `api` client, the S3 presign through raw axios (no app auth/cookies).
-      if (newFabFile.presignedUrl.startsWith('/')) {
-        await api.put(newFabFile.presignedUrl, fileToUpload, putConfig);
-      } else {
-        await axios.put(newFabFile.presignedUrl, fileToUpload, putConfig);
-      }
+      });
 
       // Check abort before presigned URL generation
       if (abortSignal?.aborted) {

@@ -1,4 +1,4 @@
-import axios from 'axios';
+import axios, { type AxiosRequestConfig } from 'axios';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
@@ -9,15 +9,27 @@ import { api } from '@client/app/contexts/ApiContext';
  * - Same-origin proxy path (self-host, starts with '/'): the authenticated `api` client, because
  *   pages/api/files/[id]/upload.ts is a normal baseApi route that needs the Bearer token.
  *
- * Shared by the single-file (fabFiles) and batch/data-lake (dataLakeWizard) upload paths so the
- * two can't diverge - they did, and self-host uploads 401'd against the proxy.
- * Pairs with the server-side resolveBrowserUploadUrl, which decides which URL shape to return.
+ * Shared by the single-file (fabFiles), batch/data-lake (dataLakeWizard), and generic
+ * (filesAPICalls) upload paths so they can't diverge - they did, and self-host uploads 401'd
+ * against the proxy. Pairs with the server-side resolveBrowserUploadUrl, which decides the URL
+ * shape. `config` forwards axios options (signal, onUploadProgress); Content-Type is always set here.
  */
-export async function uploadFileToUrl(url: string, file: File | Blob, contentType?: string): Promise<void> {
-  const headers = { 'Content-Type': contentType || (file as File).type || 'application/octet-stream' };
-  if (url.startsWith('/')) {
-    await api.put(url, file, { headers });
+export async function uploadFileToUrl(
+  url: string,
+  file: File | Blob,
+  contentType?: string,
+  config?: AxiosRequestConfig
+): Promise<void> {
+  const putConfig: AxiosRequestConfig = {
+    ...config,
+    headers: { 'Content-Type': contentType || file.type || 'application/octet-stream' },
+  };
+  // Same-origin proxy path (self-host) needs the app's Bearer via `api`; an absolute S3 presign
+  // authorizes via its own signature and must use raw axios. Exclude protocol-relative '//host/...'
+  // (also passes startsWith('/')) so the Bearer can never be sent to a foreign origin.
+  if (url.startsWith('/') && !url.startsWith('//')) {
+    await api.put(url, file, putConfig);
   } else {
-    await axios.put(url, file, { headers });
+    await axios.put(url, file, putConfig);
   }
 }

@@ -24,4 +24,21 @@ describe('uploadFileToUrl', () => {
     expect(apiPut).not.toHaveBeenCalled();
     expect(axiosPut.mock.calls[0][0]).toBe(s3);
   });
+
+  it('sends protocol-relative URLs through raw axios, never the authed api client', async () => {
+    // '//host/...' passes startsWith('/'); guard it so the Bearer never reaches a foreign origin.
+    await uploadFileToUrl('//evil.example.com/key.md', file, 'text/markdown');
+    expect(axiosPut).toHaveBeenCalledTimes(1);
+    expect(apiPut).not.toHaveBeenCalled();
+  });
+
+  it('forwards request config (signal, onUploadProgress) and Content-Type to the put call', async () => {
+    const signal = new AbortController().signal;
+    const onUploadProgress = vi.fn();
+    await uploadFileToUrl('/api/files/abc/upload', file, 'text/markdown', { signal, onUploadProgress });
+    const cfg = apiPut.mock.calls[0][2];
+    expect(cfg.signal).toBe(signal);
+    expect(cfg.onUploadProgress).toBe(onUploadProgress);
+    expect(cfg.headers['Content-Type']).toBe('text/markdown');
+  });
 });
