@@ -2,7 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { validateEmbedKeyOrigins } from '@server/services/publish';
+import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { logEvent } from '@server/utils/analyticsLog';
 import {
   ApiKeyScope,
@@ -90,6 +90,13 @@ const handler = baseApi()
       }
       embedOrigins = originsCheck.value;
     }
+    // Branding format screen (hex color, https logo, caps); the service
+    // re-validates with the same shared schema.
+    const brandingCheck = validateEmbedBranding(branding);
+    if (!brandingCheck.ok) {
+      throw new BadRequestError(brandingCheck.error);
+    }
+    const screenedBranding = brandingCheck.value;
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,
@@ -106,7 +113,9 @@ const handler = baseApi()
         // Forward embed fields whenever present - not only for embed keys - so the
         // service's coherence invariant rejects a non-embed key that carries them
         // (fail loud) instead of silently dropping them.
-        ...(isEmbedKey || hasEmbedFields ? { agentId, allowedOrigins: embedOrigins, branding, spendCap } : {}),
+        ...(isEmbedKey || hasEmbedFields
+          ? { agentId, allowedOrigins: embedOrigins, branding: screenedBranding, spendCap }
+          : {}),
         ...(organizationId
           ? { organizationId, billingOwnerType: CreditHolderType.Organization }
           : { billingOwnerType: CreditHolderType.User }),

@@ -88,8 +88,10 @@ export interface IUserApiKeyRateLimit {
 }
 
 /**
- * White-label config for an embed key (epic #41). Phase A stores it; the theming
- * that consumes these fields is Phase D. `hideBranding` is plan-gated there.
+ * White-label config for an embed key (epic #41), rendered by the widget serve
+ * route. Writes are validated by EmbedBrandingSchema (schemas/embedBranding.ts);
+ * `hideBranding` is honored only when the key owner's plan carries the
+ * whitelabel entitlement - the serve route re-checks on every request.
  */
 export interface IEmbedBranding {
   primaryColor?: string;

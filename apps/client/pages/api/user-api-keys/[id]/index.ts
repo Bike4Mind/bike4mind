@@ -1,7 +1,7 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
-import { validateEmbedKeyOrigins } from '@server/services/publish';
+import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
 import { logEvent } from '@server/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -39,9 +39,16 @@ const handler = baseApi().patch(
       embedOrigins = originsCheck.value;
     }
 
+    // Branding format screen (hex color, https logo, caps); the service
+    // re-validates with the same shared schema.
+    const brandingCheck = validateEmbedBranding(branding);
+    if (!brandingCheck.ok) {
+      throw new BadRequestError(brandingCheck.error);
+    }
+
     const updated = await userApiKeyService.updateEmbedKey(
       userId,
-      { keyId, agentId, allowedOrigins: embedOrigins, branding },
+      { keyId, agentId, allowedOrigins: embedOrigins, branding: brandingCheck.value },
       { db: { userApiKeys: userApiKeyRepository } }
     );
 

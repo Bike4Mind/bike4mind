@@ -112,4 +112,18 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid embed origin/i);
     expect(updateEmbedKey).not.toHaveBeenCalled();
   });
+
+  // The service is mocked, so these prove the ROUTE screens branding itself
+  // (validateEmbedBranding) rather than relying on the service re-validation.
+  it('rejects branding with a javascript: logo URL and never calls the service', async () => {
+    const { req, res } = patch('key-1', { branding: { logoUrl: 'javascript:alert(1)' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects branding with a non-hex primaryColor and never calls the service', async () => {
+    const { req, res } = patch('key-1', { branding: { primaryColor: 'red;}body{}' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
 });

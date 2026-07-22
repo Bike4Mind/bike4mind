@@ -1,13 +1,11 @@
-import { ApiKeyScope, EmbedOriginsSchema, IUserApiKeyRepository } from '@bike4mind/common';
+import {
+  ApiKeyScope,
+  EmbedBrandingSchema,
+  EmbedOriginsSchema,
+  IUserApiKeyRepository,
+} from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
-
-const embedBrandingSchema = z.object({
-  primaryColor: z.string().optional(),
-  logoUrl: z.string().optional(),
-  displayName: z.string().optional(),
-  hideBranding: z.boolean().optional(),
-});
 
 const updateEmbedKeySchema = z.object({
   keyId: z.string(),
@@ -17,7 +15,7 @@ const updateEmbedKeySchema = z.object({
   // lives at the route, which has the runtime host.
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
-  branding: embedBrandingSchema.optional(),
+  branding: EmbedBrandingSchema.optional(),
 });
 
 export type UpdateEmbedKeyParameters = z.infer<typeof updateEmbedKeySchema>;

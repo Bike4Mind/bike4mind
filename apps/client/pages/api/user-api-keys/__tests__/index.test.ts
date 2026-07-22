@@ -141,4 +141,28 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/must be an array/i);
     expect(createUserApiKey).not.toHaveBeenCalled();
   });
+
+  // The service is mocked, so these prove the ROUTE screens branding itself
+  // (validateEmbedBranding) rather than relying on the service re-validation.
+  it('(e) rejects branding with a javascript: logo URL and never calls the service', async () => {
+    const { req, res } = post({
+      name: 'bad',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      branding: { logoUrl: 'javascript:alert(1)' },
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('(e2) rejects branding with a non-hex primaryColor and never calls the service', async () => {
+    const { req, res } = post({
+      name: 'bad',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      branding: { primaryColor: 'rgb(0,0,0)' },
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
 });
