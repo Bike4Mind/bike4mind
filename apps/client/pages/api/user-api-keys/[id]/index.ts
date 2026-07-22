@@ -2,6 +2,7 @@ import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
+import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
 import { logEvent } from '@server/utils/analyticsLog';
 import { IEmbedBranding, UserApiKeyEvents } from '@bike4mind/common';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
@@ -40,15 +41,18 @@ const handler = baseApi().patch(
     }
 
     // Branding format screen (hex color, https logo, caps); the service
-    // re-validates with the same shared schema.
+    // re-validates with the same shared schema. The whitelabel write gate then
+    // neutralizes an unentitled hideBranding elevation (read side is the
+    // authoritative enforcement).
     const brandingCheck = validateEmbedBranding(branding);
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
+    const gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value);
 
     const updated = await userApiKeyService.updateEmbedKey(
       userId,
-      { keyId, agentId, allowedOrigins: embedOrigins, branding: brandingCheck.value },
+      { keyId, agentId, allowedOrigins: embedOrigins, branding: gatedBranding },
       { db: { userApiKeys: userApiKeyRepository } }
     );
 

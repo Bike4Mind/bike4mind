@@ -1,8 +1,8 @@
-import { CreditHolderType, type ApiKeyBillingOwnerType } from '@bike4mind/common';
+import { CreditHolderType, type ApiKeyBillingOwnerType, type IEmbedBranding } from '@bike4mind/common';
 import { organizationRepository, userRepository } from '@bike4mind/database';
-import { normalizeTag } from '@client/lib/entitlements/registry';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
 import type { EntitlementKey } from '@client/lib/entitlements/types';
-import { getUserEntitlements } from './index';
+import { getUserEntitlements, requestHasEntitlement, type EntitlementRequest } from './index';
 
 /** The slice of ApiKeyInfo the owner resolution needs; structurally assignable. */
 export interface EmbedKeyOwnerRef {
@@ -39,4 +39,28 @@ export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: E
   } catch {
     return false;
   }
+}
+
+/**
+ * Write-side defense in depth for the key create/update routes: neutralize an
+ * incoming `hideBranding: true` when the CALLER lacks the whitelabel
+ * entitlement, leaving every other branding field intact. Deliberately
+ * caller-scoped (requestHasEntitlement, admin bypass included) while the read
+ * side above is owner-scoped: the read side is authoritative and fail-safe, so
+ * any scope mismatch resolves to "branding shows", never the reverse. Strips
+ * silently rather than 403ing - the flag is a cosmetic preference, and a
+ * rejection would both leak entitlement state and block the legitimate save of
+ * the other branding fields in the same request. Acts only on the incoming
+ * object: a PATCH that omits branding never reaches this, so a stored
+ * hideBranding is never proactively cleared (it is inert data the read gate
+ * already ignores for unentitled owners).
+ */
+export async function gateEmbedBrandingWrite(
+  req: EntitlementRequest,
+  branding: IEmbedBranding | undefined
+): Promise<IEmbedBranding | undefined> {
+  if (!branding || branding.hideBranding !== true) return branding;
+  const entitled = await requestHasEntitlement(req, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false);
+  if (entitled) return branding;
+  return { ...branding, hideBranding: false };
 }
