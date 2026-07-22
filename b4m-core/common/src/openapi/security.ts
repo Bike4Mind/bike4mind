@@ -28,13 +28,29 @@ export const apiKeyAuth = registry.registerComponent('securitySchemes', 'apiKeyA
 });
 
 /**
- * Security requirement referenced by every operation: either scheme grants
+ * JWT-only bearer auth. Distinct from `bearerAuth` (which also accepts a
+ * `b4m_live_` key): the tools endpoint's handler (`apps/client/server/cli/tools.ts`)
+ * runs `verifyJwtToken` only and rejects API keys, so operations backed by that
+ * handler reference this scheme rather than `bearerAuth`/`apiKeyAuth`.
+ */
+export const jwtAuth = registry.registerComponent('securitySchemes', 'jwtAuth', {
+  type: 'http',
+  scheme: 'bearer',
+  bearerFormat: 'JWT',
+  description: 'JWT access token only. Send `Authorization: Bearer <access_token>`. API keys are NOT accepted here.',
+});
+
+/**
+ * Security requirement for API-key-capable operations: either scheme grants
  * access. Scope arrays are empty because OpenAPI only honors scopes for
  * oauth2/openIdConnect schemes; the per-operation scope contract is published
  * via the `x-required-scopes` vendor extension and the operation description
  * instead. See {@link REQUIRED_SCOPES}.
  */
 export const SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ bearerAuth: [] }, { apiKeyAuth: [] }];
+
+/** Security requirement for JWT-only operations (e.g. the tools endpoint). */
+export const JWT_SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ jwtAuth: [] }];
 
 /**
  * Canonical API key scopes, sourced verbatim from the runtime {@link ApiKeyScope}
@@ -44,8 +60,16 @@ export const SECURITY_REQUIREMENT: Array<Record<string, string[]>> = [{ bearerAu
  */
 export const ALL_API_KEY_SCOPES: string[] = Object.values(ApiKeyScope);
 
-/** Scopes an operation expects, surfaced per-operation via `x-required-scopes`. */
+/**
+ * Scopes an operation actually enforces, surfaced per-operation via
+ * `x-required-scopes`. OR semantics: a key needs ANY ONE of the listed scopes
+ * (auth.ts gates with `requiredScopes.some(...)`), not all of them.
+ *
+ * Only `createCompletion` is listed: `sseRoute.ts` -> `verifyApiKey` enforces
+ * these. `executeTool` is intentionally ABSENT - its handler is JWT-only and
+ * checks no scope, so publishing a scope requirement there would advertise a
+ * gate that does not exist.
+ */
 export const REQUIRED_SCOPES = {
   createCompletion: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
-  executeTool: [ApiKeyScope.AI_CHAT, ApiKeyScope.AI_GENERATE],
 } as const;
