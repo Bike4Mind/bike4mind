@@ -59,11 +59,15 @@ const WIDGET_JS = String.raw`(function () {
   var css = document.createElement('style');
   css.textContent = [
     '#b4m-ov,#b4m-ov *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}',
-    '#b4m-ov{position:fixed;z-index:2147483000;bottom:20px;right:20px}',
+    // --b4m-chrome is the height of the wrapper's bottom livery bar (.b4m-bar), measured at
+    // boot. That bar is fixed at z-index 2147483647 (the max), so we cannot stack above it -
+    // the launcher and panel must sit clear of it instead. Must stay in sync with the bar in
+    // renderBundleWrapper (pages/api/publish/serve/[...path].ts).
+    '#b4m-ov{position:fixed;z-index:2147483000;bottom:calc(20px + var(--b4m-chrome,0px));right:20px}',
     '#b4m-launch{display:flex;align-items:center;gap:8px;background:#1a1a2e;color:#fff;border:0;border-radius:999px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.28)}',
     '#b4m-launch:hover{background:#2a2a44}',
     '#b4m-launch .dot{background:#8ab4ff;color:#0f0f1a;border-radius:999px;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;padding:0 5px}',
-    '#b4m-panel{position:fixed;bottom:20px;right:20px;width:360px;max-width:calc(100vw - 32px);max-height:min(640px,calc(100vh - 40px));background:#fff;color:#1a1a2e;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.32);display:none;flex-direction:column;overflow:hidden}',
+    '#b4m-panel{position:fixed;z-index:2147483000;bottom:calc(20px + var(--b4m-chrome,0px));right:20px;width:360px;max-width:calc(100vw - 32px);max-height:min(640px,calc(100vh - 40px - var(--b4m-chrome,0px)));background:#fff;color:#1a1a2e;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.32);display:none;flex-direction:column;overflow:hidden}',
     '#b4m-panel.b4m-open{display:flex}',
     '#b4m-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid #ececf3}',
     '#b4m-head b{font-size:15px}',
@@ -127,6 +131,16 @@ const WIDGET_JS = String.raw`(function () {
   panel.id = 'b4m-panel';
   document.body.appendChild(ov);
   document.body.appendChild(panel);
+
+  // The bottom livery bar is present only on own-tab open-public renders, and its height
+  // grows when its contents wrap on narrow viewports - so measure rather than hardcode 52px.
+  function syncChrome() {
+    var bar = document.querySelector('.b4m-bar');
+    var h = bar ? bar.getBoundingClientRect().height : 0;
+    document.documentElement.style.setProperty('--b4m-chrome', h + 'px');
+  }
+  syncChrome();
+  window.addEventListener('resize', syncChrome);
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
