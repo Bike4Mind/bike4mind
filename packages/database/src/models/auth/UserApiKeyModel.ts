@@ -6,6 +6,7 @@ import {
   CreditHolderType,
   IEmbedBranding,
   IUserApiKeyDocument,
+  IUserApiKeyRateLimit,
   IUserApiKeyRepository,
 } from '@bike4mind/common';
 import BaseRepository from '@bike4mind/db-core';
@@ -58,6 +59,20 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     // null clears via $unset so the field goes truly absent ("uncapped"), never
     // null - the gate distinguishes absent from a present 0.
     await this.model.updateOne({ _id: id }, spendCap === null ? { $unset: { spendCap: 1 } } : { $set: { spendCap } });
+  }
+
+  // Per-path $set (not a whole-subdoc $set) to stay consistent with updateUsage
+  // and to leave any future sibling under rateLimit untouched.
+  async setRateLimit(id: string, rateLimit: IUserApiKeyRateLimit) {
+    await this.model.updateOne(
+      { _id: id },
+      {
+        $set: {
+          'rateLimit.requestsPerMinute': rateLimit.requestsPerMinute,
+          'rateLimit.requestsPerDay': rateLimit.requestsPerDay,
+        },
+      }
+    );
   }
 
   async resetSpend(id: string) {

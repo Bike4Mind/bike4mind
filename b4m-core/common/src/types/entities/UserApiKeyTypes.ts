@@ -158,6 +158,8 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   setSpendCap: (id: string, spendCap: number | null) => Promise<void>;
   /** Zeroes `usage.totalSpendCredits` - the top-up lever for an over-cap key. */
   resetSpend: (id: string) => Promise<void>;
+  /** Replaces both request ceilings; the enforcer picks them up on the next request. */
+  setRateLimit: (id: string, rateLimit: IUserApiKeyRateLimit) => Promise<void>;
   updateLastUsed: (id: string) => Promise<void>;
   findActiveByKeyPrefix: (keyPrefix: string) => Promise<IUserApiKeyDocument | null>;
   deactivateAllByUserId: (userId: string) => Promise<void>;
