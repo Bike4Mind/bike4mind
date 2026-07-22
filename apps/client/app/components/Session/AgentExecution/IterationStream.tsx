@@ -283,8 +283,15 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                 key={group.iteration}
                 expanded={expanded}
                 onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
-                // gap: 12px summary->steps; mt: 12px above every iteration after the first.
-                sx={{ gap: 1.5, mt: renderIdx === 0 ? 0 : 1.5 }}
+                // gap: 12px summary->steps but ONLY when expanded (a collapsed
+                // accordion shouldn't show a gap under its title); mt: 12px above
+                // every iteration after the first; drop the bottom divider on the
+                // last (so a single iteration has no trailing separator line).
+                sx={{
+                  gap: expanded ? 1.5 : 0,
+                  mt: renderIdx === 0 ? 0 : 1.5,
+                  borderBottom: isLast ? 'none' : undefined,
+                }}
               >
                 <AccordionSummary
                   // Chevron sits next to the title instead of pushed to the far
