@@ -76,7 +76,9 @@ const WIDGET_CSS = `
   #b4m-footer { text-align: center; color: #999; font-size: 11px; padding: 4px 0 8px; flex: 0 0 auto; }
 `;
 
-const WIDGET_JS = `(function () {
+/** Exported so the runtime test can eval the exact IIFE the page ships (not a
+ *  copy) in jsdom against a stubbed fetch. */
+export const EMBED_WIDGET_JS = `(function () {
   'use strict';
   ${EMBED_SSE_PARSER_SRC}
 
@@ -144,11 +146,31 @@ const WIDGET_JS = `(function () {
     });
   }
 
+  // UTF-8 byte length, NOT String#length (UTF-16 code units): a CJK-heavy
+  // conversation is ~3 bytes/char, so a code-unit cap of 900k would let ~2.6MB
+  // of real bytes through and trip the route's 1mb express.json limit (413).
+  function byteLen(str) {
+    return new TextEncoder().encode(str).length;
+  }
+
   // The server resends nothing (stateless), so the full history goes up each
   // turn; keep it bounded under the route's 1mb body cap with headroom.
   function trimHistory() {
     while (history.length > HISTORY_MAX_TURNS) history.shift();
-    while (history.length > 1 && JSON.stringify(history).length > HISTORY_MAX_BYTES) history.shift();
+    while (history.length > 1 && byteLen(JSON.stringify(history)) > HISTORY_MAX_BYTES) history.shift();
+    // A single turn that alone exceeds the cap can't be trimmed away by
+    // shifting; hard-truncate its content (by bytes) so the request still fits
+    // rather than failing as a generic 413.
+    if (history.length === 1 && byteLen(JSON.stringify(history)) > HISTORY_MAX_BYTES) {
+      var only = history[0];
+      var enc = new TextEncoder();
+      var dec = new TextDecoder();
+      // Leave headroom for the JSON envelope around the content string.
+      var budget = HISTORY_MAX_BYTES - 200;
+      var bytes = enc.encode(only.content).slice(0, budget);
+      // stream:false drops a trailing partial multibyte char instead of U+FFFD.
+      only.content = dec.decode(bytes);
+    }
     if (history.length && history[0].role === 'assistant') history.shift();
   }
 
@@ -298,7 +320,7 @@ export function renderEmbedWidgetHtml(config: EmbedWidgetConfig): string {
 </div>
 <div id="b4m-footer"></div>
 <script>window.__B4M_EMBED__ = ${serializeConfigForScript(resolved)};</script>
-<script>${WIDGET_JS}</script>
+<script>${EMBED_WIDGET_JS}</script>
 </body>
 </html>
 `;

@@ -6,8 +6,16 @@ describe('isFirstPartyEmbedOrigin', () => {
     expect(isFirstPartyEmbedOrigin('https://app.example.com', undefined, 'app.example.com')).toBe(true);
   });
 
-  it('permits a subdomain under the publish host', () => {
-    expect(isFirstPartyEmbedOrigin('https://sub.app.example.com', undefined, 'app.example.com')).toBe(true);
+  it('rejects a subdomain under the publish host (exact match only)', () => {
+    // Subtree trust would include untrusted customer bundles served from
+    // {publicId}.usercontent.app.<domain>; only the exact app host is first-party.
+    expect(isFirstPartyEmbedOrigin('https://sub.app.example.com', undefined, 'app.example.com')).toBe(false);
+  });
+
+  it('rejects a usercontent bundle origin under the app host', () => {
+    expect(isFirstPartyEmbedOrigin('https://abc123.usercontent.app.example.com', undefined, 'app.example.com')).toBe(
+      false
+    );
   });
 
   it('rejects a third-party origin regardless of publish host', () => {

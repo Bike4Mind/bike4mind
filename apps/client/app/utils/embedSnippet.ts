@@ -3,6 +3,12 @@
  * (pages/api/embed/widget.ts), the snippet-generator UI, and docs - one source
  * of truth for the customer-facing paths and the two copy-paste snippets, so
  * the served code and the generated snippets cannot drift apart.
+ *
+ * Script-tag variant: `<script src="<host>/api/embed/widget" data-key data-position>`.
+ * The loader (widget.ts) reads exactly `data-key` (required) and `data-position`
+ * (`bottom-right` default | `bottom-left`); keep any new option in lockstep with
+ * both `buildScriptSnippet` here and the loader's attribute reads.
+ * Iframe variant: `<iframe src="<host>/embed/chat?k=<key>">` at a fixed size.
  */
 
 import { escapeAttr } from './htmlEscape';

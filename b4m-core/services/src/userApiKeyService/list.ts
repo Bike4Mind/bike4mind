@@ -32,20 +32,6 @@ export const listUserApiKeys = async (
  * the org's keys. Authorization (is the caller an administrator of this org?)
  * is the caller's responsibility.
  */
-/**
- * List the active embed keys bound to an agent. The finder is agentId-scoped
- * already; the scope filter is defensive so a non-embed key that somehow
- * carries a stray agentId never surfaces on an embed listing. Authorization
- * (may the caller see this agent's keys?) is the caller's responsibility.
- */
-export const listAgentEmbedKeys = async (
-  agentId: string,
-  adapters: ListUserApiKeysAdapters
-): Promise<IUserApiKeyDocument[]> => {
-  const keys = await adapters.db.userApiKeys.findByAgentId(agentId);
-  return keys.filter(key => key.scopes.includes(ApiKeyScope.EMBED_CHAT));
-};
-
 export const listOrganizationApiKeys = async (
   organizationId: string,
   adapters: ListUserApiKeysAdapters,
@@ -58,4 +44,18 @@ export const listOrganizationApiKeys = async (
   }
 
   return apiKeys;
+};
+
+/**
+ * List the active embed keys bound to an agent. The finder is agentId-scoped
+ * already; the scope filter is defensive so a non-embed key that somehow
+ * carries a stray agentId never surfaces on an embed listing. Authorization
+ * (may the caller see this agent's keys?) is the caller's responsibility.
+ */
+export const listAgentEmbedKeys = async (
+  agentId: string,
+  adapters: ListUserApiKeysAdapters
+): Promise<IUserApiKeyDocument[]> => {
+  const keys = await adapters.db.userApiKeys.findByAgentId(agentId);
+  return keys.filter(key => key.scopes.includes(ApiKeyScope.EMBED_CHAT));
 };

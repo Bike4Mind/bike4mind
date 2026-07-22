@@ -44,7 +44,9 @@ export function EmbedSnippetSection({
   agentName,
   testIdPrefix = 'agent-embed-snippet',
 }: EmbedSnippetSectionProps) {
-  const [keys, setKeys] = useState<AgentEmbedKey[] | null>(null);
+  // null = loading; 'error' = fetch failed (distinct from an empty list so a
+  // transient failure reads as "couldn't load" not "no keys exist").
+  const [keys, setKeys] = useState<AgentEmbedKey[] | null | 'error'>(null);
   const [selectedKeyId, setSelectedKeyId] = useState<string | null>(null);
   const [format, setFormat] = useState<SnippetFormat>('script');
   const [pastedKey, setPastedKey] = useState('');
@@ -58,14 +60,15 @@ export function EmbedSnippetSection({
         setSelectedKeyId(prev => prev ?? list[0]?.id ?? null);
       })
       .catch(() => {
-        if (active) setKeys([]);
+        if (active) setKeys('error');
       });
     return () => {
       active = false;
     };
   }, [agentId]);
 
-  const selectedKey = keys?.find(k => k.id === selectedKeyId) ?? null;
+  const keyList = Array.isArray(keys) ? keys : [];
+  const selectedKey = keyList.find(k => k.id === selectedKeyId) ?? null;
 
   const snippet = useMemo(() => {
     if (!selectedKey) return '';
@@ -87,7 +90,11 @@ export function EmbedSnippetSection({
         <CodeIcon fontSize="small" />
         <FormLabel sx={{ mb: 0 }}>Embed on your site</FormLabel>
       </Box>
-      {keys.length === 0 ? (
+      {keys === 'error' ? (
+        <Typography level="body-sm" color="danger" sx={{ opacity: 0.85 }} data-testid={`${testIdPrefix}-error`}>
+          Couldn&apos;t load embed keys for this agent. Please refresh to try again.
+        </Typography>
+      ) : keys.length === 0 ? (
         <Typography level="body-sm" sx={{ opacity: 0.75 }} data-testid={`${testIdPrefix}-empty`}>
           No embed keys are provisioned for this agent yet. Embed keys are minted by an organization administrator; once
           one exists, the copy-paste embed code appears here.

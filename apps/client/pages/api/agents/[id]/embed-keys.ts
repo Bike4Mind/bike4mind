@@ -65,7 +65,7 @@ const handler = baseApi().get(async (req, res) => {
     id: key.id,
     name: key.name,
     keyPrefix: key.keyPrefix,
-    agentId: key.agentId!,
+    agentId: key.agentId ?? id,
     allowedOrigins: key.allowedOrigins ?? [],
     status: key.status,
     createdAt: key.createdAt,

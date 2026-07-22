@@ -1,4 +1,4 @@
-import { isOriginPermitted, isOriginUnderHost } from '@bike4mind/common';
+import { isOriginPermitted } from '@bike4mind/common';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
 
 /**
@@ -13,26 +13,32 @@ import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
  * no attack surface. Must stay in lockstep across BOTH origin gates:
  * pages/api/embed/session.ts and server/chatCompletion/external/embedRoute.ts.
  *
- * Two matches, in order:
- * - Origin under PUBLISH_HOST (branded deployments; robust behind CloudFront,
- *   where the upstream Host header may be an internal one).
- * - Origin host equals the request's own Host header (covers unbranded
- *   local/dev stacks where PUBLISH_HOST is empty and the origin is http).
+ * EXACT host match only - deliberately NOT a subtree match on PUBLISH_HOST. The
+ * widget page is served from exactly `app.<domain>`, so an exact match is all
+ * the first-party flow needs; a subtree match would also trust
+ * `{publicId}.usercontent.app.<domain>`, which serves untrusted customer-published
+ * bundles (the read-time mirror of the write-time self-host rejection in
+ * embedOrigins.ts). Never widen this to the app subtree.
+ *
+ * Two matches:
+ * - hostname === PUBLISH_HOST (branded deployments; PUBLISH_HOST is portless).
+ * - host === the request's own Host header (unbranded local/dev stacks where
+ *   PUBLISH_HOST is empty; Host may carry a port, so compare host-with-port).
  */
 export function isFirstPartyEmbedOrigin(
   origin: string,
   requestHost: string | undefined,
   publishHost: string = PUBLISH_HOST
 ): boolean {
-  if (publishHost) return isOriginUnderHost(origin, publishHost);
-  if (!requestHost) return false;
-  let originHost: string;
+  let url: URL;
   try {
-    originHost = new URL(origin.trim().toLowerCase()).host;
+    url = new URL(origin.trim().toLowerCase());
   } catch {
     return false;
   }
-  return originHost === requestHost.trim().toLowerCase();
+  if (publishHost && url.hostname === publishHost.toLowerCase()) return true;
+  if (requestHost && url.host === requestHost.trim().toLowerCase()) return true;
+  return false;
 }
 
 /**

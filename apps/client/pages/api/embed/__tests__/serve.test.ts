@@ -168,6 +168,32 @@ describe('GET /api/embed/serve - public widget page', () => {
     expect(res.getHeader('Vary')).toBeUndefined();
   });
 
+  it('drops CSP-injection-shaped stored origins at the frame-ancestors boundary', async () => {
+    // Even if a malformed value reached the stored allow-list, the read-time
+    // parseEmbedOrigin re-screen must keep it out of the CSP header - no
+    // whitespace/semicolon/newline can smuggle a new directive.
+    mockVerifyEmbedApiKey.mockResolvedValue({
+      ...VALID_INFO,
+      allowedOrigins: [
+        'https://ok.example',
+        'https://evil.example; script-src *',
+        'https://evil.example\n; default-src *',
+        "https://evil.example' 'unsafe-inline",
+      ],
+    });
+    const res = await run({ k: 'b4m_live_inject' });
+    expect(res._getStatusCode()).toBe(200);
+    const csp = String(res.getHeader('Content-Security-Policy'));
+    // Only the one canonical origin survives; nothing malformed reaches the header.
+    expect(frameAncestorsOf(res)).toBe("frame-ancestors 'self' https://ok.example");
+    expect(csp).not.toContain('evil.example');
+    expect(csp).not.toContain('script-src *');
+    expect(csp).not.toContain('default-src *');
+    expect(csp).not.toContain('\n');
+    // The re-screen must not have appended any extra directive to the fixed set.
+    expect(csp.split(';')).toHaveLength(8);
+  });
+
   it('filters a non-canonical stored origin out of the CSP (read-time re-screen)', async () => {
     mockVerifyEmbedApiKey.mockResolvedValue({
       ...VALID_INFO,

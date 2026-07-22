@@ -47,6 +47,14 @@ describe('EmbedSnippetSection', () => {
     await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-empty')).toBeTruthy());
   });
 
+  it('shows a distinct error state (not the empty state) when the fetch fails', async () => {
+    getAgentEmbedKeys.mockRejectedValue(new Error('500'));
+    renderSection();
+    await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-error')).toBeTruthy());
+    // A transient failure must NOT read as "no keys exist".
+    expect(screen.queryByTestId('agent-embed-snippet-empty')).toBeNull();
+  });
+
   it('lists the key and emits a script snippet with the placeholder by default', async () => {
     renderSection();
     await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-snippet')).toBeTruthy());
