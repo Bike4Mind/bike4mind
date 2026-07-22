@@ -43,6 +43,7 @@ const h = vi.hoisted(() => ({
   updateMutate: vi.fn(),
   createMutate: vi.fn(),
   billingOrgs: [] as { id: string; name: string }[],
+  allOrgs: [] as { id: string; name: string }[],
   isAdmin: false,
 }));
 
@@ -59,14 +60,13 @@ vi.mock('@client/app/contexts/UserContext', () => ({
   useUser: () => ({ currentUser: { id: 'u1', isAdmin: h.isAdmin } }),
 }));
 
-// Stub the admin all-orgs Autocomplete to a plain button, so the admin branch is
-// exercised without dragging in useSearchUserOrganizations + debounce.
-vi.mock('@client/app/components/common/SingleOrganizationSelector', () => ({
-  default: ({ onChange }: { onChange: (id: string | null) => void }) => (
-    <button data-testid="embed-key-org-admin-pick" onClick={() => onChange('org-admin')}>
-      pick admin org
-    </button>
-  ),
+// The admin branch searches ALL orgs (useSearchOrganizations, no userId filter);
+// return a fixed set regardless of the search term so the Autocomplete has options.
+vi.mock('@client/app/hooks/data/organizations', () => ({
+  useSearchOrganizations: () => ({
+    data: { data: h.allOrgs, totalPages: 1, totalOrganizations: h.allOrgs.length },
+    isLoading: false,
+  }),
 }));
 
 vi.mock('@client/app/hooks/data/agents', () => ({
@@ -99,6 +99,7 @@ describe('EmbedKeysTab', () => {
   beforeEach(() => {
     h.keys = [embedKey, plainKey, modellessAgentKey];
     h.billingOrgs = [{ id: 'org-1', name: 'Acme Org' }];
+    h.allOrgs = [{ id: 'org-admin', name: 'Global Org' }];
     h.isAdmin = false;
     h.updateMutate.mockClear();
     h.createMutate.mockClear();
@@ -237,14 +238,20 @@ describe('EmbedKeysTab', () => {
     expect(screen.getByTestId('embed-key-create-btn')).toBeDisabled();
   });
 
-  it('lets a platform admin pick any org, flowing organizationId into the create payload', () => {
+  // A platform admin picks from ALL orgs (not the billing-organizations set), so
+  // they can mint for any tenant - the create route's isAdmin bypass allows it.
+  it('lets a platform admin pick any org, flowing organizationId into the create payload', async () => {
     h.isAdmin = true;
     renderTab();
     fireEvent.click(screen.getByTestId('embed-key-new-btn'));
     fillNameAndAgent('Marketing site');
+    // The non-admin Select is not used for admins.
     expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTestId('embed-key-org-admin-pick'));
+    const combo = within(screen.getByTestId('embed-key-org-admin-select')).getByRole('combobox');
+    fireEvent.change(combo, { target: { value: 'Global' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Global Org' }));
+
     fireEvent.click(screen.getByTestId('embed-key-create-btn'));
 
     expect(h.createMutate).toHaveBeenCalledTimes(1);
@@ -257,7 +264,7 @@ describe('EmbedKeysTab', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
     expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('embed-key-org-admin')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-org-admin-select')).not.toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-org-empty')).not.toBeInTheDocument();
   });
 });

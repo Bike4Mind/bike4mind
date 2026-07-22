@@ -9,6 +9,7 @@ import {
 } from '@client/app/hooks/data/userApiKeys';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -41,16 +42,19 @@ import {
   ApiKeyScope,
   EMBED_ORIGINS_MAX,
   IEmbedBranding,
+  IOrganizationDocument,
   IUserApiKeyDocument,
   parseEmbedOrigin,
+  WithId,
 } from '@bike4mind/common';
 import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEditor';
-import SingleOrganizationSelector from '@client/app/components/common/SingleOrganizationSelector';
 import { useUser } from '@client/app/contexts/UserContext';
 import { useGetAgents } from '@client/app/hooks/data/agents';
+import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
+import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
@@ -259,38 +263,64 @@ function EmbedKeyFormFields({
 
 const emptyForm = (): EmbedKeyFormState => ({ agentId: '', allowedOrigins: [], branding: {} });
 
-/**
- * Required owning-organization picker for minting an embed key. Embed keys must
- * be org-owned - assertEmbedCredential rejects a user-owned key - so unlike the
- * optional "bill usage to" selector on personal keys, this has no personal
- * fallback and creation is blocked until an org is chosen. A platform admin can
- * bill any org; a regular org admin picks from the orgs they own or manage,
- * which is exactly what the create route authorizes for a non-admin
- * (billing-organizations == findIdsAdministeredBy), so a selectable org can
- * never 403 at submit. Lives outside the shared EmbedKeyFormState because
- * ownership is fixed at creation and Configure must not expose it.
- */
-function EmbedKeyOrganizationField({
-  value,
-  onChange,
-}: {
-  value?: string;
-  onChange: (organizationId?: string) => void;
-}) {
-  const { currentUser } = useUser();
-  const { data: billingOrgs, isLoading } = useBillingOrganizations();
+const orgOwnerHint = 'The organization that owns and is billed for this key.';
 
-  if (currentUser?.isAdmin) {
-    return (
-      <FormControl required data-testid="embed-key-org-admin">
-        <FormLabel>Organization</FormLabel>
-        <SingleOrganizationSelector currentOrgId={value ?? null} onChange={id => onChange(id ?? undefined)} />
-        <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
-          The organization that owns and is billed for this key.
-        </Typography>
-      </FormControl>
-    );
-  }
+/**
+ * Platform-admin branch of the org picker: a server-searched Autocomplete over
+ * EVERY organization. It must NOT reuse SingleOrganizationSelector / the
+ * useSearchUserOrganizations hook - those inject `filters.userId`, so even an
+ * admin would only see the orgs they own or belong to. useSearchOrganizations
+ * sends no userId, and /api/organizations returns all tenants for an admin, so
+ * an admin can bill any org (which the create route's isAdmin bypass allows).
+ * The picked org is remembered so it stays selected while the search term
+ * changes, and cleared when the parent resets `value` after a successful mint.
+ */
+function AdminOrgPicker({ value, onChange }: { value?: string; onChange: (organizationId?: string) => void }) {
+  const { debouncedValue: search, setValue: setSearch } = useDebounceValue('', 400);
+  const { data, isLoading } = useSearchOrganizations({ page: 1, limit: 20, search });
+  const [picked, setPicked] = useState<WithId<IOrganizationDocument> | null>(null);
+
+  useEffect(() => {
+    if (!value) setPicked(null);
+  }, [value]);
+
+  const options = data?.data ?? [];
+  const selected = value ? (picked ?? options.find(org => org.id === value) ?? null) : null;
+  // Keep the selected org present even when the current search filters it out.
+  const mergedOptions = selected && !options.some(org => org.id === selected.id) ? [selected, ...options] : options;
+
+  return (
+    <FormControl required>
+      <FormLabel>Organization</FormLabel>
+      <Autocomplete
+        placeholder="Search organizations"
+        loading={isLoading}
+        options={mergedOptions}
+        value={selected}
+        onChange={(_, org) => {
+          setPicked(org);
+          onChange(org?.id ?? undefined);
+        }}
+        onInputChange={(_, input) => setSearch(input ?? '')}
+        isOptionEqualToValue={(option, v) => option.id === v.id}
+        getOptionLabel={option => option.name}
+        data-testid="embed-key-org-admin-select"
+      />
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+        {orgOwnerHint}
+      </Typography>
+    </FormControl>
+  );
+}
+
+/**
+ * Non-admin branch: pick from the orgs the caller owns or manages
+ * (billing-organizations == findIdsAdministeredBy), which is exactly what the
+ * create route authorizes for a non-admin, so a selectable org can never 403 at
+ * submit. A caller who administers none is told they cannot mint.
+ */
+function MemberOrgPicker({ value, onChange }: { value?: string; onChange: (organizationId?: string) => void }) {
+  const { data: billingOrgs, isLoading } = useBillingOrganizations();
 
   if (!isLoading && (billingOrgs?.length ?? 0) === 0) {
     return (
@@ -309,7 +339,7 @@ function EmbedKeyOrganizationField({
       <Select
         value={value ?? null}
         onChange={(_, v) => onChange((v as string) ?? undefined)}
-        placeholder={isLoading ? 'Loading organizations…' : 'Select the owning organization'}
+        placeholder={isLoading ? 'Loading organizations...' : 'Select the owning organization'}
         disabled={isLoading}
         data-testid="embed-key-org-select"
       >
@@ -320,9 +350,34 @@ function EmbedKeyOrganizationField({
         ))}
       </Select>
       <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
-        The organization that owns and is billed for this key.
+        {orgOwnerHint}
       </Typography>
     </FormControl>
+  );
+}
+
+/**
+ * Required owning-organization picker for minting an embed key. Embed keys must
+ * be org-owned - assertEmbedCredential rejects a user-owned key - so unlike the
+ * optional "bill usage to" selector on personal keys, this has no personal
+ * fallback and creation is blocked until an org is chosen. Split by role so each
+ * branch mounts only its own data hook: a platform admin searches all orgs (see
+ * AdminOrgPicker), everyone else picks from the orgs they administer. Lives
+ * outside the shared EmbedKeyFormState because ownership is fixed at creation
+ * and Configure must not expose it.
+ */
+function EmbedKeyOrganizationField({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (organizationId?: string) => void;
+}) {
+  const { currentUser } = useUser();
+  return currentUser?.isAdmin ? (
+    <AdminOrgPicker value={value} onChange={onChange} />
+  ) : (
+    <MemberOrgPicker value={value} onChange={onChange} />
   );
 }
 
