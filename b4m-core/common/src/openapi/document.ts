@@ -38,7 +38,9 @@ function infoDescription(): string {
     'API keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:',
     ...ALL_API_KEY_SCOPES.map(s => `- \`${s}\``),
     '',
-    'Per-operation required scopes are published on each operation via the `x-required-scopes` extension.',
+    'Per-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: ' +
+      "a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no " +
+      '`x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).',
     '',
     '## CORS',
     'The spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints ' +
@@ -81,7 +83,7 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  * `streaming` toggles the SSE-only affordances (curl `-N`, Python `stream=True`)
  * so the non-streaming tools endpoint does not tell users to stream JSON.
  */
-function codeSamples(path: string, body: unknown, streaming: boolean) {
+function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string) {
   const url = `https://your-deployment.example.com${path}`;
   const json = JSON.stringify(body);
   const pretty = JSON.stringify(body, null, 2);
@@ -91,7 +93,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean) {
     {
       lang: 'curl',
       label: 'curl',
-      source: `curl ${curlFlags} -X POST "${url}" \\\n  -H "Authorization: Bearer b4m_live_<key>" \\\n  -H "Content-Type: application/json" \\\n  -d '${json}'`,
+      source: `curl ${curlFlags} -X POST "${url}" \\\n  -H "Authorization: Bearer ${authToken}" \\\n  -H "Content-Type: application/json" \\\n  -d '${json}'`,
     },
     {
       lang: 'JavaScript',
@@ -99,7 +101,7 @@ function codeSamples(path: string, body: unknown, streaming: boolean) {
       source:
         `const res = await fetch("${url}", {\n` +
         `  method: "POST",\n` +
-        `  headers: {\n    "Authorization": "Bearer b4m_live_<key>",\n    "Content-Type": "application/json",\n  },\n` +
+        `  headers: {\n    "Authorization": "Bearer ${authToken}",\n    "Content-Type": "application/json",\n  },\n` +
         `  body: JSON.stringify(${pretty}),\n});`,
     },
     {
@@ -108,22 +110,29 @@ function codeSamples(path: string, body: unknown, streaming: boolean) {
       source:
         `import requests\n\n` +
         `res = requests.post(\n    "${url}",\n` +
-        `    headers={"Authorization": "Bearer b4m_live_<key>"},\n` +
+        `    headers={"Authorization": "Bearer ${authToken}"},\n` +
         `    json=${toPythonLiteral(body)},${pyStream}\n)`,
     },
   ];
 }
 
-const CODE_SAMPLES: Record<string, { streaming: boolean; body: unknown }> = {
+// `authToken` is the placeholder shown in the Authorization header: completions
+// accepts a b4m_live_ API key; the tools endpoint is JWT-only (see security.ts).
+const CODE_SAMPLES: Record<string, { streaming: boolean; authToken: string; body: unknown }> = {
   createCompletion: {
     streaming: true,
+    authToken: 'b4m_live_<key>',
     body: {
       model: 'claude-opus-4-8',
       messages: [{ role: 'user', content: 'How do I reset my password?' }],
       max_tokens: 500,
     },
   },
-  executeTool: { streaming: false, body: { toolName: 'web_search', input: { query: 'how to reset a password' } } },
+  executeTool: {
+    streaming: false,
+    authToken: '<access_token>',
+    body: { toolName: 'web_search', input: { query: 'how to reset a password' } },
+  },
 };
 
 const REQUEST_ID_HEADER_SPEC = {
@@ -179,12 +188,13 @@ export function buildOpenApiDocument(version: string): Record<string, unknown> {
     for (const method of Object.keys(paths[pathKey])) {
       if (!HTTP_METHODS.has(method.toLowerCase())) continue;
       const op = paths[pathKey][method];
-      const opId = op?.operationId as keyof typeof REQUIRED_SCOPES | undefined;
+      const opId = op?.operationId as string | undefined;
       if (!opId) continue;
 
-      if (REQUIRED_SCOPES[opId]) op['x-required-scopes'] = REQUIRED_SCOPES[opId];
+      const scopes = (REQUIRED_SCOPES as Record<string, readonly string[]>)[opId];
+      if (scopes) op['x-required-scopes'] = scopes;
       const sample = CODE_SAMPLES[opId];
-      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming);
+      if (sample) op['x-codeSamples'] = codeSamples(pathKey, sample.body, sample.streaming, sample.authToken);
 
       for (const status of Object.keys(op.responses ?? {})) {
         const response = op.responses[status];
