@@ -55,7 +55,8 @@ export const generateTools = (
   entitlementKeys: string[] = [],
   sessionId?: string,
   codeMinifier?: ToolContext['codeMinifier'],
-  availableModels?: import('@bike4mind/common').ModelInfo[]
+  availableModels?: import('@bike4mind/common').ModelInfo[],
+  onToolLlmUsage?: ToolContext['onToolLlmUsage']
 ): Record<string, ICompletionOptionTools> => {
   const context: ToolContext = {
     userId,
@@ -77,6 +78,7 @@ export const generateTools = (
     kbScope,
     codeMinifier,
     availableModels,
+    onToolLlmUsage,
   };
 
   return Object.entries(tools).reduce(
