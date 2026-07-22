@@ -27,7 +27,13 @@ export interface EmbedKeyOwnerRef {
 export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: EntitlementKey): Promise<boolean> {
   try {
     let ownerUserId = info.userId;
-    if (info.billingOwnerType === CreditHolderType.Organization && info.organizationId) {
+    if (info.billingOwnerType === CreditHolderType.Organization) {
+      // Org-billed key: the entitlement is the org billing owner's, never the
+      // minter's. Assert positive ownership rather than falling through - a
+      // missing organizationId (which create-time invariants forbid, but assert
+      // here too) means we cannot resolve the owner, so fail closed instead of
+      // silently checking the minter's plan.
+      if (!info.organizationId) return false;
       const org = await organizationRepository.findById(info.organizationId);
       if (!org?.userId) return false;
       ownerUserId = String(org.userId);

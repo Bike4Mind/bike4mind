@@ -59,6 +59,18 @@ describe('embedKeyOwnerHasEntitlement', () => {
     await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY)).resolves.toBe(false);
   });
 
+  it('fails closed for an org-billed key with a missing organizationId (never the minter)', async () => {
+    getUserEntitlements.mockResolvedValue([KEY]); // minter WOULD be entitled
+    const orgKeyNoOrg = {
+      userId: 'minter-1',
+      billingOwnerType: CreditHolderType.Organization,
+      organizationId: undefined,
+    };
+    await expect(embedKeyOwnerHasEntitlement(orgKeyNoOrg, KEY)).resolves.toBe(false);
+    // Must not fall through to resolving the minter's plan.
+    expect(userRepository.findById).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the org has no billing owner', async () => {
     organizationRepository.findById.mockResolvedValue({ id: 'org-1', userId: undefined });
     await expect(embedKeyOwnerHasEntitlement(orgKeyRef, KEY)).resolves.toBe(false);
