@@ -272,10 +272,25 @@ const CliConfigSchema = z.object({
     disabled: z.array(z.string()),
     config: z.record(z.string(), z.any()),
   }),
+  // catchall keeps plugin feature keys (features.<configKey>) from being
+  // stripped on load; only tavern is a known built-in. Preprocess strips any
+  // non-boolean entry FIRST so one malformed value can't throw a ZodError -
+  // which load() turns into discarding the entire config to defaults, and the
+  // next save() would then wipe real config (auth, mcpServers).
   features: z
-    .object({
-      tavern: z.boolean().optional(),
-    })
+    .preprocess(
+      v =>
+        v && typeof v === 'object' && !Array.isArray(v)
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>).filter(([, val]) => typeof val === 'boolean')
+            )
+          : v,
+      z
+        .object({
+          tavern: z.boolean().optional(),
+        })
+        .catchall(z.boolean())
+    )
     .optional()
     .prefault({}),
   trustedTools: z.array(z.string()).optional().prefault([]),
@@ -856,6 +871,61 @@ export class ConfigStore {
   }
 
   /**
+   * Read the features map straight from the global config file, bypassing the
+   * in-memory cache. save() merges over this so concurrent writers (the
+   * interactive session vs `b4m plugin add`) don't clobber each other's keys.
+   */
+  private async readDiskFeatures(): Promise<Record<string, boolean>> {
+    try {
+      const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as {
+        features?: Record<string, unknown>;
+      };
+      // Return only boolean entries so callers that write this back (e.g.
+      // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
+      return Object.fromEntries(Object.entries(raw.features ?? {}).filter(([, v]) => typeof v === 'boolean')) as Record<
+        string,
+        boolean
+      >;
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Merge a features save against the current on-disk map. Start from disk and
+   * apply only the keys the caller actually CHANGED relative to the snapshot it
+   * loaded - so a concurrent writer's edit to a key this caller didn't touch
+   * survives, and a key this caller removed is dropped. This is what makes the
+   * cross-process guarantee hold even for conflicting edits, not just new keys.
+   */
+  private mergeFeatures(
+    disk: Record<string, boolean>,
+    snapshot: Record<string, boolean | undefined> | undefined,
+    incoming: Record<string, boolean | undefined> | undefined
+  ): Record<string, boolean> {
+    const base = snapshot ?? {};
+    const next = incoming ?? base;
+    const has = (o: Record<string, boolean | undefined>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+    const merged: Record<string, boolean> = { ...disk };
+    // Keys the caller added or flipped vs its load-time snapshot win. Own-key
+    // checks only (never the prototype chain) so a key like 'toString' can't
+    // read as "already present".
+    for (const key of Object.keys(next)) {
+      const value = next[key];
+      if (value !== undefined && (!has(base, key) || base[key] !== value)) {
+        merged[key] = value;
+      }
+    }
+    // Keys the caller intentionally removed (present at load, absent now) go.
+    for (const key of Object.keys(base)) {
+      if (!has(next, key)) {
+        delete merged[key];
+      }
+    }
+    return merged;
+  }
+
+  /**
    * Save configuration to disk
    */
   async save(config?: Partial<CliConfig>): Promise<void> {
@@ -880,6 +950,15 @@ export class ConfigStore {
           ...existingConfig.toolApiKeys,
           ...(config.toolApiKeys || {}),
         },
+        // Merge features against the fresh on-disk map, applying only the keys
+        // this caller changed vs its load-time snapshot, so a concurrent writer
+        // (e.g. `b4m plugin add` in another process) isn't clobbered - including
+        // conflicting edits, not just brand-new keys.
+        features: this.mergeFeatures(
+          await this.readDiskFeatures(),
+          existingConfig.features,
+          config.features ?? existingConfig.features
+        ),
       };
     }
 
@@ -1129,6 +1208,11 @@ export class ConfigStore {
     config.apiConfig = newApiConfig;
     config.authByEnv = authByEnv;
     config.auth = restored; // undefined → user will be prompted to /login
+
+    // Switching env does not touch features; refresh them from disk so a
+    // concurrent `b4m plugin add` in another process isn't reverted by this
+    // whole-config save (the no-arg save() path skips mergeFeatures).
+    config.features = await this.readDiskFeatures();
 
     await this.save();
 

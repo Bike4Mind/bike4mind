@@ -224,6 +224,32 @@ const argv = await yargs(hideBin(process.argv))
       })
       .demandCommand(1, 'You must provide a subcommand (list, add, remove, enable, disable, serve)');
   })
+  .command('plugin', 'Manage B4M feature-module plugins', (yargs) => {
+    return yargs
+      .command('list', 'List installed plugins', {}, async () => {
+        // Handled by external command handler
+      })
+      .command('add <spec>', 'Install a plugin package', (yargs) => {
+        return yargs
+          .positional('spec', {
+            type: 'string',
+            describe: 'npm package, @scope/package, github:user/repo, or file:<path>',
+          })
+          .example('b4m plugin add @someone/b4m-plugin-foo', 'Install from npm')
+          .example('b4m plugin add github:user/b4m-plugin-foo', 'Install from GitHub');
+      }, async () => {
+        // Handled by external command handler
+      })
+      .command('remove <name>', 'Uninstall a plugin', (yargs) => {
+        return yargs.positional('name', {
+          type: 'string',
+          describe: 'Plugin name (config key, package name, or short name)',
+        });
+      }, async () => {
+        // Handled by external command handler
+      })
+      .demandCommand(1, 'You must provide a subcommand (list, add, remove)');
+  })
   .command('update', 'Check for and install CLI updates')
   .command('doctor', 'Run diagnostic checks on CLI installation')
   .command('acp', 'Run as an Agent Client Protocol (ACP) stdio server for editors like Zed')
@@ -291,7 +317,7 @@ if (argv.resume) {
 }
 // Positional task (claude `<prompt>` form): seeds AND submits turn 1, stays interactive.
 // Only when it's not a known subcommand and headless -p wasn't used.
-const KNOWN_SUBCOMMANDS = new Set(['mcp', 'update', 'doctor', 'acp']);
+const KNOWN_SUBCOMMANDS = new Set(['mcp', 'plugin', 'update', 'doctor', 'acp']);
 if (argv.prompt === undefined && argv._.length > 0 && !KNOWN_SUBCOMMANDS.has(String(argv._[0]))) {
   process.env.B4M_INITIAL_PROMPT = String(argv._[0]);
 }
@@ -427,6 +453,31 @@ if (argv._[0] === 'mcp') {
     }
 
     await handleMcpCommand(mcpSubcommand, argv);
+    process.exit(0);
+  } catch (error) {
+    console.error('Error:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle plugin subcommands (external commands)
+if (argv._[0] === 'plugin') {
+  const pluginSubcommand = argv._[1];
+
+  try {
+    let handlePluginCommand;
+
+    if (isDev) {
+      const { register } = require('tsx/esm/api');
+      register();
+      const module = await import('../src/commands/pluginCommand.ts');
+      handlePluginCommand = module.handlePluginCommand;
+    } else {
+      const module = await import('../dist/commands/pluginCommand.mjs');
+      handlePluginCommand = module.handlePluginCommand;
+    }
+
+    await handlePluginCommand(pluginSubcommand, argv);
     process.exit(0);
   } catch (error) {
     console.error('Error:', error.message);

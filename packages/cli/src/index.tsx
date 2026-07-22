@@ -159,7 +159,9 @@ import {
 import { buildSkillsPromptSection } from './core/skillsPrompt';
 import { checkForUpdate } from './utils/updateChecker.js';
 import { FeatureModuleRegistry } from './features/FeatureModuleRegistry.js';
-import { TavernModule } from './features/tavern/index.js';
+import { buildFeatureRegistry } from './features/buildFeatureRegistry.js';
+import { createBuiltinModules } from './features/createBuiltinModules.js';
+import { PluginStore, type PluginDescriptor } from './plugins/PluginStore.js';
 import { bridgePresence } from './features/bridgePresence/index.js';
 import { buildLlmBackend } from './bootstrap/buildLlmBackend.js';
 import { buildSandbox } from './bootstrap/buildSandbox.js';
@@ -234,6 +236,7 @@ interface CliState {
   checkpointStore: CheckpointStore | null; // File change checkpointing for undo/restore
   additionalDirectories: string[]; // Additional directories for file access (from --add-dir or /add-dir)
   featureRegistry: FeatureModuleRegistry | null; // Opt-in feature module registry
+  pluginDescriptors: PluginDescriptor[]; // Installed plugins discovered at bootstrap (installs need a restart)
 }
 
 // Global state for exit handling (outside React for immediate response)
@@ -286,6 +289,7 @@ function CliApp() {
     checkpointStore: null,
     additionalDirectories: [],
     featureRegistry: null,
+    pluginDescriptors: [],
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
@@ -880,30 +884,9 @@ function CliApp() {
       // Create get_file_structure tool for AST-based code overview
       const getFileStructureTool = createGetFileStructureTool();
 
-      // Create feature module registry and conditionally register modules
-      const featureRegistry = new FeatureModuleRegistry();
-      if (config.features?.tavern) {
-        featureRegistry.register(
-          new TavernModule(
-            apiClient,
-            entry => useCliStore.getState().addTavernLogEntry(entry),
-            () => useCliStore.getState().tavernActivityLog
-          )
-        );
-      }
-
-      // Register feature module tool names with ToolRouter so they route as local tools
-      const featureModuleToolNames = featureRegistry.getAllToolNames();
-      if (featureModuleToolNames.length > 0) {
-        registerFeatureModuleTools(featureModuleToolNames);
-      }
-
-      // Register feature module WS handlers
-      if (wsManager && featureRegistry.hasModules) {
-        featureRegistry.registerAllWsHandlers(wsManager);
-      }
-
-      // Combine B4M, MCP, and CLI-specific tools
+      // Combine B4M, MCP, and CLI-specific tools. Assembled before the feature
+      // registry so their names can be reserved against plugin tool-name
+      // collisions (a duplicate tool name would 400 every completion).
       const cliTools = [
         agentDelegateTool,
         ...backgroundTools,
@@ -926,6 +909,33 @@ function CliApp() {
       if (config.preferences.enableCoordinatorMode === true) {
         const coordinateTaskTool = createCoordinateTaskTool(orchestrator, agentStore, newSession.id);
         cliTools.push(coordinateTaskTool);
+      }
+
+      // Build the feature registry: config-gated built-ins plus any enabled
+      // external plugins (discovered once here; installs need a restart).
+      const pluginDescriptors = await new PluginStore().discover();
+      const {
+        registry: featureRegistry,
+        loaded: loadedPlugins,
+        skipped: skippedPlugins,
+      } = await buildFeatureRegistry({
+        builtins: createBuiltinModules(config, apiClient),
+        descriptors: pluginDescriptors,
+        config,
+        logger,
+        // 'tool_search' is added later but its name is fixed; reserve it too.
+        reservedToolNames: [...loadedB4mTools, ...cliTools].map(t => t.toolSchema.name).concat('tool_search'),
+      });
+
+      // Register feature module tool names with ToolRouter so they route as local tools
+      const featureModuleToolNames = featureRegistry.getAllToolNames();
+      if (featureModuleToolNames.length > 0) {
+        registerFeatureModuleTools(featureModuleToolNames);
+      }
+
+      // Register feature module WS handlers
+      if (wsManager && featureRegistry.hasModules) {
+        featureRegistry.registerAllWsHandlers(wsManager);
       }
 
       const featureTools = featureRegistry.getAllTools();
@@ -961,6 +971,12 @@ function CliApp() {
       if (featureRegistry.hasModules) {
         const moduleNames = featureRegistry.getModuleNames().join(', ');
         startupLog.push(`🏰 Feature modules: ${moduleNames} (${featureTools.length} tools)`);
+      }
+      if (loadedPlugins.length > 0) {
+        startupLog.push(`🔌 Plugins loaded: ${loadedPlugins.join(', ')}`);
+      }
+      if (skippedPlugins.length > 0) {
+        startupLog.push(`⚠️ Plugins skipped: ${skippedPlugins.map(s => s.name).join(', ')} (see debug log)`);
       }
       logger.debug(
         `Total tools available to agent: ${allTools.length} (${loadedB4mTools.length} B4M loaded + ${cliTools.length} CLI + ${featureTools.length} feature + ${toolSearchTool ? 1 : 0} tool_search, ${deferredB4mTools.length} B4M + ${mcpTools.length} MCP deferred)`
@@ -1027,6 +1043,7 @@ function CliApp() {
         checkpointStore, // File change checkpointing for undo/restore
         additionalDirectories, // Store additional directories for file access
         featureRegistry, // Feature module registry for opt-in modules
+        pluginDescriptors, // Reused by /config hot-reload and the config editor
       }));
 
       // Sync initial session with Zustand store
@@ -3476,18 +3493,23 @@ function CliApp() {
       // Clear old feature tool registrations from ToolRouter
       clearFeatureModuleTools();
 
-      // Create fresh registry with new config
-      newFeatureRegistry = new FeatureModuleRegistry();
+      // Create fresh registry with new config (same descriptors as bootstrap;
+      // newly installed plugins appear after a restart)
       const apiClient = new ApiClient(requireApiUrl(updatedConfig.apiConfig), state.configStore);
-
-      if (updatedConfig.features?.tavern) {
-        newFeatureRegistry.register(
-          new TavernModule(
-            apiClient,
-            entry => useCliStore.getState().addTavernLogEntry(entry),
-            () => useCliStore.getState().tavernActivityLog
-          )
-        );
+      // The agent's non-feature tools (core + B4M + tool_search) are reserved so
+      // a hot-reloaded plugin can't claim a name that would 400 completions.
+      const oldFeatureToolNames = new Set(state.featureRegistry?.getAllToolNames() ?? []);
+      const baseTools = state.agent.getTools().filter(t => !oldFeatureToolNames.has(t.toolSchema.name));
+      const rebuilt = await buildFeatureRegistry({
+        builtins: createBuiltinModules(updatedConfig, apiClient),
+        descriptors: state.pluginDescriptors,
+        config: updatedConfig,
+        logger,
+        reservedToolNames: baseTools.map(t => t.toolSchema.name),
+      });
+      newFeatureRegistry = rebuilt.registry;
+      for (const skippedPlugin of rebuilt.skipped) {
+        console.error(`\n\x1b[33m⚠️ Plugin ${skippedPlugin.name} skipped: ${skippedPlugin.reason}\x1b[0m`);
       }
 
       // Register new tool names with ToolRouter
@@ -3502,8 +3524,6 @@ function CliApp() {
       }
 
       // Hot-swap agent tools: remove old feature tools, add new ones
-      const oldFeatureToolNames = new Set(state.featureRegistry?.getAllToolNames() ?? []);
-      const baseTools = state.agent.getTools().filter(t => !oldFeatureToolNames.has(t.toolSchema.name));
       const newFeatureTools = newFeatureRegistry.getAllTools();
       state.agent.setTools([...baseTools, ...newFeatureTools]);
 
@@ -3746,6 +3766,7 @@ function CliApp() {
       commands={allCommands}
       config={state.config}
       availableModels={state.availableModels}
+      pluginDescriptors={state.pluginDescriptors}
       onSaveConfig={handleSaveConfig}
       prefillInput={state.prefillInput}
       onPrefillConsumed={() => {
