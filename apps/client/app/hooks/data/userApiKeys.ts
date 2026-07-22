@@ -155,13 +155,54 @@ export function useUpdateEmbedKey({ onSuccess }: { onSuccess?: () => void } = {}
 }
 
 export function useAdminGenerateApiKey({ onSuccess }: { onSuccess?: (result: CreateUserApiKeyResponse) => void } = {}) {
+  const queryClient = useQueryClient();
+
   return useMutation<CreateUserApiKeyResponse, Error, { userId: string; data: CreateUserApiKeyRequest }>({
     mutationFn: async ({ userId, data }) => {
       const response = await api.post(`/api/admin/users/${userId}/generate-api-key`, data);
       return response.data;
     },
     onSuccess: result => {
+      // Keep the admin key list coherent when both modals are in play.
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys'] });
       if (onSuccess) onSuccess(result);
+    },
+    onError: (error: Error) => {
+      toast.error(parseValidationError(error));
+    },
+  });
+}
+
+/** Response of GET /api/admin/users/[userId]/user-api-keys: the user's keys plus
+ * each key's live minute/day rate-limit counters (keyed by key id) - the
+ * usage fields on the key doc itself are not maintained. */
+export interface AdminUserApiKeysResponse {
+  apiKeys: IUserApiKeyDocument[];
+  liveUsage: Record<string, { minute: number; day: number }>;
+}
+
+export function useAdminGetUserApiKeys(userId: string | undefined) {
+  return useQuery<AdminUserApiKeysResponse>({
+    queryKey: ['admin', 'user-api-keys', userId],
+    queryFn: async () => {
+      const response = await api.get(`/api/admin/users/${userId}/user-api-keys`);
+      return response.data;
+    },
+    enabled: typeof userId === 'string' && userId.length > 0,
+  });
+}
+
+export function useAdminResetApiKeyRateLimit({ onSuccess }: { onSuccess?: () => void } = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation<{ success: boolean; id: string }, Error, string>({
+    mutationFn: async keyId => {
+      const response = await api.post(`/api/admin/user-api-keys/${keyId}/reset-rate-limit`);
+      return response.data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'user-api-keys'] });
+      if (onSuccess) onSuccess();
     },
     onError: (error: Error) => {
       toast.error(parseValidationError(error));
