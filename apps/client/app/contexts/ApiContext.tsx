@@ -149,18 +149,19 @@ api.interceptors.response.use(
     const isMfaPending401 =
       isAxiosError(error) && error.response?.status === 401 && error.response?.data?.mfaPending === true;
 
+    // Suppress logging for the expected mid-MFA rejection; log everything else.
     // TODO: have graceful toasters for customers vs developers
     // For now just a console.log
-    if (isMfaPending401) {
-      // expected mid-MFA rejection - intentionally not logged
-    } else if (isAxiosError(error)) {
-      if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
-        console.error('Network Error: Backend may not be running. Check that SST is started.');
+    if (!isMfaPending401) {
+      if (isAxiosError(error)) {
+        if (error.code === 'ERR_NETWORK' || error.message === 'Network Error') {
+          console.error('Network Error: Backend may not be running. Check that SST is started.');
+        } else {
+          console.error('Axios Error:', error.response?.data || error.message);
+        }
       } else {
-        console.error('Axios Error:', error.response?.data || error.message);
+        console.log('Axios Error', error);
       }
-    } else {
-      console.log('Axios Error', error);
     }
     /*
         toast.error(
