@@ -32,6 +32,10 @@ vi.mock('@server/middlewares/baseApi', () => {
   return { baseApi: () => chain };
 });
 
+vi.mock('@server/middlewares/csrfProtection', () => ({
+  csrfProtection: () => (_req: any, _res: any, next: any) => next(),
+}));
+
 const updateApiKeyRateLimit = vi.hoisted(() =>
   vi.fn((_userId?: unknown, params?: Record<string, unknown>) => ({
     id: (params as any)?.keyId ?? 'key-1',
