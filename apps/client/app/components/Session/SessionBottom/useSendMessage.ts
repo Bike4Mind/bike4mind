@@ -318,6 +318,10 @@ export function useSendMessage({
   ): Promise<IChatHistoryItemDocument | undefined> => {
     if (submitting) return;
 
+    // Lock out concurrent sends immediately so a second click/Enter during
+    // validation or the host-create await cannot slip through the guard above.
+    setSubmitting(true);
+
     // For editor-driven sends (newPrompt === undefined) serialize the composer to
     // markdown so inline formatting (Ctrl+B / Ctrl+I) round-trips into the rendered
     // user bubble. getSerializedValue() emits plain text unchanged when no
@@ -343,6 +347,7 @@ export function useSendMessage({
     if (errorMessage) {
       console.error(errorMessage);
       toast.error(errorMessage);
+      setSubmitting(false);
       return;
     }
 
@@ -358,11 +363,10 @@ export function useSendMessage({
       const hostCreateSession = useSessionRouter.getState().hostCreateSession;
       if (hostCreateSession) {
         await hostCreateSession(prompt);
+        setSubmitting(false);
         return;
       }
     }
-
-    setSubmitting(true);
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;

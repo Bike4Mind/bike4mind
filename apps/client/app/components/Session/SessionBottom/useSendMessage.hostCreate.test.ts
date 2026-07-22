@@ -23,7 +23,7 @@ describe('useSendMessage — host-managed first-message creation (regression)', 
   it('delegates a no-session send to the host factory and short-circuits', () => {
     // The guard reads the host factory from useSessionRouter and awaits it with the prompt.
     expect(source).toContain('useSessionRouter.getState().hostCreateSession');
-    expect(source).toMatch(/await hostCreateSession\(prompt\);\s*return;/);
+    expect(source).toMatch(/await hostCreateSession\(prompt\);\s*setSubmitting\(false\);\s*return;/);
   });
 
   it('runs the delegation only when there is no active session', () => {
@@ -35,13 +35,21 @@ describe('useSendMessage — host-managed first-message creation (regression)', 
 
   it('delegates BEFORE the generic send path begins (ordering invariant)', () => {
     const delegateIdx = source.indexOf('await hostCreateSession(prompt)');
-    const firstSubmittingIdx = source.indexOf('setSubmitting(true)');
     const newOptimisticIdx = source.indexOf("location.pathname === '/new'");
 
     expect(delegateIdx).toBeGreaterThan(-1);
-    // Delegation short-circuits before the generic send turns on the submitting state...
-    expect(delegateIdx).toBeLessThan(firstSubmittingIdx);
-    // ...and before the /new optimistic-create branch that would mint a generic session.
+    // Delegation short-circuits before the /new optimistic-create branch that would mint a generic session.
     expect(delegateIdx).toBeLessThan(newOptimisticIdx);
+  });
+
+  it('resets submitting state on the host-create early-return path', () => {
+    // setSubmitting(true) is now a re-entrancy lock at the top of handleSendClick.
+    // The host-create path must call setSubmitting(false) before returning so the
+    // UI is not left stuck in a submitting state.
+    const hostReturnBlock = source.slice(
+      source.indexOf('await hostCreateSession(prompt)'),
+      source.indexOf('await hostCreateSession(prompt)') + 200
+    );
+    expect(hostReturnBlock).toContain('setSubmitting(false)');
   });
 });
