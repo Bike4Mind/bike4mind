@@ -12,4 +12,4 @@ export function exceedsTtsResponseLimit(audioBytes: number): boolean {
 }
 
 export const TTS_RESPONSE_TOO_LARGE_MESSAGE =
-  'Generated audio is too large to return over this endpoint (~4MB limit). Shorten the input or request the mp3 format.';
+  'Generated audio is too large to return over this endpoint (~4MB limit). Shorten the input, or switch to a compressed format (mp3) if you requested wav or pcm.';

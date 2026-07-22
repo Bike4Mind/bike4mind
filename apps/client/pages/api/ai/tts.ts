@@ -2,6 +2,7 @@ import { baseApi } from '@server/middlewares/baseApi';
 import {
   ttsRequestSchema,
   TTS_MAX_INPUT_CHARS,
+  VOICE_VENDOR_SUPPORTED_FORMATS,
   UnprocessableEntityError,
   VoiceGenerationVendor,
 } from '@bike4mind/common';
@@ -39,6 +40,19 @@ const handler = baseApi().post(async (req, res) => {
   if (text.length > maxChars) {
     throw new UnprocessableEntityError(
       `Input exceeds the ${vendor} limit of ${maxChars} characters (got ${text.length})`
+    );
+  }
+
+  // Reject an unsupported (vendor, format) pair up front: without this the
+  // vendor service throws mid-synthesis and the catch below maps it to a
+  // generic 502, hiding the fact that the caller's format choice is the
+  // problem. Validating here fails fast with an actionable 422 and before any
+  // provider cost is incurred. (Undefined format falls back to each vendor's
+  // mp3 default, which every provider supports.)
+  if (format && !VOICE_VENDOR_SUPPORTED_FORMATS[vendor].includes(format)) {
+    throw new UnprocessableEntityError(
+      `The ${vendor} provider does not support the '${format}' output format ` +
+        `(supported: ${VOICE_VENDOR_SUPPORTED_FORMATS[vendor].join(', ')})`
     );
   }
 

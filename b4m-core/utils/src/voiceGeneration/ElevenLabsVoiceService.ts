@@ -17,7 +17,9 @@ const DEFAULT_BILLING_MODEL = 'eleven_multilingual_v2';
 
 // ElevenLabs takes an `output_format` enum rather than a bare extension. Only
 // the formats it actually supports are mapped; unsupported ones fail loudly
-// instead of silently returning mislabeled bytes.
+// instead of silently returning mislabeled bytes. The key set here MUST stay in
+// sync with VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs (@bike4mind/common), which
+// the /api/ai/tts route uses to reject an unsupported format before this point.
 const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>> = {
   mp3: 'mp3_44100_128',
   pcm: 'pcm_44100',

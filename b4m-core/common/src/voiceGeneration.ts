@@ -13,6 +13,17 @@ export const voiceOutputFormatSchema = z.enum(['mp3', 'wav', 'opus', 'aac', 'fla
 
 export type VoiceOutputFormat = z.infer<typeof voiceOutputFormatSchema>;
 
+// Output formats each provider can actually produce. Validated at the API
+// boundary (POST /api/ai/tts) so an unsupported (vendor, format) pair fails
+// fast with a clear 422 BEFORE any provider cost is incurred, rather than
+// surfacing as an opaque upstream error. OpenAI accepts the full set;
+// ElevenLabs maps a subset. MUST stay in sync with each vendor service's format
+// map (e.g. ELEVENLABS_OUTPUT_FORMAT in ElevenLabsVoiceService).
+export const VOICE_VENDOR_SUPPORTED_FORMATS: Record<VoiceGenerationVendor, VoiceOutputFormat[]> = {
+  openai: ['mp3', 'wav', 'opus', 'aac', 'flac', 'pcm'],
+  elevenlabs: ['mp3', 'pcm', 'opus'],
+};
+
 // How the endpoint should return the audio. 'binary' streams raw bytes with an
 // audio/* Content-Type; 'base64' returns JSON { audio, format, contentType }.
 export const voiceResponseEncodingSchema = z.enum(['binary', 'base64']);

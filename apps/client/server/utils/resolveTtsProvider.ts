@@ -48,12 +48,18 @@ export async function resolveTtsProvider({
       throw new TtsProviderNotConfiguredError('OpenAI API key not configured');
     }
 
-    const settings = await getSettingsMap(
-      { adminSettings: adminSettingsRepository },
-      { names: ['voiceSessionAiVoice'] }
-    );
-    const adminVoice = getSettingsValue('voiceSessionAiVoice', settings) || 'alloy';
-    return { apiKey, voice: requestedVoice || preferredVoice || adminVoice };
+    // Resolve the admin default voice lazily: only hit the settings store when
+    // neither an explicit request voice nor the user's preference will supply
+    // it, sparing a DB round-trip on the common (voice-specified) path.
+    let voice = requestedVoice || preferredVoice || undefined;
+    if (!voice) {
+      const settings = await getSettingsMap(
+        { adminSettings: adminSettingsRepository },
+        { names: ['voiceSessionAiVoice'] }
+      );
+      voice = getSettingsValue('voiceSessionAiVoice', settings) || 'alloy';
+    }
+    return { apiKey, voice };
   }
 
   // ElevenLabs: prefer a per-user key, else fall back to the admin-provisioned
