@@ -2,6 +2,7 @@ import { EditedFieldsState } from '@client/app/components/admin/Users/Views/Full
 
 import GrantSubscriptionModal from './GrantSubscriptionModal';
 import AdminGenerateApiKeyModal from './AdminGenerateApiKeyModal';
+import AdminApiKeysModal from './AdminApiKeysModal';
 import MFAStatusBadge from '../MFAStatusBadge';
 import { useForceResetMFA } from '@client/app/hooks/data/mfa';
 import { useConfirmation } from '@client/app/hooks/useConfirmation';
@@ -28,6 +29,7 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
   const [organizationName, setOrganizationName] = useState<string | null>(user.organizationId?.name ?? null);
   const [isGrantSubscriptionModalOpen, setIsGrantSubscriptionModalOpen] = useState(false);
   const [isGenerateApiKeyModalOpen, setIsGenerateApiKeyModalOpen] = useState(false);
+  const [isApiKeysModalOpen, setIsApiKeysModalOpen] = useState(false);
   const queryClient = useQueryClient();
 
   const forceResetMFA = useForceResetMFA();
@@ -371,6 +373,16 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
             Generate API Key
           </Button>
 
+          <Button
+            startDecorator={<KeyIcon />}
+            color="neutral"
+            variant="outlined"
+            onClick={() => setIsApiKeysModalOpen(true)}
+            data-testid="admin-api-keys-btn"
+          >
+            View API Keys
+          </Button>
+
           {user.mfa && user.mfa.totpEnabled && (
             <Alert color="neutral" size="sm">
               User has MFA enabled since {new Date(user.mfa.setupAt).toLocaleDateString()}
@@ -391,6 +403,8 @@ const UserDetails: React.FC<UserDetailsProps> = ({ user, editedFields, onFieldCh
         open={isGenerateApiKeyModalOpen}
         onClose={() => setIsGenerateApiKeyModalOpen(false)}
       />
+
+      <AdminApiKeysModal user={user} open={isApiKeysModalOpen} onClose={() => setIsApiKeysModalOpen(false)} />
     </>
   );
 };
