@@ -128,12 +128,16 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
       data-testid={`permission-card-${executionId}`}
       color="warning"
       variant="soft"
-      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1, mt: 1, p: 2 }}
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, mt: 1, p: 2 }}
     >
-      <Typography level="title-sm">Permission required</Typography>
-      <Typography level="body-sm">
-        Allow <strong>{toolDisplayName}</strong> at iteration {pending.iteration + 1}?
-      </Typography>
+      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+        <Typography level="title-sm" sx={{ color: 'text.primary', fontSize: '16px' }}>
+          Permission required
+        </Typography>
+        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+          Allow <strong>{toolDisplayName}</strong> at iteration {pending.iteration + 1}?
+        </Typography>
+      </Box>
       {formattedInput ? (
         <Box
           component="pre"
@@ -141,7 +145,10 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
             m: 0,
             p: 1,
             borderRadius: 'sm',
-            backgroundColor: 'background.level1',
+            // Match the outer IterationStream frame so the code block reads as a
+            // distinct surface sitting on top of the orange (both light + dark).
+            backgroundColor: 'background.surface2',
+            color: 'text.primary',
             fontSize: 'xs',
             maxHeight: 160,
             overflow: 'auto',
@@ -152,7 +159,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
           {formattedInput}
         </Box>
       ) : null}
-      <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap', mt: 1 }}>
+      <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap' }}>
         <Button
           data-testid={`permission-approve-${executionId}`}
           color="success"
