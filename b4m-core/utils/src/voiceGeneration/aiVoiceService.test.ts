@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import axios from 'axios';
+import { VOICE_VENDOR_SUPPORTED_FORMATS } from '@bike4mind/common';
 import { Logger } from '@bike4mind/observability';
 import { aiVoiceService, OpenAIVoiceService, ElevenLabsVoiceService } from './index';
 import { CONTENT_TYPE_BY_FORMAT } from './AIVoiceService';
+import { ELEVENLABS_OUTPUT_FORMAT } from './ElevenLabsVoiceService';
 
 const speechCreate = vi.fn();
 vi.mock('openai', () => ({
@@ -135,5 +137,30 @@ describe('ElevenLabsVoiceService', () => {
     await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hello', { voice: 'voice-123' });
 
     expect(mockedPost).toHaveBeenCalledWith(expect.any(String), { text: 'hello' }, expect.any(Object));
+  });
+
+  it('sends only the field the caller set, letting ElevenLabs default the other', async () => {
+    mockedPost.mockResolvedValue({ data: new Uint8Array([8]).buffer });
+
+    await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hello', {
+      voice: 'voice-123',
+      stability: 0.3,
+    });
+
+    // similarity_boost must be absent (not 0) so the voice's own default applies.
+    expect(mockedPost).toHaveBeenCalledWith(
+      expect.any(String),
+      { text: 'hello', voice_settings: { stability: 0.3 } },
+      expect.any(Object)
+    );
+  });
+});
+
+describe('ELEVENLABS_OUTPUT_FORMAT stays in sync with VOICE_VENDOR_SUPPORTED_FORMATS', () => {
+  // The service's format map and the boundary allow-list are kept aligned by
+  // comment convention across the utils/common package split; assert set-equality
+  // here so drift fails a test instead of shipping a mislabeled/rejected format.
+  it('has exactly the formats the API boundary advertises for elevenlabs', () => {
+    expect(new Set(Object.keys(ELEVENLABS_OUTPUT_FORMAT))).toEqual(new Set(VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs));
   });
 });

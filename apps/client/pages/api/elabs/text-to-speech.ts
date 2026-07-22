@@ -55,7 +55,10 @@ const handler = baseApi().post(
         return res.status(413).json({ error: TTS_RESPONSE_TOO_LARGE_MESSAGE });
       }
       return res.send({ audio: audio.toString('base64') });
-    } catch {
+    } catch (error) {
+      // This route now bills credits; log the failure so a synthesis error is
+      // observable rather than a silent 500 (mirrors the sibling TTS routes).
+      req.logger.error('ElevenLabs TTS error', { error });
       return res.status(500).json({ error: 'Something went wrong' });
     }
   })

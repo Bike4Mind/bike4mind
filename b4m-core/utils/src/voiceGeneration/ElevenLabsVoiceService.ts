@@ -20,7 +20,7 @@ const DEFAULT_BILLING_MODEL = 'eleven_multilingual_v2';
 // instead of silently returning mislabeled bytes. The key set here MUST stay in
 // sync with VOICE_VENDOR_SUPPORTED_FORMATS.elevenlabs (@bike4mind/common), which
 // the /api/ai/tts route uses to reject an unsupported format before this point.
-const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>> = {
+export const ELEVENLABS_OUTPUT_FORMAT: Partial<Record<VoiceOutputFormat, string>> = {
   mp3: 'mp3_44100_128',
   pcm: 'pcm_44100',
   opus: 'opus_48000_128',
@@ -48,9 +48,12 @@ export class ElevenLabsVoiceService extends AIVoiceService {
       body.model_id = options.model;
     }
     if (options.stability !== undefined || options.similarityBoost !== undefined) {
+      // Send only the field the caller actually set. Omitting the other lets
+      // ElevenLabs apply that voice's own default (~0.75) instead of forcing it
+      // to 0, which would silently degrade output on a one-field request.
       body.voice_settings = {
-        stability: options.stability ?? 0,
-        similarity_boost: options.similarityBoost ?? 0,
+        ...(options.stability !== undefined && { stability: options.stability }),
+        ...(options.similarityBoost !== undefined && { similarity_boost: options.similarityBoost }),
       };
     }
 
