@@ -97,7 +97,7 @@
     "@bike4mind/observability": "workspace:*",
     "@casl/ability": "^6.8.1",
     "@google/genai": "^1.46.0",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "cheerio": "1.2.0",
     "csv-parse": "^6.2.1",
     "dayjs": "^1.11.21",

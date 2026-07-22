@@ -48,7 +48,7 @@
     "@bike4mind/observability": "workspace:*",
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.9.3",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "cheerio": "1.2.0",
     "file-type": "^22.0.1",
     "jszip": "^3.10.1",

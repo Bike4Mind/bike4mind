@@ -56,7 +56,7 @@
     "@bike4mind/common": "workspace:*",
     "@bike4mind/observability": "workspace:*",
     "@google/genai": "^1.46.0",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "lodash": "^4.18.1",
     "ollama": "^0.6.3",
     "openai": "^6.46.0",
