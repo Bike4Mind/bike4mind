@@ -211,7 +211,7 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
       sx={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 1,
+        gap: 2.5, // 20px between status header, iterations, and permission card
         p: 2,
         border: '1px solid',
         borderColor: 'neutral.outlinedBorder',
@@ -227,7 +227,15 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
           {isActive ? <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} /> : null}
-          <Chip size="sm" color={statusMeta.color}>
+          <Chip
+            size="sm"
+            color={statusMeta.color}
+            sx={{
+              '--Chip-minHeight': '24px',
+              '--Chip-paddingInline': '8px',
+              '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
+            }}
+          >
             {statusMeta.label}
           </Chip>
           {visibleIterationCount > 0 ? (
@@ -275,9 +283,23 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                 key={group.iteration}
                 expanded={expanded}
                 onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
+                sx={{ gap: 1.5 }} // 12px between the summary and the step content
               >
-                <AccordionSummary>
-                  <Typography level="body-sm" sx={{ fontWeight: 500 }}>
+                <AccordionSummary
+                  // Chevron sits next to the title instead of pushed to the far
+                  // right; the whole row stays clickable and gets the same hover
+                  // as sidebar rows (notebooklist.hoverBg).
+                  sx={theme => ({
+                    '& .MuiAccordionSummary-button': {
+                      justifyContent: 'flex-start',
+                      gap: 0.5,
+                      minHeight: '40px',
+                      borderRadius: '8px', // match the outer iterations frame
+                      '&:hover': { backgroundColor: theme.palette.notebooklist.hoverBg },
+                    },
+                  })}
+                >
+                  <Typography level="body-sm" sx={{ fontWeight: 500, color: 'text.primary' }}>
                     Iteration {group.iteration + 1}
                   </Typography>
                 </AccordionSummary>

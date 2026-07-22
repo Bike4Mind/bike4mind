@@ -130,14 +130,9 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
       variant="soft"
       sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 2, mt: 1, p: 2 }}
     >
-      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-        <Typography level="title-sm" sx={{ color: 'text.primary', fontSize: '16px' }}>
-          Permission required
-        </Typography>
-        <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-          Allow <strong>{toolDisplayName}</strong> at iteration {pending.iteration + 1}?
-        </Typography>
-      </Box>
+      <Typography level="title-sm" sx={{ color: 'text.primary', fontSize: '16px' }}>
+        Allow <strong>{toolDisplayName}</strong> at iteration {pending.iteration + 1}?
+      </Typography>
       {formattedInput ? (
         <Box
           component="pre"

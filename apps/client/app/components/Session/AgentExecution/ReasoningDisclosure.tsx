@@ -159,7 +159,7 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
       </Button>
 
       {expanded ? (
-        <Box sx={{ mt: 0.5, pl: 1, borderLeft: theme => `2px solid ${theme.palette.neutral.outlinedBorder}` }}>
+        <Box sx={{ mt: 0.5 }}>
           {isLoading ? (
             <Stack direction="row" alignItems="center" spacing={1} sx={{ py: 1 }}>
               <CircularProgress size="sm" thickness={2} />
