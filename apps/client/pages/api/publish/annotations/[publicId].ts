@@ -151,7 +151,12 @@ const handler = baseApi({ auth: false })
         createdAt: { $gte: new Date(Date.now() - COMMENT_RATE_WINDOW_MS) },
       });
       if (recent >= COMMENT_RATE_MAX) {
-        return res.status(429).json({ error: 'You are commenting too quickly - please slow down' });
+        // Names the account-wide window explicitly: it counts across ALL artifacts, so
+        // a message about "this artifact" would misdirect when it fires somewhere the
+        // author has not commented.
+        return res.status(429).json({
+          error: 'You have posted too many comments across your account recently - please slow down',
+        });
       }
     }
 

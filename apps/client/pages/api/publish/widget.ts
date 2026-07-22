@@ -30,7 +30,15 @@ const WIDGET_JS = String.raw`(function () {
   var origin = window.location.origin;
   var API = origin + '/api/publish/annotations/' + encodeURIComponent(publicId);
 
-  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPostedId: null };
+  // justPosted holds EVERY comment of ours the server list has not caught up to yet,
+  // as [{id, at}] - a single slot would leave an earlier comment unprotected as soon
+  // as a second one was posted, and the next stale poll would drop it. Entries expire
+  // after PENDING_TTL_MS so a comment deleted before it ever appeared in the list
+  // cannot be resurrected indefinitely. Must stay well above the poll cadence (60s
+  // closed / 15s open) and the list's cache staleness, or a comment would be dropped
+  // while it is still legitimately waiting to show up.
+  var PENDING_TTL_MS = 300000;
+  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
 
   function getToken() {
     try {
@@ -47,8 +55,22 @@ const WIDGET_JS = String.raw`(function () {
     if (t) h['Authorization'] = 'Bearer ' + t;
     return h;
   }
+  // Server clock minus client clock, learned from the initial list response's Date
+  // header. Timestamps come from the server but were being compared against the
+  // browser's clock, so a viewer whose clock ran behind saw every comment as "just
+  // now". Only the FIRST load is sampled: it is sent no-store, so its Date header is
+  // genuinely fresh, whereas a cached response's Date is older by its cache age.
+  var serverSkewMs = 0;
+  function noteServerClock(r) {
+    try {
+      var d = r.headers && r.headers.get && r.headers.get('date');
+      if (!d) return;
+      var t = new Date(d).getTime();
+      if (!isNaN(t)) serverSkewMs = t - Date.now();
+    } catch (e) { /* header unreadable - leave the skew at 0 */ }
+  }
   function timeAgo(iso) {
-    var s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    var s = Math.max(0, (Date.now() + serverSkewMs - new Date(iso).getTime()) / 1000);
     if (s < 60) return 'just now';
     if (s < 3600) return Math.floor(s / 60) + 'm ago';
     if (s < 86400) return Math.floor(s / 3600) + 'h ago';
@@ -301,11 +323,10 @@ const WIDGET_JS = String.raw`(function () {
     // in-memory justPostedId guard below cannot help here - a reload wipes it.
     // Polls keep the default cache mode, so the fan-out collapse is preserved.
     return fetch(API, { headers: headers(false), credentials: 'omit', cache: 'no-store' })
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); noteServerClock(r); return r.json(); })
       .then(function (data) {
         state.comments = data.annotations || [];
         policy = data.commentPolicy || policy;
-        lastSig = sig(state.comments); // seed so the first poll doesn't re-render identical data
         render();
       })
       .catch(function () { /* artifact may be private to this viewer; stay quiet */ render(); });
@@ -337,7 +358,11 @@ const WIDGET_JS = String.raw`(function () {
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
         return r.json();
       })
-      .then(function (created) { state.comments.push(created); state.justPostedId = created.id; render(); });
+      .then(function (created) {
+        state.comments.push(created);
+        state.justPosted.push({ id: created.id, at: Date.now() });
+        render();
+      });
   }
 
   // ---- smart polling: pick up other users' comments without a reload ----
@@ -348,7 +373,6 @@ const WIDGET_JS = String.raw`(function () {
   function sig(list) {
     return list.length + ':' + list.map(function (c) { return c.id + (c.resolvedAt ? 'R' : ''); }).join(',');
   }
-  var lastSig = '';
   var lastCanComment = null;
   function poll() {
     if (document.visibilityState !== 'visible') return;
@@ -359,17 +383,26 @@ const WIDGET_JS = String.raw`(function () {
       .then(function (data) {
         if (!data) return;
         var incoming = data.annotations || [];
-        // Don't let a poll whose fetch predated your just-posted comment drop it from
-        // the list (it self-heals next cycle, but the blink is avoidable). Keep the
-        // local copy until the server's list reflects it. Only protects YOUR fresh
-        // post — never resurrects others' deletes.
-        if (state.justPostedId) {
-          if (incoming.some(function (c) { return c.id === state.justPostedId; })) state.justPostedId = null;
-          else incoming = incoming.concat(state.comments.filter(function (c) { return c.id === state.justPostedId; }));
+        // Don't let a poll whose fetch predated your just-posted comments drop them
+        // from the list (it self-heals next cycle, but the blink is avoidable). Keep
+        // the local copies until the server's list reflects them. Only protects YOUR
+        // fresh posts — never resurrects others' deletes.
+        if (state.justPosted.length) {
+          var now = Date.now();
+          // Retire an entry once the server list carries it, or once it ages out.
+          state.justPosted = state.justPosted.filter(function (p) {
+            return now - p.at < PENDING_TTL_MS && !incoming.some(function (c) { return c.id === p.id; });
+          });
+          var pending = state.comments.filter(function (c) {
+            return state.justPosted.some(function (p) { return p.id === c.id; });
+          });
+          if (pending.length) incoming = incoming.concat(pending);
         }
-        var s = sig(incoming);
-        if (s === lastSig) return; // nothing changed
-        lastSig = s;
+        // Compare against what is actually on screen rather than a remembered
+        // signature: an optimistic local copy can diverge from the last server
+        // response, and a remembered signature would then early-return forever and
+        // never reconcile it away.
+        if (sig(incoming) === sig(state.comments)) return; // nothing changed
         state.comments = incoming;
         render();
       })
