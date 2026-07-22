@@ -96,6 +96,10 @@ import type { DagHandoffSignal } from '@bike4mind/services';
 import { maybeBuildFirstIterationQuery } from './agentExecutor.firstIterationQuery';
 import { toUserFacingFailureMessage } from './agentExecutor.failureMessage';
 import { buildReActAgentRuntimeConfig } from './agentExecutor.reActAgentConfig';
+// Per-iteration billing (delta math + #657 context-window guard) lives in its
+// own side-effect-free module so the guard can be unit-tested with injected
+// effect doubles; see `agentExecutor.billing.ts`.
+import { billIteration, type BillingCounters } from './agentExecutor.billing';
 import { buildSubagentToolConfig } from './agentExecutor.subagentToolConfig';
 import {
   resolveTopLevelProfile,
@@ -1495,101 +1499,87 @@ async function processExecution(
         totalCacheReadTokens: number;
         totalCacheWriteTokens: number;
       },
-      counters: {
-        cumulativeCost: number;
-        inputTokens: number;
-        outputTokens: number;
-        cacheReadTokens: number;
-        cacheWriteTokens: number;
-      }
+      counters: BillingCounters
     ) => {
       if (!modelInfo) return;
-      // Price cache tokens explicitly: totalInputTokens EXCLUDES cache-read/write (they're
-      // tracked as separate counters), so passing them here bills cache-read at ~0.1x and
-      // cache-write at ~1.25x rather than pricing them at zero. Mirrors the chat path.
-      const cumulativeCost = getTextModelCost(
-        modelInfo,
-        checkpoint.totalInputTokens,
-        checkpoint.totalOutputTokens,
-        checkpoint.totalCacheReadTokens,
-        checkpoint.totalCacheWriteTokens
-      );
-      const costDelta = cumulativeCost - counters.cumulativeCost;
-      if (costDelta <= 0) return;
-      const inputTokensDelta = checkpoint.totalInputTokens - counters.inputTokens;
-      const outputTokensDelta = checkpoint.totalOutputTokens - counters.outputTokens;
-      const cacheReadTokensDelta = checkpoint.totalCacheReadTokens - counters.cacheReadTokens;
-      const cacheWriteTokensDelta = checkpoint.totalCacheWriteTokens - counters.cacheWriteTokens;
-      counters.cumulativeCost = cumulativeCost;
-      counters.inputTokens = checkpoint.totalInputTokens;
-      counters.outputTokens = checkpoint.totalOutputTokens;
-      counters.cacheReadTokens = checkpoint.totalCacheReadTokens;
-      counters.cacheWriteTokens = checkpoint.totalCacheWriteTokens;
-      // Stochastic settlement: a sub-credit delta legitimately rounds to 0
-      // (paid in expectation across iterations), so only skip the ledger
-      // deduction - the usage event below still records the COGS delta,
-      // otherwise margin reporting would silently under-count cost.
-      const credits = usdToCreditsStochastic(costDelta);
-      if (credits > 0) {
-        await creditService.deductCreditsWithOrgSupport(
-          {
-            type: 'text_generation_usage',
-            user: user as IUserDocument,
-            organization,
-            credits,
-            sessionId: execution.sessionId,
-            questId: execution.questId,
-            model: execution.model,
-            inputTokens: inputTokensDelta,
-            outputTokens: outputTokensDelta,
-          },
-          {
-            db: {
-              creditTransactions: creditTransactionRepository,
-              users: userRepository,
-              organizations: organizationRepository,
-            },
-          }
-        );
-      }
-      // Dual-write usage event: analytics only, never billing. One per billed iteration.
-      usageEventRepository
-        .record({
-          requestId: execution.questId || executionId,
-          userId: execution.userId,
-          ownerId: organization ? organization.id : (user as IUserDocument).id,
-          ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
-          sessionId: execution.sessionId,
-          feature: 'agent_execution',
-          provider: modelInfo.backend,
-          model: execution.model,
-          inputTokens: inputTokensDelta,
-          outputTokens: outputTokensDelta,
-          cachedInputTokens: cacheReadTokensDelta,
-          cacheWriteTokens: cacheWriteTokensDelta,
-          costUsd: costDelta,
-          creditsCharged: credits,
-          status: 'ok',
-          latencyMs: Date.now() - startTime,
-        })
-        .catch(err => logger.warn('Failed to record usage event', { err }));
-      await agentExecutionRepository.addIterationBilling(executionId, {
-        iteration: iterationIndex,
-        inputTokens: inputTokensDelta,
-        outputTokens: outputTokensDelta,
-        cacheReadTokens: cacheReadTokensDelta,
-        cacheWriteTokens: cacheWriteTokensDelta,
-        credits,
+      // Capture the narrowed value so the effect closures below carry a
+      // non-undefined `ModelInfo` type (control-flow narrowing of the outer
+      // `const` doesn't always survive into nested closures).
+      const resolvedModelInfo = modelInfo;
+      // The fixed billing context (user, org, session, db wiring, WS wire
+      // convention) is bound into each effect closure; `billIteration` only
+      // decides the amounts and advances `counters` in place. See
+      // `agentExecutor.billing.ts` for the delta math + #657 guard.
+      await billIteration({
+        iterationIndex,
+        checkpoint,
+        counters,
+        modelInfo: resolvedModelInfo,
         model: execution.model,
-        timestamp: new Date(),
-      });
-      await sendWs('progress', {
-        executionId,
-        creditsUsed: credits,
-        // 0-indexed wire convention (matches `permission_request` and the
-        // per-step listener). DB `addIterationBilling.iteration` keeps the
-        // 1-indexed value since billing records are persisted.
-        iteration: Math.max(0, iterationIndex - 1),
+        startTime,
+        effects: {
+          usdToCredits: usdToCreditsStochastic,
+          now: () => Date.now(),
+          logGuardTrip: ({ inputTokensDelta, contextWindow }) =>
+            logger.error(
+              '[agentExecutor] iteration input tokens exceed model context window; skipping charge to avoid over-billing (#657)',
+              {
+                executionId,
+                sessionId: execution.sessionId,
+                model: execution.model,
+                inputTokensDelta,
+                contextWindow,
+              }
+            ),
+          deductCredits: async ({ credits, inputTokens, outputTokens }) => {
+            await creditService.deductCreditsWithOrgSupport(
+              {
+                type: 'text_generation_usage',
+                user: user as IUserDocument,
+                organization,
+                credits,
+                sessionId: execution.sessionId,
+                questId: execution.questId,
+                model: execution.model,
+                inputTokens,
+                outputTokens,
+              },
+              {
+                db: {
+                  creditTransactions: creditTransactionRepository,
+                  users: userRepository,
+                  organizations: organizationRepository,
+                },
+              }
+            );
+          },
+          recordUsageEvent: event => {
+            usageEventRepository
+              .record({
+                requestId: execution.questId || executionId,
+                userId: execution.userId,
+                ownerId: organization ? organization.id : (user as IUserDocument).id,
+                ownerType: organization ? CreditHolderType.Organization : CreditHolderType.User,
+                sessionId: execution.sessionId,
+                feature: 'agent_execution',
+                provider: resolvedModelInfo.backend,
+                model: execution.model,
+                ...event,
+              })
+              .catch(err => logger.warn('Failed to record usage event', { err }));
+          },
+          addIterationBilling: billing => agentExecutionRepository.addIterationBilling(executionId, billing),
+          sendProgress: async (creditsUsed, iterIndex) => {
+            await sendWs('progress', {
+              executionId,
+              creditsUsed,
+              // 0-indexed wire convention (matches `permission_request` and the
+              // per-step listener). DB `addIterationBilling.iteration` keeps the
+              // 1-indexed value since billing records are persisted.
+              iteration: Math.max(0, iterIndex - 1),
+            });
+          },
+        },
       });
     };
 
