@@ -127,6 +127,38 @@ export class ApiKeyUsageLogRepository extends BaseRepository<IApiKeyUsageLogDocu
       })
       .exec();
   }
+
+  /**
+   * Count logged requests per API key for a user, in a single aggregation.
+   * Returns each key's lifetime total (bounded by this collection's 90-day TTL)
+   * and today's count (timestamp >= dayStart). Backs the API-key usage view with
+   * real request data instead of the never-written UserApiKey.usage counters (#773).
+   * Keys with no logged requests are simply absent from the result.
+   */
+  async countRequestsByKeyForUser(
+    userId: string,
+    dayStart: Date
+  ): Promise<Record<string, { totalRequests: number; requestsToday: number }>> {
+    const rows = await this.model.aggregate<{
+      _id: string;
+      totalRequests: number;
+      requestsToday: number;
+    }>([
+      { $match: { userId } },
+      {
+        $group: {
+          _id: '$keyId',
+          totalRequests: { $sum: 1 },
+          requestsToday: { $sum: { $cond: [{ $gte: ['$timestamp', dayStart] }, 1, 0] } },
+        },
+      },
+    ]);
+
+    return rows.reduce<Record<string, { totalRequests: number; requestsToday: number }>>((acc, row) => {
+      acc[row._id] = { totalRequests: row.totalRequests, requestsToday: row.requestsToday };
+      return acc;
+    }, {});
+  }
 }
 
 export const apiKeyUsageLogRepository = new ApiKeyUsageLogRepository(ApiKeyUsageLog);
