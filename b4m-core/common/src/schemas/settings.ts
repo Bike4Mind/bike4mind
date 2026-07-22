@@ -3279,15 +3279,19 @@ export const settingsMap = {
   HardwareComputeMaxUsdPerRun: makeNumberSetting({
     key: 'HardwareComputeMaxUsdPerRun',
     name: 'Hardware Compute: Max USD per run',
-    defaultValue: 100,
+    defaultValue: 300,
     min: 1,
     max: 10_000,
     description:
       'Defense-in-depth spend ceiling for a single eligible hybrid compute job run on real external ' +
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
       'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
-      'per-run spend without maintaining a hardcoded device allowlist; raise it here without a deploy ' +
-      'if a legitimately pricier target needs to be reachable.',
+      'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
+      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (which applies a 16x ' +
+      'error-mitigation/debias multiplier, ~10x the Standard tier reservation after margins) for SMALL/sparse ' +
+      'briefs only; larger 16-qubit High-fidelity runs reserve well past $300 and are rejected here by design. ' +
+      'Raise further without a deploy (up to $10k) to admit pricier briefs; bounded per-run exposure is the ' +
+      'deliberate tradeoff over universal High-fidelity.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -3312,14 +3316,17 @@ export const settingsMap = {
   HardwareComputeMaxUsdPerUserPerDay: makeNumberSetting({
     key: 'HardwareComputeMaxUsdPerUserPerDay',
     name: 'Hardware Compute: Max USD per user per day',
-    defaultValue: 200,
+    defaultValue: 600,
     min: 1,
     max: 100_000,
     description:
       "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
       'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raise it here without a deploy as real usage patterns emerge.',
+      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
+      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
+      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
+      'patterns emerge.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
