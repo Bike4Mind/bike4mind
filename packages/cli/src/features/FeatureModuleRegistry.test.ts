@@ -109,6 +109,21 @@ describe('FeatureModuleRegistry fault isolation', () => {
     expect(registry.getAllCommands().map(c => c.name)).toEqual(['g']);
   });
 
+  it('executeCommand isolates a module whose getCommands throws and still checks the rest', () => {
+    const registry = new FeatureModuleRegistry();
+    registry.register(
+      mod('bad', {
+        getCommands: () => {
+          throw new Error('getCommands boom');
+        },
+      })
+    );
+    registry.register(mod('good', { getCommands: () => [{ name: 'g', description: '', execute: () => {} }] }));
+    // The bad module (registered first) must not crash dispatch or shadow 'g'.
+    expect(registry.executeCommand('g', [])).toBe(true);
+    expect(registry.executeCommand('nope', [])).toBe(false);
+  });
+
   it('executeCommand swallows a throwing command but still reports it handled', () => {
     const registry = new FeatureModuleRegistry();
     registry.register(

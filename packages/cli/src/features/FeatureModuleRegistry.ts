@@ -81,8 +81,18 @@ export class FeatureModuleRegistry {
   /** Try to execute a slash command. Returns true if handled. */
   executeCommand(name: string, args: string[]): boolean {
     for (const module of this.modules) {
-      const commands = module.getCommands?.() ?? [];
-      const command = commands.find(c => c.name === name);
+      // getCommands() itself can throw late (state-dependent), and this runs
+      // inside the un-guarded handleCommand dispatch - isolate it per-module
+      // like every other accessor so one plugin can't crash dispatch.
+      let command: FeatureCommand | undefined;
+      try {
+        command = (module.getCommands?.() ?? []).find(c => c.name === name);
+      } catch (error) {
+        logger.warn(
+          `[feature:${module.name}] getCommands threw during dispatch: ${error instanceof Error ? error.message : String(error)}`
+        );
+        continue;
+      }
       if (command) {
         // A throwing (or rejecting) plugin command is handled-but-failed, not
         // unhandled: swallow so it can't take down the dispatch loop or surface

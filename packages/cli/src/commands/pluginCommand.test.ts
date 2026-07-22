@@ -52,8 +52,13 @@ describe('validatePluginSpec', () => {
     'github:user/repo#v1.0.0',
     'user/repo',
     'file:/abs/path/to/plugin',
+    'file:C:\\Users\\dev\\plugins\\foo', // Windows path backslashes allowed for file:
   ])('accepts %s', spec => {
     expect(validatePluginSpec(spec)).toBe(true);
+  });
+
+  it('still rejects backslashes in a non-file spec', () => {
+    expect(validatePluginSpec('foo\\bar')).toBe(false);
   });
 
   it.each([
@@ -279,6 +284,53 @@ describe('add/remove orchestration', () => {
 
     const reloaded = await new ConfigStore(configPath).load();
     expect(reloaded.features?.foo).toBe(false);
+  });
+
+  it('add reports npm-missing (ENOENT) and exits 1', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
+    const err = vi.mocked(console.error);
+    mockedExecFileSync.mockImplementation(() => {
+      const e = new Error('spawn npm ENOENT') as NodeJS.ErrnoException;
+      e.code = 'ENOENT';
+      throw e;
+    });
+    await expect(handleAdd('b4m-plugin-foo', dir, configStore)).rejects.toThrow('exit');
+    expect(err.mock.calls.flat().join(' ')).toContain('npm is required');
+    exitSpy.mockRestore();
+  });
+
+  it('add reports a generic install failure and exits 1', async () => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
+    const err = vi.mocked(console.error);
+    mockedExecFileSync.mockImplementation(() => {
+      // execFileSync failures carry a numeric `status`, not on the Errno type.
+      const e = new Error('E404') as NodeJS.ErrnoException & { status?: number };
+      e.status = 1;
+      throw e;
+    });
+    await expect(handleAdd('b4m-plugin-foo', dir, configStore)).rejects.toThrow('exit');
+    expect(err.mock.calls.flat().join(' ')).toContain('Install failed');
+    exitSpy.mockRestore();
+  });
+
+  it('remove reports npm-missing (ENOENT) and exits 1', async () => {
+    await fakeInstalledPlugin('b4m-plugin-foo', 'foo');
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
+    const err = vi.mocked(console.error);
+    mockedExecFileSync.mockImplementation(() => {
+      const e = new Error('spawn npm ENOENT') as NodeJS.ErrnoException;
+      e.code = 'ENOENT';
+      throw e;
+    });
+    await expect(handleRemove('foo', dir, configStore)).rejects.toThrow('exit');
+    expect(err.mock.calls.flat().join(' ')).toContain('npm is required');
+    exitSpy.mockRestore();
   });
 
   it('remove exits without npm when nothing matches', async () => {

@@ -32,14 +32,24 @@ export async function buildFeatureRegistry(params: {
   descriptors: PluginDescriptor[];
   config: CliConfig;
   logger: Logger;
+  /** Tool names already owned by the CLI core (non-feature-module tools). A
+   *  plugin colliding with one is skipped, since tools are sent 1:1 to the
+   *  provider with no dedup and a duplicate name 400s every completion. */
+  reservedToolNames?: string[];
 }): Promise<BuildFeatureRegistryResult> {
   const { builtins, descriptors, config, logger } = params;
   const registry = new FeatureModuleRegistry();
   const loaded: string[] = [];
   const skipped: Array<{ name: string; reason: string }> = [];
 
+  // Track every tool name already claimed (CLI core + built-ins + loaded
+  // plugins) so a collision is caught at build time, not as a 400 mid-session.
+  const claimedToolNames = new Set(params.reservedToolNames ?? []);
   for (const module of builtins) {
     registry.register(module);
+    for (const tool of module.getTools()) {
+      claimedToolNames.add(tool.toolSchema.name);
+    }
   }
 
   for (const descriptor of descriptors) {
@@ -74,7 +84,20 @@ export async function buildFeatureRegistry(params: {
       continue;
     }
 
+    // Reject a plugin whose tool names collide with an already-claimed name
+    // (CLI core, a built-in, or an earlier plugin) or with each other.
+    const toolNames = module.getTools().map(t => t.toolSchema.name);
+    const collision =
+      toolNames.find(n => claimedToolNames.has(n)) ?? toolNames.find((n, i) => toolNames.indexOf(n) !== i);
+    if (collision) {
+      const reason = `tool name '${collision}' collides with an existing tool`;
+      skipped.push({ name: descriptor.name, reason });
+      logger.warn(`[plugin:${descriptor.name}] skipped: ${reason}`);
+      continue;
+    }
+
     registry.register(module);
+    toolNames.forEach(n => claimedToolNames.add(n));
     loaded.push(descriptor.name);
   }
 

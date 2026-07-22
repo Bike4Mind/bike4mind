@@ -100,6 +100,41 @@ describe('ConfigStore features map', () => {
     expect(reloaded.features?.drop).toBeUndefined();
   });
 
+  it('strips a non-boolean feature value on load instead of wiping the whole config', async () => {
+    // A malformed feature value must not ZodError the whole parse (which would
+    // discard config to defaults and let the next save wipe auth/mcpServers).
+    const config = await store.load();
+    await store.save({ ...config, features: { tavern: true } });
+    // Corrupt the on-disk features with a non-boolean value, plus a real auth token.
+    const onDisk = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    onDisk.features = { tavern: true, bogus: 'not-a-boolean' };
+    onDisk.auth = { accessToken: 'a', refreshToken: 'r', expiresAt: '2099-01-01T00:00:00Z', userId: 'u1' };
+    await fs.writeFile(configPath, JSON.stringify(onDisk));
+
+    const reloaded = await new ConfigStore(configPath).load();
+    expect(reloaded.features?.tavern).toBe(true); // valid key kept
+    expect(reloaded.features?.bogus).toBeUndefined(); // bad value stripped, not fatal
+    expect(reloaded.auth?.userId).toBe('u1'); // rest of the config survived
+  });
+
+  it('switchApiEnvironment preserves features written by another process', async () => {
+    const config = await store.load();
+    await store.save({ ...config, features: { tavern: true } });
+    const session = new ConfigStore(configPath);
+    await session.load(); // snapshot without the not-yet-added plugin
+
+    // Another process adds + enables a plugin on disk.
+    const other = new ConfigStore(configPath);
+    const oc = await other.load();
+    await other.save({ ...oc, features: { ...oc.features, 'b4m-plugin-x': true } });
+
+    // The interactive session switches API env (no-arg save under the hood).
+    await session.switchApiEnvironment({ customUrl: 'https://app.staging.bike4mind.com' });
+
+    const reloaded = await new ConfigStore(configPath).load();
+    expect(reloaded.features?.['b4m-plugin-x']).toBe(true); // not reverted by /set-api
+  });
+
   it('lets an in-memory toggle win per-key over the disk value', async () => {
     const config = await store.load();
     await store.save({ ...config, features: { tavern: true } });

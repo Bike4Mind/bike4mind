@@ -29,8 +29,12 @@ const NPM_TIMEOUT_MS = 120_000;
  */
 export function validatePluginSpec(spec: string): boolean {
   // `%` is rejected too: under the Windows shell path it would trigger cmd.exe
-  // environment-variable expansion.
-  if (!spec || /\s/.test(spec) || /[;&|<>`$(){}\\!*?[\]'"%]/.test(spec)) {
+  // environment-variable expansion. `file:` specs may contain backslashes
+  // (Windows paths, e.g. file:C:\plugins\foo), so exempt those from the
+  // backslash rejection while still blocking every other shell metacharacter.
+  const isFile = /^file:/i.test(spec);
+  const dangerous = isFile ? /[;&|<>`$(){}!*?[\]'"%]/ : /[;&|<>`$(){}\\!*?[\]'"%]/;
+  if (!spec || /\s/.test(spec) || dangerous.test(spec)) {
     return false;
   }
   // Segments must start alphanumeric so a relative path (../x, .hidden/y)

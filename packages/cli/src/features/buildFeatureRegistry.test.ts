@@ -178,6 +178,75 @@ describe('buildFeatureRegistry', () => {
     expect(registry.getModuleNames()).toEqual(['tavern']);
   });
 
+  it('skips a plugin whose tool name collides with a reserved CLI-core tool', async () => {
+    const descriptor = await writePluginEntry('collide-core.mjs', factorySource('collide-core', 'write_todos'));
+    const { registry, loaded, skipped } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [descriptor],
+      config: makeConfig({ 'collide-core': true }),
+      logger: quietLogger,
+      reservedToolNames: ['write_todos', 'skill', 'tool_search'],
+    });
+    expect(loaded).toEqual([]);
+    expect(skipped[0].reason).toContain("tool name 'write_todos'");
+    expect(registry.getAllToolNames()).toEqual([]);
+  });
+
+  it('skips a plugin whose tool name collides with an already-loaded plugin', async () => {
+    const first = await writePluginEntry('first-tool.mjs', factorySource('first-tool', 'shared_tool'));
+    const second = await writePluginEntry('second-tool.mjs', factorySource('second-tool', 'shared_tool'));
+    const { registry, loaded, skipped } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [first, second],
+      config: makeConfig({ 'first-tool': true, 'second-tool': true }),
+      logger: quietLogger,
+    });
+    expect(loaded).toEqual(['first-tool']);
+    expect(skipped.map(s => s.name)).toEqual(['second-tool']);
+    expect(registry.getAllToolNames()).toEqual(['shared_tool']);
+  });
+
+  it('skips a plugin whose own tools collide with each other', async () => {
+    const descriptor = await writePluginEntry(
+      'dup-intra.mjs',
+      `export default () => ({
+        name: 'dup-intra', description: '',
+        getTools: () => [
+          { toolFn: () => 'a', toolSchema: { name: 'dup', description: '', parameters: { type: 'object', properties: {} } } },
+          { toolFn: () => 'b', toolSchema: { name: 'dup', description: '', parameters: { type: 'object', properties: {} } } },
+        ],
+        getSystemPromptSection: () => '',
+      });`
+    );
+    const { loaded, skipped } = await buildFeatureRegistry({
+      builtins: [],
+      descriptors: [descriptor],
+      config: makeConfig({ 'dup-intra': true }),
+      logger: quietLogger,
+    });
+    expect(loaded).toEqual([]);
+    expect(skipped[0].reason).toContain("tool name 'dup'");
+  });
+
+  it('skips a plugin whose tool name collides with a built-in module', async () => {
+    const builtin = makeBuiltin('tavern');
+    builtin.getTools = () => [
+      {
+        toolFn: async () => 'ok',
+        toolSchema: { name: 'tavern_status', description: 'd', parameters: { type: 'object', properties: {} } },
+      },
+    ];
+    const descriptor = await writePluginEntry('collide-builtin.mjs', factorySource('collide-builtin', 'tavern_status'));
+    const { loaded, skipped } = await buildFeatureRegistry({
+      builtins: [builtin],
+      descriptors: [descriptor],
+      config: makeConfig({ tavern: true, 'collide-builtin': true }),
+      logger: quietLogger,
+    });
+    expect(loaded).toEqual([]);
+    expect(skipped[0].reason).toContain("tool name 'tavern_status'");
+  });
+
   it('skips a plugin with a malformed tool before it can poison the registry', async () => {
     const descriptor = await writePluginEntry(
       'bad-tool.mjs',

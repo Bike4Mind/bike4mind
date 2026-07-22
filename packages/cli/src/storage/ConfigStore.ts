@@ -273,12 +273,24 @@ const CliConfigSchema = z.object({
     config: z.record(z.string(), z.any()),
   }),
   // catchall keeps plugin feature keys (features.<configKey>) from being
-  // stripped on load; only tavern is a known built-in.
+  // stripped on load; only tavern is a known built-in. Preprocess strips any
+  // non-boolean entry FIRST so one malformed value can't throw a ZodError -
+  // which load() turns into discarding the entire config to defaults, and the
+  // next save() would then wipe real config (auth, mcpServers).
   features: z
-    .object({
-      tavern: z.boolean().optional(),
-    })
-    .catchall(z.boolean())
+    .preprocess(
+      v =>
+        v && typeof v === 'object' && !Array.isArray(v)
+          ? Object.fromEntries(
+              Object.entries(v as Record<string, unknown>).filter(([, val]) => typeof val === 'boolean')
+            )
+          : v,
+      z
+        .object({
+          tavern: z.boolean().optional(),
+        })
+        .catchall(z.boolean())
+    )
     .optional()
     .prefault({}),
   trustedTools: z.array(z.string()).optional().prefault([]),
@@ -1191,6 +1203,11 @@ export class ConfigStore {
     config.apiConfig = newApiConfig;
     config.authByEnv = authByEnv;
     config.auth = restored; // undefined → user will be prompted to /login
+
+    // Switching env does not touch features; refresh them from disk so a
+    // concurrent `b4m plugin add` in another process isn't reverted by this
+    // whole-config save (the no-arg save() path skips mergeFeatures).
+    config.features = await this.readDiskFeatures();
 
     await this.save();
 
