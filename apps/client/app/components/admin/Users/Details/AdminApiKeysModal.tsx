@@ -68,7 +68,9 @@ export default function AdminApiKeysModal({ open, onClose, user }: AdminApiKeysM
         setResettingKeyId(key.id);
         resetMutation.mutate(key.id, {
           onSuccess: () => toast.success(`Rate limit reset for "${key.name}"`),
-          onSettled: () => setResettingKeyId(null),
+          // Clear only our own row: a later reset on another row may already
+          // own the spinner when this settle lands.
+          onSettled: () => setResettingKeyId(prev => (prev === key.id ? null : prev)),
         });
       },
     });
