@@ -84,8 +84,8 @@ const handler = baseApi().get<Request<{}, {}, {}, Record<string, string>>>(async
     // users, downloadAll is admin-only, and the page size is hard-capped.
     const isAdmin = !!req.user?.isAdmin;
     if (publicView && !isAdmin) {
-      // projectId-scoped requests show members of one specific project — not a full-directory
-      // enumeration path — so they are exempt from the search-term minimum.
+      // projectId-scoped requests show members of one specific project -- not a full-directory
+      // enumeration path -- so they are exempt from the search-term minimum.
       if (!projectId && (!search || search.length < 3)) {
         return res.status(400).json({ message: 'A search term of at least 3 characters is required.' });
       }

@@ -302,6 +302,7 @@ const OrganizationMembers: FC<OrganizationMembersProps> = ({ organization, userP
                 getItemId={user => user.username}
                 onSearch={term => debouncedModalSearch(term)}
                 searchPlaceholder={t('common.search_users', 'Search users')}
+                searchMinLength={3}
                 onAdd={handleAddMembers}
                 isPending={shareDocument.isPending}
                 renderItem={renderUserItem}

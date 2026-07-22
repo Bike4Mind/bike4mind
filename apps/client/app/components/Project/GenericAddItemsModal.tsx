@@ -58,6 +58,7 @@ export interface GenericAddItemsModalProps<T> {
   showButtonBadge?: boolean;
   emptyResultMessage?: string;
   triggerTestId?: string;
+  searchMinLength?: number;
 }
 
 function GenericAddItemsModal<T>({
@@ -97,6 +98,7 @@ function GenericAddItemsModal<T>({
   value,
   showButtonBadge = true,
   triggerTestId,
+  searchMinLength,
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -310,8 +312,10 @@ function GenericAddItemsModal<T>({
                         py={4}
                       >
                         <Typography className="generic-add-items-empty-message" level="body-lg" color="neutral">
-                          {searchTerm.length > 0 && searchTerm.length < 3
-                            ? 'Type at least 3 characters to search.'
+                          {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength
+                            ? t('common.search_min_length', 'Type at least {{count}} characters to search.', {
+                                count: searchMinLength,
+                              })
                             : searchTerm
                               ? 'No results found. Try adjusting your search.'
                               : emptyResultMessage}

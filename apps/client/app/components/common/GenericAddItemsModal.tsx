@@ -56,6 +56,7 @@ export interface GenericAddItemsModalProps<T> {
   modalWidth?: string | number;
   value?: string[];
   showButtonBadge?: boolean;
+  searchMinLength?: number;
 }
 
 function GenericAddItemsModal<T>({
@@ -93,6 +94,7 @@ function GenericAddItemsModal<T>({
   modalWidth = '950px',
   value,
   showButtonBadge = true,
+  searchMinLength,
 }: GenericAddItemsModalProps<T>) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -287,11 +289,11 @@ function GenericAddItemsModal<T>({
                       }}
                     >
                       <Typography level="body-lg" color="neutral">
-                        {searchTerm.length > 0 && searchTerm.length < 3
-                          ? 'Type at least 3 characters to search.'
-                          : searchTerm
-                            ? t('common.no_results_found', 'No results found')
-                            : t('common.no_results_found', 'No results found')}
+                        {searchMinLength && searchTerm.length > 0 && searchTerm.length < searchMinLength
+                          ? t('common.search_min_length', 'Type at least {{count}} characters to search.', {
+                              count: searchMinLength,
+                            })
+                          : t('common.no_results_found', 'No results found')}
                       </Typography>
                     </Box>
                   )}
