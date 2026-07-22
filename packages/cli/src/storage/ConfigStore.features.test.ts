@@ -117,6 +117,23 @@ describe('ConfigStore features map', () => {
     expect(reloaded.auth?.userId).toBe('u1'); // rest of the config survived
   });
 
+  it('switchApiEnvironment does not write back a bogus disk feature value', async () => {
+    const config = await store.load();
+    await store.save({ ...config, features: { tavern: true } });
+    // Corrupt the disk features with a non-boolean before the env switch.
+    const onDisk = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    onDisk.features = { tavern: true, bogus: 'nope' };
+    await fs.writeFile(configPath, JSON.stringify(onDisk));
+
+    const session = new ConfigStore(configPath);
+    await session.load();
+    await session.switchApiEnvironment({ customUrl: 'https://app.staging.bike4mind.com' });
+
+    const written = JSON.parse(await fs.readFile(configPath, 'utf-8'));
+    expect(written.features.tavern).toBe(true);
+    expect('bogus' in written.features).toBe(false); // stripped, not written back
+  });
+
   it('switchApiEnvironment preserves features written by another process', async () => {
     const config = await store.load();
     await store.save({ ...config, features: { tavern: true } });

@@ -878,9 +878,14 @@ export class ConfigStore {
   private async readDiskFeatures(): Promise<Record<string, boolean>> {
     try {
       const raw = JSON.parse(await fs.readFile(this.configPath, 'utf-8')) as {
-        features?: Record<string, boolean>;
+        features?: Record<string, unknown>;
       };
-      return raw.features ?? {};
+      // Return only boolean entries so callers that write this back (e.g.
+      // switchApiEnvironment) or merge over it can't reintroduce a bogus value.
+      return Object.fromEntries(Object.entries(raw.features ?? {}).filter(([, v]) => typeof v === 'boolean')) as Record<
+        string,
+        boolean
+      >;
     } catch {
       return {};
     }
