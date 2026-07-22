@@ -3,6 +3,8 @@ import {
   ApiKeyType,
   CreditHolderType,
   insufficientCreditsError,
+  IOrganizationDocument,
+  IUserDocument,
   SoundGenerationVendor,
   soundEffectsRequestSchema,
 } from '@bike4mind/common';
@@ -10,6 +12,7 @@ import {
   adminSettingsRepository,
   apiKeyRepository,
   creditTransactionRepository,
+  organizationRepository,
   userRepository,
   usageEventRepository,
 } from '@bike4mind/database';
@@ -26,9 +29,10 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 };
 
 // Provider-agnostic sound-effects generation. Meters usage: estimates the
-// credit cost up front (rejecting when the balance is short), then charges the
-// user after a successful generation. All billing is gated on the enforceCredits
-// admin setting, so self-host / credits-off deployments run free.
+// credit cost up front (rejecting when the balance is short), then charges after
+// a successful generation. Org-billed API keys charge the organization's shared
+// pool; all other callers bill the requesting user. All billing is gated on the
+// enforceCredits admin setting, so self-host / credits-off deployments run free.
 // Scope-gated (AI_GENERATE) so an under-scoped API key can't drive paid provider
 // generation, matching the image/video generation endpoints.
 const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req, res) => {
@@ -54,12 +58,46 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   // capture true provider cost even on credits-off / self-host deployments.
   const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
+  // Billing owner: org-billed API keys charge the organization's shared pool
+  // (invariant: apiKeyInfo.organizationId is set iff billingOwnerType is
+  // Organization); every other caller bills the requesting user. The user stays
+  // the actor for attribution + per-member usage tracking.
+  const billingOrganizationId =
+    req.apiKeyInfo?.billingOwnerType === CreditHolderType.Organization ? req.apiKeyInfo.organizationId : undefined;
+  const creditOwnerId = billingOrganizationId ?? userId;
+  const creditOwnerType = billingOrganizationId ? CreditHolderType.Organization : CreditHolderType.User;
+
+  // Holder docs are resolved under enforceCredits only (both the balance
+  // pre-check and the post-generation charge need them); left null on
+  // credits-off / self-host deploys, which never bill.
+  let billingUser: IUserDocument | null = null;
+  let billingOrg: IOrganizationDocument | null = null;
+
   if (enforceCredits) {
-    const user = await userRepository.findById(userId);
-    if (!user) throw new BadRequestError('User not found');
-    if ((user.currentCredits ?? 0) < requiredCredits) {
+    billingUser = await userRepository.findById(userId);
+    if (!billingUser) throw new BadRequestError('User not found');
+    if (billingOrganizationId) {
+      billingOrg = await organizationRepository.findById(billingOrganizationId);
+      if (!billingOrg) throw new BadRequestError('Billing organization not found');
+    }
+
+    // Org-billed keys respect the per-member cap before the shared-pool balance,
+    // mirroring deductCreditsWithOrgSupport (which re-checks it atomically at charge).
+    if (billingOrg?.maxCreditsPerMember != null) {
+      const usedCredits = billingOrg.userDetails?.find(member => member.id === userId)?.usedCredits ?? 0;
+      if (usedCredits + requiredCredits > billingOrg.maxCreditsPerMember) {
+        throw insufficientCreditsError(
+          `Your organization member credit limit has been reached for sound generation. Contact your organization administrator.`
+        );
+      }
+    }
+
+    const availableCredits = (billingOrg ?? billingUser).currentCredits ?? 0;
+    if (availableCredits < requiredCredits) {
       throw insufficientCreditsError(
-        `You do not have enough credits for sound generation. You currently have ${user.currentCredits ?? 0} credits and this requires approximately ${requiredCredits}.`
+        billingOrg
+          ? `Your organization does not have enough credits for sound generation. It currently has ${availableCredits} credits and this requires approximately ${requiredCredits}.`
+          : `You do not have enough credits for sound generation. You currently have ${availableCredits} credits and this requires approximately ${requiredCredits}.`
       );
     }
   }
@@ -74,8 +112,8 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
       .record({
         requestId: sessionId,
         userId,
-        ownerId: userId,
-        ownerType: CreditHolderType.User,
+        ownerId: creditOwnerId,
+        ownerType: creditOwnerType,
         sessionId,
         feature: 'sound_effects',
         provider,
@@ -115,21 +153,30 @@ const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(asyn
   let creditsCharged = 0;
   if (enforceCredits && requiredCredits > 0) {
     try {
-      await creditService.subtractCredits(
+      // billingUser is guaranteed set here: enforceCredits populated it above.
+      await creditService.deductCreditsWithOrgSupport(
         {
           type: 'sound_effects_usage',
-          ownerId: userId,
-          ownerType: CreditHolderType.User,
+          user: billingUser!,
+          organization: billingOrg, // null => bills the user's personal pool
           credits: requiredCredits,
-          model: provider,
           sessionId,
+          model: provider,
+          source: 'api',
         },
-        { db: { creditTransactions: creditTransactionRepository }, creditHolderMethods: userRepository }
+        {
+          db: {
+            creditTransactions: creditTransactionRepository,
+            users: userRepository,
+            organizations: organizationRepository,
+          },
+        }
       );
       creditsCharged = requiredCredits;
     } catch (err) {
       req.logger.error('Sound-effects credit deduction failed - billing may be missed', {
         userId,
+        organizationId: billingOrganizationId,
         error: err instanceof Error ? err.message : 'Unknown error',
       });
     }

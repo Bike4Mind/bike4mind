@@ -12,9 +12,12 @@ import { BadRequestError } from '@bike4mind/utils';
 import { subtractCredits, SubtractCreditsParameters } from './subtractCredits';
 
 /**
- * Base parameters for credit deduction with organization support
+ * Base parameters for credit deduction with organization support, shared by
+ * every deduction type. Quest-scoped types add a `questId` (see
+ * DeductCreditsWithOrgSupportParams); quest-less types (e.g. sound effects)
+ * use this base directly.
  */
-export interface DeductCreditsWithOrgSupportParams {
+export interface DeductCreditsCommonParams {
   /** The user performing the action */
   user: IUserDocument;
   /** The organization (if any) to deduct credits from */
@@ -23,8 +26,6 @@ export interface DeductCreditsWithOrgSupportParams {
   credits: number;
   /** Session ID for tracking */
   sessionId: string;
-  /** Quest ID for tracking */
-  questId: string;
   /** Model used for the operation */
   model: string;
   /**
@@ -33,6 +34,14 @@ export interface DeductCreditsWithOrgSupportParams {
    * helper is invoked from web/agent chat-completion paths (image/video/text).
    */
   source?: CompletionSource;
+}
+
+/**
+ * Base parameters for quest-scoped credit deductions (image/video/text).
+ */
+export interface DeductCreditsWithOrgSupportParams extends DeductCreditsCommonParams {
+  /** Quest ID for tracking */
+  questId: string;
 }
 
 /**
@@ -68,13 +77,23 @@ export interface DeductTextGenerationCreditsParams extends DeductCreditsWithOrgS
 }
 
 /**
+ * Parameters for sound-effects credit deduction. Quest-less: sound generation
+ * is a stateless API call with only a synthetic sessionId, so it extends the
+ * common base rather than the quest-scoped one.
+ */
+export interface DeductSoundEffectsCreditsParams extends DeductCreditsCommonParams {
+  type: 'sound_effects_usage';
+}
+
+/**
  * Union type of all deduction parameter types
  */
 export type DeductCreditsParams =
   | DeductImageGenerationCreditsParams
   | DeductImageEditCreditsParams
   | DeductVideoGenerationCreditsParams
-  | DeductTextGenerationCreditsParams;
+  | DeductTextGenerationCreditsParams
+  | DeductSoundEffectsCreditsParams;
 
 /**
  * Database adapters required for credit deduction.
@@ -124,7 +143,7 @@ export async function deductCreditsWithOrgSupport(
   adapters: DeductCreditsAdapters,
   options?: DeductCreditsOptions
 ): Promise<void> {
-  const { user, organization, credits, sessionId, questId, model, type } = params;
+  const { user, organization, credits, sessionId, model, type } = params;
   const source: CompletionSource = params.source ?? 'web';
 
   let ownerId = user.id;
@@ -160,7 +179,6 @@ export async function deductCreditsWithOrgSupport(
     ownerType,
     credits,
     sessionId,
-    questId,
     model,
     source,
   };
@@ -171,13 +189,19 @@ export async function deductCreditsWithOrgSupport(
     transactionParams = {
       ...baseParams,
       type: 'text_generation_usage',
+      questId: params.questId,
       inputTokens: params.inputTokens,
       outputTokens: params.outputTokens,
     };
+  } else if (type === 'sound_effects_usage') {
+    // Quest-less: sound effects has no questId.
+    transactionParams = { ...baseParams, type: 'sound_effects_usage' };
   } else {
+    // Quest-scoped image/edit/video types; questId is guaranteed by their param shape.
     transactionParams = {
       ...baseParams,
       type,
+      questId: params.questId,
     } as SubtractCreditsParameters;
   }
 
