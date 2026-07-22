@@ -16,6 +16,7 @@ import {
 import CodeIcon from '@mui/icons-material/Code';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import { getAgentEmbedKeys, type AgentEmbedKey } from '@client/app/utils/agentsAPICalls';
+import { ModellessAgentAlert } from '@client/app/components/common/ModellessAgentWarning';
 import { copyTextWithToast } from '@client/app/utils/copyToClipboard';
 import {
   buildIframeSnippet,
@@ -28,6 +29,8 @@ export interface EmbedSnippetSectionProps {
   agentId: string;
   /** Used for the iframe snippet's accessible title. */
   agentName?: string;
+  /** Live form value; '' or unset means the agent is on the system default model. */
+  preferredModel?: string;
   testIdPrefix?: string;
 }
 
@@ -42,6 +45,7 @@ type SnippetFormat = 'script' | 'iframe';
 export function EmbedSnippetSection({
   agentId,
   agentName,
+  preferredModel,
   testIdPrefix = 'agent-embed-snippet',
 }: EmbedSnippetSectionProps) {
   // null = loading; 'error' = fetch failed (distinct from an empty list so a
@@ -90,6 +94,9 @@ export function EmbedSnippetSection({
         <CodeIcon fontSize="small" />
         <FormLabel sx={{ mb: 0 }}>Embed on your site</FormLabel>
       </Box>
+      {/* Same falsy notion as isModellessAgent; the agent object itself is not
+          in scope here, only the live form value. Mirrors the embed-key modals. */}
+      {!preferredModel && <ModellessAgentAlert testId={`${testIdPrefix}-model-warning`} />}
       {keys === 'error' ? (
         <Typography level="body-sm" color="danger" sx={{ opacity: 0.85 }} data-testid={`${testIdPrefix}-error`}>
           Couldn&apos;t load embed keys for this agent. Please refresh to try again.
