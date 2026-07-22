@@ -30,7 +30,7 @@ import { agentContinuationQueue } from './queues';
 const SHARED_AGENT_EXECUTOR_CONFIG = {
   handler: 'apps/client/server/queueHandlers/agentExecutor.handler',
   runtime: 'nodejs24.x' as const,
-  timeout: '15 minutes' as const,
+  timeout: '6 minutes' as const,
   memory: '2048 MB' as const,
   vpc: lambdaVpc,
   link: [
