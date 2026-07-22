@@ -291,6 +291,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'completion_api_usage',
   'speech_to_text_usage',
   'text_to_speech_usage',
+  'sound_effects_usage',
   'transfer_credit',
   'generic_deduct',
 ] as const;
