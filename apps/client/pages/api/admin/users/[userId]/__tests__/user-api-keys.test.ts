@@ -53,6 +53,10 @@ vi.mock('@server/utils/apiKeyRateLimitCheck', () => ({
 }));
 
 import handler from '../user-api-keys';
+// These resolve to the mocked classes above, so instanceof pins which error
+// (and therefore which status) each guard maps to.
+import { ForbiddenError } from '@server/utils/errors';
+import { BadRequestError, NotFoundError } from '@bike4mind/utils';
 
 const ADMIN = { id: 'admin1', isAdmin: true };
 
@@ -69,36 +73,36 @@ beforeEach(() => {
 });
 
 describe('GET /api/admin/users/:userId/user-api-keys', () => {
-  it('rejects non-admins before touching any data source', async () => {
+  it('rejects non-admins with ForbiddenError before touching any data source', async () => {
     const { promise } = run({ user: { id: 'u2', isAdmin: false } });
-    await expect(promise).rejects.toThrow();
+    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockUserFind).not.toHaveBeenCalled();
     expect(mockListKeys).not.toHaveBeenCalled();
   });
 
-  it('rejects an unauthenticated request (no req.user)', async () => {
+  it('rejects an unauthenticated request (no req.user) with ForbiddenError', async () => {
     const { promise } = run();
-    await expect(promise).rejects.toThrow();
+    await expect(promise).rejects.toBeInstanceOf(ForbiddenError);
     expect(mockUserFind).not.toHaveBeenCalled();
     expect(mockListKeys).not.toHaveBeenCalled();
   });
 
   it('rejects a userId that arrives as an array', async () => {
     const { promise } = run({ user: ADMIN, userId: ['a', 'b'] });
-    await expect(promise).rejects.toThrow('Invalid user ID');
+    await expect(promise).rejects.toBeInstanceOf(BadRequestError);
     expect(mockUserFind).not.toHaveBeenCalled();
   });
 
   it('rejects an empty-string userId', async () => {
     const { promise } = run({ user: ADMIN, userId: '' });
-    await expect(promise).rejects.toThrow('Invalid user ID');
+    await expect(promise).rejects.toBeInstanceOf(BadRequestError);
     expect(mockUserFind).not.toHaveBeenCalled();
   });
 
   it('404s when the target user does not exist, without listing keys', async () => {
     mockUserFind.mockResolvedValue(null);
     const { promise } = run({ user: ADMIN });
-    await expect(promise).rejects.toThrow('User not found');
+    await expect(promise).rejects.toBeInstanceOf(NotFoundError);
     expect(mockListKeys).not.toHaveBeenCalled();
   });
 
