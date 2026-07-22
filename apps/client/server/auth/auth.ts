@@ -61,7 +61,9 @@ passport.use(
         // token presented as a Bearer access token). Missing typ = legacy pre-claim token,
         // accepted (self-expiring grace); the mfaPending access token is also typ-less and
         // handled by the mfaPending gate below. Shares isTokenTypeAcceptable with the
-        // refresh path so both enforce identically.
+        // refresh path (verifyRefreshToken) so those two REST verifiers enforce identically.
+        // NOTE: the WS/CLI verifiers (verifyToken / server/cli/auth.ts verifyJwtToken) do
+        // NOT yet apply this check - tracked as a follow-up, not covered here.
         if (!isTokenTypeAcceptable(jwt_payload.typ, 'access')) {
           return done(null, false);
         }

@@ -131,6 +131,18 @@ describe('AuthTokenGeneratorService', () => {
       expect(svc.verifyRefreshToken(accessToken)).toBeNull();
     });
 
+    it('rejects an access-typed token on the previous-secret rotation branch too', () => {
+      const svc = sharedSecretService();
+      const previousSecret = 'previous-shared-secret';
+      // Signed with the OLD secret so only the rotation fallback verifies it - the typ
+      // check must run on that recovered payload, not just the primary-secret path.
+      const rotatedAccess = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'access' }, previousSecret, {
+        algorithm: 'HS256',
+        expiresIn: '7d',
+      });
+      expect(svc.verifyRefreshToken(rotatedAccess, previousSecret)).toBeNull();
+    });
+
     it('still accepts a legacy typ-less refresh token (self-expiring grace)', () => {
       const svc = sharedSecretService();
       const legacyRefresh = jwt.sign({ id: 'user-1', tokenVersion: 0 }, SHARED, {
@@ -180,6 +192,15 @@ describe('AuthTokenGeneratorService', () => {
 
     it('rejects an unexpected typ value', () => {
       expect(isTokenTypeAcceptable('bogus', 'access')).toBe(false);
+    });
+
+    // Only a literally-absent claim (undefined) is the grace case. A null, empty-string,
+    // or object typ is a malformed/forged token and must be rejected - the guard is
+    // strict-equality, not truthiness, so these do not slip through as "legacy".
+    it('rejects null / empty-string / object typ (not treated as the legacy grace case)', () => {
+      expect(isTokenTypeAcceptable(null, 'access')).toBe(false);
+      expect(isTokenTypeAcceptable('', 'access')).toBe(false);
+      expect(isTokenTypeAcceptable({}, 'access')).toBe(false);
     });
   });
 
