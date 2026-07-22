@@ -43,13 +43,20 @@ export function guardDecomposeOnce(
         const run = inner.toolFn;
         return {
           ...inner,
-          toolFn: (parameters?: unknown, apiKey?: string) => {
+          toolFn: async (parameters?: unknown, apiKey?: string) => {
             if (state.decomposeUsed) {
               onBlocked?.();
-              return Promise.resolve(DECOMPOSE_ALREADY_DONE_MSG);
+              return DECOMPOSE_ALREADY_DONE_MSG;
             }
-            state.decomposeUsed = true;
-            return run(parameters, apiKey);
+            // Latch the durable flag ONLY on a successful decompose. A throw (surfaced by
+            // ReActAgent.callTool as an "Error: ..." observation) propagates without setting it;
+            // a non-throwing "Error: ..." string return is also treated as "did not happen". Else a
+            // first-try decompose failure would permanently poison the ledger (decomposeUsed=true,
+            // steps=[]) across continuations -- redirecting every later decompose to advance a plan
+            // that never loaded. Success detection mirrors planCompletionGuard's isToolSuccess.
+            const out = await run(parameters, apiKey);
+            if (!out.trimStart().toLowerCase().startsWith('error')) state.decomposeUsed = true;
+            return out;
           },
         };
       },

@@ -60,4 +60,52 @@ describe('guardDecomposeOnce', () => {
     expect(guarded).not.toBe(map);
     expect(map.optihashi_decompose).toBe(tool); // original entry untouched
   });
+
+  // #680 regression: with the flag now DURABLE, a failed first decompose must not latch it -- else
+  // it would permanently block retries across continuations against a plan that never loaded.
+  it('does NOT latch the flag when decompose returns an Error string; a retry re-runs it', async () => {
+    const calls: unknown[] = [];
+    const tool = {
+      name: 'optihashi_decompose',
+      implementation: () => ({
+        toolFn: async (p?: unknown) => {
+          calls.push(p);
+          return calls.length === 1 ? 'Error: could not formulate step 1' : 'PLAN CREATED';
+        },
+        toolSchema: {},
+      }),
+    } as unknown as ToolDefinition;
+    const state = { decomposeUsed: false };
+    const guarded = guardDecomposeOnce({ optihashi_decompose: tool }, state);
+
+    const first = await run(guarded.optihashi_decompose);
+    expect(first).toMatch(/^Error:/);
+    expect(state.decomposeUsed).toBe(false); // failure did not latch
+
+    const second = await run(guarded.optihashi_decompose);
+    expect(second).toBe('PLAN CREATED'); // retry actually re-ran the real tool
+    expect(calls).toHaveLength(2);
+    expect(state.decomposeUsed).toBe(true); // success latches
+  });
+
+  it('does NOT latch the flag when decompose throws (error surfaces, retry still allowed)', async () => {
+    let attempts = 0;
+    const tool = {
+      name: 'optihashi_decompose',
+      implementation: () => ({
+        toolFn: async () => {
+          attempts++;
+          if (attempts === 1) throw new Error('boom');
+          return 'PLAN CREATED';
+        },
+        toolSchema: {},
+      }),
+    } as unknown as ToolDefinition;
+    const state = { decomposeUsed: false };
+    const guarded = guardDecomposeOnce({ optihashi_decompose: tool }, state);
+
+    await expect(run(guarded.optihashi_decompose)).rejects.toThrow('boom');
+    expect(state.decomposeUsed).toBe(false); // throw did not latch
+    expect(await run(guarded.optihashi_decompose)).toBe('PLAN CREATED'); // retry runs
+  });
 });
