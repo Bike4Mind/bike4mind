@@ -1,4 +1,5 @@
 import {
+  ApiKeyScope,
   ApiKeyType,
   CreditHolderType,
   insufficientCreditsError,
@@ -28,7 +29,9 @@ const PROVIDER_API_KEY_TYPE: Record<SoundGenerationVendor, ApiKeyType> = {
 // credit cost up front (rejecting when the balance is short), then charges the
 // user after a successful generation. All billing is gated on the enforceCredits
 // admin setting, so self-host / credits-off deployments run free.
-const handler = baseApi().post(async (req, res) => {
+// Scope-gated (AI_GENERATE) so an under-scoped API key can't drive paid provider
+// generation, matching the image/video generation endpoints.
+const handler = baseApi({ requiredScopes: [ApiKeyScope.AI_GENERATE] }).post(async (req, res) => {
   const { provider, text, durationSeconds, promptInfluence, format } = soundEffectsRequestSchema.parse(req.body);
   const userId = req.user?.id;
 
