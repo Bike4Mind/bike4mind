@@ -92,6 +92,26 @@ export function resolveRelativePath(basePath: string, relativePath: string): str
 }
 
 /**
+ * Video extensions the help renderer treats as gif-style demo videos
+ * (autoplay, muted, looping), authored with the same ![alt](path) markdown
+ * syntax as images.
+ *
+ * This is the canonical list used by:
+ * - The React media renderer (HelpContent.tsx) to dispatch img vs video
+ * - The content validator (validate-help-content.ts) to recognize/size-check media
+ * - The bundler (bundle-help-content.ts) to copy media into public/help-content
+ *
+ * IMPORTANT: Any changes here must keep those three consumers in sync.
+ */
+export const VIDEO_EXTENSIONS = ['.webm', '.mp4'];
+
+/** True when the path (or URL) ends in a supported help video extension. */
+export function hasVideoExtension(target: string): boolean {
+  const lower = target.toLowerCase();
+  return VIDEO_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
  * Approximate token count using chars/4 heuristic.
  * Good enough for budget management; avoids pulling in tiktoken as a dependency.
  */

@@ -6,7 +6,11 @@
  * for production serving. Uses real file copies (not symlinks) so content survives
  * Lambda deployment via OpenNext/SST.
  *
- * Only bundles files that are referenced in the help-index.json.
+ * Only bundles files that are referenced in the help-index.json, plus any media
+ * assets (images, GIFs, demo videos) those articles reference - copied with the
+ * same docs-root-relative path so relative references resolve under
+ * /help-content/ at runtime. Existence, format, and size rules for that media
+ * are enforced by validate-help-content.ts, not here.
  *
  * Usage: pnpm --filter @bike4mind/scripts help:bundle-content
  */
@@ -15,6 +19,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import type { HelpIndex } from './types.js';
+import { extractMarkdownLinks, hasAssetExtension, isExternal, resolveAssetPath } from './validate-help-content.js';
 
 // ES module compatibility
 const __filename = fileURLToPath(import.meta.url);
@@ -125,6 +130,50 @@ async function bundleHelpContent(): Promise<void> {
     }
   }
 
+  // Collect media/assets referenced by the bundled articles. Broken or escaping
+  // references are skipped silently here - the validator reports them as errors.
+  const assetRelPaths = new Set<string>();
+  for (const file of filesToBundle) {
+    const sourcePath = path.join(DOCS_ROOT, file);
+    if (!fs.existsSync(sourcePath)) continue;
+    const content = fs.readFileSync(sourcePath, 'utf-8');
+    for (const link of extractMarkdownLinks(content)) {
+      const pathPart = link.target.split('#')[0];
+      if (!pathPart || isExternal(pathPart)) continue;
+      if (!link.isImage && !hasAssetExtension(pathPart)) continue;
+      const absSource = resolveAssetPath(pathPart, path.dirname(sourcePath), DOCS_ROOT);
+      if (!absSource || !fs.existsSync(absSource)) continue;
+      assetRelPaths.add(path.relative(DOCS_ROOT, absSource));
+    }
+  }
+
+  let assetCopiedCount = 0;
+  let assetSkippedCount = 0;
+  for (const relPath of assetRelPaths) {
+    const sourcePath = path.join(DOCS_ROOT, relPath);
+    const destPath = path.join(OUTPUT_DIR, relPath);
+    expectedFiles.add(destPath);
+
+    const destDir = path.dirname(destPath);
+    if (!fs.existsSync(destDir)) {
+      fs.mkdirSync(destDir, { recursive: true });
+    }
+
+    if (isUpToDate(destPath, sourcePath)) {
+      assetSkippedCount++;
+      continue;
+    }
+
+    try {
+      copyFile(sourcePath, destPath);
+      assetCopiedCount++;
+      console.log(`  Copied asset: ${relPath}`);
+    } catch (error) {
+      console.error(`Error copying asset ${relPath}:`, error);
+      errorCount++;
+    }
+  }
+
   // Clean up stale files (files/symlinks that exist but aren't in the index)
   let removedCount = 0;
   function cleanupDirectory(dir: string): void {
@@ -157,6 +206,9 @@ async function bundleHelpContent(): Promise<void> {
   console.log(`\nSummary:`);
   console.log(`  Copied: ${copiedCount} files`);
   console.log(`  Skipped: ${skippedCount} (already up-to-date)`);
+  console.log(
+    `  Assets: ${assetCopiedCount} copied, ${assetSkippedCount} up-to-date (${assetRelPaths.size} referenced)`
+  );
   console.log(`  Removed: ${removedCount} stale files`);
   if (errorCount > 0) {
     console.log(`  Errors: ${errorCount}`);

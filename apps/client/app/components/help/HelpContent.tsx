@@ -8,7 +8,7 @@ import type { Options as RehypeSanitizeOptions } from 'rehype-sanitize';
 import type { PluggableList } from 'unified';
 import { useHelpContent } from '@client/app/hooks/useHelpContent';
 import { useHelpPanel } from '@client/app/hooks/useHelpPanel';
-import { toAnchor, resolveRelativePath } from '@bike4mind/scripts/help/utils';
+import { toAnchor, resolveRelativePath, hasVideoExtension } from '@bike4mind/scripts/help/utils';
 import { CodeBlock } from '@client/app/components/common/CodeBlock';
 import HelpFeedbackWidget from './HelpFeedbackWidget';
 
@@ -216,6 +216,103 @@ const SummaryAccordionItem: React.FC<{ children?: React.ReactNode; node?: unknow
   <AccordionSummary>{children}</AccordionSummary>
 );
 
+/**
+ * Resolve a help media src (image/GIF/video) to its bundled URL under
+ * /help-content/. Relative paths resolve against the current article's FILE
+ * path using the same base the content validator uses (the article's
+ * directory), so bare "media/x.gif" and "./media/x.gif" behave identically.
+ * External URLs pass through untouched - the validator rejects them at build
+ * time; the renderer just stays tolerant.
+ */
+export function resolveHelpMediaSrc(src: string | undefined, currentFilePath: string | undefined): string | undefined {
+  if (!src) return src;
+  const lower = src.toLowerCase();
+  if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('//')) return src;
+  if (src.startsWith('/')) return `/help-content${src}`;
+  const fileBase = currentFilePath ? currentFilePath.replace(/\.md$/, '') : '';
+  const relative = src.startsWith('.') ? src : `./${src}`;
+  return `/help-content/${resolveRelativePath(fileBase, relative)}`;
+}
+
+/**
+ * Lazy gif-style demo video: nothing is fetched until the demo scrolls near
+ * the viewport, then it autoplays muted on a loop (controls kept for
+ * pause/scrub). Authored via markdown image syntax, so it renders inside a
+ * <p> - hence span wrappers (display:block) instead of div/Box.
+ */
+const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) => {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  // No IntersectionObserver (jsdom, very old browsers): load immediately.
+  const [inView, setInView] = useState(() => typeof IntersectionObserver === 'undefined');
+
+  useEffect(() => {
+    if (inView) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          setInView(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' } // start loading just before the demo scrolls into view
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [inView]);
+
+  return (
+    <span ref={containerRef} style={{ display: 'block' }} data-testid="help-video-container">
+      {inView ? (
+        // Video styling lives in the parent Box sx ('& video') for theme parity
+        <video
+          src={src}
+          aria-label={label}
+          autoPlay
+          muted
+          loop
+          playsInline
+          controls
+          preload="metadata"
+          data-testid="help-video-player"
+        />
+      ) : (
+        <span
+          aria-label={label}
+          data-testid="help-video-placeholder"
+          style={{
+            display: 'block',
+            minHeight: 180,
+            borderRadius: 8,
+            backgroundColor: 'var(--joy-palette-background-level1)',
+          }}
+        />
+      )}
+    </span>
+  );
+};
+
+/**
+ * Media renderer for markdown images. GIF-style demo videos (.webm/.mp4) use
+ * the same ![alt](path) syntax as images and are dispatched here by extension.
+ * Reads the help panel store via getState() (not a hook) for the same reason
+ * as handleLinkClick.
+ */
+const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }> = ({
+  node: _node,
+  src,
+  alt,
+  ...props
+}) => {
+  const rawSrc = typeof src === 'string' ? src : undefined;
+  const resolvedSrc = resolveHelpMediaSrc(rawSrc, useHelpPanel.getState().currentFilePath);
+  if (rawSrc && hasVideoExtension(rawSrc)) {
+    return <HelpVideo src={resolvedSrc} label={alt} />;
+  }
+  return <img src={resolvedSrc} alt={alt} loading="lazy" decoding="async" {...props} />;
+};
+
 // Stable components object for ReactMarkdown - prevents re-renders.
 // Exported so tests can render through the EXACT production component set.
 export const markdownComponents = {
@@ -230,6 +327,7 @@ export const markdownComponents = {
   h6: H6,
   details: DetailsAccordion,
   summary: SummaryAccordionItem,
+  img: HelpMedia,
 };
 
 const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
@@ -397,6 +495,15 @@ const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
           maxWidth: '100%',
           height: 'auto',
           borderRadius: '8px',
+        },
+        '& video': {
+          display: 'block',
+          width: '100%',
+          maxWidth: '100%',
+          borderRadius: '8px',
+          border: '1px solid var(--joy-palette-divider)',
+          backgroundColor: 'var(--joy-palette-background-level1)',
+          my: 2,
         },
         // Anchor link styling for headings
         '& h1, & h2, & h3, & h4, & h5, & h6': {
