@@ -268,7 +268,7 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
         // Video styling lives in the parent Box sx ('& video') for theme parity
         <video
           src={src}
-          aria-label={label}
+          aria-label={label || undefined}
           autoPlay
           muted
           loop
@@ -279,11 +279,14 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
         />
       ) : (
         <span
-          aria-label={label}
+          aria-label={label || undefined}
           data-testid="help-video-placeholder"
           style={{
             display: 'block',
-            minHeight: 180,
+            width: '100%',
+            // Assume the common screen-recording shape so the swap to the real
+            // video doesn't pop layout; off-ratio clips still shift slightly.
+            aspectRatio: '16 / 9',
             borderRadius: 8,
             backgroundColor: 'var(--joy-palette-background-level1)',
           }}
