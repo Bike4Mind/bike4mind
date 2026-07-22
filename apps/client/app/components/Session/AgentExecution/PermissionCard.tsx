@@ -107,12 +107,28 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
 
   const toolDisplayName = humanizeToolName(pending.toolName);
 
+  // Match the outlined action buttons below chat messages: neutral outline on an
+  // opaque chat-area (background.body) fill, so the buttons read as buttons
+  // instead of blending into the warning Alert (the neutral border is invisible
+  // on the warm Alert tint but shows on the darker chat bg).
+  //
+  // Joy's outlined rest background does not come from --variant-outlinedBg here
+  // (setting it had no effect), so set the actual background-color property with
+  // !important to beat Joy's own declaration. Hover lifts to surface2 (also
+  // !important). Border stays the neutral --variant-outlinedBorder; Deny's red
+  // text is handled separately via --variant-outlinedColor.
+  const outlinedActionSx = {
+    borderRadius: '6px',
+    backgroundColor: 'var(--joy-palette-background-body) !important',
+    '&:hover': { backgroundColor: 'var(--joy-palette-background-surface2) !important' },
+  };
+
   return (
     <Alert
       data-testid={`permission-card-${executionId}`}
       color="warning"
       variant="soft"
-      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1, mt: 1 }}
+      sx={{ display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 1, mt: 1, p: 2 }}
     >
       <Typography level="title-sm">Permission required</Typography>
       <Typography level="body-sm">
@@ -136,7 +152,7 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
           {formattedInput}
         </Box>
       ) : null}
-      <Stack direction="row" spacing={1} sx={{ flexWrap: 'wrap' }}>
+      <Stack direction="row" spacing={1.5} sx={{ flexWrap: 'wrap', mt: 1 }}>
         <Button
           data-testid={`permission-approve-${executionId}`}
           color="success"
@@ -148,8 +164,9 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
         <Button
           data-testid={`permission-allow-session-${executionId}`}
           variant="outlined"
-          color="success"
+          color="neutral"
           size="sm"
+          sx={outlinedActionSx}
           onClick={() => handleRespond(true, true, pending.toolName)}
         >
           Allow for Session
@@ -157,8 +174,12 @@ const PermissionCard: FC<PermissionCardProps> = ({ executionId }) => {
         <Button
           data-testid={`permission-deny-${executionId}`}
           variant="outlined"
-          color="danger"
+          color="neutral"
           size="sm"
+          // Same outlined frame/fill as Allow, but red text/icon to signal the
+          // reject action. Overriding --variant-outlinedColor (not color="danger")
+          // keeps the border and hover neutral.
+          sx={{ ...outlinedActionSx, '--variant-outlinedColor': 'var(--joy-palette-danger-outlinedColor)' }}
           onClick={() => handleRespond(false, false, pending.toolName)}
         >
           Deny
