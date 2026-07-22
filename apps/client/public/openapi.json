@@ -47,151 +47,6 @@
       }
     },
     "schemas": {
-      "CompletionMessage": {
-        "type": "object",
-        "properties": {
-          "role": {
-            "type": "string",
-            "enum": [
-              "user",
-              "assistant",
-              "system"
-            ]
-          },
-          "content": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "array",
-                "items": {}
-              }
-            ]
-          },
-          "cache": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "role",
-          "content"
-        ]
-      },
-      "CompletionTool": {
-        "type": "object",
-        "properties": {
-          "toolSchema": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "description": {
-                "type": "string"
-              },
-              "parameters": {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "enum": [
-                      "object"
-                    ]
-                  },
-                  "properties": {
-                    "type": "object",
-                    "additionalProperties": {}
-                  },
-                  "additionalProperties": {
-                    "type": "boolean"
-                  },
-                  "required": {
-                    "type": "array",
-                    "items": {
-                      "type": "string"
-                    }
-                  }
-                },
-                "required": [
-                  "type"
-                ],
-                "additionalProperties": {}
-              },
-              "strict": {
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "name",
-              "description",
-              "parameters"
-            ]
-          },
-          "_isMcpTool": {
-            "type": "boolean"
-          }
-        },
-        "required": [
-          "toolSchema"
-        ]
-      },
-      "ResponseFormat": {
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "text"
-                ]
-              }
-            },
-            "required": [
-              "type"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": [
-                  "json_schema"
-                ]
-              },
-              "json_schema": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "schema": {
-                    "type": "object",
-                    "additionalProperties": {}
-                  },
-                  "strict": {
-                    "type": "boolean",
-                    "default": true
-                  }
-                },
-                "required": [
-                  "name",
-                  "schema"
-                ]
-              }
-            },
-            "required": [
-              "type",
-              "json_schema"
-            ]
-          }
-        ]
-      },
       "CompletionRequest": {
         "type": "object",
         "properties": {
@@ -819,7 +674,7 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/ai/v1/completions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"model\":\"claude-opus-4-8\",\"messages\":[{\"role\":\"user\",\"content\":\"How do I reset my password?\"}],\"max_tokens\":500}'"
+            "source": "curl -sN -X POST \"https://your-deployment.example.com/api/ai/v1/completions\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"model\": \"claude-opus-4-8\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"How do I reset my password?\"\n    }\n  ],\n  \"max_tokens\": 500\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
@@ -1043,7 +898,7 @@
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"toolName\":\"web_search\",\"input\":{\"query\":\"how to reset a password\"}}'"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  --data-binary @- <<'B4M_REQUEST_BODY'\n{\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}\nB4M_REQUEST_BODY"
           },
           {
             "lang": "JavaScript",
