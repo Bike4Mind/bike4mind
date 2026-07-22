@@ -17,6 +17,7 @@ import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 
 /**
  * Derive a single tag for a file from its immediate parent folder, so each file
@@ -280,12 +281,12 @@ function slugify(text: string): string {
 }
 
 /**
- * Upload a single file to S3 using a presigned URL.
+ * Upload one file to the URL the server returned - a same-origin proxy (self-host) or an
+ * S3 presigned URL (hosted). The auth routing (authenticated api client vs raw axios) lives
+ * in uploadFileToUrl so this and the single-file path stay in sync.
  */
 async function uploadFileToS3(url: string, file: File): Promise<void> {
-  await axios.put(url, file, {
-    headers: { 'Content-Type': file.type || 'application/octet-stream' },
-  });
+  await uploadFileToUrl(url, file, file.type);
 }
 
 /**

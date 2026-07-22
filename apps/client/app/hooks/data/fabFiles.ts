@@ -21,7 +21,7 @@ import { getContentFromFabfile as getContentFromFabfileInString } from '@client/
 import { isOptimisticId } from '@client/app/utils/llm';
 import { getErrorMessage } from '@client/app/utils/error';
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import axios from 'axios';
+import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
 import { ActualFileObject } from 'filepond';
 import { toast } from 'sonner';
 
@@ -118,11 +118,7 @@ export function useCreateFabFileWithUpload(options?: {
       const newFabFile = await createFabFileOnServer(formData);
       // If the file has a presigned URL, upload it to the bucket
       if (newFabFile.presignedUrl) {
-        await axios.put(newFabFile.presignedUrl, file, {
-          headers: {
-            'Content-Type': file.type,
-          },
-        });
+        await uploadFileToUrl(newFabFile.presignedUrl, file, file.type);
       }
 
       // Optimistically add to the first page of fab files queries

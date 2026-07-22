@@ -13,6 +13,20 @@ export function isTokenVersionCurrent(payloadVersion?: number, userVersion?: num
   return (payloadVersion ?? 0) === (userVersion ?? 0);
 }
 
+/**
+ * Pure enforcement check for the access/refresh token-type separation.
+ *
+ * A token is acceptable on a given path when its `typ` matches the expected type -
+ * OR when it carries no `typ` at all. Tokens minted before the claim existed have no
+ * `typ` and are honored (self-expiring grace), so no live session is logged out; they
+ * age out within their TTL. Mirrors isTokenVersionCurrent's "missing normalizes to
+ * valid" shape. Shared by the refresh path (verifyRefreshToken) and the access path
+ * (the passport JWT strategy) so both enforce identically.
+ */
+export function isTokenTypeAcceptable(tokenType: unknown, expected: 'access' | 'refresh'): boolean {
+  return tokenType === undefined || tokenType === expected;
+}
+
 export class AuthTokenGeneratorService {
   constructor(
     private readonly options: {
@@ -35,6 +49,11 @@ export class AuthTokenGeneratorService {
       id,
       tokenVersion,
       ...additionalPayload,
+      // Token-type claim: `typ` is authoritative (set after the spread so an
+      // additionalPayload can't override it). Verifiers reject a token presented on
+      // the wrong path (e.g. an access token replayed at the refresh endpoint). Kept
+      // last so access and refresh tokens are never interchangeable.
+      typ: 'access' as const,
     };
     const accessToken = jwt.sign(payload, this.options.accessTokenSecret, {
       algorithm: 'HS256',
@@ -47,7 +66,7 @@ export class AuthTokenGeneratorService {
   }
 
   createRefreshToken(id: string, tokenVersion: number): string {
-    return jwt.sign({ id, tokenVersion }, this.options.refreshTokenSecret, {
+    return jwt.sign({ id, tokenVersion, typ: 'refresh' }, this.options.refreshTokenSecret, {
       algorithm: 'HS256',
       expiresIn: this.options.refreshTokenExpiresIn,
     } as jwt.SignOptions);
@@ -76,6 +95,9 @@ export class AuthTokenGeneratorService {
     const decode = (secret: string): { userId: string; tokenVersion?: number } | null => {
       const payload = jwt.verify(token, secret, { algorithms: ['HS256'] }) as JwtPayload;
       if (payload.mfaPending) return null;
+      // Reject a token minted for a different path (e.g. an access token replayed here).
+      // Missing typ = legacy pre-claim token, accepted (self-expiring grace). See helper.
+      if (!isTokenTypeAcceptable(payload.typ, 'refresh')) return null;
       return { userId: payload.id, tokenVersion: payload.tokenVersion };
     };
     try {

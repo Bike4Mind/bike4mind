@@ -181,6 +181,27 @@ describe('GET /api/sessions auth behavior (issue #626 decision gate)', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(res._getJSONData()).toEqual({ count: 0 });
   });
+
+  // The token-type guard in the passport JWT strategy (auth.ts) is the access-path half
+  // of the fix: a refresh token replayed as a Bearer access token must be rejected BEFORE
+  // the handler runs. These drive the real chain (not just the unit-level helper) so the
+  // REST rejection path is proven end-to-end.
+  it('REFRESH-typed token on the access path -> 401; handler never runs', async () => {
+    const token = sign({ id: USER_ID, tokenVersion: 0, typ: 'refresh' }, { expiresIn: '7d' });
+    const { req, res } = fire(token);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(401);
+    expect(mockSearchOwnSessions).not.toHaveBeenCalled();
+  });
+
+  it('ACCESS-typed token on the access path -> 200 [] (guard does not over-reject)', async () => {
+    const token = sign({ id: USER_ID, tokenVersion: 0, typ: 'access' }, { expiresIn: '7d' });
+    const { req, res } = fire(token);
+    await handler(req, res);
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getJSONData()).toEqual([]);
+    expect(mockSearchOwnSessions).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The whole audit list from issue #626. Each mounts via baseApi() (auth:true), so an

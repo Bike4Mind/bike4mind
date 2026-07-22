@@ -2868,7 +2868,7 @@ export const settingsMap = {
     name: 'ElevenLabs Server API Key (Voice v2)',
     defaultValue: '',
     description:
-      'Server-side ElevenLabs API key used by /api/voice/v2/sessions to mint Conversational AI signed URLs. Distinct from the per-user ElevenLabs key used for TTS preview.',
+      'Server-side ElevenLabs API key. Mints Conversational AI signed URLs for /api/voice/v2/sessions and is the org-wide fallback key for ElevenLabs text-to-speech (/api/ai/tts) when a user has no personal key. A per-user ElevenLabs key still takes precedence.',
     isSensitive: true,
     category: 'AI',
     group: API_SERVICE_GROUPS.VOICE_SESSION.id,
