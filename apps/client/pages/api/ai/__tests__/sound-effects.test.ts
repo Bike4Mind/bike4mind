@@ -93,7 +93,7 @@ beforeEach(() => {
 describe('POST /api/ai/sound-effects', () => {
   it('charges the user after a successful generation when enforceCredits is on', async () => {
     getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
     findById.mockResolvedValue({ currentCredits: 100 });
 
     const { res, promise } = run({ text: 'explosion', durationSeconds: 3 });
@@ -105,13 +105,13 @@ describe('POST /api/ai/sound-effects', () => {
     const [params] = subtractCredits.mock.calls[0];
     expect(params).toMatchObject({ type: 'sound_effects_usage', credits: 12, ownerId: 'u1' });
     expect(recordUsage).toHaveBeenCalledWith(
-      expect.objectContaining({ feature: 'sound_effects', creditsCharged: 12, costUsd: 0.006, status: 'ok' })
+      expect.objectContaining({ feature: 'sound_effects', creditsCharged: 12, costUsd: 0.006, units: 3, status: 'ok' })
     );
   });
 
   it('does NOT charge when enforceCredits is off, but still records analytics (COGS, 0 credits)', async () => {
     getSettingsValue.mockReturnValue(false);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
 
     const { res, promise } = run({ text: 'rain', durationSeconds: 3 });
     await promise;
@@ -125,9 +125,23 @@ describe('POST /api/ai/sound-effects', () => {
     );
   });
 
+  it('records billed (not requested) duration as units when duration is omitted', async () => {
+    getSettingsValue.mockReturnValue(true);
+    // No durationSeconds requested: the estimator bills the vendor auto-duration
+    // default, and units must follow the billed value - not the request's undefined.
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 73, usdCost: 0.0364, billedSeconds: 200 / 11 });
+    findById.mockResolvedValue({ currentCredits: 1000 });
+
+    const { res, promise } = run({ text: 'ambient hum' });
+    await promise;
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(recordUsage).toHaveBeenCalledWith(expect.objectContaining({ feature: 'sound_effects', units: 200 / 11 }));
+  });
+
   it('rejects with 422 (insufficient_credits) before generating when the balance is short', async () => {
     getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025 });
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 50, usdCost: 0.025, billedSeconds: 12 });
     findById.mockResolvedValue({ currentCredits: 10 });
 
     const { res, promise } = run({ text: 'thunder' });
@@ -160,7 +174,7 @@ describe('POST /api/ai/sound-effects', () => {
 
   it('maps an upstream provider failure to 502 and does not charge', async () => {
     getSettingsValue.mockReturnValue(true);
-    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006 });
+    estimateSoundCredits.mockReturnValue({ requiredCredits: 12, usdCost: 0.006, billedSeconds: 3 });
     findById.mockResolvedValue({ currentCredits: 100 });
     generate.mockRejectedValue(new Error('ElevenLabs sound generation failed: 429'));
 

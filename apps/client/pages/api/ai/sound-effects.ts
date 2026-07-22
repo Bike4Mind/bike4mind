@@ -49,7 +49,7 @@ const handler = baseApi().post(async (req, res) => {
   // estimate drives the (optional) balance pre-check, the charge, and the
   // usage-event COGS - it's computed regardless of enforceCredits so analytics
   // capture true provider cost even on credits-off / self-host deployments.
-  const { requiredCredits, usdCost } = estimateSoundCredits(provider, { durationSeconds });
+  const { requiredCredits, usdCost, billedSeconds } = estimateSoundCredits(provider, { durationSeconds });
 
   if (enforceCredits) {
     const user = await userRepository.findById(userId);
@@ -81,7 +81,10 @@ const handler = baseApi().post(async (req, res) => {
         outputTokens: 0,
         cachedInputTokens: 0,
         cacheWriteTokens: 0,
-        units: durationSeconds ?? 0,
+        // Effective billed duration, not the raw request field: an omitted
+        // duration is billed at the vendor auto-duration default, so recording
+        // the request's `undefined` (as 0) would desync units from costUsd.
+        units: billedSeconds,
         costUsd: costUsdValue,
         creditsCharged,
         status,

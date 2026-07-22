@@ -1,4 +1,4 @@
-import { SoundCostCalculator } from './types';
+import { SoundCost, SoundCostCalculator } from './types';
 
 /**
  * ElevenLabs sound-effects pricing. Billed by generated audio length at
@@ -16,8 +16,8 @@ export interface ElevenLabsSoundCostInput {
 }
 
 export class ElevenLabsSoundCostCalculator implements SoundCostCalculator<ElevenLabsSoundCostInput> {
-  getCost(input: ElevenLabsSoundCostInput): number {
-    const seconds = input.durationSeconds ?? DEFAULT_DURATION_SECONDS;
-    return seconds * USD_PER_SECOND;
+  getCost(input: ElevenLabsSoundCostInput): SoundCost {
+    const billedSeconds = input.durationSeconds ?? DEFAULT_DURATION_SECONDS;
+    return { usdCost: billedSeconds * USD_PER_SECOND, billedSeconds };
   }
 }

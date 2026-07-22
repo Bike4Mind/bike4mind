@@ -26,7 +26,16 @@ describe('estimateSoundCredits', () => {
     expect(estimateSoundCredits('elevenlabs', { durationSeconds: 3 })).toEqual({
       requiredCredits: 12,
       usdCost: expect.closeTo(0.006, 6),
+      billedSeconds: 3,
     });
+  });
+
+  it('reports the auto-duration default as billedSeconds when no duration is given', () => {
+    // billedSeconds must match what the cost was computed on, so usage-event
+    // units stay consistent with costUsd for auto-duration calls.
+    const { billedSeconds, usdCost } = estimateSoundCredits('elevenlabs', {});
+    expect(billedSeconds).toBeCloseTo(200 / 11, 6);
+    expect(usdCost).toBeCloseTo((200 / 11) * (0.12 / 60), 6);
   });
 
   it('never charges below 1 credit', () => {
