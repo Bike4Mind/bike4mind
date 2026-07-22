@@ -80,11 +80,16 @@ export interface RotateUserApiKeyResponse {
   key: string; // Only returned once during rotation
 }
 
+/**
+ * Includes revoked (`disabled`) keys - the management tables render them as a
+ * `Revoked` row with the actions disabled, so revocation stays visible instead
+ * of the key silently dropping out of the list.
+ */
 export function useGetUserApiKeys() {
   return useQuery<IUserApiKeyDocument[]>({
     queryKey: ['user-api-keys'],
     queryFn: async () => {
-      const response = await api.get('/api/user-api-keys');
+      const response = await api.get('/api/user-api-keys', { params: { includeDisabled: true } });
       return response.data;
     },
   });

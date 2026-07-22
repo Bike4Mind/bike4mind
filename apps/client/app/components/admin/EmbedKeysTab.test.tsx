@@ -95,4 +95,16 @@ describe('EmbedKeysTab', () => {
     expect('branding' in arg).toBe(false);
     expect('agentId' in arg).toBe(false);
   });
+
+  // The list route now returns disabled keys (#776); before that this row could
+  // never render and the Revoked branch was dead code.
+  it('renders a revoked key as Revoked with its actions disabled', () => {
+    h.keys = [{ ...embedKey, id: 'key-3', status: 'disabled' }];
+    renderTab();
+
+    const row = screen.getByTestId('embed-key-row-key-3');
+    expect(row).toHaveTextContent('Revoked');
+    expect(screen.getByTestId('embed-key-configure-key-3')).toBeDisabled();
+    expect(screen.getByTestId('embed-key-revoke-key-3')).toBeDisabled();
+  });
 });
