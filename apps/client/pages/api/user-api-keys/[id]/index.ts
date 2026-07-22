@@ -50,8 +50,11 @@ const handler = baseApi().patch(
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
+    // The stored value only matters for an incoming hideBranding elevation; skip
+    // the extra read on the common color/logo/name-only edit (the gate is a no-op
+    // there anyway, and updateEmbedKey re-fetches the doc regardless).
     let gatedBranding = brandingCheck.value;
-    if (brandingCheck.value !== undefined) {
+    if (brandingCheck.value?.hideBranding === true) {
       const existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
       gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value, existing?.branding?.hideBranding === true);
     }
