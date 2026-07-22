@@ -205,8 +205,8 @@ The stack bundles an optional `ollama` service. To enable it:
 
    ```bash
    OLLAMA_BASE_URL=http://ollama:11434
-   # Chat model + an embedder so offline file search works out of the box:
-   OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen3-embedding:0.6b
+   # General chat model + a coding-tuned model for artifacts + an embedder (offline file search):
+   OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b
    ```
 
 2. Bring the stack up with the `ollama` profile (this also downloads the model on first run):
@@ -219,17 +219,19 @@ That's it - open the model picker and select your model under **Local / Self-Hos
 
 ### Choosing a model (Qwen menu + hardware)
 
-Pick by the hardware you have. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all. Qwen3.5 is a newer line than the older Qwen2.5-Coder: it is multimodal (reads images, so no separate vision model is needed), does native tool-calling, and has a thinking mode.
+Two families, pick by task. Qwen3.5 is the newer general line - multimodal (reads images, so no separate vision model is needed), native tool-calling, thinking mode - and the default for chat, agents, and vision. Qwen2.5-Coder is coding-tuned and writes cleaner, complete code and HTML/React artifacts, so select it for artifact/code work; the general qwen3.5 models emit incomplete or malformed markup at small sizes. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
 
 | Model tag | Download | Min GPU VRAM | CPU-only RAM | Notes |
 |-----------|---------:|-------------:|-------------:|-------|
 | `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | Tiny; multimodal; fast on CPU too |
-| `qwen3.5:2b-q4_K_M` | ~2.0 GB | ~4 GB | ~8 GB | Default; fits a 4GB laptop GPU |
+| `qwen3.5:2b-q4_K_M` | ~2.0 GB | ~4 GB | ~8 GB | Default; general/vision/tools; fits a 4GB laptop GPU |
 | `qwen3.5:2b` | ~2.7 GB | ~5 GB | ~8 GB | Same 2b, full-precision Q8_0; better quality, wants 5GB+ |
-| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | Higher quality; spills under 6GB |
-| `qwen3.5:9b` | ~6.6 GB | ~8 GB | ~16 GB | Strongest small; needs a real GPU |
+| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | Higher-quality general; spills under 6GB |
+| `qwen3.5:9b` | ~6.6 GB | ~8 GB | ~16 GB | Strongest small general; needs a real GPU |
+| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Coding-tuned; best for HTML/React artifacts on a small GPU |
+| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Coding-tuned; stronger code/artifacts, needs more VRAM |
 
-The plain `qwen3.5:2b` tag is the full-precision Q8_0 build (best 2b quality) and spills on a 4GB card; `qwen3.5:2b-q4_K_M` is the quantized build that fits a 4GB GPU fully, which is why it is the default - use the plain `:2b` if you have 5GB+. Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen3.5:4b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen3.5:4b`. No GPU? Everything runs on CPU - start with a 0.8b or 2b model.
+The plain `qwen3.5:2b` tag is the full-precision Q8_0 build (best 2b quality) and spills on a 4GB card; `qwen3.5:2b-q4_K_M` is the quantized build that fits a 4GB GPU fully, which is why it is the default - use the plain `:2b` if you have 5GB+. For building HTML/React artifacts, pull and select `qwen2.5-coder` - it writes complete files where the general qwen3.5 models leave markup half-finished at these sizes. Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:3b`. No GPU? Everything runs on CPU - start with a 0.8b or 2b model.
 
 ### GPU acceleration (NVIDIA)
 
