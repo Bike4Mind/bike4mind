@@ -15,6 +15,7 @@ import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
+import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
 
 /**
@@ -513,6 +514,9 @@ export function useBatchUpload() {
         });
 
         queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
+        // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
+        // Reveal them without waiting out the gears/status staleTime (#833).
+        invalidateGearsStatusWhileLocked(queryClient, ['datalakes', 'files']);
 
         return { dataLakeId, batchId, uploadedCount, failedCount };
       } catch (err) {
