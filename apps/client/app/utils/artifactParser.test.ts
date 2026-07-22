@@ -229,4 +229,12 @@ describe('parseArtifactsWithFallback - attribute values containing quotes', () =
     expect(result.artifacts).toHaveLength(1);
     expect(result.artifacts[0].title).toBe('A "quoted" phrase');
   });
+
+  it('does not accept mismatched opening and closing quotes', () => {
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier="x" type="text/html" title="mismatched'><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('Untitled Artifact');
+  });
 });
