@@ -4,6 +4,7 @@ import {
   useRotateUserApiKey,
   useRevokeUserApiKey,
   useUpdateEmbedKey,
+  useBillingOrganizations,
   UpdateEmbedKeyRequest,
 } from '@client/app/hooks/data/userApiKeys';
 import {
@@ -44,6 +45,8 @@ import {
   parseEmbedOrigin,
 } from '@bike4mind/common';
 import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEditor';
+import SingleOrganizationSelector from '@client/app/components/common/SingleOrganizationSelector';
+import { useUser } from '@client/app/contexts/UserContext';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
@@ -256,6 +259,73 @@ function EmbedKeyFormFields({
 
 const emptyForm = (): EmbedKeyFormState => ({ agentId: '', allowedOrigins: [], branding: {} });
 
+/**
+ * Required owning-organization picker for minting an embed key. Embed keys must
+ * be org-owned - assertEmbedCredential rejects a user-owned key - so unlike the
+ * optional "bill usage to" selector on personal keys, this has no personal
+ * fallback and creation is blocked until an org is chosen. A platform admin can
+ * bill any org; a regular org admin picks from the orgs they own or manage,
+ * which is exactly what the create route authorizes for a non-admin
+ * (billing-organizations == findIdsAdministeredBy), so a selectable org can
+ * never 403 at submit. Lives outside the shared EmbedKeyFormState because
+ * ownership is fixed at creation and Configure must not expose it.
+ */
+function EmbedKeyOrganizationField({
+  value,
+  onChange,
+}: {
+  value?: string;
+  onChange: (organizationId?: string) => void;
+}) {
+  const { currentUser } = useUser();
+  const { data: billingOrgs, isLoading } = useBillingOrganizations();
+
+  if (currentUser?.isAdmin) {
+    return (
+      <FormControl required data-testid="embed-key-org-admin">
+        <FormLabel>Organization</FormLabel>
+        <SingleOrganizationSelector currentOrgId={value ?? null} onChange={id => onChange(id ?? undefined)} />
+        <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+          The organization that owns and is billed for this key.
+        </Typography>
+      </FormControl>
+    );
+  }
+
+  if (!isLoading && (billingOrgs?.length ?? 0) === 0) {
+    return (
+      <Alert color="warning" startDecorator={<WarningIcon />} data-testid="embed-key-org-empty">
+        <Typography level="body-sm">
+          You do not administer any organization. Embed keys must be organization-owned, so ask an org owner or a
+          platform admin to mint one.
+        </Typography>
+      </Alert>
+    );
+  }
+
+  return (
+    <FormControl required>
+      <FormLabel>Organization</FormLabel>
+      <Select
+        value={value ?? null}
+        onChange={(_, v) => onChange((v as string) ?? undefined)}
+        placeholder={isLoading ? 'Loading organizations…' : 'Select the owning organization'}
+        disabled={isLoading}
+        data-testid="embed-key-org-select"
+      >
+        {billingOrgs?.map(org => (
+          <Option key={org.id} value={org.id}>
+            {org.name}
+          </Option>
+        ))}
+      </Select>
+      <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
+        The organization that owns and is billed for this key.
+      </Typography>
+    </FormControl>
+  );
+}
+
 function NewEmbedKeyModal({
   open,
   onClose,
@@ -266,6 +336,7 @@ function NewEmbedKeyModal({
   onSuccess: (key: string) => void;
 }) {
   const [name, setName] = useState('');
+  const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
   const [form, setForm] = useState<EmbedKeyFormState>(emptyForm());
 
   const createMutation = useCreateUserApiKey({
@@ -273,6 +344,7 @@ function NewEmbedKeyModal({
       onSuccess(result.key);
       onClose();
       setName('');
+      setOrganizationId(undefined);
       setForm(emptyForm());
     },
   });
@@ -280,6 +352,7 @@ function NewEmbedKeyModal({
   const handleSubmit = () =>
     createMutation.mutate({
       name,
+      organizationId,
       scopes: [ApiKeyScope.EMBED_CHAT],
       agentId: form.agentId,
       allowedOrigins: form.allowedOrigins,
@@ -306,6 +379,8 @@ function NewEmbedKeyModal({
             />
           </FormControl>
 
+          <EmbedKeyOrganizationField value={organizationId} onChange={setOrganizationId} />
+
           <EmbedKeyFormFields form={form} onChange={setForm} />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
@@ -315,7 +390,7 @@ function NewEmbedKeyModal({
             <Button
               onClick={handleSubmit}
               loading={createMutation.isPending}
-              disabled={!name.trim() || !form.agentId}
+              disabled={!name.trim() || !form.agentId || !organizationId}
               data-testid="embed-key-create-btn"
             >
               Create Embed Key
