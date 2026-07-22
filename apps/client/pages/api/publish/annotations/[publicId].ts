@@ -104,8 +104,12 @@ const handler = baseApi({ auth: false })
     // Only OPEN-public (ungated) may be shared-cached: a gated artifact's list is
     // authorized per viewer, so it keeps the no-store default even though its
     // visibility is still 'public'.
+    // No stale-while-revalidate: it let a viewer who had just commented be served the
+    // pre-comment body for up to a further 60s, so a fresh comment appeared to vanish
+    // on reload. A short shared TTL still collapses the polling fan-out. The widget
+    // additionally sends `cache: 'no-store'` on its FIRST load for the same reason.
     if (isOpenPublic(artifact)) {
-      res.setHeader('Cache-Control', 'public, max-age=5, s-maxage=15, stale-while-revalidate=60');
+      res.setHeader('Cache-Control', 'public, max-age=5, s-maxage=5');
     }
     return res.status(200).json(response);
   })

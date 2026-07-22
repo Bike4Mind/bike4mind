@@ -102,6 +102,17 @@ describe('publish comment widget', () => {
     expect(chromeVar()).toBe('84px');
   });
 
+  it('bypasses the HTTP cache on the initial list load but not on polls', () => {
+    runWidget();
+
+    const listCall = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls.find(
+      c => !String(c[0]).endsWith('/can-comment')
+    );
+    // A reload wipes the in-memory justPostedId guard, so a cached pre-comment body
+    // would make the viewer's own fresh comment appear to vanish.
+    expect(listCall?.[1]).toMatchObject({ cache: 'no-store' });
+  });
+
   it('mounts the launcher and panel', () => {
     runWidget();
 
