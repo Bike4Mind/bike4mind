@@ -69,7 +69,7 @@
     "@opensearch-project/opensearch": "2.11.0",
     "@smithy/node-http-handler": "^4.9.3",
     "async-mutex": "^0.5.0",
-    "axios": "1.16.1",
+    "axios": "1.18.0",
     "bcryptjs": "^3.0.2",
     "better-sqlite3": "^12.11.1",
     "cheerio": "1.2.0",
