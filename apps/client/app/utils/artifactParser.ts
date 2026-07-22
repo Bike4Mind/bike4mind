@@ -10,7 +10,10 @@ import { tryParseChartJSON } from './chartJsonParser';
 // Built from the shared ARTIFACT_ATTRS_PATTERN so the attribute sub-pattern
 // stays in sync with the core parser and PromptReplies truncation detector.
 const ARTIFACT_REGEX = new RegExp(`<artifact\\s+(${ARTIFACT_ATTRS_PATTERN})>([\\s\\S]*?)<\\/artifact>`, 'gi');
-const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches.
+const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 export interface ParsedArtifact {
   fullMatch: string;
@@ -76,8 +79,8 @@ export function parseArtifacts(
     ATTRIBUTE_REGEX.lastIndex = 0;
 
     while ((attrMatch = ATTRIBUTE_REGEX.exec(attributesString)) !== null) {
-      const [, key, value] = attrMatch;
-      attributes[key] = value;
+      const [, key, doubleQuoted, singleQuoted] = attrMatch;
+      attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
     // Determine artifact type and operation
@@ -805,10 +808,11 @@ function toolCallJsonToArtifact(candidate: string): string | null {
   );
   if (!html) return null;
 
-  // Strip quotes from the model-controlled title before interpolating it into
-  // title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no escape
-  // mechanism, so an embedded quote would silently truncate the attribute.
-  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/["']/g, '') || 'HTML Page';
+  // Strip double quotes from the model-controlled title before interpolating it
+  // into title="...": the artifact attribute parser (ATTRIBUTE_REGEX) has no
+  // escape mechanism, so an embedded " would truncate the attribute. Apostrophes
+  // are safe inside a double-quoted value and are kept.
+  const title = (extractHTMLTitle(html) || 'HTML Page').replace(/"/g, '') || 'HTML Page';
   const identifier = title.toLowerCase().replace(/[^a-z0-9]/g, '-');
   return `<artifact identifier="${identifier}" type="text/html" title="${title}">
 ${html.trim()}

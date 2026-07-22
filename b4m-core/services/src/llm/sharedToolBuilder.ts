@@ -200,7 +200,11 @@ export interface BuildSharedToolsOptions {
 // `populateDecomposition` loads a decomposed multi-step plan's first sub-problem.
 const VALID_SIDE_EFFECT_TYPES = new Set(['populateProblem', 'populateFamilyProblem', 'populateDecomposition']);
 const TOOL_ARTIFACT_RE = /<artifact\s+([^>]*)>([\s\S]*?)<\/artifact>/gi;
-const TOOL_ATTR_RE = /(\w+)=["']([^"']*?)["']/g;
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches. Must stay in sync
+// with ATTRIBUTE_REGEX in utils/artifactParser.ts and the client mirror.
+const TOOL_ATTR_RE = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 
 // ---------------------------------------------------------------------------
 // Main function
@@ -522,7 +526,7 @@ function wrapToolsForSentinels(
               let attrMatch;
               TOOL_ATTR_RE.lastIndex = 0;
               while ((attrMatch = TOOL_ATTR_RE.exec(attrsStr)) !== null) {
-                attrs[attrMatch[1]] = attrMatch[2];
+                attrs[attrMatch[1]] = attrMatch[2] ?? attrMatch[3];
               }
 
               let metadata: Record<string, unknown> = {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { CurationArtifactType } from '@bike4mind/common';
-import { mapMimeTypeToArtifactType } from './artifactExtractor';
+import { extractArtifactsFromMessage, mapMimeTypeToArtifactType } from './artifactExtractor';
 
 // The curation extractor used to carry its own copy of the MIME-to-type table. It now
 // delegates parsing to the shared @bike4mind/common mapper and only bridges the shared
@@ -37,5 +37,29 @@ describe('mapMimeTypeToArtifactType (curation bridge)', () => {
   it('returns null for unknown / unmappable MIME types', () => {
     expect(mapMimeTypeToArtifactType('application/octet-stream')).toBeNull();
     expect(mapMimeTypeToArtifactType('')).toBeNull();
+  });
+});
+
+/**
+ * ATTRIBUTE_REGEX used to stop the value capture at the first quote of either kind,
+ * so a double-quoted attribute containing an apostrophe was silently truncated.
+ */
+describe('extractArtifactsFromMessage - attribute values containing quotes', () => {
+  const options = {
+    includeCode: true,
+    includeDiagrams: true,
+    includeDataViz: true,
+  } as Parameters<typeof extractArtifactsFromMessage>[1];
+
+  it('keeps an apostrophe inside a double-quoted title', () => {
+    const artifacts = extractArtifactsFromMessage(
+      {
+        id: 'm1',
+        reply: `<artifact identifier="bobs-app" type="text/html" title="Bob's App"><p>hi</p></artifact>`,
+      },
+      options
+    );
+    const html = artifacts.find(a => a.type === CurationArtifactType.HTML);
+    expect(html?.metadata?.title).toBe("Bob's App");
   });
 });
