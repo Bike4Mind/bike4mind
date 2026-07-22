@@ -3,7 +3,7 @@
   "info": {
     "title": "Bike4Mind API",
     "version": "3.0.0",
-    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n\nPer-operation required scopes are published on each operation via the `x-required-scopes` extension.\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
+    "description": "Programmatic access to the Bike4Mind API. Schemas are generated from the same Zod definitions that validate requests at runtime, so this spec cannot drift from the implementation.\n\n## Authentication\nSend an API key as `Authorization: Bearer b4m_live_<key>` (canonical), `x-api-key: b4m_live_<key>` (legacy), or `Authorization: ApiKey b4m_live_<key>`. A JWT access token is also accepted in the `Authorization: Bearer` header.\n\n## Scopes\nAPI keys carry `resource:action` scopes. The canonical set (from the runtime `ApiKeyScope` enum) is:\n- `notebooks:read`\n- `notebooks:write`\n- `files:read`\n- `files:write`\n- `ai:generate`\n- `ai:chat`\n- `projects:read`\n- `projects:write`\n- `cc-bridge:connect`\n- `admin:*`\n- `marketing-reports:read`\n- `marketing-reports:write`\n- `overwatch-ingest:write`\n- `embed:chat`\n\nPer-operation required scopes are published via the `x-required-scopes` extension. Semantics are OR: a key needs ANY ONE of an operation's listed scopes, not all of them. Operations with no `x-required-scopes` enforce no scope (e.g. the JWT-only tools endpoint).\n\n## CORS\nThe spec (`/api/v1/openapi.json`) is served publicly with permissive CORS. The API endpoints themselves are called server-to-server with a secret key and are not intended for browser CORS use.\n\n## Correlation\nEvery response carries an `X-Request-ID` header (echoed as `request_id`/`requestId` in bodies and events) for log correlation.",
     "contact": {
       "name": "Bike4Mind",
       "url": "https://your-deployment.example.com"
@@ -38,6 +38,12 @@
         "in": "header",
         "name": "x-api-key",
         "description": "Legacy auth. Send `x-api-key: b4m_live_<key>`. Equivalent to `bearerAuth` for API keys."
+      },
+      "jwtAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "JWT access token only. Send `Authorization: Bearer <access_token>`. API keys are NOT accepted here."
       }
     },
     "schemas": {
@@ -832,16 +838,13 @@
       "post": {
         "operationId": "executeTool",
         "summary": "Execute a server-side tool",
-        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
+        "description": "Runs one of the built-in server-side tools (`weather_info`, `web_search`, `web_fetch`) and returns its result as JSON. Authenticate with a JWT access token only - API keys are NOT accepted on this endpoint. Rate-limited to 100 requests/hour. `request_id` echoes the X-Request-ID response header.",
         "tags": [
           "AI"
         ],
         "security": [
           {
-            "bearerAuth": []
-          },
-          {
-            "apiKeyAuth": []
+            "jwtAuth": []
           }
         ],
         "requestBody": {
@@ -927,6 +930,78 @@
               }
             }
           },
+          "401": {
+            "description": "Missing or invalid JWT (an API key is rejected here).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limit exceeded (100 requests/hour).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "headers": {
+              "X-Request-ID": {
+                "description": "Correlation id for this request; safe to log and quote in support requests.",
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-RateLimit-Limit": {
+                "description": "Request quota for the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Remaining": {
+                "description": "Requests remaining in the window.",
+                "schema": {
+                  "type": "integer"
+                }
+              },
+              "X-RateLimit-Reset": {
+                "description": "Unix epoch (seconds) when the window resets.",
+                "schema": {
+                  "type": "integer"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Tool execution failed; body carries `success: false` with `error`.",
             "content": {
@@ -964,25 +1039,21 @@
             }
           }
         },
-        "x-required-scopes": [
-          "ai:chat",
-          "ai:generate"
-        ],
         "x-codeSamples": [
           {
             "lang": "curl",
             "label": "curl",
-            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer b4m_live_<key>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"toolName\":\"web_search\",\"input\":{\"query\":\"how to reset a password\"}}'"
+            "source": "curl -s -X POST \"https://your-deployment.example.com/api/ai/v1/tools\" \\\n  -H \"Authorization: Bearer <access_token>\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\"toolName\":\"web_search\",\"input\":{\"query\":\"how to reset a password\"}}'"
           },
           {
             "lang": "JavaScript",
             "label": "fetch",
-            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/tools\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer b4m_live_<key>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}),\n});"
+            "source": "const res = await fetch(\"https://your-deployment.example.com/api/ai/v1/tools\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer <access_token>\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n  \"toolName\": \"web_search\",\n  \"input\": {\n    \"query\": \"how to reset a password\"\n  }\n}),\n});"
           },
           {
             "lang": "Python",
             "label": "requests",
-            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer b4m_live_<key>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
+            "source": "import requests\n\nres = requests.post(\n    \"https://your-deployment.example.com/api/ai/v1/tools\",\n    headers={\"Authorization\": \"Bearer <access_token>\"},\n    json={\n        \"toolName\": \"web_search\",\n        \"input\": {\n            \"query\": \"how to reset a password\"\n        }\n    },\n)"
           }
         ]
       }
