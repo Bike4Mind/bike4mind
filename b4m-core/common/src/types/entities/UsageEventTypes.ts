@@ -14,6 +14,7 @@ export const USAGE_EVENT_FEATURES = [
   'video_generation',
   'voice',
   'transcription',
+  'text_to_speech',
   'agent_execution',
   'completion_api',
   'tool',

@@ -16,6 +16,10 @@ const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> =
   [ApiKeyType.xai]: 'xaiApiKey',
   [ApiKeyType.bfl]: 'bflApiKey',
   [ApiKeyType.voyageai]: 'voyageApiKey',
+  // Admin-provisioned ElevenLabs key powers TTS for all users (same key the
+  // Voice v2 sessions use), so no per-user key is required - matching how every
+  // other provider falls back to its admin key.
+  [ApiKeyType.elevenlabs]: 'elevenLabsServerApiKey',
 };
 
 // Base type - used by getEffectiveApiKey (~15 callers, unchanged contract)
