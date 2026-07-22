@@ -42,6 +42,9 @@
     "test": {
       "dependsOn": ["^build"]
     },
+    "openapi:generate": {
+      "cache": false
+    },
     "dev": {
       "cache": false,
       "persistent": true

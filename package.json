@@ -30,6 +30,7 @@
     "turbo:typecheck:native": "turbo typecheck:native",
     "turbo:typecheck:fast": "turbo typecheck:fast",
     "turbo:test": "turbo test",
+    "turbo:openapi:generate": "turbo openapi:generate --filter @bike4mind/common",
     "import-polaris-data": "pnpm --filter scripts import-polaris-data",
     "lint": "eslint .",
     "lint:check": "eslint . --quiet --cache --cache-location node_modules/.cache/eslint/",
