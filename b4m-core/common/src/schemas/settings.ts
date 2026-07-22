@@ -3287,9 +3287,11 @@ export const settingsMap = {
       'compute hardware (see EnableHardwareCompute): any target whose advertised minimum cost exceeds ' +
       'this is rejected before submission, independent of the live device roster. Bounds worst-case ' +
       'per-run spend without maintaining a hardcoded device allowlist. Raised from $100 to $300 (Quest 6, ' +
-      '2026-07-21) to admit the High-fidelity quality tier, whose debias-aware reservation runs roughly ' +
-      '16x the Standard tier; raise further here without a deploy if a legitimately pricier target needs ' +
-      'to be reachable.',
+      '2026-07-21) as a conservative default that admits the High-fidelity quality tier (whose debias-aware ' +
+      'reservation runs ~16x the Standard tier) for SMALL/sparse briefs only; larger 16-qubit High-fidelity ' +
+      'runs reserve well past $300 and are rejected here by design. Raise further without a deploy (up to ' +
+      '$10k) to admit pricier briefs — bounded per-run exposure is the deliberate tradeoff over universal ' +
+      'High-fidelity.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 87,
@@ -3321,9 +3323,10 @@ export const settingsMap = {
       "Rolling 24h per-user spend ceiling (in USD, measured against each run's reserved worst-case cost, " +
       'not the flat per-run credit reservation) for eligible hybrid compute jobs on real external compute ' +
       'hardware (see EnableHardwareCompute). A second, cumulative brake alongside the per-run cost ceiling ' +
-      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21) to admit a single ' +
-      'High-fidelity-tier run per day at the raised per-run ceiling; raise further here without a deploy ' +
-      'as real usage patterns emerge.',
+      'and the concurrent-run cap. Raised from $200 to $600 (Quest 6, 2026-07-21): enough for a couple of ' +
+      'small High-fidelity-tier runs per day (each reserves ~$275 at the small-brief scale the $300 per-run ' +
+      'cap admits), fewer or none for larger briefs; raise further here without a deploy as real usage ' +
+      'patterns emerge.',
     category: 'Experimental',
     group: API_SERVICE_GROUPS.EXPERIMENTAL.id,
     order: 89,
