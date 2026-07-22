@@ -314,6 +314,64 @@ describe('OllamaBackend.complete tool loop', () => {
   });
 });
 
+// getModelInfo derives each model's flags from Ollama's own /api/show
+// capabilities rather than a hardcoded list, so a thinking-capable model
+// (e.g. qwen3.5) must surface can_think and drive the Thinking toggle.
+describe('OllamaBackend.getModelInfo capability mapping', () => {
+  function backendWithCapabilities(capabilities: string[]) {
+    const backend = new OllamaBackend('http://localhost:11434', silentLogger);
+    (backend as any)._api = {
+      list: vi.fn(async () => ({ models: [{ name: 'qwen3.5:2b-q4_K_M' }] })),
+      show: vi.fn(async () => ({ capabilities, model_info: { 'qwen35.context_length': 262144 } })),
+    };
+    return backend;
+  }
+
+  it('sets can_think, supportsVision and supportsTools from reported capabilities', async () => {
+    const [info] = await backendWithCapabilities(['completion', 'vision', 'tools', 'thinking']).getModelInfo();
+    expect(info.can_think).toBe(true);
+    expect(info.supportsVision).toBe(true);
+    expect(info.supportsTools).toBe(true);
+    expect(info.contextWindow).toBe(262144);
+  });
+
+  it('leaves can_think false when the model does not report thinking', async () => {
+    const [info] = await backendWithCapabilities(['completion', 'tools']).getModelInfo();
+    expect(info.can_think).toBe(false);
+    expect(info.supportsTools).toBe(true);
+    expect(info.supportsVision).toBe(false);
+  });
+});
+
+// Ollama returns reasoning in a separate message.thinking field (not inline
+// <think> tags); the backend must wrap it so the consumer renders it, and drive
+// Ollama's think flag from the Thinking toggle.
+describe('OllamaBackend thinking field', () => {
+  it('wraps the separate thinking field in <think> tags ahead of the answer', async () => {
+    const { backend } = makeBackend([
+      { message: { content: '42', thinking: 'let me add', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 },
+    ]);
+    const { text } = await run(backend, { tools: [] });
+    expect(text).toBe('<think>let me add</think>42');
+  });
+
+  it('passes think:true to Ollama when the thinking toggle is enabled', async () => {
+    const { backend, chat } = makeBackend([
+      { message: { content: 'ok', thinking: 'hmm', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 },
+    ]);
+    await run(backend, { tools: [], thinking: { enabled: true, budget_tokens: 16000 } });
+    expect((chat.mock.calls[0][0] as { think?: boolean }).think).toBe(true);
+  });
+
+  it('omits think entirely when no thinking option is provided', async () => {
+    const { backend, chat } = makeBackend([
+      { message: { content: 'ok', tool_calls: [] }, prompt_eval_count: 3, eval_count: 2 },
+    ]);
+    await run(backend, { tools: [] });
+    expect((chat.mock.calls[0][0] as { think?: boolean }).think).toBeUndefined();
+  });
+});
+
 // Vision-capable local models receive images via Ollama's images[] field (raw
 // base64), not the multimodal content-block array other providers use.
 describe('OllamaBackend.buildMessages image handling', () => {

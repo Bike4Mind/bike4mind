@@ -160,7 +160,7 @@ curl -N -X POST http://localhost:8788/api/ai/v1/completions \
   -H "x-api-key: $B4M_API_KEY" \
   -H "content-type: application/json" \
   -d '{
-    "model": "qwen2.5-coder:7b",
+    "model": "qwen3.5:2b-q4_K_M",
     "messages": [{ "role": "user", "content": "Say hello in five words." }]
   }'
 ```
@@ -205,8 +205,8 @@ The stack bundles an optional `ollama` service. To enable it:
 
    ```bash
    OLLAMA_BASE_URL=http://ollama:11434
-   # Chat model + an embedder so offline file search works out of the box:
-   OLLAMA_PULL_MODELS=qwen2.5-coder:7b nomic-embed-text
+   # General chat model + a coding-tuned model for artifacts + an embedder (offline file search):
+   OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b qwen3-embedding:0.6b
    ```
 
 2. Bring the stack up with the `ollama` profile (this also downloads the model on first run):
@@ -219,18 +219,19 @@ That's it - open the model picker and select your model under **Local / Self-Hos
 
 ### Choosing a model (Qwen menu + hardware)
 
-Pick by the hardware you have. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all. Qwen2.5-Coder is tuned for coding; qwen3 is a newer general model.
+Two families, pick by task. Qwen3.5 is the newer general line - multimodal (reads images, so no separate vision model is needed), native tool-calling, thinking mode - and the default for chat, agents, and vision. Qwen2.5-Coder is coding-tuned and writes cleaner, complete code and HTML/React artifacts, so select it for artifact/code work; the general qwen3.5 models emit incomplete or malformed markup at small sizes. "Min GPU VRAM" is what it takes to run fully on a GPU; with less, it still runs but spills to CPU RAM (slower). "CPU-only RAM" is what it needs with no GPU at all.
 
 | Model tag | Download | Min GPU VRAM | CPU-only RAM | Notes |
 |-----------|---------:|-------------:|-------------:|-------|
-| `qwen2.5-coder:1.5b` | ~1.0 GB | ~2 GB | ~8 GB | Tiny; fast even on CPU |
-| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Good on small / laptop GPUs |
-| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Recommended default |
-| `qwen2.5-coder:14b` | ~9 GB | ~12 GB | ~32 GB | Stronger; needs a real GPU |
-| `qwen2.5-coder:32b` | ~20 GB | ~24 GB | ~64 GB | Best local coder |
-| `qwen3:8b` | ~5 GB | ~8 GB | ~16 GB | General-purpose alternative |
+| `qwen3.5:0.8b` | ~1.0 GB | ~2 GB | ~4 GB | Tiny; multimodal; fast on CPU too |
+| `qwen3.5:2b-q4_K_M` | ~2.0 GB | ~4 GB | ~8 GB | Default; general/vision/tools; fits a 4GB laptop GPU |
+| `qwen3.5:2b` | ~2.7 GB | ~5 GB | ~8 GB | Same 2b, full-precision Q8_0; better quality, wants 5GB+ |
+| `qwen3.5:4b` | ~3.4 GB | ~6 GB | ~8 GB | Higher-quality general; spills under 6GB |
+| `qwen3.5:9b` | ~6.6 GB | ~8 GB | ~16 GB | Strongest small general; needs a real GPU |
+| `qwen2.5-coder:3b` | ~2.0 GB | ~4 GB | ~8 GB | Coding-tuned; best for HTML/React artifacts on a small GPU |
+| `qwen2.5-coder:7b` | ~4.7 GB | ~6-8 GB | ~16 GB | Coding-tuned; stronger code/artifacts, needs more VRAM |
 
-Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen2.5-coder:3b qwen2.5-coder:7b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:14b`. No GPU? Everything runs on CPU - start with a 1.5b or 3b model.
+The plain `qwen3.5:2b` tag is the full-precision Q8_0 build (best 2b quality) and spills on a 4GB card; `qwen3.5:2b-q4_K_M` is the quantized build that fits a 4GB GPU fully, which is why it is the default - use the plain `:2b` if you have 5GB+. For building HTML/React artifacts, pull and select `qwen2.5-coder` - it writes complete files where the general qwen3.5 models leave markup half-finished at these sizes. Set one or more (space-separated) in `OLLAMA_PULL_MODELS`, e.g. `OLLAMA_PULL_MODELS=qwen3.5:2b-q4_K_M qwen2.5-coder:3b`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull qwen2.5-coder:3b`. No GPU? Everything runs on CPU - start with a 0.8b or 2b model.
 
 ### GPU acceleration (NVIDIA)
 
@@ -408,7 +409,7 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
-- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen2.5-coder:1.5b` or `:3b`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
+- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
 - **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The puller triggers an SD.Next rescan once the download finishes, and the picker caches models for ~60s. If it still isn't listed, force a rescan from the host: `curl -X POST http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints`.
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.

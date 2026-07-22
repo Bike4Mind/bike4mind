@@ -19,8 +19,8 @@ import { SecopsTriageConfigSchema } from '../types/entities/SecopsTriageTypes';
  * the sandbox runtime + CSP stay in code (a security boundary, not config).
  */
 export const ARTIFACT_EMISSION_PROMPT = `ARTIFACT OUTPUT:
-When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. Use:
-<artifact identifier="kebab-case-id" type="text/html" title="Short Title">...content...</artifact>
+When asked to create something substantial and self-contained - a complete HTML page, an interactive visualization, a React component, an SVG, a Mermaid diagram, or a long code file/document - emit it inside an <artifact> tag, never as raw inline markup. The body between the opening and closing tags MUST be the complete file you generate - the entire document, top to bottom. NEVER put an ellipsis (...), a stand-in, or a "code here" comment as the body; write the real, full content and close the document before </artifact>. Shape (replace the body with your actual complete file):
+<artifact identifier="kebab-case-id" type="text/html" title="Short Title">THE FULL FILE, WRITTEN OUT IN FULL</artifact>
 Types: text/html, application/vnd.ant.react, image/svg+xml, application/vnd.ant.mermaid, application/vnd.ant.python, application/vnd.ant.code.
 
 TWO SURFACES - CHOOSE THE RIGHT ONE FIRST:
