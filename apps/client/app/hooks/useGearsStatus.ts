@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, type QueryClient } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 
 /**
@@ -72,6 +72,25 @@ export function useGearsStatus() {
     // picked up on the next visit) - keep the nav from refetching on every mount.
     staleTime: 5 * 60_000,
   });
+}
+
+/**
+ * Invalidate the gears/status query after a creation, but only while at least one
+ * of the given destination gears is still locked in the cache. A creation unlocks
+ * its gear server-side, yet the 5-minute staleTime would otherwise keep the newly
+ * earned nav slot (and Gears CTA) hidden until a reload. Skipping the refetch once
+ * the gear is already unlocked keeps routine creates from refetching every time.
+ * No cached status means no observers to update, so there is nothing to invalidate.
+ * Mirrors the inline pattern in SessionFilePond for the 'files' gear.
+ */
+export function invalidateGearsStatusWhileLocked(queryClient: QueryClient, keys: GearKey[]): void {
+  const status = queryClient.getQueryData<GearsStatusResponse>(['gears', 'status']);
+  if (!status) return;
+  const anyStillLocked = keys.some(key => {
+    const gear = status.gears.find(g => g.key === key);
+    return gear && !gear.unlocked;
+  });
+  if (anyStillLocked) void queryClient.invalidateQueries({ queryKey: ['gears', 'status'] });
 }
 
 /** Convenience map: key -> unlocked. `undefined` while loading (callers choose their fallback). */
