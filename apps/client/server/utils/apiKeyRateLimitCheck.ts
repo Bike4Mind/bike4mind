@@ -57,6 +57,35 @@ export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
   await cacheRepository.deleteByKey(dayKey);
 }
 
+export interface RateLimitUsage {
+  minute: number;
+  day: number;
+}
+
+/**
+ * Read a key's current minute and day counter values without touching them.
+ * A missing doc, or one whose fixed window already ended (expiresAt in the
+ * past, awaiting TTL cleanup), reads as 0 - the same view the enforcer takes
+ * on the next request. The DB usage.* fields on the key doc are not
+ * maintained; these cache counters are the live source of truth.
+ */
+export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitUsage> {
+  const { minuteKey, dayKey } = buildRateLimitKeys(keyId);
+  const [minuteDoc, dayDoc] = await Promise.all([
+    cacheRepository.findByKey(minuteKey),
+    cacheRepository.findByKey(dayKey),
+  ]);
+  return { minute: readCounterValue(minuteDoc), day: readCounterValue(dayDoc) };
+}
+
+function readCounterValue(doc: { result?: unknown; expiresAt?: Date } | null): number {
+  if (!doc || (doc.expiresAt && doc.expiresAt.getTime() <= Date.now())) {
+    return 0;
+  }
+  const count = (doc.result as { count?: unknown } | undefined)?.count;
+  return typeof count === 'number' ? count : 0;
+}
+
 /**
  * Atomically increment a rate-limit counter ONLY if under limit, using
  * FIXED-WINDOW semantics: the window opens on the first request and closes

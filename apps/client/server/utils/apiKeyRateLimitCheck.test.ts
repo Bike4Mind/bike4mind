@@ -3,6 +3,7 @@ import {
   buildRateLimitKeys,
   checkApiKeyRateLimit,
   extractApiKeyFromHeaders,
+  getApiKeyRateLimitUsage,
   resetApiKeyRateLimit,
 } from './apiKeyRateLimitCheck';
 import { cacheRepository } from '@bike4mind/database';
@@ -14,6 +15,7 @@ vi.mock('@bike4mind/database', () => ({
     tryIncrementWithinLimitFixedWindow: vi.fn(),
     decrementCounter: vi.fn(),
     deleteByKey: vi.fn(),
+    findByKey: vi.fn(),
   },
 }));
 
@@ -323,6 +325,42 @@ describe('apiKeyRateLimitCheck', () => {
         .mocked(cacheRepository.tryIncrementWithinLimitFixedWindow)
         .mock.calls.map(call => call[0]);
       expect(enforcerKeys).toEqual([minuteKey, dayKey]);
+    });
+  });
+
+  describe('getApiKeyRateLimitUsage', () => {
+    it('reads both counters by their canonical keys', async () => {
+      vi.mocked(cacheRepository.findByKey)
+        .mockResolvedValueOnce({ result: { count: 3 }, expiresAt: future(MINUTE_MS) })
+        .mockResolvedValueOnce({ result: { count: 42 }, expiresAt: future(DAY_MS) });
+
+      const usage = await getApiKeyRateLimitUsage(mockKeyId);
+
+      expect(usage).toEqual({ minute: 3, day: 42 });
+      const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
+      const queried = vi.mocked(cacheRepository.findByKey).mock.calls.map(call => call[0]);
+      expect(new Set(queried)).toEqual(new Set([minuteKey, dayKey]));
+    });
+
+    it('reads a missing counter doc as 0', async () => {
+      vi.mocked(cacheRepository.findByKey).mockResolvedValue(null);
+      expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 0 });
+    });
+
+    it('reads an expired window (awaiting TTL cleanup) as 0', async () => {
+      vi.mocked(cacheRepository.findByKey)
+        .mockResolvedValueOnce({ result: { count: 60 }, expiresAt: new Date(Date.now() - 1) })
+        .mockResolvedValueOnce({ result: { count: 500 }, expiresAt: future(DAY_MS) });
+
+      expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 500 });
+    });
+
+    it('reads a malformed counter doc as 0', async () => {
+      vi.mocked(cacheRepository.findByKey)
+        .mockResolvedValueOnce({ result: 'not-a-counter', expiresAt: future(MINUTE_MS) })
+        .mockResolvedValueOnce({ expiresAt: future(DAY_MS) });
+
+      expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 0 });
     });
   });
 
