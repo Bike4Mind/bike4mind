@@ -32,4 +32,9 @@ describe('hydrateEmbedAgent', () => {
     expect(h.deniedTools).toEqual([]);
     expect(h.projectId).toBeUndefined();
   });
+
+  it('treats an empty-string preferredModel (System Default in the UI) the same as unset', () => {
+    const h = hydrateEmbedAgent({ name: 'Bare', personality: {}, preferredModel: '' } as unknown as IAgent);
+    expect(h.model).toBe('');
+  });
 });

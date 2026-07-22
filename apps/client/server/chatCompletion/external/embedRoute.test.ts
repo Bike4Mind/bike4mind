@@ -265,10 +265,17 @@ describe('POST /api/embed/chat', () => {
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 
-  it('returns 422 when the bound agent has no configured model', async () => {
+  it('returns 422 naming the fix when the bound agent has no configured model', async () => {
     mockHydrate.mockReturnValue({ model: '', systemPrompt: 'p', allowedTools: [], deniedTools: [] });
     const res = await post(CHAT);
     expect(res.status).toBe(422);
+    // Pin the full body: integrators branch on `code`, operators read the description.
+    expect(await res.json()).toEqual({
+      error: 'unprocessable',
+      error_description:
+        'Bound agent has no explicit model configured. Set a model on the agent; embed chat does not fall back to the system default.',
+      code: 'agent_model_not_configured',
+    });
     expect(mockExecuteCompletion).not.toHaveBeenCalled();
   });
 

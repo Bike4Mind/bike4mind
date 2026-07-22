@@ -1,6 +1,6 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import { ApiKeyScope } from '@bike4mind/common';
@@ -26,6 +26,17 @@ const plainKey = {
   status: 'active',
   keyPrefix: 'b4m_live_z',
 };
+// Bound to the model-less agent-2: the fixture for the missing-model warning.
+const modellessAgentKey = {
+  id: 'key-4',
+  name: 'Beta widget',
+  scopes: [ApiKeyScope.EMBED_CHAT],
+  status: 'active',
+  keyPrefix: 'b4m_live_def456',
+  agentId: 'agent-2',
+  allowedOrigins: [],
+  createdAt: new Date('2026-01-02'),
+};
 
 const h = vi.hoisted(() => ({ keys: [] as any[], updateMutate: vi.fn() }));
 
@@ -39,8 +50,10 @@ vi.mock('@client/app/hooks/data/userApiKeys', () => ({
 
 vi.mock('@client/app/hooks/data/agents', () => ({
   useGetAgents: () => ({
+    // agent-1 has an explicit model; agent-2 is on the system default (no
+    // preferredModel field, matching the real /api/agents payload for an unset model).
     data: [
-      { id: 'agent-1', name: 'Agent One' },
+      { id: 'agent-1', name: 'Agent One', preferredModel: 'claude-test' },
       { id: 'agent-2', name: 'Agent Two' },
     ],
     isLoading: false,
@@ -63,7 +76,7 @@ const renderTab = () =>
 
 describe('EmbedKeysTab', () => {
   beforeEach(() => {
-    h.keys = [embedKey, plainKey];
+    h.keys = [embedKey, plainKey, modellessAgentKey];
     h.updateMutate.mockClear();
   });
 
@@ -99,12 +112,48 @@ describe('EmbedKeysTab', () => {
   // The list route now returns disabled keys (#776); before that this row could
   // never render and the Revoked branch was dead code.
   it('renders a revoked key as Revoked with its actions disabled', () => {
-    h.keys = [{ ...embedKey, id: 'key-3', status: 'disabled' }];
+    h.keys = [{ ...embedKey, id: 'key-9', status: 'disabled' }];
     renderTab();
 
-    const row = screen.getByTestId('embed-key-row-key-3');
+    const row = screen.getByTestId('embed-key-row-key-9');
     expect(row).toHaveTextContent('Revoked');
-    expect(screen.getByTestId('embed-key-configure-key-3')).toBeDisabled();
-    expect(screen.getByTestId('embed-key-revoke-key-3')).toBeDisabled();
+    expect(screen.getByTestId('embed-key-configure-key-9')).toBeDisabled();
+    expect(screen.getByTestId('embed-key-revoke-key-9')).toBeDisabled();
+  });
+
+  it('shows no model warning in the create modal until an agent is selected', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    expect(screen.queryByTestId('embed-key-model-warning')).not.toBeInTheDocument();
+  });
+
+  it('warns in the create modal when the selected agent has no explicit model, without blocking submit', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    // The testid sits on the Joy Input wrapper; the change event needs the native input.
+    fireEvent.change(within(screen.getByTestId('embed-key-name-input')).getByRole('textbox'), {
+      target: { value: 'Beta site' },
+    });
+
+    // The testid sits on the Select wrapper; the trigger is the button inside it.
+    fireEvent.click(within(screen.getByTestId('embed-key-agent-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Agent Two' }));
+
+    expect(screen.getByTestId('embed-key-model-warning')).toBeInTheDocument();
+    // Advisory only: the warning must not disable creation.
+    expect(screen.getByTestId('embed-key-create-btn')).not.toBeDisabled();
+  });
+
+  it('warns in the configure modal for a key bound to a model-less agent', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-configure-key-4'));
+    expect(screen.getByTestId('embed-key-model-warning')).toBeInTheDocument();
+    expect(screen.getByTestId('embed-key-save-btn')).not.toBeDisabled();
+  });
+
+  it('shows no warning in the configure modal when the bound agent has an explicit model', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+    expect(screen.queryByTestId('embed-key-model-warning')).not.toBeInTheDocument();
   });
 });

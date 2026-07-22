@@ -355,10 +355,17 @@ export function registerEmbedRoutes(app: Express, track: (p: Promise<void>) => v
       }
 
       const hydrated = hydrateEmbedAgent(agent);
+      // Deliberately fail-closed: embed chat never inherits the system default, so a
+      // public embed's model (and cost profile) cannot drift when an admin changes it.
+      // The literal code stays off QUEST_ERROR_CODES - that tuple is SSE-frame scoped
+      // and feeds the streamed-action enum; this is a pre-stream JSON contract.
       if (!hydrated.model) {
-        return res
-          .status(422)
-          .json({ error: 'unprocessable', error_description: 'Bound agent has no configured model' });
+        return res.status(422).json({
+          error: 'unprocessable',
+          error_description:
+            'Bound agent has no explicit model configured. Set a model on the agent; embed chat does not fall back to the system default.',
+          code: 'agent_model_not_configured',
+        });
       }
 
       // A key can outlive its org (org deleted while the key stayed active). That is a

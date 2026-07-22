@@ -171,6 +171,13 @@ function EmbedKeyFormFields({
 }) {
   const { data: agents, isLoading: agentsLoading } = useGetAgents();
 
+  // Advisory only, on positive knowledge: the agent must be IN the fetched list AND
+  // model-less ('' and unset both mean "System Default"). An agent the viewer cannot
+  // see (or beyond the list's first page) shows no warning - same degradation as the
+  // Select itself; the embed route's 422 remains the enforcement layer.
+  const selectedAgent = agents?.find(agent => agent.id === form.agentId);
+  const selectedAgentMissingModel = !!selectedAgent && !selectedAgent.preferredModel;
+
   return (
     <>
       <FormControl required>
@@ -190,6 +197,12 @@ function EmbedKeyFormFields({
         <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
           The embed key can only talk to this one agent.
         </Typography>
+        {selectedAgentMissingModel && (
+          <Alert color="warning" startDecorator={<WarningIcon />} sx={{ mt: 1 }} data-testid="embed-key-model-warning">
+            This agent is on the system default model. Embed chat requires an explicit model, so end-user chats will be
+            rejected until you set one on the agent.
+          </Alert>
+        )}
       </FormControl>
 
       <EmbedOriginsField
