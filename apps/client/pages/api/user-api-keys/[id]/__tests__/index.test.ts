@@ -38,7 +38,10 @@ const updateEmbedKey = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateEmbedKey } }));
-vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+// The route reads the stored key (for the branding echo-vs-elevation decision)
+// via findByUserIdAndId; default to no stored key (stored hideBranding false).
+const userApiKeyRepository = vi.hoisted(() => ({ findByUserIdAndId: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 
@@ -138,6 +141,8 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     beforeEach(() => {
       requestHasEntitlement.mockReset();
       requestHasEntitlement.mockResolvedValue(false);
+      userApiKeyRepository.findByUserIdAndId.mockReset();
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null); // no stored hideBranding
     });
 
     it('strips hideBranding:true for an unentitled caller, keeping other fields', async () => {
@@ -191,6 +196,35 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
         expect.objectContaining({ branding: { primaryColor: '#336699' } }),
+        expect.anything()
+      );
+    });
+
+    // Onoya's regression (issue #572 comment): a stored hideBranding:true must
+    // survive an unrelated branding edit by an unentitled member - the client
+    // echoes the stored flag, and the gate must treat that echo as not-an-
+    // elevation rather than clobbering white-label the org already earned.
+    it('preserves a stored hideBranding:true when an unentitled caller edits an unrelated branding field', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: true } });
+      requestHasEntitlement.mockResolvedValue(false);
+      const { req, res } = patch('key-1', { branding: { primaryColor: '#0a7f3f', hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { primaryColor: '#0a7f3f', hideBranding: true } }),
+        expect.anything()
+      );
+      // An echo is not an elevation, so the entitlement lookup is not even needed.
+      expect(requestHasEntitlement).not.toHaveBeenCalled();
+    });
+
+    it('still strips a genuine elevation (stored not true) by an unentitled caller', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: false } });
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
         expect.anything()
       );
     });

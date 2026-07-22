@@ -42,13 +42,19 @@ const handler = baseApi().patch(
 
     // Branding format screen (hex color, https logo, caps); the service
     // re-validates with the same shared schema. The whitelabel write gate then
-    // neutralizes an unentitled hideBranding elevation (read side is the
-    // authoritative enforcement).
+    // blocks only an unentitled hideBranding *elevation* (read side is the
+    // authoritative enforcement); pass the stored value so an unentitled member
+    // editing an unrelated branding field cannot clobber white-label the org
+    // already earned.
     const brandingCheck = validateEmbedBranding(branding);
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
-    const gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value);
+    let gatedBranding = brandingCheck.value;
+    if (brandingCheck.value !== undefined) {
+      const existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
+      gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value, existing?.branding?.hideBranding === true);
+    }
 
     const updated = await userApiKeyService.updateEmbedKey(
       userId,

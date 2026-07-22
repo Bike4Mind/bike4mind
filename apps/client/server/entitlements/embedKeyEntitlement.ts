@@ -48,24 +48,31 @@ export async function embedKeyOwnerHasEntitlement(info: EmbedKeyOwnerRef, key: E
 }
 
 /**
- * Write-side defense in depth for the key create/update routes: neutralize an
- * incoming `hideBranding: true` when the CALLER lacks the whitelabel
- * entitlement, leaving every other branding field intact. Deliberately
- * caller-scoped (requestHasEntitlement, admin bypass included) while the read
- * side above is owner-scoped: the read side is authoritative and fail-safe, so
- * any scope mismatch resolves to "branding shows", never the reverse. Strips
- * silently rather than 403ing - the flag is a cosmetic preference, and a
- * rejection would both leak entitlement state and block the legitimate save of
- * the other branding fields in the same request. Acts only on the incoming
- * object: a PATCH that omits branding never reaches this, so a stored
- * hideBranding is never proactively cleared (it is inert data the read gate
- * already ignores for unentitled owners).
+ * Write-side defense in depth for the key create/update routes: block a CALLER
+ * who lacks the whitelabel entitlement from ELEVATING `hideBranding` to true,
+ * leaving every other branding field intact. Deliberately caller-scoped
+ * (requestHasEntitlement, admin bypass included) while the read side above is
+ * owner-scoped: the read side is authoritative and fail-safe, so any scope
+ * mismatch resolves to "branding shows", never the reverse. Strips silently
+ * rather than 403ing - the flag is a cosmetic preference, and a rejection would
+ * both leak entitlement state and block the legitimate save of the other
+ * branding fields in the same request.
+ *
+ * `storedHideBranding` is the value currently on the key (false for a create).
+ * Only a genuine elevation (stored-not-true -> incoming true by an unentitled
+ * caller) is stripped; an ECHO of an already-stored true is preserved, so an
+ * unentitled org member editing an unrelated branding field (e.g. the color)
+ * does not silently clobber white-label the org already earned. Preserving a
+ * stale stored true is safe: the owner-scoped read gate re-checks live and shows
+ * branding anyway if the plan lapsed.
  */
 export async function gateEmbedBrandingWrite(
   req: EntitlementRequest,
-  branding: IEmbedBranding | undefined
+  branding: IEmbedBranding | undefined,
+  storedHideBranding = false
 ): Promise<IEmbedBranding | undefined> {
   if (!branding || branding.hideBranding !== true) return branding;
+  if (storedHideBranding === true) return branding; // echo, not an elevation
   const entitled = await requestHasEntitlement(req, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false);
   if (entitled) return branding;
   return { ...branding, hideBranding: false };
