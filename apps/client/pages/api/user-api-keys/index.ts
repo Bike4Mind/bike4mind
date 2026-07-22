@@ -47,16 +47,20 @@ const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
 
+    // Opt-in so the documented public API keeps its active-only default; the
+    // management UIs pass it to render revoked keys as `Revoked` rows.
+    const listOptions = { includeDisabled: req.query.includeDisabled === 'true' };
+
     // Personal keys (minted by this user) plus every key billed to an org this
     // user administers - so any org admin sees the org's keys, not just the minter.
     const [personalKeys, administeredOrgIds] = await Promise.all([
-      userApiKeyService.listUserApiKeys(userId, { db: { userApiKeys: userApiKeyRepository } }),
+      userApiKeyService.listUserApiKeys(userId, { db: { userApiKeys: userApiKeyRepository } }, listOptions),
       organizationRepository.findIdsAdministeredBy(userId),
     ]);
 
     const orgKeyLists = await Promise.all(
       administeredOrgIds.map(orgId =>
-        userApiKeyService.listOrganizationApiKeys(orgId, { db: { userApiKeys: userApiKeyRepository } })
+        userApiKeyService.listOrganizationApiKeys(orgId, { db: { userApiKeys: userApiKeyRepository } }, listOptions)
       )
     );
 

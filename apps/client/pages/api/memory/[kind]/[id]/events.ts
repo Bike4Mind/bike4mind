@@ -48,11 +48,9 @@ const handler = baseApi().post(async (req, res) => {
   // assert resets derivedFrom/provenance - silently discarding citations, or (with no prior belief)
   // injecting the raw subject string as the memory. Fact-less operations belong to affirm/retract.
   if (eventKind === 'assert' && (!fact || !fact.trim())) {
-    return res
-      .status(400)
-      .json({
-        error: "An 'assert' event requires a non-empty 'fact'. Use 'affirm' or 'retract' for fact-less operations.",
-      });
+    return res.status(400).json({
+      error: "An 'assert' event requires a non-empty 'fact'. Use 'affirm' or 'retract' for fact-less operations.",
+    });
   }
   // Subject identity: an explicit subject wins; otherwise derive a stable key from the fact so
   // re-mentions coalesce (affirm) instead of piling up. Null means neither gave a usable key.

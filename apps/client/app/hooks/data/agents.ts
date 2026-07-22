@@ -2,16 +2,20 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '@client/app/contexts/ApiContext';
 import { IAgent } from '@bike4mind/common';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import { useIsFullyAuthenticated } from '@client/app/hooks/useAccessToken';
 import { isOptimisticId } from '@client/app/utils/llm';
 
 export const useGetAgents = (enabled: boolean = true) => {
+  // Gate on the fully-authenticated state so this doesn't fire during the login
+  // mfaPending window, where it would 401 (#804).
+  const isFullyAuthenticated = useIsFullyAuthenticated();
   return useQuery({
     queryKey: ['agents'],
     queryFn: async (): Promise<IAgent[]> => {
       const response = await api.get<{ data: IAgent[]; hasMore: boolean; total: number }>('/api/agents');
       return response.data.data;
     },
-    enabled,
+    enabled: enabled && isFullyAuthenticated,
     staleTime: 5 * 60 * 1000, // 5 minutes - only refetch when agents actually change
     refetchOnWindowFocus: false, // Prevent refetch when switching tabs/windows
     refetchOnReconnect: false, // Prevent refetch on network reconnection

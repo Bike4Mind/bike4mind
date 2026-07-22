@@ -8,6 +8,14 @@
  */
 
 export { ReActAgent, findIterationBoundary, WORKFLOW_REMINDER_MARKER } from './ReActAgent';
+export {
+  RepeatedCallGuard,
+  repeatedCallWarning,
+  repeatedCallBlockedObservation,
+  DEFAULT_WARN_THRESHOLD,
+  DEFAULT_BLOCK_THRESHOLD,
+} from './repeatedCallGuard';
+export type { RepeatedCallGuardOptions, RepeatedCallRecord } from './repeatedCallGuard';
 export { PERSONA_ALLOWED_SUBAGENTS } from './types';
 export { isContextLimitError } from './errors';
 export type {

@@ -11,7 +11,10 @@ import {
  */
 
 const ARTIFACT_TAG_REGEX = /<artifact\s+(.*?)>([\s\S]*?)<\/artifact>/gi;
-const ATTRIBUTE_REGEX = /(\w+)=["']([^"']*?)["']/g;
+// Value is anchored to its own quote kind so a double-quoted value can contain
+// apostrophes (title="Bob's App") and vice versa. Group 2 is the double-quoted
+// body, group 3 the single-quoted one; exactly one matches.
+const ATTRIBUTE_REGEX = /(\w+)=(?:"([^"]*)"|'([^']*)')/g;
 const CODE_BLOCK_REGEX = /```(\w+)?\s*([\s\S]*?)```/g;
 
 /**
@@ -116,8 +119,8 @@ function extractArtifactTags(content: string, messageId: string, timestamp: Date
     ATTRIBUTE_REGEX.lastIndex = 0;
 
     while ((attrMatch = ATTRIBUTE_REGEX.exec(attributesString)) !== null) {
-      const [, key, value] = attrMatch;
-      attributes[key] = value;
+      const [, key, doubleQuoted, singleQuoted] = attrMatch;
+      attributes[key] = doubleQuoted ?? singleQuoted;
     }
 
     const mimeType = attributes.type || '';

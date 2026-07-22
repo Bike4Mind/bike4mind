@@ -316,3 +316,34 @@ describe('parseArtifactsWithFallback - graphically-empty SVG suppression', () =>
     expect(artifacts).toHaveLength(0);
   });
 });
+
+/**
+ * ATTRIBUTE_REGEX used to stop the value capture at the first quote of either kind,
+ * so a double-quoted value containing an apostrophe was silently truncated.
+ */
+describe('parseArtifactsWithFallback - attribute values containing quotes', () => {
+  it('keeps an apostrophe inside a double-quoted title', () => {
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier="bobs-app" type="text/html" title="Bob's App"><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe("Bob's App");
+    expect(result.artifacts[0].identifier).toBe('bobs-app');
+  });
+
+  it('keeps double quotes inside a single-quoted value', () => {
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier='x' type='text/html' title='A "quoted" phrase'><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(1);
+    expect(result.artifacts[0].title).toBe('A "quoted" phrase');
+  });
+
+  it('does not accept mismatched opening and closing quotes', () => {
+    // The unterminated double quote makes the whole opening tag unmatchable.
+    const result = parseArtifactsWithFallback(
+      `<artifact identifier="x" type="text/html" title="mismatched'><p>hi</p></artifact>`
+    );
+    expect(result.artifacts).toHaveLength(0);
+  });
+});

@@ -486,9 +486,4 @@ export type SpecificArtifact =
 
 // New: Type union for all V2 specific artifacts
 export type SpecificArtifactV2 =
-  | ReactArtifactV2
-  | HtmlArtifactV2
-  | SvgArtifactV2
-  | MermaidArtifactV2
-  | PythonArtifactV2
-  | QuestMasterArtifactV2;
+  ReactArtifactV2 | HtmlArtifactV2 | SvgArtifactV2 | MermaidArtifactV2 | PythonArtifactV2 | QuestMasterArtifactV2;

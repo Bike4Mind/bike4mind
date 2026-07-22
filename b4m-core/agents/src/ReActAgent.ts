@@ -22,6 +22,7 @@ import {
   type ToolResult,
   type ToolUseInfo,
 } from './toolParallelizer';
+import { RepeatedCallGuard, repeatedCallWarning, repeatedCallBlockedObservation } from './repeatedCallGuard';
 
 /**
  * Placeholder tool_result content for a tool_use that never ran because the run
@@ -213,6 +214,22 @@ export class ReActAgent extends EventEmitter {
    */
   private initialMessageCount = 0;
 
+  /**
+   * Circuit breaker against non-terminating exploration loops (same call, same
+   * args, same result, repeated). Instance-scoped so its state survives the
+   * per-iteration history trimming that otherwise hides the loop from the model.
+   * Reset at the start of every run()/runIteration().
+   */
+  private readonly repeatedCallGuard: RepeatedCallGuard;
+
+  /**
+   * Read-only classifier for the active run, captured from run options (falls
+   * back to the built-in check). Used by the repeated-call guard to decide
+   * whether a completed tool call was a mutation that should invalidate earlier
+   * read observations. Set at the start of every run()/runIteration().
+   */
+  private isReadOnlyToolFn: (toolName: string) => boolean = defaultIsReadOnlyTool;
+
   constructor(context: AgentContext) {
     super();
     this.context = {
@@ -221,6 +238,7 @@ export class ReActAgent extends EventEmitter {
       maxTokens: context.maxTokens ?? 4096,
       temperature: context.temperature ?? 0.7,
     };
+    this.repeatedCallGuard = new RepeatedCallGuard(context.repeatedCallGuard);
   }
 
   /**
@@ -313,6 +331,8 @@ export class ReActAgent extends EventEmitter {
     this.confidenceLog = [];
     this.iterationConfidences = [];
     this.lastStopReason = undefined;
+    this.repeatedCallGuard.reset();
+    this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
 
     const maxIterations = options.maxIterations ?? this.context.maxIterations ?? 50;
     const temperature = options.temperature ?? this.context.temperature ?? 0.7;
@@ -1092,6 +1112,8 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
       this.iterationConfidences = [];
       this.lastStopReason = undefined;
       this.iterations = 0;
+      this.repeatedCallGuard.reset();
+      this.isReadOnlyToolFn = options.isReadOnlyTool ?? defaultIsReadOnlyTool;
 
       this.messages = [
         {
@@ -1721,14 +1743,41 @@ Remember: You are an autonomous AGENT. Act independently and solve problems proa
         `if no more tools are needed.`
       );
     }
+    // Circuit breaker: refuse to re-run a call that has already returned the
+    // same result blockThreshold times, and return a nudge instead of spinning.
+    const signature = RepeatedCallGuard.signature(toolUse.name, toolUse.arguments);
+    if (this.repeatedCallGuard.shouldBlock(signature)) {
+      this.context.logger.warn(
+        `[ReActAgent] Repeated-call circuit breaker tripped for "${toolUse.name}" - skipping execution`
+      );
+      return repeatedCallBlockedObservation(toolUse.name, this.repeatedCallGuard.blockLimit);
+    }
+
+    const isReadOnly = this.isReadOnlyToolFn(toolUse.name);
+    let observation: string;
+    let succeeded = true;
     try {
       const params = this.parseToolArguments(toolUse.arguments);
       const result = await tool.toolFn(params);
-      return typeof result === 'string' ? result : JSON.stringify(result);
+      observation = typeof result === 'string' ? result : JSON.stringify(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return `Error: ${message}`;
+      observation = `Error: ${message}`;
+      succeeded = false;
     }
+
+    // Track this call's result. A changed result resets the counter (progress);
+    // an unchanged result escalates toward warn and then block.
+    const { count, warn } = this.repeatedCallGuard.record(signature, observation, isReadOnly);
+
+    // A successful mutation may have changed state that earlier reads sampled,
+    // so their "settled" counts (and any block) are now stale - clear them so a
+    // follow-up re-read of what just changed isn't wrongly short-circuited.
+    if (succeeded && !isReadOnly) {
+      this.repeatedCallGuard.invalidateReadOnly();
+    }
+
+    return warn ? `${observation}${repeatedCallWarning(toolUse.name, count)}` : observation;
   }
 
   /**
