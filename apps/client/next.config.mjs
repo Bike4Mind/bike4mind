@@ -206,6 +206,15 @@ const nextConfig = {
         source: '/a/:path*',
         destination: '/api/publish/serve/a/:path*',
       },
+      // Public embeddable chat widget. Pretty `/embed/*` URLs (the iframe src on
+      // customer sites) are served by the unauth embed serve handler, which sets
+      // its own per-response CSP with frame-ancestors derived from the embed
+      // key's allowedOrigins. Routing to /api keeps it out of the SPA and out of
+      // proxy.ts's global CSP so the handler's own headers win.
+      {
+        source: '/embed/:path*',
+        destination: '/api/embed/serve',
+      },
     ];
   },
   poweredByHeader: false,

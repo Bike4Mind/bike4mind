@@ -169,11 +169,17 @@ export function proxy(request: NextRequest) {
   // `/a/*` (no-sign-in share links) rewrites to the same serve handler and likewise
   // sets its own per-response CSP for the sandboxed bundle - the global app CSP would
   // weaken/break it, so exclude it here too.
+  // `/embed/*` (public embeddable chat widget) rewrites to /api/embed/serve, which
+  // sets its own CSP whose frame-ancestors comes from the embed key's allowedOrigins.
+  // The global CSP would clobber that, and `X-Frame-Options: SAMEORIGIN` would block
+  // the external framing the feature exists for. Middleware matches the PRE-rewrite
+  // path, hence `/embed/` here; `/api/embed/*` is already covered by the `/api/` line.
   if (
     !pathname.startsWith('/api/') &&
     !pathname.startsWith('/p/') &&
     !pathname.startsWith('/uc/') &&
-    !pathname.startsWith('/a/')
+    !pathname.startsWith('/a/') &&
+    !pathname.startsWith('/embed/')
   ) {
     response.headers.set('Content-Security-Policy', cspHeader);
     response.headers.set('X-Frame-Options', 'SAMEORIGIN');
@@ -188,7 +194,8 @@ export function proxy(request: NextRequest) {
   response.headers.set('X-Content-Type-Options', 'nosniff');
   // `/a/*` share links set their own `Referrer-Policy: no-referrer` (the token must not
   // leak via Referer on author outbound links) - don't clobber it with the app default.
-  if (!pathname.startsWith('/a/')) {
+  // `/embed/*` likewise: its URL carries the embed key in the query string.
+  if (!pathname.startsWith('/a/') && !pathname.startsWith('/embed/')) {
     response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   }
   if (!request.nextUrl.hostname.includes('localhost')) {

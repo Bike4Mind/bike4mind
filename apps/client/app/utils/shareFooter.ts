@@ -14,6 +14,7 @@
 import { B4M_HORIZONTAL_LOGO_SVG } from '@client/app/utils/b4mLogo';
 // Marketing-site URL sourced from config (empty when unconfigured).
 import { WEBSITE_URL, getBrandName } from '@client/config/general';
+import { escapeAttr } from './htmlEscape';
 
 const SITE_URL = WEBSITE_URL;
 
@@ -35,13 +36,6 @@ export interface ShareFooterOptions {
    * footers, where the publicId isn't known until finalize.
    */
   reportPublicId?: string;
-}
-
-// Escapes &, <, >, " - safe for BOTH attribute values and element inner text
-// (this footer uses it in both: the text-wordmark/CTA spans render the escaped
-// value as inner text). The extra `"` escaping is harmless in a text context.
-function escapeAttr(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /**
