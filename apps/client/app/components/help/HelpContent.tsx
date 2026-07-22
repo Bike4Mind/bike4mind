@@ -297,10 +297,19 @@ const HelpVideo: React.FC<{ src?: string; label?: string }> = ({ src, label }) =
 };
 
 /**
+ * File path of the article currently being rendered, provided by HelpContent
+ * for media src resolution. A context rather than the useHelpPanel store
+ * (which handleLinkClick reads) because media srcs are computed at RENDER
+ * time: the store is only synced from a post-commit effect, so on a
+ * cached-content navigation the first render would read the PREVIOUS
+ * article's path and compute a wrong (404) URL that never self-corrects.
+ * Links are immune - they resolve at click time, long after that effect ran.
+ */
+export const HelpArticleFilePathContext = React.createContext<string | undefined>(undefined);
+
+/**
  * Media renderer for markdown images. GIF-style demo videos (.webm/.mp4) use
  * the same ![alt](path) syntax as images and are dispatched here by extension.
- * Reads the help panel store via getState() (not a hook) for the same reason
- * as handleLinkClick.
  */
 const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: unknown }> = ({
   node: _node,
@@ -308,8 +317,9 @@ const HelpMedia: React.FC<React.ImgHTMLAttributes<HTMLImageElement> & { node?: u
   alt,
   ...props
 }) => {
+  const currentFilePath = React.useContext(HelpArticleFilePathContext);
   const rawSrc = typeof src === 'string' ? src : undefined;
-  const resolvedSrc = resolveHelpMediaSrc(rawSrc, useHelpPanel.getState().currentFilePath);
+  const resolvedSrc = resolveHelpMediaSrc(rawSrc, currentFilePath);
   if (rawSrc && hasVideoExtension(rawSrc)) {
     return <HelpVideo src={resolvedSrc} label={alt} />;
   }
@@ -514,9 +524,11 @@ const HelpContent: React.FC<HelpContentProps> = ({ slug, anchor }) => {
         },
       }}
     >
-      <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
-        {content}
-      </ReactMarkdown>
+      <HelpArticleFilePathContext.Provider value={filePath}>
+        <ReactMarkdown remarkPlugins={remarkPlugins} rehypePlugins={rehypePlugins} components={markdownComponents}>
+          {content}
+        </ReactMarkdown>
+      </HelpArticleFilePathContext.Provider>
       <HelpFeedbackWidget key={slug} slug={slug} />
     </Box>
   );
