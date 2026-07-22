@@ -3,7 +3,15 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { withTransaction } from '@bike4mind/database';
 import { BadRequestError } from '@server/utils/errors';
 import { logEvent } from '@server/utils/analyticsLog';
-import { OrganizationEvents, toSafeUser, toSafeUsers, toSafeOrganization } from '@bike4mind/common';
+import {
+  OrganizationEvents,
+  toSafeUser,
+  toSafeUsers,
+  toSafeOrganization,
+  safeUserResponseSchema,
+  safeUsersResponseSchema,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { Request } from 'express';
 import { organizationRepository } from '@bike4mind/database/infra';
 import { userRepository } from '@bike4mind/database/auth';
@@ -18,7 +26,7 @@ const handler = baseApi()
       { db: { organizations: organizationRepository, users: userRepository } }
     );
 
-    return res.json(toSafeUsers(users, 'same-org'));
+    return respond(res, safeUsersResponseSchema, toSafeUsers(users, 'same-org'));
   })
   .post(async (req: Request<{}, {}, { name: string; email: string; level: string }, { id?: string }>, res) => {
     const { id: userId } = req.user;
@@ -55,7 +63,7 @@ const handler = baseApi()
       { ability: req.ability }
     );
 
-    return res.json(toSafeUser(newMember, 'same-org'));
+    return respond(res, safeUserResponseSchema, toSafeUser(newMember, 'same-org'));
   })
   .delete(async (req, res) => {
     // Transaction: org-membership removal and clearing the user's organizationId must

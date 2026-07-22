@@ -7,6 +7,7 @@ import {
   USER_SECRET_FIELDS,
   USER_SUBFIELD_REDACTED_FIELDS,
 } from './toSafeUser';
+import { safeUserResponseSchema, safeUsersResponseSchema } from '../schemas/user';
 
 // A user carrying every category of secret. Not every required nested field is
 // populated, so cast once here rather than fighting the type in a fixture.
@@ -243,5 +244,41 @@ describe('redactUserSecretsForSelf', () => {
     for (const f of USER_SECRET_FIELDS) {
       if (!rebuilt.has(f)) expect(f in self).toBe(false);
     }
+  });
+});
+
+// RFC #483: toSafeUser is the serializer; safeUserResponseSchema is the response
+// contract respond() enforces. These must stay in lockstep -- every serializer
+// output must satisfy the schema, so a schema that's too strict can't silently 500
+// a live endpoint.
+describe('toSafeUser <-> safeUserResponseSchema contract', () => {
+  it.each(['public', 'same-org', 'self'] as const)('%s scope output parses against the schema', scope => {
+    const safe = toSafeUser(fullUser, scope);
+    expect(() => safeUserResponseSchema.parse(safe)).not.toThrow();
+  });
+
+  it('the array schema accepts toSafeUsers output', () => {
+    const safe = toSafeUsers([fullUser, fullUser], 'same-org');
+    expect(() => safeUsersResponseSchema.parse(safe)).not.toThrow();
+  });
+
+  it('strips fields not in the schema (defense-in-depth for a raw doc)', () => {
+    // Feed the schema a raw-ish object carrying a secret; parse must drop it.
+    const parsed = safeUserResponseSchema.parse({
+      id: 'u1',
+      name: 'Jane Doe',
+      username: 'jane',
+      photoUrl: null,
+      password: 'BCRYPT-HASH',
+      stripeCustomerId: 'cus_SECRET',
+    });
+    expect(parsed).not.toHaveProperty('password');
+    expect(parsed).not.toHaveProperty('stripeCustomerId');
+    expect(JSON.stringify(parsed)).not.toContain('cus_SECRET');
+  });
+
+  it('fails loud when a required field is missing or the wrong type', () => {
+    expect(() => safeUserResponseSchema.parse({ id: 'u1', username: 'jane' })).toThrow();
+    expect(() => safeUserResponseSchema.parse({ id: 1, name: 'J', username: 'j', photoUrl: null })).toThrow();
   });
 });
