@@ -208,6 +208,7 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
     'tool_usage',
     'completion_api_usage',
     'speech_to_text_usage',
+    'text_to_speech_usage',
   ];
 
   it('counts every AI usage type', async () => {
@@ -215,7 +216,9 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
 
     const rows = await creditTransactionRepository.sourceUsageForOwner(ORG, CreditHolderType.Organization);
 
-    expect(rows).toMatchObject([{ source: 'web', requests: EXPECTED_AI_USAGE_TYPES.length, creditsSpent: 80 }]);
+    expect(rows).toMatchObject([
+      { source: 'web', requests: EXPECTED_AI_USAGE_TYPES.length, creditsSpent: EXPECTED_AI_USAGE_TYPES.length * 10 },
+    ]);
   });
 
   it('breaks ties on source so equal-spend buckets keep a stable order', async () => {

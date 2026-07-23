@@ -107,8 +107,8 @@ export type OpenAIImageStyle = z.infer<typeof OpenAIImageStyleSchema>;
  * same-provider, same-modality replacement.
  */
 export const LEGACY_IMAGE_MODEL_MAP: Record<string, (typeof ALL_IMAGE_MODELS)[number]> = {
-  'dall-e-3': ImageModels.GPT_IMAGE_1,
-  'dall-e-2': ImageModels.GPT_IMAGE_1,
+  'dall-e-3': ImageModels.GPT_IMAGE_2,
+  'dall-e-2': ImageModels.GPT_IMAGE_2,
   'flux-dev': ImageModels.FLUX_PRO_1_1, // removed model -> live BFL standard
   'grok-2-image-1212': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // original xAI image id -> current id
   'grok-2-image': ImageModels.GROK_IMAGINE_IMAGE_QUALITY, // intermediate xAI image id -> current id

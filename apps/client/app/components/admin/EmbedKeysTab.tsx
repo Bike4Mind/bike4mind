@@ -22,6 +22,7 @@ import {
   Option,
   Select,
   Stack,
+  Switch,
   Table,
   Tooltip,
   Typography,
@@ -49,6 +50,8 @@ import {
   ModellessAgentAlert,
   MODELLESS_AGENT_WARNING,
 } from '@client/app/components/common/ModellessAgentWarning';
+import { useEntitlementGate } from '@client/app/hooks/useEntitlementGate';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
@@ -145,9 +148,9 @@ interface EmbedKeyFormState {
 
 /**
  * Trim branding to undefined when every field is blank, so we never persist an
- * empty object. `hideBranding` is preserved verbatim: the form doesn't expose it
- * (plan-gated, Phase D #572), but it can already be set on a stored key, and a
- * full-replace save must not silently drop it.
+ * empty object. `hideBranding` is preserved verbatim: the toggle only renders
+ * for whitelabel-entitled viewers, so for everyone else it rides through from
+ * the stored key untouched - a full-replace save must not silently drop it.
  */
 function normalizeBranding(branding: IEmbedBranding): IEmbedBranding | undefined {
   const displayName = branding.displayName?.trim() || undefined;
@@ -175,6 +178,12 @@ function EmbedKeyFormFields({
   onChange: (form: EmbedKeyFormState) => void;
 }) {
   const { data: agents, isLoading: agentsLoading } = useGetAgents();
+  // Viewer-scoped and UX-only: it decides whether to OFFER the toggle, while the
+  // serve route enforces on the key owner's plan and the write route strips an
+  // unentitled elevation. `pending` renders like `denied` (no spinner flash in
+  // an already-open modal). Known asymmetry: this gate bypasses for developers,
+  // the server gates do not - a dev's toggle save is stripped server-side.
+  const whitelabelGate = useEntitlementGate(EMBED_WHITELABEL_ENTITLEMENT_KEY);
 
   // Advisory only. An agent the viewer cannot see (or beyond the list's first
   // page) shows no warning - same degradation as the Select itself; the embed
@@ -243,10 +252,26 @@ function EmbedKeyFormFields({
               />
             </FormControl>
           </Stack>
-          <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-            How the widget presents itself on the host site. Hiding Bike4Mind branding is plan-gated and configured
-            separately.
-          </Typography>
+          {whitelabelGate.state === 'satisfied' ? (
+            <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
+              <Box>
+                <FormLabel>Hide Bike4Mind branding</FormLabel>
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  Removes the powered-by footer. Applied only when this key&apos;s plan includes white-label - the
+                  server enforces it per key owner.
+                </Typography>
+              </Box>
+              <Switch
+                checked={form.branding.hideBranding ?? false}
+                onChange={e => onChange({ ...form, branding: { ...form.branding, hideBranding: e.target.checked } })}
+                slotProps={{ input: { 'data-testid': 'embed-key-branding-hide' } }}
+              />
+            </FormControl>
+          ) : (
+            <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+              How the widget presents itself on the host site. Hiding Bike4Mind branding requires the white-label plan.
+            </Typography>
+          )}
         </Stack>
       </Box>
     </>

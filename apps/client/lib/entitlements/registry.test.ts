@@ -266,6 +266,13 @@ describe('allKnownEntitlementKeys', () => {
     const known = allKnownEntitlementKeys();
     expect(new Set(known).size).toBe(known.length);
   });
+
+  // Deleting the embed-whitelabel grant row silently un-gates nothing (the key
+  // simply stops being grantable), so pin its presence and grant path explicitly.
+  it('includes the embed whitelabel key with its comp-tag grant path', () => {
+    expect(KNOWN_ENTITLEMENT_KEYS).toContain('embed:whitelabel');
+    expect(grantTagForEntitlement('embed:whitelabel')).toBe('embed-whitelabel');
+  });
 });
 
 describe('grantTagForEntitlement', () => {

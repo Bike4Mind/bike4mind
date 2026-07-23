@@ -94,4 +94,20 @@ describe('userApiKeyService - updateEmbedKey', () => {
     ).rejects.toThrow(/normalized https origin/);
     expect(repo.update).not.toHaveBeenCalled();
   });
+
+  // Branding format validation (shared EmbedBrandingSchema): removing the schema
+  // from updateEmbedKeySchema lets any of these persist.
+  it.each([
+    ['a javascript: logo URL', { logoUrl: 'javascript:alert(1)' }],
+    ['an http: logo URL', { logoUrl: 'http://example.com/logo.png' }],
+    ['a non-hex primaryColor', { primaryColor: 'red;}body{background:url(//evil)' }],
+    ['an overlong displayName', { displayName: 'a'.repeat(65) }],
+  ])('rejects branding with %s', async (_label, branding) => {
+    const repo = makeRepo(embedKey());
+
+    await expect(
+      updateEmbedKey('user1', { keyId: 'key-1', branding }, { db: { userApiKeys: repo } })
+    ).rejects.toThrow();
+    expect(repo.update).not.toHaveBeenCalled();
+  });
 });

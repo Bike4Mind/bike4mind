@@ -1,1 +1,1 @@
-export { AuthTokenGeneratorService, isTokenVersionCurrent } from '@bike4mind/auth';
+export { AuthTokenGeneratorService, isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/auth';

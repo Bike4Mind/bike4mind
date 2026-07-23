@@ -32,8 +32,7 @@ function mountWidget(config: EmbedWidgetConfig = CONFIG): void {
   document.body.innerHTML = bodyInner;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).__B4M_EMBED__ = {
-    embedKey: config.embedKey,
-    agentId: config.agentId,
+    ...config,
     sessionPath: '/api/embed/session',
     chatPath: '/api/embed/chat',
   };
@@ -114,5 +113,48 @@ describe('embed widget runtime (real IIFE in jsdom)', () => {
 
     await vi.waitFor(() => expect(chatBody).not.toBe(''));
     expect(new TextEncoder().encode(chatBody).length).toBeLessThan(1_000_000);
+  });
+
+  it('renders an https logo image in the header with the title as alt text', () => {
+    mountWidget({ ...CONFIG, displayName: 'Acme Support', logoUrl: 'https://logos.example/acme.png' });
+    const logo = document.querySelector('#b4m-header img#b4m-logo') as HTMLImageElement;
+    expect(logo).toBeTruthy();
+    expect(logo.src).toBe('https://logos.example/acme.png');
+    expect(logo.alt).toBe('Acme Support');
+    expect(document.querySelector('#b4m-header span')?.textContent).toBe('Acme Support');
+  });
+
+  it('removes the logo from the header when it fails to load', () => {
+    mountWidget({ ...CONFIG, logoUrl: 'https://logos.example/broken.png' });
+    const logo = document.getElementById('b4m-logo') as HTMLImageElement;
+    expect(logo).toBeTruthy();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (logo as any).onerror();
+    expect(document.getElementById('b4m-logo')).toBeNull();
+  });
+
+  it.each([['javascript:alert(1)'], ['http://logos.example/acme.png'], ['//logos.example/acme.png']])(
+    'renders no logo for a non-https logoUrl (%s) even if it reached the config',
+    logoUrl => {
+      mountWidget({ ...CONFIG, logoUrl });
+      expect(document.getElementById('b4m-logo')).toBeNull();
+    }
+  );
+
+  it('renders the header title without a logo when no logoUrl is configured', () => {
+    mountWidget({ ...CONFIG, displayName: 'Plain' });
+    expect(document.getElementById('b4m-logo')).toBeNull();
+    expect(document.querySelector('#b4m-header span')?.textContent).toBe('Plain');
+  });
+
+  it('renders the footer only when a poweredByLabel is present', () => {
+    mountWidget({ ...CONFIG, poweredByLabel: 'Powered by Bike4Mind' });
+    expect(document.getElementById('b4m-footer')?.textContent).toBe('Powered by Bike4Mind');
+
+    document.body.innerHTML = '';
+    mountWidget(CONFIG);
+    // The server omitting the label IS the hide-branding transport; the widget
+    // must render nothing rather than a fallback.
+    expect(document.getElementById('b4m-footer')?.textContent).toBe('');
   });
 });

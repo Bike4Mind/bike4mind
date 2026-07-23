@@ -210,6 +210,18 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
     expect(repo.create).not.toHaveBeenCalled();
   });
 
+  // Branding format validation (shared EmbedBrandingSchema): removing the schema
+  // from createUserApiKeySchema lets any of these mint.
+  it.each([
+    ['a javascript: logo URL', { logoUrl: 'javascript:alert(1)' }],
+    ['a data: logo URL', { logoUrl: 'data:image/png;base64,xx' }],
+    ['a non-hex primaryColor', { primaryColor: 'rgb(0,0,0)' }],
+    ['an overlong displayName', { displayName: 'a'.repeat(65) }],
+  ])('rejects branding with %s', async (_label, branding) => {
+    await expect(createUserApiKey('user1', { ...embedParams, branding }, adapters())).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
   it('rejects more than EMBED_ORIGINS_MAX origins', async () => {
     const tooMany = Array.from({ length: 6 }, (_, i) => `https://site${i}.example.com`);
     await expect(createUserApiKey('user1', { ...embedParams, allowedOrigins: tooMany }, adapters())).rejects.toThrow();

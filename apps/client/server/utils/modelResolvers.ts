@@ -48,11 +48,11 @@ export const getApiKeyTypeFromBackend = (backend: ModelBackend): ApiKeyType | nu
  * Get default image model with fallback priority
  */
 export function getDefaultImageModel(models: ModelInfo[]): ModelInfo | undefined {
-  // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_1 -> any image model
+  // Priority order: FLUX_PRO_1_1 -> FLUX_KONTEXT_PRO -> GPT_IMAGE_2 -> any image model
   return (
     models.find(m => m.id === 'flux-pro-1.1') ||
     models.find(m => m.id === 'flux-kontext-pro') ||
-    models.find(m => m.id === 'gpt-image-1') ||
+    models.find(m => m.id === 'gpt-image-2') ||
     models.find(m => m.type === 'image')
   );
 }

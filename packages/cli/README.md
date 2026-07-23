@@ -401,6 +401,66 @@ b4m mcp serve --http --port 7000     # stateless streamable HTTP at http://127.0
 
 Auth precedence is `--api-key` > `B4M_API_KEY` > the stored login; the endpoint is `B4M_API_URL` > `--api-url` > the configured backend. Tool *listing* needs no credentials; tool *calls* authenticate. Prefer `B4M_API_KEY` over `--api-key` (a flag value shows up in process listings). HTTP mode binds loopback only (`127.0.0.1`, `/mcp` path) and has no per-request auth, so do not expose it off-host. The advertised scopes are the recommended key configuration, not per-route hard gates. See [Serve Bike4Mind as an MCP server](../../BIKE4MIND_CLI.md#serve-bike4mind-as-an-mcp-server-b4m-mcp-serve) for the Claude Desktop config and details.
 
+## Plugins
+
+The CLI can load external feature modules at runtime. A plugin is an npm package that adds tools, a system-prompt section, slash commands, and (optionally) WebSocket handlers to the interactive session, without any change to the CLI itself.
+
+```bash
+b4m plugin add @someone/b4m-plugin-foo     # install from npm
+b4m plugin add github:user/b4m-plugin-foo  # install from GitHub
+b4m plugin add file:/path/to/local/plugin  # install a local directory (development/QA)
+b4m plugin list                            # show installed plugins and their state
+b4m plugin remove foo                      # uninstall and disable
+```
+
+Plugins install to `~/.bike4mind/plugins/` and are gated by a `features` toggle in your config: `add` enables it for you, and every installed plugin also shows up automatically in the `/config` editor. A newly installed plugin loads the next time you start `b4m`; toggling an already-installed plugin in `/config` hot-reloads it in place.
+
+### Writing a plugin
+
+A plugin declares itself with a `b4m-plugin` field in its `package.json`:
+
+```json
+{
+  "name": "@someone/b4m-plugin-foo",
+  "type": "module",
+  "b4m-plugin": { "entry": "./dist/index.js", "configKey": "foo" }
+}
+```
+
+`entry` (required) is the module the CLI imports, resolved inside the package. `configKey` (optional, defaults to the package name) is the `features` key that gates the plugin.
+
+The entry default-exports a factory. It receives a context (currently `{ logger }`, with `debug/info/warn/error` methods that write to the CLI debug log) and returns the module object:
+
+```js
+export default ctx => ({
+  name: 'foo',                       // unique module name
+  description: 'What this plugin does',
+  getTools: () => [
+    {
+      toolFn: async args => 'result',   // invoked when the agent calls the tool
+      toolSchema: {
+        name: 'foo_tool',
+        description: 'What the tool does',
+        parameters: { type: 'object', properties: {} },  // JSON Schema
+      },
+    },
+  ],
+  getSystemPromptSection: () => 'Extra system-prompt text (or an empty string)',
+  getCommands: () => [{ name: 'foo', description: '...', execute: args => {} }],  // optional
+  registerWsHandlers: wsManager => {},  // optional
+  dispose: () => {},                    // optional, runs on exit/disable
+});
+```
+
+Tool objects are written out structurally as shown - plugin packages cannot import `@bike4mind/*` packages at runtime (those are bundled into the CLI binary and are not on npm in a compatible form). See `test/fixtures/b4m-plugin-example/` in this package for a complete working plugin.
+
+### Limitations and trust
+
+- **Plugins run in-process with your privileges.** Installing one runs its npm install scripts, and enabling it executes its code inside the CLI, same as configuring an MCP server command. Only install plugins you trust.
+- **Interactive mode only.** Headless (`b4m -p`) and ACP sessions do not load feature modules or plugins today.
+- **Downgrade caveat:** CLI versions without plugin support strip plugin keys from the config `features` map on their next save; re-enable after upgrading again.
+- A plugin that fails to load (bad manifest, import error, malformed tools) is skipped with a warning at startup - it never blocks the CLI. `b4m plugin list` shows the reason.
+
 ## Git-Aware Code Search
 
 The CLI includes a `recent_changes` tool that uses git history to find recently modified files. This significantly speeds up debugging by narrowing the search space to recently changed code.

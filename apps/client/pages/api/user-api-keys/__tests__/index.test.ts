@@ -52,6 +52,11 @@ vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
 vi.mock('@bike4mind/database', () => ({ organizationRepository: { findIdsAdministeredBy } }));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent: vi.fn().mockResolvedValue(undefined) }));
 
+// The real gateEmbedBrandingWrite runs; only its entitlement seam is stubbed,
+// so these tests exercise the actual strip logic through the route.
+const requestHasEntitlement = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@server/entitlements', () => ({ requestHasEntitlement }));
+
 import '@pages/api/user-api-keys/index';
 
 function post(body: unknown) {
@@ -147,6 +152,88 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     });
     await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/must be an array/i);
     expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  // The service is mocked, so these prove the ROUTE screens branding itself
+  // (validateEmbedBranding) rather than relying on the service re-validation.
+  it('(e) rejects branding with a javascript: logo URL and never calls the service', async () => {
+    const { req, res } = post({
+      name: 'bad',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      branding: { logoUrl: 'javascript:alert(1)' },
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  it('(e2) rejects branding with a non-hex primaryColor and never calls the service', async () => {
+    const { req, res } = post({
+      name: 'bad',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      branding: { primaryColor: 'rgb(0,0,0)' },
+    });
+    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(createUserApiKey).not.toHaveBeenCalled();
+  });
+
+  describe('whitelabel write gate (epic #41 Phase D)', () => {
+    const mintBody = (branding: Record<string, unknown>) => ({
+      name: 'widget',
+      scopes: ['embed:chat'],
+      agentId: 'agent-1',
+      branding,
+    });
+
+    beforeEach(() => {
+      requestHasEntitlement.mockReset();
+      requestHasEntitlement.mockResolvedValue(false);
+    });
+
+    it('strips hideBranding:true for an unentitled caller, keeping other fields', async () => {
+      const { req, res } = post(mintBody({ displayName: 'Acme', hideBranding: true }));
+      await mockRefs.postHandler!(req, res);
+      expect(res._getStatusCode()).toBe(201);
+      expect(createUserApiKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { displayName: 'Acme', hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('preserves hideBranding:true for an entitled caller', async () => {
+      requestHasEntitlement.mockResolvedValue(true);
+      const { req, res } = post(mintBody({ hideBranding: true }));
+      await mockRefs.postHandler!(req, res);
+      expect(createUserApiKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: true } }),
+        expect.anything()
+      );
+    });
+
+    it('strips hideBranding when the entitlement lookup rejects (fail closed)', async () => {
+      requestHasEntitlement.mockRejectedValue(new Error('lookup down'));
+      const { req, res } = post(mintBody({ hideBranding: true }));
+      await mockRefs.postHandler!(req, res);
+      expect(createUserApiKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('never consults the entitlement for branding without a hideBranding elevation', async () => {
+      const { req, res } = post(mintBody({ primaryColor: '#336699' }));
+      await mockRefs.postHandler!(req, res);
+      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      expect(createUserApiKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { primaryColor: '#336699' } }),
+        expect.anything()
+      );
+    });
   });
 });
 

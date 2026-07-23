@@ -99,6 +99,7 @@ export const GenericDeductReasons = [
   'admin_adjustment',
   'refund_adjustment',
   'optihashi_reservation',
+  'optihashi_cost_chargeup',
   'credit_expiry',
 ] as const;
 
@@ -189,6 +190,12 @@ export const SpeechToTextUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
 });
 
+export const TextToSpeechUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('text_to_speech_usage'),
+  model: z.string(),
+  sessionId: z.string(),
+});
+
 export const TransferCreditTransaction = BaseCreditTransaction.extend({
   type: z.literal('transfer_credit'),
   recipientId: z.string(),
@@ -219,6 +226,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   ToolUsageTransaction,
   CompletionApiUsageTransaction,
   SpeechToTextUsageTransaction,
+  TextToSpeechUsageTransaction,
   TransferCreditTransaction,
   ReceivedCreditTransaction,
 ]);
@@ -243,6 +251,7 @@ export type IRealtimeVoiceUsageTransaction = z.infer<typeof RealtimeVoiceUsageTr
 export type IToolUsageTransaction = z.infer<typeof ToolUsageTransaction>;
 export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTransaction>;
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
+export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
 export type ITransferCreditTransaction = z.infer<typeof TransferCreditTransaction>;
 export type IReceivedCreditTransaction = z.infer<typeof ReceivedCreditTransaction>;
 
@@ -273,6 +282,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'tool_usage',
   'completion_api_usage',
   'speech_to_text_usage',
+  'text_to_speech_usage',
   'transfer_credit',
   'generic_deduct',
 ] as const;

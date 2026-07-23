@@ -18,6 +18,7 @@ import { MessageItem } from './MessageItem';
 import { useCliStore, selectLiveSubagentTokens, selectLiveSubagentCredits } from '../store';
 import { useShallow } from 'zustand/react/shallow';
 import type { CliConfig } from '../storage';
+import type { PluginDescriptor } from '../plugins/PluginStore';
 import { ChatModels, type ModelInfo } from '@bike4mind/common';
 import type { McpManager } from '../utils/mcpAdapter';
 import { processFileReferences, hasFileReferences } from '../utils/processFileReferences.js';
@@ -36,6 +37,7 @@ interface AppProps {
   commands?: CommandDefinition[]; // Merged built-in + custom commands
   config?: CliConfig;
   availableModels?: ModelInfo[];
+  pluginDescriptors?: PluginDescriptor[];
   onSaveConfig?: (config: CliConfig) => Promise<void>;
   prefillInput?: string; // Pre-fill input (e.g., from rewind)
   onPrefillConsumed?: () => void; // Called after prefill is applied
@@ -55,6 +57,7 @@ export function App({
   commands = [],
   config,
   availableModels = [],
+  pluginDescriptors = [],
   onSaveConfig,
   prefillInput,
   onPrefillConsumed,
@@ -185,6 +188,7 @@ export function App({
           <ConfigEditor
             config={config}
             availableModels={availableModels}
+            pluginDescriptors={pluginDescriptors}
             onSave={onSaveConfig}
             onClose={() => setShowConfigEditor(false)}
           />
