@@ -146,6 +146,18 @@ describe('POST /api/ai/tts', () => {
     expect(mocks.deductTtsCredits).toHaveBeenCalledTimes(1);
   });
 
+  it('forwards languageCode to the provider as the language option', async () => {
+    const { promise } = run({ text: '2', provider: 'elevenlabs', languageCode: 'en' });
+    await promise;
+    expect(mocks.synthesize).toHaveBeenCalledWith('2', expect.objectContaining({ language: 'en' }));
+  });
+
+  it('passes language as undefined when languageCode is omitted (preserves default behavior)', async () => {
+    const { promise } = run({ text: 'hi' });
+    await promise;
+    expect(mocks.synthesize).toHaveBeenCalledWith('hi', expect.objectContaining({ language: undefined }));
+  });
+
   it('does not bill a caller without a resolved user id', async () => {
     const { promise } = run({ text: 'hi' }, {});
     await promise.catch(() => undefined);
