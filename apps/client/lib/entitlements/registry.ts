@@ -48,6 +48,24 @@ export const BASE_ENTITLEMENT_KEY = 'base';
 export const EMBED_WHITELABEL_ENTITLEMENT_KEY: EntitlementKey = 'embed:whitelabel';
 
 /**
+ * Entitlements whose real enforcement is OWNER-scoped through the raw
+ * `getUserEntitlements` resolver and so honors NEITHER the admin nor the
+ * developer gate bypass - a literal grant (tag / subscription / domain) is
+ * required. The admin Product Access resolver must therefore NOT attribute
+ * these to `admin-bypass` / `developer-bypass`, or it reports access the gate
+ * won't actually confer. Must stay in sync with the enforcement side
+ * (`server/entitlements/embedKeyEntitlement.ts` -> `embedKeyOwnerHasEntitlement`).
+ * `embed:whitelabel` is the only such key today; the OptiHashi/Overwatch/Bob/Pi
+ * gates deliberately DO honor the bypass, so they are not members.
+ */
+export const BYPASS_EXEMPT_ENTITLEMENTS: ReadonlySet<EntitlementKey> = new Set([EMBED_WHITELABEL_ENTITLEMENT_KEY]);
+
+/** Whether `key` is bypass-exempt (see `BYPASS_EXEMPT_ENTITLEMENTS`). Normalizes first. */
+export function isBypassExemptEntitlement(key: EntitlementKey): boolean {
+  return BYPASS_EXEMPT_ENTITLEMENTS.has(normalizeTag(key));
+}
+
+/**
  * A product's Stripe price ids, authored per-stage and captured BEFORE the
  * `isTestMode` resolution. The ternary resolves to ONE id at module load
  * (test-mode in CI), which would hide the inactive stage's id from the
