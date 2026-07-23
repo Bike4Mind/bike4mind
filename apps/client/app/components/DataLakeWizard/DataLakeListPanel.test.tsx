@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within, fireEvent } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -230,6 +230,7 @@ describe('DataLakeListPanel - persistent Data Lakes info tooltip (#834)', () => 
   });
 
   it('shows a persistent info icon next to the header that reveals the RAG explanation on hover', async () => {
+    const user = userEvent.setup();
     render(
       <Wrapper>
         <DataLakeListPanel />
@@ -241,7 +242,7 @@ describe('DataLakeListPanel - persistent Data Lakes info tooltip (#834)', () => 
     expect(trigger).toBeInTheDocument();
     expect(trigger).toHaveAttribute('aria-label', 'Help: Data Lakes');
 
-    fireEvent.mouseOver(trigger);
+    await user.hover(trigger);
     expect(
       await screen.findByText(/curated knowledge base the AI grounds its answers in \(RAG\)/i)
     ).toBeInTheDocument();
