@@ -145,7 +145,7 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
   // a small follow-up if the store ever holds many replays at once.
 
   return (
-    <Box data-testid={`reasoning-disclosure-${agentExecutionId}`} sx={{ mt: 0.5 }}>
+    <Box data-testid={`reasoning-disclosure-${agentExecutionId}`}>
       <Button
         size="sm"
         variant="plain"
@@ -153,7 +153,35 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
         startDecorator={<PsychologyOutlinedIcon fontSize="small" />}
         endDecorator={expanded ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
         onClick={() => setExpanded(v => !v)}
-        sx={{ '--Button-gap': '0.4rem', fontWeight: 400, color: 'text.tertiary' }}
+        sx={theme => ({
+          '--Button-gap': '0.4rem',
+          minHeight: 0,
+          fontWeight: 400,
+          fontSize: '13px',
+          color: 'text.primary', // "Show reasoning" label
+          '& .MuiButton-startDecorator svg': { color: 'text.tertiary' }, // brain icon
+          '& .MuiButton-endDecorator svg': { color: 'text.tertiary' }, // chevron (default)
+          '&:hover .MuiButton-endDecorator svg': { color: 'text.primary' }, // chevron on hover
+          // Collapsed: the button IS the framed card (surface2 bg + outlined
+          // border + 8px radius, 12/16 padding), sized to its content, so the
+          // whole card is the click target. Hover uses the app's default row
+          // hover (notebooklist.hoverBg, like the iteration frames). Set via the
+          // plain-variant CSS vars since Joy ignores a plain backgroundColor.
+          // Expanded: bare, no padding.
+          ...(expanded
+            ? { '--Button-paddingInline': '0px', py: 0 }
+            : {
+                width: 'fit-content',
+                py: 1.5, // 12px top/bottom
+                px: 2, // 16px sides
+                border: '1px solid',
+                borderColor: 'neutral.outlinedBorder',
+                borderRadius: '8px',
+                backgroundColor: 'background.surface2',
+                '--variant-plainHoverBg': theme.palette.notebooklist.hoverBg,
+                '--variant-plainActiveBg': theme.palette.notebooklist.hoverBg,
+              }),
+        })}
       >
         {expanded ? 'Hide reasoning' : 'Show reasoning'}
       </Button>
