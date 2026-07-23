@@ -60,6 +60,10 @@ export async function resetApiKeyRateLimit(keyId: string): Promise<void> {
 export interface RateLimitUsage {
   minute: number;
   day: number;
+  /** Epoch seconds when the current minute window ends; undefined when no window is open (count 0). */
+  minuteResetAt?: number;
+  /** Epoch seconds when the current day window ends; undefined when no window is open (count 0). */
+  dayResetAt?: number;
 }
 
 /**
@@ -75,15 +79,30 @@ export async function getApiKeyRateLimitUsage(keyId: string): Promise<RateLimitU
     cacheRepository.findByKey(minuteKey),
     cacheRepository.findByKey(dayKey),
   ]);
-  return { minute: readCounterValue(minuteDoc), day: readCounterValue(dayDoc) };
+  const minute = readCounter(minuteDoc);
+  const day = readCounter(dayDoc);
+  return {
+    minute: minute.count,
+    day: day.count,
+    minuteResetAt: minute.resetAt,
+    dayResetAt: day.resetAt,
+  };
 }
 
-function readCounterValue(doc: { result?: unknown; expiresAt?: Date } | null): number {
+/**
+ * Read a counter doc's live count and window-end (epoch seconds). A missing,
+ * expired-but-uncleaned, or malformed doc reads as count 0 with no reset - the
+ * window is effectively closed, so there is nothing to reset.
+ */
+function readCounter(doc: { result?: unknown; expiresAt?: Date } | null): { count: number; resetAt?: number } {
   if (!doc || (doc.expiresAt && doc.expiresAt.getTime() <= Date.now())) {
-    return 0;
+    return { count: 0 };
   }
   const count = (doc.result as { count?: unknown } | undefined)?.count;
-  return typeof count === 'number' ? count : 0;
+  if (typeof count !== 'number') {
+    return { count: 0 };
+  }
+  return { count, resetAt: doc.expiresAt ? Math.floor(doc.expiresAt.getTime() / 1000) : undefined };
 }
 
 /**

@@ -4,6 +4,18 @@ import { Key, Warning } from '@mui/icons-material';
 import { useGetApiUsage } from '@client/app/hooks/data/admin';
 import type { ApiKeyUsageItem } from '@client/app/hooks/data/admin';
 
+/** Short "3h 12m" / "45m" / "30s" until an epoch-seconds reset; empty if absent or already past. */
+const formatReset = (resetAtSeconds?: number): string => {
+  if (!resetAtSeconds) return '';
+  const remainingSeconds = resetAtSeconds - Math.floor(Date.now() / 1000);
+  if (remainingSeconds <= 0) return '';
+  const hours = Math.floor(remainingSeconds / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m`;
+  return `${remainingSeconds}s`;
+};
+
 const ApiKeyStatusTab: React.FC = () => {
   const theme = useTheme();
   const apiUsage = useGetApiUsage();
@@ -95,7 +107,10 @@ const ApiKeyStatusTab: React.FC = () => {
                   </Typography>
                 </Stack>
                 <Typography level="body-xs" sx={{ mt: 0.5, color: theme.palette.text.secondary }}>
-                  Today: {key.usage.requestsToday} requests · Total: {key.usage.totalRequests}
+                  Today: {key.liveUsage.day.toLocaleString()} / {key.rateLimit.requestsPerDay.toLocaleString()} requests
+                  {key.liveUsage.day > 0 && formatReset(key.liveUsage.dayResetAt)
+                    ? ` · resets in ${formatReset(key.liveUsage.dayResetAt)}`
+                    : ''}
                 </Typography>
                 {hasAlerts && (
                   <Box sx={{ mt: 1, display: 'flex', flexDirection: 'column', gap: 0.5 }}>
