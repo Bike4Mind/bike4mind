@@ -1,6 +1,6 @@
 import type { Logger } from '@bike4mind/observability';
-import type { ImageModerationService } from '@bike4mind/utils';
-import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils';
+import type { ImageModerationService } from '@bike4mind/utils/imageModeration';
+import { ImageModerationBlockedError, UnsupportedImageFormatError } from '@bike4mind/utils/imageModeration';
 import type { ImageModerationIncident } from '@bike4mind/common';
 import { SupportedFabFileMimeTypes } from '@bike4mind/common';
 import { fileTypeFromBuffer } from 'file-type';

@@ -20,8 +20,10 @@ const handler = baseApi()
     } else {
       const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
       let previousSecret = undefined;
-      // If JWT_SECRET was just recently renewed within 24 hours, allow the user to continue using the old key
-      if (dayjs(secretRotation?.rotatedAt).isBefore(dayjs().add(1, 'day'))) {
+      // Accept the previous key only when JWT_SECRET was rotated within the last 24 hours.
+      // Mirrors auth.ts / refreshToken.ts; the prior isBefore(now + 1 day) was true for any
+      // past rotation, leaving the retired secret valid indefinitely on this path.
+      if (dayjs(secretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
         previousSecret = secretRotation?.previousKey;
       }
       const decoded = authTokenGenerator.verifyToken(accessToken, previousSecret);

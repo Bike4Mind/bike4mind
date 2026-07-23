@@ -23,7 +23,7 @@ import {
   IUsageEventRepository,
   IOrganizationRepository,
 } from '@bike4mind/common';
-import { generateTools } from '../llm';
+import { b4mTools, generateTools } from '../llm';
 
 interface GenerateAndSendProactiveMessageAdapters {
   config: ISessionAgentConfigDocument;
@@ -131,7 +131,7 @@ export async function generateAndSendProactiveMessage({
       {},
       model,
       undefined, // imageProcessorLambdaName
-      undefined, // tools (defaults to b4mTools)
+      b4mTools, // tools: full server-side tool set
       undefined, // allowedDirectories
       undefined, // entitlementKeys
       session.id, // sessionId: attribute proactive-message tool spend to its session

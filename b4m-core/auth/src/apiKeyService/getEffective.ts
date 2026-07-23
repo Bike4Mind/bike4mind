@@ -8,7 +8,7 @@ import {
   GetMultipleApiKeysAdapters,
 } from './get';
 
-// Map providers to their demo key setting names
+// Map providers to their admin-configured fallback key setting names
 const DEMO_KEY_MAP: Partial<Record<ApiKeyType, IAdminSettings['settingName']>> = {
   [ApiKeyType.openai]: 'openaiDemoKey',
   [ApiKeyType.anthropic]: 'anthropicDemoKey',

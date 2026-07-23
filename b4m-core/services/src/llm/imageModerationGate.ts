@@ -1,5 +1,5 @@
 import { ImageModerationIncident as ImageModerationIncidentInput } from '@bike4mind/common';
-import { ImageModerationBlockedError, ImageModerationService } from '@bike4mind/utils';
+import { ImageModerationBlockedError, ImageModerationService } from '@bike4mind/utils/imageModeration';
 import { Logger } from '@bike4mind/observability';
 
 /**

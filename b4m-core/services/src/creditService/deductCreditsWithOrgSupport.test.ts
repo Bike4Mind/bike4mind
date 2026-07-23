@@ -278,6 +278,58 @@ describe('creditService - deductCreditsWithOrgSupport', () => {
         expect.any(Object)
       );
     });
+
+    it('should handle sound_effects_usage type (quest-less, questId omitted)', async () => {
+      const params: DeductCreditsParams = {
+        type: 'sound_effects_usage',
+        user: mockUser,
+        organization: null,
+        credits: 20,
+        sessionId: 'session1',
+        model: 'elevenlabs',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      const [calledWith] = mockSubtractCredits.mock.calls.at(-1)!;
+      expect(calledWith).toMatchObject({
+        type: 'sound_effects_usage',
+        ownerId: 'user1',
+        ownerType: CreditHolderType.User,
+        credits: 20,
+      });
+      // Quest-less: no questId key is forwarded for sound effects.
+      expect('questId' in calledWith).toBe(false);
+    });
+
+    it('should bill the org pool and track userDetails for org-billed sound effects', async () => {
+      const params: DeductCreditsParams = {
+        type: 'sound_effects_usage',
+        user: mockUser,
+        organization: mockOrganization,
+        credits: 20,
+        sessionId: 'session1',
+        model: 'elevenlabs',
+        source: 'api',
+      };
+
+      await deductCreditsWithOrgSupport(params, mockAdapters);
+
+      expect(mockOrgRepo.updateUserDetails).toHaveBeenCalledWith(
+        'org1',
+        'user1',
+        expect.objectContaining({ creditsDelta: 20 })
+      );
+      expect(mockSubtractCredits).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'sound_effects_usage',
+          ownerId: 'org1',
+          ownerType: CreditHolderType.Organization,
+        }),
+        expect.any(Object)
+      );
+    });
   });
 
   describe('error handling', () => {

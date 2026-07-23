@@ -10,6 +10,7 @@ import {
   RealtimeVoiceUsageTransaction,
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
+  SoundEffectsUsageTransaction,
   TextGenerationUsageTransaction,
   ToolUsageTransaction,
   TransferCreditTransaction,
@@ -56,6 +57,7 @@ export const SubtractCreditsSchema = z.discriminatedUnion('type', [
   CompletionApiUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   SpeechToTextUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   TextToSpeechUsageTransaction.omit({ createdAt: true, updatedAt: true }),
+  SoundEffectsUsageTransaction.omit({ createdAt: true, updatedAt: true }),
   TransferCreditTransaction.omit({ createdAt: true, updatedAt: true }),
 ]);
 
@@ -188,6 +190,17 @@ export async function subtractCredits(
       ownerType,
       credits: -Math.abs(credits),
       description: description || 'Text to speech usage',
+      metadata,
+      source,
+      model: params.model,
+      sessionId: params.sessionId,
+    });
+  } else if (type === 'sound_effects_usage') {
+    await db.creditTransactions.createTransaction('sound_effects_usage', {
+      ownerId,
+      ownerType,
+      credits: -Math.abs(credits),
+      description: description || 'Sound effects usage',
       metadata,
       source,
       model: params.model,

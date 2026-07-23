@@ -81,7 +81,8 @@ export function validateEmbedKeyOrigins(raw: string[] | undefined): EmbedOrigins
   return screenEmbedOrigins(raw);
 }
 
-export type EmbedBrandingResult = { ok: true; value: IEmbedBranding | undefined } | { ok: false; error: string; code: string };
+export type EmbedBrandingResult =
+  { ok: true; value: IEmbedBranding | undefined } | { ok: false; error: string; code: string };
 
 /**
  * Route-level screen for an embed key's branding write (epic #41 Phase D).
@@ -96,7 +97,11 @@ export function validateEmbedBranding(raw: unknown): EmbedBrandingResult {
   if (!parsed.success) {
     const first = parsed.error.issues[0];
     const field = first?.path.join('.') || 'branding';
-    return { ok: false, error: `Invalid branding: ${field}: ${first?.message ?? 'invalid'}`, code: 'EMBED_BRANDING_INVALID' };
+    return {
+      ok: false,
+      error: `Invalid branding: ${field}: ${first?.message ?? 'invalid'}`,
+      code: 'EMBED_BRANDING_INVALID',
+    };
   }
   return { ok: true, value: parsed.data };
 }
