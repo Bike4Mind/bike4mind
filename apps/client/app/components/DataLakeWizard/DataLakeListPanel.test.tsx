@@ -221,6 +221,34 @@ describe('DataLakeListPanel - EnableDataLakes gating', () => {
   });
 });
 
+describe('DataLakeListPanel - persistent Data Lakes info tooltip (#834)', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    useDataLakes.mockReset();
+    useDataLakes.mockReturnValue({ data: [], isLoading: false });
+  });
+
+  it('shows a persistent info icon next to the header that reveals the RAG explanation on hover', async () => {
+    const user = userEvent.setup();
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    // Always present next to the header - not a one-time dismissable callout.
+    const trigger = screen.getByTestId('field-tooltip-data-lake-panel');
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-label', 'Help: Data Lakes');
+
+    await user.hover(trigger);
+    expect(
+      await screen.findByText(/curated knowledge base the AI grounds its answers in \(RAG\)/i)
+    ).toBeInTheDocument();
+  });
+});
+
 describe('DataLakeListPanel - management affordances gate on canManage', () => {
   beforeEach(() => {
     isFeatureEnabled.mockReset();

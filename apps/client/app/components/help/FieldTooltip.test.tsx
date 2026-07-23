@@ -104,4 +104,16 @@ describe('FieldTooltip', () => {
 
     expect(screen.getByTestId('field-tooltip-credits')).toBeInTheDocument();
   });
+
+  it('merges a call-site sx into the wrapper (e.g. layout margin)', () => {
+    render(
+      <TestWrapper>
+        <FieldTooltip content="Help" data-testid="field-tooltip-sx" sx={{ marginBottom: '16px' }} />
+      </TestWrapper>
+    );
+
+    // The wrapper span is the trigger's parent; the sx margin must land on it.
+    const wrapper = screen.getByTestId('field-tooltip-sx').parentElement as HTMLElement;
+    expect(wrapper).toHaveStyle({ marginBottom: '16px' });
+  });
 });
