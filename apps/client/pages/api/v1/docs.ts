@@ -25,8 +25,8 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  * Known cosmetic quirk in a real browser: the app's PWA service worker (Serwist,
  * app/sw.ts) routes /api/* through NetworkOnly, and a Scalar-initiated fetch to
  * an /api/* deep-link can surface a benign `no-response` console error. The page
- * still renders and works; fixing the SW interaction is tracked separately (it
- * is app-wide infra, out of scope for this route).
+ * still renders and works; this is pre-existing app-wide SW infra, not caused by
+ * or addressed in this route.
  */
 
 const VENDORED_SCALAR_SRC = '/scalar/scalar.standalone.js';
