@@ -8,13 +8,13 @@ import FolderSharedIcon from '@mui/icons-material/FolderSharedOutlined';
 import SmartToyOutlinedIcon from '@mui/icons-material/SmartToyOutlined';
 import HubOutlinedIcon from '@mui/icons-material/HubOutlined';
 import TempleBuddhistOutlinedIcon from '@mui/icons-material/TempleBuddhistOutlined';
-import WaterOutlinedIcon from '@mui/icons-material/WaterOutlined';
 import CastleOutlinedIcon from '@mui/icons-material/CastleOutlined';
 import PublicOutlinedIcon from '@mui/icons-material/PublicOutlined';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import HelpCenterOutlinedIcon from '@mui/icons-material/HelpCenterOutlined';
 import { canAccessTavern } from '@bike4mind/common';
 import { premiumRoutes } from '@client/app/premium-generated/premiumRoutes.generated';
+import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useFeatureEnabled } from '@client/app/hooks/useFeatureEnabled';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { useUser } from '@client/app/contexts/UserContext';
@@ -161,8 +161,8 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
       ? [
           {
             key: 'datalakes',
-            label: t('sidenav.dataLakes', 'Data Lakes'),
-            icon: iconSlot(<WaterOutlinedIcon sx={{ fontSize: '18px' }} />),
+            label: t('sidenav.dataLakes', DATA_LAKES),
+            icon: iconSlot(<DataLakeIcon sx={{ fontSize: '18px' }} />),
             isActive: location.pathname.startsWith('/data-lakes'),
             onClick: () => {
               closeOnMobile();
