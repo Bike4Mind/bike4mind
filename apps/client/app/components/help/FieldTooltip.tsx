@@ -1,6 +1,7 @@
 import React from 'react';
 import { Tooltip, Typography, Box } from '@mui/joy';
 import type { TooltipProps } from '@mui/joy';
+import type { SxProps } from '@mui/joy/styles/types';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 
 export interface FieldTooltipProps {
@@ -20,6 +21,8 @@ export interface FieldTooltipProps {
   'data-testid'?: string;
   /** Optional className applied to the wrapper Box. */
   className?: string;
+  /** Extra styles merged into the wrapper Box (e.g. layout margins at a call site). */
+  sx?: SxProps;
 }
 
 /**
@@ -53,6 +56,7 @@ const FieldTooltip: React.FC<FieldTooltipProps> = ({
   ariaLabel,
   'data-testid': dataTestId,
   className,
+  sx,
 }) => {
   const effectiveAriaLabel = ariaLabel ?? (typeof label === 'string' ? `Help: ${label}` : 'Help');
   const tooltipId = React.useId();
@@ -107,7 +111,7 @@ const FieldTooltip: React.FC<FieldTooltipProps> = ({
     <Box
       component="span"
       className={className}
-      sx={{ display: 'inline-flex', alignItems: 'center', gap: hasLabel ? 0.5 : 0 }}
+      sx={{ display: 'inline-flex', alignItems: 'center', gap: hasLabel ? 0.5 : 0, ...sx }}
     >
       {hasLabel &&
         (typeof label === 'string' ? (
