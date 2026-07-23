@@ -2,7 +2,7 @@ import type { ToolDefinition } from '@bike4mind/services';
 import type { IOptiPlanState, IOptiPlanStep } from '@bike4mind/database';
 
 /** One planned sub-problem: its family and the short title the decomposition gave it. */
-export type PlanStep = IOptiPlanStep;
+type PlanStep = IOptiPlanStep;
 
 /**
  * The slice of the durable opti plan ledger this guard reads/writes. Derived from the persisted

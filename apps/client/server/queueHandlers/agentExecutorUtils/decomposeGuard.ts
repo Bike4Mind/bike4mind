@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '@bike4mind/services';
+import type { IOptiPlanState } from '@bike4mind/database';
 
 /**
  * Message returned when the opti loop tries to decompose a second time. It tells the
@@ -24,14 +25,14 @@ export const DECOMPOSE_ALREADY_DONE_MSG =
  *
  * State is carried on the durable opti plan ledger (`AgentExecution.optiPlanState`, #680) so it is
  * rehydrated on a continuation Lambda -- a re-plan is blocked even across a self-dispatch/resume.
- * The block requires BOTH `decomposeUsed` AND `steps.length > 0`: a first decompose that fails or
- * returns an unparseable success latches `decomposeUsed` with no captured plan, and gating on that
- * alone would durably poison the run (every retry redirected to a plan that never loaded). Requiring
- * a loaded plan lets those cases re-decompose while still blocking a genuine re-plan.
+ * The effective gate is `steps.length > 0` (a plan actually loaded): `decomposeUsed` is recorded but
+ * does not gate on its own, because a first decompose that fails or returns an unparseable success
+ * latches `decomposeUsed` with no captured plan. Requiring a loaded plan lets those cases
+ * re-decompose to recover while still blocking a genuine re-plan.
  */
 export function guardDecomposeOnce(
   tools: Record<string, ToolDefinition>,
-  state: { decomposeUsed: boolean; steps: readonly unknown[] },
+  state: Pick<IOptiPlanState, 'decomposeUsed' | 'steps'>,
   onBlocked?: () => void
 ): Record<string, ToolDefinition> {
   const raw = tools['optihashi_decompose'];
@@ -47,12 +48,11 @@ export function guardDecomposeOnce(
           ...inner,
           toolFn: (parameters?: unknown, apiKey?: string) => {
             // Block a repeat decompose ONLY once a plan actually loaded (steps captured by
-            // planCompletionGuard from a parseable result). Gating on `decomposeUsed` alone would,
-            // with the durable ledger (#680), permanently poison a run whose first decompose failed
-            // OR succeeded-but-unparseable: the flag would latch with steps=[] and every retry would
-            // get redirected to advance a plan that never loaded. Requiring steps>0 lets those cases
-            // re-decompose while still blocking a genuine re-plan.
-            if (state.decomposeUsed && state.steps.length > 0) {
+            // planCompletionGuard from a parseable result). A first decompose that fails or succeeds-
+            // but-unparseable captures no steps, so it stays re-runnable -- gating on the durable
+            // `decomposeUsed` flag alone (#680) would permanently redirect every retry to a plan that
+            // never loaded. `decomposeUsed` is still recorded (below) for the ledger's active check.
+            if (state.steps.length > 0) {
               onBlocked?.();
               return Promise.resolve(DECOMPOSE_ALREADY_DONE_MSG);
             }

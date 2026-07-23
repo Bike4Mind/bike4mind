@@ -86,7 +86,7 @@ import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
 import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
-import { rehydrateOptiPlanState, optiPlanActive } from './agentExecutorUtils/optiPlanLedger';
+import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1756,7 +1756,7 @@ async function processExecution(
           executionId,
           checkpoint,
           'continuing',
-          optiPlanActive(optiPlanState) ? optiPlanState : undefined
+          ledgerForWrite(optiPlanState)
         );
 
         // Publish to continuation queue
@@ -1889,7 +1889,7 @@ async function processExecution(
       await agentExecutionRepository.updateCheckpoint(
         executionId,
         iterationResult.checkpoint,
-        optiPlanActive(optiPlanState) ? optiPlanState : undefined
+        ledgerForWrite(optiPlanState)
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
 

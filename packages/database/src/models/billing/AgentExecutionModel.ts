@@ -112,7 +112,11 @@ export interface IOptiPlanStep {
  * Opti-only: absent on non-opti executions (no schema default).
  */
 export interface IOptiPlanState {
-  /** True once optihashi_decompose has run; blocks a repeat re-plan across continuations. */
+  /**
+   * True once optihashi_decompose has run (recorded for the ledger's active check). The re-plan
+   * block itself keys on a LOADED plan (`steps.length > 0`), not this flag alone -- a failed or
+   * unparseable first decompose sets this with no captured steps and must stay re-runnable.
+   */
   decomposeUsed: boolean;
   /** Ordered plan captured from the decompose result (empty until a plan loads). */
   steps: IOptiPlanStep[];
@@ -456,7 +460,10 @@ const OptiPlanStateSchema = new mongoose.Schema(
     solved: { type: mongoose.Schema.Types.Mixed, default: {} },
     results: { type: mongoose.Schema.Types.Mixed, default: {} },
   },
-  { _id: false }
+  // `minimize: false` so an empty `solved`/`results` (`{}`) still persists and reads back as `{}`,
+  // matching the non-optional type -- otherwise Mongoose drops empty objects and the read boundary
+  // would return `undefined` for a field the type says is always present.
+  { _id: false, minimize: false }
 );
 
 const WaitingOnChildSchema = new mongoose.Schema(

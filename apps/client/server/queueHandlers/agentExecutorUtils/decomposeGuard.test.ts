@@ -21,7 +21,7 @@ function fakeDecompose(): { tool: ToolDefinition; calls: unknown[] } {
 const run = (t: ToolDefinition, params?: unknown) => t.implementation({} as never, undefined).toolFn(params);
 // The ledger the guard shares with planCompletionGuard: `steps` is populated by the latter when a
 // decompose result parses into a plan. Start empty, like a fresh execution.
-const ledger = () => ({ decomposeUsed: false, steps: [] as unknown[] });
+const ledger = () => ({ decomposeUsed: false, steps: [] as { family: string; title: string }[] });
 
 describe('guardDecomposeOnce', () => {
   it('runs the real decompose on the FIRST call', async () => {
@@ -47,12 +47,12 @@ describe('guardDecomposeOnce', () => {
     expect(onBlocked).toHaveBeenCalledTimes(1);
   });
 
-  // #680 (F1): a first decompose that failed OR succeeded-but-unparseable latches decomposeUsed with
-  // no captured plan. Gating the block on `decomposeUsed` alone would durably poison the run; gating
-  // on a LOADED plan (steps>0) lets the agent re-decompose to recover.
+  // A first decompose that failed or succeeded-but-unparseable latches decomposeUsed with no captured
+  // plan. Gating the block on the durable flag alone would poison the run across continuations;
+  // gating on a loaded plan (steps>0) lets the agent re-decompose to recover.
   it('does NOT block a repeat when the flag latched but no plan loaded (steps empty)', async () => {
     const { tool, calls } = fakeDecompose();
-    const state = { decomposeUsed: true, steps: [] as unknown[] }; // poisoned-looking state
+    const state = { decomposeUsed: true, steps: [] as { family: string; title: string }[] }; // no plan loaded
     const onBlocked = vi.fn();
     const guarded = guardDecomposeOnce({ optihashi_decompose: tool }, state, onBlocked);
     const out = await run(guarded.optihashi_decompose);
