@@ -47,6 +47,7 @@ import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEdit
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
+import { revocationTooltip } from '@client/app/utils/apiKeyRevocation';
 import { useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import dayjs from 'dayjs';
@@ -565,9 +566,11 @@ export default function EmbedKeysTab() {
                       )}
                     </td>
                     <td>
-                      <Chip variant="soft" color={disabled ? 'danger' : 'success'}>
-                        {disabled ? 'Revoked' : 'Active'}
-                      </Chip>
+                      <Tooltip title={revocationTooltip(key) ?? ''} data-testid={`embed-key-status-${key.id}`}>
+                        <Chip variant="soft" color={disabled ? 'danger' : 'success'}>
+                          {disabled ? 'Revoked' : 'Active'}
+                        </Chip>
+                      </Tooltip>
                     </td>
                     <td>
                       <Typography level="body-xs">{dayjs(key.createdAt).format('MMM D, YYYY')}</Typography>

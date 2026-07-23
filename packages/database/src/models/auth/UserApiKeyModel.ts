@@ -83,11 +83,14 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
       .exec();
   }
 
+  // Bulk deactivation has no human actor, so it stamps revokedAt without revokedBy.
+  // Scoped to keys actually transitioning: re-running must not reset an existing
+  // timestamp, and keys disabled before this field existed must not get a fabricated one.
   async deactivateAllByUserId(userId: string) {
     await this.model.updateMany(
-      { userId },
+      { userId, status: { $ne: ApiKeyStatus.DISABLED } },
       {
-        $set: { status: ApiKeyStatus.DISABLED },
+        $set: { status: ApiKeyStatus.DISABLED, revokedAt: new Date() },
       }
     );
   }
@@ -146,6 +149,11 @@ const UserApiKeySchema = new mongoose.Schema<IUserApiKeyDocument, IUserApiKeyMod
     status: { type: String, enum: Object.values(ApiKeyStatus), default: ApiKeyStatus.ACTIVE },
     expiresAt: { type: Date },
     lastUsedAt: { type: Date },
+    // Revocation audit trail. Every path that flips status to DISABLED must stamp
+    // revokedAt, or a revoked key renders with no "when" - see IUserApiKey.
+    revokedAt: { type: Date },
+    revokedBy: { type: String },
+    revokedReason: { type: String },
     rateLimit: {
       requestsPerMinute: { type: Number, required: true, default: 60 },
       requestsPerDay: { type: Number, required: true, default: 1000 },

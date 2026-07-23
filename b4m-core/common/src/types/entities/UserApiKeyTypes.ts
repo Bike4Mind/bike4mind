@@ -108,6 +108,21 @@ export interface IUserApiKey {
   status: ApiKeyStatus;
   expiresAt?: Date; // Optional expiration
   lastUsedAt?: Date;
+  /**
+   * Revocation audit trail, all set together the first time a key is revoked and
+   * never overwritten afterwards. `updatedAt` is not a substitute - any write to
+   * the document bumps it.
+   */
+  revokedAt?: Date;
+  /**
+   * Acting user who revoked the key. Absent for system-initiated revocations
+   * (rollbacks, bulk deactivation) that have no human actor. Today this always
+   * equals `userId` because every revoke path is minter-scoped; it becomes
+   * genuinely distinct once org admins can revoke keys they did not mint.
+   */
+  revokedBy?: string;
+  /** Why the key was revoked, when the caller supplied a reason. */
+  revokedReason?: string;
   rateLimit: IUserApiKeyRateLimit;
   usage: IUserApiKeyUsage;
   metadata: IUserApiKeyMetadata;

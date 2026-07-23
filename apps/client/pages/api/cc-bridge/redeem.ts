@@ -124,7 +124,18 @@ const handler = baseApi({ auth: false })
           `[CC_BRIDGE] Lost redemption race for token ${tokenPrefix}, user ${record.userId}; rolling back`
         );
         try {
-          await UserApiKey.updateOne({ _id: createdKey.id }, { $set: { status: ApiKeyStatus.DISABLED } });
+          await UserApiKey.updateOne(
+            { _id: createdKey.id },
+            {
+              // Stamped like any other revocation so the key never shows up as
+              // disabled-with-no-when. System-initiated, so no revokedBy.
+              $set: {
+                status: ApiKeyStatus.DISABLED,
+                revokedAt: new Date(),
+                revokedReason: 'Rolled back after a lost pairing-token redemption race',
+              },
+            }
+          );
           await CcBridgeDevice.deleteOne({ _id: device._id });
         } catch (rollbackErr) {
           req.logger.error(`[CC_BRIDGE] Rollback after lost race failed for key ${createdKey.id}`, rollbackErr);
