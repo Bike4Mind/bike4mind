@@ -1,23 +1,19 @@
 import type { ToolDefinition } from '@bike4mind/services';
+import type { IOptiPlanState, IOptiPlanStep } from '@bike4mind/database';
 
 /** One planned sub-problem: its family and the short title the decomposition gave it. */
-export type PlanStep = { family: string; title: string };
+export type PlanStep = IOptiPlanStep;
 
 /**
- * Per-execution plan progress. `steps` is the ordered plan captured from the decompose result
- * (null until a decomposition loads, so single-problem runs are never gated). `solved` counts
- * SUCCESSFUL schedule/solve calls per family. `results` holds the first winning-result digest per
- * family, so the completion redirect can hand the agent the actual per-step results to summarize --
- * the agent's own transcript memory of earlier steps is unreliable (that's the bug we're fixing).
- * Keep this in the caller's execution closure so it survives tool-map rebuilds.
+ * The slice of the durable opti plan ledger this guard reads/writes. Derived from the persisted
+ * `IOptiPlanState` (single source of truth, #680) rather than re-declared, so a change to those
+ * fields' shapes propagates here instead of silently drifting. `steps` is the ordered plan captured
+ * from the decompose result (empty until a decomposition loads, so single-problem runs are never
+ * gated); `solved` counts SUCCESSFUL schedule/solve calls per family; `results` holds the first
+ * winning-result digest per family, so the completion redirect can hand the agent the actual per-step
+ * results to summarize (its own transcript memory of earlier steps is unreliable -- the bug we fix).
  */
-export type PlanProgressState = {
-  // Empty until a plan is captured from a decompose result (was `| null`; now a plain array so it
-  // maps 1:1 onto the durable AgentExecution.optiPlanState ledger, #680).
-  steps: PlanStep[];
-  solved: Record<string, number>;
-  results: Record<string, string>;
-};
+export type PlanProgressState = Pick<IOptiPlanState, 'steps' | 'solved' | 'results'>;
 
 type ToolFn = (parameters?: unknown, apiKey?: string) => Promise<string>;
 
@@ -118,7 +114,7 @@ export function planIsComplete(state: PlanProgressState): boolean {
  * re-deriving from its transcript (where earlier steps are buried and get forgotten/undersold).
  */
 export function buildPlanCompleteMsg(state: PlanProgressState): string {
-  const lines = (state.steps ?? []).map((step, i) => {
+  const lines = state.steps.map((step, i) => {
     const digest = state.results[step.family];
     return `${i + 1}. ${step.title}${digest ? ` -- ${digest}` : ' -- solved (see result in your history above)'}`;
   });
