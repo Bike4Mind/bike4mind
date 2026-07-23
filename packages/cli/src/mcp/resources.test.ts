@@ -69,9 +69,11 @@ describe('registerResources', () => {
 
     const result = await listOf(collectResources(client).get('notebook')!);
 
+    // `title` is asserted alongside `name`: the SDK spreads the template metadata
+    // under each entry, so an entry without its own title renders as 'Notebook'.
     expect(result.resources).toEqual([
-      { uri: 'b4m://notebook/n1', name: 'NB', mimeType: 'application/json' },
-      { uri: 'b4m://notebook/n2', name: 'n2', mimeType: 'application/json' },
+      { uri: 'b4m://notebook/n1', name: 'NB', title: 'NB', mimeType: 'application/json' },
+      { uri: 'b4m://notebook/n2', name: 'n2', title: 'n2', mimeType: 'application/json' },
     ]);
   });
 
@@ -136,16 +138,17 @@ describe('registerResources', () => {
 
     expect(listFiles).toHaveBeenCalledWith({ limit: 100 });
     expect(result.resources).toEqual([
-      { uri: 'b4m://file/f1', name: 'notes.md', mimeType: 'application/json' },
-      { uri: 'b4m://file/f2', name: 'f2', mimeType: 'application/json' },
+      { uri: 'b4m://file/f1', name: 'notes.md', title: 'notes.md', mimeType: 'application/json' },
+      { uri: 'b4m://file/f2', name: 'f2', title: 'f2', mimeType: 'application/json' },
     ]);
   });
 
   it('degrades a failing file list to an empty result without throwing', async () => {
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const client = mockClient({ listFiles: vi.fn().mockRejectedValue(forbidden()) });
 
     await expect(listOf(collectResources(client).get('file')!)).resolves.toEqual({ resources: [] });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('recommended scope: files:read'));
   });
 
   it('reads one file record as JSON contents', async () => {
@@ -183,16 +186,17 @@ describe('registerResources', () => {
 
     expect(listProjects).toHaveBeenCalledWith({ limit: 100 });
     expect(result.resources).toEqual([
-      { uri: 'b4m://project/p1', name: 'Apollo', mimeType: 'application/json' },
-      { uri: 'b4m://project/p2', name: 'p2', mimeType: 'application/json' },
+      { uri: 'b4m://project/p1', name: 'Apollo', title: 'Apollo', mimeType: 'application/json' },
+      { uri: 'b4m://project/p2', name: 'p2', title: 'p2', mimeType: 'application/json' },
     ]);
   });
 
   it('degrades a failing project list to an empty result without throwing', async () => {
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const client = mockClient({ listProjects: vi.fn().mockRejectedValue(forbidden()) });
 
     await expect(listOf(collectResources(client).get('project')!)).resolves.toEqual({ resources: [] });
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('recommended scope: projects:read'));
   });
 
   it('reads one project record as JSON contents', async () => {
@@ -232,16 +236,23 @@ describe('registerResources', () => {
 
     expect(listArtifacts).toHaveBeenCalledWith({ limit: 100 });
     expect(result.resources).toEqual([
-      { uri: 'b4m://artifact/artifact_a_1', name: 'Chart', mimeType: 'application/json' },
-      { uri: 'b4m://artifact/artifact_a_2', name: 'artifact_a_2', mimeType: 'application/json' },
+      { uri: 'b4m://artifact/artifact_a_1', name: 'Chart', title: 'Chart', mimeType: 'application/json' },
+      {
+        uri: 'b4m://artifact/artifact_a_2',
+        name: 'artifact_a_2',
+        title: 'artifact_a_2',
+        mimeType: 'application/json',
+      },
     ]);
   });
 
   it('degrades a failing artifact list to an empty result without throwing', async () => {
-    vi.spyOn(logger, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
     const client = mockClient({ listArtifacts: vi.fn().mockRejectedValue(forbidden()) });
 
     await expect(listOf(collectResources(client).get('artifact')!)).resolves.toEqual({ resources: [] });
+    // No artifacts:* scope exists, so the hint must stay absent rather than name a proxy.
+    expect(errorSpy.mock.calls[0][0]).not.toContain('recommended scope');
   });
 
   it('reads an artifact with its content as JSON contents', async () => {

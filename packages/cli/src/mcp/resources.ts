@@ -37,13 +37,20 @@ function registerJsonResource<T>(server: McpServer, client: B4mApiClient, spec: 
         try {
           const items = await spec.list();
           return {
-            resources: items.map(item => ({
-              // Raw id, deliberately not encodeURIComponent'd: UriTemplate.match()
-              // never percent-decodes, and B4mApiClient encodes ids into REST paths.
-              uri: `b4m://${spec.name}/${spec.id(item)}`,
-              name: spec.label(item) ?? spec.id(item),
-              mimeType: 'application/json',
-            })),
+            resources: items.map(item => {
+              const label = spec.label(item) ?? spec.id(item);
+              return {
+                // Raw id, deliberately not encodeURIComponent'd: UriTemplate.match()
+                // never percent-decodes, and B4mApiClient encodes ids into REST paths.
+                uri: `b4m://${spec.name}/${spec.id(item)}`,
+                name: label,
+                // `title` must be set per entry: the SDK emits each listed resource as
+                // `{ ...template.metadata, ...resource }`, so the template's constant
+                // title would otherwise shadow the label on every row.
+                title: label,
+                mimeType: 'application/json',
+              };
+            }),
           };
         } catch (err) {
           logger.error(`mcp: listing ${spec.name} resources failed: ${mapApiError(err, client.baseURL, spec.scope)}`);
