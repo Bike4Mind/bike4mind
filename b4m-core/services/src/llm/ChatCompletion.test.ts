@@ -1344,7 +1344,12 @@ describe('ChatCompletionProcess', () => {
 
     const runWithTools = async (opts: {
       tools: any[];
-      messagesTokenCount: number;
+      // Either one count applied to every message source, or an explicit per-source queue in
+      // calculateTotalTokenLength's call order: [messages, mementos, fab, url, history, userPrompt].
+      // The per-source form lets a test give systemPrompts a non-degenerate value so the
+      // "tools are not folded into the system-prompt remainder" property is actually asserted.
+      messagesTokenCount?: number;
+      sourceTokenCounts?: [number, number, number, number, number, number];
       // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
       // arg); the impl differentiates so a test can target one without disturbing the other.
       toolCountImpl: (text: any) => number;
@@ -1352,7 +1357,12 @@ describe('ChatCompletionProcess', () => {
       const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(opts.tools as any);
       const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
 
-      mockedCalculateTotalTokenLength.mockResolvedValue(opts.messagesTokenCount);
+      mockedCalculateTotalTokenLength.mockReset();
+      if (opts.sourceTokenCounts) {
+        for (const n of opts.sourceTokenCounts) mockedCalculateTotalTokenLength.mockResolvedValueOnce(n);
+      } else {
+        mockedCalculateTotalTokenLength.mockResolvedValue(opts.messagesTokenCount ?? 0);
+      }
       mockTokenizer.countTokens.mockReset().mockImplementation(async (text: any) => opts.toolCountImpl(text));
       mockedUsdToCredits.mockImplementation(realUsdToCredits);
       mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
@@ -1392,16 +1402,51 @@ describe('ChatCompletionProcess', () => {
       return call?.[0]?.promptMeta;
     };
 
-    it('counts tool-schema tokens and folds them into the input total', async () => {
-      // messages -> 0, so tool schemas are the sole input contributor; tool serialization -> 30,
-      // model output -> 7. inputTokens (0 + 30) + outputTokens (7) = 37.
+    it('folds tool-schema tokens into inputTokens without inflating the systemPrompts remainder', async () => {
+      // Per-source counts: messages 100, memento/fab/url 0, history 10, userPrompt 5; tools -> 30.
+      // systemPrompts = totalTokens(100) - knownSources(0+0+0+10+5) = 85, independent of tools.
+      // inputTokens = totalTokens(100) + toolSchemas(30) = 130. A mutation that derived
+      // systemPrompts from inputTokens (115) or subtracted tools (55) would fail this.
       const promptMeta = await runWithTools({
         tools: [probeTool, probeTool],
-        messagesTokenCount: 0,
-        toolCountImpl: (text: any) => (typeof text === 'string' && text.includes('estimate_probe_tool') ? 30 : 7),
+        sourceTokenCounts: [100, 0, 0, 0, 10, 5],
+        toolCountImpl: (text: any) => (typeof text === 'string' ? 30 : 7),
       });
       expect(promptMeta.context.tokensBySource.toolSchemas).toBe(30);
-      expect(promptMeta.tokenUsage.totalTokens).toBe(37);
+      expect(promptMeta.context.tokensBySource.systemPrompts).toBe(85);
+      expect(promptMeta.tokenUsage.inputTokens).toBe(130);
+    });
+
+    it('serializes every tool as {name, description, input_schema} and joins them', async () => {
+      // Two DISTINCT tools so the assertion pins both the per-tool wire shape and the N-tool join
+      // (one tool passed twice, or dropping input_schema, would not survive this).
+      const toolA = {
+        toolSchema: {
+          name: 'tool_a',
+          description: 'first',
+          parameters: { type: 'object', properties: { a: { type: 'string' } } },
+        },
+      };
+      const toolB = {
+        toolSchema: {
+          name: 'tool_b',
+          description: 'second',
+          parameters: { type: 'object', properties: { b: { type: 'number' } } },
+        },
+      };
+      const promptMeta = await runWithTools({
+        tools: [toolA, toolB],
+        messagesTokenCount: 0,
+        toolCountImpl: (t: any) => (typeof t === 'string' ? 30 : 7),
+      });
+      const serialized = mockTokenizer.countTokens.mock.calls
+        .map(([a]: [any]) => a)
+        .find((a: any) => typeof a === 'string');
+      expect(serialized).toBe(
+        JSON.stringify({ name: 'tool_a', description: 'first', input_schema: toolA.toolSchema.parameters }) +
+          JSON.stringify({ name: 'tool_b', description: 'second', input_schema: toolB.toolSchema.parameters })
+      );
+      expect(promptMeta.tokenUsage.inputTokens).toBe(30);
     });
 
     it('records zero tool-schema tokens when no tools are attached', async () => {
@@ -1411,7 +1456,7 @@ describe('ChatCompletionProcess', () => {
         toolCountImpl: () => 7,
       });
       expect(promptMeta.context.tokensBySource.toolSchemas).toBe(0);
-      expect(promptMeta.tokenUsage.totalTokens).toBe(7); // 0 input + 7 output
+      expect(promptMeta.tokenUsage.inputTokens).toBe(0);
     });
 
     it('falls back to zero tool tokens WITHOUT zeroing the messages-total floor when the tokenizer throws', async () => {
@@ -1429,7 +1474,12 @@ describe('ChatCompletionProcess', () => {
         },
       });
       expect(promptMeta.context.tokensBySource.toolSchemas).toBe(0);
-      expect(promptMeta.tokenUsage.totalTokens).toBe(57); // 50 messages floor + 7 output (NOT 0 + 7)
+      expect(promptMeta.tokenUsage.inputTokens).toBe(50); // messages floor preserved, NOT 0
+      // The catch actually ran (distinguishes this from a no-tools/no-throw run).
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to count tool-schema tokens'),
+        expect.anything()
+      );
     });
   });
 

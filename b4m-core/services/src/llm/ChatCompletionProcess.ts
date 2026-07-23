@@ -1848,18 +1848,16 @@ export class ChatCompletionProcess {
         // under-reserve credits, or under-bill the fallback/quest total.
         inputTokens = totalTokens;
 
-        // Tool schemas ship to the provider as a separate `tools` request param, NOT inside
-        // `messages`, so calculateTotalTokenLength above never counted them - they were previously
-        // hardcoded to 0. Count the serialized schema with the same tokenizer and add it on top, so
-        // the input total the rest of this method relies on (pre-reservation, context-overflow
-        // guard, [BILLING_DRIFT] ratio) reflects what the provider bills instead of under-counting
-        // by the tool block. The {name, description, input_schema} shape is an estimate-only proxy
-        // (roughly the Anthropic wire form); exact, per-backend serialization lives in each
-        // adapter's formatTools - this stays backend-agnostic because it runs pre-fallback.
+        // Tool schemas ship to the provider as a separate `tools` request param (not in
+        // `messages`), so the count above missed them - they were hardcoded to 0. Count the
+        // serialized schema with the same tokenizer and add it on top, so pre-reservation, the
+        // context-overflow guard, and the [BILLING_DRIFT] ratio reflect the tool block. The
+        // {name, description, input_schema} shape is an estimate-only proxy (roughly the Anthropic
+        // wire form); exact, per-backend serialization lives in each adapter's formatTools.
         // Wrapped in its own try/catch: tool descriptions can be untrusted third-party text (e.g.
         // MCP tools via generateMcpToolsFromCache) containing special-token literals that trip the
-        // tokenizer's encode(); on failure we fall back to 0 (tools uncounted) rather than losing
-        // the whole breakdown and the messages-total floor.
+        // tokenizer's encode(); on failure we fall back to 0 (tools uncounted), preserving the
+        // messages-total floor set above.
         let toolSchemaTokens = 0;
         if (allTools && allTools.length > 0) {
           try {
@@ -1888,10 +1886,10 @@ export class ChatCompletionProcess {
           }ms`
         );
 
-        // System prompts = messages remainder after subtracting all known message sources.
-        // This avoids double-counting (mementos/project are system-role but tracked separately)
-        // and captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
-        // Tool schemas are NOT subtracted here: they are not part of `messages` (see above).
+        // System prompts = the messages-only total (totalTokens) minus the known message sources.
+        // This avoids double-counting (mementos/project are system-role but tracked separately) and
+        // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
+        // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
         const knownSourceTokens = fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens;
         const systemPromptTokens = Math.max(0, totalTokens - knownSourceTokens);
 

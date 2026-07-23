@@ -3,13 +3,7 @@
  * Mirrors the `tokensBySource` breakdown computed in ChatCompletionProcess.
  */
 export type TokenSource =
-  | 'systemPrompts'
-  | 'conversationHistory'
-  | 'mementos'
-  | 'fabFiles'
-  | 'urlContent'
-  | 'toolSchemas'
-  | 'userPrompt';
+  'systemPrompts' | 'conversationHistory' | 'mementos' | 'fabFiles' | 'urlContent' | 'toolSchemas' | 'userPrompt';
 
 export interface ContextOverflowMessageParams {
   /** Human-readable model name (e.g. "Claude 4.5 Sonnet"). */
@@ -42,6 +36,8 @@ const SOURCE_REMEDIATION: Partial<Record<TokenSource, string>> = {
     'Most of your context is conversation history. Start a new session to reset the history, or summarize the discussion so far, then try again.',
   urlContent: 'Most of your context comes from fetched URLs. Reference fewer or shorter pages, then try again.',
   mementos: 'Most of your context comes from saved memories. Reduce how many mementos are in play, then try again.',
+  toolSchemas:
+    'Most of your context is tool definitions. Turn off tools you are not using (Smart Tools and MCP servers) for this chat, then try again.',
 };
 
 const GENERIC_REMEDIATION =
