@@ -333,7 +333,7 @@ export const IntentClassifierConfigSchema = z.object({
   enabled: z.boolean().default(true),
   shadowMode: z.boolean().default(true),
   primaryModel: z.string().default('claude-haiku-4-5-20251001'),
-  fallbackModels: z.array(z.string()).default(['gemini-2.5-flash-lite', 'gpt-4.1-nano-2025-04-14']),
+  fallbackModels: z.array(z.string()).default(['gemini-2.5-flash-lite', 'gpt-5.4-nano']),
 });
 
 export type IntentClassifierConfig = z.infer<typeof IntentClassifierConfigSchema>;

@@ -177,6 +177,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
         trainingCutoff: '2024-06-01',
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Designed for high-volume, low-cost processing with rapid response times, ideal for budget-conscious applications.',
       },
@@ -239,6 +240,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
         trainingCutoff: '2024-06-01',
+        deprecationDate: '2026-12-11', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's O3 reasoning model with broad capabilities and up-to-date training data. Superseded by O4 Mini for most use cases.",
         isSlowModel: true,
@@ -324,6 +326,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 10,
         trainingCutoff: '2025-04-01',
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's compact reasoning model optimized for fast, cost-efficient performance with strong multimodal and agentic capabilities. Excellent for STEM tasks and coding.",
         isSlowModel: true,
@@ -536,6 +539,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 1,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-11-13',
+        deprecationDate: '2026-08-10', // Deprecated as per https://platform.openai.com/docs/deprecations
         description: 'Latest GPT-5.2 model version. Automatically updated with improvements and optimizations.',
       },
 
@@ -582,6 +586,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 1,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-11-13',
+        deprecationDate: '2026-07-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Continuously updated GPT-5.1 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.',
       },
@@ -674,6 +679,7 @@ export class OpenAIBackend implements ICompletionBackend {
         rank: 3,
         trainingCutoff: '2024-09-30',
         releaseDate: '2025-08-07',
+        deprecationDate: '2026-07-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Continuously updated GPT-5 chat model with advanced conversational abilities and vision support, ideal for dynamic, real-time applications.',
       },
@@ -731,6 +737,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 10,
         supportsTools: true,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           'Delivers fast, efficient text generation with advanced reasoning, a large context window, and integrated vision and tool capabilities.',
       },
@@ -750,6 +757,7 @@ export class OpenAIBackend implements ICompletionBackend {
         logoFile: 'OpenAI_Logo.svg',
         rank: 11,
         supportsTools: false,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
         description:
           "OpenAI's original GPT-4 model. Legacy model good for basic tasks and content generation, but newer models offer better capabilities.",
       },
@@ -768,6 +776,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1 - Advanced multimodal image generation with text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 10,
+        deprecationDate: '2026-10-23', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       {
         id: ImageModels.GPT_IMAGE_1_5,
@@ -783,6 +792,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1.5 - Enhanced version of GPT-Image-1 with improved image generation quality and text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 9,
+        deprecationDate: '2026-12-01', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       {
         id: ImageModels.GPT_IMAGE_2,
@@ -814,6 +824,7 @@ export class OpenAIBackend implements ICompletionBackend {
         description:
           'OpenAI GPT-Image-1 Mini - Faster, cost-effective version of GPT-Image-1 with good quality image generation and text integration, supporting up to 2048x2048 resolution and image editing capabilities.',
         rank: 11,
+        deprecationDate: '2026-12-01', // Deprecated as per https://platform.openai.com/docs/deprecations
       },
       // OpenAI Speech-to-Text Models
       {
@@ -854,6 +865,8 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
         rank: 1,
+        // Sora 2 and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
+        deprecationDate: '2026-09-24',
         description:
           "OpenAI's Sora video generation model. Creates high-quality videos from text prompts with durations of 4, 8, or 12 seconds.",
       },
@@ -874,6 +887,8 @@ export class OpenAIBackend implements ICompletionBackend {
         supportsImageVariation: false,
         logoFile: 'OpenAI_Logo.svg',
         rank: 0,
+        // Sora 2 Pro and the Videos API are being removed with no OpenAI replacement. https://platform.openai.com/docs/deprecations
+        deprecationDate: '2026-09-24',
         description:
           "OpenAI's premium Sora video generation model. Produces the highest quality videos with enhanced detail, coherence, and visual fidelity.",
       },
