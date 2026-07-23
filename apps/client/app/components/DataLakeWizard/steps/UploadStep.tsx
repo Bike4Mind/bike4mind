@@ -2,6 +2,7 @@ import { Alert, Box, Button, LinearProgress, Stack, Typography } from '@mui/joy'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
 
 function ProgressRow({ label, current, total }: { label: string; current: number; total: number }) {
@@ -117,7 +118,7 @@ export default function UploadStep() {
           </Typography>
           <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
             <Typography level="body-xs">
-              <strong>Common fixes:</strong> Make sure the Data Lake Name and Tag Prefix fields are filled in. The Tag
+              <strong>Common fixes:</strong> Make sure the {DATA_LAKE} Name and Tag Prefix fields are filled in. The Tag
               Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
             </Typography>
           </Alert>
