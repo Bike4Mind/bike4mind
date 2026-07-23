@@ -151,6 +151,18 @@ export const hearthRepository = {
     );
   },
 
+  /**
+   * Last N events of a channel by event count (not seq arithmetic, which
+   * can undercount when burned seqs cluster near the end). For rendering
+   * surfaces; never touches cursors.
+   */
+  async tailEvents(channelId: string, n: number): Promise<HearthEvent[]> {
+    const docs = await HearthEventDoc.find({ channelId: new Types.ObjectId(channelId) })
+      .sort({ seq: -1 })
+      .limit(n);
+    return docs.reverse().map(toDomainEvent);
+  },
+
   /** Resolve actor display names for a batch of events (for rendering surfaces). */
   async actorNamesById(actorIds: string[]): Promise<Map<string, string>> {
     const unique = [...new Set(actorIds)].map(id => new Types.ObjectId(id));

@@ -957,6 +957,9 @@ importers:
 
   b4m-core/common:
     dependencies:
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../hearth
       axios:
         specifier: 1.18.0
         version: 1.18.0

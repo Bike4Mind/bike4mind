@@ -6,7 +6,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
-import { toWireHearthEvent } from '@server/utils/hearthWire';
+import { toWireHearthEvent, HearthActorParamSchema, resolveRequestActor } from '@server/utils/hearthWire';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -18,17 +18,11 @@ const CatchupSchema = z.object({
   advance: z.boolean().prefault(true),
   limit: z.number().int().min(1).max(500).optional(),
   /**
-   * Tail mode: return only the last N events, ignoring and never touching any
-   * cursor (used by rendering surfaces like the SPA channel view).
+   * Tail mode: return only the last N events by event count, ignoring and
+   * never touching any cursor (used by rendering surfaces like the SPA view).
    */
   tail: z.number().int().min(1).max(500).optional(),
-  /** Optional actor identity, same contract as POST /api/hearth/events. */
-  actor: z
-    .object({
-      kind: z.enum(['human', 'agent', 'gateway', 'device']).prefault('agent'),
-      displayName: z.string().min(1).max(200),
-    })
-    .optional(),
+  actor: HearthActorParamSchema,
 });
 
 const hearthLog = new HearthLog(hearthRepository.store);
@@ -45,8 +39,7 @@ const handler = baseApi()
     if (!channel) throw new NotFoundError('Channel not found');
 
     if (body.tail !== undefined) {
-      const sinceSeq = Math.max(0, channel.nextSeq - body.tail);
-      const tailEvents = await hearthRepository.store.eventsSince(body.channelId, sinceSeq);
+      const tailEvents = await hearthRepository.tailEvents(body.channelId, body.tail);
       const tailNames = await hearthRepository.actorNamesById(tailEvents.map(e => e.actorId));
       res.json({
         events: tailEvents.map(e => toWireHearthEvent(e, tailNames.get(e.actorId))),
@@ -55,9 +48,7 @@ const handler = baseApi()
       return;
     }
 
-    const actor = body.actor
-      ? await hearthRepository.ensureActor(req.user.id, body.actor.kind, body.actor.displayName)
-      : await hearthRepository.ensureActor(req.user.id, 'human', req.user.username ?? req.user.email ?? 'user');
+    const actor = await resolveRequestActor(req.user, body.actor);
     const actorId = actor._id.toString();
 
     const events = await hearthLog.catchup(actorId, body.channelId, {

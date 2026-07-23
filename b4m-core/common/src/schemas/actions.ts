@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { hearthEventKindSchema, hearthMachineBodySchema, hearthEventRefsSchema } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
@@ -813,42 +814,21 @@ export type ITavernHeartbeatLogAction = z.infer<typeof TavernHeartbeatLogAction>
  */
 export const HearthEventAction = z.object({
   action: z.literal('hearth_event'),
+  // kind/machine/refs come from the @bike4mind/hearth boundary schemas so the
+  // enum lists have a single source of truth across model, route, and action.
   event: z.object({
     id: z.string(),
     channelId: z.string(),
     seq: z.number(),
     actorId: z.string(),
     actorName: z.string().optional(),
-    kind: z.enum([
-      'message',
-      'edit',
-      'reaction',
-      'artifact',
-      'presence',
-      'delegation',
-      'quest.update',
-      'gate.request',
-      'gate.resolve',
-      'system',
-    ]),
+    kind: hearthEventKindSchema,
     human: z.object({
       text: z.string(),
       format: z.enum(['md', 'text']),
     }),
-    machine: z
-      .object({
-        schema: z.string(),
-        payload: z.unknown(),
-      })
-      .optional(),
-    refs: z
-      .object({
-        threadRootId: z.string().optional(),
-        replyToId: z.string().optional(),
-        questId: z.string().optional(),
-        externalId: z.string().optional(),
-      })
-      .prefault({}),
+    machine: hearthMachineBodySchema.optional(),
+    refs: hearthEventRefsSchema.prefault({}),
     createdAt: z.string(),
   }),
 });

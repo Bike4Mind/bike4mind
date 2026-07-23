@@ -1,5 +1,5 @@
 import mongoose, { Schema, Model, model, Types } from 'mongoose';
-import type { ActorKind } from '@bike4mind/hearth';
+import { actorKindSchema, type ActorKind } from '@bike4mind/hearth';
 
 /**
  * A Hearth actor: any participant in the event log - human, agent, gateway,
@@ -26,7 +26,8 @@ const HearthActorSchema = new Schema<IHearthActorDoc>(
     kind: {
       type: String,
       required: true,
-      enum: ['human', 'agent', 'gateway', 'device', 'system'],
+      // Derived from the boundary schema so a new kind is a one-file change.
+      enum: actorKindSchema.options,
     },
     displayName: { type: String, required: true, maxlength: 200 },
     capabilities: { type: [String], default: [] },

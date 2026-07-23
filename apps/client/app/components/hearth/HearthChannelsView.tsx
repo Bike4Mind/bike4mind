@@ -16,6 +16,19 @@ interface HearthChannel {
 /** How many trailing events the view loads on channel select. */
 const TAIL_SIZE = 100;
 
+/** Max buffered live events kept per channel (not global, so a burst on one
+ * channel can never evict another channel's buffered events). */
+const LIVE_CAP_PER_CHANNEL = 500;
+
+function appendLiveEvent(prev: WireHearthEvent[], event: WireHearthEvent): WireHearthEvent[] {
+  if (prev.some(e => e.id === event.id)) return prev;
+  const next = [...prev, event];
+  const inChannel = next.filter(e => e.channelId === event.channelId);
+  if (inChannel.length <= LIVE_CAP_PER_CHANNEL) return next;
+  const evictId = inChannel[0].id;
+  return next.filter(e => e.id !== evictId);
+}
+
 function useHearthChannels() {
   return useQuery<HearthChannel[]>({
     queryKey: ['hearth', 'channels'],
@@ -56,9 +69,7 @@ export default function HearthChannelsView() {
   useEffect(() => {
     const unsubscribe = subscribeToAction('hearth_event', async message => {
       const { event } = message as IHearthEventAction;
-      // Accumulates across channels (the render merge filters by channel);
-      // capped so a long-lived tab can't grow without bound.
-      setLiveEvents(prev => (prev.some(e => e.id === event.id) ? prev : [...prev, event].slice(-500)));
+      setLiveEvents(prev => appendLiveEvent(prev, event));
     });
     return unsubscribe;
   }, [subscribeToAction]);
@@ -90,7 +101,7 @@ export default function HearthChannelsView() {
     onSuccess: event => {
       setDraft('');
       // The WS echo may race the HTTP response; the id-dedupe in the merge handles both orders.
-      setLiveEvents(prev => (prev.some(e => e.id === event.id) ? prev : [...prev, event]));
+      setLiveEvents(prev => appendLiveEvent(prev, event));
     },
   });
 

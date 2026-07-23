@@ -5,6 +5,7 @@ import { rateLimit } from '@server/middlewares/rateLimit';
 import { csrfProtection } from '@server/middlewares/csrfProtection';
 import { requireFeatureEnabled } from '@server/middlewares/featureFlag';
 import { requireUser } from '@server/middlewares/requireUser';
+import { isDuplicateKeyError } from '@server/utils/isDuplicateKeyError';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { z } from 'zod';
 
@@ -13,10 +14,6 @@ const createRateLimit = rateLimit({ limit: 10, windowMs: 60000 });
 const CreateChannelSchema = z.object({
   name: z.string().min(1).max(200),
 });
-
-function isDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
-}
 
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableHearth'))

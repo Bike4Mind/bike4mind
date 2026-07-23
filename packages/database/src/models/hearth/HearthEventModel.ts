@@ -1,5 +1,5 @@
 import mongoose, { Schema, Model, model, Types } from 'mongoose';
-import type { HearthEventKind } from '@bike4mind/hearth';
+import { hearthEventKindSchema, type HearthEventKind } from '@bike4mind/hearth';
 
 /**
  * One event in the append-only Hearth log. Never updated or deleted; chat,
@@ -32,18 +32,8 @@ const HearthEventSchema = new Schema<IHearthEventDoc>(
     kind: {
       type: String,
       required: true,
-      enum: [
-        'message',
-        'edit',
-        'reaction',
-        'artifact',
-        'presence',
-        'delegation',
-        'quest.update',
-        'gate.request',
-        'gate.resolve',
-        'system',
-      ],
+      // Derived from the boundary schema so a new kind is a one-file change.
+      enum: hearthEventKindSchema.options,
     },
     human: {
       type: new Schema(
