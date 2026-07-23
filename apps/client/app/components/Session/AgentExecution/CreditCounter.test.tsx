@@ -51,17 +51,18 @@ describe('CreditCounter', () => {
       </TestWrapper>
     );
     expect(screen.getByTestId(`credit-counter-${EXECUTION_ID}`)).toBeInTheDocument();
-    expect(screen.getByText('0 credits')).toBeInTheDocument();
+    // Matches the per-reply chip: bare number (with the Bike4Mind icon + tooltip).
+    expect(screen.getByText('0')).toBeInTheDocument();
   });
 
-  it('rounds fractional credits and formats with locale thousands separator', () => {
+  it('rounds fractional credits to a whole number', () => {
     mocks.totalCreditsUsed = 1234.7;
     render(
       <TestWrapper>
         <CreditCounter executionId={EXECUTION_ID} />
       </TestWrapper>
     );
-    expect(screen.getByText('1,235 credits')).toBeInTheDocument();
+    expect(screen.getByText('1235')).toBeInTheDocument();
   });
 
   it('renders null when enforceCredits is off, even mid-run', () => {
