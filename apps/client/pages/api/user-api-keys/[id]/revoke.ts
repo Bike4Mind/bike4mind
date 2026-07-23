@@ -14,7 +14,7 @@ const handler = baseApi().post(
 
     if (!keyId) throw new BadRequestError('Invalid key ID');
 
-    await userApiKeyService.revokeUserApiKey(
+    const { name } = await userApiKeyService.revokeUserApiKey(
       userId,
       { keyId, reason },
       {
@@ -30,7 +30,7 @@ const handler = baseApi().post(
         type: UserApiKeyEvents.REVOKED,
         metadata: {
           keyId,
-          name: 'Unknown', // We could fetch this if needed
+          name,
           reason,
         },
       },
