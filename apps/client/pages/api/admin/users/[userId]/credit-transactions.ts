@@ -28,16 +28,13 @@ export interface IUserCreditAdjustment {
 }
 
 const handler = baseApi().get(
-  asyncHandler<{}, unknown, unknown, { userId?: string; days?: string }>(async (req, res) => {
+  // `userId` is always present - it is the `[userId]` route segment.
+  asyncHandler<{}, unknown, unknown, { userId: string; days?: string }>(async (req, res) => {
     if (!req.user?.isAdmin) {
       throw new ForbiddenError('Unauthorized. Admin access required.');
     }
 
     const userId = req.query.userId;
-    if (!userId) {
-      return res.status(400).json({ error: 'userId is required' });
-    }
-
     const { days } = QuerySchema.parse({ days: req.query.days });
 
     const transactions = await creditTransactionRepository.findByOwnerWithFilters(userId, CreditHolderType.User, {
@@ -47,11 +44,7 @@ const handler = baseApi().get(
 
     // Resolve each distinct actor once for display.
     const actorIds = [
-      ...new Set(
-        transactions
-          .map(tx => (tx.metadata?.actorId as string | undefined) ?? undefined)
-          .filter((id): id is string => !!id)
-      ),
+      ...new Set(transactions.map(tx => tx.metadata?.actorId as string | undefined).filter((id): id is string => !!id)),
     ];
     const actorNames = new Map<string, string>();
     await Promise.all(
