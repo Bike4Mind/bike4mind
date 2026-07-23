@@ -55,7 +55,7 @@ export const CreditAdjustmentModal: React.FC<CreditAdjustmentModalProps> = ({
         {selectedUser && (
           <>
             <Typography level="body-md">
-              User: <strong>{selectedUser.fullName || selectedUser.email}</strong>
+              User: <strong>{selectedUser.name || selectedUser.email}</strong>
             </Typography>
 
             <Typography level="body-md" mb={1}>
