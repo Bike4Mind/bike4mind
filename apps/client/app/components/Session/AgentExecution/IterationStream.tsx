@@ -51,6 +51,12 @@ interface IterationStreamProps {
    * this default (see `expanded` below), so iterations stay freely collapsible.
    */
   collapsedByDefault?: boolean;
+  /**
+   * Render without the outer artifact-style frame (border/bg/radius/padding).
+   * Used by the "Show reasoning" disclosure, which supplies its own frame (with
+   * a "Hide reasoning" header on top) so the trace doesn't get a doubled border.
+   */
+  unframed?: boolean;
 }
 
 interface IterationGroup {
@@ -88,6 +94,7 @@ const IterationStream: FC<IterationStreamProps> = ({
   executionId,
   hideFinalAnswer = false,
   collapsedByDefault = false,
+  unframed = false,
 }) => {
   const execution = useAgentExecutionStore(selectExecution(executionId));
 
@@ -222,16 +229,21 @@ const IterationStream: FC<IterationStreamProps> = ({
       data-testid={`iteration-stream-${executionId}`}
       // Framed like an artifact card (ArtifactPreviewCard): outlined border +
       // surface2 background + 8px radius + 16px inner padding, so the whole
-      // reply reads as one contained block.
+      // reply reads as one contained block. `unframed` drops the frame when a
+      // parent (the "Show reasoning" disclosure) already provides one.
       sx={{
         display: 'flex',
         flexDirection: 'column',
         gap: 2.5, // 20px between status header, iterations, and permission card
-        p: 2,
-        border: '1px solid',
-        borderColor: 'neutral.outlinedBorder',
-        backgroundColor: 'background.surface2',
-        borderRadius: '8px',
+        ...(unframed
+          ? {}
+          : {
+              p: 2,
+              border: '1px solid',
+              borderColor: 'neutral.outlinedBorder',
+              backgroundColor: 'background.surface2',
+              borderRadius: '8px',
+            }),
       }}
     >
       {/* Status header - suppressed when there's nothing meaningful to show
@@ -240,7 +252,7 @@ const IterationStream: FC<IterationStreamProps> = ({
           We still surface the header during active runs (status pill + abort
           button) so the user has feedback and a way to bail out. */}
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
+        <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap', mt: 0.5 }}>
           {execution.isAborting ? (
             // Aborting: credits on the left, red "Aborting…" text. No spinner
             // here - the Stop button already shows a "Stopping…" spinner.
