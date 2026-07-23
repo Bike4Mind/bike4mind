@@ -53,7 +53,7 @@ import { useUser } from '@client/app/contexts/UserContext';
 import { useEntitlementGate } from '@client/app/hooks/useEntitlementGate';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
-import { useSearchOrganizations } from '@client/app/hooks/data/organizations';
+import { useGetOrganization, useSearchOrganizations } from '@client/app/hooks/data/organizations';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
@@ -304,13 +304,17 @@ function AdminOrgPicker({ value, onChange }: { value?: string; onChange: (organi
   const { debouncedValue: search, setValue: setSearch } = useDebounceValue('', 400);
   const { data, isLoading } = useSearchOrganizations({ page: 1, limit: 20, search });
   const [picked, setPicked] = useState<WithId<IOrganizationDocument> | null>(null);
+  // Resolve the label for a value that isn't in the current search page and wasn't
+  // picked here (e.g. a role flip re-mounts this picker with a pre-set org), so the
+  // Autocomplete never looks empty while the parent still holds that organizationId.
+  const { data: fetchedSelected } = useGetOrganization(value && !picked ? value : null);
 
   useEffect(() => {
     if (!value) setPicked(null);
   }, [value]);
 
   const options = data?.data ?? [];
-  const selected = value ? (picked ?? options.find(org => org.id === value) ?? null) : null;
+  const selected = value ? (picked ?? options.find(org => org.id === value) ?? fetchedSelected ?? null) : null;
   // Keep the selected org present even when the current search filters it out.
   const mergedOptions = selected && !options.some(org => org.id === selected.id) ? [selected, ...options] : options;
 
@@ -326,7 +330,12 @@ function AdminOrgPicker({ value, onChange }: { value?: string; onChange: (organi
           setPicked(org);
           onChange(org?.id ?? undefined);
         }}
-        onInputChange={(_, input) => setSearch(input ?? '')}
+        onInputChange={(_, input, reason) => {
+          // On select, MUI pushes the chosen label back through onInputChange
+          // (reason 'reset'); don't treat that as a new search - it just triggers a
+          // redundant refetch and narrows the next-open list to the one org.
+          if (reason !== 'reset') setSearch(input ?? '');
+        }}
         isOptionEqualToValue={(option, v) => option.id === v.id}
         getOptionLabel={option => option.name}
         data-testid="embed-key-org-admin-select"
@@ -349,12 +358,15 @@ function MemberOrgPicker({ value, onChange }: { value?: string; onChange: (organ
 
   if (!isLoading && (billingOrgs?.length ?? 0) === 0) {
     return (
-      <Alert color="warning" startDecorator={<WarningIcon />} data-testid="embed-key-org-empty">
-        <Typography level="body-sm">
-          You do not administer any organization. Embed keys must be organization-owned, so ask an org owner or a
-          platform admin to mint one.
-        </Typography>
-      </Alert>
+      <FormControl required>
+        <FormLabel>Organization</FormLabel>
+        <Alert color="warning" startDecorator={<WarningIcon />} data-testid="embed-key-org-empty">
+          <Typography level="body-sm">
+            You do not administer any organization. Embed keys must be organization-owned, so ask an org owner or a
+            platform admin to mint one.
+          </Typography>
+        </Alert>
+      </FormControl>
     );
   }
 
@@ -419,13 +431,25 @@ function NewEmbedKeyModal({
   const [organizationId, setOrganizationId] = useState<string | undefined>(undefined);
   const [form, setForm] = useState<EmbedKeyFormState>(emptyForm());
 
+  const resetForm = () => {
+    setName('');
+    setOrganizationId(undefined);
+    setForm(emptyForm());
+  };
+
+  // The modal is parent-controlled via `open`, so it hides rather than unmounts;
+  // reset on every close (cancel/backdrop) or a filled-then-cancelled form would
+  // reappear pre-populated on reopen.
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
       onSuccess(result.key);
       onClose();
-      setName('');
-      setOrganizationId(undefined);
-      setForm(emptyForm());
+      resetForm();
     },
   });
 
@@ -440,7 +464,7 @@ function NewEmbedKeyModal({
     });
 
   return (
-    <Modal open={open} onClose={onClose}>
+    <Modal open={open} onClose={handleClose}>
       <ModalDialog size="lg" sx={{ width: '600px', maxWidth: '95vw', maxHeight: '90vh', overflow: 'auto' }}>
         <Typography level="h4">Create Embed Key</Typography>
         <Typography level="body-sm" sx={{ color: 'text.tertiary', mt: 0.5, mb: 2 }}>
@@ -464,7 +488,7 @@ function NewEmbedKeyModal({
           <EmbedKeyFormFields form={form} onChange={setForm} />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
-            <Button variant="outlined" onClick={onClose}>
+            <Button variant="outlined" onClick={handleClose}>
               Cancel
             </Button>
             <Button

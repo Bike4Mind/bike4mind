@@ -67,6 +67,9 @@ vi.mock('@client/app/hooks/data/organizations', () => ({
     data: { data: h.allOrgs, totalPages: 1, totalOrganizations: h.allOrgs.length },
     isLoading: false,
   }),
+  // Label-resolver fallback for a set-but-off-page org; the admin picker only needs
+  // it on the cold-start/role-flip path, so null is fine for these tests.
+  useGetOrganization: () => ({ data: null }),
 }));
 
 vi.mock('@client/app/hooks/data/agents', () => ({
@@ -267,6 +270,20 @@ describe('EmbedKeysTab', () => {
         organizationId: 'org-1',
       })
     );
+  });
+
+  it('resets the create form on cancel so a filled-then-cancelled form does not reappear', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    fillNameAndAgent('Marketing site');
+    fireEvent.click(within(screen.getByTestId('embed-key-org-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Acme Org' }));
+    // Cancel, then reopen.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+
+    expect(within(screen.getByTestId('embed-key-name-input')).getByRole('textbox')).toHaveValue('');
+    expect(screen.getByTestId('embed-key-create-btn')).toBeDisabled();
   });
 
   it('keeps Create disabled until an organization is chosen', () => {
