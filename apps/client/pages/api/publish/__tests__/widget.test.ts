@@ -119,6 +119,16 @@ describe('publish comment widget', () => {
     expect(document.getElementById('b4m-ov')).not.toBeNull();
     expect(document.getElementById('b4m-panel')).not.toBeNull();
   });
+
+  it('scopes the sans-serif font to the panel, which is appended to body not #b4m-ov', () => {
+    const css = getWidgetJs();
+    // The panel and hint live outside #b4m-ov, so the font rule must name them or they
+    // fall back to the host page's default serif (buttons hide it via a UA sans default).
+    const fontRule = css.split('\n').find(line => line.includes('font-family:ui-sans-serif'));
+    expect(fontRule).toBeDefined();
+    expect(fontRule).toContain('#b4m-panel');
+    expect(fontRule).toContain('#b4m-panel *');
+  });
 });
 
 /**

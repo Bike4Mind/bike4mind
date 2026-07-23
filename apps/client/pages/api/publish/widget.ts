@@ -80,7 +80,10 @@ const WIDGET_JS = String.raw`(function () {
   // ---- styles (style-src allows 'unsafe-inline') ----
   var css = document.createElement('style');
   css.textContent = [
-    '#b4m-ov,#b4m-ov *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}',
+    // Cover all three widget roots, not just #b4m-ov: the panel and the hint toast are
+    // appended to <body> (not inside #b4m-ov), so without this they inherit the host
+    // page's default serif. Buttons masked the bug by defaulting to a UA sans-serif.
+    '#b4m-ov,#b4m-ov *,#b4m-panel,#b4m-panel *,#b4m-hint{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}',
     // --b4m-chrome is the height of the wrapper's bottom livery bar (.b4m-bar), measured at
     // boot. That bar is fixed at z-index 2147483647 (the max), so we cannot stack above it -
     // the launcher and panel must sit clear of it instead. Must stay in sync with the bar in
