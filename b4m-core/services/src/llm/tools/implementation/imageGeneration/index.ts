@@ -16,9 +16,9 @@ import {
   LocalImageService,
   getSettingsMap,
   getSettingsValue,
-  RekognitionImageModerationService,
 } from '@bike4mind/utils';
 import { BFLImageService } from '@bike4mind/utils';
+import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { ImageGenerateParams } from 'openai/resources/images';
 import { getEffectiveApiKey } from '../../../../apiKeyService';
 import axios from 'axios';

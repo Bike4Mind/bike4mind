@@ -15,11 +15,16 @@ interface RevokeUserApiKeyAdapters {
   };
 }
 
+export interface RevokeUserApiKeyResult {
+  /** The revoked key's name, so callers can log a real name instead of a placeholder. */
+  name: string;
+}
+
 export const revokeUserApiKey = async (
   userId: string,
   parameters: RevokeUserApiKeyParameters,
   adapters: RevokeUserApiKeyAdapters
-): Promise<void> => {
+): Promise<RevokeUserApiKeyResult> => {
   const { db } = adapters;
   const params = secureParameters(parameters, revokeUserApiKeySchema);
 
@@ -28,6 +33,18 @@ export const revokeUserApiKey = async (
     throw new NotFoundError('API key not found');
   }
 
+  // Stamp only on the actual transition, so re-revoking never resets the audit
+  // trail and a key disabled before these fields existed keeps an honest blank.
+  if (apiKey.status !== ApiKeyStatus.DISABLED) {
+    apiKey.revokedAt = new Date();
+    apiKey.revokedBy = userId;
+    if (params.reason) {
+      apiKey.revokedReason = params.reason;
+    }
+  }
+
   apiKey.status = ApiKeyStatus.DISABLED;
   await db.userApiKeys.update(apiKey);
+
+  return { name: apiKey.name };
 };

@@ -57,7 +57,10 @@ export * from './cache/RapidReplyMappingsCache';
 export * from './queue';
 export * from './ws';
 export * from './promptModeration';
-export * from './imageModeration';
+// NOTE: './imageModeration' is intentionally NOT re-exported here - it pulls in
+// @aws-sdk/client-rekognition + jimp. Import it via the '@bike4mind/utils/imageModeration'
+// subpath instead so those server-only deps stay out of bundles that don't moderate
+// images (e.g. the CLI). See issue #660.
 export * from './file';
 export * from './questMaster';
 export * from './questMasterToolSchema';
@@ -65,6 +68,7 @@ export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
 export * from './videoGeneration';
+export * from './soundGeneration';
 export * from './analytics';
 export * from './user';
 export * from './pricing';

@@ -153,7 +153,11 @@ const SidenavNav = ({ section = 'all' }: { section?: 'pinned' | 'scroll' | 'all'
     // It opens the user's own lakes (browse + manage) at /data-lakes, so a non-Opti
     // user with the feature can reach their lakes too (was previously elided when
     // Opti was off, and pointed at the Opti static-registry explorer when on).
-    ...(isDataLakesEnabled && gearOpen('datalakes')
+    // Gated ONLY on the EnableDataLakes admin flag, deliberately NOT earned-nav: an
+    // admin explicitly turns this feature on, so it must be discoverable immediately.
+    // Earned-nav here was a bootstrapping trap - the row only appeared AFTER a lake
+    // existed, yet the row is how a first-time user reaches the create/manage UI.
+    ...(isDataLakesEnabled
       ? [
           {
             key: 'datalakes',

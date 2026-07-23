@@ -3,7 +3,7 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { homedir } from 'os';
 import { join, dirname } from 'path';
 import { MCPClient } from '@bike4mind/mcp';
-import { generateMcpTools, generateMcpToolsFromCache } from '@bike4mind/services';
+import { generateMcpTools, generateMcpToolsFromCache } from '@bike4mind/services/llm/tools/cliTools';
 import type { ICompletionOptionTools } from '@bike4mind/llm-adapters';
 import type { CliConfig } from '../storage/types';
 import { logger } from './Logger';

@@ -335,4 +335,21 @@ describe('EmbedKeysTab', () => {
     expect(screen.queryByTestId('embed-key-org-admin-select')).not.toBeInTheDocument();
     expect(screen.queryByTestId('embed-key-org-empty')).not.toBeInTheDocument();
   });
+
+  it('marks rows bound to a model-less agent with a warning indicator', () => {
+    renderTab();
+    expect(screen.getByTestId('embed-key-row-model-warning-key-4')).toBeInTheDocument();
+  });
+
+  it('shows no row indicator for a key bound to an agent with an explicit model', () => {
+    renderTab();
+    expect(screen.queryByTestId('embed-key-row-model-warning-key-1')).not.toBeInTheDocument();
+  });
+
+  it('shows no row indicator when the bound agent is not in the fetched list', () => {
+    h.keys = [{ ...modellessAgentKey, id: 'key-8', agentId: 'agent-ghost' }];
+    renderTab();
+    expect(screen.getByTestId('embed-key-row-key-8')).toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-row-model-warning-key-8')).not.toBeInTheDocument();
+  });
 });

@@ -685,7 +685,11 @@ const AgentForm: React.FC<AgentFormProps> = ({
 
         {mode === 'edit' && initialData?.id && (
           <Grid xs={12}>
-            <EmbedSnippetSection agentId={initialData.id} agentName={formState.name} />
+            <EmbedSnippetSection
+              agentId={initialData.id}
+              agentName={formState.name}
+              preferredModel={formState.preferredModel}
+            />
           </Grid>
         )}
       </Box>

@@ -9,7 +9,8 @@ import {
 } from '@bike4mind/database';
 import { moderateImageOrThrow } from '@bike4mind/services';
 import { decodeS3Key, findWithRetry, withContext } from '@server/s3/utils';
-import { getSettingsMap, getSettingsValue, RekognitionImageModerationService } from '@bike4mind/utils';
+import { getSettingsMap, getSettingsValue } from '@bike4mind/utils';
+import { RekognitionImageModerationService } from '@bike4mind/utils/imageModeration';
 import { getFilesStorage } from '@server/utils/storage';
 import { moderateUploadedFile } from '@server/s3/moderateUploadedFile';
 import { sendToQueue } from '@server/utils/sqs';

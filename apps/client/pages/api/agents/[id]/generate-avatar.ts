@@ -9,9 +9,8 @@ import {
   getSettingsByNames,
   getSettingsMap,
   getSettingsValue,
-  RekognitionImageModerationService,
-  ImageModerationBlockedError,
 } from '@bike4mind/utils';
+import { RekognitionImageModerationService, ImageModerationBlockedError } from '@bike4mind/utils/imageModeration';
 import { getAvailableModels } from '@bike4mind/llm-adapters';
 import { apiKeyService, moderateImageOrThrow } from '@bike4mind/services';
 import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';

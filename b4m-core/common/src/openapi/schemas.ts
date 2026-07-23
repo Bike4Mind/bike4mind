@@ -1,11 +1,6 @@
 import { z } from 'zod';
 import { registry } from './registry';
-import {
-  CompletionRequestSchema,
-  CompletionMessageSchema,
-  CompletionToolSchema,
-  ResponseFormatSchema,
-} from '../schemas/cliCompletions';
+import { CompletionRequestSchema } from '../schemas/cliCompletions';
 
 /**
  * OpenAPI component registrations for the public `/v1` surface.
@@ -15,12 +10,13 @@ import {
  * Response/SSE/error schemas are declared here because the wire responses are
  * assembled in handlers, not from a single Zod object - they MUST stay in sync
  * with their sources, noted per schema below.
+ *
+ * The message/tool/response-format sub-schemas are intentionally NOT registered
+ * as standalone components: CompletionRequestSchema composes the untagged Zod
+ * instances, so the generator inlines their shapes into CompletionRequest.
+ * Registering `.openapi()`-tagged copies would only emit orphaned, never-$ref'd
+ * components (redocly no-unused-components), so the shapes live inline instead.
  */
-
-// --- Shared request components (reused inside CompletionRequest) ---
-registry.register('CompletionMessage', CompletionMessageSchema.openapi('CompletionMessage'));
-registry.register('CompletionTool', CompletionToolSchema.openapi('CompletionTool'));
-registry.register('ResponseFormat', ResponseFormatSchema.openapi('ResponseFormat'));
 
 export const CompletionRequest = registry.register(
   'CompletionRequest',

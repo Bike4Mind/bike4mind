@@ -196,6 +196,12 @@ export const TextToSpeechUsageTransaction = BaseCreditTransaction.extend({
   sessionId: z.string(),
 });
 
+export const SoundEffectsUsageTransaction = BaseCreditTransaction.extend({
+  type: z.literal('sound_effects_usage'),
+  model: z.string(),
+  sessionId: z.string(),
+});
+
 export const TransferCreditTransaction = BaseCreditTransaction.extend({
   type: z.literal('transfer_credit'),
   recipientId: z.string(),
@@ -227,6 +233,7 @@ export const CreditTransaction = z.discriminatedUnion('type', [
   CompletionApiUsageTransaction,
   SpeechToTextUsageTransaction,
   TextToSpeechUsageTransaction,
+  SoundEffectsUsageTransaction,
   TransferCreditTransaction,
   ReceivedCreditTransaction,
 ]);
@@ -252,6 +259,7 @@ export type IToolUsageTransaction = z.infer<typeof ToolUsageTransaction>;
 export type ICompletionApiUsageTransaction = z.infer<typeof CompletionApiUsageTransaction>;
 export type ISpeechToTextUsageTransaction = z.infer<typeof SpeechToTextUsageTransaction>;
 export type ITextToSpeechUsageTransaction = z.infer<typeof TextToSpeechUsageTransaction>;
+export type ISoundEffectsUsageTransaction = z.infer<typeof SoundEffectsUsageTransaction>;
 export type ITransferCreditTransaction = z.infer<typeof TransferCreditTransaction>;
 export type IReceivedCreditTransaction = z.infer<typeof ReceivedCreditTransaction>;
 
@@ -283,6 +291,7 @@ export const CREDIT_DEDUCT_TRANSACTION_TYPES: CreditTransactionType[] = [
   'completion_api_usage',
   'speech_to_text_usage',
   'text_to_speech_usage',
+  'sound_effects_usage',
   'transfer_credit',
   'generic_deduct',
 ] as const;
@@ -430,6 +439,13 @@ export interface ICreditTransactionRepository extends IBaseRepository<ICreditTra
 
   /** One filtered, paginated page of an owner's ledger, newest first, with a total count. */
   queryLedgerPage(ownerId: string, ownerType: CreditHolderType, options: ILedgerQueryOptions): Promise<ILedgerPage>;
+
+  /**
+   * One page of admin credit adjustments across ALL users, newest first, with a
+   * total count. Cross-owner (not scoped to one holder): the generic_add /
+   * generic_deduct rows written by `adminUpdateUser` (reason `admin_adjustment`).
+   */
+  queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage>;
 
   /**
    * An owner's API-token spend over the trailing N days (default 30) grouped by

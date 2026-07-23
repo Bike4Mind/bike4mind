@@ -50,6 +50,7 @@ const CreditTransactionSchema = new Schema<ICreditTransactionDocument>(
         'completion_api_usage',
         'speech_to_text_usage',
         'text_to_speech_usage',
+        'sound_effects_usage',
         'transfer_credit',
         'received_credit',
       ],
@@ -220,6 +221,30 @@ export class CreditTransactionRepository
     // together since a busy org can have tens of thousands of rows. Not a single
     // transaction: a concurrent write between the two can make total differ from
     // the page by one - acceptable for a read-only admin view.
+    const [data, total] = await Promise.all([
+      this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
+      this.model.countDocuments(query),
+    ]);
+
+    return { data, total };
+  }
+
+  async queryAdminAdjustmentsPage(options: { days?: number; limit: number; skip: number }): Promise<ILedgerPage> {
+    // Admin adjustments are the generic_add / generic_deduct rows adminUpdateUser
+    // writes with reason `admin_adjustment` against a User holder. Scoping to that
+    // reason keeps out OTC/registration grants and other generic writes.
+    const query: Record<string, unknown> = {
+      ownerType: CreditHolderType.User,
+      type: { $in: ['generic_add', 'generic_deduct'] },
+      reason: 'admin_adjustment',
+    };
+
+    if (options.days !== undefined) {
+      const from = new Date();
+      from.setDate(from.getDate() - options.days);
+      query.createdAt = { $gte: from };
+    }
+
     const [data, total] = await Promise.all([
       this.model.find(query).sort({ createdAt: -1 }).skip(options.skip).limit(options.limit).exec(),
       this.model.countDocuments(query),

@@ -22,6 +22,13 @@ const DEPRECATED_MODEL_MAP: Record<string, string> = {
   'claude-sonnet-4-20250514': 'claude-sonnet-4-6',
   'claude-3-opus-20240229': 'claude-opus-4-8',
   'claude-3-haiku-20240307': 'claude-haiku-4-5-20251001',
+  // OpenAI-hosted models retired from the API (https://platform.openai.com/docs/deprecations).
+  // These are past their shutdown date and 404 upstream, so a session/agent still pinned to
+  // one must be upgraded here to avoid a hard API failure. Models with a future shutdown date
+  // keep their real ID (they still resolve) and are only hidden from the picker via
+  // deprecationDate in the catalog.
+  'gpt-5-chat-latest': 'gpt-5.5',
+  'gpt-5.1-chat-latest': 'gpt-5.5',
 };
 
 export function resolveDeprecatedModelId(modelId: string, context?: string): string {

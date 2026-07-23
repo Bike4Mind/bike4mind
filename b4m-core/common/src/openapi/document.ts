@@ -7,6 +7,16 @@ import { ALL_API_KEY_SCOPES, REQUIRED_SCOPES } from './security';
 import './schemas';
 import './operations';
 
+// Neutral placeholder default so the committed openapi.json never hardcodes a
+// real deployment domain in this public repo (matches apiReferenceContent.ts).
+// Real deployments set B4M_OPENAPI_PROD_URL at build time.
+const PLACEHOLDER_PROD_URL = 'https://your-deployment.example.com';
+
+/** The production base URL - single source for both servers() and codeSamples(). */
+function prodUrl(): string {
+  return process.env.B4M_OPENAPI_PROD_URL ?? PLACEHOLDER_PROD_URL;
+}
+
 /**
  * Server URLs are env-overridable with neutral placeholder defaults so the
  * committed openapi.json never hardcodes a real deployment domain in this public
@@ -15,7 +25,7 @@ import './operations';
  */
 function servers() {
   return [
-    { url: process.env.B4M_OPENAPI_PROD_URL ?? 'https://your-deployment.example.com', description: 'Production' },
+    { url: prodUrl(), description: 'Production' },
     {
       url: process.env.B4M_OPENAPI_STAGING_URL ?? 'https://staging.your-deployment.example.com',
       description: 'Staging',
@@ -82,18 +92,28 @@ export function toPythonLiteral(value: unknown, indent = 1): string {
  * curl / JS / Python samples, attached to each operation as `x-codeSamples`.
  * `streaming` toggles the SSE-only affordances (curl `-N`, Python `stream=True`)
  * so the non-streaming tools endpoint does not tell users to stream JSON.
+ * The curl body is piped through a quoted heredoc (`--data-binary @-`) so a
+ * single quote inside the JSON body can never break out of the shell string.
+ * The delimiter is deliberately unusual so it cannot collide with a body line
+ * (a bare `JSON` line in a future dynamic body would end the heredoc early).
  */
+const CURL_HEREDOC_DELIMITER = 'B4M_REQUEST_BODY';
+
 function codeSamples(path: string, body: unknown, streaming: boolean, authToken: string) {
-  const url = `https://your-deployment.example.com${path}`;
-  const json = JSON.stringify(body);
+  const url = `${prodUrl()}${path}`;
   const pretty = JSON.stringify(body, null, 2);
   const curlFlags = streaming ? '-sN' : '-s';
   const pyStream = streaming ? '\n    stream=True,' : '';
+  const d = CURL_HEREDOC_DELIMITER;
   return [
     {
       lang: 'curl',
       label: 'curl',
-      source: `curl ${curlFlags} -X POST "${url}" \\\n  -H "Authorization: Bearer ${authToken}" \\\n  -H "Content-Type: application/json" \\\n  -d '${json}'`,
+      source:
+        `curl ${curlFlags} -X POST "${url}" \\\n` +
+        `  -H "Authorization: Bearer ${authToken}" \\\n` +
+        `  -H "Content-Type: application/json" \\\n` +
+        `  --data-binary @- <<'${d}'\n${pretty}\n${d}`,
     },
     {
       lang: 'JavaScript',
