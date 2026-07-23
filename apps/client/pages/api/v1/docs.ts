@@ -34,6 +34,10 @@ const SPEC_URL = '/api/v1/openapi.json';
 
 // Keeps the page self-contained (see the header comment): no hosted fonts, no
 // Agent calls to api.scalar.com.
+// Constraint: this is serialized into the single-quoted `data-configuration`
+// HTML attribute below, so values must contain no apostrophe - one would
+// silently truncate the attribute. Keep values apostrophe-free (today all are
+// booleans), or switch that attribute to double-quotes with &quot; escaping.
 const SCALAR_CONFIG = { withDefaultFonts: false, agent: { disabled: true } };
 
 // Scoped to this route (global CSP does not apply to /api/*). script-src stays
