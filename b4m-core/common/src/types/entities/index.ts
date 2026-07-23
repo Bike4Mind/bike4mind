@@ -30,6 +30,7 @@ export * from './CounterLogTypes';
 export * from './PromptTypes';
 export * from './MementoTypes';
 export * from './QuestTypes';
+export * from './QuestNodeTypes';
 export * from './ProjectTypes';
 export * from './FriendshipTypes';
 export * from './ActivityTypes';
