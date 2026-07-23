@@ -18,8 +18,10 @@ export class AdminPage extends BasePage {
     // Menu items can be detached by React re-renders (WebSocket/polling).
     // Retry: re-open the menu if the click fails due to detachment or visibility.
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await this.page.getByTestId('profile-menu-card').click();
       try {
+        // Bound the click so a stuck menu-open (unbounded stability check) fails fast into the
+        // retry rather than hanging; keeping it inside the try lets a throw retry too.
+        await this.page.getByTestId('profile-menu-card').click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await this.page.getByTestId('profile-menu-admin').click({ timeout: TIMEOUTS.ELEMENT_STATE });
         break;
       } catch {
@@ -92,8 +94,10 @@ export class AdminPage extends BasePage {
     const testId = option === 'name' ? 'sort-option-name' : 'sort-option-created-at';
     // Dropdown options can be detached by React re-renders. Retry: re-open the dropdown.
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await this.page.getByTestId('admin-sort-by-select').click();
       try {
+        // Bound the click so a stuck dropdown-open (unbounded stability check) fails fast into
+        // the retry rather than hanging; keeping it inside the try lets a throw retry too.
+        await this.page.getByTestId('admin-sort-by-select').click({ timeout: TIMEOUTS.ELEMENT_STATE });
         await this.page.getByTestId(testId).click({ timeout: TIMEOUTS.ELEMENT_STATE });
         break;
       } catch {
