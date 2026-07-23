@@ -11,6 +11,7 @@ import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import type { IFabFileDocument } from '@bike4mind/common';
 
@@ -187,7 +188,7 @@ export default function DataLakeExplorer({
         </Box>
       )}
       <Box sx={{ px: 3, pt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: 'Data Lake Explorer' }]} />
+        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: `${DATA_LAKE} Explorer` }]} />
         {onManage && (
           <Button
             data-testid="datalake-manage-btn"
