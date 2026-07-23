@@ -7,7 +7,7 @@ import { useEntitlements } from '@client/app/hooks/data/entitlements';
 // @bike4mind/common. Access is any-of: admin OR (allowedUserTags intersect
 // userTags) OR (allowedEntitlements intersect entitlementKeys); empty keys
 // means tag-only.
-import { isModelAccessible } from '@bike4mind/common';
+import { isModelAccessible, isModelDeprecated } from '@bike4mind/common';
 
 /**
  * Hook that returns only the models that the current user can access
@@ -41,21 +41,24 @@ export function useAccessibleModels() {
     return modelConfigs.filter(model => isModelAccessible(model, userTags, isAdmin, entitlementKeys));
   }, [modelConfigs, userTags, isAdmin, entitlementKeys]);
 
-  // Also provide helpers for specific model types
+  // Type-specific lists feed the model pickers, so they also drop retired models
+  // (deprecationDate reached). The raw `accessibleModels` is intentionally left
+  // unfiltered: it backs validation, default resolution, and fallback, where a
+  // session/agent still pinned to a just-retired model must remain recognized.
   const accessibleTextModels = useMemo(() => {
-    return accessibleModels.filter(model => model.type === 'text');
+    return accessibleModels.filter(model => model.type === 'text' && !isModelDeprecated(model));
   }, [accessibleModels]);
 
   const accessibleImageModels = useMemo(() => {
-    return accessibleModels.filter(model => model.type === 'image');
+    return accessibleModels.filter(model => model.type === 'image' && !isModelDeprecated(model));
   }, [accessibleModels]);
 
   const accessibleSpeechModels = useMemo(() => {
-    return accessibleModels.filter(model => model.type === 'speech-to-text');
+    return accessibleModels.filter(model => model.type === 'speech-to-text' && !isModelDeprecated(model));
   }, [accessibleModels]);
 
   const accessibleVideoModels = useMemo(() => {
-    return accessibleModels.filter(model => model.type === 'video');
+    return accessibleModels.filter(model => model.type === 'video' && !isModelDeprecated(model));
   }, [accessibleModels]);
 
   return {
