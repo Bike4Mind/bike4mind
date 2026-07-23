@@ -9,7 +9,7 @@
  * surface must share: resolving WHICH lakes a user can see.
  */
 import { DATA_LAKES, getAccessibleDataLakes, hasDeveloperUserTag, isImageServeable } from '@bike4mind/common';
-import type { DataLakeConfig, AccessContext } from '@bike4mind/common';
+import type { DataLakeConfig, AccessContext, IFabFileDocument } from '@bike4mind/common';
 import { dataLakeService, fabFilesService } from '@bike4mind/services';
 import {
   adminSettingsRepository,
@@ -55,6 +55,41 @@ export async function resolveAccessibleLakes(req: EntitlementRequest): Promise<D
 
   const dynamicIds = new Set(dynamic.map(d => d.id));
   return [...dynamic, ...staticLakes.filter(s => !dynamicIds.has(s.id))];
+}
+
+/**
+ * Pure gate: is `file` accessible via any of `lakes`? Access = the file carries an accessible
+ * lake's unique meta-tag (covers dynamic lakes safely - membership IS the meta-tag) OR a
+ * static-registry (open) prefix. A dynamic lake's user-controlled prefix is deliberately NOT a
+ * grant here - that was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
+ * This is the single source of truth for single-file lake authorization (used by the browse
+ * deep-link branch and the /api/files/:id lake-aware fallback). (#836)
+ */
+export function isFileInAccessibleLake(lakes: DataLakeConfig[], file: IFabFileDocument): boolean {
+  const dataLakeTags = lakes.map(dl => dl.datalakeTag);
+  const { openTagPrefixes } = splitTagPrefixes(lakes);
+  const fileTagNames = file.tags?.map(t => t.name) ?? [];
+  const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
+  const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
+  return hasMetaTagAccess || hasOpenPrefixAccess;
+}
+
+/**
+ * Resolve + authorize a single FabFile by id against the caller's accessible lakes. Returns the
+ * FabFile doc when it belongs to a lake the caller can access, else null. Used as the fallback
+ * for GET /api/files/:id so curated/shared lake files (which are authorized by lake tag/prefix,
+ * NOT by per-file ACL) open in the shared file viewer. Does NOT itself mint a signed URL - the
+ * caller passes the returned doc through fabFilesService.generateSignedUrl. (#836)
+ */
+export async function findLakeAccessibleFabFile(
+  req: EntitlementRequest,
+  fileId: string
+): Promise<IFabFileDocument | null> {
+  const lakes = await resolveAccessibleLakes(req);
+  if (lakes.length === 0) return null;
+  const file = await fabFileRepository.findById(fileId);
+  if (!file || file.deletedAt) return null;
+  return isFileInAccessibleLake(lakes, file) ? file : null;
 }
 
 export interface DataLakeArticlesQuery {
@@ -108,11 +143,9 @@ export async function queryDataLakeArticles(
   // was the cross-tenant hole; dynamic-lake files are reached via the meta-tag.
   if (query.id) {
     const file = await fabFileRepository.findById(query.id);
-    if (!file || file.deletedAt) return { data: [], total: 0, hasMore: false };
-    const fileTagNames = file.tags?.map(t => t.name) ?? [];
-    const hasMetaTagAccess = dataLakeTags.some(t => fileTagNames.includes(t));
-    const hasOpenPrefixAccess = openTagPrefixes.some(p => fileTagNames.some(t => t.startsWith(p)));
-    if (!hasMetaTagAccess && !hasOpenPrefixAccess) return { data: [], total: 0, hasMore: false };
+    if (!file || file.deletedAt || !isFileInAccessibleLake(lakes, file)) {
+      return { data: [], total: 0, hasMore: false };
+    }
     const { content, chunks, vector, ...metadata } = file as unknown as Record<string, unknown>;
     // A held/blocked uploaded image must not hand out its cached URL via the
     // deep-link/single-id branch. Keep the metadata (so the client can render a

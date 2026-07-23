@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import type { ISessionDocument } from '@bike4mind/common';
 import DataLakeExplorer from '@client/app/components/datalake/DataLakeExplorer';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
@@ -9,6 +10,10 @@ import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStor
 import { useChatInput } from '@client/app/hooks/useChatInput';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import { api } from '@client/app/contexts/ApiContext';
+
+// Per-browser pointer to the user's datalake chat session, reused across loads so opening the
+// surface doesn't mint a fresh empty session every visit. (#836)
+const DATALAKE_SESSION_KEY = 'dataLakeSessionId';
 
 /**
  * Data Lakes home - the top-level, Opti-independent destination for a user's OWN
@@ -47,15 +52,30 @@ export default function DataLakesHome() {
     creatingRef.current = true;
     void (async () => {
       try {
+        // Reuse the last datalake session if it still exists; otherwise create one. Reuse
+        // avoids minting an empty session on every visit (they'd pile up in the sidebar).
+        const savedId = localStorage.getItem(DATALAKE_SESSION_KEY);
+        if (savedId) {
+          try {
+            const { data } = await api.get<ISessionDocument>(`/api/sessions/${savedId}`);
+            queryClient.setQueryData(['sessions', savedId], data);
+            setSessionId(savedId);
+            return;
+          } catch {
+            localStorage.removeItem(DATALAKE_SESSION_KEY); // stale/gone - fall through to create
+          }
+        }
         const { data } = await api.post<ISessionDocument>('/api/sessions/create', {
           name: 'Data Lake',
           surface: 'datalake',
           forceKnowledgeRetrieval: true,
         });
         queryClient.setQueryData(['sessions', data.id], data);
+        localStorage.setItem(DATALAKE_SESSION_KEY, data.id);
         setSessionId(data.id);
       } catch {
         creatingRef.current = false; // allow a retry on the next render
+        toast.error("Couldn't start the data lake chat - please try again.");
       }
     })();
   }, [sessionId, queryClient]);
