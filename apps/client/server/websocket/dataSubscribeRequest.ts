@@ -107,6 +107,13 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
       [Subscription.collection.collectionName]: accessibleBy(userAbility).ofType(Subscription),
       [Artifact.collection.collectionName]: accessibleBy(userAbility).ofType(Artifact),
       [ArtifactVersion.collection.collectionName]: accessibleBy(userAbility).ofType(ArtifactVersion),
+      // [DELETION-FOOTPRINT] premium-bob run doc: the reading screen live-subscribes to its
+      // bob_runs doc by _id (issue #33). Owner-scoped so a user only sees their own runs. Literal
+      // string because the model lives in the overlay (not importable here); `userId` is a String
+      // field, so match the stringified id. This ownership rule (own runs only) MUST stay in sync
+      // with the GET /api/premium-bob/runs/:id polling route's read check (assertCanReadRun) so the
+      // poll can't leak what the socket wouldn't. Removed when Bob is extracted.
+      ['bob_runs']: { userId: user._id.toString() },
     }[collectionName];
   }
 
