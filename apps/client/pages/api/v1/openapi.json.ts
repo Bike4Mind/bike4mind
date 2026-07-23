@@ -37,7 +37,11 @@ function specForRequest(req: NextApiRequest): string {
   const host = req.headers.host;
   if (!host || !PLACEHOLDER_URL) return SPEC_JSON;
   const xfProto = req.headers['x-forwarded-proto'];
-  const proto = (Array.isArray(xfProto) ? xfProto[0] : xfProto)?.split(',')[0]?.trim() || 'https';
+  const rawProto = (Array.isArray(xfProto) ? xfProto[0] : xfProto)?.split(',')[0]?.trim();
+  // Allowlist the scheme: origin is spliced into the serialized JSON before it
+  // is re-parsed below, so a proxy ever forwarding a quote/backslash/control
+  // char in x-forwarded-proto would otherwise break JSON.parse and 5xx.
+  const proto = rawProto === 'http' || rawProto === 'https' ? rawProto : 'https';
   const origin = `${proto}://${host}`;
   // Rewrite the prod placeholder wherever it is embedded (contact + code
   // samples), then advertise this one real origin as the only server.
