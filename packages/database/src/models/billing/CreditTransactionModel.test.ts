@@ -290,3 +290,74 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
     expect(windowed).toHaveLength(0);
   });
 });
+
+describe('CreditTransactionRepository.queryAdminAdjustmentsPage', () => {
+  const USER = 'user-1';
+  const recent = () => new Date();
+  const seedAdjustments = (rows: Array<Record<string, unknown>>) =>
+    CreditTransaction.collection.insertMany(
+      rows.map(r => ({
+        ownerId: USER,
+        ownerType: CreditHolderType.User,
+        credits: 50,
+        type: 'generic_add',
+        reason: 'admin_adjustment',
+        createdAt: day(1),
+        updatedAt: day(1),
+        ...r,
+      }))
+    );
+
+  it('returns admin adjustments across all users, newest first, paginated', async () => {
+    await seedAdjustments([
+      { ownerId: 'user-a', createdAt: day(1) },
+      { ownerId: 'user-b', type: 'generic_deduct', credits: -20, createdAt: day(3) },
+      { ownerId: 'user-c', createdAt: day(2) },
+    ]);
+
+    const page1 = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 2, skip: 0 });
+    expect(page1.total).toBe(3);
+    expect(page1.data.map(d => d.createdAt.getTime())).toEqual([day(3).getTime(), day(2).getTime()]);
+    expect(page1.data.map(d => d.ownerId)).toEqual(['user-b', 'user-c']);
+  });
+
+  it('excludes non-admin generic writes and usage/org rows', async () => {
+    await seedAdjustments([{ createdAt: recent() }]); // admin adjustment (kept)
+    await seed([
+      // OTC-style generic_add against a user, but not an admin adjustment
+      {
+        ownerId: USER,
+        ownerType: CreditHolderType.User,
+        type: 'generic_add',
+        reason: 'OTC registration',
+        credits: 100,
+        createdAt: recent(),
+      },
+      // usage row
+      {
+        ownerId: USER,
+        ownerType: CreditHolderType.User,
+        type: 'text_generation_usage',
+        credits: -5,
+        createdAt: recent(),
+      },
+      // admin_adjustment but on an organization holder
+      { type: 'generic_deduct', reason: 'admin_adjustment', credits: -10, createdAt: recent() },
+    ]);
+
+    const { data, total } = await creditTransactionRepository.queryAdminAdjustmentsPage({ limit: 50, skip: 0 });
+    expect(total).toBe(1);
+    expect(data[0].ownerType).toBe(CreditHolderType.User);
+    expect(data[0].reason).toBe('admin_adjustment');
+  });
+
+  it('honors the trailing-day window', async () => {
+    await seedAdjustments([{ createdAt: recent() }]);
+    let res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
+    expect(res.total).toBe(1);
+
+    await CreditTransaction.collection.updateMany({}, { $set: { createdAt: new Date('2020-01-01') } });
+    res = await creditTransactionRepository.queryAdminAdjustmentsPage({ days: 30, limit: 50, skip: 0 });
+    expect(res.total).toBe(0);
+  });
+});

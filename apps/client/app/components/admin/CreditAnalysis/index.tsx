@@ -5,10 +5,12 @@ import InsightsIcon from '@mui/icons-material/Insights';
 import PriceChangeIcon from '@mui/icons-material/PriceChange';
 import BusinessIcon from '@mui/icons-material/Business';
 import ReceiptLongIcon from '@mui/icons-material/ReceiptLong';
+import HistoryIcon from '@mui/icons-material/History';
 import { MarginDashboard } from './components/MarginDashboard';
 import { ModelPricingCatalog } from './components/ModelPricingCatalog';
 import { OrgUsageDashboard } from './components/OrgUsageDashboard';
 import { TransactionLedger } from './components/TransactionLedger';
+import { CreditAdjustmentsLog } from './components/CreditAdjustmentsLog';
 import { UserCreditsManager } from './components/UserCreditsManager';
 import AdminProfileModal from '../AdminProfileModal';
 import ContextHelpButton from '@client/app/components/help/ContextHelpButton';
@@ -50,6 +52,12 @@ export const CreditAnalyticsTab: React.FC = () => {
               <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Ledger</Box>
             </Box>
           </Tab>
+          <Tab value="adjustments" data-testid="credit-analysis-adjustments-tab">
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <HistoryIcon sx={{ fontSize: '18px' }} />
+              <Box sx={{ display: { xs: 'none', sm: 'inline' } }}>Adjustments</Box>
+            </Box>
+          </Tab>
           <ContextHelpButton helpId="admin/credit-analytics" tooltipText="Credit Analytics Help" />
         </TabList>
 
@@ -71,6 +79,10 @@ export const CreditAnalyticsTab: React.FC = () => {
 
         <TabPanel value="ledger" sx={{ p: 0 }}>
           <TransactionLedger />
+        </TabPanel>
+
+        <TabPanel value="adjustments" sx={{ p: 0 }}>
+          <CreditAdjustmentsLog />
         </TabPanel>
       </Tabs>
 
