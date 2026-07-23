@@ -84,6 +84,16 @@ describe('GET /api/v1/openapi.json', () => {
     expect(spec.servers[0].url).toBe('http://local.test:3000');
   });
 
+  it('falls back to https for an unrecognized x-forwarded-proto (no JSON injection)', () => {
+    const { res, getStatus, getBody } = makeRes();
+    // A proto carrying a JSON-breaking char must not reach JSON.parse; the scheme
+    // is allowlisted, so the body stays valid and the origin defaults to https.
+    handler(makeReq('GET', { host: 'api.example.test', 'x-forwarded-proto': 'ht"tp' }), res);
+    expect(getStatus()).toBe(200);
+    const spec = JSON.parse(getBody()) as { servers: Array<{ url: string }> };
+    expect(spec.servers[0].url).toBe('https://api.example.test');
+  });
+
   it('serves the committed spec unchanged when no Host header is present', () => {
     const { res, getBody } = makeRes();
     handler(makeReq('GET'), res);
@@ -95,6 +105,7 @@ describe('GET /api/v1/openapi.json', () => {
     const { res, headers } = makeRes();
     handler(makeReq('GET', { host: 'api.example.test' }), res);
     expect(headers['Vary']).toContain('Host');
+    expect(headers['Vary']).toContain('X-Forwarded-Proto');
   });
 
   it('sets fully permissive CORS so any origin/tool can fetch the contract', () => {
