@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate, useSearch } from '@tanstack/react-router';
 import DataLakeExplorer from '@client/app/components/datalake/DataLakeExplorer';
+import { DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 import { useChatInput } from '@client/app/hooks/useChatInput';
 
@@ -33,7 +34,7 @@ export default function DataLakesHome() {
   return (
     <DataLakeExplorer
       source="datalakes"
-      rootLabel="Data Lakes"
+      rootLabel={DATA_LAKES}
       articleId={article ?? null}
       onBack={() => navigate({ to: '/new' })}
       onAskAbout={handleAskAbout}
