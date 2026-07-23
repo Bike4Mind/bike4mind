@@ -76,6 +76,9 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
 
   const [editedFields, setEditedFields] = useState<EditedFieldsState>({});
   const [formState, setFormState] = useState<WithOrgRef<IUserDocument>>({ ...user });
+  // Optional reason for a manual credit change; persisted on the audit record
+  // (see adminUpdateUser) only when currentCredits is actually edited.
+  const [creditReason, setCreditReason] = useState('');
   const [tempUserLevel, setTempUserLevel] = useState<UserLevelType>(user.level);
   const [systemMessageModalOpen, setSystemMessageModalOpen] = useState(false);
   const [loginAsMfaModalOpen, setLoginAsMfaModalOpen] = useState(false);
@@ -86,6 +89,7 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
   useEffect(() => {
     setFormState({ ...user });
     setTempUserLevel(user.level);
+    setCreditReason('');
   }, [user]);
 
   const handleFormFieldChange = (key: keyof IUserDocument, value: unknown) => {
@@ -121,12 +125,21 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
   };
 
   const handleSaveChanges = async () => {
-    const data = Object.entries(editedFields).reduce<Partial<IUserDocument>>((acc, [key, value]) => {
-      if (value) {
-        acc[key as keyof IUserDocument] = formState[key as keyof IUserDocument] as any;
-      }
-      return acc;
-    }, {});
+    const data = Object.entries(editedFields).reduce<Partial<IUserDocument> & { creditReason?: string }>(
+      (acc, [key, value]) => {
+        if (value) {
+          acc[key as keyof IUserDocument] = formState[key as keyof IUserDocument] as any;
+        }
+        return acc;
+      },
+      {}
+    );
+
+    // Attach the reason only when credits actually changed - the server ignores
+    // it otherwise, and it should never leak onto an unrelated profile edit.
+    if (editedFields.currentCredits && creditReason.trim()) {
+      data.creditReason = creditReason.trim();
+    }
 
     updateUser.mutate(
       { id: user.id, data },
@@ -135,6 +148,10 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
           // Product Access reads server-resolved sources (bypass follows the Role/isAdmin
           // just saved); refresh them so its chips aren't stale after a save.
           queryClient.invalidateQueries({ queryKey: ['admin', 'user-entitlements', user.id] });
+          setCreditReason('');
+          // Surface the just-written adjustment in the Credit Analysis audit views.
+          queryClient.invalidateQueries({ queryKey: ['admin', 'credit-adjustments'] });
+          queryClient.invalidateQueries({ queryKey: ['admin', 'user-credit-adjustments', user.id] });
           // Check if the updated user is the current logged-in user
           if (currentUser && user.id === currentUser.id) {
             try {
@@ -345,6 +362,8 @@ export const FullUsersView: React.FC<UsersViewProps> = ({ user, index, inModal }
                   userKey={user.id}
                   editedFields={editedFields}
                   onFieldChange={handleFormFieldChange}
+                  creditReason={creditReason}
+                  onCreditReasonChange={setCreditReason}
                 />
               </Stack>
 
