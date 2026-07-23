@@ -44,15 +44,13 @@ interface IterationStreamProps {
    */
   hideFinalAnswer?: boolean;
   /**
-   * Force every iteration accordion open by default. The live mount relies
-   * on the natural `defaultExpanded={isLast}` behavior (each iteration mounts
-   * as "the latest" at the time, then stays uncontrolled-open as the next
-   * one arrives), but the disclosure replay hydrates all iterations at once,
-   * so without this flag only the last one mounts expanded. The user
-   * expanding "Show reasoning" wants the full trace visible - they
-   * shouldn't have to click each step to see the work.
+   * Start every iteration collapsed. Used by the "Show reasoning" disclosure
+   * replay: the user opened the trace to browse it, so default to a compact,
+   * all-collapsed list they can expand at will (rather than the live default
+   * where the latest iteration is auto-open). A user click always wins over
+   * this default (see `expanded` below), so iterations stay freely collapsible.
    */
-  expandAll?: boolean;
+  collapsedByDefault?: boolean;
 }
 
 interface IterationGroup {
@@ -86,7 +84,11 @@ const STATUS_LABEL: Record<string, { label: string; color: 'neutral' | 'primary'
     failed: { label: 'Failed', color: 'danger' },
   };
 
-const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswer = false, expandAll = false }) => {
+const IterationStream: FC<IterationStreamProps> = ({
+  executionId,
+  hideFinalAnswer = false,
+  collapsedByDefault = false,
+}) => {
   const execution = useAgentExecutionStore(selectExecution(executionId));
 
   // Per-iteration manual override of the default "expanded only if latest"
@@ -180,6 +182,18 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
   const statusMeta = STATUS_LABEL[execution.status] ?? { label: execution.status, color: 'neutral' as const };
   const lastIteration = groups[groups.length - 1]?.iteration ?? 0;
 
+  // The rendered accordions = groups minus final_answer-only ones (those are
+  // surfaced in the success box below, not as an empty accordion). Computed here
+  // so we can tell which accordion is truly *last on screen*: lastIteration (from
+  // the unfiltered groups) can point at a filtered-out final_answer group, which
+  // would otherwise leave the real last accordion with a trailing divider.
+  const renderableGroups = groups
+    .map(group => ({
+      ...group,
+      steps: group.steps.filter(s => s.step.type !== 'final_answer'),
+    }))
+    .filter(group => group.steps.length > 0);
+
   // Active = the executor is doing work right now. We surface a live
   // spinner/working indicator in two places (next to the status chip and
   // under the latest iteration) so the UI doesn't read as "stuck" during
@@ -228,12 +242,13 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
           {execution.isAborting ? (
+            // Aborting: credits on the left, red "Aborting…" text. No spinner
+            // here - the Stop button already shows a "Stopping…" spinner.
             <>
-              <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} />
-              <Typography level="body-sm" sx={{ color: 'danger.plainColor', fontWeight: 600 }}>
+              <CreditCounter executionId={executionId} />
+              <Typography level="body-sm" sx={{ color: 'danger.outlinedColor', fontWeight: 600 }}>
                 Aborting…
               </Typography>
-              <CreditCounter executionId={executionId} />
             </>
           ) : isActive ? (
             // In progress: credits on the left, then the live progress indicator
@@ -280,87 +295,80 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
       )}
 
       <AccordionGroup size="sm" sx={{ '--ListItem-paddingY': '0.25rem' }}>
-        {groups
-          // The `final_answer` step is already surfaced prominently in the
-          // success Box below the accordions - rendering it again inside the
-          // last iteration's accordion was a double-render of the same text.
-          // CLI matches: shows thoughts/actions in the trace, then the final
-          // answer once as the message body. Filter the step out at the group
-          // level so an iteration that contained only a final_answer step
-          // doesn't render an empty accordion.
-          .map(group => ({
-            ...group,
-            steps: group.steps.filter(s => s.step.type !== 'final_answer'),
-          }))
-          .filter(group => group.steps.length > 0)
-          .map((group, renderIdx) => {
-            const isLast = group.iteration === lastIteration;
-            // Auto-collapse past iterations as soon as a newer one arrives:
-            // the "current" iteration is the focal point of the live trace,
-            // and a long observation in a finished iteration pushes the input
-            // off-screen. User can re-open any iteration - the override map
-            // sticks across re-renders so the click isn't undone by the next
-            // store update. `expandAll` (disclosure replay) wins absolutely.
-            const userOverride = overrides.get(group.iteration);
-            const expanded = expandAll || (userOverride ?? isLast);
-            return (
-              <Accordion
-                key={group.iteration}
-                expanded={expanded}
-                onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
-                // gap: 12px summary->steps but ONLY when expanded (a collapsed
-                // accordion shouldn't show a gap under its title); mt: 12px above
-                // every iteration after the first; drop the bottom divider on the
-                // last (so a single iteration has no trailing separator line).
-                sx={{
-                  gap: expanded ? 1.5 : 0,
-                  mt: renderIdx === 0 ? 0 : 1.5,
-                  borderBottom: isLast ? 'none' : undefined,
-                }}
+        {renderableGroups.map((group, renderIdx) => {
+          const isLast = group.iteration === lastIteration;
+          // Last accordion actually on screen (see renderableGroups above).
+          const isLastRendered = renderIdx === renderableGroups.length - 1;
+          // Auto-collapse past iterations as soon as a newer one arrives:
+          // the "current" iteration is the focal point of the live trace,
+          // and a long observation in a finished iteration pushes the input
+          // off-screen. User can re-open any iteration - the override map
+          // sticks across re-renders so the click isn't undone by the next
+          // store update. A user click (userOverride) always wins, so every
+          // iteration stays collapsible - including in the replay.
+          const userOverride = overrides.get(group.iteration);
+          const expanded = userOverride ?? (collapsedByDefault ? false : isLast);
+          return (
+            <Accordion
+              key={group.iteration}
+              expanded={expanded}
+              onChange={(_, isExpanded) => toggleIteration(group.iteration, isExpanded)}
+              // gap: 12px summary->steps but ONLY when expanded (a collapsed
+              // accordion shouldn't show a gap under its title); mt: 12px above
+              // every iteration after the first; pb: 12px between the content and
+              // the divider (so the separator isn't stuck to the frame) on every
+              // iteration that has one; drop the bottom divider on the last one on
+              // screen (so a single iteration has no trailing line).
+              sx={{
+                gap: expanded ? 1.5 : 0,
+                mt: renderIdx === 0 ? 0 : 1.5,
+                pb: isLastRendered ? 0 : 1.5,
+                borderBottom: isLastRendered ? 'none' : undefined,
+              }}
+            >
+              <AccordionSummary
+                // Chevron sits next to the title instead of pushed to the far
+                // right; the whole row stays clickable and gets the same hover
+                // as sidebar rows (notebooklist.hoverBg).
+                sx={theme => ({
+                  '& .MuiAccordionSummary-button': {
+                    justifyContent: 'flex-start',
+                    gap: 0.5,
+                    minHeight: '40px',
+                    borderRadius: '8px', // match the outer iterations frame
+                    '&:hover': { backgroundColor: `${theme.palette.notebooklist.hoverBg} !important` },
+                  },
+                })}
               >
-                <AccordionSummary
-                  // Chevron sits next to the title instead of pushed to the far
-                  // right; the whole row stays clickable and gets the same hover
-                  // as sidebar rows (notebooklist.hoverBg).
-                  sx={theme => ({
-                    '& .MuiAccordionSummary-button': {
-                      justifyContent: 'flex-start',
-                      gap: 0.5,
-                      minHeight: '40px',
-                      borderRadius: '8px', // match the outer iterations frame
-                      '&:hover': { backgroundColor: `${theme.palette.notebooklist.hoverBg} !important` },
-                    },
-                  })}
-                >
-                  <Typography level="body-sm" sx={{ fontWeight: 500, color: 'text.primary' }}>
-                    Iteration {group.iteration + 1}
-                  </Typography>
-                </AccordionSummary>
-                <AccordionDetails>
-                  <Stack spacing={1}>
-                    {group.steps.map(s => {
-                      const stepKey = `${group.iteration}-${s.receivedAt}`;
-                      const nestedChildId = stepToChildId.get(stepKey);
-                      return (
-                        <Box key={stepKey}>
-                          {/* A tool-error observation is "recovered" unless the run
+                <Typography level="body-sm" sx={{ fontWeight: 500, color: 'text.primary' }}>
+                  Iteration {group.iteration + 1}
+                </Typography>
+              </AccordionSummary>
+              <AccordionDetails>
+                <Stack spacing={1}>
+                  {group.steps.map(s => {
+                    const stepKey = `${group.iteration}-${s.receivedAt}`;
+                    const nestedChildId = stepToChildId.get(stepKey);
+                    return (
+                      <Box key={stepKey}>
+                        {/* A tool-error observation is "recovered" unless the run
                               actually failed - the stream knows the run status, the
                               step doesn't. */}
-                          <IterationStep step={s.step} recovered={execution.status !== 'failed'} />
-                          {/* Inline child render for `delegate_to_agent` actions
+                        <IterationStep step={s.step} recovered={execution.status !== 'failed'} />
+                        {/* Inline child render for `delegate_to_agent` actions
                               that dispatched a foreground subagent. Background
                               subagents surface in the header badge instead. */}
-                          {nestedChildId && execution?.childExecutions[nestedChildId] ? (
-                            <SubagentStepNest
-                              topLevelExecutionId={executionId}
-                              child={execution.childExecutions[nestedChildId]}
-                              depth={1}
-                            />
-                          ) : null}
-                        </Box>
-                      );
-                    })}
-                    {/* Live placeholder while a tool call is awaiting its
+                        {nestedChildId && execution?.childExecutions[nestedChildId] ? (
+                          <SubagentStepNest
+                            topLevelExecutionId={executionId}
+                            child={execution.childExecutions[nestedChildId]}
+                            depth={1}
+                          />
+                        ) : null}
+                      </Box>
+                    );
+                  })}
+                  {/* Live placeholder while a tool call is awaiting its
                         observation. The chip-level spinner above already
                         carries the "active" signal - adding a second spinner
                         here is visual noise, so we rely on the italic copy +
@@ -369,27 +377,27 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
                         do, it's on the action step's metadata) - gives the
                         user a real signal about what's happening behind the
                         scenes instead of generic "Running tool...". */}
-                    {isLast && awaitingObservation ? (
-                      <Box
-                        data-testid={`iteration-stream-${executionId}-awaiting-observation`}
-                        sx={{
-                          pl: 2,
-                          py: 0.75,
-                          borderLeft: theme => `2px dashed ${theme.palette.neutral.outlinedBorder}`,
-                        }}
-                      >
-                        <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
-                          {copyForRunningTool(
-                            (lastStep as { metadata?: { toolName?: string } } | undefined)?.metadata?.toolName
-                          )}
-                        </Typography>
-                      </Box>
-                    ) : null}
-                  </Stack>
-                </AccordionDetails>
-              </Accordion>
-            );
-          })}
+                  {isLast && awaitingObservation ? (
+                    <Box
+                      data-testid={`iteration-stream-${executionId}-awaiting-observation`}
+                      sx={{
+                        pl: 2,
+                        py: 0.75,
+                        borderLeft: theme => `2px dashed ${theme.palette.neutral.outlinedBorder}`,
+                      }}
+                    >
+                      <Typography level="body-sm" sx={{ color: 'text.tertiary', fontStyle: 'italic' }}>
+                        {copyForRunningTool(
+                          (lastStep as { metadata?: { toolName?: string } } | undefined)?.metadata?.toolName
+                        )}
+                      </Typography>
+                    </Box>
+                  ) : null}
+                </Stack>
+              </AccordionDetails>
+            </Accordion>
+          );
+        })}
         {/* Live streaming text for the in-flight iteration wins over the generic
             rotating copy - the user sees the agent's actual words as they type
             instead of a placeholder. Falls back to the rotating "Thinking..."

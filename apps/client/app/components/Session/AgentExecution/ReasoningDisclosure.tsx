@@ -186,10 +186,10 @@ const ReasoningDisclosure: FC<ReasoningDisclosureProps> = ({
             // answer within a few centimeters of itself. The standalone focused panel
             // has no such bubble, so it shows the answer (showFinalAnswer).
             //
-            // expandAll: replay hydrates all iterations at once, so without this only
-            // the last accordion mounts open. The user explicitly asked to see the
-            // trace - show the work.
-            <IterationStream executionId={replayId} hideFinalAnswer={!showFinalAnswer} expandAll />
+            // collapsedByDefault: the replay opens with every iteration collapsed
+            // (a compact, browsable list); the user expands the ones they care
+            // about. Each stays freely collapsible.
+            <IterationStream executionId={replayId} hideFinalAnswer={!showFinalAnswer} collapsedByDefault />
           ) : null}
         </Box>
       ) : null}

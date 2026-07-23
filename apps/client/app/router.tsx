@@ -56,6 +56,8 @@ const VerifyEmailChangePage = lazy(() => import('./routes/verify-change'));
 const SubscribePage = lazy(() => import('./routes/subscribe'));
 const TutorialsPage = lazy(() => import('./routes/tutorials'));
 const ArtifactsDemoPage = lazy(() => import('./routes/artifacts-demo'));
+// TEMP dev harness - multi-iteration preview. Remove before commit.
+const TmpIterationsPreviewPage = lazy(() => import('./routes/tmp-iterations-preview'));
 const AdminEmergencyPage = lazy(() => import('./routes/admin-emergency'));
 const GoogleDriveCallbackPage = lazy(() => import('./routes/google-drive/callback'));
 const HomePage = lazy(() => import('./routes/index'));
@@ -736,6 +738,17 @@ const artifactsDemoRoute = createRoute({
   ),
 });
 
+// TEMP dev harness - multi-iteration preview. Remove before commit.
+const tmpIterationsPreviewRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/tmp-iterations-preview',
+  component: () => (
+    <Suspense fallback={<RouteLoadingFallback />}>
+      <TmpIterationsPreviewPage />
+    </Suspense>
+  ),
+});
+
 // Quests route
 const questsRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -967,6 +980,7 @@ const routeTree = rootRoute.addChildren([
     organizationDetailRoute,
     tutorialsRoute,
     artifactsDemoRoute,
+    tmpIterationsPreviewRoute,
     questsRoute,
     dataLakesRoute,
     hudRoute,
