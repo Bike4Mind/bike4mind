@@ -1756,7 +1756,7 @@ async function processExecution(
           executionId,
           checkpoint,
           'continuing',
-          optiPlanActive() ? optiPlanState : undefined
+          optiPlanActive(optiPlanState) ? optiPlanState : undefined
         );
 
         // Publish to continuation queue
@@ -1889,7 +1889,7 @@ async function processExecution(
       await agentExecutionRepository.updateCheckpoint(
         executionId,
         iterationResult.checkpoint,
-        optiPlanActive() ? optiPlanState : undefined
+        optiPlanActive(optiPlanState) ? optiPlanState : undefined
       );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
 
