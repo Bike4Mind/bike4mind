@@ -243,7 +243,7 @@ export const func = withWebSocketContext<APIGatewayProxyWebsocketEventV2>(async 
     }
     case 'permission_response': {
       const permCmd = PermissionResponseSchema.parse(rawBody);
-      await handlePermissionResponse(permCmd, userId, connectionId, logger);
+      await handlePermissionResponse(permCmd, userId, connectionId, endpoint, logger);
       break;
     }
     case 'gate_response': {
@@ -614,6 +614,7 @@ async function handlePermissionResponse(
   cmd: z.infer<typeof PermissionResponseSchema>,
   userId: string,
   connectionId: string,
+  endpoint: string,
   logger: Logger
 ): Promise<void> {
   const execution = await agentExecutionRepository.findById(cmd.executionId);
@@ -629,18 +630,40 @@ async function handlePermissionResponse(
     return;
   }
 
-  // Update permission state
-  if (cmd.approved) {
-    await agentExecutionRepository.updatePermissionState(cmd.executionId, {
-      pendingPermission: null,
-      approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
-    });
-  } else {
+  // Deny stops the run. The tool already executed this iteration (Phase 1
+  // post-execution gating), but we must not let the agent keep acting on a
+  // denied action. Mirror the executor's own denied-tool outcome: mark the run
+  // failed and emit `failed`; do NOT resume. (Previously this branch fell
+  // through to the resume below, so a one-time Deny silently let the run
+  // continue - the tool was only recorded when `rememberForSession` was set,
+  // which the Deny button never sends.)
+  if (!cmd.approved) {
     await agentExecutionRepository.updatePermissionState(cmd.executionId, {
       pendingPermission: null,
       deniedTool: cmd.rememberForSession ? cmd.toolName : undefined,
     });
+    await agentExecutionRepository.markFailed(cmd.executionId, {
+      message: `Execution stopped: you denied "${cmd.toolName}".`,
+    });
+    await sendAgentEvent(connectionId, endpoint, {
+      action: 'failed',
+      executionId: cmd.executionId,
+      reason: 'tool_denied',
+      toolName: cmd.toolName,
+      message: `Execution stopped: you denied "${cmd.toolName}".`,
+    });
+    logger.info('[Permission] Denied — execution stopped', {
+      executionId: cmd.executionId,
+      toolName: cmd.toolName,
+    });
+    return;
   }
+
+  // Approved: record (optionally remembering it for the session) and resume.
+  await agentExecutionRepository.updatePermissionState(cmd.executionId, {
+    pendingPermission: null,
+    approvedTool: cmd.rememberForSession ? cmd.toolName : undefined,
+  });
 
   // Re-invoke Lambda to resume execution.
   // Note: checkpointDepth is not carried here - it lives in the SQS message from the previous
@@ -664,9 +687,8 @@ async function handlePermissionResponse(
     })
   );
 
-  logger.info('[Permission] Response processed, Lambda re-invoked', {
+  logger.info('[Permission] Approved — Lambda re-invoked', {
     executionId: cmd.executionId,
-    approved: cmd.approved,
   });
 }
 
