@@ -2,6 +2,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { userRepository } from '@bike4mind/database';
 import { userService } from '@bike4mind/services';
+import { logAuthAudit } from '@server/utils/authAudit';
 
 /**
  * Admin action: force-logout a user by revoking all their sessions (tokenVersion bump).
@@ -16,6 +17,12 @@ const handler = baseApi().post(
       { id: targetId },
       { db: { users: userRepository }, logger: req.logger }
     );
+    // Forensic trail for the admin force-logout (best-effort; never blocks the response).
+    await logAuthAudit(req, {
+      userId: targetId,
+      event: 'session_revoked',
+      metadata: { revokedBy: req.user.id },
+    });
     return res.status(200).json({ message: 'Sessions revoked', userId: targetId, tokenVersion });
   })
 );

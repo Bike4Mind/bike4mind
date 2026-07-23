@@ -7,8 +7,8 @@ import BaseRepository from '@bike4mind/db-core';
  * not be duplicated. Integration-level OAuth connect/disconnect lives in
  * IntegrationAuditLogModel; this collection captures identity-level events.
  *
- * `session_revoked` is reserved for a future "log out everywhere" action; no
- * endpoint writes it yet.
+ * `session_revoked` records an admin force-logout (revoke all of a user's sessions
+ * via the tokenVersion kill switch); written by the admin revoke-sessions route.
  */
 export type UserAuthAuditEvent =
   | 'login_success'

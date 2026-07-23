@@ -624,22 +624,27 @@ const ProfileMenu = () => {
               }}
             />
           )}
-          <MenuRow
-            testId="logout-btn"
-            icon={isPendingLogout ? <CircularProgress size="sm" /> : <LogoutIcon sx={{ fontSize: '18px' }} />}
-            label={t('logout', 'Log Out')}
-            // Version sits opposite the Logout label (trimmed to major.minor.patch, e.g. v0.7.25).
-            endDecorator={
-              <Typography level="body-xs" sx={{ color: 'text.tertiary', fontSize: '11px' }}>
-                v{appVersion.data?.version?.split('.').slice(0, 3).join('.')}
-              </Typography>
-            }
-            // Guard against re-firing the logout mutation while one is already in flight
-            // (the old footer used disabled={isPendingLogout}; MenuRow has no disabled prop).
-            onClick={() => {
-              if (!isPendingLogout) logout();
-            }}
-          />
+          {/* Hide Log Out while impersonating: logout now revokes sessions server-side, and doing
+              that from an impersonated session would force-log-out the real customer on every device.
+              The admin exits via "Return to safety" above instead. */}
+          {!hasReturnToken && (
+            <MenuRow
+              testId="logout-btn"
+              icon={isPendingLogout ? <CircularProgress size="sm" /> : <LogoutIcon sx={{ fontSize: '18px' }} />}
+              label={t('logout', 'Log Out')}
+              // Version sits opposite the Logout label (trimmed to major.minor.patch, e.g. v0.7.25).
+              endDecorator={
+                <Typography level="body-xs" sx={{ color: 'text.tertiary', fontSize: '11px' }}>
+                  v{appVersion.data?.version?.split('.').slice(0, 3).join('.')}
+                </Typography>
+              }
+              // Guard against re-firing the logout mutation while one is already in flight
+              // (the old footer used disabled={isPendingLogout}; MenuRow has no disabled prop).
+              onClick={() => {
+                if (!isPendingLogout) logout();
+              }}
+            />
+          )}
         </Box>
       )}
 

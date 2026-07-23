@@ -78,6 +78,9 @@ passport.use(
             return done(null, false);
           }
           (user as any).mfaPending = !!jwt_payload.mfaPending;
+          // Propagate the impersonation marker (set by loginAs) so request handlers
+          // can distinguish an admin-driven session from the real customer's - see logout.ts.
+          (user as any).impersonatedBy = jwt_payload.impersonatedBy;
           return done(null, user);
         } else {
           return done(null, false);
@@ -120,7 +123,7 @@ export const auth = handler
         '/api/auth/mfa/verify-setup',
         '/api/auth/mfa/verify',
         '/api/auth/mfa/cancel-setup',
-        '/api/auth/logout',
+        '/api/logout', // real logout route; lets an mfaPending user abandon and revoke
         '/api/identify', // Allow identify for user data
         '/api/settings/fetch', // Needed by MFAEnforcementWrapper to check enforceMFA setting
         '/api/auth/mfa/status', // Needed by MFAEnforcementWrapper to check user MFA status
