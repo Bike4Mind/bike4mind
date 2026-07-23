@@ -5,7 +5,7 @@ import type { ComponentProps } from 'react';
  * Single source of truth for the Data Lake name + icon. Every surface (sidenav,
  * gears, Files manager, session "Send to ..." menus, wizard) imports from here so
  * the label and glyph stay identical everywhere. The premium OptiHashi overlay
- * adopts the same tokens via `@client/app/components/datalake/dataLakeBranding`.
+ * will adopt the same tokens via `@client/app/components/datalake/dataLakeBranding`.
  *
  * WaterOutlined is deliberately chosen over Storage: it is lake-exclusive, whereas
  * Storage is reused for admin/database/research surfaces and so cannot uniquely
