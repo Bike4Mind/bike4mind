@@ -7,6 +7,23 @@ import { logger } from '../utils/Logger.js';
 // GET /api/artifacts enforces, so raising this needs that route revisited first.
 const LIST_LIMIT = 100;
 
+/**
+ * Decode a URI-template variable, tolerating an id that was never encoded.
+ *
+ * The SDK reaches a read callback via `new URL(uri)` -> `uriTemplate.match(url.toString())`,
+ * and `URL.toString()` percent-encodes, so an id we listed with `encodeURIComponent`
+ * arrives already encoded and must be decoded back before it hits a REST path. A
+ * hand-crafted uri with a malformed escape (e.g. `%zz`) would make `decodeURIComponent`
+ * throw a bare `URIError` past `mapApiError`; fall back to the raw value instead.
+ */
+function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 interface ResourceSpec<T> {
   /** Registration name; doubles as the `b4m://<name>/{id}` host segment. */
   name: string;
@@ -40,9 +57,12 @@ function registerJsonResource<T>(server: McpServer, client: B4mApiClient, spec: 
             resources: items.map(item => {
               const label = spec.label(item) ?? spec.id(item);
               return {
-                // Raw id, deliberately not encodeURIComponent'd: UriTemplate.match()
-                // never percent-decodes, and B4mApiClient encodes ids into REST paths.
-                uri: `b4m://${spec.name}/${spec.id(item)}`,
+                // Encode the id into the URI: the SDK matches a read against
+                // `new URL(uri).toString()`, which percent-encodes, so an id with a
+                // space or non-ASCII char (artifact ids embed an LLM-supplied,
+                // unvalidated identifier) round-trips only if we encode here and
+                // safeDecode in the read callback below.
+                uri: `b4m://${spec.name}/${encodeURIComponent(spec.id(item))}`,
                 name: label,
                 // `title` must be set per entry: the SDK emits each listed resource as
                 // `{ ...template.metadata, ...resource }`, so the template's constant
@@ -60,7 +80,7 @@ function registerJsonResource<T>(server: McpServer, client: B4mApiClient, spec: 
     }),
     { title: spec.title, description: spec.description, mimeType: 'application/json' },
     async (uri, variables) => {
-      const id = String(variables.id);
+      const id = safeDecode(String(variables.id));
       try {
         const record = await spec.read(id);
         return {

@@ -302,24 +302,32 @@ describe('registerResources', () => {
     expect(all.map(r => r.uri)).toEqual(['b4m://notebook/n1', 'b4m://file/f1', 'b4m://artifact/artifact_a_1']);
   });
 
-  it('round-trips a listed URI through the read callback with the id unmodified', async () => {
-    const id = 'artifact_react_chart_1759_0';
-    const getArtifact = vi.fn().mockResolvedValue({ artifact: { id } });
-    const registered = collectResources(
-      mockClient({
-        listArtifacts: vi.fn().mockResolvedValue({ data: [{ id, title: 'Chart' }], hasMore: false }),
-        getArtifact,
-      })
-    );
-    const entry = registered.get('artifact')!;
+  // A URL-safe id is a no-op through encodeURIComponent, so the space-bearing case
+  // is the one that proves the encode-on-list / safeDecode-on-read round-trip; it
+  // 404'd before the fix (`new URL(...).toString()` double-encoded the raw id).
+  it.each([['artifact_react_chart_1759_0'], ['artifact_react_my chart_1759_0']])(
+    'round-trips the listed URI for id %j back to the original on read',
+    async id => {
+      const getArtifact = vi.fn().mockResolvedValue({ artifact: { id } });
+      const registered = collectResources(
+        mockClient({
+          listArtifacts: vi.fn().mockResolvedValue({ data: [{ id, title: 'Chart' }], hasMore: false }),
+          getArtifact,
+        })
+      );
+      const entry = registered.get('artifact')!;
 
-    const [listed] = (await listOf(entry)).resources;
-    // Exactly what the SDK does on resources/read: normalize, then template-match.
-    const variables = entry.template.uriTemplate.match(new URL(listed.uri).toString())!;
+      const [listed] = (await listOf(entry)).resources;
+      // The listed URI must already be encoded (no raw space), else the client emits
+      // an invalid URI; the read path then safeDecodes it back to the original id.
+      expect(listed.uri).toBe(`b4m://artifact/${encodeURIComponent(id)}`);
+      // Exactly what the SDK does on resources/read: normalize, then template-match.
+      const variables = entry.template.uriTemplate.match(new URL(listed.uri).toString());
 
-    expect(variables).not.toBeNull();
-    await entry.read(new URL(listed.uri), variables);
+      expect(variables).not.toBeNull();
+      await entry.read(new URL(listed.uri), variables!);
 
-    expect(getArtifact).toHaveBeenCalledWith(id);
-  });
+      expect(getArtifact).toHaveBeenCalledWith(id);
+    }
+  );
 });

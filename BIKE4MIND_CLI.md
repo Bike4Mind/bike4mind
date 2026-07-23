@@ -148,7 +148,7 @@ It also exposes four resource templates, each with a working `list` and `read` t
 | `b4m://project/{id}` | Your projects | `projects:read` |
 | `b4m://artifact/{id}` | Artifact metadata plus its current content | none (see below) |
 
-Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
+Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
 
 The **Scope** column in both tables is the *recommended* key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
 
