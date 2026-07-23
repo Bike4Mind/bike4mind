@@ -14,7 +14,11 @@ import { EMBED_CHAT_PATH } from '@client/app/utils/embedSnippet';
  * controls anyway.
  *
  * Same posture as publish/widget.ts: self-contained vanilla JS, DOM via
- * createElement/textContent, no external assets.
+ * createElement/textContent. Its one network call is a cross-origin GET to the
+ * app's /api/embed/branding (this script runs on the customer's page) to theme
+ * the launcher per key; the launcher mounts with safe defaults first and only
+ * re-themes if that resolves, so branding is purely additive and never blocks
+ * or regresses the default bubble.
  */
 
 const WIDGET_JS = String.raw`(function () {
@@ -60,6 +64,7 @@ const WIDGET_JS = String.raw`(function () {
   panel.id = 'b4m-embed-panel';
 
   var frame = null;
+  var brandedTitle = null;
   var launch = document.createElement('button');
   launch.id = 'b4m-embed-launch';
   launch.type = 'button';
@@ -78,7 +83,7 @@ const WIDGET_JS = String.raw`(function () {
       frame = document.createElement('iframe');
       frame.id = 'b4m-embed-frame';
       frame.src = iframeSrc;
-      frame.title = 'Chat';
+      frame.title = brandedTitle || 'Chat';
       frame.loading = 'lazy';
       panel.appendChild(frame);
     }
@@ -90,6 +95,51 @@ const WIDGET_JS = String.raw`(function () {
   root.appendChild(launch);
   document.head.appendChild(css);
   document.body.appendChild(root);
+
+  // Re-theme the launcher from the key's branding. Defaults are already mounted
+  // above and are never mutated, so a slow/failed/absent fetch simply leaves the
+  // default bubble - branding is strictly additive (no visual regression).
+  function applyBranding(b) {
+    if (!b || typeof b !== 'object') return;
+    var color = typeof b.primaryColor === 'string' ? b.primaryColor.trim() : '';
+    // Re-validate at the CSS sink; never trust a network value even though the
+    // endpoint sanitizes. The char class alone makes ';', '}', 'url(' and
+    // whitespace structurally impossible, so no escaping is needed on interpolation.
+    // must stay in sync with EMBED_BRANDING_COLOR_PATTERN in @bike4mind/common
+    if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(color)) {
+      var override = document.createElement('style');
+      // Appended after the default style: equal specificity, later source order
+      // wins, and filter:brightness keeps the hover a lighten of the base with no
+      // color math (matching the default #1a1a2e -> #2a2a44 direction).
+      override.textContent =
+        '#b4m-embed-launch{background:' + color + '}' +
+        '#b4m-embed-launch:hover{background:' + color + ';filter:brightness(1.1)}';
+      document.head.appendChild(override);
+    }
+    var name = typeof b.displayName === 'string' ? b.displayName.trim().slice(0, 64) : '';
+    if (name) {
+      launch.setAttribute('aria-label', name);
+      launch.setAttribute('title', name);
+      brandedTitle = name;
+    }
+  }
+
+  if (typeof fetch === 'function') {
+    var ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = ctrl ? setTimeout(function () { ctrl.abort(); }, 5000) : null;
+    var clearTimer = function () { if (timer) clearTimeout(timer); };
+    fetch(origin + '/api/embed/branding?k=' + encodeURIComponent(key), ctrl ? { signal: ctrl.signal } : undefined)
+      .then(function (r) {
+        return r && r.ok ? r.json() : null;
+      })
+      .then(function (b) {
+        clearTimer();
+        if (b) applyBranding(b);
+      })
+      .catch(function () {
+        clearTimer(); // keep the default styling
+      });
+  }
 })();`;
 
 export default function handler(req: NextApiRequest, res: NextApiResponse): void {
