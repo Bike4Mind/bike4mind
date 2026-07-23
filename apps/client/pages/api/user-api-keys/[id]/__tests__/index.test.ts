@@ -38,9 +38,19 @@ const updateEmbedKey = vi.hoisted(() =>
   }))
 );
 vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateEmbedKey } }));
-vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository: {} }));
+// The route reads the stored key (for the branding echo-vs-elevation decision)
+// via findByUserIdAndId; default to no stored key (stored hideBranding false).
+const userApiKeyRepository = vi.hoisted(() => ({ findByUserIdAndId: vi.fn().mockResolvedValue(null) }));
+vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
+
+// The real gateEmbedBrandingWrite runs; only its entitlement seam is stubbed,
+// so these tests exercise the actual strip logic through the route. The database
+// barrel is stubbed because the gate's module also exports the owner resolver.
+const requestHasEntitlement = vi.hoisted(() => vi.fn().mockResolvedValue(false));
+vi.mock('@server/entitlements', () => ({ requestHasEntitlement }));
+vi.mock('@bike4mind/database', () => ({ organizationRepository: {}, userRepository: {} }));
 
 import '@pages/api/user-api-keys/[id]/index';
 
@@ -111,5 +121,112 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
     const { req, res } = patch('key-1', { allowedOrigins: ['http://example.com'] });
     await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid embed origin/i);
     expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
+
+  // The service is mocked, so these prove the ROUTE screens branding itself
+  // (validateEmbedBranding) rather than relying on the service re-validation.
+  it('rejects branding with a javascript: logo URL and never calls the service', async () => {
+    const { req, res } = patch('key-1', { branding: { logoUrl: 'javascript:alert(1)' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
+
+  it('rejects branding with a non-hex primaryColor and never calls the service', async () => {
+    const { req, res } = patch('key-1', { branding: { primaryColor: 'red;}body{}' } });
+    await expect(mockRefs.patchHandler!(req, res)).rejects.toThrow(/Invalid branding/i);
+    expect(updateEmbedKey).not.toHaveBeenCalled();
+  });
+
+  describe('whitelabel write gate (epic #41 Phase D)', () => {
+    beforeEach(() => {
+      requestHasEntitlement.mockReset();
+      requestHasEntitlement.mockResolvedValue(false);
+      userApiKeyRepository.findByUserIdAndId.mockReset();
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null); // no stored hideBranding
+    });
+
+    it('strips hideBranding:true for an unentitled caller, keeping other fields', async () => {
+      const { req, res } = patch('key-1', { branding: { displayName: 'Acme', hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(res._getStatusCode()).toBe(200);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { displayName: 'Acme', hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('preserves hideBranding:true for an entitled caller', async () => {
+      requestHasEntitlement.mockResolvedValue(true);
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: true } }),
+        expect.anything()
+      );
+    });
+
+    it('strips hideBranding when the entitlement lookup rejects (fail closed)', async () => {
+      requestHasEntitlement.mockRejectedValue(new Error('lookup down'));
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
+
+    it('forwards an omitted branding as undefined (stored hideBranding never cleared)', async () => {
+      const { req, res } = patch('key-1', { agentId: 'agent-2' });
+      await mockRefs.patchHandler!(req, res);
+      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: undefined }),
+        expect.anything()
+      );
+    });
+
+    it('never consults the entitlement for branding without a hideBranding elevation', async () => {
+      const { req, res } = patch('key-1', { branding: { primaryColor: '#336699' } });
+      await mockRefs.patchHandler!(req, res);
+      expect(requestHasEntitlement).not.toHaveBeenCalled();
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { primaryColor: '#336699' } }),
+        expect.anything()
+      );
+    });
+
+    // Onoya's regression (issue #572 comment): a stored hideBranding:true must
+    // survive an unrelated branding edit by an unentitled member - the client
+    // echoes the stored flag, and the gate must treat that echo as not-an-
+    // elevation rather than clobbering white-label the org already earned.
+    it('preserves a stored hideBranding:true when an unentitled caller edits an unrelated branding field', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: true } });
+      requestHasEntitlement.mockResolvedValue(false);
+      const { req, res } = patch('key-1', { branding: { primaryColor: '#0a7f3f', hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { primaryColor: '#0a7f3f', hideBranding: true } }),
+        expect.anything()
+      );
+      // An echo is not an elevation, so the entitlement lookup is not even needed.
+      expect(requestHasEntitlement).not.toHaveBeenCalled();
+    });
+
+    it('still strips a genuine elevation (stored not true) by an unentitled caller', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ branding: { hideBranding: false } });
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      await mockRefs.patchHandler!(req, res);
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'u1',
+        expect.objectContaining({ branding: { hideBranding: false } }),
+        expect.anything()
+      );
+    });
   });
 });

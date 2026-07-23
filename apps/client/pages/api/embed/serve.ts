@@ -27,8 +27,15 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { agentRepository } from '@bike4mind/database';
-import { parseEmbedOrigin } from '@bike4mind/common';
+import {
+  parseBrandingColor,
+  parseBrandingDisplayName,
+  parseBrandingLogoUrl,
+  parseEmbedOrigin,
+} from '@bike4mind/common';
 import { renderEmbedWidgetHtml } from '@server/embed/embedWidgetPage';
+import { embedKeyOwnerHasEntitlement } from '@server/entitlements/embedKeyEntitlement';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 
 /** Structural response shape shared by the Express/Next response baseApi hands us. */
 interface HtmlResponse {
@@ -41,14 +48,16 @@ const SERVE_RATE_LIMIT = 60;
 const RATE_WINDOW_MS = 60_000;
 
 /** Directives beyond frame-ancestors are pinned tight: the page is fully
- *  server-generated (inline script/style only, same-origin fetches, no forms). */
-function buildEmbedWidgetCsp(origins: string[]): string {
+ *  server-generated (inline script/style only, same-origin fetches, no forms).
+ *  img-src widens to exactly one extra origin - the key's validated https logo -
+ *  and only when such a logo exists; everything else stays byte-identical. */
+function buildEmbedWidgetCsp(origins: string[], logoOrigin: string | null): string {
   return [
     "default-src 'none'",
     "script-src 'unsafe-inline'",
     "style-src 'unsafe-inline'",
     "connect-src 'self'",
-    'img-src data:',
+    logoOrigin ? `img-src data: ${logoOrigin}` : 'img-src data:',
     "base-uri 'none'",
     "form-action 'none'",
     `frame-ancestors 'self' ${origins.join(' ')}`,
@@ -97,22 +106,43 @@ const handler = baseApi({ auth: false })
       return sendErrorPage(res, 403, 'No embed origins are configured for this key.');
     }
 
+    // Cosmetic only - the chat route re-hydrates the agent itself; a missing
+    // name (or a failed lookup) just falls back to the page's default header.
+    const agent = info.agentId ? await agentRepository.findById(info.agentId).catch(() => null) : null;
+
+    // Effective branding is decided HERE and only the outcome reaches the page:
+    // the raw hideBranding flag never crosses to the client. Stored values are
+    // re-sanitized (they may predate write validation). The entitlement gate only
+    // matters when a key actually asks to hide branding, so the owner lookup (a
+    // few DB reads on this public no-store path) is short-circuited otherwise; it
+    // is resolved live against the key's billing owner and fails closed to
+    // "branding shows" on any lookup error - so an expired plan un-hides next load.
+    const branding = info.branding ?? {};
+    const showBranding =
+      branding.hideBranding !== true ||
+      !(await embedKeyOwnerHasEntitlement(info, EMBED_WHITELABEL_ENTITLEMENT_KEY).catch(() => false));
+    const displayName = parseBrandingDisplayName(branding.displayName) ?? agent?.name ?? undefined;
+    const primaryColor = parseBrandingColor(branding.primaryColor) ?? undefined;
+    const logoUrl = parseBrandingLogoUrl(branding.logoUrl) ?? undefined;
+    // Derived from the SAME sanitized URL the page receives, so the CSP grant
+    // and the rendered img.src cannot disagree.
+    const logoOrigin = logoUrl ? new URL(logoUrl).origin : null;
+
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.setHeader('Content-Security-Policy', buildEmbedWidgetCsp(origins));
+    res.setHeader('Content-Security-Policy', buildEmbedWidgetCsp(origins, logoOrigin));
     res.setHeader('Cache-Control', 'private, no-store, must-revalidate');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     // The URL carries the key; never leak it via Referer or index it.
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('X-Robots-Tag', 'noindex, nofollow');
-    // Cosmetic only - the chat route re-hydrates the agent itself; a missing
-    // name (or a failed lookup) just falls back to the page's default header.
-    const agent = info.agentId ? await agentRepository.findById(info.agentId).catch(() => null) : null;
     return res.status(200).send(
       renderEmbedWidgetHtml({
         embedKey: k,
         agentId: info.agentId,
-        displayName: agent?.name,
-        poweredByLabel: process.env.APP_NAME ? `Powered by ${process.env.APP_NAME}` : undefined,
+        displayName,
+        primaryColor,
+        logoUrl,
+        poweredByLabel: showBranding && process.env.APP_NAME ? `Powered by ${process.env.APP_NAME}` : undefined,
       })
     );
   });

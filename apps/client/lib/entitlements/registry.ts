@@ -41,6 +41,13 @@ export function normalizeTag(tag: string): string {
 export const BASE_ENTITLEMENT_KEY = 'base';
 
 /**
+ * Entitlement gating white-label branding (`hideBranding`) on an embed key
+ * (epic #41 Phase D). Shared by the widget serve route (owner-scoped, the
+ * authoritative check) and the key write routes (caller-scoped defense in depth).
+ */
+export const EMBED_WHITELABEL_ENTITLEMENT_KEY: EntitlementKey = 'embed:whitelabel';
+
+/**
  * A product's Stripe price ids, authored per-stage and captured BEFORE the
  * `isTestMode` resolution. The ternary resolves to ONE id at module load
  * (test-mode in CI), which would hide the inactive stage's id from the
@@ -144,6 +151,12 @@ const TAG_GRANT_ROWS: TagGrantRow[] = [
   // gates Bob's `/bob` route and its nav entry (the premium-bob overlay). No Stripe
   // price yet; granted-only initially. Removed when Bob is extracted.
   { tag: 'bob', entitlements: ['bob:pro'] },
+  // Embed white-label: the `embed-whitelabel` tag bridges to `embed:whitelabel`,
+  // which gates hiding the "Powered by" branding on the public embed widget
+  // (epic #41 Phase D). Checked against the KEY OWNER (org billing owner), not
+  // the viewer - see server/entitlements/embedKeyEntitlement.ts. Granted-only
+  // for now (no Stripe price yet).
+  { tag: 'embed-whitelabel', entitlements: ['embed:whitelabel'] },
 ];
 
 /**

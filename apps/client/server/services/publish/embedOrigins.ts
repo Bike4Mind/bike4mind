@@ -1,4 +1,10 @@
-import { parseEmbedOrigin, isOriginUnderHost, EMBED_ORIGINS_MAX } from '@bike4mind/common';
+import {
+  EmbedBrandingSchema,
+  parseEmbedOrigin,
+  isOriginUnderHost,
+  EMBED_ORIGINS_MAX,
+  type IEmbedBranding,
+} from '@bike4mind/common';
 import { PUBLISH_HOST } from './validateBundle';
 
 export type EmbedOriginsResult = { ok: true; value: string[] } | { ok: false; error: string; code: string };
@@ -73,4 +79,24 @@ export function validateEmbedOrigins(raw: string[] | undefined, ctx: { isOpenPub
 export function validateEmbedKeyOrigins(raw: string[] | undefined): EmbedOriginsResult {
   if (raw === undefined) return { ok: true, value: [] };
   return screenEmbedOrigins(raw);
+}
+
+export type EmbedBrandingResult = { ok: true; value: IEmbedBranding | undefined } | { ok: false; error: string; code: string };
+
+/**
+ * Route-level screen for an embed key's branding write (epic #41 Phase D).
+ * Same shared schema the service re-validates (hex-only primaryColor, https-only
+ * logoUrl, length caps); screening here too keeps the route contract observable
+ * (a 400 with a message, not a service-layer throw) and mirrors how
+ * validateEmbedKeyOrigins is layered.
+ */
+export function validateEmbedBranding(raw: unknown): EmbedBrandingResult {
+  if (raw === undefined) return { ok: true, value: undefined };
+  const parsed = EmbedBrandingSchema.safeParse(raw);
+  if (!parsed.success) {
+    const first = parsed.error.issues[0];
+    const field = first?.path.join('.') || 'branding';
+    return { ok: false, error: `Invalid branding: ${field}: ${first?.message ?? 'invalid'}`, code: 'EMBED_BRANDING_INVALID' };
+  }
+  return { ok: true, value: parsed.data };
 }

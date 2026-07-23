@@ -66,6 +66,13 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
+// Default DENIED: every pre-Phase-D case runs with the hide-branding toggle
+// hidden, which is that era's behavior. Individual tests flip the state.
+const gate = vi.hoisted(() => ({ state: 'denied' as string, bypass: false }));
+vi.mock('@client/app/hooks/useEntitlementGate', () => ({
+  useEntitlementGate: () => ({ state: gate.state, bypass: gate.bypass }),
+}));
+
 const appTheme = extendTheme({ ...getThemeConfig() });
 const renderTab = () =>
   render(
@@ -78,6 +85,8 @@ describe('EmbedKeysTab', () => {
   beforeEach(() => {
     h.keys = [embedKey, plainKey, modellessAgentKey];
     h.updateMutate.mockClear();
+    gate.state = 'denied';
+    gate.bypass = false;
   });
 
   it('lists embed:chat keys and filters out non-embed keys', () => {
@@ -107,6 +116,48 @@ describe('EmbedKeysTab', () => {
     // branding + agentId were untouched, so they must not be in the partial update.
     expect('branding' in arg).toBe(false);
     expect('agentId' in arg).toBe(false);
+  });
+
+  describe('hide-branding toggle (whitelabel gate, epic #41 Phase D)', () => {
+    it('shows and round-trips the toggle when the whitelabel gate is satisfied', () => {
+      gate.state = 'satisfied';
+      h.keys = [{ ...embedKey, branding: { displayName: 'Acme' } }];
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+
+      const toggle = screen.getByTestId('embed-key-branding-hide');
+      fireEvent.click(toggle);
+      fireEvent.click(screen.getByTestId('embed-key-save-btn'));
+
+      expect(h.updateMutate).toHaveBeenCalledTimes(1);
+      expect(h.updateMutate.mock.calls[0][0]).toEqual({
+        keyId: 'key-1',
+        branding: { displayName: 'Acme', primaryColor: undefined, logoUrl: undefined, hideBranding: true },
+      });
+    });
+
+    it('hides the toggle and keeps the plan note when the gate is denied', () => {
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
+      expect(screen.getAllByText(/requires the white-label/i).length).toBeGreaterThan(0);
+    });
+
+    it('renders neither the toggle nor a spinner while the gate is pending', () => {
+      gate.state = 'pending';
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
+      // The modal already renders a progressbar-free form; pending must not add one.
+      expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+    });
+
+    it('still cannot clobber a stored hideBranding on a no-op save while denied', () => {
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+      fireEvent.click(screen.getByTestId('embed-key-save-btn'));
+      expect(h.updateMutate).not.toHaveBeenCalled();
+    });
   });
 
   // The list route now returns disabled keys (#776); before that this row could

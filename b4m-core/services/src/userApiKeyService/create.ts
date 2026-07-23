@@ -3,6 +3,7 @@ import {
   ApiKeyScope,
   ApiKeyStatus,
   CreditHolderType,
+  EmbedBrandingSchema,
   EmbedOriginsSchema,
   IEmbedBranding,
   IUserApiKeyRepository,
@@ -18,13 +19,6 @@ import { KEY_PREFIX_LENGTH } from './constants';
 // path (setEmbedKeySpendCap).
 export const EMBED_SPEND_CAP_MAX_CREDITS = 100_000_000;
 
-const embedBrandingSchema = z.object({
-  primaryColor: z.string().optional(),
-  logoUrl: z.string().optional(),
-  displayName: z.string().optional(),
-  hideBranding: z.boolean().optional(),
-});
-
 const createUserApiKeySchema = z.object({
   name: z.string().min(1).max(100),
   scopes: z.array(z.enum(ApiKeyScope)).min(1),
@@ -36,7 +30,7 @@ const createUserApiKeySchema = z.object({
   // the coherence guard below (which the route mirrors via `!== undefined`).
   agentId: z.string().min(1).optional(),
   allowedOrigins: EmbedOriginsSchema.optional(),
-  branding: embedBrandingSchema.optional(),
+  branding: EmbedBrandingSchema.optional(),
   // Spend settles in whole credits, so a fractional cap has no resolution.
   // `.positive()` rejects a 0 cap at mint (a dead-on-arrival key), but enforcement
   // still honors a stored 0 as a real cap.
