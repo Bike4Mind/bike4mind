@@ -15,7 +15,11 @@ import type { ComponentProps } from 'react';
 /** Singular noun - use for actions and single-lake contexts ("Send to Data Lake"). */
 export const DATA_LAKE = 'Data Lake';
 
-/** Plural / collection - use for the nav destination and the manager header. */
+/**
+ * Plural / collection - use for the nav destination and the manager header.
+ * Must stay in sync with the `sidenav.dataLakes` key in `apps/client/app/locales/en.json`,
+ * which is the translated source for the sidenav label (this token is only its `t()` fallback).
+ */
 export const DATA_LAKES = 'Data Lakes';
 
 /** The canonical Data Lake icon. Forwards `sx`/`fontSize`/etc. to the underlying icon. */
