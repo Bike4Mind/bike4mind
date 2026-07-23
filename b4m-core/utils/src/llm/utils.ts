@@ -46,10 +46,6 @@ const EDITABLE_IMAGE_KEY_RE = /\.(jpe?g|png|webp|gif)$/i;
 const PREVIEW_CHUNK = 700;
 const CHARS_PER_TOKEN = 3.5;
 
-// Bedrock limits images to 2000px max dimension for multi-image requests.
-// Since conversations accumulate images over time, always enforce this limit.
-const MAX_IMAGE_DIMENSION_PX = 2000;
-
 // Emergency token limits for embedding generation
 const EMBEDDING_TOKEN_LIMITS = {
   MAX_EMBEDDING_TOKENS: 8000, // Conservative limit under 8192
@@ -671,62 +667,15 @@ async function cosineSearch(
 }
 
 /**
- * Supported output MIME types for jimp's getBuffer.
- * Used to validate the detected mime before re-encoding.
+ * Downscales an image to fit the model's dimension limit. Injected into
+ * processFabFilesServer (see its deps) rather than imported here so this module -
+ * and thus the @bike4mind/utils barrel - carries no jimp dependency. Server callers
+ * pass `ensureImageWithinDimensionLimit` from '@bike4mind/utils/imageResize'. See #660.
  */
-const JIMP_SUPPORTED_MIMES = new Set([
-  'image/bmp',
-  'image/x-ms-bmp',
-  'image/gif',
-  'image/jpeg',
-  'image/png',
-  'image/tiff',
-]);
+type ResizeImageForModel = (imageBuffer: Buffer, maxDimension?: number, logger?: Logger) => Promise<Buffer>;
 
-/**
- * Ensures an image buffer's dimensions do not exceed the max allowed pixels.
- * Bedrock rejects images >2000px in multi-image requests.
- * Returns the original buffer unchanged if already within limits.
- * Uses jimp (pure JS) instead of sharp to avoid native dependency issues in Lambda.
- */
-async function ensureImageWithinDimensionLimit(
-  imageBuffer: Buffer,
-  maxDimension: number = MAX_IMAGE_DIMENSION_PX,
-  logger?: Logger
-): Promise<Buffer> {
-  try {
-    // Dynamic import: jimp is only needed by server-side callers (Lambda, services).
-    // A static import would cause bundlers (e.g., CLI's tsdown) to mark jimp as an
-    // external dependency even though the CLI never calls this function.
-    const { Jimp } = await import('jimp');
-    const image = await Jimp.read(imageBuffer);
-    const { width, height } = image.bitmap;
-
-    if (width <= maxDimension && height <= maxDimension) {
-      return imageBuffer;
-    }
-
-    // Scale down preserving aspect ratio so the longest edge = maxDimension
-    const scale = maxDimension / Math.max(width, height);
-    const newWidth = Math.floor(width * scale);
-    const newHeight = Math.floor(height * scale);
-
-    logger?.info(`[ensureImageWithinDimensionLimit] Resizing from ${width}x${height} to ${newWidth}x${newHeight}`);
-
-    const resized = image.resize({ w: newWidth, h: newHeight });
-
-    // Re-encode in original format if jimp supports it, otherwise fall back to PNG
-    const outputMime = image.mime && JIMP_SUPPORTED_MIMES.has(image.mime) ? image.mime : 'image/png';
-    // jimp's getBuffer generic constraint requires a specific mime literal union;
-    // we've already validated the value against JIMP_SUPPORTED_MIMES above
-    return Buffer.from(await resized.getBuffer(outputMime as 'image/png'));
-  } catch (error) {
-    // If resize fails (corrupt image, unsupported format), return the original buffer
-    // and let the downstream API call surface any errors naturally
-    logger?.warn(`[ensureImageWithinDimensionLimit] Failed to resize image, using original: ${error}`);
-    return imageBuffer;
-  }
-}
+/** Passthrough default: no resize when a caller doesn't inject one. */
+const noopResize: ResizeImageForModel = async imageBuffer => imageBuffer;
 
 export async function processFabFilesServer(
   embeddingFactory: EmbeddingFactory,
@@ -739,6 +688,9 @@ export async function processFabFilesServer(
     logger,
     storage,
     db,
+    // Injected (see ResizeImageForModel) so this module carries no jimp dependency.
+    // Defaults to a passthrough when omitted. #660
+    resizeImageForModel = noopResize,
   }: {
     logger: Logger;
     storage: BaseStorage;
@@ -747,6 +699,7 @@ export async function processFabFilesServer(
       fabfiles: Pick<IFabFileRepository, 'update'>;
       caches: ICacheRepository;
     };
+    resizeImageForModel?: ResizeImageForModel;
   },
   progressCallback?: (progress: number, total: number) => Promise<void>
 ): Promise<{ userMessages: IMessage[]; errorMessages: IExtendedMessage[] }> {
@@ -874,7 +827,7 @@ export async function processFabFilesServer(
 
               // Download image, enforce dimension limit, and detect actual format
               const rawImageBuffer = await storage.download(file.filePath!);
-              const imageBuffer = await ensureImageWithinDimensionLimit(rawImageBuffer, MAX_IMAGE_DIMENSION_PX, logger);
+              const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
               const imageData = imageBuffer.toString('base64');
 
               // Detect actual mime type from buffer to avoid mismatches with Anthropic API
@@ -907,7 +860,7 @@ export async function processFabFilesServer(
             // backend later maps it into Ollama's images[] field. Enforce the
             // dimension cap so a large upload does not blow the local context.
             const rawImageBuffer = await storage.download(file.filePath!);
-            const imageBuffer = await ensureImageWithinDimensionLimit(rawImageBuffer, MAX_IMAGE_DIMENSION_PX, logger);
+            const imageBuffer = await resizeImageForModel(rawImageBuffer, undefined, logger);
             const { mime: ollamaMimeType } = await getFileType(imageBuffer, file.fileName, file.mimeType);
             const ollamaBase64 = imageBuffer.toString('base64');
 

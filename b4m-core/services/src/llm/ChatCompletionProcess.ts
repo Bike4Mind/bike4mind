@@ -57,6 +57,9 @@ import {
   getLastBuildDebugInfo,
   getSettingsByNames,
 } from '@bike4mind/utils';
+// Injected into processFabFilesServer so @bike4mind/utils's barrel carries no jimp
+// dependency (keeps it out of the CLI bundle). See issue #660.
+import { ensureImageWithinDimensionLimit } from '@bike4mind/utils/imageResize';
 import { toRetrievalFilter, type RetrievalExclusionOptions } from '@bike4mind/utils/retrievalExclusion';
 import {
   getAvailableModels,
@@ -4045,6 +4048,7 @@ export class ChatCompletionProcess {
         db: this.db,
         logger: this.logger,
         storage: this.storage,
+        resizeImageForModel: ensureImageWithinDimensionLimit,
       }
     );
 
