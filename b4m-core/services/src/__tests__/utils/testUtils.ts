@@ -158,7 +158,6 @@ export const createMockOrganizationRepository = (): MockedObject<IOrganizationRe
     findIdsAdministeredBy: vi.fn(),
     incrementCredits: vi.fn(),
     incrementCurrentStorage: vi.fn(),
-    incrementTokenVersion: vi.fn(),
     findByIdAndUserId: vi.fn(),
     updateUserDetails: vi.fn(),
   });
