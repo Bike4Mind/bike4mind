@@ -103,6 +103,35 @@ describe('buildOpenApiDocument', () => {
     expect(sampleSource(tools, 'Python')).not.toContain('stream=True');
   });
 
+  it('escapes the curl body via a quoted heredoc so a single quote cannot break the shell string', () => {
+    const curl = (op: typeof completions) =>
+      op['x-codeSamples'].find((s: { lang: string }) => s.lang === 'curl').source as string;
+    for (const op of [completions, tools]) {
+      const source = curl(op);
+      // Body is piped in, not inlined as -d '...': a quote in the JSON is now safe.
+      expect(source).toContain("--data-binary @- <<'B4M_REQUEST_BODY'");
+      expect(source).toContain('\nB4M_REQUEST_BODY');
+      expect(source).not.toContain("-d '");
+    }
+  });
+
+  it('sources the code-sample URL from the same env as servers() (B4M_OPENAPI_PROD_URL)', () => {
+    const original = process.env.B4M_OPENAPI_PROD_URL;
+    process.env.B4M_OPENAPI_PROD_URL = 'https://api.test.example';
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- spec doc is loosely typed for traversal
+      const rebuilt = buildOpenApiDocument('9.9.9') as any;
+      expect(rebuilt.servers[0].url).toBe('https://api.test.example');
+      const curl = rebuilt.paths['/api/ai/v1/completions'].post['x-codeSamples'].find(
+        (s: { lang: string }) => s.lang === 'curl'
+      ).source as string;
+      expect(curl).toContain('https://api.test.example/api/ai/v1/completions');
+    } finally {
+      if (original === undefined) delete process.env.B4M_OPENAPI_PROD_URL;
+      else process.env.B4M_OPENAPI_PROD_URL = original;
+    }
+  });
+
   it('renders Python literals without mangling string values that contain true/false/null', () => {
     expect(toPythonLiteral(true)).toBe('True');
     expect(toPythonLiteral(false)).toBe('False');
@@ -122,5 +151,20 @@ describe('buildOpenApiDocument', () => {
   it('declares X-Request-ID on every response and rate-limit headers on tools', () => {
     expect(completions.responses['200'].headers['X-Request-ID']).toBeDefined();
     expect(tools.responses['200'].headers['X-RateLimit-Limit']).toBeDefined();
+  });
+
+  it('emits no orphaned component schemas (every schema is $ref-ed somewhere)', () => {
+    // Mirrors redocly no-unused-components: a registered-but-never-referenced
+    // component is dead weight and confuses SDK generators. Sub-schemas that
+    // CompletionRequest composes are inlined, not registered, on purpose.
+    const names = Object.keys(doc.components.schemas);
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      // A schema may legitimately $ref another schema in its own definition, so
+      // exclude that definition before checking the rest of the document.
+      const { [name]: _self, ...others } = doc.components.schemas;
+      const rest = JSON.stringify({ paths: doc.paths, schemas: others });
+      expect(rest, `component ${name} is never referenced`).toContain(`#/components/schemas/${name}`);
+    }
   });
 });

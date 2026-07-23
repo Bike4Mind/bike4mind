@@ -49,6 +49,8 @@ import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { toast } from 'sonner';
 import DataLakeViewer from './DataLakeViewer';
+import FieldTooltip from '@client/app/components/help/FieldTooltip';
+import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 
 export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
@@ -107,7 +109,18 @@ export default function DataLakeListPanel() {
         {/* pr clears the modal's absolutely-positioned ModalClose (top-right) so the
             Create button doesn't collide with the × when this panel is shown in a modal. */}
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 2, pr: 5 }}>
-          <Typography level="title-md" startDecorator={<DataLakeIcon />}>
+          <Typography
+            level="title-md"
+            startDecorator={<DataLakeIcon />}
+            endDecorator={
+              <FieldTooltip
+                content={FIELD_TOOLTIPS.dataLake}
+                placement="bottom"
+                ariaLabel="Help: Data Lakes"
+                data-testid="field-tooltip-data-lake-panel"
+              />
+            }
+          >
             {DATA_LAKES}
           </Typography>
           <Button size="sm" variant="soft" color="primary" startDecorator={<AddIcon />} onClick={openWizard}>

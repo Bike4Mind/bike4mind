@@ -328,6 +328,62 @@ jobs:
       - name: Lint (errors only)
         run: pnpm exec eslint . --quiet --cache --cache-location node_modules/.cache/eslint/
 
+  # OpenAPI contract gate: the spec is generated from the same Zod schemas that
+  # validate requests at runtime, so it cannot drift silently - UNLESS a schema
+  # change lands without regenerating the committed spec. This job regenerates
+  # and fails on any diff, then structurally lints the spec (redocly). Source
+  # only: generation runs via tsx (no core build), so this leg needs neither the
+  # core-build artifact nor SST types - it depends on `changes` directly.
+  openapi:
+    needs: changes
+    if: needs.changes.outputs.deployable == 'true'
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
+    name: OpenAPI Spec
+    timeout-minutes: 10
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: false
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v5
+
+      - name: Cache pnpm dependencies
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.pnpm-store
+            node_modules
+            */*/node_modules
+          key: ${{ runner.os }}-pnpm-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --recursive
+
+      - name: Regenerate OpenAPI spec from Zod schemas
+        run: pnpm turbo:openapi:generate
+
+      # Fails the PR if a schema change did not regenerate the committed spec.
+      - name: Verify committed spec is up to date (no drift)
+        run: git diff --exit-code apps/client/public/openapi.json
+
+      # Structural lint. Rules + intentional-rule exceptions live in redocly.yaml.
+      - name: Lint OpenAPI spec (redocly)
+        run: pnpm --package=@redocly/cli@1.34.5 dlx redocly lint apps/client/public/openapi.json
+
   # Tests run as a matrix of shards so wall time is the slowest shard, not the
   # serial sum. The heavy suites are isolated onto their own runners:
   #   - client: the large apps/client suite (thousands of fast files) — alone so
@@ -578,7 +634,7 @@ jobs:
   # ============================================================
   ci-complete:
     name: CI Complete
-    needs: [changes, core-build, typecheck, lint, test, cli-e2e]
+    needs: [changes, core-build, typecheck, lint, openapi, test, cli-e2e]
     if: always()
     runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-latest-m' }}
     steps:
@@ -588,13 +644,14 @@ jobs:
           CORE_BUILD: ${{ needs.core-build.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           LINT: ${{ needs.lint.result }}
+          OPENAPI: ${{ needs.openapi.result }}
           TEST: ${{ needs.test.result }}
           CLI_E2E: ${{ needs.cli-e2e.result }}
         run: |
-          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT test=$TEST cli-e2e=$CLI_E2E"
+          echo "results: changes=$CHANGES core-build=$CORE_BUILD typecheck=$TYPECHECK lint=$LINT openapi=$OPENAPI test=$TEST cli-e2e=$CLI_E2E"
           # A CI leg that genuinely failed flips the check red. Skipped
           # (non-deployable change) is treated as passing.
-          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$TEST" "$CLI_E2E"; do
+          for r in "$CHANGES" "$CORE_BUILD" "$TYPECHECK" "$LINT" "$OPENAPI" "$TEST" "$CLI_E2E"; do
             if [ "$r" = "failure" ]; then
               echo "::error::A CI gate failed; failing the required check."
               exit 1
