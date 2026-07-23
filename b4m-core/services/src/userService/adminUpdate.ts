@@ -1,8 +1,17 @@
 import { z } from 'zod';
 import { updateUserSchema, applyBaseUserUpdates } from './update';
-import { IOrganizationDocument, IUserRepository, Permission, IFriendshipModelAdapter } from '@bike4mind/common';
+import {
+  CreditHolderType,
+  ICreditTransactionRepository,
+  IOrganizationDocument,
+  IUserRepository,
+  Permission,
+  IFriendshipModelAdapter,
+} from '@bike4mind/common';
 import { BadRequestError, ForbiddenError, secureParameters } from '@bike4mind/utils';
 import { sendFriendRequest } from '../friendshipService/sendFriendRequest';
+import { addCredits } from '../creditService/addCredits';
+import { subtractCredits } from '../creditService/subtractCredits';
 import { MODERATION_POLICY } from './moderationPolicy';
 
 const adminUpdateUserSchema = updateUserSchema.extend({
@@ -31,6 +40,11 @@ const adminUpdateUserSchema = updateUserSchema.extend({
   // `throttledUntil` stay consistent - this is how an admin confirms a `suspend_pending`
   // account, lifts a throttle/suspension back to `active`, or manually throttles.
   moderationStatus: z.enum(['active', 'throttled', 'suspend_pending', 'suspended']).optional(),
+  // Human-readable reason for a manual credit adjustment. Not a user-doc field:
+  // it is stripped from the doc write and persisted on the audited
+  // CreditTransaction (description + metadata.note) instead. See `currentCredits`
+  // routing in `adminUpdateUser`.
+  creditReason: z.string().max(500).optional(),
 });
 
 export type AdminUpdateUserParameters = z.infer<typeof adminUpdateUserSchema>;
@@ -43,6 +57,14 @@ export interface AdminUpdateUserAdapters {
       update: (organization: IOrganizationDocument) => Promise<unknown>;
     };
     friendship: IFriendshipModelAdapter;
+    /**
+     * Optional: when provided, a `currentCredits` change is routed through the
+     * audited credit ledger (addCredits/subtractCredits) instead of a raw
+     * balance overwrite, so every admin adjustment leaves a CreditTransaction
+     * recording actor, delta, resulting balance, timestamp, and reason. Omit to
+     * keep the legacy direct-overwrite behavior (unaudited).
+     */
+    creditTransactions?: ICreditTransactionRepository;
   };
 }
 
@@ -93,9 +115,26 @@ export async function adminUpdateUser(
     lastCreditsPurchasedAt = new Date();
   }
 
-  // `moderationStatus` is applied via a dedicated repo call below, not the generic field
-  // spread - pull it out so it never lands as a stray top-level field on the user doc.
-  const { moderationStatus, ...baseParams } = params;
+  // Route a credit change through the audited ledger when the adapter is wired.
+  // The atomic increment (below, after the base doc write) then owns the balance,
+  // so `currentCredits` must NOT also be spread onto the doc - a full-doc write
+  // carrying the stale balance would clobber the increment.
+  const previousBalance = user.currentCredits ?? 0;
+  const creditDelta =
+    params.currentCredits !== undefined && params.currentCredits !== previousBalance
+      ? params.currentCredits - previousBalance
+      : 0;
+  const auditCreditChange = creditDelta !== 0 && !!db.creditTransactions;
+
+  // `moderationStatus`/`creditReason` are handled out-of-band (a dedicated repo
+  // call and the credit ledger, respectively) - pull them out so they never land
+  // as stray top-level fields on the user doc.
+  const { moderationStatus, creditReason, ...baseParams } = params;
+  // When auditing the credit change, drop `currentCredits` from the doc write so
+  // the atomic increment below is the sole balance mutation.
+  if (auditCreditChange) {
+    delete baseParams.currentCredits;
+  }
   const updatedUser = applyBaseUserUpdates(user, { ...baseParams, lastCreditsPurchasedAt });
 
   if (!!params.organizationId && user.organizationId !== params.organizationId) {
@@ -131,6 +170,50 @@ export async function adminUpdateUser(
       throttledUntil:
         moderationStatus === 'throttled' ? new Date(Date.now() + MODERATION_POLICY.throttleDurationMs) : null,
     });
+  }
+
+  // Audited credit adjustment: runs AFTER the base doc write so the atomic
+  // increment is the final word on the balance. Records who (actorId = the
+  // acting admin), the delta (the transaction `credits`), the resulting
+  // balance, and the reason, as a generic_add / generic_deduct CreditTransaction.
+  if (auditCreditChange && db.creditTransactions) {
+    const note = creditReason?.trim() || undefined;
+    const resultingBalance = params.currentCredits as number;
+    const metadata: Record<string, unknown> = { actorId: userId, previousBalance, resultingBalance };
+    if (note) {
+      metadata.note = note;
+    }
+    const creditAdapters = {
+      db: { creditTransactions: db.creditTransactions },
+      creditHolderMethods: db.users,
+    };
+    if (creditDelta > 0) {
+      await addCredits(
+        {
+          ownerId: params.id,
+          ownerType: CreditHolderType.User,
+          credits: creditDelta,
+          type: 'generic_add',
+          reason: 'admin_adjustment',
+          description: note || 'Admin credit adjustment',
+          metadata,
+        },
+        creditAdapters
+      );
+    } else {
+      await subtractCredits(
+        {
+          ownerId: params.id,
+          ownerType: CreditHolderType.User,
+          credits: Math.abs(creditDelta),
+          type: 'generic_deduct',
+          reason: 'admin_adjustment',
+          description: note || 'Admin credit adjustment',
+          metadata,
+        },
+        creditAdapters
+      );
+    }
   }
 
   const finalUser = await db.users.findById(params.id);

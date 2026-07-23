@@ -51,6 +51,7 @@ vi.mock('@bike4mind/database', () => ({
   },
   userRepository: { count: (...a: unknown[]) => mockCount(...a) },
   friendshipRepository: {},
+  creditTransactionRepository: {},
   Organization: {},
   withTransaction: (fn: () => unknown) => fn(),
   TelemetryAuditLogModel: { create: vi.fn().mockResolvedValue(undefined) },

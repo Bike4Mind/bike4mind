@@ -4,7 +4,7 @@ import GroupAddIcon from '@mui/icons-material/GroupAdd';
 import MonetizationOnIcon from '@mui/icons-material/MonetizationOn';
 import SdStorageIcon from '@mui/icons-material/SdStorage';
 import WorkspacePremiumIcon from '@mui/icons-material/WorkspacePremium';
-import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button } from '@mui/joy';
+import { Input, Stack, Tooltip, LinearProgress, Typography, Box, Button, Textarea, FormHelperText } from '@mui/joy';
 import React, { useState } from 'react';
 import prettyBytes from 'pretty-bytes';
 import { api } from '@client/app/contexts/ApiContext';
@@ -15,10 +15,13 @@ interface Bike4MindUserDetailsProps {
   userKey: string;
   editedFields: EditedFieldsState;
   onFieldChange: (fieldName: keyof IUserDocument, value: unknown) => void;
+  /** Optional reason for a manual credit change; recorded on the audit trail. */
+  creditReason?: string;
+  onCreditReasonChange?: (value: string) => void;
 }
 
 const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
-  ({ user, editedFields, onFieldChange, userKey }) => {
+  ({ user, editedFields, onFieldChange, userKey, creditReason = '', onCreditReasonChange }) => {
     const [isRecalculating, setIsRecalculating] = useState(false);
     const queryClient = useQueryClient();
 
@@ -122,6 +125,24 @@ const Bike4MindUserDetails: React.FC<Bike4MindUserDetailsProps> = React.memo(
             />
           </Stack>
         </Tooltip>
+
+        {/* Reason surfaces only once credits are edited - it applies to that change. */}
+        {editedFields?.currentCredits && onCreditReasonChange && (
+          <Stack direction="row" spacing={2} sx={{ alignItems: 'flex-start', padding: '0px 16px 0px 8px' }}>
+            <Box sx={{ width: 24 }} />
+            <Box sx={{ flex: 1 }}>
+              <Textarea
+                data-testid="admin-credit-reason-input"
+                minRows={2}
+                maxRows={4}
+                placeholder="Reason for credit adjustment (optional)"
+                value={creditReason}
+                onChange={e => onCreditReasonChange(e.target.value)}
+              />
+              <FormHelperText>Recorded on the credit audit trail.</FormHelperText>
+            </Box>
+          </Stack>
+        )}
         <Tooltip title="Storage Usage">
           <Stack spacing={1.5}>
             <Stack direction="row" spacing={2} sx={{ alignItems: 'center', padding: '0px 16px 0px 8px' }}>

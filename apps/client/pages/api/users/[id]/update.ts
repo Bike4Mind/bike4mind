@@ -5,6 +5,7 @@ import {
   User,
   userRepository,
   friendshipRepository,
+  creditTransactionRepository,
   withTransaction,
   TelemetryAuditLogModel,
 } from '@bike4mind/database';
@@ -142,6 +143,8 @@ const handler = baseApi().put(
               users: userRepository,
               organizations: Organization,
               friendship: friendshipRepository,
+              // Audits admin `currentCredits` changes as CreditTransactions.
+              creditTransactions: creditTransactionRepository,
             },
           }
         )
