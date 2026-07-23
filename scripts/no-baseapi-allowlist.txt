@@ -18,6 +18,7 @@ apps/client/pages/api/__tests__/react-artifact-sandbox.test.ts # Test file for t
 apps/client/pages/api/__tests__/sessionRedactionGuard.test.ts # Static-analysis guard test (#9405); reads route source via fs, not an API route
 apps/client/pages/api/feedback/[id]/__tests__/update.ability.test.ts # Pure CASL unit test (class-vs-instance); no HTTP route, no baseApi
 apps/client/pages/api/publish/widget.ts                 # Static first-party comment-overlay JS; intentionally public, no user data, no DB
+apps/client/pages/api/publish/__tests__/widget.test.ts  # Test file for the handler above (script greps by path, not export)
 apps/client/pages/api/embed/widget.ts                   # Static first-party embed-loader JS; intentionally public, no user data, no DB (epic #41 Phase C)
 apps/client/pages/api/embed/__tests__/widget.test.ts    # Test file for the handler above (script greps by path, not export)
 
