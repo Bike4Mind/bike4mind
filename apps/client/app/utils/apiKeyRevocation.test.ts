@@ -18,6 +18,14 @@ describe('revocationTooltip', () => {
     expect(tooltip).toContain('Jan 15, 2026 9:30 AM');
   });
 
+  // What the client actually receives: the API serializes revokedAt to JSON, so
+  // prod passes an ISO string here even though IUserApiKey types it as a Date.
+  it('accepts an ISO string as it arrives over the wire', () => {
+    const tooltip = revocationTooltip({ revokedAt: REVOKED_AT.toISOString() });
+
+    expect(tooltip).toContain('Jan 15, 2026 9:30 AM');
+  });
+
   it('appends the reason when one was recorded', () => {
     const tooltip = revocationTooltip({
       revokedAt: REVOKED_AT,

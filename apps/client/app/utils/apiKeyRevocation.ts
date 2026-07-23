@@ -1,8 +1,17 @@
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
-import type { IUserApiKey } from '@bike4mind/common';
 
 dayjs.extend(relativeTime);
+
+/**
+ * `IUserApiKey` types these as `Date`, but the client reads them out of a JSON
+ * response, so at runtime they arrive as ISO strings. dayjs accepts both; this
+ * spells out what actually reaches the helper rather than inheriting the lie.
+ */
+interface RevocationFields {
+  revokedAt?: Date | string;
+  revokedReason?: string;
+}
 
 /**
  * Tooltip text for a revoked key's audit trail, shared by the admin embed-key
@@ -15,7 +24,7 @@ dayjs.extend(relativeTime);
  * `revokedBy` is deliberately not rendered - it is a raw user id that always
  * equals the key's minter while every revoke path is minter-scoped.
  */
-export function revocationTooltip(key: Pick<IUserApiKey, 'revokedAt' | 'revokedReason'>): string | null {
+export function revocationTooltip(key: RevocationFields): string | null {
   if (!key.revokedAt) return null;
 
   const at = dayjs(key.revokedAt);
