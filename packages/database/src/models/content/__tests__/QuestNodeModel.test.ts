@@ -20,8 +20,23 @@ const makeNode = (graphId: string, overrides = {}) =>
 
 describe('hasCycle', () => {
   it('returns false for a DAG and true for a back-edge', () => {
-    expect(hasCycle(new Map([['a', ['b']], ['b', ['c']], ['c', []]]))).toBe(false);
-    expect(hasCycle(new Map([['a', ['b']], ['b', ['a']]]))).toBe(true);
+    expect(
+      hasCycle(
+        new Map([
+          ['a', ['b']],
+          ['b', ['c']],
+          ['c', []],
+        ])
+      )
+    ).toBe(false);
+    expect(
+      hasCycle(
+        new Map([
+          ['a', ['b']],
+          ['b', ['a']],
+        ])
+      )
+    ).toBe(true);
   });
 });
 
@@ -70,6 +85,42 @@ describe('QuestGraph / QuestNode model', () => {
     const a = await makeNode(graph.id);
     const b = await makeNode(graph.id, { dependsOn: [a.id] }); // b -> a
     await expect(questNodeRepository.addDependency(a.id, b.id)).rejects.toThrow('dependency cycle detected');
+  });
+
+  it('addDependency canonicalizes a non-canonical dependency id before persisting', async () => {
+    const graph = await makeGraph();
+    const a = await makeNode(graph.id);
+    const b = await makeNode(graph.id);
+
+    // An ObjectId accepts differently-cased hex; the stored edge must be the
+    // canonical lowercase String(_id), never the raw input.
+    const updated = await questNodeRepository.addDependency(a.id, b.id.toUpperCase());
+    expect(updated?.dependsOn).toContain(b.id);
+    expect(updated?.dependsOn?.every(id => id === new mongoose.Types.ObjectId(id).toHexString())).toBe(true);
+  });
+
+  it('rejects a cycle even when the closing edge is supplied as a non-canonical id', async () => {
+    const graph = await makeGraph();
+    const a = await makeNode(graph.id);
+    const b = await makeNode(graph.id, { dependsOn: [a.id] }); // b -> a
+    // Uppercased hex of b closes a -> b -> a; a raw-id edge map would miss it.
+    await expect(questNodeRepository.addDependency(a.id, b.id.toUpperCase())).rejects.toThrow(
+      'dependency cycle detected'
+    );
+  });
+
+  it('addDependency rejects ids that are not valid ObjectIds', async () => {
+    const graph = await makeGraph();
+    const a = await makeNode(graph.id);
+    await expect(questNodeRepository.addDependency(a.id, 'not-an-id')).rejects.toThrow('dependency not found');
+    await expect(questNodeRepository.addDependency('not-an-id', a.id)).rejects.toThrow('node not found');
+  });
+
+  it('addNode persists de-duplicated dependency ids', async () => {
+    const graph = await makeGraph();
+    const dep = await makeNode(graph.id);
+    const node = await makeNode(graph.id, { dependsOn: [dep.id, dep.id] });
+    expect(node.dependsOn).toEqual([dep.id]);
   });
 
   it('computeReadyNodes gates on dependency completion', async () => {

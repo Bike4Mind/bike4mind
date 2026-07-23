@@ -177,21 +177,26 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
       if (depth > graph.budget.maxDepth) throw new Error('max depth exceeded');
     }
 
-    const dependsOn = input.dependsOn ?? [];
-    if (dependsOn.length) {
-      const unique = [...new Set(dependsOn)];
+    // Canonical, de-duplicated dependency ids. Persist THESE (not the raw input)
+    // so the stored edges always match the String(_id) keys buildEdgeMap emits -
+    // a non-canonical or duplicated input id must never survive into the graph.
+    let dependsOn: string[] = [];
+    const rawDependsOn = input.dependsOn ?? [];
+    if (rawDependsOn.length) {
+      const unique = [...new Set(rawDependsOn)];
       if (!unique.every(id => mongoose.Types.ObjectId.isValid(id))) throw new Error('dependency not found');
       const found = await this.questNodeModel.find(
         { _id: { $in: convertIds(unique) }, graphId: input.graphId },
         { _id: 1 }
       );
       if (found.length !== unique.length) throw new Error('dependency not found');
+      dependsOn = found.map(d => String(d._id));
 
       // Guard the full edge set including this node's proposed edges. A fresh
       // node has no incoming edges so it cannot close a loop today, but this
       // keeps the invariant literal and correct if edges are ever seeded here.
       const edges = await this.buildEdgeMap(input.graphId);
-      edges.set('__pending__', unique);
+      edges.set('__pending__', dependsOn);
       if (hasCycle(edges)) throw new Error('dependency cycle detected');
     }
 
@@ -215,18 +220,27 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
   // Adding an edge to an existing node is the operation that can actually close a
   // dependency loop (append-only addNode never can), so the cycle guard lives here too.
   async addDependency(nodeId: string, dependsOnId: string): Promise<IQuestNodeDocument | null> {
+    // Reject invalid ids up front with the same errors as a missing doc, so a
+    // malformed id surfaces cleanly instead of as a downstream cast failure.
+    if (!mongoose.Types.ObjectId.isValid(nodeId)) throw new Error('node not found');
+    if (!mongoose.Types.ObjectId.isValid(dependsOnId)) throw new Error('dependency not found');
+
     const node = await this.questNodeModel.findById(nodeId);
     if (!node) throw new Error('node not found');
 
     const dep = await this.questNodeModel.findOne({ _id: convertId(dependsOnId), graphId: node.graphId });
     if (!dep) throw new Error('dependency not found');
 
+    // Key and edge value must both be canonical String(_id) so a non-canonical
+    // input (e.g. differently-cased hex) cannot slip past the cycle guard or
+    // persist an edge buildEdgeMap could never match on a later call.
+    const depId = String(dep._id);
     const edges = await this.buildEdgeMap(node.graphId);
     const key = String(node._id);
-    edges.set(key, [...(edges.get(key) ?? []), dependsOnId]);
+    edges.set(key, [...(edges.get(key) ?? []), depId]);
     if (hasCycle(edges)) throw new Error('dependency cycle detected');
 
-    return this.questNodeModel.findByIdAndUpdate(nodeId, { $addToSet: { dependsOn: dependsOnId } }, { new: true });
+    return this.questNodeModel.findByIdAndUpdate(nodeId, { $addToSet: { dependsOn: depId } }, { new: true });
   }
 
   async getNodes(graphId: string): Promise<IQuestNodeDocument[]> {
@@ -237,11 +251,7 @@ class QuestNodeRepository extends BaseRepository<IQuestNodeDocument> implements 
     return this.findById(id);
   }
 
-  async updateStatus(
-    id: string,
-    status: NodeStatus,
-    extra?: QuestNodeStatusExtra
-  ): Promise<IQuestNodeDocument | null> {
+  async updateStatus(id: string, status: NodeStatus, extra?: QuestNodeStatusExtra): Promise<IQuestNodeDocument | null> {
     const set: Record<string, unknown> = { status };
     if (extra?.score !== undefined) set.score = extra.score;
     if (extra?.reviewVerdict !== undefined) set.reviewVerdict = extra.reviewVerdict;
