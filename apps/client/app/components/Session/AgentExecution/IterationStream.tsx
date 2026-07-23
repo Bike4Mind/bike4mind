@@ -227,44 +227,53 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
           button) so the user has feedback and a way to bail out. */}
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
-          {isActive ? <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} /> : null}
           {execution.isAborting ? (
-            <Typography level="body-sm" sx={{ color: 'danger.plainColor', fontWeight: 600 }}>
-              Aborting…
-            </Typography>
+            <>
+              <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} />
+              <Typography level="body-sm" sx={{ color: 'danger.plainColor', fontWeight: 600 }}>
+                Aborting…
+              </Typography>
+              <CreditCounter executionId={executionId} />
+            </>
           ) : isActive ? (
-            // Single status line: In Progress · Iteration N · elapsed. The
-            // iteration number is the current one (lastKnownIteration is
-            // 0-indexed); the elapsed timer re-renders ~1/s via ElapsedTime.
-            <Typography level="body-sm" sx={{ color: 'text.primary', fontWeight: 600 }}>
-              In Progress · Iteration {execution.lastKnownIteration + 1}
-              {execution.startedAt ? (
-                <>
-                  {' · '}
-                  <ElapsedTime startedAt={execution.startedAt} />
-                </>
-              ) : null}
-            </Typography>
+            // In progress: credits on the left, then the live progress indicator
+            // (spinner + "In Progress · Iteration N · elapsed"). lastKnownIteration
+            // is 0-indexed; the timer re-renders ~1/s via ElapsedTime.
+            <>
+              <CreditCounter executionId={executionId} />
+              <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} />
+              <Typography level="body-sm" sx={{ color: 'text.primary', fontWeight: 600 }}>
+                In Progress · Iteration {execution.lastKnownIteration + 1}
+                {execution.startedAt ? (
+                  <>
+                    {' · '}
+                    <ElapsedTime startedAt={execution.startedAt} />
+                  </>
+                ) : null}
+              </Typography>
+            </>
           ) : (
-            <Chip
-              size="sm"
-              color={statusMeta.color}
-              sx={{
-                '--Chip-minHeight': '24px',
-                '--Chip-paddingInline': '8px',
-                '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
-              }}
-            >
-              {statusMeta.label}
-            </Chip>
+            // Terminal / awaiting: status chip -> credits -> iteration count.
+            <>
+              <Chip
+                size="sm"
+                color={statusMeta.color}
+                sx={{
+                  '--Chip-minHeight': '24px',
+                  '--Chip-paddingInline': '8px',
+                  '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
+                }}
+              >
+                {statusMeta.label}
+              </Chip>
+              <CreditCounter executionId={executionId} />
+              {visibleIterationCount > 0 ? (
+                <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                  {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
+                </Typography>
+              ) : null}
+            </>
           )}
-          {/* Credits sit right after the status, before the iteration count. */}
-          <CreditCounter executionId={executionId} />
-          {!isActive && !execution.isAborting && visibleIterationCount > 0 ? (
-            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-              {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
-            </Typography>
-          ) : null}
           <Box sx={{ flex: 1 }} />
           <AbortButton executionId={executionId} status={execution.status} />
         </Stack>
