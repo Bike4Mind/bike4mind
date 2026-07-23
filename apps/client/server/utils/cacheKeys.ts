@@ -83,4 +83,10 @@ export const CacheKeys = {
   modelStats: () => 'model-stats',
 
   modelList: (userId: string) => `model-list:${userId}`,
+
+  refineText: (text: string, context?: string) => {
+    const material = JSON.stringify({ text, context: context ?? '' });
+    const hash = crypto.createHash('sha256').update(material).digest('hex').substring(0, 16);
+    return `refine-text:${hash}`;
+  },
 };
