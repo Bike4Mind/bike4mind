@@ -1,8 +1,9 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Button, Typography, useTheme } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { OptiModeBreadcrumb } from '@client/app/components/datalake/OptiModeBreadcrumb';
+import { useKnowledgeModal } from '@client/app/components/Knowledge/KnowledgeModal';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
 import { TelemetryTicker, deckBackground } from '@client/app/components/datalake/deckChrome';
@@ -26,6 +27,13 @@ interface DataLakeExplorerProps {
   rootLabel?: string;
   /** When provided, renders a "Manage" button that opens the lake management panel. */
   onManage?: () => void;
+  /**
+   * Chat-first surface: when provided, this node (a full `SessionContainer`) fills the RIGHT
+   * pane instead of `DataLakeArticle`, and file clicks open the rich `KnowledgeModal` viewer.
+   * The parent owns/pre-creates the session (see issue #836). When absent, the legacy
+   * markdown `DataLakeArticle` behavior is kept unchanged (back-compat for pinned consumers).
+   */
+  chatSlot?: React.ReactNode;
 }
 
 /** True only for drags carrying real files (not text/image-from-page drags). */
@@ -38,11 +46,31 @@ export default function DataLakeExplorer({
   source = 'opti',
   rootLabel = '⛩ Mission Hub',
   onManage,
+  chatSlot,
 }: DataLakeExplorerProps) {
   const theme = useTheme();
   const isDark = theme.palette.mode === 'dark';
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
+
+  // Chat-first mode: clicking a file opens the app's universal rich viewer (KnowledgeModal),
+  // which fetches the FabFile by id, instead of the markdown-only DataLakeArticle. The modal
+  // is a store-driven singleton already mounted in the Notebook layout on both surfaces.
+  const usingChat = !!chatSlot;
+  const setKnowledgeOpen = useKnowledgeModal(s => s.setOpen);
+  const setKnowledgeFileId = useKnowledgeModal(s => s.setSelectedFabFileId);
+  const setKnowledgeViewOnly = useKnowledgeModal(s => s.setViewOnly);
+  // Id of the file most recently opened in the modal, kept only to highlight it in the tree.
+  const [modalFileId, setModalFileId] = useState<string | null>(usingChat ? (articleId ?? null) : null);
+  const openInKnowledgeModal = useCallback(
+    (fileId: string) => {
+      setKnowledgeFileId(fileId);
+      setKnowledgeViewOnly(true); // data-lake browsing is read-only
+      setKnowledgeOpen(true);
+      setModalFileId(fileId);
+    },
+    [setKnowledgeFileId, setKnowledgeViewOnly, setKnowledgeOpen]
+  );
 
   // Drag-to-ingest: an overlay invites dropping files/folders, which then open a lake
   // picker that hands off to the append wizard. A counter ref avoids flicker as drag
@@ -102,10 +130,21 @@ export default function DataLakeExplorer({
 
   // Deep-link: fetch the specific article by ID when URL param is present.
   // Uses dedicated id-lookup path on the server (search by ID as text never matched).
+  // In chat mode the fetch is skipped: KnowledgeModal resolves the FabFile from the id itself.
   const { data: deepLinkResult } = useGetDataLakeArticles(
-    articleId && !userSelectedFile ? { id: articleId, limit: 1 } : null,
+    articleId && !userSelectedFile && !usingChat ? { id: articleId, limit: 1 } : null,
     source
   );
+
+  // Chat mode deep-link: open the rich viewer for the URL's article on mount. Guarded so
+  // closing the modal doesn't reopen it, and so it re-fires only when the id actually changes.
+  const openedDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (usingChat && articleId && openedDeepLinkRef.current !== articleId) {
+      openedDeepLinkRef.current = articleId;
+      openInKnowledgeModal(articleId);
+    }
+  }, [usingChat, articleId, openInKnowledgeModal]);
 
   // Derive selectedFile: user's explicit click takes priority, then deep-link result.
   // Pure derivation - no effects, no refs, no setState during render.
@@ -117,9 +156,16 @@ export default function DataLakeExplorer({
     setUserSelectedFile(null);
   }, []);
 
-  const handleSelectFile = useCallback((file: IFabFileDocument) => {
-    setUserSelectedFile(file);
-  }, []);
+  const handleSelectFile = useCallback(
+    (file: IFabFileDocument) => {
+      if (usingChat) {
+        openInKnowledgeModal(file.id);
+      } else {
+        setUserSelectedFile(file);
+      }
+    },
+    [usingChat, openInKnowledgeModal]
+  );
 
   // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
   // overcount multi-tagged articles ~2x); branch count stays tree-derived.
@@ -222,12 +268,23 @@ export default function DataLakeExplorer({
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
-          selectedFileId={selectedFile?.id ?? null}
+          selectedFileId={usingChat ? modalFileId : (selectedFile?.id ?? null)}
           onSelectFile={handleSelectFile}
           isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
           isError={tagCountsError}
         />
-        <DataLakeArticle file={selectedFile} onAskAbout={onAskAbout} quickDives={quickDives} onDive={handleNavigate} />
+        {chatSlot ? (
+          <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {chatSlot}
+          </Box>
+        ) : (
+          <DataLakeArticle
+            file={selectedFile}
+            onAskAbout={onAskAbout}
+            quickDives={quickDives}
+            onDive={handleNavigate}
+          />
+        )}
       </Box>
 
       {/* Drag-to-ingest: pick a destination lake, then the append wizard takes over.
