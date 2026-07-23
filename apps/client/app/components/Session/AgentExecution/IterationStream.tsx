@@ -227,28 +227,43 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
       {(isActive || visibleIterationCount > 0 || execution.pendingPermission) && (
         <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
           {isActive ? <CircularProgress size="sm" thickness={2} sx={{ '--CircularProgress-size': '16px' }} /> : null}
-          <Chip
-            size="sm"
-            color={statusMeta.color}
-            sx={{
-              '--Chip-minHeight': '24px',
-              '--Chip-paddingInline': '8px',
-              '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
-            }}
-          >
-            {statusMeta.label}
-          </Chip>
-          {visibleIterationCount > 0 ? (
-            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-              {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
+          {execution.isAborting ? (
+            <Typography level="body-sm" sx={{ color: 'danger.plainColor', fontWeight: 600 }}>
+              Aborting…
             </Typography>
-          ) : null}
-          {/* Live elapsed time during active runs - grounds the wait in real
-              data so the rotating "Thinking..." copy doesn't feel like the
-              only signal that progress is being made. Re-renders ~1/s; the
-              underlying interval lives in the child so toggling visibility
-              doesn't leak timers. */}
-          {isActive && execution.startedAt ? <ElapsedTime startedAt={execution.startedAt} /> : null}
+          ) : isActive ? (
+            // Single status line: In Progress · Iteration N · elapsed. The
+            // iteration number is the current one (lastKnownIteration is
+            // 0-indexed); the elapsed timer re-renders ~1/s via ElapsedTime.
+            <Typography level="body-sm" sx={{ color: 'text.primary', fontWeight: 600 }}>
+              In Progress · Iteration {execution.lastKnownIteration + 1}
+              {execution.startedAt ? (
+                <>
+                  {' · '}
+                  <ElapsedTime startedAt={execution.startedAt} />
+                </>
+              ) : null}
+            </Typography>
+          ) : (
+            <>
+              <Chip
+                size="sm"
+                color={statusMeta.color}
+                sx={{
+                  '--Chip-minHeight': '24px',
+                  '--Chip-paddingInline': '8px',
+                  '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
+                }}
+              >
+                {statusMeta.label}
+              </Chip>
+              {visibleIterationCount > 0 ? (
+                <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+                  {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
+                </Typography>
+              ) : null}
+            </>
+          )}
           <Box sx={{ flex: 1 }} />
           <AbortButton executionId={executionId} status={execution.status} />
         </Stack>
@@ -427,11 +442,8 @@ const ElapsedTime: FC<{ startedAt: number }> = ({ startedAt }) => {
   // Compact: "7s" under a minute, "1m 12s" past it. Long-running agents
   // are rare but the format keeps the row readable when they happen.
   const label = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return (
-    <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-      · {label}
-    </Typography>
-  );
+  // Plain text so it composes inline inside the single status line.
+  return <>{label}</>;
 };
 
 // Live token stream for the in-flight iteration. Rendered in place of the rotating
