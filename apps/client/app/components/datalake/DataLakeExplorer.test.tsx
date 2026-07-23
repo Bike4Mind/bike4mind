@@ -4,16 +4,20 @@ import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
 import DataLakeExplorer from './DataLakeExplorer';
 
-// KnowledgeModal store: spy on the setters so we can assert file clicks / deep-links drive it.
-// Mocked (rather than importing the real store) to avoid dragging in the heavy modal deps.
-const { setOpen, setSelectedFabFileId, setViewOnly } = vi.hoisted(() => ({
-  setOpen: vi.fn(),
-  setSelectedFabFileId: vi.fn(),
-  setViewOnly: vi.fn(),
+// Chat-first mode opens a clicked file INLINE in the KnowledgeViewer by adding it to the
+// session workbench and switching layout to `vertical`. Spy on those two seams.
+const { setWorkBenchFiles, setSessionLayout } = vi.hoisted(() => ({
+  setWorkBenchFiles: vi.fn(),
+  setSessionLayout: vi.fn(),
 }));
-vi.mock('@client/app/components/Knowledge/KnowledgeModal', () => ({
-  useKnowledgeModal: (selector: (s: unknown) => unknown) =>
-    selector({ open: false, selectedFabFileId: null, viewOnly: false, setOpen, setSelectedFabFileId, setViewOnly }),
+vi.mock('@client/app/contexts/SessionsContext', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/contexts/SessionsContext')>()),
+  useSessions: () => ({ currentSessionId: 'sess-1' }),
+  useWorkBenchActions: () => ({ setWorkBenchFiles }),
+}));
+vi.mock('@client/app/hooks/useSessionLayout', async importOriginal => ({
+  ...(await importOriginal<typeof import('@client/app/hooks/useSessionLayout')>()),
+  setSessionLayout,
 }));
 
 vi.mock('@client/app/hooks/data/fabFiles', () => ({
@@ -22,7 +26,11 @@ vi.mock('@client/app/hooks/data/fabFiles', () => ({
     isLoading: false,
     isError: false,
   }),
-  useGetDataLakeArticles: () => ({ data: { data: [] }, isLoading: false }),
+  // id query (deep-link) resolves to a file; tag query resolves empty.
+  useGetDataLakeArticles: (params?: { id?: string } | null) => ({
+    data: { data: params?.id ? [{ id: params.id, fileName: 'Deep Book', tags: [] }] : [] },
+    isLoading: false,
+  }),
   useGetFabFileContent: () => ({ data: undefined, isLoading: false }),
 }));
 
@@ -75,30 +83,29 @@ describe('DataLakeExplorer chat-first surface', () => {
     expect(screen.queryByTestId('datalake-article-empty')).not.toBeInTheDocument();
   });
 
-  it('opens the rich KnowledgeModal (read-only) when a file is clicked in chat mode', () => {
+  it('opens a clicked file inline (workbench + vertical KnowledgeViewer) in chat mode', () => {
     renderExplorer({ chatSlot: <div data-testid="my-chat" /> });
     fireEvent.click(screen.getByTestId('mock-select-file'));
-    expect(setSelectedFabFileId).toHaveBeenCalledWith('file-123');
-    expect(setViewOnly).toHaveBeenCalledWith(true);
-    expect(setOpen).toHaveBeenCalledWith(true);
+    // Added to the session workbench so the KnowledgeViewer renders it.
+    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+    // Layout switched to the split view with the file selected.
+    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'file-123' });
     // The clicked file is highlighted in the tree.
     expect(screen.getByTestId('mock-tree')).toHaveAttribute('data-selected', 'file-123');
   });
 
-  it('opens the KnowledgeModal for the deep-linked articleId on mount in chat mode', () => {
+  it('opens the deep-linked articleId inline once it resolves', () => {
     renderExplorer({ chatSlot: <div data-testid="my-chat" />, articleId: 'deep-1' });
-    expect(setSelectedFabFileId).toHaveBeenCalledWith('deep-1');
-    expect(setViewOnly).toHaveBeenCalledWith(true);
-    expect(setOpen).toHaveBeenCalledWith(true);
+    expect(setWorkBenchFiles).toHaveBeenCalledWith('sess-1', expect.any(Function));
+    expect(setSessionLayout).toHaveBeenCalledWith({ layout: 'vertical', selectedArtifactId: 'deep-1' });
   });
 
-  it('back-compat: with no chatSlot, renders DataLakeArticle and does NOT open the modal on click', () => {
+  it('back-compat: with no chatSlot, renders DataLakeArticle and does NOT touch layout/workbench', () => {
     renderExplorer();
-    // Empty-state article is shown (no file selected yet), not a chat.
     expect(screen.getByTestId('datalake-article-empty')).toBeInTheDocument();
     fireEvent.click(screen.getByTestId('mock-select-file'));
-    // Legacy path selects into the article panel; the modal is never opened.
-    expect(setOpen).not.toHaveBeenCalled();
+    expect(setWorkBenchFiles).not.toHaveBeenCalled();
+    expect(setSessionLayout).not.toHaveBeenCalled();
     expect(screen.getByTestId('datalake-article')).toBeInTheDocument();
   });
 });

@@ -112,6 +112,7 @@ export default function DataLakesHome() {
             currentSessionId={sessionId ?? undefined}
             isLoading={!sessionId}
             autoHideOnEmpty={false}
+            transparentTop
             customSplash={<DataLakeChatSplash />}
             emptySessionSplash={<DataLakeChatSplash />}
           />

@@ -31,9 +31,11 @@ type SessionTopProps = {
    */
   enableSearch?: boolean;
   onChatWidthToggle?: (isFullWidth: boolean) => void;
+  /** Render the bar transparent (no solid topbar background) - chat-first Data Lake surface. */
+  transparentTop?: boolean;
 };
 
-const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidthToggle }) => {
+const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidthToggle, transparentTop }) => {
   const { currentSession, currentSessionId } = useSessions();
   const { data: cachedSession } = useGetSession(currentSessionId ?? null);
   const layout = useSessionLayout(s => s.layout);
@@ -79,7 +81,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
           flexDirection: 'row',
           paddingRight: '0px',
           height: '0em',
-          backgroundColor: 'chatbox.topbarBg',
+          backgroundColor: transparentTop ? 'transparent' : 'chatbox.topbarBg',
           color: 'chatbox.topbarText',
           zIndex: 10000,
         })}

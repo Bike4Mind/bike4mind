@@ -65,6 +65,9 @@ interface SessionLayoutProps {
   floatingChatHeaderActions?: React.ReactNode;
   /** Called when the server auto-creates a session (e.g. first prompt with no session). Lets parent pages like /opti sync their local session state. */
   onSessionCreated?: (sessionId: string) => void;
+  /** When true, the top toolbar bar renders transparent (no solid background) so a surface's
+   *  own backdrop shows through - used by the chat-first Data Lake surface. (#836) */
+  transparentTop?: boolean;
 }
 
 /**
@@ -186,6 +189,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
   emptySessionSplash,
   floatingChatHeaderActions,
   onSessionCreated,
+  transparentTop,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const { changeSession, currentSessionId: contextSessionId, setCurrentSessionId, setCurrentSession } = useSessions();
@@ -487,7 +491,7 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   width: '100%',
                   height: '60px',
                   borderColor: 'divider',
-                  background: theme.palette.background.body,
+                  background: transparentTop ? 'transparent' : theme.palette.background.body,
                   zIndex: 1,
                   padding: '0px 0 0px 12px',
                   display: {
@@ -496,7 +500,11 @@ const SessionContainer: FC<SessionLayoutProps> = ({
                   },
                 })}
               >
-                <SessionTop listClosed={listClosed} onChatWidthToggle={setIsFullWidth} />
+                <SessionTop
+                  listClosed={listClosed}
+                  onChatWidthToggle={setIsFullWidth}
+                  transparentTop={transparentTop}
+                />
               </Box>
               {/* Skip rendering chat content when floatingChat/dock is active — FloatingChatWindow
                 or DockedChatPanel renders its own SessionMiddle + SessionBottom. Rendering duplicates

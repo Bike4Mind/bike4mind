@@ -3,7 +3,8 @@ import { Box, Button, Typography, useTheme } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import { OptiModeBreadcrumb } from '@client/app/components/datalake/OptiModeBreadcrumb';
-import { useKnowledgeModal } from '@client/app/components/Knowledge/KnowledgeModal';
+import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
+import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
 import { TelemetryTicker, deckBackground } from '@client/app/components/datalake/deckChrome';
@@ -53,23 +54,26 @@ export default function DataLakeExplorer({
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [userSelectedFile, setUserSelectedFile] = useState<IFabFileDocument | null>(null);
 
-  // Chat-first mode: clicking a file opens the app's universal rich viewer (KnowledgeModal),
-  // which fetches the FabFile by id, instead of the markdown-only DataLakeArticle. The modal
-  // is a store-driven singleton already mounted in the Notebook layout on both surfaces.
+  // Chat-first mode: clicking a file opens it INLINE in the chat's KnowledgeViewer (the split
+  // "knowledge-viewer-container") rather than a modal - by adding it to the session workbench and
+  // switching the layout to `vertical` (KnowledgeViewer left, chat right). The parent's
+  // SessionContainer drives the global session context, so `currentSessionId` here is the
+  // datalake chat's session. (#836)
   const usingChat = !!chatSlot;
-  const setKnowledgeOpen = useKnowledgeModal(s => s.setOpen);
-  const setKnowledgeFileId = useKnowledgeModal(s => s.setSelectedFabFileId);
-  const setKnowledgeViewOnly = useKnowledgeModal(s => s.setViewOnly);
-  // Id of the file most recently opened in the modal, kept only to highlight it in the tree.
-  const [modalFileId, setModalFileId] = useState<string | null>(usingChat ? (articleId ?? null) : null);
-  const openInKnowledgeModal = useCallback(
-    (fileId: string) => {
-      setKnowledgeFileId(fileId);
-      setKnowledgeViewOnly(true); // data-lake browsing is read-only
-      setKnowledgeOpen(true);
-      setModalFileId(fileId);
+  const { currentSessionId } = useSessions();
+  const { setWorkBenchFiles } = useWorkBenchActions();
+  // Id of the file most recently opened in the viewer, kept to highlight it in the tree.
+  const [viewerFileId, setViewerFileId] = useState<string | null>(usingChat ? (articleId ?? null) : null);
+  const openFileInViewer = useCallback(
+    (file: IFabFileDocument) => {
+      if (currentSessionId) {
+        setWorkBenchFiles(currentSessionId, prev => (prev.some(f => f.id === file.id) ? prev : [...prev, file]));
+      }
+      // Show the KnowledgeViewer split and select this file's tab.
+      setSessionLayout({ layout: 'vertical', selectedArtifactId: file.id });
+      setViewerFileId(file.id);
     },
-    [setKnowledgeFileId, setKnowledgeViewOnly, setKnowledgeOpen]
+    [currentSessionId, setWorkBenchFiles]
   );
 
   // Drag-to-ingest: an overlay invites dropping files/folders, which then open a lake
@@ -128,43 +132,49 @@ export default function DataLakeExplorer({
   );
   const leafArticles = leafTag ? (leafArticlesResult?.data ?? []) : [];
 
-  // Deep-link: fetch the specific article by ID when URL param is present.
-  // Uses dedicated id-lookup path on the server (search by ID as text never matched).
-  // In chat mode the fetch is skipped: KnowledgeModal resolves the FabFile from the id itself.
+  // Deep-link: fetch the specific article by ID when URL param is present. The inline viewer
+  // needs the FabFile OBJECT (to add to the workbench), so chat mode fetches it too.
   const { data: deepLinkResult } = useGetDataLakeArticles(
-    articleId && !userSelectedFile && !usingChat ? { id: articleId, limit: 1 } : null,
+    articleId && !userSelectedFile ? { id: articleId, limit: 1 } : null,
     source
   );
-
-  // Chat mode deep-link: open the rich viewer for the URL's article on mount. Guarded so
-  // closing the modal doesn't reopen it, and so it re-fires only when the id actually changes.
-  const openedDeepLinkRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (usingChat && articleId && openedDeepLinkRef.current !== articleId) {
-      openedDeepLinkRef.current = articleId;
-      openInKnowledgeModal(articleId);
-    }
-  }, [usingChat, articleId, openInKnowledgeModal]);
-
-  // Derive selectedFile: user's explicit click takes priority, then deep-link result.
-  // Pure derivation - no effects, no refs, no setState during render.
+  // Derive selectedFile (used by the legacy DataLakeArticle fallback): explicit click first,
+  // then the deep-link result. Pure derivation - no effects, no setState during render.
   const deepLinkTarget = deepLinkResult?.data?.[0] ?? null;
   const selectedFile = userSelectedFile ?? (articleId ? deepLinkTarget : null);
 
-  const handleNavigate = useCallback((newBreadcrumb: string[]) => {
-    setBreadcrumb(newBreadcrumb);
-    setUserSelectedFile(null);
-  }, []);
+  // Chat mode deep-link: open the URL's article in the inline viewer once it resolves. Guarded
+  // so it fires once per id (closing the viewer or re-rendering won't reopen it).
+  const openedDeepLinkRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (usingChat && deepLinkTarget && openedDeepLinkRef.current !== deepLinkTarget.id) {
+      openedDeepLinkRef.current = deepLinkTarget.id;
+      openFileInViewer(deepLinkTarget);
+    }
+  }, [usingChat, deepLinkTarget, openFileInViewer]);
+
+  const handleNavigate = useCallback(
+    (newBreadcrumb: string[]) => {
+      setBreadcrumb(newBreadcrumb);
+      setUserSelectedFile(null);
+      // Browsing away closes the inline file viewer, returning to the full-width chat.
+      if (usingChat) {
+        setSessionLayout({ layout: 'hide' });
+        setViewerFileId(null);
+      }
+    },
+    [usingChat]
+  );
 
   const handleSelectFile = useCallback(
     (file: IFabFileDocument) => {
       if (usingChat) {
-        openInKnowledgeModal(file.id);
+        openFileInViewer(file);
       } else {
         setUserSelectedFile(file);
       }
     },
-    [usingChat, openInKnowledgeModal]
+    [usingChat, openFileInViewer]
   );
 
   // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
@@ -268,7 +278,7 @@ export default function DataLakeExplorer({
           articles={leafArticles}
           breadcrumb={breadcrumb}
           onNavigate={handleNavigate}
-          selectedFileId={usingChat ? modalFileId : (selectedFile?.id ?? null)}
+          selectedFileId={usingChat ? viewerFileId : (selectedFile?.id ?? null)}
           onSelectFile={handleSelectFile}
           isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
           isError={tagCountsError}
