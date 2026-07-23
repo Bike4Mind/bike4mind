@@ -4,6 +4,8 @@
  * sentences. For deeper documentation, link out via `ContextHelpButton`.
  */
 export const FIELD_TOOLTIPS = {
+  dataLake:
+    'A Data Lake is a curated knowledge base the AI grounds its answers in (RAG). It gives you better, sourced answers without having to recall the exact document.',
   credits: 'AI operations consume credits. Your balance updates after each request.',
   burnRate:
     'Average credits consumed per day over your recent activity. Use this to estimate how long your balance will last.',
