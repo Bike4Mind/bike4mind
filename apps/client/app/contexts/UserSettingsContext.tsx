@@ -32,6 +32,7 @@ export type ExperimentalFeature =
   | 'enableBmPi'
   | 'enableLattice'
   | 'enableBriefcase'
+  | 'enableHearth'
   // Layer-1 gate for the Agent-mode composer toggle.
   // Hides the entire feature surface until parity ships. Default false for everyone.
   | 'agentMode';
@@ -94,6 +95,7 @@ const defaultSettings: UserSettings = {
     enableResearchEngine: false,
     enableBmPi: false,
     enableLattice: false,
+    enableHearth: false,
     enableBriefcase: false,
     agentMode: false,
   },

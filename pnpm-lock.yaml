@@ -204,6 +204,9 @@ importers:
       '@bike4mind/fab-pipeline':
         specifier: workspace:*
         version: link:../../b4m-core/fab-pipeline
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../../b4m-core/hearth
       '@bike4mind/infra':
         specifier: workspace:*
         version: link:../../b4m-core/infra
@@ -954,6 +957,9 @@ importers:
 
   b4m-core/common:
     dependencies:
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../hearth
       axios:
         specifier: 1.18.0
         version: 1.18.0
@@ -1943,6 +1949,9 @@ importers:
       '@bike4mind/db-core':
         specifier: workspace:*
         version: link:../../b4m-core/db-core
+      '@bike4mind/hearth':
+        specifier: workspace:*
+        version: link:../../b4m-core/hearth
       '@bike4mind/llm-adapters':
         specifier: workspace:*
         version: link:../../b4m-core/llm-adapters
