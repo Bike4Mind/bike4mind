@@ -30,7 +30,15 @@ const WIDGET_JS = String.raw`(function () {
   var origin = window.location.origin;
   var API = origin + '/api/publish/annotations/' + encodeURIComponent(publicId);
 
-  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPostedId: null };
+  // justPosted holds EVERY comment of ours the server list has not caught up to yet,
+  // as [{id, at}] - a single slot would leave an earlier comment unprotected as soon
+  // as a second one was posted, and the next stale poll would drop it. Entries expire
+  // after PENDING_TTL_MS so a comment deleted before it ever appeared in the list
+  // cannot be resurrected indefinitely. Must stay well above the poll cadence (60s
+  // closed / 15s open) and the list's cache staleness, or a comment would be dropped
+  // while it is still legitimately waiting to show up.
+  var PENDING_TTL_MS = 300000;
+  var state = { comments: [], canComment: false, open: false, pinMode: false, pendingAnchor: null, draft: '', justPosted: [] };
 
   function getToken() {
     try {
@@ -47,8 +55,22 @@ const WIDGET_JS = String.raw`(function () {
     if (t) h['Authorization'] = 'Bearer ' + t;
     return h;
   }
+  // Server clock minus client clock, learned from the initial list response's Date
+  // header. Timestamps come from the server but were being compared against the
+  // browser's clock, so a viewer whose clock ran behind saw every comment as "just
+  // now". Only the FIRST load is sampled: it is sent no-store, so its Date header is
+  // genuinely fresh, whereas a cached response's Date is older by its cache age.
+  var serverSkewMs = 0;
+  function noteServerClock(r) {
+    try {
+      var d = r.headers && r.headers.get && r.headers.get('date');
+      if (!d) return;
+      var t = new Date(d).getTime();
+      if (!isNaN(t)) serverSkewMs = t - Date.now();
+    } catch (e) { /* header unreadable - leave the skew at 0 */ }
+  }
   function timeAgo(iso) {
-    var s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    var s = Math.max(0, (Date.now() + serverSkewMs - new Date(iso).getTime()) / 1000);
     if (s < 60) return 'just now';
     if (s < 3600) return Math.floor(s / 60) + 'm ago';
     if (s < 86400) return Math.floor(s / 3600) + 'h ago';
@@ -58,12 +80,19 @@ const WIDGET_JS = String.raw`(function () {
   // ---- styles (style-src allows 'unsafe-inline') ----
   var css = document.createElement('style');
   css.textContent = [
-    '#b4m-ov,#b4m-ov *{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}',
-    '#b4m-ov{position:fixed;z-index:2147483000;bottom:20px;right:20px}',
+    // Cover all three widget roots, not just #b4m-ov: the panel and the hint toast are
+    // appended to <body> (not inside #b4m-ov), so without this they inherit the host
+    // page's default serif. Buttons masked the bug by defaulting to a UA sans-serif.
+    '#b4m-ov,#b4m-ov *,#b4m-panel,#b4m-panel *,#b4m-hint{box-sizing:border-box;font-family:ui-sans-serif,system-ui,-apple-system,sans-serif}',
+    // --b4m-chrome is the height of the wrapper's bottom livery bar (.b4m-bar), measured at
+    // boot. That bar is fixed at z-index 2147483647 (the max), so we cannot stack above it -
+    // the launcher and panel must sit clear of it instead. Must stay in sync with the bar in
+    // renderBundleWrapper (pages/api/publish/serve/[...path].ts).
+    '#b4m-ov{position:fixed;z-index:2147483000;bottom:calc(20px + var(--b4m-chrome,0px));right:20px}',
     '#b4m-launch{display:flex;align-items:center;gap:8px;background:#1a1a2e;color:#fff;border:0;border-radius:999px;padding:11px 16px;font-size:14px;font-weight:600;cursor:pointer;box-shadow:0 6px 24px rgba(0,0,0,.28)}',
     '#b4m-launch:hover{background:#2a2a44}',
     '#b4m-launch .dot{background:#8ab4ff;color:#0f0f1a;border-radius:999px;min-width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;padding:0 5px}',
-    '#b4m-panel{position:fixed;bottom:20px;right:20px;width:360px;max-width:calc(100vw - 32px);max-height:min(640px,calc(100vh - 40px));background:#fff;color:#1a1a2e;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.32);display:none;flex-direction:column;overflow:hidden}',
+    '#b4m-panel{position:fixed;z-index:2147483000;bottom:calc(20px + var(--b4m-chrome,0px));right:20px;width:360px;max-width:calc(100vw - 32px);max-height:min(640px,calc(100vh - 40px - var(--b4m-chrome,0px)));background:#fff;color:#1a1a2e;border-radius:14px;box-shadow:0 12px 48px rgba(0,0,0,.32);display:none;flex-direction:column;overflow:hidden}',
     '#b4m-panel.b4m-open{display:flex}',
     '#b4m-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid #ececf3}',
     '#b4m-head b{font-size:15px}',
@@ -127,6 +156,16 @@ const WIDGET_JS = String.raw`(function () {
   panel.id = 'b4m-panel';
   document.body.appendChild(ov);
   document.body.appendChild(panel);
+
+  // The bottom livery bar is present only on own-tab open-public renders, and its height
+  // grows when its contents wrap on narrow viewports - so measure rather than hardcode 52px.
+  function syncChrome() {
+    var bar = document.querySelector('.b4m-bar');
+    var h = bar ? bar.getBoundingClientRect().height : 0;
+    document.documentElement.style.setProperty('--b4m-chrome', h + 'px');
+  }
+  syncChrome();
+  window.addEventListener('resize', syncChrome);
 
   function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
 
@@ -281,12 +320,16 @@ const WIDGET_JS = String.raw`(function () {
   var CAN_API = API + '/can-comment';
 
   function loadList() {
-    return fetch(API, { headers: headers(false), credentials: 'omit' })
-      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+    // no-store on the INITIAL load only: the list is deliberately cacheable for the
+    // polling fan-out, but a reader who just posted (or reloaded right after someone
+    // else did) would otherwise be served their own stale pre-comment copy. The
+    // in-memory justPosted guard below cannot help here - a reload wipes it.
+    // Polls keep the default cache mode, so the fan-out collapse is preserved.
+    return fetch(API, { headers: headers(false), credentials: 'omit', cache: 'no-store' })
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); noteServerClock(r); return r.json(); })
       .then(function (data) {
         state.comments = data.annotations || [];
         policy = data.commentPolicy || policy;
-        lastSig = sig(state.comments); // seed so the first poll doesn't re-render identical data
         render();
       })
       .catch(function () { /* artifact may be private to this viewer; stay quiet */ render(); });
@@ -318,7 +361,11 @@ const WIDGET_JS = String.raw`(function () {
         if (!r.ok) return r.json().then(function (j) { throw new Error(j.error || ('HTTP ' + r.status)); });
         return r.json();
       })
-      .then(function (created) { state.comments.push(created); state.justPostedId = created.id; render(); });
+      .then(function (created) {
+        state.comments.push(created);
+        state.justPosted.push({ id: created.id, at: Date.now() });
+        render();
+      });
   }
 
   // ---- smart polling: pick up other users' comments without a reload ----
@@ -329,7 +376,6 @@ const WIDGET_JS = String.raw`(function () {
   function sig(list) {
     return list.length + ':' + list.map(function (c) { return c.id + (c.resolvedAt ? 'R' : ''); }).join(',');
   }
-  var lastSig = '';
   var lastCanComment = null;
   function poll() {
     if (document.visibilityState !== 'visible') return;
@@ -340,17 +386,26 @@ const WIDGET_JS = String.raw`(function () {
       .then(function (data) {
         if (!data) return;
         var incoming = data.annotations || [];
-        // Don't let a poll whose fetch predated your just-posted comment drop it from
-        // the list (it self-heals next cycle, but the blink is avoidable). Keep the
-        // local copy until the server's list reflects it. Only protects YOUR fresh
-        // post — never resurrects others' deletes.
-        if (state.justPostedId) {
-          if (incoming.some(function (c) { return c.id === state.justPostedId; })) state.justPostedId = null;
-          else incoming = incoming.concat(state.comments.filter(function (c) { return c.id === state.justPostedId; }));
+        // Don't let a poll whose fetch predated your just-posted comments drop them
+        // from the list (it self-heals next cycle, but the blink is avoidable). Keep
+        // the local copies until the server's list reflects them. Only protects YOUR
+        // fresh posts — never resurrects others' deletes.
+        if (state.justPosted.length) {
+          var now = Date.now();
+          // Retire an entry once the server list carries it, or once it ages out.
+          state.justPosted = state.justPosted.filter(function (p) {
+            return now - p.at < PENDING_TTL_MS && !incoming.some(function (c) { return c.id === p.id; });
+          });
+          var pending = state.comments.filter(function (c) {
+            return state.justPosted.some(function (p) { return p.id === c.id; });
+          });
+          if (pending.length) incoming = incoming.concat(pending);
         }
-        var s = sig(incoming);
-        if (s === lastSig) return; // nothing changed
-        lastSig = s;
+        // Compare against what is actually on screen rather than a remembered
+        // signature: an optimistic local copy can diverge from the last server
+        // response, and a remembered signature would then early-return forever and
+        // never reconcile it away.
+        if (sig(incoming) === sig(state.comments)) return; // nothing changed
         state.comments = incoming;
         render();
       })
