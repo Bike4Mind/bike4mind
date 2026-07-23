@@ -1329,6 +1329,110 @@ describe('ChatCompletionProcess', () => {
     });
   });
 
+  // Tool schemas ship to the provider as a separate `tools` param, so the local input estimate
+  // must count them (previously hardcoded to 0). These pin the branch added for #811, including the
+  // throw-path fallback that must NOT zero the messages-total floor - a zeroed inputTokens would
+  // silently disable the overflow guard, under-reserve credits, and under-bill the fallback total.
+  describe('tool-schema token counting (local input estimate)', () => {
+    const probeTool = {
+      toolSchema: {
+        name: 'estimate_probe_tool',
+        description: 'probe',
+        parameters: { type: 'object', properties: {} },
+      },
+    };
+
+    const runWithTools = async (opts: {
+      tools: any[];
+      messagesTokenCount: number;
+      // countTokens serves BOTH the tool-schema count (string arg) and the output count (array
+      // arg); the impl differentiates so a test can target one without disturbing the other.
+      toolCountImpl: (text: any) => number;
+    }): Promise<any> => {
+      const buildToolsSpy = vi.spyOn(ToolBuilder.prototype, 'buildTools').mockReturnValue(opts.tools as any);
+      const buildToolPromptSpy = vi.spyOn(ToolBuilder.prototype, 'buildToolPrompt').mockResolvedValue(null);
+
+      mockedCalculateTotalTokenLength.mockResolvedValue(opts.messagesTokenCount);
+      mockTokenizer.countTokens.mockReset().mockImplementation(async (text: any) => opts.toolCountImpl(text));
+      mockedUsdToCredits.mockImplementation(realUsdToCredits);
+      mockedUsdToCreditsStochastic.mockImplementation(usd => realUsdToCreditsStochastic(usd, () => 0));
+
+      mockedGetLlmByModel.mockReturnValue({
+        complete: vi.fn().mockImplementation(async (_m: any, _msgs: any, _opts: any, cb: any) => {
+          await cb(['Hi!'], { inputTokens: 100, outputTokens: 50 });
+        }),
+        getModelInfo: vi.fn().mockResolvedValue([]),
+        currentModel: ChatModels.GPT4,
+      } as any);
+      mockedGetAvailableModels.mockResolvedValue([
+        {
+          id: ChatModels.GPT4,
+          type: 'text',
+          name: 'GPT-4',
+          backend: ModelBackend.OpenAI,
+          max_tokens: 100,
+          contextWindow: 200_000,
+          can_stream: false,
+          pricing: { 200000: { input: 10 / 1_000_000, output: 30 / 1_000_000 } },
+          supportsImageVariation: false,
+        },
+      ] as any);
+      mockedBuildAndSortMessages.mockResolvedValue([{ role: 'user', content: 'Hello' }] as any);
+      mockedFetchAndProcessPreviousMessages.mockResolvedValue([[], 0, {}] as any);
+      mockedProcessUrlsFromPrompt.mockResolvedValue({ userMessages: [], remainingPrompt: 'Hello' } as any);
+
+      const body = { ...startQuestParams, tools: [], projectId: undefined, organizationId: undefined };
+      await service.process({ body, logger: mockLogger });
+
+      const call = mockDb.quests.update.mock.calls.find(
+        ([arg]: [any]) => arg?.promptMeta?.context?.tokensBySource !== undefined
+      );
+      buildToolsSpy.mockRestore();
+      buildToolPromptSpy.mockRestore();
+      return call?.[0]?.promptMeta;
+    };
+
+    it('counts tool-schema tokens and folds them into the input total', async () => {
+      // messages -> 0, so tool schemas are the sole input contributor; tool serialization -> 30,
+      // model output -> 7. inputTokens (0 + 30) + outputTokens (7) = 37.
+      const promptMeta = await runWithTools({
+        tools: [probeTool, probeTool],
+        messagesTokenCount: 0,
+        toolCountImpl: (text: any) => (typeof text === 'string' && text.includes('estimate_probe_tool') ? 30 : 7),
+      });
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(30);
+      expect(promptMeta.tokenUsage.totalTokens).toBe(37);
+    });
+
+    it('records zero tool-schema tokens when no tools are attached', async () => {
+      const promptMeta = await runWithTools({
+        tools: [],
+        messagesTokenCount: 0,
+        toolCountImpl: () => 7,
+      });
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(0);
+      expect(promptMeta.tokenUsage.totalTokens).toBe(7); // 0 input + 7 output
+    });
+
+    it('falls back to zero tool tokens WITHOUT zeroing the messages-total floor when the tokenizer throws', async () => {
+      // A tool description with special-token literals trips tiktoken's encode(). The count must
+      // degrade to 0 (tools uncounted) while inputTokens keeps the known-good messages total (50) -
+      // not collapse to 0 and silently disable the overflow guard / under-reserve / under-bill.
+      const promptMeta = await runWithTools({
+        tools: [probeTool],
+        messagesTokenCount: 50,
+        toolCountImpl: (text: any) => {
+          if (typeof text === 'string' && text.includes('estimate_probe_tool')) {
+            throw new Error('Encountered text corresponding to disallowed special token');
+          }
+          return 7;
+        },
+      });
+      expect(promptMeta.context.tokensBySource.toolSchemas).toBe(0);
+      expect(promptMeta.tokenUsage.totalTokens).toBe(57); // 50 messages floor + 7 output (NOT 0 + 7)
+    });
+  });
+
   describe('isRequestTimeoutError', () => {
     it('should match lowercase "request timeout"', () => {
       expect(isRequestTimeoutError(new Error('Anthropic API request timeout after 60000ms'))).toBe(true);
