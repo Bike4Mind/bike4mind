@@ -1,4 +1,4 @@
-import { AuthTokenGeneratorService, isTokenVersionCurrent } from './AuthTokenGeneratorService';
+import { AuthTokenGeneratorService, isTokenVersionCurrent, isTokenTypeAcceptable } from './AuthTokenGeneratorService';
 import jwt from 'jsonwebtoken';
 
 const makeService = () =>
@@ -100,6 +100,61 @@ describe('AuthTokenGeneratorService', () => {
     });
   });
 
+  describe('token-type claim (access vs refresh separation)', () => {
+    // In production accessTokenSecret === refreshTokenSecret, so before the `typ` claim an
+    // access token verified fine on the refresh path and could be exchanged for a full
+    // session. The claim closes that; typ-less legacy tokens stay valid (self-expiring grace).
+    const SHARED = 'shared-jwt-secret';
+    const sharedSecretService = () =>
+      new AuthTokenGeneratorService({
+        accessTokenSecret: SHARED,
+        refreshTokenSecret: SHARED,
+        accessTokenExpiresIn: '7d',
+        refreshTokenExpiresIn: '30d',
+      });
+
+    it('stamps typ=access on access tokens', () => {
+      const svc = makeService();
+      const { accessToken } = svc.createAccessToken('user-1', 0);
+      expect((svc.verifyToken(accessToken) as { typ?: string }).typ).toBe('access');
+    });
+
+    it('stamps typ=refresh on refresh tokens', () => {
+      const svc = makeService();
+      const refreshToken = svc.createRefreshToken('user-1', 0);
+      expect((jwt.decode(refreshToken) as { typ?: string }).typ).toBe('refresh');
+    });
+
+    it('rejects an access token replayed on the refresh path (shared secret)', () => {
+      const svc = sharedSecretService();
+      const { accessToken } = svc.createAccessToken('user-1', 0);
+      expect(svc.verifyRefreshToken(accessToken)).toBeNull();
+    });
+
+    it('rejects an access-typed token on the previous-secret rotation branch too', () => {
+      const svc = sharedSecretService();
+      const previousSecret = 'previous-shared-secret';
+      // Signed with the OLD secret so only the rotation fallback verifies it - the typ
+      // check must run on that recovered payload, not just the primary-secret path.
+      const rotatedAccess = jwt.sign({ id: 'user-1', tokenVersion: 0, typ: 'access' }, previousSecret, {
+        algorithm: 'HS256',
+        expiresIn: '7d',
+      });
+      expect(svc.verifyRefreshToken(rotatedAccess, previousSecret)).toBeNull();
+    });
+
+    it('still accepts a legacy typ-less refresh token (self-expiring grace)', () => {
+      const svc = sharedSecretService();
+      const legacyRefresh = jwt.sign({ id: 'user-1', tokenVersion: 0 }, SHARED, {
+        algorithm: 'HS256',
+        expiresIn: '30d',
+      });
+      const result = svc.verifyRefreshToken(legacyRefresh);
+      expect(result).not.toBeNull();
+      expect(result!.userId).toBe('user-1');
+    });
+  });
+
   describe('tokenVersion kill switch', () => {
     it('embeds tokenVersion in the access token and surfaces it on verify', () => {
       const svc = makeService();
@@ -114,6 +169,38 @@ describe('AuthTokenGeneratorService', () => {
       const result = svc.verifyRefreshToken(refreshToken);
       expect(result).not.toBeNull();
       expect(result!.tokenVersion).toBe(3);
+    });
+  });
+
+  describe('isTokenTypeAcceptable', () => {
+    it('accepts a token whose typ matches the expected path', () => {
+      expect(isTokenTypeAcceptable('access', 'access')).toBe(true);
+      expect(isTokenTypeAcceptable('refresh', 'refresh')).toBe(true);
+    });
+
+    it('rejects a token whose typ is the wrong path (the confusion guard)', () => {
+      expect(isTokenTypeAcceptable('access', 'refresh')).toBe(false);
+      expect(isTokenTypeAcceptable('refresh', 'access')).toBe(false);
+    });
+
+    // A token with no typ (issued before the claim existed) is honored on either path
+    // so live sessions aren't logged out - it ages out within its TTL.
+    it('accepts a typ-less legacy token on either path (self-expiring grace)', () => {
+      expect(isTokenTypeAcceptable(undefined, 'access')).toBe(true);
+      expect(isTokenTypeAcceptable(undefined, 'refresh')).toBe(true);
+    });
+
+    it('rejects an unexpected typ value', () => {
+      expect(isTokenTypeAcceptable('bogus', 'access')).toBe(false);
+    });
+
+    // Only a literally-absent claim (undefined) is the grace case. A null, empty-string,
+    // or object typ is a malformed/forged token and must be rejected - the guard is
+    // strict-equality, not truthiness, so these do not slip through as "legacy".
+    it('rejects null / empty-string / object typ (not treated as the legacy grace case)', () => {
+      expect(isTokenTypeAcceptable(null, 'access')).toBe(false);
+      expect(isTokenTypeAcceptable('', 'access')).toBe(false);
+      expect(isTokenTypeAcceptable({}, 'access')).toBe(false);
     });
   });
 

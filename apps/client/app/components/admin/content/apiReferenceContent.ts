@@ -650,7 +650,8 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 |--------|----------|-------------|
 | POST | /api/ai/llm | Raw LLM completion |
 | POST | /api/ai/transcribe | Audio/video to text (Whisper) |
-| POST | /api/ai/text-to-speech | Text to speech synthesis |
+| POST | /api/ai/tts | Multi-provider text-to-speech (openai, elevenlabs) |
+| POST | /api/ai/text-to-speech | Text to speech synthesis (OpenAI; legacy, use /api/ai/tts) |
 | POST | /api/ai/generate-image | Image generation (DALL-E) |
 | POST | /api/ai/edit-image | Image editing |
 | POST | /api/ai/generate-video | Video generation (Sora) |
@@ -668,7 +669,7 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | /api/elabs/text-to-speech | ElevenLabs TTS |
+| POST | /api/elabs/text-to-speech | ElevenLabs TTS (legacy, use /api/ai/tts) |
 | GET | /api/elabs/ready | Check ElevenLabs availability |
 | GET | /api/elabs/voice | List available voices |
 | GET | /api/elabs/voice/[id] | Get voice details |

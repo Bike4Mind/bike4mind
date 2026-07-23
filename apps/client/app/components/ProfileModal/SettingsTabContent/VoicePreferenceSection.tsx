@@ -275,6 +275,7 @@ const VoicePreferenceSection = () => {
                 </Select>
 
                 <Button
+                  data-testid="voice-test-btn"
                   size="md"
                   variant="outlined"
                   color="primary"

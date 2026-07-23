@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
 // Unwrap the handler: baseApi({auth:false}).use(rateLimit).get(fn) => fn
@@ -19,6 +19,13 @@ vi.mock('@server/cli/auth', () => ({
 const mockAgentFindById = vi.hoisted(() => vi.fn());
 vi.mock('@bike4mind/database', () => ({
   agentRepository: { findById: mockAgentFindById },
+}));
+
+// Owner-entitlement resolver mocked at the seam serve.ts calls; the default is
+// NOT entitled, so every pre-existing case exercises the branding-shows posture.
+const mockOwnerHasEntitlement = vi.hoisted(() => vi.fn());
+vi.mock('@server/entitlements/embedKeyEntitlement', () => ({
+  embedKeyOwnerHasEntitlement: mockOwnerHasEntitlement,
 }));
 
 // Real parseEmbedOrigin from @bike4mind/common - the CSP filter is exercised
@@ -62,6 +69,7 @@ describe('GET /api/embed/serve - public widget page', () => {
     vi.clearAllMocks();
     mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO });
     mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+    mockOwnerHasEntitlement.mockResolvedValue(false);
   });
 
   it('renders the agent name into the page config and survives a failed lookup', async () => {
@@ -212,5 +220,145 @@ describe('GET /api/embed/serve - public widget page', () => {
     const occurrences = body.split('b4m_live_secret_sauce').length - 1;
     expect(occurrences).toBe(1);
     expect(body).toContain('__B4M_EMBED__');
+  });
+});
+
+describe('GET /api/embed/serve - white-label branding (epic #41 Phase D)', () => {
+  const withBranding = (branding: Record<string, unknown>) => ({ ...VALID_INFO, branding });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubEnv('APP_NAME', 'Bike4Mind');
+    mockVerifyEmbedApiKey.mockResolvedValue({ ...VALID_INFO });
+    mockAgentFindById.mockResolvedValue({ id: 'agent-1', name: 'Sales Bot' });
+    mockOwnerHasEntitlement.mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it('prefers the branding displayName over the agent name', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: 'Acme Support' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).toContain('Acme Support');
+    expect(res._getData()).not.toContain('Sales Bot');
+  });
+
+  it('falls back to the agent name for a whitespace-only displayName', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: '   ' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).toContain('Sales Bot');
+  });
+
+  it('re-caps a stored displayName that predates the write-time length limit', async () => {
+    const overlong = 'Z'.repeat(200);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: overlong }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).not.toContain(overlong);
+    expect(res._getData()).toContain('Z'.repeat(64));
+  });
+
+  it('short-circuits the owner entitlement lookup when hideBranding is not set', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: 'Acme' }));
+    await run({ k: 'b4m_live_brand' });
+    expect(mockOwnerHasEntitlement).not.toHaveBeenCalled();
+  });
+
+  it('widens img-src to exactly the validated logo origin (whole header pinned)', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ logoUrl: 'https://logos.example/acme.png' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(String(res.getHeader('Content-Security-Policy'))).toBe(
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "connect-src 'self'; img-src data: https://logos.example; base-uri 'none'; " +
+        "form-action 'none'; frame-ancestors 'self' https://good.example"
+    );
+    expect(res._getData()).toContain('https://logos.example/acme.png');
+  });
+
+  it('keeps the logo origin port in the CSP grant', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ logoUrl: 'https://logos.example:8443/acme.png' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(String(res.getHeader('Content-Security-Policy'))).toContain('img-src data: https://logos.example:8443;');
+  });
+
+  it.each([
+    ['javascript: URL', 'javascript:alert(1)'],
+    ['data: URL', 'data:image/png;base64,xx'],
+    ['http: URL', 'http://logos.example/acme.png'],
+    ['empty string', ''],
+  ])('does not widen img-src or render a logo for a stored %s', async (_label, logoUrl) => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ logoUrl }));
+    const res = await run({ k: 'b4m_live_brand' });
+    const csp = String(res.getHeader('Content-Security-Policy'));
+    expect(csp).toContain('img-src data:;');
+    expect(csp.split(';')).toHaveLength(8);
+    // The config JSON must not carry a logoUrl key (the bare cfg.logoUrl
+    // reference in the widget JS is always present and not what is asserted).
+    expect(res._getData()).not.toContain('"logoUrl"');
+    if (logoUrl) expect(res._getData()).not.toContain(logoUrl);
+  });
+
+  it('emits the color override style for a valid stored hex color', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ primaryColor: '#AA00FF' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).toContain(':root{--b4m-primary:#aa00ff}');
+  });
+
+  it('drops a CSS-injection-shaped stored color entirely', async () => {
+    mockVerifyEmbedApiKey.mockResolvedValue(
+      withBranding({ primaryColor: '#fff;}body{background:url(//evil.example)' })
+    );
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).not.toContain(':root{--b4m-primary');
+    expect(res._getData()).not.toContain('evil.example');
+  });
+
+  it('hides the powered-by footer only for an entitled owner with hideBranding', async () => {
+    mockOwnerHasEntitlement.mockResolvedValue(true);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ hideBranding: true }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).not.toContain('Powered by');
+  });
+
+  it('shows branding for an unentitled owner even when hideBranding is stored true', async () => {
+    // THE server-side enforcement the AC requires: the stored flag alone must
+    // never hide branding.
+    mockOwnerHasEntitlement.mockResolvedValue(false);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ hideBranding: true }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).toContain('Powered by Bike4Mind');
+  });
+
+  it('fails closed to branding-shows when the entitlement resolver rejects', async () => {
+    mockOwnerHasEntitlement.mockRejectedValue(new Error('lookup failed'));
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ hideBranding: true }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getStatusCode()).toBe(200);
+    expect(res._getData()).toContain('Powered by Bike4Mind');
+  });
+
+  it('shows branding for an entitled owner who has not set hideBranding', async () => {
+    mockOwnerHasEntitlement.mockResolvedValue(true);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ displayName: 'Acme' }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).toContain('Powered by Bike4Mind');
+  });
+
+  it('never leaks the raw hideBranding flag to the page', async () => {
+    mockOwnerHasEntitlement.mockResolvedValue(true);
+    mockVerifyEmbedApiKey.mockResolvedValue(withBranding({ hideBranding: true }));
+    const res = await run({ k: 'b4m_live_brand' });
+    expect(res._getData()).not.toContain('hideBranding');
+  });
+
+  it('renders unbranded output byte-identical CSP with no branding stored', async () => {
+    const res = await run({ k: 'b4m_live_plain' });
+    expect(String(res.getHeader('Content-Security-Policy'))).toBe(
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; " +
+        "connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; " +
+        "frame-ancestors 'self' https://good.example"
+    );
+    expect(res._getData()).not.toContain(':root{--b4m-primary');
   });
 });

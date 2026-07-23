@@ -63,6 +63,7 @@ export * from './questMaster';
 export * from './questMasterToolSchema';
 export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
+export * from './voiceGeneration';
 export * from './videoGeneration';
 export * from './analytics';
 export * from './user';

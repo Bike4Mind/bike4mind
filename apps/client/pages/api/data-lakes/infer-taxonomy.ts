@@ -9,10 +9,11 @@ import { apiKeyRepository, adminSettingsRepository } from '@bike4mind/database';
 import OpenAI from 'openai';
 import { Request } from 'express';
 
-// Per-user/day cap on taxonomy inference. The endpoint is tag-gated (admin / opti /
-// developer), but a tagged user could otherwise burn OpenAI spend unbounded. Admins and
-// developer-tagged users stay uncapped; every other caller who reaches here gets the daily
-// cap. The limit trips in middleware, before any OpenAI call, so a rejected request is free.
+// Per-user/day cap on taxonomy inference. Access is the EnableDataLakes feature flag alone
+// (see the handler below), so any feature-enabled user reaches this endpoint and could
+// otherwise burn OpenAI spend unbounded. Admins and developer-tagged users stay uncapped;
+// every other caller gets the daily cap. The limit trips in middleware, before any OpenAI
+// call, so a rejected request is free.
 export const TAXONOMY_INFERENCE_DAILY_CAP = 50;
 const DAY_MS = 24 * 60 * 60 * 1000;
 

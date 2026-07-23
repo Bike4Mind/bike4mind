@@ -1,24 +1,13 @@
 import { User } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
-import { IUserDocument, redactUserSecretsForSelf } from '@bike4mind/common';
+import {
+  IUserDocument,
+  redactUserSecretsForSelf,
+  publicUserProfileResponseSchema,
+  type PublicUserProfile,
+} from '@bike4mind/common';
+import { respond } from '@server/utils/respond';
 import { Request } from 'express';
-
-/**
- * Fields safe to expose to any authenticated user about another user's profile.
- * Deliberately excludes: email, isAdmin, financial data, OAuth tokens,
- * security questions, admin notes, login records, and Slack credentials.
- */
-export interface PublicUserProfile {
-  id: string;
-  username: string;
-  name: string;
-  photoUrl: string | null;
-  level: string;
-  role: string | null;
-  team: string | null;
-  lastActiveAt?: Date;
-  isOnline: boolean;
-}
 
 function toPublicProfile(user: IUserDocument): PublicUserProfile {
   return {
@@ -53,7 +42,7 @@ const handler = baseApi().get<Request<{}, unknown, unknown, { id: string }>>(asy
     return res.json(redactUserSecretsForSelf(user, { keep: ['securityQuestions', 'userNotes'] }));
   }
 
-  return res.json(toPublicProfile(user));
+  return respond(res, publicUserProfileResponseSchema, toPublicProfile(user));
 });
 
 export const config = {

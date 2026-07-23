@@ -1,4 +1,8 @@
 import type { IUser } from '../types/entities/UserTypes';
+// SafeUser is inferred from the Zod response schema (RFC #483) so the serializer's
+// output type and the parsed response contract can never drift apart. It is exported
+// to the @bike4mind/common barrel from schemas/user, not re-exported here.
+import type { SafeUser } from '../schemas/user';
 
 /**
  * Central boundary for serializing user records into API responses.
@@ -79,13 +83,6 @@ export const SAFE_USER_LOOKUP_PROJECT: Record<string, 1> = {
 };
 
 export type SafeUserScope = 'public' | 'same-org' | 'self';
-
-export type SafeUser = Pick<IUser, 'id' | 'name' | 'username' | 'photoUrl' | 'isOnline' | 'lastActiveAt'> & {
-  email?: string | null;
-  // Only populated for the 'same-org' scope: org-member cards (UserCard.tsx) render a
-  // "Deactivated" chip from isBanned.
-  isBanned?: boolean;
-};
 
 // Accept anything user-doc-shaped (Mongoose doc, toJSON()'d object, or lean result).
 type UserLike = (Partial<IUser> & { _id?: unknown }) | null | undefined;

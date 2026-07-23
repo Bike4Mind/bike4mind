@@ -6,6 +6,7 @@ import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
 import { getFilesStorage } from '@server/utils/storage';
+import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
 const createFabFileSchema = fabFilesService.createFabFileSchema;
 
@@ -59,13 +60,11 @@ const handler = baseApi()
         { ability: req.ability }
       );
 
-      // Self-host: the direct S3 presign targets the internal MinIO host (unreachable from a
-      // browser and blocked by CSP connect-src). Hand back a same-origin proxy URL instead;
-      // it streams the PUT to storage server-side (pages/api/files/[id]/upload.ts) and writes
-      // the same key, so the MinIO webhook + ingestion pipeline fire unchanged. Hosted keeps
-      // the direct presign (byte-identical).
-      if (process.env.B4M_SELF_HOST === 'true' && result.presignedUrl) {
-        result.presignedUrl = `/api/files/${result.id}/upload`;
+      // Route the browser's upload via the shared resolver: hosted keeps the direct S3 presign;
+      // self-host returns a same-origin proxy (S3/MinIO isn't browser-reachable). Shared with the
+      // batch path (generate-presigned-urls-batch) so the two upload entry points can't diverge.
+      if (result.presignedUrl) {
+        result.presignedUrl = resolveBrowserUploadUrl(result.id, result.presignedUrl);
       }
 
       return res.json(result);

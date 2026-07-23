@@ -1,3 +1,4 @@
+import { parseBrandingColor } from '@bike4mind/common';
 import { EMBED_SSE_PARSER_SRC } from './embedSseParser';
 
 /**
@@ -23,6 +24,14 @@ export interface EmbedWidgetConfig {
   sessionPath?: string;
   chatPath?: string;
   poweredByLabel?: string;
+  /** Validated https logo URL; rides the JSON blob, rendered via DOM img.src. */
+  logoUrl?: string;
+  /**
+   * Validated hex color (parseBrandingColor). Never serialized into the config
+   * JSON - it is emitted as a server-rendered style block only, so the runtime
+   * script has no color-shaped injection surface.
+   */
+  primaryColor?: string;
 }
 
 /**
@@ -59,7 +68,7 @@ const WIDGET_CSS = `
     display: flex; flex-direction: column; gap: 8px;
   }
   .b4m-msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
-  .b4m-msg-user { align-self: flex-end; background: #2b6cb0; color: #fff; border-bottom-right-radius: 4px; }
+  .b4m-msg-user { align-self: flex-end; background: var(--b4m-primary, #2b6cb0); color: #fff; border-bottom-right-radius: 4px; }
   .b4m-msg-assistant { align-self: flex-start; background: #f1f1f1; border-bottom-left-radius: 4px; }
   .b4m-msg-error { align-self: flex-start; background: #fdecea; color: #922; }
   .b4m-note { align-self: flex-start; color: #888; font-size: 12px; }
@@ -70,8 +79,9 @@ const WIDGET_CSS = `
   }
   #b4m-send {
     flex: 0 0 auto; border: 0; border-radius: 8px; padding: 8px 14px;
-    background: #2b6cb0; color: #fff; font: inherit; cursor: pointer;
+    background: var(--b4m-primary, #2b6cb0); color: #fff; font: inherit; cursor: pointer;
   }
+  #b4m-logo { max-height: 20px; width: auto; vertical-align: middle; margin-right: 8px; }
   #b4m-send:disabled { opacity: 0.5; cursor: default; }
   #b4m-footer { text-align: center; color: #999; font-size: 11px; padding: 4px 0 8px; flex: 0 0 auto; }
 `;
@@ -96,7 +106,23 @@ export const EMBED_WIDGET_JS = `(function () {
   var sendEl = document.getElementById('b4m-send');
   var footerEl = document.getElementById('b4m-footer');
 
-  headerEl.textContent = typeof cfg.displayName === 'string' && cfg.displayName ? cfg.displayName : 'Chat';
+  var title = typeof cfg.displayName === 'string' && cfg.displayName ? cfg.displayName : 'Chat';
+  // Logo via DOM property assignment (never innerHTML); the https prefix guard
+  // mirrors the server-side sanitizer, and the page CSP img-src is the network
+  // boundary. A broken image removes itself rather than showing a broken glyph.
+  if (typeof cfg.logoUrl === 'string' && cfg.logoUrl.indexOf('https://') === 0) {
+    var logoEl = document.createElement('img');
+    logoEl.id = 'b4m-logo';
+    logoEl.src = cfg.logoUrl;
+    logoEl.alt = title;
+    logoEl.onerror = function () {
+      if (logoEl.parentNode) logoEl.parentNode.removeChild(logoEl);
+    };
+    headerEl.appendChild(logoEl);
+  }
+  var titleEl = document.createElement('span');
+  titleEl.textContent = title;
+  headerEl.appendChild(titleEl);
   if (typeof cfg.poweredByLabel === 'string' && cfg.poweredByLabel) {
     footerEl.textContent = cfg.poweredByLabel;
   }
@@ -302,6 +328,11 @@ export function renderEmbedWidgetHtml(config: EmbedWidgetConfig): string {
     chatPath: DEFAULT_CHAT_PATH,
     ...config,
   };
+  // The color never enters the config JSON: it is re-validated here (stored
+  // values may predate write validation) and emitted only as a style block,
+  // where the strict hex character class is what makes CSS breakout impossible.
+  const { primaryColor, ...bootConfig } = resolved;
+  const colorOverride = parseBrandingColor(primaryColor);
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -310,6 +341,7 @@ export function renderEmbedWidgetHtml(config: EmbedWidgetConfig): string {
 <meta name="robots" content="noindex, nofollow">
 <title>Chat</title>
 <style>${WIDGET_CSS}</style>
+${colorOverride ? `<style>:root{--b4m-primary:${colorOverride}}</style>` : ''}
 </head>
 <body>
 <div id="b4m-header"></div>
@@ -319,7 +351,7 @@ export function renderEmbedWidgetHtml(config: EmbedWidgetConfig): string {
 <button id="b4m-send" type="button">Send</button>
 </div>
 <div id="b4m-footer"></div>
-<script>window.__B4M_EMBED__ = ${serializeConfigForScript(resolved)};</script>
+<script>window.__B4M_EMBED__ = ${serializeConfigForScript(bootConfig)};</script>
 <script>${EMBED_WIDGET_JS}</script>
 </body>
 </html>

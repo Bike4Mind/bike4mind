@@ -12,6 +12,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { Request } from 'express';
 import { Resource } from 'sst';
 import { toAccessContext } from '@server/dataLakes/toAccessContext';
+import { resolveBrowserUploadUrl } from '@server/utils/browserUploadUrl';
 
 const s3Client = new S3Client();
 const EXPIRES = 600; // 10 minutes
@@ -132,7 +133,11 @@ const handler = baseApi().post(async (req: Request, res) => {
         Key: fileKey,
       });
 
-      const url = await getSignedUrl(s3Client, command, { expiresIn: EXPIRES });
+      // Hosted returns the direct S3 presign; self-host returns a same-origin proxy URL
+      // (S3/MinIO isn't browser-reachable). Shared with the single-file path (createFabFile)
+      // so the two upload entry points can't diverge.
+      const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: EXPIRES });
+      const url = resolveBrowserUploadUrl(file.id, presignedUrl);
 
       return {
         fileId: file.id,

@@ -22,9 +22,13 @@ export class ChatPage extends BasePage {
    */
   private async typeAndWaitForSendReady(text: string) {
     for (let attempt = 1; attempt <= 3; attempt++) {
-      await this.chatInput.click();
-      await this.page.keyboard.insertText(text);
       try {
+        // Bound the click: with no suite-level actionTimeout an unbounded click would hang on
+        // the actionability/stability check (background refetch re-rendering the input) instead
+        // of throwing, starving this retry loop. Keeping it inside the try also lets a real
+        // click failure fall through to the reload-and-retry path.
+        await this.chatInput.click({ timeout: TIMEOUTS.ELEMENT_STATE });
+        await this.page.keyboard.insertText(text);
         await expect(this.sendButton).toBeEnabled({ timeout: TIMEOUTS.NAVIGATION });
         return;
       } catch {
