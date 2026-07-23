@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { ISessionDocument } from '@bike4mind/common';
 import DataLakeExplorer from '@client/app/components/datalake/DataLakeExplorer';
+import DataLakeChatSplash from '@client/app/components/datalake/DataLakeChatSplash';
 import SessionContainer from '@client/app/components/Session/SessionContainer';
 import { NotebookFilepondProvider } from '@client/app/components/Session/NotebookFilepondProvider';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -107,7 +108,13 @@ export default function DataLakesHome() {
         onAskAbout={handleAskAbout}
         onManage={openManager}
         chatSlot={
-          <SessionContainer currentSessionId={sessionId ?? undefined} isLoading={!sessionId} autoHideOnEmpty={false} />
+          <SessionContainer
+            currentSessionId={sessionId ?? undefined}
+            isLoading={!sessionId}
+            autoHideOnEmpty={false}
+            customSplash={<DataLakeChatSplash />}
+            emptySessionSplash={<DataLakeChatSplash />}
+          />
         }
       />
     </NotebookFilepondProvider>
