@@ -1844,20 +1844,57 @@ export class ChatCompletionProcess {
           calculateTotalTokenLength(previousMessages, tokenCalcOptions),
           calculateTotalTokenLength([{ role: 'user' as const, content: effectiveUserPrompt }], tokenCalcOptions),
         ]);
+        // Establish the input floor from the messages total FIRST. calculateTotalTokenLength
+        // succeeded (we're past the await above), so this is a known-good value. Keeping it as the
+        // floor before the tool-schema count means a throw in that count can only cost us the tool
+        // delta - it can never leave inputTokens at 0 and silently disable the overflow guard,
+        // under-reserve credits, or under-bill the fallback/quest total.
         inputTokens = totalTokens;
+
+        // Tool schemas ship to the provider as a separate `tools` request param (not in
+        // `messages`), so the count above missed them - they were hardcoded to 0. Count the
+        // serialized schema with the same tokenizer and add it on top, so pre-reservation, the
+        // context-overflow guard, and the [BILLING_DRIFT] ratio reflect the tool block. The
+        // {name, description, input_schema} shape is an estimate-only proxy (roughly the Anthropic
+        // wire form); exact, per-backend serialization lives in each adapter's formatTools.
+        // Wrapped in its own try/catch: tool descriptions can be untrusted third-party text (e.g.
+        // MCP tools via generateMcpToolsFromCache) containing special-token literals that trip the
+        // tokenizer's encode(); on failure we fall back to 0 (tools uncounted), preserving the
+        // messages-total floor set above.
+        let toolSchemaTokens = 0;
+        if (allTools && allTools.length > 0) {
+          try {
+            const serializedToolSchemas = allTools
+              .map(t =>
+                JSON.stringify({
+                  name: t.toolSchema.name,
+                  description: t.toolSchema.description,
+                  input_schema: t.toolSchema.parameters,
+                })
+              )
+              .join('');
+            toolSchemaTokens = await this.tokenizer.countTokens(serializedToolSchemas);
+          } catch (toolTokenError) {
+            logger.warn(
+              '📊 Failed to count tool-schema tokens; leaving tools uncounted for this estimate',
+              toolTokenError
+            );
+          }
+        }
+
+        inputTokens += toolSchemaTokens;
         logger.info(
-          `⏱️ [${Date.now() - processStartTime}ms] Token calculation completed (${inputTokens} input tokens) in ${
+          `⏱️ [${Date.now() - processStartTime}ms] Token calculation completed (${inputTokens} input tokens, ${toolSchemaTokens} in tool schemas) in ${
             Date.now() - tokenCalculationStartTime
           }ms`
         );
-        const toolSchemaTokens = 0; // Will be populated in M4 with actual tool schema tokens
 
-        // System prompts = remainder after subtracting all known sources from total.
-        // This avoids double-counting (mementos/project are system-role but tracked separately)
-        // and captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.)
-        const knownSourceTokens =
-          fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens + toolSchemaTokens;
-        const systemPromptTokens = Math.max(0, inputTokens - knownSourceTokens);
+        // System prompts = the messages-only total (totalTokens) minus the known message sources.
+        // This avoids double-counting (mementos/project are system-role but tracked separately) and
+        // captures all other system content (dateTimeContext, toolPrompt, agentDetection, etc.).
+        // Derived from totalTokens, NOT inputTokens, so the tool-schema count never inflates it.
+        const knownSourceTokens = fabTokens + historyTokens + mementoTokens + urlTokens + userPromptTokens;
+        const systemPromptTokens = Math.max(0, totalTokens - knownSourceTokens);
 
         tokensBySource = {
           systemPrompts: systemPromptTokens,
@@ -3153,9 +3190,12 @@ export class ChatCompletionProcess {
         // the provider reports. With provider-basis settlement this no longer
         // guards billing; it monitors the quality of the local estimate that still
         // drives pre-reservation (and fallback settlement). Causes worth
-        // investigating: a new content-block shape we don't measure, tool schemas
-        // (toolSchemaTokens TODO at the breakdown site), a provider accounting
-        // change. Threshold is symmetric +/-30%.
+        // investigating: a new content-block shape we don't measure, or a provider
+        // accounting change. Tool schemas ARE now counted (see the breakdown site),
+        // so the expected residual gap on tool-carrying turns is wire-shape
+        // approximation (our {name,description,input_schema} proxy vs each backend's
+        // exact formatTools) plus provider-side overhead the provider injects when
+        // tools are present (e.g. a tool-use preamble). Threshold is symmetric +/-30%.
         // Compare against the provider's FULL input accounting, not just the uncached tail.
         // Provider `input_tokens` reports only the tokens NOT served from / written to cache;
         // on a prompt-cache hit or write the rest lands in cache_read/cache_creation. Summing
