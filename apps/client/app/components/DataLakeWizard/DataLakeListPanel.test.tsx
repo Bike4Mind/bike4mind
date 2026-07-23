@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { CssVarsProvider, extendTheme } from '@mui/joy/styles';
 import { getThemeConfig } from '@client/app/utils/themes';
@@ -218,6 +218,33 @@ describe('DataLakeListPanel - EnableDataLakes gating', () => {
     // is a dead end - so the panel must not render at all, mirroring
     // SendToDataLakeModal's render guard.
     expect(screen.queryByTestId('datalake-list-panel')).not.toBeInTheDocument();
+  });
+});
+
+describe('DataLakeListPanel - persistent Data Lakes info tooltip (#834)', () => {
+  beforeEach(() => {
+    isFeatureEnabled.mockReset();
+    isFeatureEnabled.mockReturnValue(true);
+    useDataLakes.mockReset();
+    useDataLakes.mockReturnValue({ data: [], isLoading: false });
+  });
+
+  it('shows a persistent info icon next to the header that reveals the RAG explanation on hover', async () => {
+    render(
+      <Wrapper>
+        <DataLakeListPanel />
+      </Wrapper>
+    );
+
+    // Always present next to the header - not a one-time dismissable callout.
+    const trigger = screen.getByTestId('field-tooltip-data-lake-panel');
+    expect(trigger).toBeInTheDocument();
+    expect(trigger).toHaveAttribute('aria-label', 'Help: Data Lakes');
+
+    fireEvent.mouseOver(trigger);
+    expect(
+      await screen.findByText(/curated knowledge base the AI grounds its answers in \(RAG\)/i)
+    ).toBeInTheDocument();
   });
 });
 
