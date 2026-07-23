@@ -33,9 +33,19 @@ const SPEC_JSON = JSON.stringify(openapiSpec);
 // the code samples and contact URL, so replacing it everywhere is sufficient.
 const PLACEHOLDER_URL = (openapiSpec as { servers?: Array<{ url?: string }> }).servers?.[0]?.url ?? '';
 
+// A valid HTTP authority is a hostname (optionally :port) or a bracketed IPv6
+// literal - every character of which is in this set. A direct-to-origin request
+// can carry an arbitrary Host, so anything outside the set is rejected below.
+const HOST_CHARSET = /^[A-Za-z0-9.\-:[\]]+$/;
+
 function specForRequest(req: NextApiRequest): string {
   const host = req.headers.host;
   if (!host || !PLACEHOLDER_URL) return SPEC_JSON;
+  // Allowlist the Host charset before splicing it into the serialized JSON: a
+  // malformed direct-to-origin Host (a quote/backslash/control char) would
+  // otherwise break the JSON.parse below and 5xx. Same reasoning as the proto
+  // allowlist - fall back to the committed spec rather than risk an injection.
+  if (!HOST_CHARSET.test(host)) return SPEC_JSON;
   const xfProto = req.headers['x-forwarded-proto'];
   const rawProto = (Array.isArray(xfProto) ? xfProto[0] : xfProto)?.split(',')[0]?.trim();
   // Allowlist the scheme: origin is spliced into the serialized JSON before it
