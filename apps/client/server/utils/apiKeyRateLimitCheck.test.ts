@@ -330,13 +330,18 @@ describe('apiKeyRateLimitCheck', () => {
 
   describe('getApiKeyRateLimitUsage', () => {
     it('reads both counters by their canonical keys', async () => {
-      vi.mocked(cacheRepository.findByKey)
-        .mockResolvedValueOnce({ result: { count: 3 }, expiresAt: future(MINUTE_MS) })
-        .mockResolvedValueOnce({ result: { count: 42 }, expiresAt: future(DAY_MS) });
+      const minuteDoc = { result: { count: 3 }, expiresAt: future(MINUTE_MS) };
+      const dayDoc = { result: { count: 42 }, expiresAt: future(DAY_MS) };
+      vi.mocked(cacheRepository.findByKey).mockResolvedValueOnce(minuteDoc).mockResolvedValueOnce(dayDoc);
 
       const usage = await getApiKeyRateLimitUsage(mockKeyId);
 
-      expect(usage).toEqual({ minute: 3, day: 42 });
+      expect(usage).toEqual({
+        minute: 3,
+        day: 42,
+        minuteResetAt: Math.floor(minuteDoc.expiresAt.getTime() / 1000),
+        dayResetAt: Math.floor(dayDoc.expiresAt.getTime() / 1000),
+      });
       const { minuteKey, dayKey } = buildRateLimitKeys(mockKeyId);
       const queried = vi.mocked(cacheRepository.findByKey).mock.calls.map(call => call[0]);
       expect(new Set(queried)).toEqual(new Set([minuteKey, dayKey]));
@@ -348,11 +353,17 @@ describe('apiKeyRateLimitCheck', () => {
     });
 
     it('reads an expired window (awaiting TTL cleanup) as 0', async () => {
+      const dayDoc = { result: { count: 500 }, expiresAt: future(DAY_MS) };
       vi.mocked(cacheRepository.findByKey)
         .mockResolvedValueOnce({ result: { count: 60 }, expiresAt: new Date(Date.now() - 1) })
-        .mockResolvedValueOnce({ result: { count: 500 }, expiresAt: future(DAY_MS) });
+        .mockResolvedValueOnce(dayDoc);
 
-      expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({ minute: 0, day: 500 });
+      // Expired minute window -> 0 with no reset; live day window keeps its reset.
+      expect(await getApiKeyRateLimitUsage(mockKeyId)).toEqual({
+        minute: 0,
+        day: 500,
+        dayResetAt: Math.floor(dayDoc.expiresAt.getTime() / 1000),
+      });
     });
 
     it('reads a malformed counter doc as 0', async () => {
