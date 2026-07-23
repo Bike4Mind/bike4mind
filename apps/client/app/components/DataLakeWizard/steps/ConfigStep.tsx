@@ -48,7 +48,10 @@ export default function ConfigStep() {
 
   // Duplicate-name hint. The visible lake list spans every lake the user can read, but a
   // create only ever collides inside its own org scope (the server disambiguates the slug
-  // per-org), so narrow it to the account-switcher scope the create will land in.
+  // per-org), so narrow it to the account-switcher scope the create will land in. Must stay
+  // in sync with activeOrgId() in hooks/data/dataLakes.ts, which the create path reads at
+  // mutation time - matching it on a null selection too is what keeps the hint from ever
+  // naming a scope the lake won't land in.
   const { data: allLakes } = useGetDataLakes();
   const selectedAccount = useSelectedAccount(s => s.selectedAccount);
   const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
