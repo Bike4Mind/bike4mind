@@ -98,6 +98,14 @@ describe('GET /api/admin/users/:userId/user-api-keys (end-to-end, real model + M
     expect(key.keyHash).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain('$2b$12$');
 
-    expect(body.liveUsage[created.id]).toEqual({ minute: 2, day: 2 });
+    const usage = body.liveUsage[created.id];
+    expect(usage).toMatchObject({ minute: 2, day: 2 });
+    // Fixed-window resets are the counters' real expiry (epoch seconds): the
+    // minute window ends ~60s out, the day window ~24h out.
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    expect(usage.minuteResetAt).toBeGreaterThan(nowSeconds);
+    expect(usage.minuteResetAt).toBeLessThanOrEqual(nowSeconds + 60);
+    expect(usage.dayResetAt).toBeGreaterThan(nowSeconds);
+    expect(usage.dayResetAt).toBeLessThanOrEqual(nowSeconds + 86_400);
   });
 });
