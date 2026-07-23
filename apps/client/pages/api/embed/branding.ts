@@ -19,14 +19,20 @@
  * (a bcrypt compare + a lastUsed write) this endpoint would otherwise run on
  * every visitor's page view. A branding edit takes effect within one TTL.
  *
- * embedCors() only sets Access-Control-Allow-Origin so the cross-origin loader
- * can read the JSON; the key itself is the gate. Any verification failure
- * returns a uniform 404 - no branch may confirm that a probed key exists.
+ * Cross-origin: the loader calls this from the customer's page, so the browser
+ * needs an Access-Control-Allow-Origin header to read the JSON. The platform
+ * (CloudFront) already emits a single `Access-Control-Allow-Origin: *` on every
+ * /api route - the same header the sibling /api/embed/widget loader relies on -
+ * which is exactly right for this public, non-credentialed endpoint. So this
+ * handler must NOT set its own ACAO (e.g. via embedCors): a per-route value
+ * stacks on top of the platform `*` into a duplicate header, and browsers reject
+ * a response carrying two Access-Control-Allow-Origin values. The key is the
+ * gate; any verification failure returns a uniform 404 - no branch may confirm
+ * that a probed key exists.
  */
 
 import { baseApi } from '@server/middlewares/baseApi';
 import { rateLimit } from '@server/middlewares/rateLimit';
-import { embedCors } from '@server/middlewares/embedCors';
 import { verifyEmbedApiKey } from '@server/cli/auth';
 import { parseBrandingColor, parseBrandingDisplayName } from '@bike4mind/common';
 
@@ -56,7 +62,6 @@ function sendError(res: JsonResponse, status: number, error: string): void {
 }
 
 const handler = baseApi({ auth: false })
-  .use(embedCors())
   .use(rateLimit({ limit: BRANDING_RATE_LIMIT, windowMs: RATE_WINDOW_MS, bucket: 'embed-branding' }))
   .get(async (req, res) => {
     const k = req.query.k;

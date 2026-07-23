@@ -1,7 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMocks } from 'node-mocks-http';
 
-// Unwrap the handler: baseApi({auth:false}).use(embedCors).use(rateLimit).get(fn) => fn
+// Unwrap the handler: baseApi({auth:false}).use(rateLimit).get(fn) => fn.
+// No embedCors here: the endpoint relies on the platform-level ACAO (see branding.ts),
+// so it must not set its own or the two stack into a duplicate the browser rejects.
 vi.mock('@server/middlewares/baseApi', () => ({
   baseApi: () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -10,7 +12,6 @@ vi.mock('@server/middlewares/baseApi', () => ({
   },
 }));
 vi.mock('@server/middlewares/rateLimit', () => ({ rateLimit: () => () => {} }));
-vi.mock('@server/middlewares/embedCors', () => ({ embedCors: () => () => {} }));
 
 const mockVerifyEmbedApiKey = vi.fn();
 vi.mock('@server/cli/auth', () => ({
