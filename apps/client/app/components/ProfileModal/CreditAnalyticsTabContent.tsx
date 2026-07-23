@@ -118,6 +118,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const toolUsageTransactions = sortedTransactions.filter(t => t.type === 'tool_usage');
     const speechToTextUsageTransactions = sortedTransactions.filter(t => t.type === 'speech_to_text_usage');
     const textToSpeechUsageTransactions = sortedTransactions.filter(t => t.type === 'text_to_speech_usage');
+    const soundEffectsUsageTransactions = sortedTransactions.filter(t => t.type === 'sound_effects_usage');
 
     // Combined deduct transactions for burn rate calculation
     const allDeductTransactions = [
@@ -130,6 +131,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...toolUsageTransactions,
       ...speechToTextUsageTransactions,
       ...textToSpeechUsageTransactions,
+      ...soundEffectsUsageTransactions,
     ];
 
     // Calculate burn rate (average daily usage)
@@ -214,6 +216,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const toolUsageDailyData = new Map<string, { x: string; y: number }>();
     const speechToTextUsageDailyData = new Map<string, { x: string; y: number }>();
     const textToSpeechUsageDailyData = new Map<string, { x: string; y: number }>();
+    const soundEffectsUsageDailyData = new Map<string, { x: string; y: number }>();
     const creditsAddedDailyData = new Map<string, { x: string; y: number }>(); // Combined purchases, subscriptions, and generic adds
     const allUsageDailyData = new Map<string, { x: string; y: number }>(); // Combined all usage types including generic deducts
 
@@ -246,6 +249,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     processTransactionType(toolUsageTransactions, toolUsageDailyData);
     processTransactionType(speechToTextUsageTransactions, speechToTextUsageDailyData);
     processTransactionType(textToSpeechUsageTransactions, textToSpeechUsageDailyData);
+    processTransactionType(soundEffectsUsageTransactions, soundEffectsUsageDailyData);
 
     // Create combined credits added (purchases + subscriptions + generic adds)
     [...purchaseTransactions, ...subscriptionTransactions, ...genericAddTransactions].forEach(transaction => {
@@ -268,6 +272,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
       ...toolUsageTransactions,
       ...speechToTextUsageTransactions,
       ...textToSpeechUsageTransactions,
+      ...soundEffectsUsageTransactions,
     ].forEach(transaction => {
       const day = dayjs(transaction.createdAt).format('YYYY-MM-DD');
       if (!allUsageDailyData.has(day)) {
@@ -295,6 +300,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
         toolUsageDailyData,
         speechToTextUsageDailyData,
         textToSpeechUsageDailyData,
+        soundEffectsUsageDailyData,
         creditsAddedDailyData,
         allUsageDailyData,
       ].forEach(dataMap => {
@@ -322,6 +328,7 @@ const CreditAnalyticsTabContent: React.FC = () => {
     const toolUsageDataPoints = sortDataPoints(toolUsageDailyData);
     const speechToTextUsageDataPoints = sortDataPoints(speechToTextUsageDailyData);
     const textToSpeechUsageDataPoints = sortDataPoints(textToSpeechUsageDailyData);
+    const soundEffectsUsageDataPoints = sortDataPoints(soundEffectsUsageDailyData);
     const creditsAddedDataPoints = sortDataPoints(creditsAddedDailyData);
     const allUsageDataPoints = sortDataPoints(allUsageDailyData);
 
@@ -442,6 +449,14 @@ const CreditAnalyticsTabContent: React.FC = () => {
           id: 'text_to_speech_usage',
           data: textToSpeechUsageDataPoints,
           color: theme.palette.primary[300],
+        });
+      }
+
+      if (soundEffectsUsageDataPoints.some(p => p.y > 0)) {
+        lines.push({
+          id: 'sound_effects_usage',
+          data: soundEffectsUsageDataPoints,
+          color: theme.palette.warning[400],
         });
       }
 
@@ -952,6 +967,8 @@ const CreditAnalyticsTabContent: React.FC = () => {
                       return 'Speech to Text';
                     case 'text_to_speech_usage':
                       return 'Text to Speech';
+                    case 'sound_effects_usage':
+                      return 'Sound Effects';
                     case 'usage':
                       return t('credits.credits_used');
                     case 'credits_added':

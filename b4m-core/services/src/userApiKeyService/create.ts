@@ -13,6 +13,7 @@ import { randomBytes } from 'crypto';
 import bcrypt from 'bcryptjs';
 import { z } from 'zod';
 import { KEY_PREFIX_LENGTH } from './constants';
+import { API_KEY_RATE_LIMIT_DEFAULTS, apiKeyRateLimitSchema } from './rateLimit';
 
 // Sanity ceiling for a per-embed-key spend cap, in whole credits - a guard against
 // fat-finger/overflow values, not a product limit. Shared with the spend-cap update
@@ -35,12 +36,8 @@ const createUserApiKeySchema = z.object({
   // `.positive()` rejects a 0 cap at mint (a dead-on-arrival key), but enforcement
   // still honors a stored 0 as a real cap.
   spendCap: z.number().int().positive().max(EMBED_SPEND_CAP_MAX_CREDITS).optional(),
-  rateLimit: z
-    .object({
-      requestsPerMinute: z.number().min(1).max(10_000).prefault(60),
-      requestsPerDay: z.number().min(1).max(1_000_000).prefault(1000),
-    })
-    .optional(),
+  // Bounds live in ./rateLimit so mint and update can never accept different values.
+  rateLimit: apiKeyRateLimitSchema.optional(),
   metadata: z.object({
     clientIP: z.string().optional(),
     userAgent: z.string().optional(),
@@ -170,10 +167,7 @@ export const createUserApiKey = async (
 
   const { key, keyPrefix, keyHash } = generateApiKey();
 
-  const rateLimit = params.rateLimit || {
-    requestsPerMinute: 60,
-    requestsPerDay: 1000,
-  };
+  const rateLimit = params.rateLimit || API_KEY_RATE_LIMIT_DEFAULTS;
 
   const apiKeyDocument = await db.userApiKeys.create({
     userId,

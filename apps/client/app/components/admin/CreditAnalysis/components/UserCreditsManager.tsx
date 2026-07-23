@@ -28,11 +28,12 @@ import { CreditAdjustmentModal } from './CreditAdjustmentModal';
 
 interface AdminUser {
   id: string;
-  fullName?: string;
+  name?: string;
   email?: string;
   currentCredits?: number;
-  lastLoginAt?: string;
-  isActive?: boolean;
+  loginRecords?: Array<{ loginTime?: string | Date }> | null;
+  lastActiveAt?: string | Date;
+  isOnline?: boolean;
   isAdmin?: boolean;
   createdAt: string;
 }
@@ -40,6 +41,30 @@ interface AdminUser {
 interface UserCreditsManagerProps {
   onRefresh?: () => void;
 }
+
+// A user with no websocket activity within this window is shown as Inactive.
+const ACTIVE_WITHIN_DAYS = 30;
+
+// Most recent explicit login (loginRecords, as the Admin > Users view uses); falls back
+// to the websocket-tracked lastActiveAt for users with no recorded login yet.
+const getLastLoginDate = (user: AdminUser): Date | null => {
+  const latest = user.loginRecords?.reduce<string | Date | undefined>((acc, record) => {
+    const t = record?.loginTime;
+    if (!t) return acc;
+    return !acc || new Date(t) > new Date(acc) ? t : acc;
+  }, undefined);
+  const source = latest ?? user.lastActiveAt;
+  return source ? new Date(source) : null;
+};
+
+const getActivityStatus = (user: AdminUser): { label: string; color: 'success' | 'neutral' } => {
+  if (user.isOnline) return { label: 'Online', color: 'success' };
+  if (user.lastActiveAt) {
+    const daysSince = (Date.now() - new Date(user.lastActiveAt).getTime()) / 86_400_000;
+    if (daysSince <= ACTIVE_WITHIN_DAYS) return { label: 'Active', color: 'success' };
+  }
+  return { label: 'Inactive', color: 'neutral' };
+};
 
 export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefresh }) => {
   const [selectedUser, setSelectedUser] = useState<AdminUser | null>(null);
@@ -139,56 +164,60 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
         </Alert>
       ) : isMobile ? (
         <Stack spacing={1}>
-          {(paginatedUsers as AdminUser[]).map(user => (
-            <Card key={user.id} variant="outlined" sx={{ p: 1, gap: 0 }}>
-              {/* Row 1: name + status chips */}
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography level="body-sm" fontWeight="lg">
-                  {user.fullName || 'No Name'}
-                </Typography>
-                <Stack direction="row" spacing={0.5}>
-                  <Chip color={user.isActive ? 'success' : 'neutral'} size="sm">
-                    {user.isActive ? 'Active' : 'Inactive'}
-                  </Chip>
-                  {user.isAdmin && (
-                    <Chip color="warning" size="sm">
-                      Admin
+          {(paginatedUsers as AdminUser[]).map(user => {
+            const lastLogin = getLastLoginDate(user);
+            const status = getActivityStatus(user);
+            return (
+              <Card key={user.id} variant="outlined" sx={{ p: 1, gap: 0 }}>
+                {/* Row 1: name + status chips */}
+                <Stack direction="row" justifyContent="space-between" alignItems="center">
+                  <Typography level="body-sm" fontWeight="lg">
+                    {user.name || 'No Name'}
+                  </Typography>
+                  <Stack direction="row" spacing={0.5}>
+                    <Chip color={status.color} size="sm">
+                      {status.label}
                     </Chip>
-                  )}
+                    {user.isAdmin && (
+                      <Chip color="warning" size="sm">
+                        Admin
+                      </Chip>
+                    )}
+                  </Stack>
                 </Stack>
-              </Stack>
 
-              {/* Row 2: email */}
-              <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                {user.email || 'No Email'}
-              </Typography>
-
-              {/* Row 3: credits + last login */}
-              <Stack direction="row" spacing={2} sx={{ mt: 0.5 }}>
-                <Typography level="body-xs">
-                  Credits: <strong>{(user.currentCredits || 0).toLocaleString()}</strong>
+                {/* Row 2: email */}
+                <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                  {user.email || 'No Email'}
                 </Typography>
-                <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
-                  Login: {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : 'Never'}
-                </Typography>
-              </Stack>
 
-              {/* Row 4: actions */}
-              <Stack direction="row" spacing={1} sx={{ mt: 0.75 }}>
-                <ViewUserProfile userId={user.id} size="sm" />
-                <Button
-                  size="sm"
-                  variant="outlined"
-                  color="primary"
-                  startDecorator={<CreditCardIcon />}
-                  onClick={() => openCreditsModal(user)}
-                  sx={{ flex: 1 }}
-                >
-                  Adjust Credits
-                </Button>
-              </Stack>
-            </Card>
-          ))}
+                {/* Row 3: credits + last login */}
+                <Stack direction="row" spacing={2} sx={{ mt: 0.5 }}>
+                  <Typography level="body-xs">
+                    Credits: <strong>{(user.currentCredits || 0).toLocaleString()}</strong>
+                  </Typography>
+                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                    Login: {lastLogin ? lastLogin.toLocaleDateString() : 'Never'}
+                  </Typography>
+                </Stack>
+
+                {/* Row 4: actions */}
+                <Stack direction="row" spacing={1} sx={{ mt: 0.75 }}>
+                  <ViewUserProfile userId={user.id} size="sm" />
+                  <Button
+                    size="sm"
+                    variant="outlined"
+                    color="primary"
+                    startDecorator={<CreditCardIcon />}
+                    onClick={() => openCreditsModal(user)}
+                    sx={{ flex: 1 }}
+                  >
+                    Adjust Credits
+                  </Button>
+                </Stack>
+              </Card>
+            );
+          })}
         </Stack>
       ) : (
         <Sheet sx={{ borderRadius: 'md', overflow: 'auto' }}>
@@ -204,59 +233,61 @@ export const UserCreditsManager: React.FC<UserCreditsManagerProps> = ({ onRefres
               </tr>
             </thead>
             <tbody>
-              {(paginatedUsers as AdminUser[]).map(user => (
-                <tr key={user.id}>
-                  <td>
-                    <Stack>
-                      <Typography level="body-sm" fontWeight="lg">
-                        {user.fullName || 'No Name'}
+              {(paginatedUsers as AdminUser[]).map(user => {
+                const lastLogin = getLastLoginDate(user);
+                const status = getActivityStatus(user);
+                return (
+                  <tr key={user.id}>
+                    <td>
+                      <Stack>
+                        <Typography level="body-sm" fontWeight="lg">
+                          {user.name || 'No Name'}
+                        </Typography>
+                        <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
+                          {user.email || 'No Email'}
+                        </Typography>
+                      </Stack>
+                    </td>
+                    <td>
+                      <Typography level="body-sm" fontWeight="lg" color="primary">
+                        {(user.currentCredits || 0).toLocaleString()}
                       </Typography>
-                      <Typography level="body-xs" sx={{ color: 'text.tertiary' }}>
-                        {user.email || 'No Email'}
-                      </Typography>
-                    </Stack>
-                  </td>
-                  <td>
-                    <Typography level="body-sm" fontWeight="lg" color="primary">
-                      {(user.currentCredits || 0).toLocaleString()}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Typography level="body-xs">
-                      {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : 'Never'}
-                    </Typography>
-                  </td>
-                  <td>
-                    <Stack direction="row" spacing={1}>
-                      <Chip color={user.isActive ? 'success' : 'neutral'} size="sm">
-                        {user.isActive ? 'Active' : 'Inactive'}
-                      </Chip>
-                      {user.isAdmin && (
-                        <Chip color="warning" size="sm">
-                          Admin
+                    </td>
+                    <td>
+                      <Typography level="body-xs">{lastLogin ? lastLogin.toLocaleDateString() : 'Never'}</Typography>
+                    </td>
+                    <td>
+                      <Stack direction="row" spacing={1}>
+                        <Chip color={status.color} size="sm">
+                          {status.label}
                         </Chip>
-                      )}
-                    </Stack>
-                  </td>
-                  <td>
-                    <Typography level="body-xs">{new Date(user.createdAt).toLocaleDateString()}</Typography>
-                  </td>
-                  <td>
-                    <Stack direction="row" spacing={1}>
-                      <ViewUserProfile userId={user.id} size="sm" />
-                      <Button
-                        size="sm"
-                        variant="outlined"
-                        color="primary"
-                        startDecorator={<CreditCardIcon />}
-                        onClick={() => openCreditsModal(user)}
-                      >
-                        Credits
-                      </Button>
-                    </Stack>
-                  </td>
-                </tr>
-              ))}
+                        {user.isAdmin && (
+                          <Chip color="warning" size="sm">
+                            Admin
+                          </Chip>
+                        )}
+                      </Stack>
+                    </td>
+                    <td>
+                      <Typography level="body-xs">{new Date(user.createdAt).toLocaleDateString()}</Typography>
+                    </td>
+                    <td>
+                      <Stack direction="row" spacing={1}>
+                        <ViewUserProfile userId={user.id} size="sm" />
+                        <Button
+                          size="sm"
+                          variant="outlined"
+                          color="primary"
+                          startDecorator={<CreditCardIcon />}
+                          onClick={() => openCreditsModal(user)}
+                        >
+                          Credits
+                        </Button>
+                      </Stack>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </Table>
         </Sheet>

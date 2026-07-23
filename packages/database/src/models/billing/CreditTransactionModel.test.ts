@@ -209,6 +209,7 @@ describe('CreditTransactionRepository.sourceUsageForOwner', () => {
     'completion_api_usage',
     'speech_to_text_usage',
     'text_to_speech_usage',
+    'sound_effects_usage',
   ];
 
   it('counts every AI usage type', async () => {
