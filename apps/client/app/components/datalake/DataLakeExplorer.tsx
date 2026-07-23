@@ -11,7 +11,7 @@ import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
-import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
+import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -196,7 +196,7 @@ export default function DataLakeExplorer({
         <FieldTooltip
           content={FIELD_TOOLTIPS.dataLake}
           placement="bottom"
-          ariaLabel="Help: Data Lakes"
+          ariaLabel={`Help: ${DATA_LAKES}`}
           data-testid="field-tooltip-data-lake-explorer"
           sx={{ mb: 2 }}
         />
