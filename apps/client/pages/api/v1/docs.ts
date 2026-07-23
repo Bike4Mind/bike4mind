@@ -17,10 +17,16 @@ import type { NextApiRequest, NextApiResponse } from 'next';
  * both off the page makes zero cross-origin requests - it only fetches the spec
  * from same-origin /api/v1/openapi.json (connect-src 'self').
  *
- * Verified headless under this exact CSP: the reference renders and the console
- * is clean. Scalar attempts one eval-based feature-detection that script-src
- * 'self' blocks harmlessly (caught, no console error, rendering unaffected); we
- * keep the CSP tight rather than add 'unsafe-eval' just for it.
+ * Under this exact CSP the reference renders correctly (verified headless, i.e.
+ * with no service worker). Scalar attempts one eval-based feature-detection that
+ * script-src 'self' blocks harmlessly (caught, no console error, rendering
+ * unaffected); we keep the CSP tight rather than add 'unsafe-eval' just for it.
+ *
+ * Known cosmetic quirk in a real browser: the app's PWA service worker (Serwist,
+ * app/sw.ts) routes /api/* through NetworkOnly, and a Scalar-initiated fetch to
+ * an /api/* deep-link can surface a benign `no-response` console error. The page
+ * still renders and works; fixing the SW interaction is tracked separately (it
+ * is app-wide infra, out of scope for this route).
  */
 
 const VENDORED_SCALAR_SRC = '/scalar/scalar.standalone.js';
