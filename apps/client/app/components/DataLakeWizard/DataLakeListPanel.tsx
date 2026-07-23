@@ -116,7 +116,7 @@ export default function DataLakeListPanel() {
               <FieldTooltip
                 content={FIELD_TOOLTIPS.dataLake}
                 placement="bottom"
-                ariaLabel="Help: Data Lakes"
+                ariaLabel={`Help: ${DATA_LAKES}`}
                 data-testid="field-tooltip-data-lake-panel"
               />
             }
