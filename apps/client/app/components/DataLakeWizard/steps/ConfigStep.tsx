@@ -17,6 +17,7 @@ import {
 import { useTheme } from '@mui/joy/styles';
 import { useEffect, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
 
 function slugify(text: string): string {
@@ -100,7 +101,7 @@ export default function ConfigStep() {
 
         {/* Name */}
         <FormControl required>
-          <FormLabel>Data Lake Name</FormLabel>
+          <FormLabel>{DATA_LAKE} Name</FormLabel>
           <Input
             data-testid="config-name-input"
             value={config.name}
