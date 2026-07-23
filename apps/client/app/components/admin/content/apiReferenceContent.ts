@@ -644,6 +644,19 @@ read \`files\` (see [Poll Quest Status](#poll-quest-status)).
 }
 \`\`\`
 
+#### v1 API (OpenAPI 3.1)
+
+The versioned \`/api/ai/v1/*\` endpoints (\`/api/ai/v1/completions\` and \`/api/ai/v1/tools\`) publish a machine-readable OpenAPI 3.1 contract generated directly from the request-validation schemas, so the documentation never drifts from the running code.
+
+| Resource | Path | Description |
+|----------|------|-------------|
+| Interactive docs | \`/api/v1/docs\` | Browse and try the v1 endpoints in your browser |
+| OpenAPI spec | \`/api/v1/openapi.json\` | Raw OpenAPI 3.1 document (JSON) for SDK codegen |
+
+The spec is public and served with permissive CORS, and it rewrites its \`servers\` URL to the deployment you fetch it from, so a generated SDK targets the right origin. Point any OpenAPI generator (openapi-generator, openapi-typescript, and similar) at \`/api/v1/openapi.json\` to build a typed client.
+
+Note: \`/api/ai/v1/completions\` streams a custom SSE contract and is not OpenAI-compatible; the spec models both the completion event stream and the tools endpoint in full.
+
 #### AI Endpoints Summary
 
 | Method | Endpoint | Description |
