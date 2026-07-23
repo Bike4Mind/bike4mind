@@ -56,7 +56,9 @@ export const EMBED_WHITELABEL_ENTITLEMENT_KEY: EntitlementKey = 'embed:whitelabe
  * won't actually confer. Must stay in sync with the enforcement side
  * (`server/entitlements/embedKeyEntitlement.ts` -> `embedKeyOwnerHasEntitlement`).
  * `embed:whitelabel` is the only such key today; the OptiHashi/Overwatch/Bob/Pi
- * gates deliberately DO honor the bypass, so they are not members.
+ * entitlements are gated caller-scoped (via `requestHasEntitlement` / the client
+ * gate, which DO bypass for admin/developer), so reporting the bypass for them is
+ * correct and they are not members.
  */
 export const BYPASS_EXEMPT_ENTITLEMENTS: ReadonlySet<EntitlementKey> = new Set([EMBED_WHITELABEL_ENTITLEMENT_KEY]);
 
