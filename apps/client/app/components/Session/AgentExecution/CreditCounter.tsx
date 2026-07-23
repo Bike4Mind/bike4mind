@@ -15,20 +15,13 @@
  */
 
 import { FC } from 'react';
-import { Chip } from '@mui/joy';
+import { Chip, Tooltip } from '@mui/joy';
+import Bike4MindIcon from '@client/app/components/svgs/icons/Bike4MindIcon';
 import { useAgentExecutionStore, selectExecution } from '@client/app/stores/useAgentExecutionStore';
 import { useGetSettingsValue } from '@client/app/hooks/data/settings';
 
 interface CreditCounterProps {
   executionId: string;
-}
-
-function formatCredits(credits: number): string {
-  // Round to whole credits - sub-credit precision is noise at this surface
-  // (the executor emits fractional deltas per LLM call). The accounting
-  // ledger keeps the precise value; users just want a ballpark.
-  const rounded = Math.round(credits);
-  return rounded.toLocaleString();
 }
 
 const CreditCounter: FC<CreditCounterProps> = ({ executionId }) => {
@@ -43,10 +36,34 @@ const CreditCounter: FC<CreditCounterProps> = ({ executionId }) => {
   // gets immediate feedback that the counter is wired up.
   if (totalCreditsUsed === undefined) return null;
 
+  // Round to whole credits - sub-credit precision is noise at this surface
+  // (the executor emits fractional deltas per LLM call).
+  const rounded = Math.round(totalCreditsUsed);
+
+  // Matches the per-reply "credits used" chip in MessageContent: fileBrowser
+  // statusChip palette + Bike4Mind icon + bare number, with the count in the
+  // tooltip. Keeps the running tally visually consistent with the final bill.
   return (
-    <Chip data-testid={`credit-counter-${executionId}`} size="sm" variant="soft" color="primary">
-      {formatCredits(totalCreditsUsed)} credits
-    </Chip>
+    <Tooltip title={`Credits Used: ${rounded}`}>
+      <Chip
+        data-testid={`credit-counter-${executionId}`}
+        size="sm"
+        variant="soft"
+        sx={theme => ({
+          bgcolor: theme.palette.fileBrowser.statusChip.backgroundColor,
+          color: theme.palette.fileBrowser.statusChip.textColor,
+          fontSize: '13px',
+          height: '24px',
+          border: `1px solid ${theme.palette.fileBrowser.statusChip.borderColor}`,
+          gap: '4px',
+          px: '8px',
+          fontWeight: 500,
+        })}
+        startDecorator={<Bike4MindIcon size="12" fill="currentColor" />}
+      >
+        {rounded}
+      </Chip>
+    </Tooltip>
   );
 };
 

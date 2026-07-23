@@ -27,6 +27,7 @@ import {
 import IterationStep from './IterationStep';
 import AbortButton from './AbortButton';
 import PermissionCard from './PermissionCard';
+import CreditCounter from './CreditCounter';
 import SubagentStepNest from './SubagentStepNest';
 import { copyForRunningTool, THINKING_COPY } from './loadingCopy';
 import { useRotatingCopy } from './useRotatingCopy';
@@ -245,25 +246,25 @@ const IterationStream: FC<IterationStreamProps> = ({ executionId, hideFinalAnswe
               ) : null}
             </Typography>
           ) : (
-            <>
-              <Chip
-                size="sm"
-                color={statusMeta.color}
-                sx={{
-                  '--Chip-minHeight': '24px',
-                  '--Chip-paddingInline': '8px',
-                  '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
-                }}
-              >
-                {statusMeta.label}
-              </Chip>
-              {visibleIterationCount > 0 ? (
-                <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
-                  {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
-                </Typography>
-              ) : null}
-            </>
+            <Chip
+              size="sm"
+              color={statusMeta.color}
+              sx={{
+                '--Chip-minHeight': '24px',
+                '--Chip-paddingInline': '8px',
+                '& .MuiChip-label': { fontSize: '13px', fontWeight: 600 },
+              }}
+            >
+              {statusMeta.label}
+            </Chip>
           )}
+          {/* Credits sit right after the status, before the iteration count. */}
+          <CreditCounter executionId={executionId} />
+          {!isActive && !execution.isAborting && visibleIterationCount > 0 ? (
+            <Typography level="body-sm" sx={{ color: 'text.tertiary' }}>
+              {visibleIterationCount} iteration{visibleIterationCount === 1 ? '' : 's'}
+            </Typography>
+          ) : null}
           <Box sx={{ flex: 1 }} />
           <AbortButton executionId={executionId} status={execution.status} />
         </Stack>
