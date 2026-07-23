@@ -68,6 +68,7 @@ export * from './imageGeneration';
 export type { ImageEditResponse } from './imageGeneration';
 export * from './voiceGeneration';
 export * from './videoGeneration';
+export * from './soundGeneration';
 export * from './analytics';
 export * from './user';
 export * from './pricing';
