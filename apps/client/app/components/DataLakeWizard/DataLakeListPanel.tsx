@@ -22,7 +22,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
@@ -107,8 +107,8 @@ export default function DataLakeListPanel() {
         {/* pr clears the modal's absolutely-positioned ModalClose (top-right) so the
             Create button doesn't collide with the × when this panel is shown in a modal. */}
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 2, pr: 5 }}>
-          <Typography level="title-md" startDecorator={<StorageIcon />}>
-            Data Lakes
+          <Typography level="title-md" startDecorator={<DataLakeIcon />}>
+            {DATA_LAKES}
           </Typography>
           <Button size="sm" variant="soft" color="primary" startDecorator={<AddIcon />} onClick={openWizard}>
             Create
@@ -123,7 +123,7 @@ export default function DataLakeListPanel() {
           </Stack>
         ) : !dataLakes || dataLakes.length === 0 ? (
           <Box sx={{ textAlign: 'center', py: 4 }}>
-            <StorageIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
+            <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
             <Typography level="body-sm" color="neutral">
               No data lakes yet. Create one to organize your files.
             </Typography>
@@ -146,7 +146,7 @@ export default function DataLakeListPanel() {
                 }
               >
                 <Stack direction="row" alignItems="center" gap={1.5}>
-                  <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                  <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Typography level="title-sm" noWrap>
                       {lake.name}
