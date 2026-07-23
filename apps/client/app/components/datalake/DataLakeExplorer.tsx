@@ -12,6 +12,8 @@ import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Brows
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
 import { toast } from 'sonner';
+import FieldTooltip from '@client/app/components/help/FieldTooltip';
+import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
 import type { IFabFileDocument } from '@bike4mind/common';
 
 interface DataLakeExplorerProps {
@@ -188,6 +190,16 @@ export default function DataLakeExplorer({
       )}
       <Box sx={{ px: 3, pt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
         <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: 'Data Lake Explorer' }]} />
+        {/* Match the breadcrumb's own mb so this icon's center lines up with the
+            breadcrumb text in the center-aligned header row (breadcrumb carries mb:2). */}
+        <Box sx={{ display: 'inline-flex', mb: 2 }}>
+          <FieldTooltip
+            content={FIELD_TOOLTIPS.dataLake}
+            placement="bottom"
+            ariaLabel="Help: Data Lakes"
+            data-testid="field-tooltip-data-lake-explorer"
+          />
+        </Box>
         {onManage && (
           <Button
             data-testid="datalake-manage-btn"
