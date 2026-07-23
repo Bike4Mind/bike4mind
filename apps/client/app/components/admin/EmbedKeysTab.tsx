@@ -45,6 +45,11 @@ import {
   parseEmbedOrigin,
 } from '@bike4mind/common';
 import { coerceToOrigin } from '@client/app/components/common/EmbedAllowlistEditor';
+import {
+  isModellessAgent,
+  ModellessAgentAlert,
+  MODELLESS_AGENT_WARNING,
+} from '@client/app/components/common/ModellessAgentWarning';
 import { useEntitlementGate } from '@client/app/hooks/useEntitlementGate';
 import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
@@ -180,12 +185,11 @@ function EmbedKeyFormFields({
   // the server gates do not - a dev's toggle save is stripped server-side.
   const whitelabelGate = useEntitlementGate(EMBED_WHITELABEL_ENTITLEMENT_KEY);
 
-  // Advisory only, on positive knowledge: the agent must be IN the fetched list AND
-  // model-less ('' and unset both mean "System Default"). An agent the viewer cannot
-  // see (or beyond the list's first page) shows no warning - same degradation as the
-  // Select itself; the embed route's 422 remains the enforcement layer.
+  // Advisory only. An agent the viewer cannot see (or beyond the list's first
+  // page) shows no warning - same degradation as the Select itself; the embed
+  // route's 422 remains the enforcement layer.
   const selectedAgent = agents?.find(agent => agent.id === form.agentId);
-  const selectedAgentMissingModel = !!selectedAgent && !selectedAgent.preferredModel;
+  const selectedAgentMissingModel = isModellessAgent(selectedAgent);
 
   return (
     <>
@@ -206,12 +210,7 @@ function EmbedKeyFormFields({
         <Typography level="body-xs" sx={{ color: 'text.tertiary', mt: 0.5 }}>
           The embed key can only talk to this one agent.
         </Typography>
-        {selectedAgentMissingModel && (
-          <Alert color="warning" startDecorator={<WarningIcon />} sx={{ mt: 1 }} data-testid="embed-key-model-warning">
-            This agent is on the system default model. Embed chat requires an explicit model, so end-user chats will be
-            rejected until you set one on the agent.
-          </Alert>
-        )}
+        {selectedAgentMissingModel && <ModellessAgentAlert testId="embed-key-model-warning" />}
       </FormControl>
 
       <EmbedOriginsField
@@ -469,7 +468,7 @@ function EmbedKeyCreatedModal({ apiKey, onClose }: { apiKey: string; onClose: ()
 export default function EmbedKeysTab() {
   const { data, isLoading, error, refetch } = useGetUserApiKeys();
   const { data: agents } = useGetAgents();
-  const agentNameById = useMemo(() => new Map((agents ?? []).map(agent => [agent.id, agent.name])), [agents]);
+  const agentById = useMemo(() => new Map((agents ?? []).map(agent => [agent.id, agent])), [agents]);
 
   const [showNewKeyModal, setShowNewKeyModal] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState('');
@@ -554,15 +553,28 @@ export default function EmbedKeysTab() {
             <tbody>
               {embedKeys.map(key => {
                 const disabled = key.status === 'disabled';
+                const boundAgent = key.agentId ? agentById.get(key.agentId) : undefined;
                 return (
                   <tr key={key.id} data-testid={`embed-key-row-${key.id}`}>
                     <td>
                       <Typography fontWeight="lg">{key.name}</Typography>
                     </td>
                     <td>
-                      <Chip size="sm" variant="soft" color="primary">
-                        {(key.agentId && agentNameById.get(key.agentId)) ?? key.agentId ?? 'Unbound'}
-                      </Chip>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <Chip size="sm" variant="soft" color="primary">
+                          {boundAgent?.name ?? key.agentId ?? 'Unbound'}
+                        </Chip>
+                        {isModellessAgent(boundAgent) && (
+                          <Tooltip title={MODELLESS_AGENT_WARNING}>
+                            <WarningIcon
+                              color="warning"
+                              fontSize="small"
+                              aria-label={MODELLESS_AGENT_WARNING}
+                              data-testid={`embed-key-row-model-warning-${key.id}`}
+                            />
+                          </Tooltip>
+                        )}
+                      </Box>
                     </td>
                     <td>
                       <Typography fontFamily="monospace" fontSize="sm">

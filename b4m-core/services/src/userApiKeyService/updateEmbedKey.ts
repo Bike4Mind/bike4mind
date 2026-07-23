@@ -1,9 +1,4 @@
-import {
-  ApiKeyScope,
-  EmbedBrandingSchema,
-  EmbedOriginsSchema,
-  IUserApiKeyRepository,
-} from '@bike4mind/common';
+import { ApiKeyScope, EmbedBrandingSchema, EmbedOriginsSchema, IUserApiKeyRepository } from '@bike4mind/common';
 import { secureParameters, BadRequestError, NotFoundError } from '@bike4mind/utils';
 import { z } from 'zod';
 

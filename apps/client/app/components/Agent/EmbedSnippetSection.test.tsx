@@ -26,10 +26,10 @@ const KEY = {
   createdAt: '2026-07-01T00:00:00Z',
 };
 
-const renderSection = () =>
+const renderSection = (props: { preferredModel?: string } = {}) =>
   render(
     <Wrapper>
-      <EmbedSnippetSection agentId="agent-1" agentName="Sales Bot" />
+      <EmbedSnippetSection agentId="agent-1" agentName="Sales Bot" {...props} />
     </Wrapper>
   );
 
@@ -93,5 +93,23 @@ describe('EmbedSnippetSection', () => {
     await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-copy')).toBeTruthy());
     fireEvent.click(screen.getByTestId('agent-embed-snippet-copy'));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(snippetValue()));
+  });
+
+  it('warns when the agent has no explicit model, even with no keys yet', async () => {
+    getAgentEmbedKeys.mockResolvedValue([]);
+    renderSection({ preferredModel: '' });
+    await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-model-warning')).toBeTruthy());
+    expect(screen.getByTestId('agent-embed-snippet-empty')).toBeTruthy();
+  });
+
+  it('warns when preferredModel is unset on a populated section', async () => {
+    renderSection();
+    await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-model-warning')).toBeTruthy());
+  });
+
+  it('shows no model warning when the agent has an explicit model', async () => {
+    renderSection({ preferredModel: 'claude-test' });
+    await waitFor(() => expect(screen.getByTestId('agent-embed-snippet-snippet')).toBeTruthy());
+    expect(screen.queryByTestId('agent-embed-snippet-model-warning')).toBeNull();
   });
 });
