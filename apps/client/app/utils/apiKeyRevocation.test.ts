@@ -1,21 +1,26 @@
 import { describe, it, expect } from 'vitest';
 import { revocationTooltip } from './apiKeyRevocation';
 
+// Built from local-time components, not a 'Z' string: the helper formats in local
+// time, so a UTC fixture would render a different calendar day either side of the
+// date line and the assertion below would depend on the host timezone.
+const REVOKED_AT = new Date(2026, 0, 15, 9, 30);
+
 describe('revocationTooltip', () => {
   it('returns null for a key with no revocation timestamp', () => {
     expect(revocationTooltip({})).toBeNull();
   });
 
   it('renders relative and absolute time for a revoked key', () => {
-    const tooltip = revocationTooltip({ revokedAt: new Date('2026-01-15T09:30:00Z') });
+    const tooltip = revocationTooltip({ revokedAt: REVOKED_AT });
 
     expect(tooltip).toContain('Revoked');
-    expect(tooltip).toContain('Jan 15, 2026');
+    expect(tooltip).toContain('Jan 15, 2026 9:30 AM');
   });
 
   it('appends the reason when one was recorded', () => {
     const tooltip = revocationTooltip({
-      revokedAt: new Date('2026-01-15T09:30:00Z'),
+      revokedAt: REVOKED_AT,
       revokedReason: 'Superseded by a new federated AI-token exchange',
     });
 
