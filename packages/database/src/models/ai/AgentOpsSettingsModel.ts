@@ -39,6 +39,7 @@ export interface IAgentOpsSettingsRepository {
 export enum AgentOpsLlmModel {
   // Modern models
   CLAUDE_FABLE_5 = 'claude-fable-5',
+  CLAUDE_OPUS_5 = 'claude-opus-5',
   CLAUDE_OPUS_4_8 = 'claude-opus-4-8',
   CLAUDE_OPUS_4_7 = 'claude-opus-4-7',
   CLAUDE_OPUS_4_6 = 'claude-opus-4-6',

@@ -107,7 +107,7 @@ export function shouldTriggerFallback(error: Error): boolean {
     'is not available',
     // Claude Fable 5 GA safety-classifier refusal: the Anthropic backend surfaces a
     // stop_reason: 'refusal' as a thrown error for REFUSAL_FALLBACK_MODELS so blocked
-    // requests continue on Opus 4.8 via the claude-fable-5 fallback chain below.
+    // requests continue on Opus 5 via the claude-fable-5 fallback chain below.
     'safety classifier refusal',
   ];
 
@@ -195,8 +195,19 @@ function findAutomaticFallback(
     'gemini-1.5-pro': ['claude-sonnet-4-6', 'gpt-4o', 'claude-opus-4-6'],
     'gemini-1.5-flash': ['claude-haiku-4-5-20251001', 'gpt-4o-mini'],
 
-    // Top tier (Fable 5 / Opus 4.7-4.8) degrades within the Opus tier before dropping to Sonnet
+    // Top tier (Fable 5 / Opus 4.7-5) degrades within the Opus tier before dropping to Sonnet.
+    // Fable 5 leads with Opus 5: same price as 4.8, near-Fable capability, and its safety
+    // classifiers intervene far less often - so a Fable refusal is most likely to succeed there.
     'claude-fable-5': [
+      'claude-opus-5',
+      'claude-opus-4-8',
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-sonnet-5',
+      'claude-sonnet-4-6',
+      'gpt-5',
+    ],
+    'claude-opus-5': [
       'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-opus-4-6',

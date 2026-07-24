@@ -52,8 +52,9 @@ interface AgentOpsSettings {
 }
 
 const LLM_MODELS = [
-  { value: 'claude-opus-4-8', label: 'Claude 4.8 Opus (SOTA Recommended)' },
-  { value: 'claude-opus-4-7', label: 'Claude 4.7 Opus (Previous)' },
+  { value: 'claude-opus-5', label: 'Claude 5 Opus (SOTA Recommended)' },
+  { value: 'claude-opus-4-8', label: 'Claude 4.8 Opus (Previous)' },
+  { value: 'claude-opus-4-7', label: 'Claude 4.7 Opus' },
   { value: 'claude-opus-4-6', label: 'Claude 4.6 Opus' },
   { value: 'claude-sonnet-5', label: 'Claude 5 Sonnet (SOTA Sonnet)' },
   { value: 'claude-sonnet-4-6', label: 'Claude 4.6 Sonnet' },
