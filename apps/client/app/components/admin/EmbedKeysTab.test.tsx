@@ -66,11 +66,14 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-// Default DENIED: every pre-Phase-D case runs with the hide-branding toggle
-// hidden, which is that era's behavior. Individual tests flip the state.
-const gate = vi.hoisted(() => ({ state: 'denied' as string, bypass: false }));
-vi.mock('@client/app/hooks/useEntitlementGate', () => ({
-  useEntitlementGate: () => ({ state: gate.state, bypass: gate.bypass }),
+// The Create-form toggle gates on the CURRENT USER's own held entitlements with
+// NO admin/developer bypass (the prospective owner is the minter) - so this mock
+// stands in for /api/entitlements. The Configure-form toggle instead gates on
+// the key's server-computed `ownerHasWhitelabel`, set per-fixture below.
+// `undefined` models the still-loading query.
+const ent = vi.hoisted(() => ({ data: [] as string[] | undefined }));
+vi.mock('@client/app/hooks/data/entitlements', () => ({
+  useEntitlements: () => ({ data: ent.data }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -85,8 +88,7 @@ describe('EmbedKeysTab', () => {
   beforeEach(() => {
     h.keys = [embedKey, plainKey, modellessAgentKey];
     h.updateMutate.mockClear();
-    gate.state = 'denied';
-    gate.bypass = false;
+    ent.data = [];
   });
 
   it('lists embed:chat keys and filters out non-embed keys', () => {
@@ -118,10 +120,12 @@ describe('EmbedKeysTab', () => {
     expect('agentId' in arg).toBe(false);
   });
 
-  describe('hide-branding toggle (whitelabel gate, epic #41 Phase D)', () => {
-    it('shows and round-trips the toggle when the whitelabel gate is satisfied', () => {
-      gate.state = 'satisfied';
-      h.keys = [{ ...embedKey, branding: { displayName: 'Acme' } }];
+  // Post-#891 the toggle is owner-scoped: Configure reads the key's
+  // server-computed `ownerHasWhitelabel`; Create reads the current user's own
+  // entitlements (no admin/developer bypass). Neither honors the viewer's admin.
+  describe('hide-branding toggle - owner-scoped (#891)', () => {
+    it('Configure: shows and round-trips the toggle when the key OWNER holds white-label', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: true, branding: { displayName: 'Acme' } }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
 
@@ -136,23 +140,52 @@ describe('EmbedKeysTab', () => {
       });
     });
 
-    it('hides the toggle and keeps the plan note when the gate is denied', () => {
+    it('Configure: hides the toggle and keeps the plan note when the OWNER is not entitled', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
       expect(screen.getAllByText(/requires the white-label/i).length).toBeGreaterThan(0);
     });
 
-    it('renders neither the toggle nor a spinner while the gate is pending', () => {
-      gate.state = 'pending';
+    // Parity regression: the toggle follows the OWNER's plan even for a viewer who
+    // would have bypassed the old viewer-scoped gate (admin/developer). Configure
+    // reads only the server flag, so an unentitled owner's key never offers it.
+    it('Configure: does not offer the toggle for an unentitled owner regardless of viewer role', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
-      // The modal already renders a progressbar-free form; pending must not add one.
+    });
+
+    it('Create: shows the toggle when the current user (prospective owner) is entitled', () => {
+      ent.data = ['embed:whitelabel'];
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.getByTestId('embed-key-branding-hide')).toBeInTheDocument();
+    });
+
+    // The core Symptom-B parity regression: an admin/developer viewer no longer
+    // sees the Create toggle just for being staff - /api/entitlements applies no
+    // bypass, so an empty held-set (the unentitled case) hides it.
+    it('Create: hides the toggle when the current user is not entitled (no admin/developer bypass)', () => {
+      ent.data = [];
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
+      expect(screen.getAllByText(/requires the white-label/i).length).toBeGreaterThan(0);
+    });
+
+    it('Create: hides the toggle (and shows no spinner) while entitlements are still loading', () => {
+      ent.data = undefined;
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
       expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
 
-    it('still cannot clobber a stored hideBranding on a no-op save while denied', () => {
+    it('Configure: still cannot clobber a stored hideBranding on a no-op save for an unentitled owner', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       fireEvent.click(screen.getByTestId('embed-key-save-btn'));
