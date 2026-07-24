@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { Box, Button, Card, Chip, IconButton, Input, Modal, ModalDialog, Skeleton, Stack, Typography } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
 import PersonOutlineIcon from '@mui/icons-material/PersonOutline';
@@ -9,6 +8,7 @@ import { useBrowsePublicDataLakes } from '@client/app/hooks/data/dataLakes';
 import { useDebounceValue } from '@client/app/hooks/useDebouncedValue';
 import { formatBytes } from '@client/app/utils/folderTreeParser';
 import DataLakeViewer from './DataLakeViewer';
+import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 
 const PAGE_SIZE = 24;
 
@@ -74,7 +74,7 @@ export default function DataLakeDiscoverPanel() {
         </Stack>
       ) : lakes.length === 0 ? (
         <Box sx={{ textAlign: 'center', py: 4 }} data-testid="datalake-discover-empty">
-          <StorageIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
+          <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
           <Typography level="body-sm" color="neutral">
             {debouncedSearch
               ? `No public data lakes match "${debouncedSearch}".`
@@ -96,7 +96,7 @@ export default function DataLakeDiscoverPanel() {
                 onClick={() => setViewingLake({ id: lake.id, name: lake.name, tagPrefix: lake.fileTagPrefix })}
               >
                 <Stack direction="row" alignItems="flex-start" gap={1.5}>
-                  <StorageIcon sx={{ fontSize: 20, color: 'primary.400', mt: 0.25 }} />
+                  <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400', mt: 0.25 }} />
                   <Box sx={{ flex: 1, minWidth: 0 }}>
                     <Stack direction="row" alignItems="center" gap={0.75}>
                       <Typography level="title-sm" noWrap>

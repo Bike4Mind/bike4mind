@@ -12,6 +12,7 @@ import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import DataLakeIngestPickerModal from '@client/app/components/DataLakeWizard/DataLakeIngestPickerModal';
 import { readDroppedItems } from '@client/app/utils/dropReader';
+import { DATA_LAKE, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import FieldTooltip from '@client/app/components/help/FieldTooltip';
 import { FIELD_TOOLTIPS } from '@client/app/components/help/fieldTooltips';
@@ -193,13 +194,13 @@ export default function DataLakeExplorer({
         </Box>
       )}
       <Box sx={{ px: 3, pt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: 'Data Lake Explorer' }]} />
+        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: `${DATA_LAKE} Explorer` }]} />
         {/* mb:2 matches the breadcrumb's own mb so this icon's center lines up with the
             breadcrumb text in the center-aligned header row (breadcrumb carries mb:2). */}
         <FieldTooltip
           content={FIELD_TOOLTIPS.dataLake}
           placement="bottom"
-          ariaLabel="Help: Data Lakes"
+          ariaLabel={`Help: ${DATA_LAKES}`}
           data-testid="field-tooltip-data-lake-explorer"
           sx={{ mb: 2 }}
         />

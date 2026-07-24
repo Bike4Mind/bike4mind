@@ -188,4 +188,33 @@ describe('renderSandboxedBundle', () => {
       expect(priv.srcdoc).not.toContain('<base');
     });
   });
+
+  describe('fragment-nav helper', () => {
+    const html = `<html><head></head><body><a href="#tldr">jump</a></body></html>`;
+
+    it('injects the helper with the doc origin and page paths when pagePaths is set', () => {
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: URL_BASE,
+        origin: ORIGIN,
+        visibility: 'private',
+        assets: new Map(),
+        pagePaths: [URL_BASE, '/a/tok123'],
+      });
+      expect(srcdoc).toContain(`"paths":["${URL_BASE}","/a/tok123"]`);
+      expect(srcdoc).toContain(`"origins":["${ORIGIN}"`);
+      expect(srcdoc).toContain(`b4m:'fragment'`);
+    });
+
+    it('does not inject the helper when pagePaths is omitted (?a= sub-documents)', () => {
+      const { srcdoc } = renderSandboxedBundle({
+        indexHtml: html,
+        urlBase: '',
+        origin: ORIGIN,
+        visibility: 'public',
+        assetMode: 'inline',
+      });
+      expect(srcdoc).not.toContain(`b4m:'fragment'`);
+    });
+  });
 });

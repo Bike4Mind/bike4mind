@@ -26,7 +26,7 @@ import {
   Tooltip,
   Typography,
 } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon, DATA_LAKES } from '@client/app/components/datalake/dataLakeBranding';
 import AddIcon from '@mui/icons-material/Add';
 import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
 import ArchiveOutlinedIcon from '@mui/icons-material/ArchiveOutlined';
@@ -120,17 +120,17 @@ export default function DataLakeListPanel() {
         <Stack direction="row" justifyContent="space-between" alignItems="center" gap={1} sx={{ mb: 2, pr: 5 }}>
           <Typography
             level="title-md"
-            startDecorator={<StorageIcon />}
+            startDecorator={<DataLakeIcon />}
             endDecorator={
               <FieldTooltip
                 content={FIELD_TOOLTIPS.dataLake}
                 placement="bottom"
-                ariaLabel="Help: Data Lakes"
+                ariaLabel={`Help: ${DATA_LAKES}`}
                 data-testid="field-tooltip-data-lake-panel"
               />
             }
           >
-            Data Lakes
+            {DATA_LAKES}
           </Typography>
         </Stack>
 
@@ -171,7 +171,7 @@ export default function DataLakeListPanel() {
               </Stack>
             ) : !dataLakes || dataLakes.length === 0 ? (
               <Box sx={{ textAlign: 'center', py: 4 }}>
-                <StorageIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
+                <DataLakeIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
                 <Typography level="body-sm" color="neutral">
                   No data lakes yet. Create one to organize your files.
                 </Typography>
@@ -194,7 +194,7 @@ export default function DataLakeListPanel() {
                     }
                   >
                     <Stack direction="row" alignItems="center" gap={1.5}>
-                      <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                      <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
                       <Box sx={{ flex: 1, minWidth: 0 }}>
                         <Typography level="title-sm" noWrap>
                           {lake.name}
