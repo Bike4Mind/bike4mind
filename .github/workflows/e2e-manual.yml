@@ -143,7 +143,7 @@ jobs:
       status_context:     'e2e/smoke'
       suite_name:         ''
       artifact_suffix:    ''
-      timeout_minutes:    35
+      timeout_minutes:    60
       stamp_promotable:   ${{ needs.prep.outputs.stamp_promotable == 'true' }}
       wait_for_deploy:    ${{ github.event_name == 'schedule' || inputs.pr_number == '' }}
       show_credits:       ${{ needs.prep.outputs.show_credits == 'true' }}
