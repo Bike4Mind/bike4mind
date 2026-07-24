@@ -82,12 +82,14 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   // Mirrors useOptiAccess's route check: '/opti' only exists in overlay builds.
   const { pathname } = useLocation();
   const isOptiRoute = pathname.startsWith('/opti');
+  // The Data Lakes surface owns its own edge-to-edge chat-first layout (#836).
+  const isDataLakesRoute = pathname.startsWith('/data-lakes');
 
   const getContentPadding = (): string => {
     if (isMobile) return '0px';
-    // The Opti hub manages its own edge-to-edge layout (docked chat + splitter);
-    // the notebook gutter would double up as a visible frame around it.
-    if (isOptiRoute) return '0px';
+    // The Opti hub / Data Lakes manage their own edge-to-edge layout (docked chat +
+    // splitter); the notebook gutter would double up as a visible frame around it.
+    if (isOptiRoute || isDataLakesRoute) return '0px';
     if (openSideNav && isKnowledgeViewerOpen) return '12px 12px 12px 12px';
     if (openSideNav) return '12px 12px 12px 12px';
     if (isKnowledgeViewerOpen) return '12px 12px 12px 36px';

@@ -1,13 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Box, Button, Typography, useTheme } from '@mui/joy';
+import { Box, Typography, useTheme } from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
-import SettingsOutlinedIcon from '@mui/icons-material/SettingsOutlined';
-import { OptiModeBreadcrumb } from '@client/app/components/datalake/OptiModeBreadcrumb';
 import { useSessions, useWorkBenchActions } from '@client/app/contexts/SessionsContext';
 import { setSessionLayout } from '@client/app/hooks/useSessionLayout';
 import DataLakeTree from './DataLakeTree';
 import DataLakeArticle from './DataLakeArticle';
-import { TelemetryTicker, deckBackground } from '@client/app/components/datalake/deckChrome';
+import { deckBackground } from '@client/app/components/datalake/deckChrome';
 import { useGetDataLakeArticles, useGetDataLakeTagCounts } from '@client/app/hooks/data/fabFiles';
 import type { DataLakeBrowseSource } from '@client/app/hooks/data/fabFiles';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
@@ -26,8 +24,10 @@ interface DataLakeExplorerProps {
   source?: DataLakeBrowseSource;
   /** Root breadcrumb crumb label + handler (defaults to the Mission Hub crumb). */
   rootLabel?: string;
-  /** When provided, renders a "Manage" button that opens the lake management panel. */
+  /** When provided, the tree's gear button opens the lake management panel. */
   onManage?: () => void;
+  /** When provided, the tree's blue + button opens the Create Lake wizard. */
+  onCreateLake?: () => void;
   /**
    * Chat-first surface: when provided, this node (a full `SessionContainer`) fills the RIGHT
    * pane instead of `DataLakeArticle`, and file clicks open the rich `KnowledgeModal` viewer.
@@ -41,12 +41,12 @@ interface DataLakeExplorerProps {
 const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
 
 export default function DataLakeExplorer({
-  onBack,
   onAskAbout,
   articleId,
   source = 'opti',
-  rootLabel = '⛩ Mission Hub',
+  rootLabel = 'Data Lake',
   onManage,
+  onCreateLake,
   chatSlot,
 }: DataLakeExplorerProps) {
   const theme = useTheme();
@@ -177,11 +177,6 @@ export default function DataLakeExplorer({
     [usingChat, openFileInViewer]
   );
 
-  // Truthful distinct-file count (the tree's fileCounts are tag-occurrence sums, which
-  // overcount multi-tagged articles ~2x); branch count stays tree-derived.
-  const totalArticles = tagCountsData?.uniqueArticleCounts?.total ?? 0;
-  const branchCount = useMemo(() => tree.reduce((sum, node) => sum + Math.max(node.children.length, 1), 0), [tree]);
-
   // Quick dives for the empty state: richest second-level categories across prefixes
   const quickDives = useMemo(
     () =>
@@ -242,37 +237,10 @@ export default function DataLakeExplorer({
           </Typography>
         </Box>
       )}
-      <Box sx={{ px: 3, pt: 2, display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-        <OptiModeBreadcrumb segments={[{ label: rootLabel, onClick: onBack }, { label: 'Data Lake Explorer' }]} />
-        {onManage && (
-          <Button
-            data-testid="datalake-manage-btn"
-            size="sm"
-            variant="outlined"
-            color="neutral"
-            startDecorator={<SettingsOutlinedIcon sx={{ fontSize: 16 }} />}
-            onClick={onManage}
-            sx={{ mb: 2 }}
-          >
-            Manage lakes
-          </Button>
-        )}
-        <Box sx={{ ml: 'auto', mb: 2 }}>
-          <TelemetryTicker
-            stats={[
-              { label: 'Articles', value: String(totalArticles || '—') },
-              { label: 'Branches', value: String(branchCount || '—') },
-              {
-                label: 'Depth',
-                value: String(breadcrumb.length),
-                sub: breadcrumb.length === 0 ? 'surface' : breadcrumb.join(' : '),
-              },
-            ]}
-            isDark={isDark}
-          />
-        </Box>
-      </Box>
-      <Box sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+      <Box
+        className="datalake-explorer-body"
+        sx={{ display: 'flex', flex: 1, minHeight: 0, overflow: 'hidden', p: '12px', gap: '8px' }}
+      >
         <DataLakeTree
           tree={tree}
           articles={leafArticles}
@@ -282,6 +250,9 @@ export default function DataLakeExplorer({
           onSelectFile={handleSelectFile}
           isLoading={tagCountsLoading || (!!leafTag && leafLoading)}
           isError={tagCountsError}
+          title={rootLabel}
+          onManage={onManage}
+          onCreateLake={onCreateLake}
         />
         {chatSlot ? (
           <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, height: '100%', display: 'flex', flexDirection: 'column' }}>

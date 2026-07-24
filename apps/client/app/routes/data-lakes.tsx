@@ -38,6 +38,7 @@ export default function DataLakesHome() {
   const navigate = useNavigate();
   const { article } = useSearch({ strict: false }) as { article?: string };
   const openManager = useDataLakeWizardStore(s => s.openManager);
+  const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const queryClient = useQueryClient();
 
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -107,6 +108,7 @@ export default function DataLakesHome() {
         onBack={() => navigate({ to: '/new' })}
         onAskAbout={handleAskAbout}
         onManage={openManager}
+        onCreateLake={openWizard}
         chatSlot={
           <SessionContainer
             currentSessionId={sessionId ?? undefined}
