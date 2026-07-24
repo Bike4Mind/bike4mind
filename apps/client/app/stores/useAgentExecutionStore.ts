@@ -125,6 +125,10 @@ export interface ParentExecution {
   totalCreditsUsed: number;
   childExecutions: Record<string, ChildExecution>;
   pendingPermission?: PendingPermission;
+  /** Optimistic UI flag: user clicked Stop and we're awaiting the server's
+   *  abort acknowledgement. Drives the "Aborting…" status + disabled Stop button
+   *  so the click has immediate feedback even if the run takes a beat to stop. */
+  isAborting?: boolean;
   /** Final answer once `completed` arrives. */
   answer?: string;
   /** Surfaced reason on `failed`/`aborted` (e.g. 'aborted', 'max_handoffs_exceeded'). */
@@ -175,6 +179,8 @@ interface AgentExecutionState {
   markCompleted: (executionId: string, answer: string | undefined, totalCreditsUsed: number) => void;
   markFailed: (executionId: string, reason: string, message?: string) => void;
   markAborted: (executionId: string) => void;
+  /** Optimistic: flag an execution as aborting the moment the user clicks Stop. */
+  markAborting: (executionId: string) => void;
   setPendingPermission: (executionId: string, pending: PendingPermission | undefined) => void;
   /** Replace state from a reconnect snapshot - only resets fields the server can re-supply. */
   hydrateFromReconnect: (snapshot: {
@@ -524,7 +530,13 @@ export const useAgentExecutionStore = create<AgentExecutionState>((set, get) => 
         status: 'aborted',
         failureReason: 'aborted',
         pendingPermission: undefined,
+        isAborting: false,
       })),
+    })),
+
+  markAborting: executionId =>
+    set(state => ({
+      executions: withExecution(state, executionId, exec => ({ ...exec, isAborting: true })),
     })),
 
   setPendingPermission: (executionId, pending) =>

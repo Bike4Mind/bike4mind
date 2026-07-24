@@ -679,9 +679,7 @@ const MessageContent: React.FC<ContentProps> = memo(
             in agentExecutor.ts). Lazy-loads the iteration trace from the
             AgentExecution doc and replays it inline under the reply. */}
         {messageData.agentExecutionId && sessionId ? (
-          <Box sx={{ mt: 0.5 }}>
-            <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
-          </Box>
+          <ReasoningDisclosure agentExecutionId={messageData.agentExecutionId} sessionId={sessionId} />
         ) : null}
         {messageData.oob &&
           (() => {
