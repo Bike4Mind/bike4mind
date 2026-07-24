@@ -81,4 +81,12 @@ describe('GET /api/logout - server-side session revocation', () => {
     expect(res._getStatusCode()).toBe(200);
     expect(mockRefs.revokeUserSessions).not.toHaveBeenCalled();
   });
+
+  it('still returns 200 when the account was deleted between auth and the revoke bump', async () => {
+    const { NotFoundError } = await import('@bike4mind/utils');
+    mockRefs.revokeUserSessions?.mockRejectedValueOnce(new NotFoundError('User user-1 not found'));
+    const { req, res } = mocks({ id: 'user-1' });
+    await mockRefs.getHandler!(req, res);
+    expect(res._getStatusCode()).toBe(200);
+  });
 });

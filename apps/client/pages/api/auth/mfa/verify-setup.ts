@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
-import { User, userRepository } from '@bike4mind/database';
+import { userRepository } from '@bike4mind/database';
 import { authTokenGenerator } from '@server/auth/tokenGenerator';
 import { logAuthAudit } from '@server/utils/authAudit';
 import { redactUserSecretsForSelf } from '@bike4mind/common';
@@ -52,8 +52,7 @@ const handler = baseApi()
         // Enabling MFA is a security-relevant change: bump tokenVersion to
         // invalidate any other active sessions. Mint the completion token with
         // the new version so this session stays valid.
-        const bumped = await User.findByIdAndUpdate(result.user.id, { $inc: { tokenVersion: 1 } }, { new: true });
-        const newTokenVersion = bumped?.tokenVersion ?? (result.user.tokenVersion ?? 0) + 1;
+        const newTokenVersion = await userRepository.incrementTokenVersion(result.user.id);
         const tokens = authTokenGenerator.createAccessToken(result.user.id, newTokenVersion);
 
         await logAuthAudit(req, { userId: result.user.id, event: 'mfa_enrolled' });

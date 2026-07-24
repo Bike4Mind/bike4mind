@@ -1,7 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { asyncHandler } from '@server/middlewares/asyncHandler';
 import { mfaService } from '@bike4mind/services';
-import { User, userRepository, adminSettingsRepository } from '@bike4mind/database';
+import { userRepository, adminSettingsRepository } from '@bike4mind/database';
 import { logAuthAudit } from '@server/utils/authAudit';
 
 const handler = baseApi().post(
@@ -26,7 +26,7 @@ const handler = baseApi().post(
       // Disabling MFA is a security-relevant change: bump tokenVersion to
       // invalidate every existing session (including this one), forcing
       // re-authentication.
-      await User.updateOne({ _id: freshUser.id }, { $inc: { tokenVersion: 1 } });
+      await userRepository.incrementTokenVersion(freshUser.id);
 
       await logAuthAudit(req, { userId: freshUser.id, event: 'mfa_disabled' });
 

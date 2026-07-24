@@ -21,7 +21,7 @@ const handler = baseApi().post(
     await logAuthAudit(req, {
       userId: targetId,
       event: 'session_revoked',
-      metadata: { revokedBy: req.user.id },
+      actorUserId: req.user.id,
     });
     return res.status(200).json({ message: 'Sessions revoked', userId: targetId, tokenVersion });
   })

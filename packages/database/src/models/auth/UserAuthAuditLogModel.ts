@@ -37,6 +37,8 @@ export interface IUserAuthAuditLogDocument extends Document {
   event: UserAuthAuditEvent;
   /** Auth strategy involved, when relevant (e.g. oauth_link/oauth_unlink). */
   strategy?: string;
+  /** The user who performed the action, when it differs from `userId` (e.g. an admin force-logout). */
+  actorUserId?: string;
   actorIp: string;
   userAgent: string;
   requestId?: string;
@@ -49,6 +51,7 @@ export interface CreateUserAuthAuditLogInput {
   userId: string;
   event: UserAuthAuditEvent;
   strategy?: string;
+  actorUserId?: string;
   actorIp: string;
   userAgent: string;
   requestId?: string;
@@ -60,6 +63,7 @@ const UserAuthAuditLogSchema = new Schema<IUserAuthAuditLogDocument>(
     userId: { type: String, required: true },
     event: { type: String, required: true, enum: USER_AUTH_AUDIT_EVENTS },
     strategy: { type: String },
+    actorUserId: { type: String },
     actorIp: { type: String, required: true },
     userAgent: { type: String, required: true },
     requestId: { type: String },

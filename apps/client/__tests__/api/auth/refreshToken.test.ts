@@ -93,7 +93,7 @@ describe('POST /api/auth/refreshToken — tokenVersion kill switch', () => {
     await handler(req as any, res as any);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockCreateAccessToken).toHaveBeenCalledWith('user-1', 5);
+    expect(mockCreateAccessToken).toHaveBeenCalledWith('user-1', 5, undefined);
   });
 
   it('treats a legacy refresh token (no embedded version) as valid against a v0 user', async () => {
@@ -106,6 +106,21 @@ describe('POST /api/auth/refreshToken — tokenVersion kill switch', () => {
     await handler(req as any, res as any);
 
     expect(res._getStatusCode()).toBe(200);
-    expect(mockCreateAccessToken).toHaveBeenCalledWith('user-1', 0);
+    expect(mockCreateAccessToken).toHaveBeenCalledWith('user-1', 0, undefined);
+  });
+
+  it('re-stamps impersonatedBy from the refresh token onto the new access token pair', async () => {
+    // Regression: a refreshed access token during impersonation must keep carrying
+    // impersonatedBy, otherwise logout.ts's "don't revoke the real customer" guard
+    // silently stops applying after one refresh.
+    mockVerifyRefreshToken.mockReturnValue({ userId: 'customer-1', tokenVersion: 0, impersonatedBy: 'admin-9' });
+    mockFindById.mockResolvedValue({ id: 'customer-1', tokenVersion: 0 });
+
+    const { req, res } = createMocks({ method: 'POST', body: { refresh_token: 'impersonated-token' } });
+
+    await handler(req as any, res as any);
+
+    expect(res._getStatusCode()).toBe(200);
+    expect(mockCreateAccessToken).toHaveBeenCalledWith('customer-1', 0, { impersonatedBy: 'admin-9' });
   });
 });
