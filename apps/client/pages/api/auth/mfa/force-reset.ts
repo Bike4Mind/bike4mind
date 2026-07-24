@@ -12,11 +12,12 @@ const forceResetBodySchema = z.object({
 const handler = baseApi().post(
   asyncHandler(async (req, res) => {
     const adminUser = req.user;
-    const { userId } = forceResetBodySchema.parse(req.body);
 
-    if (!adminUser) {
-      return res.status(401).json({ error: 'User not found' });
+    if (!adminUser?.isAdmin) {
+      return res.status(403).json({ error: 'Forbidden' });
     }
+
+    const { userId } = forceResetBodySchema.parse(req.body);
 
     try {
       const result = await mfaService.forceResetMFA({ targetUserId: userId, adminUser }, userRepository);
