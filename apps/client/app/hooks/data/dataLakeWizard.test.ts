@@ -190,7 +190,7 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 
-  it('total failure (append mode): keeps the user lake, deletes only orphan FabFiles', async () => {
+  it('total failure (append mode): keeps the user lake, reconciles via upload-complete', async () => {
     uploadMock.mockRejectedValue(new Error('PUT failed'));
     seedWizard({ names: ['a.txt'], targetLake: { id: 'existing', slug: 'existing-slug' } });
 
@@ -202,14 +202,16 @@ describe('useBatchUpload rollback (#816)', () => {
     expect(postCall('/api/data-lakes')).toBeUndefined();
     // ...and never deletes the user's existing lake.
     expect(deleteCalledWith('/api/data-lakes/existing')).toBe(false);
-    // The orphan 0-chunk FabFiles created by presign are removed.
-    const del = apiDelete.mock.calls.find(([u]) => u === '/api/files/bulk-delete');
-    expect(del?.[1]).toMatchObject({ data: { fileIds: ['id-a.txt'] } });
-    // Batch still terminalized.
-    expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
+    // Orphan FabFiles + failure accounting + terminalization go through upload-complete
+    // (server-side), which deletes the orphans and finalizes the batch.
+    expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toMatchObject({
+      batchId: 'batch1',
+      failedFiles: 1,
+      failedFileIds: ['id-a.txt'],
+    });
   });
 
-  it('partial failure: keeps the lake, deletes the failed file, hands off to upload-complete', async () => {
+  it('partial failure: keeps the lake, hands the failed file to upload-complete', async () => {
     // a.txt uploads, b.txt fails.
     uploadMock.mockImplementation((url: string) =>
       url.endsWith('b.txt') ? Promise.reject(new Error('PUT failed')) : Promise.resolve()
@@ -222,17 +224,56 @@ describe('useBatchUpload rollback (#816)', () => {
 
     // Lake kept - it has a real file.
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(false);
-    // Only the failed file's orphan FabFile is removed.
-    const del = apiDelete.mock.calls.find(([u]) => u === '/api/files/bulk-delete');
-    expect(del?.[1]).toMatchObject({ data: { fileIds: ['id-b.txt'] } });
-    // Browser-failure count handed to the server so completion math can be satisfied
-    // (no stuck 'processing' batch).
+    // The failed file's orphan FabFile id, its name, and the failure count all go to
+    // upload-complete, which deletes the orphan and satisfies completion math server-side
+    // (no separate, swallow-prone client delete; no stuck 'processing' batch).
     expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toMatchObject({
       batchId: 'batch1',
       failedFiles: 1,
       failedFileNames: ['b.txt'],
+      failedFileIds: ['id-b.txt'],
     });
     expect(toastMock.warning).toHaveBeenCalled();
+  });
+
+  it('later-chunk presign failure does NOT strand already-uploaded files (multi-chunk)', async () => {
+    // Two chunks (BATCH_CHUNK_SIZE = 100): chunk 1 (f0..f99) uploads fine; chunk 2's
+    // presign (f100) rejects. This used to throw mid-loop and tear the lake down as a
+    // "total failure", stranding the 100 uploaded files - the batch must instead be a
+    // partial success with the lake kept.
+    const names = Array.from({ length: 101 }, (_, i) => `f${i}.txt`);
+    apiPost.mockImplementation((url: string, body?: { files?: { fileName: string }[] }) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        const files = body?.files ?? [];
+        if (files.some(f => f.fileName === 'f100.txt')) return Promise.reject(new Error('presign 500'));
+        return Promise.resolve({
+          data: {
+            files: files.map(f => ({
+              fileId: `id-${f.fileName}`,
+              fileKey: 'k',
+              url: `https://s3/${f.fileName}`,
+              fileName: f.fileName,
+            })),
+          },
+        });
+      }
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // The lake is kept (100 files landed), not archived as a total failure.
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(false);
+    // The failed chunk's one file is accounted (no fileId - presign never created it).
+    expect(postCall('/api/data-lakes/batches/upload-complete')?.[1]).toMatchObject({
+      batchId: 'batch1',
+      failedFiles: 1,
+    });
   });
 
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {

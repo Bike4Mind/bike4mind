@@ -6,6 +6,8 @@ const h = vi.hoisted(() => ({
   incrementCounter: vi.fn(),
   setStatusIfActive: vi.fn(),
   finalizeBatchIfComplete: vi.fn(),
+  fabFindByIdAndUserId: vi.fn(),
+  fabUpdate: vi.fn(),
 }));
 
 // baseApi mock: callable chain routed by req.method (same shape as the lifecycle test).
@@ -26,6 +28,10 @@ vi.mock('@bike4mind/database', () => ({
     update: h.update,
     incrementCounter: h.incrementCounter,
     setStatusIfActive: h.setStatusIfActive,
+  },
+  fabFileRepository: {
+    findByIdAndUserId: h.fabFindByIdAndUserId,
+    update: h.fabUpdate,
   },
 }));
 vi.mock('@server/queueHandlers/dataLakeBatchProgress', () => ({
@@ -49,6 +55,8 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.incrementCounter.mockResolvedValue(null);
     h.update.mockResolvedValue(null);
     h.finalizeBatchIfComplete.mockResolvedValue(undefined);
+    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'f1' });
+    h.fabUpdate.mockResolvedValue(null);
   });
 
   it('404s when the batch belongs to another user (no writes)', async () => {
@@ -87,5 +95,29 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     expect(h.incrementCounter).not.toHaveBeenCalled();
     expect(h.setStatusIfActive).toHaveBeenCalledWith('b1', 'processing');
     expect(h.finalizeBatchIfComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('soft-deletes the owned orphan FabFiles BEFORE finalize (so the recompute is honest)', async () => {
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 2 });
+    const order: string[] = [];
+    h.fabUpdate.mockImplementation(async () => order.push('delete'));
+    h.finalizeBatchIfComplete.mockImplementation(async () => order.push('finalize'));
+    const { res } = makeRes();
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['fid'] }, res);
+
+    expect(h.fabFindByIdAndUserId).toHaveBeenCalledWith('fid', 'u1');
+    expect(h.fabUpdate).toHaveBeenCalledWith(expect.objectContaining({ id: 'fid', deletedAt: expect.any(Date) }));
+    // The orphan must be gone before finalize recomputes lake stats.
+    expect(order).toEqual(['delete', 'finalize']);
+  });
+
+  it('never soft-deletes a FabFile the user does not own', async () => {
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
+    h.fabFindByIdAndUserId.mockResolvedValue(null); // not owned by this user
+    const { res } = makeRes();
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['someone-elses-file'] }, res);
+
+    expect(h.fabFindByIdAndUserId).toHaveBeenCalledWith('someone-elses-file', 'u1');
+    expect(h.fabUpdate).not.toHaveBeenCalled();
   });
 });

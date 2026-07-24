@@ -380,17 +380,20 @@ export function useBatchUpload() {
         dataLakeId = dataLakeRes.data.id;
       }
       let uploadedCount = 0;
-      // Hoisted above the try so the catch can terminalize the batch and clean up the
-      // partial records it created. `failedFileIds` are the FabFiles that presign
-      // created (createFabFile) but whose bytes never uploaded - the 0-chunk orphans.
+      // Hoisted above the try so the outcome branch + the catch can reconcile the batch
+      // and clean up the records setup created. `failedFileIds` are the FabFiles presign
+      // created (createFabFile) whose bytes never uploaded - the 0-chunk orphans.
+      // `reconciled` tells the catch the outcome branch already handled cleanup, so the
+      // catch only rolls back a setup-phase failure (e.g. creating the batch threw).
       let batchId: string | undefined;
       let failedCount = 0;
       const failedNames: string[] = [];
       const failedFileIds: string[] = [];
+      let reconciled = false;
 
-      // The lake and the per-file FabFile records are created before the bytes upload,
-      // so a failure below leaves orphan state (empty lake, 0-chunk FabFiles, a batch
-      // stuck mid-flight). The catch rolls that back; a total failure throws into it.
+      // The lake and the per-file FabFile records are created before the bytes upload, so
+      // a failure below leaves orphan state (empty lake, 0-chunk FabFiles, a batch stuck
+      // mid-flight). The outcome branch after the upload loop rolls that back.
       try {
         const totalSizeBytes = included.reduce((sum, f) => sum + f.size, 0);
 
@@ -428,26 +431,38 @@ export function useBatchUpload() {
         for (let i = 0; i < included.length; i += BATCH_CHUNK_SIZE) {
           const chunk = included.slice(i, i + BATCH_CHUNK_SIZE);
 
-          const urlsRes = await api.post<{
-            files: { fileId: string; fileKey: string; url: string; fileName: string }[];
-          }>('/api/files/generate-presigned-urls-batch', {
-            files: chunk.map(f => ({
-              fileName: f.file.name,
-              mimeType: f.type || 'application/octet-stream',
-              fileSize: f.size,
-              relativePath: f.relativePath,
-              ...(f.contentHash && { contentHash: f.contentHash }),
-              tags: folderTagForFile(f.relativePath, tagPrefix),
-            })),
-            dataLakeSlug: slug,
-            // Correlate every uploaded file to its batch so the pipeline
-            // (objectCreated -> chunk -> vectorize) updates batch progress and the
-            // batch can complete. Also populates the batch manifest server-side.
-            batchId,
-          });
-
-          // Upload files with concurrency limit
-          const urlMap = urlsRes.data.files;
+          // Presign per chunk. If it fails, count this chunk's files as failed and move
+          // on rather than throwing: a throw would abandon already-uploaded earlier chunks
+          // (their files land but the batch is torn down as a total failure). No FabFiles
+          // were created for a chunk whose presign failed, so there is nothing to clean up.
+          let urlMap: { fileId: string; fileKey: string; url: string; fileName: string }[];
+          try {
+            const urlsRes = await api.post<{
+              files: { fileId: string; fileKey: string; url: string; fileName: string }[];
+            }>('/api/files/generate-presigned-urls-batch', {
+              files: chunk.map(f => ({
+                fileName: f.file.name,
+                mimeType: f.type || 'application/octet-stream',
+                fileSize: f.size,
+                relativePath: f.relativePath,
+                ...(f.contentHash && { contentHash: f.contentHash }),
+                tags: folderTagForFile(f.relativePath, tagPrefix),
+              })),
+              dataLakeSlug: slug,
+              // Correlate every uploaded file to its batch so the pipeline
+              // (objectCreated -> chunk -> vectorize) updates batch progress and the
+              // batch can complete. Also populates the batch manifest server-side.
+              batchId,
+            });
+            urlMap = urlsRes.data.files;
+          } catch {
+            for (const f of chunk) {
+              failedCount++;
+              failedNames.push(f.file.name);
+            }
+            updateUploadProgress({ failedFiles: failedCount, failedFileNames: [...failedNames] });
+            continue;
+          }
 
           // Build a lookup by fileName. If filenames collide across folders, the last
           // one wins - a known limitation until the server echoes relativePath in responses.
@@ -513,29 +528,52 @@ export function useBatchUpload() {
           });
         }
 
-        // Nothing landed - throw so the catch below rolls back the lake, the orphan
-        // FabFiles, and the batch, instead of reporting a "success" with 0 files and
-        // leaving the batch stuck mid-flight.
+        // Every chunk has been attempted. Decide the outcome explicitly here rather than
+        // leaning on a thrown error to signal "total failure" (that conflated a mid-loop
+        // throw, which can happen after earlier chunks already uploaded, with nothing
+        // landing - and stranded those uploaded files).
         if (uploadedCount === 0) {
+          // Nothing landed, so no pipeline is running for this batch - it's safe to force a
+          // terminal state and roll back what setup created.
+          reconciled = true;
+          if (targetLake) {
+            // Append: keep the user's existing lake, but delete the orphan FabFiles, account
+            // the failures, and finalize (upload-complete does all three server-side).
+            await api
+              .post('/api/data-lakes/batches/upload-complete', {
+                batchId,
+                failedFiles: failedCount,
+                failedFileNames: failedNames,
+                failedFileIds,
+              })
+              .catch(() => {});
+          } else {
+            // Create: archive the empty new lake (cascade cancels the batch and tears down
+            // its FabFiles); stamp 'failed' first so the terminal state is accurate rather
+            // than the archive's 'cancelled'.
+            await api
+              .put(`/api/data-lakes/batches/${batchId}`, {
+                status: 'failed',
+                failedFiles: failedCount,
+                failedFileNames: failedNames,
+              })
+              .catch(() => {});
+            await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+          }
           throw new Error(`All ${included.length} file uploads failed`);
         }
 
-        // Partial success: the uploaded files go on to the pipeline, but the FabFiles
-        // for files whose bytes never uploaded are 0-chunk orphans - delete them so a
-        // partial upload leaves none behind (the lake itself is kept; it has real files).
-        if (failedFileIds.length > 0) {
-          await api.delete('/api/files/bulk-delete', { data: { fileIds: failedFileIds } }).catch(() => {});
-        }
-
-        // Close out the browser-upload phase server-side: account for the client-side
-        // failures atomically (so they count toward the batch's completion math) and
-        // move it to 'processing'. A bare status flip left partial batches stuck because
-        // browser-failed files never emit a pipeline event to satisfy completion.
+        // Partial or full success: the uploaded files proceed through the pipeline.
+        // upload-complete removes the failed files' 0-chunk orphan FabFiles, accounts the
+        // browser failures so the completion math can be satisfied (a partial batch used to
+        // hang at 'processing'), and finalizes - all server-side, in the right order.
+        reconciled = true;
         await api
           .post('/api/data-lakes/batches/upload-complete', {
             batchId,
             failedFiles: failedCount,
             failedFileNames: failedNames,
+            failedFileIds,
           })
           .catch(() => {});
 
@@ -548,28 +586,18 @@ export function useBatchUpload() {
 
         return { dataLakeId, batchId, uploadedCount, failedCount };
       } catch (err) {
-        // Roll back the partial state (all best-effort - a cleanup failure must not mask
-        // the real upload error, and the read-time/cron reconciler is the backstop).
-        // Terminalize the batch as 'failed' first: nothing uploaded on this path, so no
-        // pipeline is running to race this write, and it must not be left mid-flight.
-        if (batchId) {
-          await api
-            .put(`/api/data-lakes/batches/${batchId}`, {
-              status: 'failed',
-              failedFiles: failedCount,
-              failedFileNames: failedNames,
-            })
-            .catch(() => {});
-        }
-        if (!targetLake && uploadedCount === 0) {
-          // Create mode: archive the empty new lake we made. Archive cascades to cancel
-          // the batch and tear down its FabFiles, so it cleans the orphans too. Never
-          // touch the user's existing lake in append mode.
-          await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
-        } else if (failedFileIds.length > 0) {
-          // Append mode (lake kept): can't delete the user's lake, so remove just the
-          // orphan FabFiles the failed uploads created.
-          await api.delete('/api/files/bulk-delete', { data: { fileIds: failedFileIds } }).catch(() => {});
+        // Only a setup-phase failure reaches here un-reconciled (e.g. creating the batch
+        // threw): the outcome branches above handle their own cleanup before throwing.
+        // Nothing uploaded on this path, so roll back what setup created (best-effort - a
+        // cleanup failure must not mask the real error; the reconciler is the backstop).
+        if (!reconciled) {
+          if (batchId) {
+            await api.put(`/api/data-lakes/batches/${batchId}`, { status: 'failed' }).catch(() => {});
+          }
+          // Never touch the user's existing lake in append mode.
+          if (!targetLake) {
+            await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+          }
         }
         throw err;
       }
