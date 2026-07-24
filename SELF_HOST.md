@@ -99,6 +99,42 @@ curl -s -o /dev/null -w '%{http_code}\n' localhost:3000         # expect 200
 docker compose -f compose.selfhost.yaml logs -f app             # follow app logs (Ctrl-C to stop)
 ```
 
+### Frontend dev mode (host `next dev`)
+
+Want hot reload on the Next app while the backing services keep running in compose? Run the app on your host with `next dev` and point it at the compose services over their published `localhost` ports. The one wrinkle is chunking - read the note at the end before you upload files.
+
+Stop the compose `app` (it binds host port 3000, which `next dev` wants) and leave everything else up:
+
+```bash
+docker compose -f compose.selfhost.yaml --env-file .env.selfhost stop app
+```
+
+Keep the `worker` running. It is the piece that ingests uploads (queue consumers plus the safety-net scan), so chunking still happens even though the app itself now runs on your host.
+
+`next dev` reads `apps/client/.env.local` (gitignored), so create that file from your `.env.selfhost`, rewriting each compose service hostname to `localhost` and its published port:
+
+```bash
+B4M_SELF_HOST=true
+# directConnection avoids replica-set discovery, which would advertise the internal `mongo` host
+MONGODB_URI=mongodb://localhost:27017/bike4mind?replicaSet=rs0&directConnection=true
+AWS_ENDPOINT_URL_S3=http://localhost:9000       # was http://minio:9000
+AWS_ENDPOINT_URL_SQS=http://localhost:9324      # was http://sqs:9324
+# every *_QUEUE url: swap the `sqs` host for `localhost`, keep the path
+FAB_FILE_CHUNK_QUEUE=http://localhost:9324/000000000000/fabFileChunkQueue
+# ...the other *_QUEUE vars the same way
+# copy the rest verbatim from .env.selfhost: the three secrets, AWS creds, bucket names, LLM keys
+```
+
+Then start the app from the repo root:
+
+```bash
+pnpm --filter client dev      # http://localhost:3000
+```
+
+> **Match your published ports.** The values above use the compose defaults. If you set `MONGO_HOST_PORT` / `MINIO_HOST_PORT` / `SQS_HOST_PORT` in `.env.selfhost` (for example to dodge a port already in use on your host), use those host ports here instead.
+
+**Chunking in this mode.** MinIO's ObjectCreated webhook is wired to the compose `app` (`http://app:3000/...`), which your host `next dev` is not - so that notification dead-ends and never enqueues chunking. You do not have to fix this: the host upload route marks each file complete on its own, and the `worker`'s safety-net scan re-enqueues any complete-but-unchunked file once it is a couple of minutes old, so uploads still chunk (and become searchable) within a few minutes. To make chunking fire instantly instead, re-point the webhook at your host: set `MINIO_NOTIFY_WEBHOOK_ENDPOINT_primary=http://host.docker.internal:3000/api/internal/s3/object-created` (via a compose override file), then recreate MinIO with `docker compose -f compose.selfhost.yaml -f <override>.yaml --env-file .env.selfhost up -d minio`. On Linux, also add `extra_hosts: ["host.docker.internal:host-gateway"]` to the `minio` service.
+
 ## 4. Sign in
 
 Bike4Mind signs you in with a one-time code sent by email. In the self-host stack, all outgoing mail is caught by the bundled **Mailpit** - nothing leaves your machine:
@@ -399,6 +435,8 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 
 > **Run a single `worker` replica.** The scheduler and safety-net scan are not leader-guarded, so scaling `worker` to multiple replicas would double-run them (duplicate scheduled tasks and duplicate chunk enqueues). Queue consumers are safe to scale, but the bundled compose runs one `worker`; keep it that way.
 
+Running the app on your host with `next dev` instead of the compose `app`? Keep this `worker` up and see [Frontend dev mode](#frontend-dev-mode-host-next-dev) for pointing the app at the compose services - and for why uploads still chunk when the MinIO webhook can't reach your host app.
+
 ## Troubleshooting
 
 - **`docker pull` fails with `unauthorized` / `manifest unknown`** - the prebuilt image isn't available to your account (or isn't published yet). Build it from source instead - see "Building from source" in step 3.
@@ -418,7 +456,7 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
-- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs.
+- **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs. Running the app on your host with `next dev`? The webhook (aimed at the compose `app`) can't reach it at all - that is expected, and the safety-net scan still chunks within a few minutes. See [Frontend dev mode](#frontend-dev-mode-host-next-dev).
 
 ## Security notes
 
