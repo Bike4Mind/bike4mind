@@ -106,6 +106,13 @@ describe('GET /api/v1/openapi.json', () => {
     expect(spec.servers[0].url).not.toContain('a"b');
   });
 
+  it('accepts an underscore in the Host (non-RFC but JSON-safe) and rewrites the origin', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET', { host: 'my_host.local:3000', 'x-forwarded-proto': 'http' }), res);
+    const spec = JSON.parse(getBody()) as { servers: Array<{ url: string }> };
+    expect(spec.servers[0].url).toBe('http://my_host.local:3000');
+  });
+
   it('serves the committed spec unchanged when no Host header is present', () => {
     const { res, getBody } = makeRes();
     handler(makeReq('GET'), res);
