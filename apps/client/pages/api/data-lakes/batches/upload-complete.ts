@@ -42,13 +42,14 @@ const handler = baseApi()
       return res.status(404).json({ error: 'Batch not found' });
     }
 
-    // Remove the orphan FabFiles the failed uploads created. A plain owner-scoped
-    // soft-delete is complete for these: 0 chunks (nothing to tear down), no S3 object
-    // (the PUT never landed), and unreferenced (just created). The ownership check keeps
-    // this from ever touching another user's file.
+    // Remove the orphan FabFiles the failed uploads created. A plain soft-delete is
+    // complete for these: 0 chunks (nothing to tear down), no S3 object (the PUT never
+    // landed), and unreferenced (just created). Scope to files that are BOTH owned by the
+    // caller AND stamped with this batch (presign sets FabFile.batchId), so a stale or
+    // retried client sending stray ids can never delete the caller's other files.
     for (const fileId of failedFileIds ?? []) {
       const owned = await fabFileRepository.findByIdAndUserId(fileId, userId);
-      if (owned) {
+      if (owned && owned.batchId === batchId) {
         await fabFileRepository.update({ id: fileId, deletedAt: new Date() });
       }
     }

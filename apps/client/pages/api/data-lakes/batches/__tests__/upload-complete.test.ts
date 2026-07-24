@@ -55,7 +55,7 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     h.incrementCounter.mockResolvedValue(null);
     h.update.mockResolvedValue(null);
     h.finalizeBatchIfComplete.mockResolvedValue(undefined);
-    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'f1' });
+    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'f1', batchId: 'b1' });
     h.fabUpdate.mockResolvedValue(null);
   });
 
@@ -99,6 +99,7 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
 
   it('soft-deletes the owned orphan FabFiles BEFORE finalize (so the recompute is honest)', async () => {
     h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 2 });
+    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'fid', batchId: 'b1' });
     const order: string[] = [];
     h.fabUpdate.mockImplementation(async () => order.push('delete'));
     h.finalizeBatchIfComplete.mockImplementation(async () => order.push('finalize'));
@@ -118,6 +119,16 @@ describe('POST /api/data-lakes/batches/upload-complete', () => {
     await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['someone-elses-file'] }, res);
 
     expect(h.fabFindByIdAndUserId).toHaveBeenCalledWith('someone-elses-file', 'u1');
+    expect(h.fabUpdate).not.toHaveBeenCalled();
+  });
+
+  it('never soft-deletes an owned FabFile that belongs to a different batch', async () => {
+    h.findById.mockResolvedValue({ id: 'b1', userId: 'u1', totalFiles: 1 });
+    // Owned by the caller, but stamped with a different batch - a stray/retried id.
+    h.fabFindByIdAndUserId.mockResolvedValue({ id: 'other', batchId: 'someOtherBatch' });
+    const { res } = makeRes();
+    await run({ batchId: 'b1', failedFiles: 1, failedFileIds: ['other'] }, res);
+
     expect(h.fabUpdate).not.toHaveBeenCalled();
   });
 });
