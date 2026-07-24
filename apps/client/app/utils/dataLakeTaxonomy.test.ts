@@ -44,6 +44,11 @@ describe('folderMatches', () => {
     expect(folderMatches(['root', 'legal'], '/Legal/')).toBe(true);
     expect(folderMatches(['root', 'legal'], '')).toBe(false);
   });
+
+  it('matches slugified and raw spellings of the same folder', () => {
+    expect(folderMatches(['root', 'legal_docs'], 'Legal Docs')).toBe(true);
+    expect(folderMatches(['root', 'legal_docs'], 'legal-docs')).toBe(true);
+  });
 });
 
 describe('reprefixTag', () => {
@@ -63,6 +68,17 @@ describe('reprefixTag', () => {
 
   it('leaves an already-correct tag untouched', () => {
     expect(reprefixTag('lake:type:contract', '', 'lake:')).toBe('lake:type:contract');
+  });
+
+  it('moves a bare-prefix tag into the final namespace', () => {
+    // A user can rename a tag down to just the prefix; returning it verbatim would leave
+    // the lake with the mixed namespaces this function exists to prevent.
+    expect(reprefixTag('acme:', 'acme:', 'lake:')).toBe('lake:');
+  });
+
+  it('normalizes the casing of a tag that already carries the final prefix', () => {
+    // Left uppercased, it would not match the lake's fileTagPrefix for filtering.
+    expect(reprefixTag('ACME:type:contract', '', 'acme:')).toBe('acme:type:contract');
   });
 });
 
@@ -152,6 +168,17 @@ describe('tagsForFile', () => {
 
   it('returns nothing for a root-level file no category covers (it gets the lake meta-tag server-side)', () => {
     expect(tagsForFile('readme.md', taxonomy(), 'acme:')).toEqual([]);
+  });
+
+  it('applies a category to a folder whose name needed slugifying', () => {
+    // Regression: the folder tag slugified ("Legal Docs" -> legal_docs) while matching
+    // compared raw segments, so any folder with a space silently lost its taxonomy tags.
+    const result = tagsForFile(
+      'root/Legal Docs/vendor.pdf',
+      taxonomy({ tags: [tag({ name: 'acme:type:contract', matchingFolders: ['Legal Docs'] })] }),
+      'acme:'
+    );
+    expect(names(result)).toEqual(['acme:legal_docs', 'acme:type:contract']);
   });
 });
 

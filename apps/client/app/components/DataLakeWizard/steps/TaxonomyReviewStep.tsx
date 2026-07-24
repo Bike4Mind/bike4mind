@@ -44,8 +44,8 @@ function getTierLabel(tier: 'high' | 'medium' | 'low'): string {
 
 interface TagCardProps {
   tag: TaxonomyTag;
-  onUpdate: (tagName: string, updates: Partial<TaxonomyTag>) => void;
-  onDelete: (tagName: string) => void;
+  onUpdate: (originalName: string, updates: Partial<TaxonomyTag>) => void;
+  onDelete: (originalName: string) => void;
 }
 
 const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps) {
@@ -54,7 +54,7 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
 
   const handleSave = () => {
     if (editName.trim() && editName !== tag.name) {
-      onUpdate(tag.name, { name: editName.trim() });
+      onUpdate(tag.originalName, { name: editName.trim() });
     }
     setIsEditing(false);
   };
@@ -147,7 +147,7 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
             variant="plain"
             color="danger"
             data-testid="taxonomy-tag-delete"
-            onClick={() => onDelete(tag.name)}
+            onClick={() => onDelete(tag.originalName)}
           >
             <DeleteOutlineIcon sx={{ fontSize: 14 }} />
           </IconButton>
@@ -167,9 +167,11 @@ export default function TaxonomyReviewStep() {
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
   const inferTaxonomy = useInferTaxonomy();
 
+  // Pass the prefix the user may have edited above, so re-analyzing returns tags in their
+  // namespace instead of silently reverting to whatever the model picks on its own.
   const handleReanalyze = useCallback(() => {
-    inferTaxonomy.mutate({});
-  }, [inferTaxonomy]);
+    inferTaxonomy.mutate({ existingPrefix: taxonomy.prefix || undefined });
+  }, [inferTaxonomy, taxonomy.prefix]);
 
   // Auto-trigger inference on first mount if not yet attempted
   const [autoTriggered, setAutoTriggered] = useState(false);
@@ -287,7 +289,7 @@ export default function TaxonomyReviewStep() {
             }}
           >
             {tags.map(tag => (
-              <TagCard key={tag.name} tag={tag} onUpdate={updateTag} onDelete={deleteTag} />
+              <TagCard key={tag.originalName} tag={tag} onUpdate={updateTag} onDelete={deleteTag} />
             ))}
           </Box>
         </Box>

@@ -14,11 +14,18 @@ const MAX_TAXONOMY_TAGS_PER_FILE = 8;
 
 const ensureColon = (prefix: string): string => (prefix.endsWith(':') ? prefix : `${prefix}:`);
 
-const normalizeSegments = (path: string): string[] =>
-  path
-    .split('/')
-    .map(s => s.trim().toLowerCase())
-    .filter(Boolean);
+/**
+ * One normalization shared by the folder tag and folder matching. Both sides must agree:
+ * a folder named "Legal Docs" is tagged `prefix:legal_docs`, so a category listing it as
+ * either "Legal Docs" or "legal_docs" has to match the same file.
+ */
+const slugifySegment = (segment: string): string =>
+  segment
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+const normalizeSegments = (path: string): string[] => path.split('/').map(slugifySegment).filter(Boolean);
 
 /**
  * Derive a single tag for a file from its immediate parent folder, so each file
@@ -30,10 +37,7 @@ export function folderTagForFile(relativePath: string, tagPrefix: string): Appli
   const segments = relativePath.split('/').filter(Boolean);
   const parent = segments.length >= 2 ? segments[segments.length - 2] : undefined;
   if (!parent) return [];
-  const slug = parent
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
+  const slug = slugifySegment(parent);
   if (!slug) return [];
   return [{ name: `${ensureColon(tagPrefix)}${slug}`, strength: 1.0 }];
 }
@@ -64,10 +68,14 @@ export function reprefixTag(tagName: string, sourcePrefix: string, finalPrefix: 
   const source = sourcePrefix ? ensureColon(sourcePrefix) : '';
 
   if (source && tagName.toLowerCase().startsWith(source.toLowerCase())) {
-    const rest = tagName.slice(source.length);
-    return rest ? `${target}${rest}` : tagName;
+    // A tag that is nothing but the prefix still has to end up in the final namespace.
+    return `${target}${tagName.slice(source.length)}`;
   }
-  if (tagName.toLowerCase().startsWith(target.toLowerCase())) return tagName;
+  // Case-insensitive check, but rewrite rather than return as-is: "ACME:type:x" under final
+  // prefix "acme:" must come back lowercased, or it won't match the lake's fileTagPrefix.
+  if (tagName.toLowerCase().startsWith(target.toLowerCase())) {
+    return `${target}${tagName.slice(target.length)}`;
+  }
   return `${target}${tagName}`;
 }
 

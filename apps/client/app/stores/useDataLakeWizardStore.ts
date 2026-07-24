@@ -164,9 +164,9 @@ interface DataLakeWizardStore {
   setTaxonomy: (result: TaxonomyResult) => void;
   setTaxonomyAnalyzing: (analyzing: boolean) => void;
   markTaxonomyAttempted: () => void;
-  updateTag: (tagName: string, updates: Partial<TaxonomyTag>) => void;
-  mergeTags: (sourceTagName: string, targetTagName: string) => void;
-  deleteTag: (tagName: string) => void;
+  updateTag: (originalName: string, updates: Partial<TaxonomyTag>) => void;
+  mergeTags: (sourceOriginalName: string, targetOriginalName: string) => void;
+  deleteTag: (originalName: string) => void;
   setTagPrefix: (prefix: string) => void;
 
   // Config step
@@ -283,32 +283,34 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   // otherwise the step shows a blank pane instead of its empty state + Re-analyze.
   markTaxonomyAttempted: () => set(state => ({ taxonomy: { ...state.taxonomy, attempted: true, analyzing: false } })),
 
-  updateTag: (tagName, updates) =>
+  // All three mutators key on originalName, never the user-editable name: renaming one tag
+  // onto another's name would otherwise make a single edit or delete hit both.
+  updateTag: (originalName, updates) =>
     set(state => ({
       taxonomy: {
         ...state.taxonomy,
-        tags: state.taxonomy.tags.map(t => (t.name === tagName ? { ...t, ...updates } : t)),
+        tags: state.taxonomy.tags.map(t => (t.originalName === originalName ? { ...t, ...updates } : t)),
       },
     })),
 
-  mergeTags: (sourceTagName, targetTagName) =>
+  mergeTags: (sourceOriginalName, targetOriginalName) =>
     set(state => {
-      const sourceTag = state.taxonomy.tags.find(t => t.name === sourceTagName);
-      const targetTag = state.taxonomy.tags.find(t => t.name === targetTagName);
+      const sourceTag = state.taxonomy.tags.find(t => t.originalName === sourceOriginalName);
+      const targetTag = state.taxonomy.tags.find(t => t.originalName === targetOriginalName);
       if (!sourceTag || !targetTag) return state;
 
       return {
         taxonomy: {
           ...state.taxonomy,
           tags: state.taxonomy.tags.map(t => {
-            if (t.name === targetTagName) {
+            if (t.originalName === targetOriginalName) {
               return {
                 ...t,
                 matchingFolders: [...new Set([...t.matchingFolders, ...sourceTag.matchingFolders])],
                 strength: Math.max(t.strength, sourceTag.strength),
               };
             }
-            if (t.name === sourceTagName) {
+            if (t.originalName === sourceOriginalName) {
               return { ...t, deleted: true };
             }
             return t;
@@ -317,11 +319,11 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       };
     }),
 
-  deleteTag: tagName =>
+  deleteTag: originalName =>
     set(state => ({
       taxonomy: {
         ...state.taxonomy,
-        tags: state.taxonomy.tags.map(t => (t.name === tagName ? { ...t, deleted: true } : t)),
+        tags: state.taxonomy.tags.map(t => (t.originalName === originalName ? { ...t, deleted: true } : t)),
       },
     })),
 

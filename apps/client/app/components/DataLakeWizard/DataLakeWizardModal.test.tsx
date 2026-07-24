@@ -123,8 +123,8 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
  * the wizard with a dead Next button. Inference is optional by design (the endpoint itself
  * returns an empty taxonomy when no API key is configured), so it must never block.
  */
-describe('DataLakeWizardModal — taxonomy step is optional', () => {
-  const renderAtTaxonomyStep = (tags: TaxonomyTag[]) => {
+describe('DataLakeWizardModal - taxonomy step is optional', () => {
+  const renderAtTaxonomyStep = (tags: TaxonomyTag[], analyzing = false) => {
     useDataLakeWizardStore.setState({
       isOpen: true,
       step: 'taxonomy',
@@ -135,8 +135,8 @@ describe('DataLakeWizardModal — taxonomy step is optional', () => {
         suggestedName: '',
         tags,
         fileAssignments: [],
-        attempted: true,
-        analyzing: false,
+        attempted: !analyzing,
+        analyzing,
       },
     });
     render(
@@ -157,6 +157,16 @@ describe('DataLakeWizardModal — taxonomy step is optional', () => {
     expect(next.disabled).toBe(false);
     expect(next.textContent).toContain('Skip');
     expect(screen.getByTestId('taxonomy-empty-state')).toBeTruthy();
+  });
+
+  it('holds the user on the step while inference is still in flight', () => {
+    // Inference's result overwrites config.name and config.tagPrefix, so advancing mid-flight
+    // would clobber what the user then types on Config. "Skip" would also be a lie here: tags
+    // landing after the click are still applied at upload.
+    const next = renderAtTaxonomyStep([], true);
+
+    expect(next.disabled).toBe(true);
+    expect(next.textContent).toContain('Next');
   });
 
   it('labels the button Next once there are tags to apply', () => {

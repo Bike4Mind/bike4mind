@@ -4,6 +4,7 @@ import type {
   InferTaxonomyRequestInputType,
   IMessageDataToClient,
   IFabFileDocument,
+  TaxonomyFileAssignment,
 } from '@bike4mind/common';
 import { isSupportedFabFileMimeType } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType } from '@bike4mind/common';
@@ -13,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import {
   useDataLakeWizardStore,
+  type TaxonomyTag,
   type UploadProgress,
   type UploadErrorKind,
 } from '@client/app/stores/useDataLakeWizardStore';
@@ -60,6 +62,40 @@ async function readContentSample(file: File, maxBytes = 500): Promise<string> {
   } catch {
     return '';
   }
+}
+
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.trim().length > 0;
+
+const clampStrength = (value: unknown, fallback: number): number =>
+  typeof value === 'number' && Number.isFinite(value) ? Math.min(Math.max(value, 0), 1) : fallback;
+
+/** Drop categories the model returned without a usable tag name; they can't be applied or reviewed. */
+function sanitizeCategories(categories: InferTaxonomyResponse['categories']): TaxonomyTag[] {
+  if (!Array.isArray(categories)) return [];
+  return categories
+    .filter(cat => cat && isNonEmptyString(cat.tagName))
+    .map(cat => ({
+      name: cat.tagName.trim(),
+      originalName: cat.tagName.trim(),
+      strength: clampStrength(cat.confidence, 0.7),
+      source: 'ai' as const,
+      matchingFolders: Array.isArray(cat.matchingFolders) ? cat.matchingFolders.filter(isNonEmptyString) : [],
+      deleted: false,
+    }));
+}
+
+function sanitizeFileAssignments(assignments: InferTaxonomyResponse['fileAssignments']): TaxonomyFileAssignment[] {
+  if (!Array.isArray(assignments)) return [];
+  return assignments
+    .filter(entry => entry && isNonEmptyString(entry.relativePath))
+    .map(entry => ({
+      relativePath: entry.relativePath,
+      suggestedTags: Array.isArray(entry.suggestedTags)
+        ? entry.suggestedTags
+            .filter(tag => tag && isNonEmptyString(tag.name))
+            .map(tag => ({ name: tag.name.trim(), strength: clampStrength(tag.strength, 0.7) }))
+        : [],
+    }));
 }
 
 /**
@@ -112,26 +148,28 @@ export function useInferTaxonomy() {
       return response.data;
     },
     onSuccess: data => {
+      const previous = useDataLakeWizardStore.getState().taxonomy;
+      // The endpoint validates only suggestedPrefix + categories-is-an-array and otherwise
+      // returns the model's raw JSON, so everything below is sanitized HERE, at the single
+      // boundary where inference enters the store. Downstream (tagsForFile) runs mid-upload,
+      // after the lake exists - a TypeError there would roll back a real upload.
+      const tags = sanitizeCategories(data.categories);
+      // An empty response (no API key configured) must not blank a prefix the user already
+      // has: config.tagPrefix keeps its old value regardless, and a blank sourcePrefix would
+      // make reprefixTag prepend instead of rewrite, producing "mine:acme:type:contract".
+      const prefix = data.suggestedPrefix || previous.prefix;
+
       setTaxonomy({
-        prefix: data.suggestedPrefix,
-        sourcePrefix: data.suggestedPrefix,
-        suggestedName: data.suggestedName,
-        tags: data.categories.map(cat => ({
-          name: cat.tagName,
-          originalName: cat.tagName,
-          strength: cat.confidence,
-          source: 'ai' as const,
-          matchingFolders: cat.matchingFolders ?? [],
-          deleted: false,
-        })),
-        // The endpoint degrades to an empty taxonomy on any failure, so treat every
-        // field as optional rather than trusting the happy-path shape.
-        fileAssignments: data.fileAssignments ?? [],
+        prefix,
+        sourcePrefix: data.suggestedPrefix || previous.sourcePrefix,
+        suggestedName: typeof data.suggestedName === 'string' ? data.suggestedName : '',
+        tags,
+        fileAssignments: sanitizeFileAssignments(data.fileAssignments),
         attempted: true,
         analyzing: false,
       });
-      if (data.categories.length > 0) {
-        toast.success(`AI suggested ${data.categories.length} tag categories`);
+      if (tags.length > 0) {
+        toast.success(`AI suggested ${tags.length} tag categories`);
       }
     },
     onError: (error: Error) => {

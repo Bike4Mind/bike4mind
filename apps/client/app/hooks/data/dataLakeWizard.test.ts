@@ -32,15 +32,17 @@ vi.mock('@client/app/contexts/WebsocketContext', () => ({
 vi.mock('@client/app/hooks/data/dataLakes', () => ({ activeOrgId: () => undefined }));
 vi.mock('@client/app/hooks/useGearsStatus', () => ({ invalidateGearsStatusWhileLocked: () => {} }));
 
-import { useBatchUpload } from './dataLakeWizard';
+import { useBatchUpload, useInferTaxonomy } from './dataLakeWizard';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
-const mountBatchUpload = () => {
+const mountHook = <T>(hook: () => T) => {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const wrapper: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     React.createElement(QueryClientProvider, { client: queryClient }, children);
-  return renderHook(() => useBatchUpload(), { wrapper });
+  return renderHook(hook, { wrapper });
 };
+
+const mountBatchUpload = () => mountHook(useBatchUpload);
 
 const seedWizardFile = () =>
   useDataLakeWizardStore.setState({
@@ -500,6 +502,93 @@ describe('useBatchUpload rollback (#816)', () => {
 
     expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
     expect(putCall('/api/data-lakes/batches/batch1')?.[1]).toMatchObject({ status: 'failed' });
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The infer-taxonomy endpoint validates only suggestedPrefix + categories-is-an-array and
+ * otherwise returns the model's raw JSON. Since the taxonomy now feeds the upload path -
+ * which runs after the lake record exists - a malformed payload reaching tagsForFile would
+ * throw mid-upload and trigger the lake rollback. It has to be sanitized on the way in.
+ */
+describe('useInferTaxonomy response handling', () => {
+  const seedFolderTree = () =>
+    useDataLakeWizardStore.setState({
+      folderTree: { name: 'root', path: 'root', type: 'folder', children: [], excluded: false },
+      allFiles: [
+        {
+          file: new File(['contents'], 'a.txt', { type: 'text/plain' }),
+          relativePath: 'root/legal/a.txt',
+          size: 8,
+          type: 'text/plain',
+          excluded: false,
+          isDuplicate: false,
+        },
+      ],
+    });
+
+  beforeEach(() => {
+    apiPost.mockReset();
+    toastMock.success.mockClear();
+    useDataLakeWizardStore.getState().resetWizard();
+  });
+
+  it('drops malformed categories and assignments instead of storing unusable tags', async () => {
+    apiPost.mockResolvedValue({
+      data: {
+        suggestedPrefix: 'acme:',
+        suggestedName: 'Acme',
+        categories: [
+          { tagName: 'acme:type:contract', confidence: 0.9, matchingFolders: ['legal'] },
+          { confidence: 0.8, matchingFolders: ['finance'] }, // no tagName
+          { tagName: '  ', confidence: 0.8 }, // blank tagName
+        ],
+        fileAssignments: { nope: true }, // not an array
+      },
+    });
+    seedFolderTree();
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    const { taxonomy } = useDataLakeWizardStore.getState();
+    expect(taxonomy.tags.map(t => t.name)).toEqual(['acme:type:contract']);
+    expect(taxonomy.tags[0].originalName).toBe('acme:type:contract');
+    expect(taxonomy.fileAssignments).toEqual([]);
+    // The toast must reflect what was kept, not what the model claimed to send.
+    expect(toastMock.success).toHaveBeenCalledWith('AI suggested 1 tag categories');
+  });
+
+  it('keeps the existing prefix when the endpoint returns an empty taxonomy', async () => {
+    // No API key configured -> emptyTaxonomy with a blank suggestedPrefix. Blanking
+    // sourcePrefix would make reprefixTag prepend, yielding "mine:acme:type:contract".
+    apiPost.mockResolvedValue({
+      data: { suggestedPrefix: '', suggestedName: '', categories: [], fileAssignments: [] },
+    });
+    seedFolderTree();
+    useDataLakeWizardStore.setState({
+      taxonomy: {
+        ...useDataLakeWizardStore.getState().taxonomy,
+        prefix: 'mine:',
+        sourcePrefix: 'acme:',
+      },
+    });
+
+    const { result } = mountHook(useInferTaxonomy);
+    act(() => {
+      result.current.mutate({});
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().taxonomy.attempted).toBe(true));
+
+    const { taxonomy } = useDataLakeWizardStore.getState();
+    expect(taxonomy.prefix).toBe('mine:');
+    expect(taxonomy.sourcePrefix).toBe('acme:');
     expect(toastMock.success).not.toHaveBeenCalled();
   });
 });
