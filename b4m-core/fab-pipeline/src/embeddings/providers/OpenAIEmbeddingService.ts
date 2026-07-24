@@ -381,8 +381,10 @@ export class OpenAIEmbeddingService implements EmbeddingService {
         const embedding = await this.generateEmbedding(text);
         embeddings.push(embedding);
       } catch (error) {
-        // If individual call fails, rethrow (no more fallback)
-        throw new Error(`Failed to generate embedding for text: ${error}`);
+        // No more fallback. generateEmbedding already surfaces an actionable message (e.g. the
+        // wrapped 401 for a mid-flight-revoked key), so rethrow it as-is rather than burying it
+        // under a generic prefix; only a non-Error throw gets the descriptive wrapper.
+        throw error instanceof Error ? error : new Error(`Failed to generate embedding for text: ${String(error)}`);
       }
     }
 

@@ -80,6 +80,19 @@ describe('OpenAIEmbeddingService 401 handling', () => {
     expect(createMock).toHaveBeenCalledTimes(3);
   });
 
+  it('preserves the actionable 401 message through the individual-fallback path (no double-wrap)', async () => {
+    // Batch call hits a 5xx (triggers the individual fallback), then a per-text call 401s
+    // (key revoked mid-flight). The actionable message must survive, not be buried under
+    // "Failed to generate embedding for text:".
+    const serverError = Object.assign(new Error('service unavailable'), { status: 503 });
+    createMock.mockRejectedValueOnce(serverError).mockRejectedValue(new MockAuthenticationError());
+    const svc = new OpenAIEmbeddingService(REAL_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+    await expect(svc.generateEmbeddingBatch(['a', 'b'], [1, 1])).rejects.toThrow(/401 Unauthorized/);
+    await expect(svc.generateEmbeddingBatch(['a', 'b'], [1, 1])).rejects.not.toThrow(
+      /Failed to generate embedding for text/
+    );
+  });
+
   it('returns embeddings normally when the key works', async () => {
     createMock.mockResolvedValue({ data: [embedding(0)] });
     const svc = new OpenAIEmbeddingService(REAL_KEY, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
