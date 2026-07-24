@@ -558,7 +558,7 @@ export class AnthropicBackend implements ICompletionBackend {
         trainingCutoff: '2026-01-01',
         releaseDate: '2026-05-28',
         description:
-          "Anthropic's latest flagship model. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities over 4.7.",
+          "Anthropic's previous flagship model. Claude 4.8 Opus delivers enhanced frontier intelligence with improved extended thinking, coding, and agentic capabilities over 4.7.",
         isSlowModel: true,
       },
       {
@@ -587,8 +587,31 @@ export class AnthropicBackend implements ICompletionBackend {
         // GA as of 2026-07-01 ("Claude Fable 5 is once again available"). Previously gated
         // behind Fable/Mythos access this deployment's key lacked; access has since
         // been granted, so the model is now selectable. Its safety classifiers can return
-        // stop_reason: 'refusal' on benign requests - those are routed to Opus 4.8 via the
+        // stop_reason: 'refusal' on benign requests - those are routed to Opus 5 via the
         // existing fallback machinery (see REFUSAL_FALLBACK_MODELS + the refusal throw below).
+      },
+      {
+        id: ChatModels.CLAUDE_5_OPUS,
+        type: 'text',
+        name: 'Claude 5 Opus',
+        backend: ModelBackend.Anthropic,
+        supportsImageVariation: false,
+        contextWindow: 1_000_000,
+        max_tokens: 128_000,
+        can_stream: true,
+        can_think: true,
+        thinkingStyle: 'adaptive',
+        pricing: {
+          1_000_000: { input: 5 / 1_000_000, output: 25 / 1_000_000 }, // $5 / 1M Input tokens, $25 / 1M Output tokens
+        },
+        supportsVision: true,
+        logoFile: 'Anthropic_logo.png',
+        rank: 1, // premium tier - ranked below the Sonnet 5 default (opt-in via picker)
+        supportsTools: true,
+        releaseDate: '2026-07-24',
+        description:
+          "Anthropic's latest flagship model. Claude 5 Opus approaches Fable 5 performance at Opus 4.8 pricing, with adaptive extended thinking, coding, and agentic capabilities.",
+        isSlowModel: true,
       },
     ];
   }

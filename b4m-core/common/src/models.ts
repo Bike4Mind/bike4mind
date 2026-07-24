@@ -199,6 +199,7 @@ export enum ChatModels {
   CLAUDE_4_7_OPUS = 'claude-opus-4-7',
   CLAUDE_4_8_OPUS = 'claude-opus-4-8',
   CLAUDE_FABLE_5 = 'claude-fable-5',
+  CLAUDE_5_OPUS = 'claude-opus-5',
 
   JURASSIC2_ULTRA = 'ai21.j2-ultra-v1',
   JURASSIC2_MID = 'ai21.j2-mid-v1',
@@ -368,7 +369,7 @@ export const FIXED_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * The API will reject requests that include temperature for these models.
  */
 export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
-  // Opus 4.7+, Sonnet 5, and Fable 5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
+  // Opus 4.7+, Sonnet 5, Fable 5, and Opus 5 remove temperature/top_p/top_k (adaptive-thinking-only surface) - sending any returns 400
   ChatModels.CLAUDE_4_7_OPUS,
   ChatModels.CLAUDE_4_7_OPUS_BEDROCK,
   ChatModels.CLAUDE_4_8_OPUS,
@@ -376,6 +377,7 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
   ChatModels.CLAUDE_5_SONNET,
   ChatModels.CLAUDE_5_SONNET_BEDROCK,
   ChatModels.CLAUDE_FABLE_5,
+  ChatModels.CLAUDE_5_OPUS,
 ]);
 
 /**
@@ -384,9 +386,9 @@ export const NO_TEMPERATURE_MODELS: ReadonlySet<string> = new Set([
  * biology and most cybersecurity content and occasionally false-positive on benign adjacent
  * work. Per Anthropic's GA guidance a refusal from these is opt-in recoverable: rather than
  * surfacing a hard refusal, the backend throws so the completion loop's existing fallback
- * machinery continues the request on Opus 4.8. A refusal from any *other* model is a genuine
- * decline and surfaces unchanged. Keep in sync with the `claude-fable-5` fallback preference
- * chain in `adminSettings/fallback.ts`.
+ * machinery continues the request on Opus 5 (whose classifiers intervene far less often).
+ * A refusal from any *other* model is a genuine decline and surfaces unchanged. Keep in
+ * sync with the `claude-fable-5` fallback preference chain in `adminSettings/fallback.ts`.
  */
 export const REFUSAL_FALLBACK_MODELS: ReadonlySet<string> = new Set([ChatModels.CLAUDE_FABLE_5]);
 
