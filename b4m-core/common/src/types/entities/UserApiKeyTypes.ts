@@ -154,6 +154,14 @@ export interface IUserApiKey {
    * `spendCap !== undefined`, never a truthy check.
    */
   spendCap?: number;
+  /**
+   * Whether this embed key's billing OWNER holds the white-label entitlement.
+   * Computed server-side on GET /api/user-api-keys only (never persisted) so the
+   * Configure UI can gate the hide-branding toggle on the owner's plan rather
+   * than the viewer's - matching the owner-scoped serve/write rule. Boolean only:
+   * the owner's tags or the reason are never sent to the client.
+   */
+  ownerHasWhitelabel?: boolean;
 }
 
 /**

@@ -50,8 +50,8 @@ import {
   ModellessAgentAlert,
   MODELLESS_AGENT_WARNING,
 } from '@client/app/components/common/ModellessAgentWarning';
-import { useEntitlementGate } from '@client/app/hooks/useEntitlementGate';
-import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
+import { useEntitlements } from '@client/app/hooks/data/entitlements';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY, normalizeTag } from '@client/lib/entitlements/registry';
 import { useGetAgents } from '@client/app/hooks/data/agents';
 import { useCopyToClipboard } from '@client/app/hooks/useCopyToClipboard';
 import { tableHeaderSx } from '@client/app/components/ProfileModal/settingsStyles';
@@ -150,8 +150,8 @@ interface EmbedKeyFormState {
 /**
  * Trim branding to undefined when every field is blank, so we never persist an
  * empty object. `hideBranding` is preserved verbatim: the toggle only renders
- * for whitelabel-entitled viewers, so for everyone else it rides through from
- * the stored key untouched - a full-replace save must not silently drop it.
+ * for keys whose owner holds white-label, so for everyone else it rides through
+ * from the stored key untouched - a full-replace save must not silently drop it.
  */
 function normalizeBranding(branding: IEmbedBranding): IEmbedBranding | undefined {
   const displayName = branding.displayName?.trim() || undefined;
@@ -174,17 +174,19 @@ const sameBranding = (a?: IEmbedBranding, b?: IEmbedBranding) =>
 function EmbedKeyFormFields({
   form,
   onChange,
+  ownerHasWhitelabel,
 }: {
   form: EmbedKeyFormState;
   onChange: (form: EmbedKeyFormState) => void;
+  /**
+   * Whether the key's billing OWNER holds white-label - the same owner-scoped,
+   * no-bypass rule the serve and write paths enforce, so the toggle is only
+   * offered when a save would actually take effect. Resolved by the caller
+   * (Configure: the key's server-computed flag; Create: the prospective owner).
+   */
+  ownerHasWhitelabel: boolean;
 }) {
   const { data: agents, isLoading: agentsLoading } = useGetAgents();
-  // Viewer-scoped and UX-only: it decides whether to OFFER the toggle, while the
-  // serve route enforces on the key owner's plan and the write route strips an
-  // unentitled elevation. `pending` renders like `denied` (no spinner flash in
-  // an already-open modal). Known asymmetry: this gate bypasses for developers,
-  // the server gates do not - a dev's toggle save is stripped server-side.
-  const whitelabelGate = useEntitlementGate(EMBED_WHITELABEL_ENTITLEMENT_KEY);
 
   // Advisory only. An agent the viewer cannot see (or beyond the list's first
   // page) shows no warning - same degradation as the Select itself; the embed
@@ -253,7 +255,7 @@ function EmbedKeyFormFields({
               />
             </FormControl>
           </Stack>
-          {whitelabelGate.state === 'satisfied' ? (
+          {ownerHasWhitelabel ? (
             <FormControl orientation="horizontal" sx={{ justifyContent: 'space-between' }}>
               <Box>
                 <FormLabel>Hide Bike4Mind branding</FormLabel>
@@ -293,6 +295,14 @@ function NewEmbedKeyModal({
   const [name, setName] = useState('');
   const [form, setForm] = useState<EmbedKeyFormState>(emptyForm());
 
+  // The create modal only mints PERSONAL keys today (submit sends no
+  // organizationId), so the prospective owner is the current user - gate on
+  // their own held entitlements with NO admin/developer bypass, matching the
+  // owner-scoped server rule. If org-billed create is ever added here, this must
+  // resolve the chosen org owner's plan instead (the server strips regardless).
+  const { data: entitlements } = useEntitlements();
+  const ownerHasWhitelabel = (entitlements ?? []).includes(normalizeTag(EMBED_WHITELABEL_ENTITLEMENT_KEY));
+
   const createMutation = useCreateUserApiKey({
     onSuccess: result => {
       onSuccess(result.key);
@@ -331,7 +341,7 @@ function NewEmbedKeyModal({
             />
           </FormControl>
 
-          <EmbedKeyFormFields form={form} onChange={setForm} />
+          <EmbedKeyFormFields form={form} onChange={setForm} ownerHasWhitelabel={ownerHasWhitelabel} />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
             <Button variant="outlined" onClick={onClose}>
@@ -401,7 +411,11 @@ function ConfigureEmbedKeyModal({ embedKey, onClose }: { embedKey: IUserApiKeyDo
         </Typography>
 
         <Stack spacing={2.5}>
-          <EmbedKeyFormFields form={form} onChange={setForm} />
+          <EmbedKeyFormFields
+            form={form}
+            onChange={setForm}
+            ownerHasWhitelabel={embedKey.ownerHasWhitelabel ?? false}
+          />
 
           <Stack direction="row" spacing={2} justifyContent="flex-end">
             <Button variant="outlined" onClick={onClose}>
