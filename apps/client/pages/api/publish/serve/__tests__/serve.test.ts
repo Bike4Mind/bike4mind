@@ -133,6 +133,7 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     // Wrapper has no inline scripts / bundle libs in Approach B -> tightened script-src.
     expect(csp).not.toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('/api/publish/widget'); // only the external overlay widget
+    expect(data).not.toContain("b4m:'hash'"); // no inline hash bridge - the CSP would block it
   });
 
   it('falls back to the same-origin srcdoc when the wrapper is NOT served from an app host', async () => {
@@ -153,6 +154,8 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(data).not.toContain('usercontent.app.bike4mind.com'); // no cross-origin embed attempted
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'"); // srcdoc inherits -> must permit bundle inline JS
+    expect(data).toContain("b4m:'hash'"); // srcdoc mode carries the wrapper hash bridge
+    expect(data).toContain("b4m:'fragment'"); // and the srcdoc carries the fragment-nav helper
   });
 
   it('isolated origin serves the bundle AS the page with inline JS + unsafe-inline CSP', async () => {
@@ -169,6 +172,8 @@ describe('GET /api/publish/serve - sandboxed bundle', () => {
     expect(data).toContain('console.log(42)'); // author inline JS runs on the isolated origin
     expect(data).toContain('<base href='); // public tier <base> -> assets stay on the isolated origin
     expect(data).not.toContain('<iframe'); // it IS the page, not a wrapper
+    // Fragment-nav helper knows BOTH the /uc alias it is served at and the canonical /p path.
+    expect(data).toContain('"paths":["/uc/u/scope123/my-slug","/p/u/scope123/my-slug"]');
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'"); // inline allowed - isolation is the origin, not stripping
     // frame-ancestors is the EXACT app wrapper host, no wildcard. Since usercontent
@@ -330,6 +335,7 @@ describe('GET /api/publish/serve - gated-bundle loader shell', () => {
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("script-src 'unsafe-inline'");
     expect(csp).toContain('connect-src https://app.bike4mind.com');
+    expect(data).toContain("b4m:'hash'"); // hash bridge feeds deep links into the injected srcdoc
     // Shell carries no secret - no index download happens.
     expect(mockDownload).not.toHaveBeenCalled();
   });
@@ -1386,6 +1392,10 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
     const csp = res.getHeader('Content-Security-Policy') as string;
     expect(csp).toContain("frame-ancestors 'self'");
     expect(csp).toContain("form-action 'self'");
+    // Framed fallback: inside a sandboxed iframe the form cannot submit, so the
+    // shell script swaps it for open-in-own-tab guidance instead of a dead end.
+    expect(data).toContain('window.top !== window.self');
+    expect(data).toContain('cannot be unlocked inside an embedded view');
   });
 
   it('a valid per-artifact proof cookie unlocks the gated bundle - served like a gated (non-public) page', async () => {
@@ -1403,6 +1413,11 @@ describe('GET /api/publish/serve - access gates (issue #383)', () => {
     expect(res.getHeader('Cache-Control')).toBe('private, no-store, must-revalidate');
     const data = res._getData() as string;
     expect(data).not.toContain('usercontent.app.bike4mind.com');
+    // Same-page # links must scroll in place: an iframe re-navigation would drop the
+    // SameSite proof cookie and dead-end at the prompt shell inside the sandbox.
+    expect(data).toContain("b4m:'fragment'"); // helper inside the srcdoc
+    expect(data).toContain("b4m:'hash'"); // bridge in the wrapper
+    expect(data).toContain('&quot;paths&quot;:[&quot;/p/u/scope123/my-slug&quot;]'); // config, srcdoc-attr escaped
   });
 
   it('a proof for a DIFFERENT artifact does not unlock (re-prompts instead)', async () => {
