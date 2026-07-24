@@ -50,7 +50,8 @@ export default function UploadStep() {
     completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded. Chunking and vectorizing haven't started yet.`;
   }
   if (progress.failedFiles > 0) {
-    completionSummary += ` ${progress.failedFiles} failed.`;
+    const failedWord = progress.failedFiles === 1 ? 'file' : 'files';
+    completionSummary += ` ${progress.failedFiles.toLocaleString()} ${failedWord} failed.`;
   }
 
   return (
