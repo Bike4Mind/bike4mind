@@ -287,6 +287,44 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
     return results.map(r => r.toJSON() as IDataLakeDocument);
   }
 
+  async findPublicLakes(opts?: {
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ lakes: IDataLakeDocument[]; total: number }> {
+    // Clamp paging here (defense in depth) even though the route also validates: a caller
+    // reaching the repo directly can't request an unbounded page. Default one screenful.
+    const limit = Math.min(Math.max(opts?.limit ?? 24, 1), 60);
+    const offset = Math.max(opts?.offset ?? 0, 0);
+
+    // Gate-less + public + active: the browse catalog. Only both-blank-gate lakes qualify, so
+    // a lake gated after publishing drops out of browse-everyone (mirrors the retrieval/list
+    // public arm's requirement). null/'' form is the DocumentDB-safe shape used across this model.
+    const filter: Record<string, unknown> = {
+      status: 'active',
+      isPublic: true,
+      $and: [
+        { $or: [{ requiredUserTag: null }, { requiredUserTag: '' }] },
+        { $or: [{ requiredEntitlement: null }, { requiredEntitlement: '' }] },
+      ],
+    };
+
+    const search = opts?.search?.trim();
+    if (search) {
+      // Escape so a user query can't inject regex metacharacters. Case-insensitive substring
+      // match on name OR description - the two fields the browse card previews.
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const rx = { $regex: escaped, $options: 'i' };
+      // Nest under $and to compose with the gate-less $and above without a top-level $or/$and clash.
+      (filter.$and as Record<string, unknown>[]).push({ $or: [{ name: rx }, { description: rx }] });
+    }
+
+    // total is the unpaged count so the UI can show "showing X of Y" and drive load-more.
+    const total = await this.dataLakeModel.countDocuments(filter);
+    const results = await this.dataLakeModel.find(filter).sort({ name: 1 }).skip(offset).limit(limit);
+    return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
+  }
+
   async setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null> {
     const doc = await this.dataLakeModel.findByIdAndUpdate(
       id,

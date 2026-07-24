@@ -11,6 +11,7 @@ import { setLakeVisibility } from './setLakeVisibility';
 import { updateDataLake } from './updateDataLake';
 import { reconcileStuckBatches, DEFAULT_STUCK_BATCH_TIMEOUT_MS } from './reconcileStuckBatches';
 import { listDataLakes } from './listDataLakes';
+import { browsePublicDataLakes } from './browsePublicDataLakes';
 
 const lake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
   ({
@@ -893,5 +894,83 @@ describe('setLakeVisibility — personal ↔ org promotion', () => {
     const db = makeDb({ isPublic: true });
     await setLakeVisibility({ userId: 'owner', isAdmin: false }, 'lake1', 'public', { db } as any);
     expect(db.dataLakes.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('browsePublicDataLakes — public discover catalog projection', () => {
+  const publicLake = (overrides: Partial<IDataLakeDocument> = {}): IDataLakeDocument =>
+    lake({
+      id: 'pub1',
+      slug: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      createdByUserId: 'owner1',
+      isPublic: true,
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      ...overrides,
+    });
+
+  const makeDb = (lakes: IDataLakeDocument[], total = lakes.length) => ({
+    dataLakes: { findPublicLakes: vi.fn().mockResolvedValue({ lakes, total }) },
+    users: {
+      findByIds: vi.fn().mockResolvedValue([
+        { id: 'owner1', name: 'Ada Owner', username: 'ada', email: 'ada@example.com' },
+        { id: 'owner2', username: 'onlyuser', email: 'nn@example.com' },
+      ]),
+    },
+  });
+
+  it('maps a lake to its card summary with owner name, counts, and per-caller flags', async () => {
+    const db = makeDb([publicLake()]);
+    const { data, total } = await browsePublicDataLakes({ userId: 'someone-else', isAdmin: false }, {}, { db } as any);
+    expect(total).toBe(1);
+    expect(data[0]).toMatchObject({
+      id: 'pub1',
+      name: 'Public One',
+      description: 'a shared lake',
+      ownerDisplayName: 'Ada Owner',
+      fileCount: 3,
+      totalSizeBytes: 2048,
+      isOwn: false,
+      canManage: false,
+    });
+  });
+
+  it('never exposes the owner email; falls back to username when name is absent', async () => {
+    const db = makeDb([publicLake({ id: 'pub2', slug: 'pub2', createdByUserId: 'owner2' })]);
+    const { data } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db } as any);
+    expect(data[0].ownerDisplayName).toBe('onlyuser');
+    // No summary field should ever carry an email address.
+    expect(JSON.stringify(data)).not.toContain('@example.com');
+  });
+
+  it('marks the caller’s own lake and grants manage to owner and admin', async () => {
+    const db = makeDb([publicLake({ createdByUserId: 'owner1' })]);
+    const asOwner = await browsePublicDataLakes({ userId: 'owner1', isAdmin: false }, {}, { db } as any);
+    expect(asOwner.data[0]).toMatchObject({ isOwn: true, canManage: true });
+
+    const asAdmin = await browsePublicDataLakes({ userId: 'someone', isAdmin: true }, {}, { db } as any);
+    expect(asAdmin.data[0]).toMatchObject({ isOwn: false, canManage: true });
+  });
+
+  it('defaults missing counts to 0 and skips the owner lookup when there are no lakes', async () => {
+    const empty = makeDb([], 0);
+    const { data, total } = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: empty } as any);
+    expect(data).toEqual([]);
+    expect(total).toBe(0);
+    expect(empty.users.findByIds).not.toHaveBeenCalled();
+
+    const noStats = makeDb([publicLake({ fileCount: undefined, totalSizeBytes: undefined })]);
+    const res = await browsePublicDataLakes({ userId: 'x', isAdmin: false }, {}, { db: noStats } as any);
+    expect(res.data[0]).toMatchObject({ fileCount: 0, totalSizeBytes: 0 });
+  });
+
+  it('threads search + paging through to the repository', async () => {
+    const db = makeDb([publicLake()]);
+    await browsePublicDataLakes({ userId: 'x', isAdmin: false }, { search: 'widgets', limit: 10, offset: 20 }, {
+      db,
+    } as any);
+    expect(db.dataLakes.findPublicLakes).toHaveBeenCalledWith({ search: 'widgets', limit: 10, offset: 20 });
   });
 });

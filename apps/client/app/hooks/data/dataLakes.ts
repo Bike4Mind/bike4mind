@@ -1,7 +1,7 @@
-import type { DataLakeConfig } from '@bike4mind/common';
+import type { BrowsePublicDataLakesResult, DataLakeConfig } from '@bike4mind/common';
 import type { CreateDataLakeRequestInputType, UpdateDataLakeRequestInputType } from '@bike4mind/common';
 import { api } from '@client/app/contexts/ApiContext';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
@@ -118,6 +118,30 @@ export function useSetLakeVisibility() {
     onError: (error: Error) => {
       toast.error(error.message || 'Failed to change visibility');
     },
+  });
+}
+
+const PUBLIC_LAKES_KEY = ['data-lakes', 'public'];
+
+/**
+ * Browse the public-lake discovery catalog: gate-less public lakes across all orgs, with
+ * search + a growing page size for load-more. `search` should already be debounced by the
+ * caller. `limit` grows (rather than paging by offset) so "load more" keeps prior results
+ * visible without cursor bookkeeping; the query key includes both so each state is cached.
+ */
+export function useBrowsePublicDataLakes(search: string, limit = 24) {
+  return useQuery({
+    queryKey: [...PUBLIC_LAKES_KEY, { search, limit }],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (search.trim()) params.set('q', search.trim());
+      params.set('limit', String(limit));
+      const qs = params.toString();
+      const response = await api.get<BrowsePublicDataLakesResult>(`/api/data-lakes/public${qs ? `?${qs}` : ''}`);
+      return response.data;
+    },
+    // Keep the previous page visible while a new search/limit query resolves (no flash to empty).
+    placeholderData: keepPreviousData,
   });
 }
 

@@ -38,6 +38,7 @@ export default function DataLakesHome() {
       onBack={() => navigate({ to: '/new' })}
       onAskAbout={handleAskAbout}
       onManage={openManager}
+      onDiscover={() => openManager('discover')}
     />
   );
 }

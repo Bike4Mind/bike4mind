@@ -126,6 +126,19 @@ export interface IDataLakeRepository extends IBaseRepository<IDataLakeDocument> 
     ctx: AccessContext,
     opts?: { statuses?: DataLakeStatus[]; includePublic?: boolean }
   ): Promise<IDataLakeDocument[]>;
+  /**
+   * The discover/browse catalog: active, PUBLIC, gate-less lakes for the public-browse surface,
+   * independent of any caller identity (the catalog is the same for everyone). Only gate-less
+   * lakes qualify - a lake that acquired a `requiredUserTag`/`requiredEntitlement` after being
+   * published is no longer open to all, so it must not surface in a browse-everyone view (this
+   * mirrors the both-blank requirement arm on the retrieval/list paths). `search` matches name
+   * or description case-insensitively. Returns one page plus the unpaged `total` for the UI.
+   */
+  findPublicLakes(opts?: {
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ lakes: IDataLakeDocument[]; total: number }>;
   /** Persist recomputed stats (source via IFabFileRepository.computeDataLakeStats). */
   setStats(id: string, stats: { fileCount: number; totalSizeBytes: number }): Promise<IDataLakeDocument | null>;
 }

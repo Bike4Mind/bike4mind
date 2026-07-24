@@ -18,6 +18,10 @@ import {
   RadioGroup,
   Skeleton,
   Stack,
+  Tab,
+  TabList,
+  TabPanel,
+  Tabs,
   Textarea,
   Tooltip,
   Typography,
@@ -44,7 +48,8 @@ import {
   useGetArchivedDataLakes,
   useGetDeletedDataLakes,
 } from '@client/app/hooks/data/dataLakes';
-import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { useDataLakeWizardStore, type ManagerTab } from '@client/app/stores/useDataLakeWizardStore';
+import DataLakeDiscoverPanel from './DataLakeDiscoverPanel';
 import { useAccounts } from '@client/app/components/Credits/AccountSelector';
 import { useAdminSettingsCache } from '@client/app/hooks/useAdminSettingsCache';
 import { toast } from 'sonner';
@@ -56,6 +61,10 @@ export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
+  // Seed the active tab from the store once (the panel remounts each time the manager opens,
+  // so a deep-link to 'discover' lands on the right tab) while still letting the user switch.
+  const initialTab = useDataLakeWizardStore(s => s.managerTab);
+  const [tab, setTab] = useState<ManagerTab>(initialTab);
   const [viewingLake, setViewingLake] = useState<{
     id: string;
     name: string;
@@ -123,191 +132,223 @@ export default function DataLakeListPanel() {
           >
             Data Lakes
           </Typography>
-          <Button size="sm" variant="soft" color="primary" startDecorator={<AddIcon />} onClick={openWizard}>
-            Create
-          </Button>
         </Stack>
 
-        {isLoading ? (
-          <Stack gap={1}>
-            {[1, 2, 3].map(i => (
-              <Skeleton key={i} variant="rectangular" height={72} sx={{ borderRadius: 'md' }} />
-            ))}
-          </Stack>
-        ) : !dataLakes || dataLakes.length === 0 ? (
-          <Box sx={{ textAlign: 'center', py: 4 }}>
-            <StorageIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
-            <Typography level="body-sm" color="neutral">
-              No data lakes yet. Create one to organize your files.
-            </Typography>
-          </Box>
-        ) : (
-          <Stack gap={1}>
-            {dataLakes.map(lake => (
-              <Card
-                key={lake.id}
-                variant="outlined"
-                data-testid={`datalake-card-${lake.id}`}
-                sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
-                onClick={() =>
-                  setViewingLake({
-                    id: lake.id,
-                    name: lake.name,
-                    tagPrefix: lake.fileTagPrefix,
-                    canManage: !!lake.canManage,
-                  })
-                }
+        <Tabs
+          value={tab}
+          onChange={(_, v) => setTab(v as ManagerTab)}
+          data-testid="datalake-manager-tabs"
+          sx={{ bgcolor: 'transparent' }}
+        >
+          <TabList size="sm">
+            <Tab value="mine" data-testid="datalake-tab-mine">
+              My lakes
+            </Tab>
+            <Tab value="discover" data-testid="datalake-tab-discover">
+              Discover
+            </Tab>
+          </TabList>
+
+          <TabPanel value="mine" sx={{ p: 0, pt: 2 }}>
+            <Stack direction="row" justifyContent="flex-end" sx={{ mb: 1.5 }}>
+              <Button
+                size="sm"
+                variant="soft"
+                color="primary"
+                startDecorator={<AddIcon />}
+                onClick={openWizard}
+                data-testid="datalake-create-btn"
               >
-                <Stack direction="row" alignItems="center" gap={1.5}>
-                  <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
-                  <Box sx={{ flex: 1, minWidth: 0 }}>
-                    <Typography level="title-sm" noWrap>
-                      {lake.name}
-                    </Typography>
-                    <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
-                      <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
-                        {lake.fileTagPrefix}
-                      </Chip>
-                      {lake.requiredUserTag && (
-                        <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
-                          {lake.requiredUserTag}
-                        </Chip>
-                      )}
-                    </Stack>
-                  </Box>
-                  {/* Add files / Settings / Archive are owner-or-admin only (the backend
+                Create
+              </Button>
+            </Stack>
+
+            {isLoading ? (
+              <Stack gap={1}>
+                {[1, 2, 3].map(i => (
+                  <Skeleton key={i} variant="rectangular" height={72} sx={{ borderRadius: 'md' }} />
+                ))}
+              </Stack>
+            ) : !dataLakes || dataLakes.length === 0 ? (
+              <Box sx={{ textAlign: 'center', py: 4 }}>
+                <StorageIcon sx={{ fontSize: 40, opacity: 0.3, mb: 1 }} />
+                <Typography level="body-sm" color="neutral">
+                  No data lakes yet. Create one to organize your files.
+                </Typography>
+              </Box>
+            ) : (
+              <Stack gap={1}>
+                {dataLakes.map(lake => (
+                  <Card
+                    key={lake.id}
+                    variant="outlined"
+                    data-testid={`datalake-card-${lake.id}`}
+                    sx={{ p: 1.5, cursor: 'pointer', '&:hover': { borderColor: 'primary.300' } }}
+                    onClick={() =>
+                      setViewingLake({
+                        id: lake.id,
+                        name: lake.name,
+                        tagPrefix: lake.fileTagPrefix,
+                        canManage: !!lake.canManage,
+                      })
+                    }
+                  >
+                    <Stack direction="row" alignItems="center" gap={1.5}>
+                      <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+                      <Box sx={{ flex: 1, minWidth: 0 }}>
+                        <Typography level="title-sm" noWrap>
+                          {lake.name}
+                        </Typography>
+                        <Stack direction="row" gap={0.5} sx={{ mt: 0.25 }}>
+                          <Chip size="sm" variant="soft" color="neutral" sx={{ fontSize: '10px' }}>
+                            {lake.fileTagPrefix}
+                          </Chip>
+                          {lake.requiredUserTag && (
+                            <Chip size="sm" variant="soft" color="primary" sx={{ fontSize: '10px' }}>
+                              {lake.requiredUserTag}
+                            </Chip>
+                          )}
+                        </Stack>
+                      </Box>
+                      {/* Add files / Settings / Archive are owner-or-admin only (the backend
                       enforces the same rule). The list surfaces other users' read-only public
                       lakes, so render these only when the caller may manage this lake. */}
-                  {lake.canManage && (
-                    <>
-                      <Tooltip title="Add files" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="primary"
-                          data-testid={`datalake-addfiles-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            openWizardForLake({
-                              id: lake.id,
-                              slug: lake.slug,
-                              name: lake.name,
-                              fileTagPrefix: lake.fileTagPrefix,
-                              requiredUserTag: lake.requiredUserTag,
-                              requiredEntitlement: lake.requiredEntitlement,
-                            });
-                          }}
-                        >
-                          <AddIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Settings" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="neutral"
-                          data-testid={`datalake-settings-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            setEditingLakeId(lake.id);
-                          }}
-                        >
-                          <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                      <Tooltip title="Archive" size="sm">
-                        <IconButton
-                          size="sm"
-                          variant="plain"
-                          color="warning"
-                          data-testid={`datalake-archive-btn-${lake.id}`}
-                          onClick={e => {
-                            stop(e);
-                            archiveLake.mutate(lake.id);
-                          }}
-                        >
-                          <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                        </IconButton>
-                      </Tooltip>
-                    </>
-                  )}
-                </Stack>
-              </Card>
-            ))}
-          </Stack>
-        )}
+                      {lake.canManage && (
+                        <>
+                          <Tooltip title="Add files" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="primary"
+                              data-testid={`datalake-addfiles-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                openWizardForLake({
+                                  id: lake.id,
+                                  slug: lake.slug,
+                                  name: lake.name,
+                                  fileTagPrefix: lake.fileTagPrefix,
+                                  requiredUserTag: lake.requiredUserTag,
+                                  requiredEntitlement: lake.requiredEntitlement,
+                                });
+                              }}
+                            >
+                              <AddIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Settings" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="neutral"
+                              data-testid={`datalake-settings-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                setEditingLakeId(lake.id);
+                              }}
+                            >
+                              <SettingsOutlinedIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Archive" size="sm">
+                            <IconButton
+                              size="sm"
+                              variant="plain"
+                              color="warning"
+                              data-testid={`datalake-archive-btn-${lake.id}`}
+                              onClick={e => {
+                                stop(e);
+                                archiveLake.mutate(lake.id);
+                              }}
+                            >
+                              <ArchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                            </IconButton>
+                          </Tooltip>
+                        </>
+                      )}
+                    </Stack>
+                  </Card>
+                ))}
+              </Stack>
+            )}
 
-        {/* Archived (reversible) */}
-        <LifecycleSection
-          label="Archived"
-          open={showArchived}
-          onToggle={() => setShowArchived(v => !v)}
-          testid="datalake-archived-section"
-          emptyText="No archived data lakes."
-          lakes={showArchived ? archivedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-btn-${lake.id}`}
-                  onClick={() => unarchiveLake.mutate(lake.id)}
-                >
-                  <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Delete (recoverable)" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-delete-btn-${lake.id}`}
-                  onClick={() => deleteLake.mutate(lake.id)}
-                >
-                  <DeleteOutlineIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
+            {/* Archived (reversible) */}
+            <LifecycleSection
+              label="Archived"
+              open={showArchived}
+              onToggle={() => setShowArchived(v => !v)}
+              testid="datalake-archived-section"
+              emptyText="No archived data lakes."
+              lakes={showArchived ? archivedLakes : undefined}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-btn-${lake.id}`}
+                      onClick={() => unarchiveLake.mutate(lake.id)}
+                    >
+                      <UnarchiveOutlinedIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Delete (recoverable)" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-delete-btn-${lake.id}`}
+                      onClick={() => deleteLake.mutate(lake.id)}
+                    >
+                      <DeleteOutlineIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            />
 
-        {/* Deleted (recoverable until purged) */}
-        <LifecycleSection
-          label="Deleted (recoverable)"
-          open={showDeleted}
-          onToggle={() => setShowDeleted(v => !v)}
-          testid="datalake-deleted-section"
-          emptyText="No deleted data lakes."
-          lakes={showDeleted ? deletedLakes : undefined}
-          renderActions={lake => (
-            <>
-              <Tooltip title="Restore" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="success"
-                  data-testid={`datalake-restore-deleted-btn-${lake.id}`}
-                  onClick={() => restoreDeletedLake.mutate(lake.id)}
-                >
-                  <RestoreIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title="Purge permanently" size="sm">
-                <IconButton
-                  size="sm"
-                  variant="plain"
-                  color="danger"
-                  data-testid={`datalake-purge-btn-${lake.id}`}
-                  onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
-                >
-                  <DeleteForeverIcon sx={{ fontSize: 16 }} />
-                </IconButton>
-              </Tooltip>
-            </>
-          )}
-        />
+            {/* Deleted (recoverable until purged) */}
+            <LifecycleSection
+              label="Deleted (recoverable)"
+              open={showDeleted}
+              onToggle={() => setShowDeleted(v => !v)}
+              testid="datalake-deleted-section"
+              emptyText="No deleted data lakes."
+              lakes={showDeleted ? deletedLakes : undefined}
+              renderActions={lake => (
+                <>
+                  <Tooltip title="Restore" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="success"
+                      data-testid={`datalake-restore-deleted-btn-${lake.id}`}
+                      onClick={() => restoreDeletedLake.mutate(lake.id)}
+                    >
+                      <RestoreIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Purge permanently" size="sm">
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      color="danger"
+                      data-testid={`datalake-purge-btn-${lake.id}`}
+                      onClick={() => setPurgeTarget({ id: lake.id, name: lake.name })}
+                    >
+                      <DeleteForeverIcon sx={{ fontSize: 16 }} />
+                    </IconButton>
+                  </Tooltip>
+                </>
+              )}
+            />
+          </TabPanel>
+
+          <TabPanel value="discover" sx={{ p: 0, pt: 2 }}>
+            <DataLakeDiscoverPanel />
+          </TabPanel>
+        </Tabs>
       </Box>
 
       {/* Settings editor */}
