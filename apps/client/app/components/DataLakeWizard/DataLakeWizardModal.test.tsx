@@ -23,6 +23,7 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useBatchUpload: () => ({ mutate: batchUploadMutate, isPending: false }),
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
+  OFFLINE_MESSAGE: 'No internet connection. Check your network and try again.',
 }));
 // ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
 // needs no QueryClientProvider.
@@ -72,7 +73,7 @@ describe('DataLakeWizardModal — handleStartUpload offline pre-check', () => {
     expect(batchUploadMutate).not.toHaveBeenCalled();
     expect(toastMock.error).toHaveBeenCalledTimes(1);
     const [message, opts] = toastMock.error.mock.calls[0] as [string, { id: string; action: { label: string } }];
-    expect(message).toBe('No internet connection — check your network and try again.');
+    expect(message).toBe('No internet connection. Check your network and try again.');
     expect(opts.id).toBe('data-lake-batch-upload-error');
     expect(opts.action.label).toBe('Retry');
 

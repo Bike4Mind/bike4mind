@@ -2,7 +2,7 @@ import { Box, Button, Modal, ModalClose, ModalDialog, Stack, Typography } from '
 import { useTheme } from '@mui/joy/styles';
 import { toast } from 'sonner';
 import { useDataLakeWizardStore, type WizardStep } from '@client/app/stores/useDataLakeWizardStore';
-import { useBatchUpload } from '@client/app/hooks/data/dataLakeWizard';
+import { useBatchUpload, OFFLINE_MESSAGE } from '@client/app/hooks/data/dataLakeWizard';
 import WizardStepIndicator from './WizardStepIndicator';
 import SourceSelectionStep from './steps/SourceSelectionStep';
 import PreviewStep from './steps/PreviewStep';
@@ -77,12 +77,12 @@ export default function DataLakeWizardModal() {
     // the common "already offline" case, instead of depending on the mutation
     // lifecycle to notice and unwind.
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
-      const message = 'No internet connection — check your network and try again.';
+      const message = OFFLINE_MESSAGE;
       // Mirror useBatchUpload's onError so uploadProgress reflects this failure
       // the same way regardless of which of the two entry points caught it, and
       // reuse its toast id so a repeated offline click/retry replaces the same
       // toast instead of stacking a new one.
-      updateUploadProgress({ status: 'error', errorMessage: message });
+      updateUploadProgress({ status: 'error', errorKind: 'network', errorMessage: message });
       toast.error(message, {
         id: 'data-lake-batch-upload-error',
         duration: 8000,
