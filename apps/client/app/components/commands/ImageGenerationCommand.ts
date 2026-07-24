@@ -12,6 +12,7 @@ import {
   GenerateImageToolCall,
   ModelInfo,
   PromptIntent,
+  requiresImageInput,
 } from '@bike4mind/common';
 import { ISessionDocument } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
@@ -138,7 +139,9 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
       if (data.intent === 'continuation' && fabFileIds.length === 0) {
         const models = queryClient.getQueryData<ModelInfo[]>(['llm', 'models']);
         const modelInfo = models?.find(m => m.id === effectiveModel);
-        if (modelInfo && !modelInfo.supportsImageVariation) {
+        // Skip required-input models (e.g. Flux Pro Fill): supportsImageVariation is false but
+        // they DO carry a prior image forward, so "can't refine prior images" would be wrong.
+        if (modelInfo && !modelInfo.supportsImageVariation && !requiresImageInput(effectiveModel)) {
           // Build the suggested-model list dynamically so newly added variation-capable models
           // are surfaced automatically. Falls back to a static example if the model registry
           // hasn't loaded yet.
