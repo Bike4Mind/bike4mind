@@ -70,6 +70,8 @@ import {
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueue,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueue,
+  bobRunQueueDLQ,
 } from './queues';
 import { imageProcessor } from './functions';
 import { chatCompletion } from './chatCompletion';
@@ -106,6 +108,7 @@ const dlqUrls = new sst.Linkable('dlqUrls', {
     'email-job': emailJobQueueDLQ.url,
     'tavern-heartbeat': tavernHeartbeatQueueDLQ.url,
     'deep-agent-wake': deepAgentWakeQueueDLQ.url,
+    'bob-run': bobRunQueueDLQ.url,
     'sre-fix': sreFixQueueDLQ.url,
     'sre-job': sreJobQueueDLQ.url,
     'secops-triage': secopsTriageQueueDLQ.url,
@@ -154,6 +157,7 @@ const sourceQueueUrls = new sst.Linkable('sourceQueueUrls', {
     overwatchAnalyticsQueue: overwatchAnalyticsQueue.url,
     agentContinuationQueue: agentContinuationQueue.url,
     optihashiRunCompletionQueue: optihashiRunCompletionQueue.url,
+    bobRunQueue: bobRunQueue.url,
     dataLakeCleanupQueue: dataLakeCleanupQueue.url,
   },
 });

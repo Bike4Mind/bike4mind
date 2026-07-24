@@ -1174,6 +1174,42 @@ const optihashiRunCompletionQueueSubscription = optihashiRunCompletionQueue.subs
   ],
 });
 
+// Bob Panel Run Queue (@bike4mind/premium-bob, issue #33 step B)
+// POST /api/premium-bob/bob-run creates the bob_runs doc + enqueues here, then returns
+// 202 {runId}; this worker runs the ~60s five-persona panel and finalizes the doc. The
+// handler lives in the overlay and is re-exported into the stable premium-generated path
+// via b4mContributions.serverHandlerStubs (same pattern as optihashiRunCompletion above).
+const bobRunQueueDLQ = new sst.aws.Queue('bobRunQueueDLQ', {});
+const bobRunQueue = new sst.aws.Queue('bobRunQueue', {
+  // ≥ the worker timeout below (+ buffer) so an in-flight run isn't redelivered mid-panel.
+  visibilityTimeout: '6 minutes',
+  dlq: {
+    queue: bobRunQueueDLQ.arn,
+    retry: 2,
+  },
+});
+const bobRunQueueSubscription = bobRunQueue.subscribe(
+  {
+    handler: 'apps/client/server/premium-generated/bobRunWorker.dispatch',
+    runtime: 'nodejs24.x',
+    // The panel (5 parallel persona reads + merge + publish) targets ≤ ~5 min end to end.
+    timeout: '5 minutes',
+    memory: '1024 MB',
+    vpc: lambdaVpc,
+    link: [...allSecrets, websocketApi],
+    logging: {
+      retention: '3 days',
+    },
+    environment: {
+      ...DEFAULT_LAMBDA_ENVIRONMENT,
+    },
+    // Progress/finalize is written to the bob_runs doc; ManageConnections lets the worker
+    // push live status over the reading-screen websocket subscription (issue #33 step D).
+    permissions: [{ actions: ['execute-api:ManageConnections'], resources: ['*'] }],
+  },
+  SINGLE_RECORD_BATCH
+);
+
 export {
   // Queues
   fabFileChunkQueue,
@@ -1199,6 +1235,7 @@ export {
   secopsTriageQueue,
   agentContinuationQueue,
   optihashiRunCompletionQueue,
+  bobRunQueue,
   // DLQs
   fabFileChunkQueueDLQ,
   fabFileVectorizeQueueDLQ,
@@ -1226,6 +1263,7 @@ export {
   overwatchAnalyticsQueueDLQ,
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueueDLQ,
   // Subscriptions
   fabFileChunkQueueSubscription,
   fabFileVectorizeQueueSubscription,
@@ -1250,4 +1288,5 @@ export {
   secopsTriageQueueSubscription,
   overwatchAnalyticsQueueSubscription,
   optihashiRunCompletionQueueSubscription,
+  bobRunQueueSubscription,
 };
