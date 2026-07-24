@@ -380,10 +380,17 @@ export function useBatchUpload() {
         dataLakeId = dataLakeRes.data.id;
       }
       let uploadedCount = 0;
+      // Hoisted above the try so the catch can terminalize the batch and clean up the
+      // partial records it created. `failedFileIds` are the FabFiles that presign
+      // created (createFabFile) but whose bytes never uploaded - the 0-chunk orphans.
+      let batchId: string | undefined;
+      let failedCount = 0;
+      const failedNames: string[] = [];
+      const failedFileIds: string[] = [];
 
-      // The lake record is created before files are uploaded, so any failure
-      // below (e.g. an oversized file rejected at presign) would otherwise leave
-      // an orphan empty lake. Roll it back if nothing uploaded.
+      // The lake and the per-file FabFile records are created before the bytes upload,
+      // so a failure below leaves orphan state (empty lake, 0-chunk FabFiles, a batch
+      // stuck mid-flight). The catch rolls that back; a total failure throws into it.
       try {
         const totalSizeBytes = included.reduce((sum, f) => sum + f.size, 0);
 
@@ -402,7 +409,7 @@ export function useBatchUpload() {
           appliedTags,
         });
 
-        const batchId = batchRes.data.id;
+        batchId = batchRes.data.id;
 
         // Switch to upload step and set initial progress
         setStep('upload');
@@ -418,9 +425,6 @@ export function useBatchUpload() {
         });
 
         // Step 3: Request presigned URLs in chunks and upload
-        let failedCount = 0;
-        const failedNames: string[] = [];
-
         for (let i = 0; i < included.length; i += BATCH_CHUNK_SIZE) {
           const chunk = included.slice(i, i + BATCH_CHUNK_SIZE);
 
@@ -472,6 +476,7 @@ export function useBatchUpload() {
                 if (!wizFile) {
                   failedCount++;
                   failedNames.push(urlInfo.fileName);
+                  failedFileIds.push(urlInfo.fileId);
                   updateUploadProgress({ failedFiles: failedCount, failedFileNames: [...failedNames] });
                   completed++;
                   if (completed === total) {
@@ -489,6 +494,7 @@ export function useBatchUpload() {
                   .catch(() => {
                     failedCount++;
                     failedNames.push(wizFile.file.name);
+                    failedFileIds.push(urlInfo.fileId);
                     updateUploadProgress({ failedFiles: failedCount, failedFileNames: [...failedNames] });
                   })
                   .finally(() => {
@@ -507,12 +513,33 @@ export function useBatchUpload() {
           });
         }
 
-        // Update batch status: uploads done, now processing (chunking/vectorizing)
-        await api.put(`/api/data-lakes/batches/${batchId}`, { status: 'processing' }).catch(() => {});
+        // Nothing landed - throw so the catch below rolls back the lake, the orphan
+        // FabFiles, and the batch, instead of reporting a "success" with 0 files and
+        // leaving the batch stuck mid-flight.
+        if (uploadedCount === 0) {
+          throw new Error(`All ${included.length} file uploads failed`);
+        }
 
-        updateUploadProgress({
-          status: failedCount === included.length ? 'error' : 'complete',
-        });
+        // Partial success: the uploaded files go on to the pipeline, but the FabFiles
+        // for files whose bytes never uploaded are 0-chunk orphans - delete them so a
+        // partial upload leaves none behind (the lake itself is kept; it has real files).
+        if (failedFileIds.length > 0) {
+          await api.delete('/api/files/bulk-delete', { data: { fileIds: failedFileIds } }).catch(() => {});
+        }
+
+        // Close out the browser-upload phase server-side: account for the client-side
+        // failures atomically (so they count toward the batch's completion math) and
+        // move it to 'processing'. A bare status flip left partial batches stuck because
+        // browser-failed files never emit a pipeline event to satisfy completion.
+        await api
+          .post('/api/data-lakes/batches/upload-complete', {
+            batchId,
+            failedFiles: failedCount,
+            failedFileNames: failedNames,
+          })
+          .catch(() => {});
+
+        updateUploadProgress({ status: 'complete' });
 
         queryClient.invalidateQueries({ queryKey: ['data-lakes'] });
         // First lake unlocks the 'datalakes' nav slot; first file unlocks 'files'.
@@ -521,10 +548,28 @@ export function useBatchUpload() {
 
         return { dataLakeId, batchId, uploadedCount, failedCount };
       } catch (err) {
-        // Roll back ONLY a lake we just created - never delete the user's existing
-        // lake in append mode. Nothing landed, so delete the empty new lake (best-effort).
+        // Roll back the partial state (all best-effort - a cleanup failure must not mask
+        // the real upload error, and the read-time/cron reconciler is the backstop).
+        // Terminalize the batch as 'failed' first: nothing uploaded on this path, so no
+        // pipeline is running to race this write, and it must not be left mid-flight.
+        if (batchId) {
+          await api
+            .put(`/api/data-lakes/batches/${batchId}`, {
+              status: 'failed',
+              failedFiles: failedCount,
+              failedFileNames: failedNames,
+            })
+            .catch(() => {});
+        }
         if (!targetLake && uploadedCount === 0) {
+          // Create mode: archive the empty new lake we made. Archive cascades to cancel
+          // the batch and tear down its FabFiles, so it cleans the orphans too. Never
+          // touch the user's existing lake in append mode.
           await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
+        } else if (failedFileIds.length > 0) {
+          // Append mode (lake kept): can't delete the user's lake, so remove just the
+          // orphan FabFiles the failed uploads created.
+          await api.delete('/api/files/bulk-delete', { data: { fileIds: failedFileIds } }).catch(() => {});
         }
         throw err;
       }
