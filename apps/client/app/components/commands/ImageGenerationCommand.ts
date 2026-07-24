@@ -12,6 +12,7 @@ import {
   GenerateImageToolCall,
   ModelInfo,
   PromptIntent,
+  requiresImageInput,
 } from '@bike4mind/common';
 import { ISessionDocument } from '@bike4mind/common';
 import { QueryClient } from '@tanstack/react-query';
@@ -30,13 +31,16 @@ export type ImageGenerationCommandArgs = {
   tools: B4MLLMTools[];
   organizationId?: string | null;
   setChatCompletion?: (updater: (prev: any) => any) => void;
+  /** Message-level (paperclip) attachment ids, i.e. files NOT added as notebook context.
+   * Merged into the generation input so an inline-attached image still feeds image-to-image
+   * models without requiring the "Add as Notebook Context" toggle. */
+  promptFileIds?: string[];
   /** tmpId set by useSendMessage during /new pre-navigation. Must be used to key
    * the optimistic placeholder so the session.created cache migration finds it. */
   optimisticSessionId?: string;
 } & GenerateImageToolCall;
 
 export type ImageEditCommandArgs = {
-  promptFileIds?: string[];
   image?: string; // Image to be edited
 } & ImageGenerationCommandArgs;
 
@@ -62,6 +66,7 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
     queryClient,
     model,
     workBenchFiles,
+    promptFileIds,
     tools,
     organizationId,
     setChatCompletion,
@@ -100,7 +105,10 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
           return result;
         };
 
-  const fabFileIds = workBenchFiles.map(file => file.id);
+  // Include message-level (paperclip) attachments, not just notebook-context workbench files,
+  // so an image attached inline without the "Add as Notebook Context" toggle still feeds
+  // image-to-image models (Kontext/Fill). Mirrors the edit path (handleImageEditCommand).
+  const fabFileIds = [...workBenchFiles.map(file => file.id), ...(promptFileIds || [])];
 
   // Use the image model from imageConfig (which has the correct image-specific model),
   // falling back to the model param only if imageConfig is not available
@@ -131,7 +139,9 @@ export async function handleImageGenerationCommand(args: ImageGenerationCommandA
       if (data.intent === 'continuation' && fabFileIds.length === 0) {
         const models = queryClient.getQueryData<ModelInfo[]>(['llm', 'models']);
         const modelInfo = models?.find(m => m.id === effectiveModel);
-        if (modelInfo && !modelInfo.supportsImageVariation) {
+        // Skip required-input models (e.g. Flux Pro Fill): supportsImageVariation is false but
+        // they DO carry a prior image forward, so "can't refine prior images" would be wrong.
+        if (modelInfo && !modelInfo.supportsImageVariation && !requiresImageInput(effectiveModel)) {
           // Build the suggested-model list dynamically so newly added variation-capable models
           // are surfaced automatically. Falls back to a static example if the model registry
           // hasn't loaded yet.

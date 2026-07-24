@@ -13,6 +13,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  requiresImageInput,
 } from '@bike4mind/common';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -609,13 +610,33 @@ export function useSendMessage({
       return;
     }
 
-    // Warn if images are attached but model doesn't support vision
+    // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
+    // models: for image models "vision" is irrelevant - image-input capability is handled by
+    // the image-model block below. Without the type gate this fired for every image model
+    // (none set supportsVision), wrongly telling a Kontext user - a model that REQUIRES an
+    // image - that their image "will not be visible".
     const hasImageFiles =
       pendingMessageFiles.some(pf => pf.fabFile.mimeType?.startsWith('image/')) ||
       workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
-    if (hasImageFiles && currentModelInfo && !currentModelInfo.supportsVision) {
+    if (hasImageFiles && currentModelInfo?.type === 'text' && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
+      );
+    }
+
+    // Image-gen: a text-to-image-only model ('none' - no variation support and not a
+    // required-input model like Kontext/Fill) can't use an attached image. The server
+    // drops it and generates from the prompt alone, so warn rather than let it silently
+    // vanish. Uses hasImageFiles (workbench AND inline paperclip attachments) since both
+    // now feed generation. (Vision above is the text-model case; this is the image-model case.)
+    if (
+      hasImageFiles &&
+      currentModelInfo?.type === 'image' &&
+      !currentModelInfo.supportsImageVariation &&
+      !requiresImageInput(currentModelInfo.id)
+    ) {
+      toast.info(
+        `${currentModelInfo.name || model} can't transform an attached image - generating from your prompt only.`
       );
     }
 
