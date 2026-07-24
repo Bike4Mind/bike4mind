@@ -110,10 +110,10 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 slot collapses cleanly for the typical non-orchestration session. */}
             <BackgroundAgentBadge sessionId={currentSessionId} />
             {layout !== 'vertical' && layout !== 'pip' && (
-              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} />
+              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} height="32px" />
             )}
             {(layout === 'vertical' || layout === 'pip') && (
-              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} />
+              <SearchBar handleChange={setSearch} placeHolder={t('search')} width={'11rem'} height="32px" />
             )}
             <Tooltip title={copied ? 'Copied!' : 'Copy chat as Markdown'} disableInteractive>
               <IconButton
@@ -126,6 +126,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {copied ? <CheckIcon /> : <ContentCopyIcon />}
@@ -142,6 +143,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {showPinnedOnly ? <PushPinIcon /> : <PushPinOutlinedIcon />}
@@ -158,6 +160,7 @@ const SessionTop: React.FC<SessionTopProps> = ({ enableSearch = true, onChatWidt
                 sx={{
                   width: '32px',
                   height: '32px',
+                  '--Icon-fontSize': '18px',
                 }}
               >
                 {isFullWidth ? <HorizontalRuleIcon /> : <SyncAltIcon />}
