@@ -172,6 +172,23 @@ describe('UserApiKeyRepository.findByOrganizationIdsAndId', () => {
     await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], personal.id)).resolves.toBeNull();
   });
 
+  // The billingOwnerType filter, not just the organizationId set, must exclude a
+  // key: a row with organizationId in-set but billingOwnerType User (a legacy /
+  // direct-DB shape the service invariant would reject at mint) must NOT resolve.
+  // Without this, deleting the billingOwnerType clause would still pass every
+  // other case, because they all differ on organizationId too.
+  it('excludes an in-set-org key whose billingOwnerType is User (not Organization)', async () => {
+    const { userApiKeyRepository } = await import('../UserApiKeyModel');
+    const divergent = await UserApiKey.create({
+      ...base,
+      keyPrefix: 'b4m_live_fowuser',
+      agentId: 'agent-1',
+      organizationId: 'org-1',
+      billingOwnerType: CreditHolderType.User,
+    });
+    await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], divergent.id)).resolves.toBeNull();
+  });
+
   it('returns null for a key billed to an org not in the set', async () => {
     const { userApiKeyRepository, org2 } = await seed('c');
     await expect(userApiKeyRepository.findByOrganizationIdsAndId(['org-1'], org2.id)).resolves.toBeNull();
