@@ -20,7 +20,7 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
 /**
  * Unified, multi-provider Text-to-Speech endpoint (#724).
  *
- * Body: { text, provider?, model?, voice?, format?, encoding?, stability?, similarityBoost? }
+ * Body: { text, provider?, model?, voice?, format?, encoding?, stability?, similarityBoost?, languageCode? }
  * - provider defaults to openai; model/voice/format fall back to per-provider defaults.
  * - encoding 'binary' (default) streams raw audio bytes with an audio/* Content-Type;
  *   'base64' returns JSON { audio, format, contentType }.
@@ -30,9 +30,8 @@ const DEFAULT_PROVIDER: VoiceGenerationVendor = 'openai';
  * adapters over the same aiVoiceService abstraction.
  */
 const handler = baseApi().post(async (req, res) => {
-  const { text, provider, model, voice, format, encoding, stability, similarityBoost } = ttsRequestSchema.parse(
-    req.body
-  );
+  const { text, provider, model, voice, format, encoding, stability, similarityBoost, languageCode } =
+    ttsRequestSchema.parse(req.body);
 
   const vendor = provider ?? DEFAULT_PROVIDER;
 
@@ -92,6 +91,7 @@ const handler = baseApi().post(async (req, res) => {
       format,
       stability,
       similarityBoost,
+      language: languageCode,
     });
 
     // Charge for the successful synthesis. Done before the size guard below
