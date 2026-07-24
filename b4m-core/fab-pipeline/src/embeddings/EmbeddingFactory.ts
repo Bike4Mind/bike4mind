@@ -7,6 +7,11 @@ import {
   SupportedEmbeddingModel,
   VoyageAIEmbeddingModel,
 } from '@bike4mind/common';
+import { EmbeddingModelProvider, EmbeddingService } from './EmbeddingService';
+import { BEDROCK_EMBEDDING_MODEL_MAP, BedrockEmbeddingService } from './providers/BedrockEmbeddingService';
+import { OPENAI_EMBEDDING_MODEL_MAP, OpenAIEmbeddingService } from './providers/OpenAIEmbeddingService';
+import { VOYAGEAI_EMBEDDING_MODEL_MAP, VoyageAIEmbeddingProvider } from './providers/VoyageAIEmbeddingService';
+import { OLLAMA_EMBEDDING_MODEL_MAP, OllamaEmbeddingService } from './providers/OllamaEmbeddingService';
 
 // Actionable fail-fast messages when a cloud embedding key is missing or a placeholder. Both name
 // the two exits (set a real key, or go keyless with a local Ollama embedder) so the operator sees
@@ -15,11 +20,6 @@ const OPENAI_KEY_MISSING_MESSAGE =
   'OpenAI API key is not configured (found a missing or placeholder value). Set a real OPENAI_API_KEY, or for an airgapped self-host unset it and set OLLAMA_BASE_URL to use a local embedder.';
 const VOYAGE_KEY_MISSING_MESSAGE =
   'VoyageAI API key is not configured (found a missing or placeholder value). Set a real VOYAGE_API_KEY, or for an airgapped self-host set OLLAMA_BASE_URL to use a local embedder.';
-import { EmbeddingModelProvider, EmbeddingService } from './EmbeddingService';
-import { BEDROCK_EMBEDDING_MODEL_MAP, BedrockEmbeddingService } from './providers/BedrockEmbeddingService';
-import { OPENAI_EMBEDDING_MODEL_MAP, OpenAIEmbeddingService } from './providers/OpenAIEmbeddingService';
-import { VOYAGEAI_EMBEDDING_MODEL_MAP, VoyageAIEmbeddingProvider } from './providers/VoyageAIEmbeddingService';
-import { OLLAMA_EMBEDDING_MODEL_MAP, OllamaEmbeddingService } from './providers/OllamaEmbeddingService';
 
 /**
  * Configuration for embedding services
