@@ -1,7 +1,7 @@
 import { User } from '@bike4mind/database';
 import { secretRotationRepository } from '@bike4mind/database/infra';
-import { dayjs } from '@bike4mind/common';
 import { UnauthorizedError } from '@server/utils/errors';
+import { isRotatedSecretWithinGraceWindow } from '@server/auth/secretRotationGrace';
 import { requireNonSystemUser } from '@server/auth/requireNonSystemUser';
 import { baseApi } from '@server/middlewares/baseApi';
 import { checkBlockedIP } from '@server/middlewares/checkBlockedIP';
@@ -27,7 +27,7 @@ const handler = baseApi({ auth: false })
     // signed with the previous secret for a 24-hour grace period
     const secretRotation = await secretRotationRepository.findByKeyName('JWT_SECRET');
     let previousSecret: string | undefined;
-    if (dayjs(secretRotation?.rotatedAt).isAfter(dayjs().subtract(1, 'day'))) {
+    if (isRotatedSecretWithinGraceWindow(secretRotation?.rotatedAt)) {
       previousSecret = secretRotation?.previousKey;
     }
 
