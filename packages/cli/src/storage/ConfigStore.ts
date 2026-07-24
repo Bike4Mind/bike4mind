@@ -288,6 +288,7 @@ const CliConfigSchema = z.object({
       z
         .object({
           tavern: z.boolean().optional(),
+          hearth: z.boolean().optional(),
         })
         .catchall(z.boolean())
     )

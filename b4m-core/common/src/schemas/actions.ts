@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { hearthEventKindSchema, hearthMachineBodySchema, hearthEventRefsSchema } from '@bike4mind/hearth';
 import { FallbackInfoSchema } from './llm';
 import { supportedChatModels } from '../models';
 import { shareableDocumentSchema, QUEST_ERROR_CODES } from '../types';
@@ -806,6 +807,33 @@ export const TavernHeartbeatLogAction = z.object({
 });
 export type ITavernHeartbeatLogAction = z.infer<typeof TavernHeartbeatLogAction>;
 
+/**
+ * Server -> Client: a Hearth event appended to a channel the user participates
+ * in. Payload mirrors the wire shape consumed by the CLI HearthEventStream and
+ * the SPA channel view; keep in sync with b4m-core/hearth/src/types.ts.
+ */
+export const HearthEventAction = z.object({
+  action: z.literal('hearth_event'),
+  // kind/machine/refs come from the @bike4mind/hearth boundary schemas so the
+  // enum lists have a single source of truth across model, route, and action.
+  event: z.object({
+    id: z.string(),
+    channelId: z.string(),
+    seq: z.number(),
+    actorId: z.string(),
+    actorName: z.string().optional(),
+    kind: hearthEventKindSchema,
+    human: z.object({
+      text: z.string(),
+      format: z.enum(['md', 'text']),
+    }),
+    machine: hearthMachineBodySchema.optional(),
+    refs: hearthEventRefsSchema.prefault({}),
+    createdAt: z.string(),
+  }),
+});
+export type IHearthEventAction = z.infer<typeof HearthEventAction>;
+
 /** Server -> Client: real-time quest board update (replaces polling) */
 export const TavernQuestUpdateAction = z.object({
   action: z.literal('tavern_quest_update'),
@@ -1480,6 +1508,7 @@ export const MessageDataToClient = z.discriminatedUnion('action', [
   KeepCommandResultAction,
   TavernSceneBroadcastAction,
   TavernHeartbeatLogAction,
+  HearthEventAction,
   TavernQuestUpdateAction,
   TavernStockUpdateAction,
   JupyterNotebookProgressAction,

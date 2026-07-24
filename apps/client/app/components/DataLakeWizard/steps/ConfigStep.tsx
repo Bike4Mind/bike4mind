@@ -17,7 +17,10 @@ import {
 import { useTheme } from '@mui/joy/styles';
 import { useEffect, useRef } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useComputeHashes, useCheckDuplicates } from '@client/app/hooks/data/dataLakeWizard';
+import { useGetDataLakes } from '@client/app/hooks/data/dataLakes';
+import { useSelectedAccount } from '@client/app/components/Credits/AccountSelector';
 
 function slugify(text: string): string {
   return text
@@ -25,6 +28,10 @@ function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 60);
+}
+
+function normalizeName(name: string): string {
+  return name.trim().toLowerCase().replace(/\s+/g, ' ');
 }
 
 export default function ConfigStep() {
@@ -39,6 +46,23 @@ export default function ConfigStep() {
 
   const computeHashes = useComputeHashes();
   const checkDuplicates = useCheckDuplicates();
+
+  // Duplicate-name hint. The visible lake list spans every lake the user can read, but a
+  // create only ever collides inside its own org scope (the server disambiguates the slug
+  // per-org), so narrow it to the account-switcher scope the create will land in. Must stay
+  // in sync with activeOrgId() in hooks/data/dataLakes.ts, which the create path reads at
+  // mutation time - matching it on a null selection too is what keeps the hint from ever
+  // naming a scope the lake won't land in.
+  const { data: allLakes } = useGetDataLakes();
+  const selectedAccount = useSelectedAccount(s => s.selectedAccount);
+  const scopeOrgId = selectedAccount && !selectedAccount.personal ? selectedAccount.id : undefined;
+  const duplicateNameLake =
+    targetLake || !config.name.trim()
+      ? undefined
+      : allLakes?.find(
+          lake =>
+            (lake.organizationId || undefined) === scopeOrgId && normalizeName(lake.name) === normalizeName(config.name)
+        );
 
   const autoTriggered = useRef(false);
 
@@ -100,7 +124,7 @@ export default function ConfigStep() {
 
         {/* Name */}
         <FormControl required>
-          <FormLabel>Data Lake Name</FormLabel>
+          <FormLabel>{DATA_LAKE} Name</FormLabel>
           <Input
             data-testid="config-name-input"
             value={config.name}
@@ -111,6 +135,12 @@ export default function ConfigStep() {
           <FormHelperText>
             Slug: <code>{slugify(config.name) || '...'}</code>
           </FormHelperText>
+          {duplicateNameLake && (
+            <FormHelperText data-testid="config-name-duplicate-warning" sx={{ color: 'warning.plainColor' }}>
+              A data lake named &ldquo;{duplicateNameLake.name}&rdquo; already exists here. You can still continue -
+              both will appear under the same name, with different slugs.
+            </FormHelperText>
+          )}
         </FormControl>
 
         {/* Description */}

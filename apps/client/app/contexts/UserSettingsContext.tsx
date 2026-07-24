@@ -19,6 +19,7 @@ import { useSettingsFromServer } from '../hooks/data/settings';
 
 export type ExperimentalFeature =
   | 'enableQuestMaster'
+  | 'enableQuestMasterV5'
   | 'enableMementos'
   | 'enableMementosV2'
   | 'enableArtifacts'
@@ -31,6 +32,7 @@ export type ExperimentalFeature =
   | 'enableBmPi'
   | 'enableLattice'
   | 'enableBriefcase'
+  | 'enableHearth'
   // Layer-1 gate for the Agent-mode composer toggle.
   // Hides the entire feature surface until parity ships. Default false for everyone.
   | 'agentMode';
@@ -81,6 +83,7 @@ const defaultSettings: UserSettings = {
   scrollbarWidth: 10,
   experimentalFeatures: {
     enableQuestMaster: false,
+    enableQuestMasterV5: false,
     enableMementos: false,
     enableMementosV2: false,
     enableArtifacts: false,
@@ -92,6 +95,7 @@ const defaultSettings: UserSettings = {
     enableResearchEngine: false,
     enableBmPi: false,
     enableLattice: false,
+    enableHearth: false,
     enableBriefcase: false,
     agentMode: false,
   },

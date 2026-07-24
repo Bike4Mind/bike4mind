@@ -42,21 +42,26 @@ const handler = baseApi().patch(
 
     // Branding format screen (hex color, https logo, caps); the service
     // re-validates with the same shared schema. The whitelabel write gate then
-    // blocks only an unentitled hideBranding *elevation* (read side is the
-    // authoritative enforcement); pass the stored value so an unentitled member
-    // editing an unrelated branding field cannot clobber white-label the org
-    // already earned.
+    // blocks only an unentitled hideBranding *elevation* against the key OWNER's
+    // plan (same rule as the authoritative read gate); pass the stored value so
+    // an unentitled member editing an unrelated branding field cannot clobber
+    // white-label the org already earned.
     const brandingCheck = validateEmbedBranding(branding);
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
-    // The stored value only matters for an incoming hideBranding elevation; skip
-    // the extra read on the common color/logo/name-only edit (the gate is a no-op
-    // there anyway, and updateEmbedKey re-fetches the doc regardless).
+    // The stored value + owner only matter for an incoming hideBranding
+    // elevation; skip the extra read on the common color/logo/name-only edit
+    // (the gate is a no-op there anyway, and updateEmbedKey re-fetches the doc).
     let gatedBranding = brandingCheck.value;
     if (brandingCheck.value?.hideBranding === true) {
+      // Resolve the elevation against the key's billing owner, not the caller.
+      // A missing key (not found / not the caller's) fails closed to stripped;
+      // updateEmbedKey then throws not-found regardless.
       const existing = await userApiKeyRepository.findByUserIdAndId(userId, keyId);
-      gatedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value, existing?.branding?.hideBranding === true);
+      gatedBranding = existing
+        ? await gateEmbedBrandingWrite(existing, brandingCheck.value, existing.branding?.hideBranding === true)
+        : { ...brandingCheck.value, hideBranding: false };
     }
 
     const updated = await userApiKeyService.updateEmbedKey(

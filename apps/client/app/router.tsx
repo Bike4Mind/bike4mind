@@ -70,6 +70,7 @@ const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
 const DataLakesPage = lazy(() => import('./routes/data-lakes'));
 const HudPage = lazy(() => import('./routes/hud'));
+const HearthPage = lazy(() => import('./routes/hearth'));
 
 // AI-themed loading messages for route transitions
 const loadingMessages = [
@@ -369,6 +370,25 @@ const AGENT_FEATURE_GATE = {
   featureName: 'Agents',
   description: 'Create AI assistants with specialized capabilities that can be invoked with @mentions in chat.',
 };
+
+const HEARTH_FEATURE_GATE = {
+  feature: 'enableHearth' as const,
+  featureName: 'Hearth',
+  description: 'A shared event log where you, your agents, and your devices all post and catch up as actors.',
+};
+
+// Hearth channel view (minimal projection of the shared event log)
+const hearthRoute = createRoute({
+  getParentRoute: () => layoutRoute,
+  path: '/hearth',
+  component: () => (
+    <ExperimentalFeatureGate {...HEARTH_FEATURE_GATE} loadingFallback={<RouteLoadingFallback />}>
+      <Suspense fallback={<RouteLoadingFallback />}>
+        <HearthPage />
+      </Suspense>
+    </ExperimentalFeatureGate>
+  ),
+});
 
 // Agents index route (replaces /agents/index.tsx)
 const agentsRoute = createRoute({
@@ -970,6 +990,7 @@ const routeTree = rootRoute.addChildren([
     questsRoute,
     dataLakesRoute,
     hudRoute,
+    hearthRoute,
     ...builtAppShellPremiumRoutes,
   ]),
   // Standalone auth routes (no layout)

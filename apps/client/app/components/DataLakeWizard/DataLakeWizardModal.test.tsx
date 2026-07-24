@@ -24,6 +24,11 @@ vi.mock('@client/app/hooks/data/dataLakeWizard', () => ({
   useComputeHashes: () => ({ mutate: vi.fn(), isPending: false }),
   useCheckDuplicates: () => ({ mutate: vi.fn(), isPending: false }),
 }));
+// ConfigStep reads the lake list for its duplicate-name hint; stub it so this test
+// needs no QueryClientProvider.
+vi.mock('@client/app/hooks/data/dataLakes', () => ({
+  useGetDataLakes: () => ({ data: [] }),
+}));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
 const TestWrapper = ({ children }: { children: ReactNode }) => (

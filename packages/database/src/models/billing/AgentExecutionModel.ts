@@ -91,6 +91,41 @@ export type ConfidenceTelemetrySummary = {
   avgConfidence: number;
 };
 
+// --- Opti Plan Ledger ---
+
+/** One planned sub-problem in an opti decomposition: its family and short title. */
+export interface IOptiPlanStep {
+  family: string;
+  title: string;
+}
+
+/**
+ * Durable ledger for the autonomous optimizer loop (#680). The opti guards previously tracked this
+ * in per-Lambda-invocation memory, so it reset whenever a run spanned a continuation -- letting a
+ * repeat decompose or re-solve slip through after the boundary. It is persisted here, rehydrated per
+ * invocation, and written in the SAME atomic `updateOne` as the checkpoint (see updateCheckpoint /
+ * updateCheckpointAndStatus). Because every continuation path resumes from a checkpoint, riding the
+ * checkpoint write gives the ledger the checkpoint's exact durability at every boundary.
+ *
+ * Do NOT reconstruct this from `checkpoint.steps`: that transcript front-trims past ~4 iterations
+ * (ReActAgent trimSteps), so on the long runs that actually continue the early decompose is gone.
+ * Opti-only: absent on non-opti executions (no schema default).
+ */
+export interface IOptiPlanState {
+  /**
+   * True once optihashi_decompose has run (recorded for the ledger's active check). The re-plan
+   * block itself keys on a LOADED plan (`steps.length > 0`), not this flag alone -- a failed or
+   * unparseable first decompose sets this with no captured steps and must stay re-runnable.
+   */
+  decomposeUsed: boolean;
+  /** Ordered plan captured from the decompose result (empty until a plan loads). */
+  steps: IOptiPlanStep[];
+  /** Successful schedule/solve calls per family. */
+  solved: Record<string, number>;
+  /** First winning-result digest per family, for the completion summary. */
+  results: Record<string, string>;
+}
+
 // --- Waiting On Subagent ---
 
 /**
@@ -282,6 +317,12 @@ export interface IAgentExecution {
    */
   confidenceTelemetry?: IConfidenceTelemetry;
 
+  /**
+   * Durable optimizer plan ledger (#680). Present only on opti agent runs; rehydrated each
+   * invocation so the decompose-once / plan-completion guards survive continuation Lambdas.
+   */
+  optiPlanState?: IOptiPlanState;
+
   // Billing
   iterationBilling: IIterationBilling[];
   totalCreditsUsed: number;
@@ -400,6 +441,29 @@ const ConfidenceTelemetrySchema = new mongoose.Schema(
     confidenceSum: { type: Number, default: 0 },
   },
   { _id: false }
+);
+
+const OptiPlanStateSchema = new mongoose.Schema(
+  {
+    decomposeUsed: { type: Boolean, default: false },
+    steps: {
+      type: [
+        new mongoose.Schema(
+          { family: { type: String, required: true }, title: { type: String, required: true } },
+          { _id: false }
+        ),
+      ],
+      default: [],
+    },
+    // Mixed maps (family -> count / digest). Persisted via whole-subdoc $set on change, so Mongoose
+    // deep-change tracking on Mixed is not relied upon.
+    solved: { type: mongoose.Schema.Types.Mixed, default: {} },
+    results: { type: mongoose.Schema.Types.Mixed, default: {} },
+  },
+  // `minimize: false` so an empty `solved`/`results` (`{}`) still persists and reads back as `{}`,
+  // matching the non-optional type -- otherwise Mongoose drops empty objects and the read boundary
+  // would return `undefined` for a field the type says is always present.
+  { _id: false, minimize: false }
 );
 
 const WaitingOnChildSchema = new mongoose.Schema(
@@ -563,6 +627,8 @@ const AgentExecutionSchema = new mongoose.Schema(
     // the subdoc so its field defaults (evaluatedCount 0, minConfidence 1, ...)
     // apply to every new execution.
     confidenceTelemetry: { type: ConfidenceTelemetrySchema, default: () => ({}) },
+    // Opti-only; no default so non-opti executions don't carry an empty ledger.
+    optiPlanState: { type: OptiPlanStateSchema, required: false },
 
     // Billing
     iterationBilling: { type: [IterationBillingSchema], default: [] },
@@ -1081,8 +1147,16 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
     return result.modifiedCount > 0;
   }
 
-  async updateCheckpoint(id: string, checkpoint: unknown): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { checkpoint } });
+  /**
+   * Persist the checkpoint, optionally with the durable optimizer plan ledger (#680) in the SAME
+   * atomic `updateOne`. Riding the ledger on the already-awaited checkpoint write gives it exactly
+   * the checkpoint's continuation durability (every iteration boundary + handoff) with no separate
+   * write to race or lose. `optiPlanState` omitted (non-opti runs) leaves the field untouched.
+   */
+  async updateCheckpoint(id: string, checkpoint: unknown, optiPlanState?: IOptiPlanState): Promise<void> {
+    const set: Record<string, unknown> = { checkpoint };
+    if (optiPlanState !== undefined) set.optiPlanState = optiPlanState;
+    await this.model.updateOne({ _id: id }, { $set: set });
   }
 
   /**
@@ -1112,8 +1186,15 @@ class AgentExecutionRepository extends BaseRepository<IAgentExecution> {
    * document with an updated checkpoint but stale `running` status (which
    * would orphan the execution by failing the continuation Lambda's CAS).
    */
-  async updateCheckpointAndStatus(id: string, checkpoint: unknown, status: AgentExecutionStatus): Promise<void> {
-    await this.model.updateOne({ _id: id }, { $set: { checkpoint, status } });
+  async updateCheckpointAndStatus(
+    id: string,
+    checkpoint: unknown,
+    status: AgentExecutionStatus,
+    optiPlanState?: IOptiPlanState
+  ): Promise<void> {
+    const set: Record<string, unknown> = { checkpoint, status };
+    if (optiPlanState !== undefined) set.optiPlanState = optiPlanState;
+    await this.model.updateOne({ _id: id }, { $set: set });
   }
 
   async updateConnectionId(id: string, connectionId: string): Promise<void> {
