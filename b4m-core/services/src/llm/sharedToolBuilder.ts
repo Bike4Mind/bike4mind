@@ -42,6 +42,13 @@ export interface ToolBuilderDeps {
   retrievalFilter?: ToolContext['retrievalFilter'];
   /** Agent-scoped KB restriction, forwarded to the tool context (see ToolContext.kbScope). */
   kbScope?: ToolContext['kbScope'];
+  /**
+   * Sink for tool-internal LLM spend, forwarded to the tool context. The agent
+   * executor wires this to fold nested tool generation into iteration billing (#630);
+   * omit on hosts that don't bill nested tool spend to the customer (e.g. the chat
+   * path). See ToolContext.onToolLlmUsage.
+   */
+  onToolLlmUsage?: ToolContext['onToolLlmUsage'];
   storage: BaseStorage;
   imageGenerateStorage: BaseStorage;
   imageProcessorLambdaName?: string;
@@ -272,7 +279,8 @@ export function buildSharedTools(
     entitlementKeys ?? [],
     callbacks.sessionId,
     undefined, // codeMinifier - CLI-only (web-tree-sitter); server path has no minifier
-    deps.precomputed?.models
+    deps.precomputed?.models,
+    deps.onToolLlmUsage
   );
 
   // Filter to enabled tools only

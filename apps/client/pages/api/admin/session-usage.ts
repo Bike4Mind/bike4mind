@@ -83,6 +83,10 @@ const handler = baseApi().get(async (req, res) => {
         cacheWriteTokens: 0,
       };
       row.iterations += 1;
+      // `credits` is the full agent + tool-internal charge, but the token counts are
+      // AGENT-ONLY by design (tool tokens are priced at a different model and never
+      // persisted to iterationBilling - see agentExecutor.billing.ts #630).
+      // So a row's credits can exceed what its tokens alone imply; that's expected.
       row.credits += ib.credits;
       row.inputTokens += ib.inputTokens;
       row.outputTokens += ib.outputTokens;
