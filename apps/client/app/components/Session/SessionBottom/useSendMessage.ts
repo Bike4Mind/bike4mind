@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { useShallow } from 'zustand/react/shallow';
@@ -258,7 +258,15 @@ export function useSendMessage({
   // `execution_started` event during the `/new -> /notebooks/$id` swap.
   const agentExecution = useAgentExecutionDispatch();
 
-  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitting, setSubmittingState] = useState<boolean>(false);
+  // Ref-based mutex: React state updates are batched, so two rapid calls can
+  // both read `submitting === false` from their closure. The ref flips
+  // synchronously, making the guard at the top of handleSendClick airtight.
+  const submittingRef = useRef(false);
+  const setSubmitting = useCallback((value: boolean) => {
+    submittingRef.current = value;
+    setSubmittingState(value);
+  }, []);
   const [stoppingMessage, setStoppingMessage] = useState<boolean>(false);
   const [pendingAutoSubmitGoal, setPendingAutoSubmitGoal] = useState<string | null>(null);
   const [enableQuestMasterOnSubmit, setEnableQuestMasterOnSubmit] = useState(false);
@@ -316,7 +324,11 @@ export function useSendMessage({
     newPrompt?: string,
     options?: { forceEnableQuestMaster?: boolean; toolsOverride?: B4MLLMTools[] }
   ): Promise<IChatHistoryItemDocument | undefined> => {
-    if (submitting) return;
+    if (submittingRef.current) return;
+
+    // Lock out concurrent sends immediately so a second click/Enter during
+    // validation or the host-create await cannot slip through the guard above.
+    setSubmitting(true);
 
     // For editor-driven sends (newPrompt === undefined) serialize the composer to
     // markdown so inline formatting (Ctrl+B / Ctrl+I) round-trips into the rendered
@@ -343,6 +355,7 @@ export function useSendMessage({
     if (errorMessage) {
       console.error(errorMessage);
       toast.error(errorMessage);
+      setSubmitting(false);
       return;
     }
 
@@ -358,11 +371,10 @@ export function useSendMessage({
       const hostCreateSession = useSessionRouter.getState().hostCreateSession;
       if (hostCreateSession) {
         await hostCreateSession(prompt);
+        setSubmitting(false);
         return;
       }
     }
-
-    setSubmitting(true);
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;
