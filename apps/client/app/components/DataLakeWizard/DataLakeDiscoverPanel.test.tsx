@@ -34,7 +34,9 @@ const TestWrapper = ({ children }: { children: ReactNode }) => (
   <CssVarsProvider theme={appTheme}>{children}</CssVarsProvider>
 );
 
-const result = (overrides: Partial<BrowsePublicDataLakesResult> = {}): BrowsePublicDataLakesResult => ({
+const fetchNextPage = vi.fn();
+
+const page = (overrides: Partial<BrowsePublicDataLakesResult> = {}): BrowsePublicDataLakesResult => ({
   data: [
     {
       id: 'lk1',
@@ -53,22 +55,35 @@ const result = (overrides: Partial<BrowsePublicDataLakesResult> = {}): BrowsePub
   ...overrides,
 });
 
-const mockHook = (value: Partial<ReturnType<typeof mockState>> = {}) =>
-  useBrowsePublicDataLakes.mockReturnValue(mockState(value));
-
+// Mirror the useInfiniteQuery result shape the panel consumes (pages[] + paging helpers).
 const mockState = (
-  value: Partial<{ data: BrowsePublicDataLakesResult; isLoading: boolean; isFetching: boolean; isError: boolean }> = {}
-) => ({
-  data: result(),
-  isLoading: false,
-  isFetching: false,
-  isError: false,
-  ...value,
-});
+  value: Partial<{
+    pages: BrowsePublicDataLakesResult[];
+    isLoading: boolean;
+    isFetchingNextPage: boolean;
+    isError: boolean;
+    hasNextPage: boolean;
+  }> = {}
+) => {
+  const { pages, ...rest } = value;
+  return {
+    data: pages === undefined ? { pages: [page()] } : { pages },
+    isLoading: false,
+    isFetchingNextPage: false,
+    isError: false,
+    hasNextPage: false,
+    fetchNextPage,
+    ...rest,
+  };
+};
+
+const mockHook = (value: Parameters<typeof mockState>[0] = {}) =>
+  useBrowsePublicDataLakes.mockReturnValue(mockState(value));
 
 describe('DataLakeDiscoverPanel', () => {
   beforeEach(() => {
     useBrowsePublicDataLakes.mockReset();
+    fetchNextPage.mockReset();
   });
 
   it('renders a public-lake card with owner, file count, and size', () => {
@@ -84,12 +99,22 @@ describe('DataLakeDiscoverPanel', () => {
     expect(screen.getByTestId('datalake-discover-count')).toHaveTextContent('Showing 1 of 1');
   });
 
-  it('shows an "Owned by you" chip and hides the owner chip for the caller’s own lake', () => {
+  it('accumulates lakes across pages and reads total from the first page', () => {
     mockHook({
-      data: result({
-        data: [{ ...result().data[0], isOwn: true, ownerDisplayName: 'Ada Owner' }],
-      }),
+      pages: [
+        page({ total: 30 }),
+        { data: [{ ...page().data[0], id: 'lk2', slug: 'ops', name: 'Ops Lake' }], total: 30 },
+      ],
     });
+    render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
+
+    expect(screen.getByTestId('datalake-discover-card-lk1')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-discover-card-lk2')).toBeInTheDocument();
+    expect(screen.getByTestId('datalake-discover-count')).toHaveTextContent('Showing 2 of 30');
+  });
+
+  it('shows an "Owned by you" chip and hides the owner chip for the caller’s own lake', () => {
+    mockHook({ pages: [page({ data: [{ ...page().data[0], isOwn: true, ownerDisplayName: 'Ada Owner' }] })] });
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
     expect(screen.getByText('Owned by you')).toBeInTheDocument();
@@ -97,7 +122,7 @@ describe('DataLakeDiscoverPanel', () => {
   });
 
   it('renders an empty state when there are no public lakes', () => {
-    mockHook({ data: result({ data: [], total: 0 }) });
+    mockHook({ pages: [{ data: [], total: 0 }] });
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('datalake-discover-empty')).toBeInTheDocument();
@@ -108,20 +133,30 @@ describe('DataLakeDiscoverPanel', () => {
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
     await userEvent.type(screen.getByTestId('datalake-discover-search').querySelector('input')!, 'sales');
-    // Latest call reflects the debounced (here: immediate) query at the default page size.
-    expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('sales', 24);
+    // Offset paging keeps a fixed page size, so the hook takes only the (debounced) search term.
+    expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('sales');
   });
 
-  it('grows the page size when Load more is clicked', async () => {
-    mockHook({ data: result({ total: 100 }) });
+  it('fetches the next page on Load more only while there is one, and never grows the request', async () => {
+    mockHook({ hasNextPage: true });
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
+    // The hook is always called with just the search term - Load more advances offset internally,
+    // so a deep load-more can never push `limit` past the route cap (the bug this guards against).
+    expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('');
     await userEvent.click(screen.getByTestId('datalake-discover-load-more'));
-    expect(useBrowsePublicDataLakes).toHaveBeenLastCalledWith('', 48);
+    expect(fetchNextPage).toHaveBeenCalledTimes(1);
+  });
+
+  it('hides Load more when there is no next page', () => {
+    mockHook({ hasNextPage: false });
+    render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
+
+    expect(screen.queryByTestId('datalake-discover-load-more')).not.toBeInTheDocument();
   });
 
   it('surfaces an error state', () => {
-    mockHook({ isError: true, data: undefined as unknown as BrowsePublicDataLakesResult });
+    useBrowsePublicDataLakes.mockReturnValue(mockState({ isError: true, pages: [] }));
     render(<DataLakeDiscoverPanel />, { wrapper: TestWrapper });
 
     expect(screen.getByTestId('datalake-discover-error')).toBeInTheDocument();

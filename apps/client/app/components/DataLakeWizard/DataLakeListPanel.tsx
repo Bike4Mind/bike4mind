@@ -61,10 +61,13 @@ export default function DataLakeListPanel() {
   const { data: dataLakes, isLoading } = useDataLakes();
   const openWizard = useDataLakeWizardStore(s => s.openWizard);
   const openWizardForLake = useDataLakeWizardStore(s => s.openWizardForLake);
-  // Seed the active tab from the store once (the panel remounts each time the manager opens,
-  // so a deep-link to 'discover' lands on the right tab) while still letting the user switch.
-  const initialTab = useDataLakeWizardStore(s => s.managerTab);
-  const [tab, setTab] = useState<ManagerTab>(initialTab);
+  // Follow the store's target tab so a deep-link (openManager('discover')) always lands on the
+  // right tab, while still letting the user switch freely afterwards. Syncing on the store value
+  // (not just mount) keeps the deep-link working even if the manager Modal ever gains keepMounted
+  // and stops remounting this panel between opens.
+  const managerTab = useDataLakeWizardStore(s => s.managerTab);
+  const [tab, setTab] = useState<ManagerTab>(managerTab);
+  useEffect(() => setTab(managerTab), [managerTab]);
   const [viewingLake, setViewingLake] = useState<{
     id: string;
     name: string;

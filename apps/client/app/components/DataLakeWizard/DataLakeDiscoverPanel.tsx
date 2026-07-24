@@ -10,23 +10,21 @@ import { formatBytes } from '@client/app/utils/folderTreeParser';
 import DataLakeViewer from './DataLakeViewer';
 import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 
-const PAGE_SIZE = 24;
-
 /**
  * Discover surface: browse public data lakes shared by anyone across the app. Read-only -
  * a public lake's knowledge is already retrievable once published, so there is no subscribe
  * step; opening a card just previews the lake's files via the shared read-only DataLakeViewer.
- * Search matches name/description; "Load more" grows the page rather than paging by cursor.
+ * Search matches name/description; "Load more" pages by fixed-size offset (accumulated by the
+ * hook), so it never grows the request past the route's max-limit cap.
  */
 export default function DataLakeDiscoverPanel() {
   const { value: search, debouncedValue: debouncedSearch, setValue: setSearch } = useDebounceValue('', 300);
-  const [limit, setLimit] = useState(PAGE_SIZE);
   const [viewingLake, setViewingLake] = useState<{ id: string; name: string; tagPrefix: string } | null>(null);
 
-  const { data, isLoading, isFetching, isError } = useBrowsePublicDataLakes(debouncedSearch, limit);
-  const lakes = data?.data ?? [];
-  const total = data?.total ?? 0;
-  const hasMore = lakes.length < total;
+  const { data, isLoading, isFetchingNextPage, isError, fetchNextPage, hasNextPage } =
+    useBrowsePublicDataLakes(debouncedSearch);
+  const lakes = data?.pages.flatMap(page => page.data) ?? [];
+  const total = data?.pages[0]?.total ?? 0;
 
   return (
     <Box data-testid="datalake-discover-panel">
@@ -34,10 +32,7 @@ export default function DataLakeDiscoverPanel() {
         size="sm"
         placeholder="Search public data lakes"
         value={search}
-        onChange={e => {
-          setSearch(e.target.value);
-          setLimit(PAGE_SIZE); // a new query resets the page growth
-        }}
+        onChange={e => setSearch(e.target.value)}
         startDecorator={<SearchIcon sx={{ fontSize: 18 }} />}
         endDecorator={
           search ? (
@@ -47,10 +42,7 @@ export default function DataLakeDiscoverPanel() {
               color="neutral"
               aria-label="Clear search"
               data-testid="datalake-discover-clear"
-              onClick={() => {
-                setSearch('');
-                setLimit(PAGE_SIZE);
-              }}
+              onClick={() => setSearch('')}
             >
               <CloseIcon sx={{ fontSize: 16 }} />
             </IconButton>
@@ -154,14 +146,14 @@ export default function DataLakeDiscoverPanel() {
             ))}
           </Stack>
 
-          {hasMore && (
+          {hasNextPage && (
             <Button
               size="sm"
               variant="plain"
               color="neutral"
               fullWidth
-              loading={isFetching}
-              onClick={() => setLimit(l => l + PAGE_SIZE)}
+              loading={isFetchingNextPage}
+              onClick={() => fetchNextPage()}
               data-testid="datalake-discover-load-more"
               sx={{ mt: 1 }}
             >

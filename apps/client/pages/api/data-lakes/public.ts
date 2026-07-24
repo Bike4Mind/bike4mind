@@ -16,6 +16,8 @@ const BrowseQuery = z.object({
 const handler = baseApi()
   .use(requireFeatureEnabled('EnableDataLakes'))
   // GET /api/data-lakes/public - browse the public-lake discovery catalog (search + paging).
+  // "Public" = readable by any SIGNED-IN user, not open to the world: baseApi() authenticates
+  // by default, so an unauthenticated caller is rejected with 401 before this handler runs.
   .get(async (req: Request, res) => {
     const { q, limit, offset } = BrowseQuery.parse(req.query);
 
