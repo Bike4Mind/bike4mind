@@ -369,6 +369,23 @@ describe('DataLakeRepository.findPublicLakes — public discover catalog', () =>
     expect(page2.total).toBe(2);
   });
 
+  it('paginates deterministically across same-named lakes (no dup/skip between pages)', async () => {
+    // Same name on every lake -> name alone is not a total order; the _id tiebreaker is what
+    // keeps skip/limit pages disjoint and complete.
+    for (const slug of ['s1', 's2', 's3', 's4']) {
+      await dataLakeRepository.create(baseLake({ slug, name: 'Same', isPublic: true }));
+    }
+    const seen: string[] = [];
+    for (let offset = 0; offset < 4; offset += 2) {
+      const { lakes } = await dataLakeRepository.findPublicLakes({ limit: 2, offset });
+      seen.push(...lakes.map(l => l.slug));
+    }
+    // All four returned exactly once across the two pages - no overlap, nothing missed.
+    expect(seen.length).toBe(4);
+    expect(new Set(seen).size).toBe(4);
+    expect([...seen].sort()).toEqual(['s1', 's2', 's3', 's4']);
+  });
+
   it('treats a regex-metacharacter search as a literal (no injection)', async () => {
     await dataLakeRepository.create(baseLake({ slug: 'dotstar', name: 'a.b', isPublic: true }));
     await dataLakeRepository.create(baseLake({ slug: 'plain', name: 'axb', isPublic: true }));

@@ -321,7 +321,9 @@ class DataLakeRepository extends BaseRepository<IDataLakeDocument> implements ID
 
     // total is the unpaged count so the UI can show "showing X of Y" and drive load-more.
     const total = await this.dataLakeModel.countDocuments(filter);
-    const results = await this.dataLakeModel.find(filter).sort({ name: 1 }).skip(offset).limit(limit);
+    // `_id` breaks name ties so the ordering is total: without it, same-named lakes have no
+    // stable order under skip/limit, and one could appear on two pages or be skipped between them.
+    const results = await this.dataLakeModel.find(filter).sort({ name: 1, _id: 1 }).skip(offset).limit(limit);
     return { lakes: results.map(r => r.toJSON() as IDataLakeDocument), total };
   }
 
