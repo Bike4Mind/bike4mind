@@ -139,9 +139,18 @@ Some built-in tools (weather, web search, deep research) need provider keys, and
 | `list_files` | Search your files | `files:read` |
 | `get_file` | File metadata plus a signed download URL | `files:read` |
 
-It also exposes a `b4m://notebook/{id}` resource that lists and reads notebooks as JSON.
+It also exposes four resource templates, each with a working `list` and `read` that return `application/json`:
 
-The **Scope** column is the *recommended* key configuration for that tool, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
+| Resource | Lists / reads | Scope |
+| --- | --- | --- |
+| `b4m://notebook/{id}` | Your notebooks (sessions) | `notebooks:read` |
+| `b4m://file/{id}` | File metadata plus a signed download URL | `files:read` |
+| `b4m://project/{id}` | Your projects | `projects:read` |
+| `b4m://artifact/{id}` | Artifact metadata plus its current content | none (see below) |
+
+Resource *listing* is capped at 100 entries per template and takes no paging arguments. A listing that fails (for example, a key without `projects:read`) degrades to an empty list for that template only, so the other three still enumerate. Because an empty list can therefore also mean an auth failure and not just an empty account, the underlying error is written to the server's stderr; under stdio transport your MCP host captures that stream (for example Claude Desktop's `~/Library/Logs/Claude/mcp-server-*.log`), so check it there if a resource picker comes back unexpectedly empty. There is no `artifacts:*` API-key scope, so an artifact 403 carries no scope recommendation.
+
+The **Scope** column in both tables is the *recommended* key configuration for that tool or resource, not a per-route hard gate: most of these routes do not enforce scopes, so a real 403 can also mean a CASL authorization denial or a suspended account, not just a missing scope.
 
 ### Auth and endpoint
 
