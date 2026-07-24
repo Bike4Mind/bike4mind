@@ -53,6 +53,11 @@ export const ttsRequestSchema = z.object({
   // ElevenLabs voice_settings; ignored by providers that don't use them.
   stability: z.number().min(0).max(1).optional(),
   similarityBoost: z.number().min(0).max(1).optional(),
+  // ElevenLabs language_code (ISO 639-1, e.g. "en", "ja"). Pins the output
+  // language on models that support it (v2.5+/v3), removing the auto-detection
+  // that mispronounces short, isolated tokens (a bare "2", acronyms, names).
+  // Best-effort: ignored by providers/models that don't support it.
+  languageCode: z.string().optional(),
 });
 
 export type TTSRequest = z.infer<typeof ttsRequestSchema>;

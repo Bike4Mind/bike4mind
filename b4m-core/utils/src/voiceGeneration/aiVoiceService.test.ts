@@ -139,6 +139,30 @@ describe('ElevenLabsVoiceService', () => {
     expect(mockedPost).toHaveBeenCalledWith(expect.any(String), { text: 'hello' }, expect.any(Object));
   });
 
+  it('forwards language as language_code when provided', async () => {
+    mockedPost.mockResolvedValue({ data: new Uint8Array([1]).buffer });
+
+    await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('2', {
+      voice: 'voice-123',
+      model: 'eleven_turbo_v2_5',
+      language: 'en',
+    });
+
+    expect(mockedPost).toHaveBeenCalledWith(
+      expect.any(String),
+      { text: '2', model_id: 'eleven_turbo_v2_5', language_code: 'en' },
+      expect.any(Object)
+    );
+  });
+
+  it('omits language_code when no language is given (preserves auto-detection)', async () => {
+    mockedPost.mockResolvedValue({ data: new Uint8Array([1]).buffer });
+
+    await aiVoiceService('elevenlabs', 'xi-key', logger).synthesize('hello', { voice: 'voice-123' });
+
+    expect(mockedPost).toHaveBeenCalledWith(expect.any(String), { text: 'hello' }, expect.any(Object));
+  });
+
   it('sends only the field the caller set, letting ElevenLabs default the other', async () => {
     mockedPost.mockResolvedValue({ data: new Uint8Array([8]).buffer });
 
