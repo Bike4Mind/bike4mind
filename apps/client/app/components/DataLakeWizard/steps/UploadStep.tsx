@@ -47,7 +47,7 @@ export default function UploadStep() {
   } else if (processingStarted) {
     completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded - ${chunkedFiles.toLocaleString()} chunked, ${vectorizedFiles.toLocaleString()} vectorized so far.`;
   } else {
-    completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded. Chunking and vectorizing haven't started yet.`;
+    completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded - chunking and vectorizing in progress.`;
   }
   if (progress.failedFiles > 0) {
     const failedWord = progress.failedFiles === 1 ? 'file' : 'files';

@@ -56,7 +56,7 @@ describe('UploadStep — completion summary', () => {
   it('does not claim vectorized when nothing was processed (self-host, no worker)', () => {
     renderComplete({ totalFiles: 3, uploadedFiles: 3, chunkedFiles: 0, vectorizedFiles: 0 });
     const summary = screen.getByText(/uploaded/i);
-    expect(summary).toHaveTextContent("3 files uploaded. Chunking and vectorizing haven't started yet.");
+    expect(summary).toHaveTextContent('3 files uploaded - chunking and vectorizing in progress.');
     expect(summary).not.toHaveTextContent('vectorized.');
   });
 
@@ -84,6 +84,6 @@ describe('UploadStep — completion summary', () => {
   // renders in practice - assert it anyway to lock the copy against 0 uploads.
   it('renders the not-started fallback when nothing was uploaded', () => {
     renderComplete({ totalFiles: 0, uploadedFiles: 0, chunkedFiles: 0, vectorizedFiles: 0 });
-    expect(screen.getByText("0 files uploaded. Chunking and vectorizing haven't started yet.")).toBeInTheDocument();
+    expect(screen.getByText('0 files uploaded - chunking and vectorizing in progress.')).toBeInTheDocument();
   });
 });
