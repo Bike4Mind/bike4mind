@@ -12,6 +12,9 @@ import {
 
 export type WizardStep = 'source' | 'preview' | 'taxonomy' | 'config' | 'upload';
 
+/** The two tabs of the Data Lakes management panel: own lakes vs. the public discover catalog. */
+export type ManagerTab = 'mine' | 'discover';
+
 export interface TaxonomyTag {
   /** Full tag name, e.g. "acme:type:contract" */
   name: string;
@@ -116,12 +119,14 @@ interface DataLakeWizardStore {
   targetLake: WizardTargetLake | null;
   /** Drives the Data Lakes management panel (list + lifecycle), distinct from the wizard. */
   isManagerOpen: boolean;
+  /** Which manager tab to show on open: the caller's own lakes, or the public discover catalog. */
+  managerTab: ManagerTab;
 
   // Navigation
   openWizard: () => void;
   openWizardForLake: (lake: WizardTargetLake) => void;
   closeWizard: () => void;
-  openManager: () => void;
+  openManager: (tab?: ManagerTab) => void;
   closeManager: () => void;
   setStep: (step: WizardStep) => void;
 
@@ -172,6 +177,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
   hashingProgress: { total: 0, completed: 0, status: 'idle' as const },
   targetLake: null,
   isManagerOpen: false,
+  managerTab: 'mine',
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
@@ -179,7 +185,8 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
   // button calls openWizard, which stacks the wizard on top and returns here on close.
-  openManager: () => set({ isManagerOpen: true }),
+  // An optional tab lets callers deep-link straight to the public discover catalog.
+  openManager: (tab: ManagerTab = 'mine') => set({ isManagerOpen: true, managerTab: tab }),
   closeManager: () => set({ isManagerOpen: false }),
 
   // Append mode: upload into an existing lake. Preseeds config from the lake so

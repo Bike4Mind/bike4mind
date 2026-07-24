@@ -7,6 +7,7 @@ export * from './createDataLake';
 export * from './updateDataLake';
 export * from './setLakeVisibility';
 export * from './listDataLakes';
+export * from './browsePublicDataLakes';
 export * from './archiveDataLake';
 export * from './unarchiveDataLake';
 export * from './restoreDeletedDataLake';
