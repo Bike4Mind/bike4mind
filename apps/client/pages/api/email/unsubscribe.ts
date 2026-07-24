@@ -2,6 +2,12 @@ import { emailPreferencesRepository, emailSendAttemptRepository } from '@bike4mi
 import { EmailCategory } from '@bike4mind/common';
 import { baseApi } from '@server/middlewares/baseApi';
 import { BadRequestError } from '@server/utils/errors';
+import * as z from 'zod';
+
+const unsubscribeBodySchema = z.object({
+  category: z.nativeEnum(EmailCategory).optional(),
+  globalUnsubscribe: z.boolean().optional(),
+});
 
 const handler = baseApi({ auth: false })
   .get(async (req, res) => {
@@ -31,10 +37,7 @@ const handler = baseApi({ auth: false })
   })
   .post(async (req, res) => {
     const { token } = req.query as { token: string };
-    const { category, globalUnsubscribe } = req.body as {
-      category?: EmailCategory;
-      globalUnsubscribe?: boolean;
-    };
+    const { category, globalUnsubscribe } = unsubscribeBodySchema.parse(req.body);
 
     if (!token) {
       throw new BadRequestError('Token is required');

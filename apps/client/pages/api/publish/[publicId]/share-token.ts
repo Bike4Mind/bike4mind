@@ -2,6 +2,11 @@ import { baseApi } from '@server/middlewares/baseApi';
 import { PublishedArtifact } from '@bike4mind/database';
 import { generateShareToken } from '@server/services/publish';
 import type { Request, Response } from 'express';
+import * as z from 'zod';
+
+const shareTokenBodySchema = z.object({
+  regenerate: z.boolean().optional(),
+});
 
 /**
  * Owner-only management of a published artifact's no-sign-in share token (the
@@ -49,7 +54,7 @@ const handler = baseApi()
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
 
-    const regenerate = (req.body as { regenerate?: boolean } | undefined)?.regenerate === true;
+    const regenerate = shareTokenBodySchema.parse(req.body).regenerate === true;
 
     // Fast path: a token exists and we're not rotating -> return it (idempotent).
     if (!regenerate && artifact.shareToken) {
