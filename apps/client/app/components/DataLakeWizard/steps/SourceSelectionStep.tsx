@@ -1,7 +1,20 @@
-import { Box, Button, CircularProgress, Stack, Tooltip, Typography } from '@mui/joy';
+import {
+  Box,
+  Button,
+  CircularProgress,
+  Dropdown,
+  ListItemDecorator,
+  Menu,
+  MenuButton,
+  MenuItem,
+  Stack,
+  Tooltip,
+  Typography,
+} from '@mui/joy';
 import CloudUploadIcon from '@mui/icons-material/CloudUpload';
 import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
 import CloudIcon from '@mui/icons-material/Cloud';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import { useTheme } from '@mui/joy/styles';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
@@ -111,7 +124,7 @@ export default function SourceSelectionStep() {
           transition: 'all 0.2s',
           cursor: 'pointer',
         }}
-        onClick={() => !isScanning && folderInputRef.current?.click()}
+        onClick={() => !isScanning && fileInputRef.current?.click()}
       >
         {isScanning ? (
           <>
@@ -127,46 +140,86 @@ export default function SourceSelectionStep() {
           <>
             <CloudUploadIcon sx={{ fontSize: 56, color: isDragging ? 'primary.500' : 'neutral.400' }} />
             <Typography level="title-lg" textAlign="center">
-              Drop a folder here
+              Drop files or a folder here
             </Typography>
             <Typography level="body-sm" color="neutral" textAlign="center">
-              Or use the buttons below to select files
+              Or use the Upload button below
             </Typography>
           </>
         )}
       </Box>
 
-      {/* Action buttons */}
+      {/* Action buttons. A single Upload split-button covers both files and folder selection:
+          a browser file input can only be in one mode at a time (webkitdirectory forces folder-only),
+          so the two modes live behind one control instead of two top-level buttons. */}
       <Stack direction="row" gap={2} justifyContent="center" flexWrap="wrap">
-        {supportsWebkitDirectory ? (
+        {/* Joined split-button built from a flex wrapper rather than ButtonGroup: ButtonGroup's
+            child-radius CSS keys off data-first/last-child markers, which the Dropdown wrapper
+            around the caret swallows, so it can't round the caret correctly. We square the shared
+            edge and round the two outer edges by hand. */}
+        <Box sx={{ display: 'inline-flex' }}>
           <Button
-            data-testid="wizard-upload-folder-btn"
+            data-testid="wizard-upload-btn"
             variant="solid"
             color="primary"
             startDecorator={<CloudUploadIcon />}
-            onClick={() => folderInputRef.current?.click()}
+            onClick={() => fileInputRef.current?.click()}
+            sx={{ borderTopRightRadius: 0, borderBottomRightRadius: 0 }}
           >
-            Upload Folder
+            Upload
           </Button>
-        ) : (
-          <Tooltip title="Folder upload is not supported in this browser. Please use Chrome, Edge, or Safari.">
-            <span>
-              <Button variant="solid" color="primary" startDecorator={<CloudUploadIcon />} disabled>
-                Upload Folder
-              </Button>
-            </span>
-          </Tooltip>
-        )}
-
-        <Button
-          data-testid="wizard-select-files-btn"
-          variant="outlined"
-          color="neutral"
-          startDecorator={<InsertDriveFileIcon />}
-          onClick={() => fileInputRef.current?.click()}
-        >
-          Select Files
-        </Button>
+          <Dropdown>
+            <MenuButton
+              data-testid="wizard-upload-menu-btn"
+              aria-label="Upload options"
+              slots={{ root: Button }}
+              slotProps={{
+                root: {
+                  variant: 'solid',
+                  color: 'primary',
+                  sx: {
+                    px: 1,
+                    minWidth: 0,
+                    borderTopLeftRadius: 0,
+                    borderBottomLeftRadius: 0,
+                    borderLeft: '1px solid',
+                    borderLeftColor: 'primary.700', // subtle divider between the two halves
+                  },
+                },
+              }}
+            >
+              <KeyboardArrowDownIcon />
+            </MenuButton>
+            {/* zIndex above the wizard Modal (1300) so the menu isn't hidden behind it */}
+            <Menu placement="bottom-end" sx={{ zIndex: 1400 }}>
+              <MenuItem data-testid="wizard-upload-files-item" onClick={() => fileInputRef.current?.click()}>
+                <ListItemDecorator>
+                  <InsertDriveFileIcon />
+                </ListItemDecorator>
+                Upload Files&hellip;
+              </MenuItem>
+              {supportsWebkitDirectory ? (
+                <MenuItem data-testid="wizard-upload-folder-item" onClick={() => folderInputRef.current?.click()}>
+                  <ListItemDecorator>
+                    <CloudUploadIcon />
+                  </ListItemDecorator>
+                  Upload Folder&hellip;
+                </MenuItem>
+              ) : (
+                <Tooltip title="Folder upload is not supported in this browser. Please use Chrome, Edge, or Safari.">
+                  <span>
+                    <MenuItem data-testid="wizard-upload-folder-item" disabled>
+                      <ListItemDecorator>
+                        <CloudUploadIcon />
+                      </ListItemDecorator>
+                      Upload Folder&hellip;
+                    </MenuItem>
+                  </span>
+                </Tooltip>
+              )}
+            </Menu>
+          </Dropdown>
+        </Box>
 
         <Tooltip title="Coming soon">
           <span>
