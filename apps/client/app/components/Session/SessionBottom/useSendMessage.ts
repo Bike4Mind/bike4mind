@@ -610,11 +610,15 @@ export function useSendMessage({
       return;
     }
 
-    // Warn if images are attached but model doesn't support vision
+    // Warn if images are attached but a TEXT model can't see them (no vision). Gated to text
+    // models: for image models "vision" is irrelevant - image-input capability is handled by
+    // the image-model block below. Without the type gate this fired for every image model
+    // (none set supportsVision), wrongly telling a Kontext user - a model that REQUIRES an
+    // image - that their image "will not be visible".
     const hasImageFiles =
       pendingMessageFiles.some(pf => pf.fabFile.mimeType?.startsWith('image/')) ||
       workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
-    if (hasImageFiles && currentModelInfo && !currentModelInfo.supportsVision) {
+    if (hasImageFiles && currentModelInfo?.type === 'text' && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
       );
