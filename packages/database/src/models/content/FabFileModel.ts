@@ -482,6 +482,11 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       userId,
       contentHash: { $in: hashes },
       deletedAt: null,
+      // Exclude incomplete/orphan uploads: a record is created with the hash before the
+      // upload lands and stays 'pending' if it never completes, so a failed prior upload
+      // would otherwise block a legit re-upload. $ne (not === 'complete') is deliberate -
+      // it drops only the known-incomplete state and preserves legacy/undefined-status rows.
+      status: { $ne: 'pending' },
     });
     return result.map(d => d.toJSON());
   }
@@ -492,6 +497,10 @@ export class FabFileRepository extends BaseRepository<IFabFileDocument> implemen
       deletedAt: null,
       archivedAt: null,
       tags: { $elemMatch: { name: datalakeTag } },
+      // Same incomplete-upload exclusion as findByContentHashes: an orphan 'pending' record
+      // must not count as a live match, or sync-delta skips a legit re-upload and the restore
+      // paths (un/archive, un/delete) would discard the good copy in favor of the orphan.
+      status: { $ne: 'pending' },
     });
     return result.map(d => d.toJSON());
   }
