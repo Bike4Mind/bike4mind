@@ -278,6 +278,74 @@ describe('apiKeyRateLimitCheck', () => {
       expect(result.allowed).toBe(false);
     });
 
+    describe('meterDailyLimit: false (exempt reads)', () => {
+      it('should not increment the day counter and report day usage from a read', async () => {
+        // Minute increment succeeds; day counter must NOT be touched.
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mockResolvedValueOnce({
+          success: true,
+          count: 2,
+          expiresAt: future(MINUTE_MS),
+        });
+        // Existing day counter (from prior POST submissions) is read, not incremented.
+        vi.mocked(cacheRepository.findByKey).mockResolvedValueOnce({
+          key: `api-key-rate-limit:${mockKeyId}:day`,
+          result: { count: 40 },
+          expiresAt: future(DAY_MS),
+        } as never);
+
+        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, {
+          meterDailyLimit: false,
+        });
+
+        expect(result.allowed).toBe(true);
+        // Only the minute counter was incremented (day was read, not incremented).
+        expect(cacheRepository.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledTimes(1);
+        expect(cacheRepository.tryIncrementWithinLimitFixedWindow).toHaveBeenCalledWith(
+          expect.stringContaining(':minute'),
+          mockRateLimit.requestsPerMinute,
+          MINUTE_MS
+        );
+        expect(cacheRepository.findByKey).toHaveBeenCalledWith(expect.stringContaining(':day'));
+        // Day headers reflect the read value without consuming a slot.
+        expect(result.headers['X-RateLimit-Remaining-Minute']).toBe(3); // 5 - 2
+        expect(result.headers['X-RateLimit-Remaining-Day']).toBe(60); // 100 - 40, unchanged by this read
+      });
+
+      it('should report a full day quota when no day counter exists yet', async () => {
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mockResolvedValueOnce({
+          success: true,
+          count: 1,
+          expiresAt: future(MINUTE_MS),
+        });
+        vi.mocked(cacheRepository.findByKey).mockResolvedValueOnce(null as never);
+
+        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, {
+          meterDailyLimit: false,
+        });
+
+        expect(result.allowed).toBe(true);
+        expect(result.headers['X-RateLimit-Remaining-Day']).toBe(100); // full quota, nothing consumed
+      });
+
+      it('should still enforce the per-minute burst limit on exempt reads', async () => {
+        // Even exempt reads count toward the minute limit, so a runaway poll is throttled.
+        vi.mocked(cacheRepository.tryIncrementWithinLimitFixedWindow).mockResolvedValueOnce({
+          success: false,
+          count: 5,
+          expiresAt: future(MINUTE_MS),
+        });
+
+        const result = await checkApiKeyRateLimit(mockKeyId, mockRateLimit, mockContext, {
+          meterDailyLimit: false,
+        });
+
+        expect(result.allowed).toBe(false);
+        expect(result.limitType).toBe('minute');
+        // Day counter never consulted once the minute limit rejects.
+        expect(cacheRepository.findByKey).not.toHaveBeenCalled();
+      });
+    });
+
     it('should use 16-char key prefix for security', async () => {
       // Use a longer key ID to test prefix truncation
       const longKeyId = 'test-api-key-1234567890abcdef-extra';

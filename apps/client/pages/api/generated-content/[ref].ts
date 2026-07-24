@@ -13,7 +13,10 @@ const refSchema = z
 
 const PRESIGNED_URL_EXPIRY_SECONDS = 3600;
 
-const handler = baseApi().get(
+// Fetching produced content is the final read of the async generation pipeline
+// (submit + poll + fetch); exempt these reads from the daily quota so one
+// generation costs a single daily slot. Only safe methods are exempted.
+const handler = baseApi({ exemptReadsFromDailyRateLimit: true }).get(
   asyncHandler<unknown, unknown, unknown, { ref?: string; format?: string }>(async (req, res) => {
     // Validate ref format - catch ZodError so we return 400 (not 422)
     let ref: string;
