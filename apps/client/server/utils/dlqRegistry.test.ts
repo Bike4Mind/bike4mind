@@ -29,6 +29,7 @@ const mockDlqUrls = vi.hoisted(() => ({
   'overwatch-analytics': 'https://sqs.us-east-2.amazonaws.com/123456789/overwatchAnalyticsQueueDLQ',
   'agent-continuation': 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueueDLQ',
   'optihashi-run-completion': 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueueDLQ',
+  'bob-run': 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueueDLQ',
   'data-lake-cleanup': 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueueDLQ',
 }));
 
@@ -60,6 +61,7 @@ const mockSourceQueueUrls = vi.hoisted(() => ({
   overwatchAnalyticsQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/overwatchAnalyticsQueue',
   agentContinuationQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/agentContinuationQueue',
   optihashiRunCompletionQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/optihashiRunCompletionQueue',
+  bobRunQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/bobRunQueue',
   dataLakeCleanupQueue: 'https://sqs.us-east-2.amazonaws.com/123456789/dataLakeCleanupQueue',
 }));
 
@@ -75,9 +77,9 @@ import { getDlqRegistry, getDlqByLabel, getSourceQueueUrl, getDlqUrl } from './d
 
 describe('dlqRegistry', () => {
   describe('getDlqRegistry', () => {
-    it('returns all 28 DLQ entries', () => {
+    it('returns all 29 DLQ entries', () => {
       const registry = getDlqRegistry();
-      expect(registry).toHaveLength(28);
+      expect(registry).toHaveLength(29);
     });
 
     it('each entry has required fields', () => {
