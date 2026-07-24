@@ -140,6 +140,54 @@ describe('EmbeddingFactory', () => {
     expect(() => factory.createEmbeddingService(OllamaEmbeddingModel.NOMIC_EMBED_TEXT)).toThrow(/Ollama base URL/);
   });
 
+  it('createEmbeddingService throws an actionable error for a missing OpenAI key', () => {
+    const factory = new EmbeddingFactory({});
+    expect(() => factory.createEmbeddingService(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)).toThrow(
+      /OPENAI_API_KEY.*OLLAMA_BASE_URL/s
+    );
+  });
+
+  it('createEmbeddingService throws an actionable error for a placeholder OpenAI key', () => {
+    const factory = new EmbeddingFactory({ openaiApiKey: 'sk-oai-dummy-routing-test' });
+    expect(() => factory.createEmbeddingService(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)).toThrow(
+      /placeholder.*OLLAMA_BASE_URL/s
+    );
+  });
+
+  it('createEmbeddingService throws an actionable error for a placeholder Voyage key', () => {
+    const factory = new EmbeddingFactory({ voyageApiKey: 'your-api-key' });
+    expect(() => factory.createEmbeddingService(VoyageAIEmbeddingModel.VOYAGE_3)).toThrow(
+      /VOYAGE_API_KEY.*OLLAMA_BASE_URL/s
+    );
+  });
+
+  it('createEmbeddingService still constructs for a real-looking OpenAI key', () => {
+    const factory = new EmbeddingFactory({ openaiApiKey: 'sk-realLooking1234567890abcdef' });
+    vi.clearAllMocks();
+    const service = factory.createEmbeddingService(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
+    expect(OpenAIEmbeddingService).toHaveBeenCalledWith(
+      'sk-realLooking1234567890abcdef',
+      OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL
+    );
+    expect(service).toBeDefined();
+  });
+
+  it('getAvailableModels omits OpenAI models when the key is a placeholder', () => {
+    const placeholder = new EmbeddingFactory({ openaiApiKey: 'sk-oai-dummy-routing-test' });
+    expect(placeholder.getAvailableModels()).not.toContain(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
+    const real = new EmbeddingFactory({ openaiApiKey: 'sk-realLooking1234567890abcdef' });
+    expect(real.getAvailableModels()).toContain(OpenAIEmbeddingModel.TEXT_EMBEDDING_3_SMALL);
+  });
+
+  it('getDefaultEmbeddingModel skips a placeholder OpenAI key and falls through to the next provider', () => {
+    // A placeholder OpenAI key must not win priority-1; with a local Ollama URL it resolves local.
+    const factory = new EmbeddingFactory({
+      openaiApiKey: 'sk-oai-dummy-routing-test',
+      ollamaBaseUrl: 'http://localhost:11434',
+    });
+    expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
   it('getDefaultEmbeddingModel returns the local default embedder when only Ollama is configured', () => {
     const factory = new EmbeddingFactory({ ollamaBaseUrl: 'http://localhost:11434' });
     expect(factory.getDefaultEmbeddingModel()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
