@@ -107,4 +107,46 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
     const result = await validateUserApiKey(originalKey, adapters);
     expect(result.isValid).toBe(false);
   });
+
+  // #909: an org admin can rotate a key billed to an org they administer, even a
+  // key they did not mint - resolved via the org-admin fallback.
+  describe('org-admin rotate (#909)', () => {
+    it('rotates a teammate org key when the caller administers its billing org', async () => {
+      const stored = {
+        id: 'key-1',
+        name: 'Org embed key',
+        userId: 'minter',
+        keyPrefix: 'b4m_live_orig000',
+      } as unknown as IUserApiKeyDocument;
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      const { key } = await rotateUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+
+      expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
+      expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
+      expect(key).toMatch(/^b4m_live_/);
+      expect(repo.update).toHaveBeenCalled();
+    });
+
+    it('throws NotFound when the caller neither minted nor administers the key', async () => {
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      await expect(rotateUserApiKey('other-user', { keyId: 'key-1' }, adapters)).rejects.toThrow(/not found/);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
+  });
 });

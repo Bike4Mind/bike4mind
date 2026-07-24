@@ -1,5 +1,6 @@
 import { userApiKeyService } from '@bike4mind/services';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
+import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { logEvent } from '@server/utils/analyticsLog';
 import { UserApiKeyEvents } from '@bike4mind/common';
@@ -19,6 +20,7 @@ const handler = baseApi().post(
       {
         db: {
           userApiKeys: userApiKeyRepository,
+          organizations: organizationRepository,
         },
       }
     );
