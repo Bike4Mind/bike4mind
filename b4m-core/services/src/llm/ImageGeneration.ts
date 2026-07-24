@@ -13,6 +13,7 @@ import {
   IChatHistoryItemRepository,
   IUserRepository,
   PromptMeta,
+  IFabFileDocument,
   IFabFileRepository,
   IAdminSettingsRepository,
   ModelInfo,
@@ -534,6 +535,17 @@ export class ImageGenerationService {
         // wrongly report "no input image" even though one is present in the notebook.
         const recentMessages = await this.db.quests.getMostRecentChatHistory(sessionId, 50);
 
+        // Batch every attached fabFile across the scanned turns into ONE lookup rather than a
+        // findAllInIds per message - a heavy-attachment notebook (PDFs/code on earlier turns)
+        // must not fan out dozens of sequential roundtrips on the image-gen critical path.
+        const attachedIds = [...new Set(recentMessages.flatMap(msg => msg.fabFileIds ?? []))];
+        const attachedById = new Map<string, IFabFileDocument>();
+        if (attachedIds.length) {
+          for (const file of await this.db.fabFiles.findAllInIds(attachedIds)) {
+            if (file.id) attachedById.set(file.id, file);
+          }
+        }
+
         for (const msg of recentMessages) {
           if (msg.type === 'error') continue;
 
@@ -547,21 +559,20 @@ export class ImageGenerationService {
             break;
           }
 
-          if (msg.fabFileIds?.length) {
-            const attachedFiles = await this.db.fabFiles.findAllInIds(msg.fabFileIds);
-            const attachedImage = attachedFiles.find(
-              file => file.mimeType.startsWith('image') && isImageServeable(file)
+          const attachedImage = (msg.fabFileIds ?? [])
+            .map(id => attachedById.get(id))
+            .find(
+              (file): file is IFabFileDocument => !!file && file.mimeType.startsWith('image') && isImageServeable(file)
             );
-            if (attachedImage) {
-              fileImage = attachedImage;
-              imageSource = 'notebook_attachment';
-              logger.debug('Carrying forward prior attached image (notebook context)', {
-                messageId: msg.id,
-                timestamp: msg.timestamp,
-                fabFileId: attachedImage.id,
-              });
-              break;
-            }
+          if (attachedImage) {
+            fileImage = attachedImage;
+            imageSource = 'notebook_attachment';
+            logger.debug('Carrying forward prior attached image (notebook context)', {
+              messageId: msg.id,
+              timestamp: msg.timestamp,
+              fabFileId: attachedImage.id,
+            });
+            break;
           }
         }
 
@@ -938,7 +949,7 @@ export class ImageGenerationService {
           );
 
           if (imageSource === 'workbench' || imageSource === 'notebook_attachment') {
-            Logger.globalInstance.debug(`[DEBUG] Getting signed URL for workbench file...`);
+            Logger.globalInstance.debug(`[DEBUG] Getting signed URL for fabFile image (${imageSource})...`);
             try {
               imageUrl = await this.fabFileStorage.getSignedUrl(fileImage.filePath);
               Logger.globalInstance.debug(`[DEBUG] ✅ Got signed URL:`, imageUrl.substring(0, 100) + '...');
@@ -1071,9 +1082,9 @@ export class ImageGenerationService {
         if (fileImage?.filePath) {
           Logger.globalInstance.debug(`[DEBUG] Processing OpenAI with input image from ${imageSource}`);
           if (imageSource === 'workbench' || imageSource === 'notebook_attachment') {
-            // Workbench files need signed URLs
+            // fabFile-backed inputs (workbench upload or notebook attachment) need signed URLs
             imageUrl = await this.fabFileStorage.getSignedUrl(fileImage.filePath);
-            Logger.globalInstance.debug(`[DEBUG] ✅ Got signed URL for workbench image`);
+            Logger.globalInstance.debug(`[DEBUG] ✅ Got signed URL for fabFile image (${imageSource})`);
           } else {
             // Message history images are stored as S3 keys (filenames), not full URLs
             // Need to get a signed URL to access them from the generated images storage
