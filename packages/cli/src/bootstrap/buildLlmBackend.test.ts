@@ -50,52 +50,45 @@ describe('resolveModelInfo', () => {
   });
 });
 
-describe('buildLlmBackend — transport selection', () => {
-  it('uses WebSocket transport when server config provides ws urls', async () => {
-    const { deps, fakeWs, wsBackend } = makeDeps();
+describe('buildLlmBackend — SSE-only transport', () => {
+  it('always uses SSE and never attempts a WebSocket connection', async () => {
+    const { deps, serverBackend } = makeDeps();
     const res = await buildLlmBackend(makeInput(), deps);
 
-    expect(deps.connectWebSocket).toHaveBeenCalledWith('wss://x', expect.any(Function), expect.any(Function));
-    expect(deps.installWebSocketToolExecutor).toHaveBeenCalledOnce();
-    expect(deps.createWebSocketBackend).toHaveBeenCalledOnce();
-    expect(deps.registerKeepHandlers).toHaveBeenCalledWith(fakeWs);
-    expect(deps.clearWebSocketToolExecutor).not.toHaveBeenCalled();
-    expect(deps.createServerBackend).not.toHaveBeenCalled();
-    expect(res.wsManager).toBe(fakeWs);
-    expect(res.llm).toBe(wsBackend);
+    expect(deps.connectWebSocket).not.toHaveBeenCalled();
+    expect(deps.installWebSocketToolExecutor).not.toHaveBeenCalled();
+    expect(deps.createWebSocketBackend).not.toHaveBeenCalled();
+    expect(deps.registerKeepHandlers).not.toHaveBeenCalled();
+    expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
+    expect(deps.createServerBackend).toHaveBeenCalledOnce();
+    expect(res.wsManager).toBeNull();
+    expect(res.llm).toBe(serverBackend);
     expect(res.modelInfo.id).toBe('m1');
   });
 
-  it('falls back to SSE when the WebSocket fails to connect', async () => {
-    const { deps, serverBackend } = makeDeps({
-      connectWebSocket: vi.fn(async () => {
-        throw new Error('socket disconnected');
+  it('passes the server-config sseCompletionsUrl through to the SSE backend', async () => {
+    const { deps } = makeDeps();
+    await buildLlmBackend(
+      makeInput({ apiClient: fakeApiClient({ sseCompletionsUrl: 'https://cc.example/api/ai/v1/completions' }) }),
+      deps
+    );
+    expect(deps.createServerBackend).toHaveBeenCalledWith(
+      expect.objectContaining({ sseCompletionsUrl: 'https://cc.example/api/ai/v1/completions' })
+    );
+  });
+
+  it('still builds an SSE backend when the serverConfig fetch fails', async () => {
+    const { deps, serverBackend } = makeDeps();
+    const apiClient = {
+      get: vi.fn(async () => {
+        throw new Error('network down');
       }),
-    });
-    const res = await buildLlmBackend(makeInput(), deps);
+    } as never;
+    const res = await buildLlmBackend(makeInput({ apiClient }), deps);
 
-    expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
-    expect(deps.createServerBackend).toHaveBeenCalledOnce();
-    expect(deps.installWebSocketToolExecutor).not.toHaveBeenCalled();
-    expect(deps.registerKeepHandlers).not.toHaveBeenCalled();
-    expect(res.wsManager).toBeNull();
+    expect(deps.createServerBackend).toHaveBeenCalledWith(expect.objectContaining({ sseCompletionsUrl: undefined }));
     expect(res.llm).toBe(serverBackend);
-  });
-
-  it('falls back to SSE when server config lacks ws urls (never attempts connect)', async () => {
-    const { deps } = makeDeps();
-    const res = await buildLlmBackend(makeInput({ apiClient: fakeApiClient({}) }), deps);
-
-    expect(deps.connectWebSocket).not.toHaveBeenCalled();
-    expect(deps.createServerBackend).toHaveBeenCalledOnce();
-    expect(deps.clearWebSocketToolExecutor).toHaveBeenCalledOnce();
     expect(res.wsManager).toBeNull();
-  });
-
-  it('does not register Keep handlers on the SSE path', async () => {
-    const { deps } = makeDeps();
-    await buildLlmBackend(makeInput({ apiClient: fakeApiClient({}) }), deps);
-    expect(deps.registerKeepHandlers).not.toHaveBeenCalled();
   });
 });
 
