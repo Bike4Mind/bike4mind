@@ -13,7 +13,7 @@ const TestWrapper = ({ children }: { children: React.ReactNode }) => (
 describe('ApiReferenceTab', () => {
   it('links to the interactive docs at /api/v1/docs in a new tab', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
-    const link = screen.getByTestId('api-reference-docs-link');
+    const link = screen.getByTestId('api-reference-open-docs-btn');
     expect(link).toHaveAttribute('href', '/api/v1/docs');
     expect(link).toHaveAttribute('target', '_blank');
     expect(link).toHaveAttribute('rel', expect.stringContaining('noopener'));
@@ -21,7 +21,7 @@ describe('ApiReferenceTab', () => {
 
   it('offers a download of the raw OpenAPI spec at /api/v1/openapi.json', () => {
     render(<ApiReferenceTab />, { wrapper: TestWrapper });
-    const link = screen.getByTestId('api-reference-download-spec-link');
+    const link = screen.getByTestId('api-reference-download-spec-btn');
     expect(link).toHaveAttribute('href', '/api/v1/openapi.json');
     expect(link).toHaveAttribute('download', 'openapi.json');
   });
