@@ -276,6 +276,27 @@ describe('useBatchUpload rollback (#816)', () => {
     });
   });
 
+  it('batch-creation failure (create mode): setup-phase catch archives the new lake', async () => {
+    // Exercises the outer !reconciled catch: the lake was created but creating the batch
+    // throws before the outcome branch runs, so the catch (not the outcome branch) rolls
+    // the empty lake back. batchId is unset here, so no status PUT fires.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
+      if (url === '/api/data-lakes/batches') return Promise.reject(new Error('batch create 500'));
+      return Promise.resolve({ data: { success: true } });
+    });
+    seedWizard({ names: ['a.txt'] });
+
+    const { result } = mountBatchUpload();
+    act(() => result.current.mutate());
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(deleteCalledWith('/api/data-lakes/lake1')).toBe(true);
+    // Never reconciled through the outcome branch, so upload-complete is not called.
+    expect(postCall('/api/data-lakes/batches/upload-complete')).toBeUndefined();
+    expect(toastMock.success).not.toHaveBeenCalled();
+  });
+
   it('presign failure (create mode): rolls back the lake and marks the batch failed', async () => {
     apiPost.mockImplementation((url: string) => {
       if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake1' } });
