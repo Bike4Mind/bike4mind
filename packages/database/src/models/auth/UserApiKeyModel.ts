@@ -131,6 +131,19 @@ class UserApiKeyRepository extends BaseRepository<IUserApiKeyDocument> implement
     return this.model.find({ organizationId }).sort({ createdAt: -1 }).exec();
   }
 
+  // Positive org-admin scope for the write paths: the key with this id, but only
+  // if it is org-billed to one of the caller's administered orgs. The org-set and
+  // billingOwnerType filters ARE the authorization predicate, so it fails closed
+  // by construction - an empty set short-circuits without a query, and a personal
+  // (User-billed) or out-of-set key never matches. Hydrated doc, matching
+  // findByUserIdAndId so update() behaves identically on either resolution path.
+  findByOrganizationIdsAndId(organizationIds: string[], id: string) {
+    if (organizationIds.length === 0) return Promise.resolve(null);
+    return this.model
+      .findOne({ _id: id, organizationId: { $in: organizationIds }, billingOwnerType: CreditHolderType.Organization })
+      .exec();
+  }
+
   findByAgentId(agentId: string) {
     return this.model.find({ agentId, status: ApiKeyStatus.ACTIVE }).sort({ createdAt: -1 }).exec();
   }

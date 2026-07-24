@@ -195,6 +195,14 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   countActiveByProductId: (productId: string) => Promise<number>;
   /** All keys billed to an organization's credit pool (any status), newest first. */
   findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
+  /**
+   * The key with this id iff it is org-billed to one of the given orgs (any
+   * status); null for an empty set (fail-closed, no query). Positive org-admin
+   * scope for the configure/rotate/revoke write paths - mirrors how the LIST
+   * route surfaces org keys, so an org admin can act on any key billed to an org
+   * they administer, not just keys they minted.
+   */
+  findByOrganizationIdsAndId: (organizationIds: string[], id: string) => Promise<IUserApiKeyDocument | null>;
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;
