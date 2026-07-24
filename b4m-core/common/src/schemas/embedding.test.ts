@@ -104,6 +104,31 @@ describe('defaultEmbeddingModelForEnv', () => {
     expect(defaultEmbeddingModelForEnv()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
   });
 
+  it('ignores a placeholder OPENAI_API_KEY and falls back to the local embedder', () => {
+    // The airgapped-self-host bug: a dummy OPENAI_API_KEY used to count as a real cloud key,
+    // silently picking the OpenAI default (which then 401s) instead of the local Ollama embedder.
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.OPENAI_API_KEY = 'sk-oai-dummy-routing-test';
+    expect(defaultEmbeddingModelForEnv()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('ignores a placeholder VOYAGE_API_KEY and falls back to the local embedder', () => {
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.VOYAGE_API_KEY = 'your-api-key';
+    expect(defaultEmbeddingModelForEnv()).toBe(OllamaEmbeddingModel.QWEN3_EMBEDDING_0_6B);
+  });
+
+  it('keeps the cloud default for a real key (never mistaken for a placeholder)', () => {
+    // A real key must never be mistaken for a placeholder - it keeps the configured cloud default.
+    // Synthetic low-entropy value on purpose (no real-key marker) to avoid push-protection flags.
+    process.env.B4M_SELF_HOST = 'true';
+    process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
+    process.env.OPENAI_API_KEY = 'sk-proj-0000aaaa1111bbbb2222cccc3333';
+    expect(defaultEmbeddingModelForEnv()).toBe(OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002);
+  });
+
   it('only exactly "true" enables self-host (a "1" value keeps the cloud default)', () => {
     process.env.B4M_SELF_HOST = '1';
     process.env.OLLAMA_BASE_URL = 'http://ollama:11434';
