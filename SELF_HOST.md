@@ -364,6 +364,8 @@ Resolve a digest for a tag you have pulled with `docker image inspect <image> --
 
 ## Offline RAG (file search / knowledge base)
 
+Self-host embeds and searches your uploaded files two ways: a **local Ollama embedder** (the default, fully offline, no key) or a **cloud embedding key** (OpenAI / Voyage). The local path below is the out-of-the-box default; see "Cloud embeddings" further down for the hosted-key path.
+
 Self-host can embed and search your uploaded files fully offline, using a local Ollama embedder - no OpenAI/Voyage key required. With a local Ollama server and no cloud embedding key, self-host defaults the embedding model to `qwen3-embedding:0.6b` automatically, so this works out of the box:
 
 1. **Pull an embedder.** The default `OLLAMA_PULL_MODELS` already includes `qwen3-embedding:0.6b`; if you customized it, add an embedder tag (see the embedder table in `.env.selfhost.example`) and re-run `up`.
@@ -380,6 +382,18 @@ Notes:
 
 - **Dimensions / re-indexing.** Each embedding model has its own vector dimensions (e.g. `qwen3-embedding:0.6b` = 1024, `nomic-embed-text` = 768, OpenAI = 1536). If you change the Default Embedding Model, previously embedded files stay on their old dimensions and are simply skipped in search until re-processed - re-embed them via **/api/files/reprocess** (or re-upload). Mixed dimensions never error; they just don't match.
 - **Small GPUs (4 GB).** The embedder is unloaded promptly after each call (`OLLAMA_EMBED_KEEP_ALIVE` defaults to `0`) so it doesn't pin VRAM alongside your chat model. Raise it (e.g. `5m`) if you embed constantly and have VRAM to spare.
+
+### Cloud embeddings (OpenAI / Voyage key)
+
+Prefer a hosted embedder over the local one? Set a real key in `.env.selfhost` and it takes priority over the local Ollama default:
+
+- `OPENAI_API_KEY` - enables OpenAI embeddings (`text-embedding-ada-002` by default).
+- `VOYAGE_API_KEY` - enables Voyage embeddings. Voyage can also be set per-user under **Settings -> API Keys**.
+
+Then pick the cloud model under **Settings -> AI -> Default Embedding Model** and re-upload (or reprocess via **/api/files/reprocess**) so files embed with it.
+
+- **A placeholder value is treated as no key.** If `OPENAI_API_KEY`/`VOYAGE_API_KEY` holds a dummy value (e.g. `sk-oai-dummy-...`, `your-api-key`, `changeme`), self-host ignores it and keeps the keyless local embedder default - a copy-pasted placeholder no longer silently routes embeddings to a cloud provider that then rejects them. A key that is present but genuinely invalid fails fast with an actionable message (see Troubleshooting) instead of an opaque 401.
+- **If you already selected a cloud embedder in Settings**, that choice is persisted and stays selected even after you clear the key. Set a valid key for that provider, or switch **Default Embedding Model** back to a local Ollama embedder for the fully-offline path.
 
 ## Background worker
 
@@ -418,6 +432,7 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 - **Changed `SECRET_ENCRYPTION_KEY` and now secrets fail to decrypt** - restore the original key; it cannot be rotated in place.
 - **Notebook auto-naming / summaries / mementos never happen** - background enrichment runs on the `worker` service via the event queue. Check the worker is up (`docker compose -f compose.selfhost.yaml ps worker`) and that `SELF_HOST_EVENT_QUEUE` is set in `.env.selfhost` (the app warns and drops enrichment events when it's unset). Watch `docker compose -f compose.selfhost.yaml logs -f worker`.
 - **Research/deep-research tasks never complete** - the `worker` consumes the research queue. Confirm it's running and check its logs; a task that keeps failing is left for a few retries, then dropped with an error log (ElasticMQ has no dead-letter queue).
+- **Files chunk but never get vectors / vectorize fails with a `401`** - your `OPENAI_API_KEY` (or `VOYAGE_API_KEY`) is set to an invalid or placeholder value, so embedding is routed to that cloud provider and rejected. Set a real key, or clear it and configure a local Ollama embedder (see "Offline RAG") for the airgapped path. A dummy/placeholder value is ignored automatically; a present-but-invalid key now surfaces an actionable error on the file instead of a raw 401. If you previously picked a cloud embedder in **Settings -> AI**, switch it back to a local one after clearing the key.
 - **Uploaded files never chunk or become searchable** - ingestion is triggered by a MinIO -> app webhook. Verify `INTERNAL_S3_WEBHOOK_SECRET` is set (identical value reaches both the `app` and `minio` services via `.env.selfhost`), that `createbuckets` ran the `mc event add` on the fab-file bucket (`docker compose -f compose.selfhost.yaml logs createbuckets`), and that a local embedder is configured (see "Offline RAG"). Even if the webhook is missed, the worker's 60s safety-net scan re-enqueues un-chunked files - so also check the `worker` logs.
 
 ## Security notes
