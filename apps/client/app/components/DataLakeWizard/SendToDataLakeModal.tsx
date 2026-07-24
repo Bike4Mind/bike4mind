@@ -14,7 +14,7 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon, DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { toast } from 'sonner';
 import { useQueryClient } from '@tanstack/react-query';
 import { KnowledgeType } from '@bike4mind/common';
@@ -105,7 +105,7 @@ export default function SendToDataLakeModal() {
   return (
     <Modal open={isOpen} onClose={close}>
       <ModalDialog data-testid="send-to-datalake-modal" sx={{ width: { xs: '95%', sm: '28rem' }, maxWidth: '28rem' }}>
-        <DialogTitle>Send to Data Lake</DialogTitle>
+        <DialogTitle>Send to {DATA_LAKE}</DialogTitle>
         <DialogContent>
           <Typography level="body-sm" sx={{ mb: 1 }}>
             Choose a data lake to add “{fileName}”. It will be tagged into the lake and indexed for retrieval.
@@ -118,7 +118,7 @@ export default function SendToDataLakeModal() {
             </Stack>
           ) : !manageableLakes || manageableLakes.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
-              <StorageIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
+              <DataLakeIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
               <Typography level="body-sm" color="neutral">
                 No data lakes you can add to. Create one first from Files → Data Lakes.
               </Typography>
@@ -134,7 +134,7 @@ export default function SendToDataLakeModal() {
                   sx={{ borderRadius: 'sm', gap: 1 }}
                 >
                   <Radio checked={selectedId === lake.id} size="sm" />
-                  <StorageIcon sx={{ fontSize: 18, color: 'primary.400' }} />
+                  <DataLakeIcon sx={{ fontSize: 18, color: 'primary.400' }} />
                   <Typography level="title-sm" noWrap>
                     {lake.name}
                   </Typography>

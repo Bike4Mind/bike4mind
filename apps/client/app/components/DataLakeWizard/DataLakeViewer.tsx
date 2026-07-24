@@ -27,7 +27,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ChatIcon from '@mui/icons-material/Chat';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { buildTagTree, getNodesAtPath } from '@client/app/components/Files/Browser/TagView/parseTagNamespace';
 import { useGetFabFileContent } from '@client/app/hooks/data/fabFiles';
 import {
@@ -121,7 +121,7 @@ export default function DataLakeViewer({
           gap: 1,
         }}
       >
-        <StorageIcon sx={{ fontSize: 20, color: 'primary.400' }} />
+        <DataLakeIcon sx={{ fontSize: 20, color: 'primary.400' }} />
         <Typography level="title-md" sx={{ flex: 1 }}>
           {dataLakeName}
         </Typography>
@@ -408,7 +408,7 @@ function ArticlePanel({
           color: 'text.tertiary',
         }}
       >
-        <StorageIcon sx={{ fontSize: 48, opacity: 0.4 }} />
+        <DataLakeIcon sx={{ fontSize: 48, opacity: 0.4 }} />
         <Typography level="title-lg" sx={{ color: 'text.secondary' }}>
           Select a file
         </Typography>

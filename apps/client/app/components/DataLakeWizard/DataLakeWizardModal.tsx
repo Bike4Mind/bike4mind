@@ -9,6 +9,7 @@ import PreviewStep from './steps/PreviewStep';
 import TaxonomyReviewStep from './steps/TaxonomyReviewStep';
 import ConfigStep from './steps/ConfigStep';
 import UploadStep from './steps/UploadStep';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 
 const CREATE_STEPS: WizardStep[] = ['source', 'preview', 'taxonomy', 'config', 'upload'];
 // Append mode reuses the existing lake's tags, so AI taxonomy is skipped.
@@ -128,7 +129,7 @@ export default function DataLakeWizardModal() {
         {/* Header */}
         <Box sx={{ px: 3, pt: 2.5, pb: 0 }}>
           <Typography level="h4" fontWeight="lg">
-            {targetLake ? `Add Files — ${targetLake.name}` : 'Create Data Lake'}
+            {targetLake ? `Add Files — ${targetLake.name}` : `Create ${DATA_LAKE}`}
           </Typography>
         </Box>
 

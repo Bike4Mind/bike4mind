@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import mongoose from 'mongoose';
 import AgentExecutionModel, { agentExecutionRepository, type AgentExecutionStatus } from './AgentExecutionModel';
 import { setupMongoTest } from '../../__test__/utils';
@@ -286,6 +286,132 @@ describe('AgentExecutionRepository', () => {
       expect(steps).toHaveLength(2);
       expect(steps[0]?.type).toBe('thought');
       expect(steps[1]?.type).toBe('action');
+    });
+  });
+
+  describe('updateCheckpoint opti plan ledger (#680)', () => {
+    it('rides the ledger on the checkpoint write so a continuation Lambda rehydrates it', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      expect(exec.optiPlanState).toBeUndefined(); // absent on create (opti-only)
+
+      await agentExecutionRepository.updateCheckpoint(
+        exec.id,
+        { iteration: 1 },
+        {
+          decomposeUsed: true,
+          steps: [
+            { family: 'scheduling', title: 'Sequence stations' },
+            { family: 'routing', title: 'Route vans' },
+          ],
+          solved: { scheduling: 1 },
+          results: { scheduling: 'Seq -- Simulated Annealing (makespan: 130)' },
+        }
+      );
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect((updated?.checkpoint as { iteration: number }).iteration).toBe(1); // checkpoint written too
+      expect(updated?.optiPlanState?.decomposeUsed).toBe(true);
+      expect(updated?.optiPlanState?.steps).toEqual([
+        { family: 'scheduling', title: 'Sequence stations' }, // step titles round-trip intact
+        { family: 'routing', title: 'Route vans' },
+      ]);
+      expect(updated?.optiPlanState?.solved).toMatchObject({ scheduling: 1 });
+      expect(updated?.optiPlanState?.results).toMatchObject({
+        scheduling: 'Seq -- Simulated Annealing (makespan: 130)',
+      });
+    });
+
+    it('writes checkpoint + ledger in a SINGLE atomic updateOne (the refactor is a lone write)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      const spy = vi.spyOn(AgentExecutionModel, 'updateOne');
+      try {
+        await agentExecutionRepository.updateCheckpoint(
+          exec.id,
+          { iteration: 1 },
+          {
+            decomposeUsed: true,
+            steps: [{ family: 'scheduling', title: 's' }],
+            solved: {},
+            results: {},
+          }
+        );
+        expect(spy).toHaveBeenCalledTimes(1);
+        const set = (spy.mock.calls[0][1] as { $set: Record<string, unknown> }).$set;
+        expect(set).toHaveProperty('checkpoint');
+        expect(set).toHaveProperty('optiPlanState'); // both fields in the one $set
+      } finally {
+        spy.mockRestore();
+      }
+    });
+
+    it('replaces the whole ledger on each write (not a merge) so shrinking fields drop', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      await agentExecutionRepository.updateCheckpoint(
+        exec.id,
+        {},
+        {
+          decomposeUsed: true,
+          steps: [
+            { family: 'scheduling', title: 's' },
+            { family: 'routing', title: 'r' },
+          ],
+          solved: { scheduling: 1, routing: 1 },
+          results: { scheduling: 'old' },
+        }
+      );
+      // Second write carries FEWER steps + a changed result; whole-subdoc $set must replace, not merge.
+      await agentExecutionRepository.updateCheckpoint(
+        exec.id,
+        {},
+        {
+          decomposeUsed: true,
+          steps: [{ family: 'scheduling', title: 's2' }],
+          solved: { scheduling: 2 },
+          results: { scheduling: 'new' },
+        }
+      );
+
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.optiPlanState?.steps).toEqual([{ family: 'scheduling', title: 's2' }]); // routing gone, title updated
+      expect(updated?.optiPlanState?.solved).toEqual({ scheduling: 2 });
+      expect(updated?.optiPlanState?.results).toEqual({ scheduling: 'new' });
+    });
+
+    it('preserves an existing ledger across a ledger-less checkpoint write (omitted != cleared)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      // A ledger is established...
+      await agentExecutionRepository.updateCheckpoint(
+        exec.id,
+        {},
+        {
+          decomposeUsed: true,
+          steps: [{ family: 'scheduling', title: 's' }],
+          solved: { scheduling: 1 },
+          results: {},
+        }
+      );
+      // ...then a later checkpoint write with no ledger arg (a non-opti or pre-plan iteration) must
+      // NOT wipe it -- this is the assertion that actually protects the `!== undefined` guard.
+      await agentExecutionRepository.updateCheckpoint(exec.id, { iteration: 5 });
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect((updated?.checkpoint as { iteration: number }).iteration).toBe(5);
+      expect(updated?.optiPlanState?.steps).toEqual([{ family: 'scheduling', title: 's' }]);
+      expect(updated?.optiPlanState?.solved).toMatchObject({ scheduling: 1 });
+    });
+
+    it('updateCheckpointAndStatus rides the ledger + flips status atomically (timeout self-dispatch)', async () => {
+      const exec = await agentExecutionRepository.create(makeBaseExecution({ status: 'running' }));
+      await agentExecutionRepository.updateCheckpointAndStatus(exec.id, { iteration: 2 }, 'continuing', {
+        decomposeUsed: true,
+        steps: [{ family: 'routing', title: 'Route' }],
+        solved: { routing: 1 },
+        results: { routing: 'SA (35 km)' },
+      });
+      const updated = await agentExecutionRepository.findById(exec.id);
+      expect(updated?.status).toBe('continuing');
+      expect((updated?.checkpoint as { iteration: number }).iteration).toBe(2);
+      expect(updated?.optiPlanState?.steps).toEqual([{ family: 'routing', title: 'Route' }]);
+      expect(updated?.optiPlanState?.results).toMatchObject({ routing: 'SA (35 km)' });
     });
   });
 

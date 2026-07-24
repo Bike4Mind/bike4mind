@@ -12,7 +12,7 @@ import {
   Stack,
   Typography,
 } from '@mui/joy';
-import StorageIcon from '@mui/icons-material/Storage';
+import { DataLakeIcon } from '@client/app/components/datalake/dataLakeBranding';
 import { useDataLakes } from '@client/app/hooks/data/dataLakeWizard';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
 
@@ -73,7 +73,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
             </Stack>
           ) : !manageableLakes || manageableLakes.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 3 }}>
-              <StorageIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
+              <DataLakeIcon sx={{ fontSize: 36, opacity: 0.3, mb: 1 }} />
               <Typography level="body-sm" color="neutral">
                 No data lakes you can add to. Create one from Files → Data Lakes first.
               </Typography>
@@ -87,7 +87,7 @@ export default function DataLakeIngestPickerModal({ open, files, onClose }: Data
                   onClick={() => handlePick(lake)}
                   sx={{ borderRadius: 'sm', gap: 1 }}
                 >
-                  <StorageIcon sx={{ fontSize: 18, color: 'primary.400' }} />
+                  <DataLakeIcon sx={{ fontSize: 18, color: 'primary.400' }} />
                   <Typography level="title-sm" noWrap sx={{ flex: 1 }}>
                     {lake.name}
                   </Typography>

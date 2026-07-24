@@ -21,6 +21,7 @@ import {
 } from '@server/services/publish';
 import { getClientIp } from '@server/utils/ip';
 import { parsePublishPath } from '@server/services/publish/parsePublishPath';
+import { HASH_BRIDGE_JS } from '@server/services/publish/fragmentNav';
 import { requestHasGateProof } from '@server/services/publish/publishGateToken';
 import { renderPassphraseShell } from '@server/services/publish/renderPassphraseShell';
 import { PUBLISH_HOST } from '@server/services/publish/validateBundle';
@@ -558,6 +559,11 @@ const handler = baseApi({ auth: false }).get(async (req: Request, res: Response)
     visibility: effectiveVisibility,
     assetMode: isShare ? (artifact.accessGate ? 'inline' : 'base') : undefined,
     assets: inlineAssets,
+    // Same-page fragment links must scroll in place, not re-navigate the sandboxed
+    // iframe (an opaque-origin navigation drops the SameSite proof cookie and
+    // dead-ends a gated bundle at its prompt shell). Both the canonical /p path and
+    // the path this render is reached at (share token / isolated alias) count.
+    pagePaths: [urlBase, canonicalPath],
   });
 
   // Comment-pin bridge: when comments are enabled, inject a tiny trusted script INTO the
@@ -757,6 +763,12 @@ function renderBundleWrapper(
   const iframeTag = isolatedSrc
     ? `<iframe sandbox="allow-scripts allow-same-origin" title="${titleHtml}" src="${escapeHtml(isolatedSrc)}"></iframe>`
     : `<iframe sandbox="allow-scripts" title="${titleHtml}" srcdoc="${srcdocAttr}"></iframe>`;
+  // Hash bridge (srcdoc mode only): forwards the page fragment into the sandboxed
+  // bundle (initial deep link + hashchange) and mirrors in-bundle fragment jumps
+  // back into the address bar. Approach B's wrapper CSP drops 'unsafe-inline', so
+  // isolated embeds skip it - in-bundle # clicks still scroll via the injected
+  // helper (fragmentNav.ts); only address-bar deep links stay a known gap there.
+  const hashBridge = isolatedSrc ? '' : `\n<script>${HASH_BRIDGE_JS}</script>`;
   // The comment overlay lives in this trusted wrapper (app origin), floating over the
   // sandboxed iframe - never inside it (the opaque-origin bundle can't read the token).
   const overlay = buildAnnotateOverlayHtml(artifact);
@@ -836,7 +848,7 @@ function renderBundleWrapper(
 .b4m-ver .b4m-vd{opacity:.4}</style>
 </head>
 <body>
-${iframeTag}${chromeBody}${brandBadge}${floatingReport}${bar}
+${iframeTag}${hashBridge}${chromeBody}${brandBadge}${floatingReport}${bar}
 ${noscriptBody}
 </body>
 </html>`;

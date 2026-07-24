@@ -2,6 +2,7 @@ import { Alert, Box, Button, LinearProgress, Stack, Typography } from '@mui/joy'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useDataLakeWizardStore } from '@client/app/stores/useDataLakeWizardStore';
+import { DATA_LAKE } from '@client/app/components/datalake/dataLakeBranding';
 import { useBatchProgressListener } from '@client/app/hooks/data/dataLakeWizard';
 
 function ProgressRow({ label, current, total }: { label: string; current: number; total: number }) {
@@ -120,7 +121,7 @@ export default function UploadStep() {
           {progress.errorKind === 'validation' && (
             <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
               <Typography level="body-xs">
-                <strong>Common fixes:</strong> The Data Lake Name needs at least 2 letters or numbers, and the Tag
+                <strong>Common fixes:</strong> The {DATA_LAKE} Name needs at least 2 letters or numbers, and the Tag
                 Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
               </Typography>
             </Alert>
@@ -128,8 +129,8 @@ export default function UploadStep() {
           {(progress.errorKind === 'network' || progress.errorKind === 'upload') && (
             <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
               <Typography level="body-xs">
-                <strong>Common fixes:</strong> Check your internet connection and try again. Your Data Lake settings are
-                not the problem.
+                <strong>Common fixes:</strong> Check your internet connection and try again. Your {DATA_LAKE} settings
+                are not the problem.
               </Typography>
             </Alert>
           )}
