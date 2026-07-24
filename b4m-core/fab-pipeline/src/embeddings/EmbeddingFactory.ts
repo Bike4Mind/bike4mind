@@ -1,11 +1,20 @@
 import {
   BedrockEmbeddingModel,
   defaultEmbeddingModelForEnv,
+  isPlaceholderApiKey,
   OllamaEmbeddingModel,
   OpenAIEmbeddingModel,
   SupportedEmbeddingModel,
   VoyageAIEmbeddingModel,
 } from '@bike4mind/common';
+
+// Actionable fail-fast messages when a cloud embedding key is missing or a placeholder. Both name
+// the two exits (set a real key, or go keyless with a local Ollama embedder) so the operator sees
+// what to do instead of an opaque provider 401 downstream. Kept as constants so tests pin the text.
+const OPENAI_KEY_MISSING_MESSAGE =
+  'OpenAI API key is not configured (found a missing or placeholder value). Set a real OPENAI_API_KEY, or for an airgapped self-host unset it and set OLLAMA_BASE_URL to use a local embedder.';
+const VOYAGE_KEY_MISSING_MESSAGE =
+  'VoyageAI API key is not configured (found a missing or placeholder value). Set a real VOYAGE_API_KEY, or for an airgapped self-host set OLLAMA_BASE_URL to use a local embedder.';
 import { EmbeddingModelProvider, EmbeddingService } from './EmbeddingService';
 import { BEDROCK_EMBEDDING_MODEL_MAP, BedrockEmbeddingService } from './providers/BedrockEmbeddingService';
 import { OPENAI_EMBEDDING_MODEL_MAP, OpenAIEmbeddingService } from './providers/OpenAIEmbeddingService';
@@ -81,8 +90,8 @@ export class EmbeddingFactory {
 
     // Initialize or update the provider with the specified model
     if (provider === EmbeddingModelProvider.OPENAI) {
-      if (!this.config.openaiApiKey) {
-        throw new Error('OpenAI API key is required but not provided!');
+      if (isPlaceholderApiKey(this.config.openaiApiKey)) {
+        throw new Error(OPENAI_KEY_MISSING_MESSAGE);
       }
       this.providers.set(
         provider,
@@ -99,8 +108,8 @@ export class EmbeddingFactory {
         new OllamaEmbeddingService(this.config.ollamaBaseUrl, modelName as OllamaEmbeddingModel)
       );
     } else {
-      if (!this.config.voyageApiKey) {
-        throw new Error('VoyageAI API key is required but not provided');
+      if (isPlaceholderApiKey(this.config.voyageApiKey)) {
+        throw new Error(VOYAGE_KEY_MISSING_MESSAGE);
       }
       this.providers.set(
         provider,
@@ -134,11 +143,11 @@ export class EmbeddingFactory {
   public getAvailableModels(): string[] {
     const models: string[] = [];
 
-    if (this.config.openaiApiKey) {
+    if (!isPlaceholderApiKey(this.config.openaiApiKey)) {
       models.push(...Object.keys(OPENAI_EMBEDDING_MODEL_MAP));
     }
 
-    if (this.config.voyageApiKey) {
+    if (!isPlaceholderApiKey(this.config.voyageApiKey)) {
       models.push(...Object.keys(VOYAGEAI_EMBEDDING_MODEL_MAP));
     }
 
@@ -157,13 +166,13 @@ export class EmbeddingFactory {
    * @returns The recommended embedding model name
    */
   public getDefaultEmbeddingModel(): SupportedEmbeddingModel {
-    // Priority 1: OpenAI (if API key available)
-    if (this.config.openaiApiKey) {
+    // Priority 1: OpenAI (if a real API key is available - a placeholder does not count)
+    if (!isPlaceholderApiKey(this.config.openaiApiKey)) {
       return OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002;
     }
 
-    // Priority 2: VoyageAI (if API key available)
-    if (this.config.voyageApiKey) {
+    // Priority 2: VoyageAI (if a real API key is available)
+    if (!isPlaceholderApiKey(this.config.voyageApiKey)) {
       return VoyageAIEmbeddingModel.VOYAGE_3;
     }
 
@@ -192,19 +201,19 @@ export class EmbeddingFactory {
   private initializeProviders(): void {
     this.providers.clear();
 
-    // Initialize OpenAI provider with default model if API key is available
-    if (this.config.openaiApiKey) {
+    // Initialize OpenAI provider with default model if a real API key is available
+    if (!isPlaceholderApiKey(this.config.openaiApiKey)) {
       this.providers.set(
         EmbeddingModelProvider.OPENAI,
-        new OpenAIEmbeddingService(this.config.openaiApiKey, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
+        new OpenAIEmbeddingService(this.config.openaiApiKey!, OpenAIEmbeddingModel.TEXT_EMBEDDING_ADA_002)
       );
     }
 
-    // Initialize VoyageAI provider with default model if API key is available
-    if (this.config.voyageApiKey) {
+    // Initialize VoyageAI provider with default model if a real API key is available
+    if (!isPlaceholderApiKey(this.config.voyageApiKey)) {
       this.providers.set(
         EmbeddingModelProvider.VOYAGE_AI,
-        new VoyageAIEmbeddingProvider(this.config.voyageApiKey, VoyageAIEmbeddingModel.VOYAGE_3)
+        new VoyageAIEmbeddingProvider(this.config.voyageApiKey!, VoyageAIEmbeddingModel.VOYAGE_3)
       );
     }
 
