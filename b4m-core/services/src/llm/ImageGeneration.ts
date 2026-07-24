@@ -166,6 +166,12 @@ async function imageUrlToBase64(imageUrl: string): Promise<string> {
   return buffer.toString('base64');
 }
 
+// The input image fed to an image model. Two source shapes: a full workbench
+// IFabFileDocument (rich metadata) or a synthesized stub from session history (just
+// filePath + mimeType). Downstream dispatch only reads filePath and mimeType; everything
+// else is optional and used only for logging. `filePath` matches IFabFileDocument's shape.
+type SelectedImage = { filePath?: string; mimeType: string; id?: string; fileName?: string };
+
 export class ImageGenerationService {
   private db: IImageGenerationServiceOptions['db'];
   private startImageGenerationProcess: IImageGenerationServiceOptions['startImageGenerationProcess'];
@@ -464,6 +470,127 @@ export class ImageGenerationService {
     });
   }
 
+  /**
+   * Resolve the single input image (if any) fed to an image model. Precedence:
+   *   1. Workbench upload on this request (explicit user intent).
+   *   2. Otherwise, when the model accepts image input (required, or optional on a
+   *      continuation), the newest usable image already in the notebook - either a prior
+   *      *generated* image (msg.images) or an image the user *attached* to an earlier
+   *      message (msg.fabFileIds, the "notebook context" case).
+   * A model that accepts no image input at all ('none') always resolves to no image, so a
+   * stray attachment is never forwarded to a provider that would reject it.
+   *
+   * imageSource tells the caller which bucket to sign filePath against: 'workbench' and
+   * 'notebook_attachment' are fabFiles (fabFileStorage); 'message_history' is a generated
+   * image (this.storage).
+   */
+  private async selectInputImage({
+    sessionId,
+    fabFileIds,
+    model,
+    modelInfo,
+    intent,
+    logger,
+  }: {
+    sessionId: string;
+    fabFileIds?: string[];
+    model: string;
+    modelInfo: ModelInfo;
+    intent: z.infer<typeof PromptIntentSchema>;
+    logger: Logger;
+  }): Promise<{
+    fileImage?: SelectedImage;
+    imageSource: 'workbench' | 'message_history' | 'notebook_attachment';
+  }> {
+    const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
+    const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
+
+    // An explicit workbench upload must not be fed into generation while it's held (pending
+    // scan) or blocked - checked once here before any per-model getSignedUrl branch.
+    if (workbenchImage && !isImageServeable(workbenchImage)) {
+      throw new BadRequestError('The uploaded image is not available (moderation pending or blocked)');
+    }
+
+    let fileImage: SelectedImage | undefined = workbenchImage;
+    let imageSource: 'workbench' | 'message_history' | 'notebook_attachment' = 'workbench';
+
+    if (!fileImage) {
+      const shouldCarryForwardSessionImage =
+        requiresImageInput(model) || (modelInfo.supportsImageVariation && intent === 'continuation');
+
+      logger.debug('Image selection (no workbench file)', {
+        model,
+        intent,
+        supportsImageVariation: modelInfo.supportsImageVariation,
+        requiresImageInput: requiresImageInput(model),
+        shouldCarryForwardSessionImage,
+      });
+
+      if (shouldCarryForwardSessionImage) {
+        // Newest-first. Take the first usable image from EITHER a prior *generated* image
+        // (msg.images) OR an image the user *attached* to an earlier message (msg.fabFileIds
+        // - the "notebook context" case). Without the fabFileIds branch an image dropped into
+        // the conversation earlier is invisible here, so required-input models (Kontext/Fill)
+        // wrongly report "no input image" even though one is present in the notebook.
+        const recentMessages = await this.db.quests.getMostRecentChatHistory(sessionId, 50);
+
+        for (const msg of recentMessages) {
+          if (msg.type === 'error') continue;
+
+          if (msg.images?.length) {
+            fileImage = { filePath: msg.images[0], mimeType: 'image/png' };
+            imageSource = 'message_history';
+            logger.debug('Carrying forward prior generated image', {
+              messageId: msg.id,
+              timestamp: msg.timestamp,
+            });
+            break;
+          }
+
+          if (msg.fabFileIds?.length) {
+            const attachedFiles = await this.db.fabFiles.findAllInIds(msg.fabFileIds);
+            const attachedImage = attachedFiles.find(
+              file => file.mimeType.startsWith('image') && isImageServeable(file)
+            );
+            if (attachedImage) {
+              fileImage = attachedImage;
+              imageSource = 'notebook_attachment';
+              logger.debug('Carrying forward prior attached image (notebook context)', {
+                messageId: msg.id,
+                timestamp: msg.timestamp,
+                fabFileId: attachedImage.id,
+              });
+              break;
+            }
+          }
+        }
+
+        if (!fileImage) {
+          logger.debug('No prior session image available to carry forward');
+        }
+      }
+    }
+
+    // A model that accepts no image input at all ('none': not required and no variation
+    // support) must never forward an attached/context image to the provider - some providers
+    // (e.g. OpenAI's non-variation models) reject the request outright and it surfaces as an
+    // error quest. Drop the image and fall back to text-to-image.
+    const acceptsImageInput = requiresImageInput(model) || modelInfo.supportsImageVariation;
+    if (fileImage && !acceptsImageInput) {
+      logger.debug('Dropping image input for model that does not accept images', { model, imageSource });
+      fileImage = undefined;
+    }
+
+    logger.debug('Image selection result', {
+      hasImage: !!fileImage,
+      imageSource,
+      imageId: fileImage?.id,
+      fileName: fileImage?.fileName,
+    });
+
+    return { fileImage, imageSource };
+  }
+
   public async process({ body, logger }: { body: z.infer<typeof ImageGenerationBodySchema>; logger: Logger }) {
     const startTime = Date.now();
     const {
@@ -614,69 +741,13 @@ export class ImageGenerationService {
         statusMessage: 'Now painting...',
       });
 
-      // Image selection: workbench file (explicit user intent) wins; otherwise carry forward
-      // the most recent session image when the model accepts image input AND the prompt resolver
-      // classified the user's intent as a continuation of a prior image. Required-input models
-      // (Kontext) always attempt to load a prior image and throw later if none is available.
-      //
-      // Two source shapes are possible: a full workbench IFabFileDocument (rich metadata) or a
-      // synthesized stub from session history (just filePath + mimeType). The fields downstream
-      // dispatch actually reads are filePath and mimeType; everything else (id, fileName) is
-      // optional and only used for logging. `filePath` matches IFabFileDocument's nullable shape.
-      type SelectedImage = { filePath?: string; mimeType: string; id?: string; fileName?: string };
-      const fabFiles = await this.db.fabFiles.findAllInIds(fabFileIds || []);
-      const workbenchImage = fabFiles.find(file => file.mimeType.startsWith('image'));
-
-      // An explicit workbench upload the user attached for image-to-image must not be fed into
-      // generation while it's held (pending scan) or blocked. Checked once here - before it's
-      // fanned out to any of the per-model `fabFileStorage.getSignedUrl` branches below - since
-      // every branch that reads an uploaded file routes through `workbenchImage`.
-      if (workbenchImage && !isImageServeable(workbenchImage)) {
-        throw new BadRequestError('The uploaded image is not available (moderation pending or blocked)');
-      }
-
-      let fileImage: SelectedImage | undefined = workbenchImage;
-      let imageSource: 'workbench' | 'message_history' = 'workbench';
-
-      if (!fileImage) {
-        const shouldCarryForwardSessionImage =
-          requiresImageInput(model) || (modelInfo.supportsImageVariation && intent === 'continuation');
-
-        logger.debug('Image selection (no workbench file)', {
-          model,
-          intent,
-          supportsImageVariation: modelInfo.supportsImageVariation,
-          requiresImageInput: requiresImageInput(model),
-          shouldCarryForwardSessionImage,
-        });
-
-        if (shouldCarryForwardSessionImage) {
-          const recentMessages = await this.db.quests.getMostRecentChatHistory(sessionId, 50);
-          const messageWithImage = recentMessages.find(
-            msg => msg.images && msg.images.length > 0 && msg.type !== 'error'
-          );
-
-          if (messageWithImage?.images?.length) {
-            fileImage = {
-              filePath: messageWithImage.images[0],
-              mimeType: 'image/png',
-            };
-            imageSource = 'message_history';
-            logger.debug('Carrying forward prior session image', {
-              messageId: messageWithImage.id,
-              timestamp: messageWithImage.timestamp,
-            });
-          } else {
-            logger.debug('No prior session image available to carry forward');
-          }
-        }
-      }
-
-      logger.debug('Image selection result', {
-        hasImage: !!fileImage,
-        imageSource,
-        imageId: fileImage?.id,
-        fileName: fileImage?.fileName,
+      const { fileImage, imageSource } = await this.selectInputImage({
+        sessionId,
+        fabFileIds,
+        model,
+        modelInfo,
+        intent,
+        logger,
       });
 
       // Choose the appropriate service based on the model
@@ -730,8 +801,8 @@ export class ImageGenerationService {
         if (fileImage?.filePath) {
           try {
             let imageUrl: string | undefined;
-            if (imageSource === 'workbench' && fileImage.filePath) {
-              Logger.globalInstance.debug(`[DEBUG] Gemini edit: generating signed URL for workbench image`);
+            if ((imageSource === 'workbench' || imageSource === 'notebook_attachment') && fileImage.filePath) {
+              Logger.globalInstance.debug(`[DEBUG] Gemini edit: generating signed URL for fabFile image`);
               imageUrl = await this.fabFileStorage.getSignedUrl(fileImage.filePath);
             } else if (imageSource === 'message_history' && fileImage.filePath) {
               // Message history images are stored as S3 keys (filenames), not full URLs
@@ -866,7 +937,7 @@ export class ImageGenerationService {
             fileImage.filePath.substring(0, 100) + '...'
           );
 
-          if (imageSource === 'workbench') {
+          if (imageSource === 'workbench' || imageSource === 'notebook_attachment') {
             Logger.globalInstance.debug(`[DEBUG] Getting signed URL for workbench file...`);
             try {
               imageUrl = await this.fabFileStorage.getSignedUrl(fileImage.filePath);
@@ -999,7 +1070,7 @@ export class ImageGenerationService {
         let imageUrl: string | undefined;
         if (fileImage?.filePath) {
           Logger.globalInstance.debug(`[DEBUG] Processing OpenAI with input image from ${imageSource}`);
-          if (imageSource === 'workbench') {
+          if (imageSource === 'workbench' || imageSource === 'notebook_attachment') {
             // Workbench files need signed URLs
             imageUrl = await this.fabFileStorage.getSignedUrl(fileImage.filePath);
             Logger.globalInstance.debug(`[DEBUG] ✅ Got signed URL for workbench image`);

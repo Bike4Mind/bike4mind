@@ -13,6 +13,7 @@ import {
   IChatHistoryItemDocument,
   ISessionDocument,
   ModelName,
+  requiresImageInput,
 } from '@bike4mind/common';
 import type { IAgent } from '@bike4mind/common';
 import { useLLM } from '@client/app/contexts/LLMContext';
@@ -616,6 +617,22 @@ export function useSendMessage({
     if (hasImageFiles && currentModelInfo && !currentModelInfo.supportsVision) {
       toast.warning(
         `${currentModelInfo.name || model} does not support image input. Your images will not be visible to the model.`
+      );
+    }
+
+    // Image-gen: a text-to-image-only model ('none' - no variation support and not a
+    // required-input model like Kontext/Fill) can't use an attached image. The server
+    // drops it and generates from the prompt alone, so warn rather than let it silently
+    // vanish. (Vision above is the text-model case; this is the image-model case.)
+    const hasWorkbenchImage = workBenchFiles.some(f => f.mimeType?.startsWith('image/'));
+    if (
+      hasWorkbenchImage &&
+      currentModelInfo?.type === 'image' &&
+      !currentModelInfo.supportsImageVariation &&
+      !requiresImageInput(currentModelInfo.id)
+    ) {
+      toast.info(
+        `${currentModelInfo.name || model} can't transform an attached image - generating from your prompt only.`
       );
     }
 
