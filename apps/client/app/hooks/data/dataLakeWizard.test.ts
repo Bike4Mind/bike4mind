@@ -9,15 +9,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
  * retry affordance and the raw axios "Network Error" wasn't user-friendly.
  */
 
-const { toastMock, apiPost } = vi.hoisted(() => ({
+const { toastMock, apiPost, apiPut, apiDelete, uploadFileToUrlMock } = vi.hoisted(() => ({
   toastMock: { error: vi.fn(), success: vi.fn(), warning: vi.fn() },
   apiPost: vi.fn(),
+  apiPut: vi.fn(() => Promise.resolve({ data: {} })),
+  apiDelete: vi.fn(() => Promise.resolve({ data: {} })),
+  uploadFileToUrlMock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock('sonner', () => ({ toast: toastMock }));
 vi.mock('@client/app/contexts/ApiContext', () => ({
-  api: { post: apiPost, put: vi.fn(), delete: vi.fn() },
+  api: { post: apiPost, put: apiPut, delete: apiDelete },
 }));
+vi.mock('@client/app/utils/uploadFileToUrl', () => ({ uploadFileToUrl: uploadFileToUrlMock }));
 vi.mock('@client/app/contexts/WebsocketContext', () => ({
   useWebsocket: () => ({ subscribeToAction: () => () => {} }),
 }));
@@ -59,6 +63,11 @@ describe('useBatchUpload onError', () => {
   beforeEach(() => {
     apiPost.mockReset();
     toastMock.error.mockClear();
+    toastMock.warning.mockClear();
+    apiPut.mockClear();
+    apiDelete.mockClear();
+    uploadFileToUrlMock.mockReset();
+    uploadFileToUrlMock.mockResolvedValue(undefined);
     useDataLakeWizardStore.getState().resetWizard();
   });
 
@@ -150,6 +159,61 @@ describe('useBatchUpload onError', () => {
     const progress = useDataLakeWizardStore.getState().uploadProgress;
     expect(progress.errorKind).toBe('server');
     expect(progress.errorMessage).toBe('The server ran into a problem. Please try again in a moment.');
+  });
+
+  it('surfaces the server message for a non-422 4xx instead of axios default text', async () => {
+    // The EnableDataLakes feature gate 403s with a curated message; showing
+    // "Request failed with status code 403" instead would be a downgrade. Only 422
+    // carries validator text, so other 4xx bodies are safe to display.
+    apiPost.mockRejectedValue({
+      isAxiosError: true,
+      message: 'Request failed with status code 403',
+      response: { status: 403, data: { error: 'Feature not available', code: 'FEATURE_DISABLED' } },
+    });
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('server');
+    expect(progress.errorMessage).toBe('Feature not available');
+  });
+
+  it('reports errorKind "upload" when every file fails to PUT', async () => {
+    // The lake and batch are created fine and nothing throws, so this never reaches
+    // onError - the mutationFn's own all-failed branch has to set the error state.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/data-lakes') return Promise.resolve({ data: { id: 'lake-1' } });
+      if (url === '/api/data-lakes/batches') return Promise.resolve({ data: { id: 'batch-1' } });
+      if (url === '/api/files/generate-presigned-urls-batch') {
+        return Promise.resolve({
+          data: { files: [{ fileId: 'f1', fileKey: 'k1', url: 'https://upload.example/f1', fileName: 'a.txt' }] },
+        });
+      }
+      return Promise.resolve({ data: {} });
+    });
+    // Every presigned PUT fails (network blocked / CSP), which is the reported case.
+    uploadFileToUrlMock.mockRejectedValue(new Error('blocked'));
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('error'));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('upload');
+    expect(progress.failedFiles).toBe(1);
+    expect(progress.errorMessage).toBe(
+      'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.'
+    );
   });
 
   it('retrying via the toast action re-invokes the upload', async () => {

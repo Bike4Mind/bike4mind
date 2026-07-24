@@ -328,14 +328,30 @@ function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: 
         message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
       };
     }
+    // Neutral fallback: a 422 can also come from the batch/presigned-URL endpoints or
+    // requiredEntitlement, and in append mode the Config fields are locked - so don't
+    // claim the name/tag prefix is the culprit when we couldn't confirm it.
     return {
       kind: 'validation',
-      message: 'The data lake name or tag prefix is invalid. Go back to Configuration and check them.',
+      message: 'Your data lake settings were rejected. Review them and try again.',
     };
   }
 
   if (status !== undefined && status >= 500) {
     return { kind: 'server', message: 'The server ran into a problem. Please try again in a moment.' };
+  }
+
+  // Other 4xx (403 feature gate, 404, 409, 429, ...) carry a curated server message worth
+  // showing. Safe to surface: errorHandler maps every ZodError to a 422, handled above, so
+  // no validator text can reach here.
+  if (status !== undefined && status >= 400) {
+    const data = axios.isAxiosError(error) ? (error.response?.data as Record<string, unknown> | undefined) : undefined;
+    const serverMessage = typeof data?.error === 'string' ? data.error : undefined;
+    const fallbackMessage = typeof data?.message === 'string' ? data.message : undefined;
+    return {
+      kind: 'server',
+      message: serverMessage || fallbackMessage || 'The request was rejected. Please try again.',
+    };
   }
 
   // Locally-thrown guard errors (e.g. "No files to upload") already carry a friendly message.
