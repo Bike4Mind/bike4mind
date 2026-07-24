@@ -12,12 +12,16 @@ export interface ComplianceModerationIncident {
 /**
  * One recent auth-trail row for the compliance modal - event/actorIp/userAgent/createdAt only.
  * Deliberately a narrow subset of IUserAuthAuditLogDocument: strategy, requestId, metadata, and
- * userId are intentionally excluded (not needed for the read-only investigation view).
+ * userId are intentionally excluded (not needed for the read-only investigation view). actorUserId
+ * IS included: for an admin-driven event (e.g. session_revoked) it's exactly the forensic detail
+ * an investigation view needs - who did this to the user, not just that it happened.
  */
 export interface ComplianceAuthEvent {
   event: string;
   actorIp: string;
   userAgent: string;
+  /** The user who performed the action, when it differs from the subject (e.g. an admin force-logout). */
+  actorUserId?: string;
   /** ISO 8601 string. */
   createdAt: string;
 }
