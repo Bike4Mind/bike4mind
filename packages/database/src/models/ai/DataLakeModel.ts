@@ -455,6 +455,22 @@ class DataLakeBatchRepository extends BaseRepository<IDataLakeBatchDocument> imp
     );
     return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
   }
+
+  async setStatusIfActive(
+    batchId: string,
+    status: Extract<BatchStatus, 'preparing' | 'uploading' | 'processing'>
+  ): Promise<IDataLakeBatchDocument | null> {
+    // Guarded non-terminal transition: never resurrect a batch the pipeline already
+    // finalized. The client flips a batch to 'processing' after the browser upload phase,
+    // but a fast pipeline can finalize it first - an unguarded $set would revive the dead
+    // batch and strand it (no further events arrive). Mirrors markTerminalIfActive.
+    const doc = await this.batchModel.findOneAndUpdate(
+      { _id: batchId, status: { $in: BATCH_NON_TERMINAL_STATUSES } },
+      { $set: { status } },
+      { new: true }
+    );
+    return (doc?.toJSON() as IDataLakeBatchDocument) ?? null;
+  }
 }
 
 export const dataLakeBatchRepository = new DataLakeBatchRepository(DataLakeBatchModel);
