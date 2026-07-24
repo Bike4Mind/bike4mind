@@ -74,7 +74,7 @@ const ApiReferenceTab = () => {
             variant="outlined"
             color="neutral"
             size="sm"
-            data-testid="api-reference-docs-link"
+            data-testid="api-reference-open-docs-btn"
           >
             Interactive Docs
           </Button>
@@ -86,7 +86,7 @@ const ApiReferenceTab = () => {
             variant="outlined"
             color="neutral"
             size="sm"
-            data-testid="api-reference-download-spec-link"
+            data-testid="api-reference-download-spec-btn"
           >
             Download OpenAPI Spec
           </Button>
