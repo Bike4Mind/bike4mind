@@ -1,6 +1,7 @@
 import { baseApi } from '@server/middlewares/baseApi';
 import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { apiKeyAlertRepository } from '@bike4mind/database/auth';
+import { getApiKeyRateLimitUsage } from '@server/utils/apiKeyRateLimitCheck';
 
 const handler = baseApi().get(async (req, res) => {
   const userId = req.user?.id;
@@ -20,6 +21,12 @@ const handler = baseApi().get(async (req, res) => {
     return acc;
   }, {});
 
+  // Live counts come from the rate-limit cache counters, not the key doc's
+  // usage.* fields (those are never incremented - see apiKeyRateLimitCheck).
+  const liveUsageByKey = Object.fromEntries(
+    await Promise.all(apiKeys.map(async apiKey => [apiKey.id, await getApiKeyRateLimitUsage(apiKey.id)] as const))
+  );
+
   const items = apiKeys.map(apiKey => {
     const alerts = alertsByKey[apiKey.id] ?? [];
     return {
@@ -30,7 +37,7 @@ const handler = baseApi().get(async (req, res) => {
       lastUsedAt: apiKey.lastUsedAt,
       expiresAt: apiKey.expiresAt,
       rateLimit: apiKey.rateLimit,
-      usage: apiKey.usage,
+      liveUsage: liveUsageByKey[apiKey.id],
       metadata: apiKey.metadata,
       alerts: alerts.map(alert => ({
         id: alert.id,
