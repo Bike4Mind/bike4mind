@@ -36,7 +36,14 @@ const handler = baseApi({ auth: false })
         throw new UnauthorizedError('Invalid refresh token');
       }
 
-      const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(user.id, user.tokenVersion ?? 0);
+      // Re-stamp impersonatedBy from the refresh token onto the new access token pair - otherwise
+      // an impersonated session that refreshes loses the marker and logout.ts's impersonation
+      // guard silently stops applying (see AuthTokenGeneratorService.createRefreshToken).
+      const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
+        user.id,
+        user.tokenVersion ?? 0,
+        payload.impersonatedBy ? { impersonatedBy: payload.impersonatedBy } : undefined
+      );
 
       return res.json({
         access_token: accessToken,

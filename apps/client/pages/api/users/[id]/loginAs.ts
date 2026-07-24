@@ -38,9 +38,15 @@ const handler = baseApi().post(
     // belong to the target - if the client kept the admin's refresh token, the
     // first 401-triggered refresh would mint an admin access token and silently
     // flip the session back to the admin mid-impersonation.
+    //
+    // Stamp an impersonatedBy claim so downstream can tell a real customer session
+    // from an admin-driven one: /api/logout skips the tokenVersion revoke for these,
+    // otherwise an admin clicking "Log Out" mid-impersonation would force-log-out the
+    // real customer on every device.
     const { accessToken, refreshToken } = authTokenGenerator.createAccessToken(
       targetUser.id,
-      targetUser.tokenVersion ?? 0
+      targetUser.tokenVersion ?? 0,
+      { impersonatedBy: adminUser.id }
     );
 
     return res.json({ user: redactUserSecretsForSelf(targetUser), accessToken, refreshToken });

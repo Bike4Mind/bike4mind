@@ -621,6 +621,14 @@ export interface IUserRepository extends IBaseRepository<IUserDocument>, ICredit
    */
   incrementCurrentStorage: (userId: string, count: number) => Promise<void>;
   /**
+   * Atomically bump the user's tokenVersion - the server-side session kill switch.
+   * Every currently-issued access/refresh token for the user carries the old version and
+   * is rejected on its next request (per-request check in auth.ts, and at WS connect).
+   * Returns the new tokenVersion. Throws NotFoundError if the user no longer exists,
+   * rather than silently reporting a successful revoke that never happened.
+   */
+  incrementTokenVersion: (userId: string) => Promise<number>;
+  /**
    * Find a user by their Slack user ID
    * Used for OAuth user linking to prevent duplicate Slack ID associations
    */

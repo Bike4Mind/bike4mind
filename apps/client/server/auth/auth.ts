@@ -17,7 +17,7 @@ import { Logger } from '@bike4mind/observability';
 import { dayjs } from '@bike4mind/common';
 import { secretRotationRepository } from '@bike4mind/database/infra';
 import { authTokenGenerator } from './tokenGenerator';
-import { isTokenVersionCurrent, isTokenTypeAcceptable } from '@bike4mind/services';
+import { verifyJwtPayload } from './verifyJwtPayload';
 import { githubOAuthStateStore, googleOAuthStateStore } from './passportOAuthStateStore';
 import { isPolicyConsentRequired, type ConsentGateUser } from './consentGate';
 
@@ -55,40 +55,7 @@ passport.use(
         }
       },
     },
-    async (jwt_payload, done) => {
-      try {
-        // Token-type guard: reject a token minted for a different path (e.g. a refresh
-        // token presented as a Bearer access token). Missing typ = legacy pre-claim token,
-        // accepted (self-expiring grace); the mfaPending access token is also typ-less and
-        // handled by the mfaPending gate below. Shares isTokenTypeAcceptable with the
-        // refresh path (verifyRefreshToken) so those two REST verifiers enforce identically.
-        // NOTE: the WS/CLI verifiers (verifyToken / server/cli/auth.ts verifyJwtToken) do
-        // NOT yet apply this check - tracked as a follow-up, not covered here.
-        if (!isTokenTypeAcceptable(jwt_payload.typ, 'access')) {
-          return done(null, false);
-        }
-        const user = await User.findById(jwt_payload.id);
-        if (user) {
-          if (user.isSystem) return done(null, false);
-          // Server-side kill switch: reject tokens whose embedded tokenVersion
-          // is stale relative to the user's current version. Tokens issued
-          // before this field existed carry no version and normalize to 0, so
-          // they remain valid until the user's version is bumped by a revoke.
-          if (!isTokenVersionCurrent(jwt_payload.tokenVersion, user.tokenVersion)) {
-            return done(null, false);
-          }
-          (user as any).mfaPending = !!jwt_payload.mfaPending;
-          return done(null, user);
-        } else {
-          return done(null, false);
-        }
-      } catch (err) {
-        // Catch transient DB errors (EPIPE, socket closed) and treat as
-        // auth failure to prevent leaking internal details to clients
-        // and to avoid unhandled promise rejections in Lambda
-        return done(null, false);
-      }
-    }
+    verifyJwtPayload
   )
 );
 
@@ -120,7 +87,7 @@ export const auth = handler
         '/api/auth/mfa/verify-setup',
         '/api/auth/mfa/verify',
         '/api/auth/mfa/cancel-setup',
-        '/api/auth/logout',
+        '/api/logout', // real logout route; lets an mfaPending user abandon and revoke
         '/api/identify', // Allow identify for user data
         '/api/settings/fetch', // Needed by MFAEnforcementWrapper to check enforceMFA setting
         '/api/auth/mfa/status', // Needed by MFAEnforcementWrapper to check user MFA status
