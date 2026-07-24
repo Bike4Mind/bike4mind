@@ -268,6 +268,68 @@ describe('useBatchUpload onError', () => {
     );
   });
 
+  it('sends the reviewed taxonomy tags with each file, honoring renames and deletes', async () => {
+    // Regression: the Taxonomy step's edits used to be discarded entirely - every file
+    // got only a folder slug, so reviewing tags changed nothing about the upload.
+    apiPost.mockImplementation((url: string) => {
+      if (url === '/api/files/generate-presigned-urls-batch') return Promise.resolve({ data: { files: [] } });
+      return Promise.resolve({ data: { id: 'id-1' } });
+    });
+    seedWizardFile();
+    useDataLakeWizardStore.setState({
+      allFiles: [
+        {
+          file: new File(['contents'], 'vendor.pdf', { type: 'application/pdf' }),
+          relativePath: 'root/legal/vendor.pdf',
+          size: 8,
+          type: 'application/pdf',
+          excluded: false,
+          isDuplicate: false,
+        },
+      ],
+      taxonomy: {
+        prefix: 'test:',
+        sourcePrefix: 'acme:',
+        suggestedName: 'Acme',
+        attempted: true,
+        analyzing: false,
+        fileAssignments: [],
+        tags: [
+          {
+            name: 'acme:type:agreement',
+            originalName: 'acme:type:contract',
+            strength: 0.95,
+            source: 'ai',
+            matchingFolders: ['legal'],
+            deleted: false,
+          },
+          {
+            name: 'acme:topic:hr',
+            originalName: 'acme:topic:hr',
+            strength: 0.8,
+            source: 'ai',
+            matchingFolders: ['legal'],
+            deleted: true,
+          },
+        ],
+      },
+    });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() =>
+      expect(apiPost).toHaveBeenCalledWith('/api/files/generate-presigned-urls-batch', expect.anything())
+    );
+
+    const presign = apiPost.mock.calls.find(([url]) => url === '/api/files/generate-presigned-urls-batch');
+    const tagNames = (presign?.[1] as { files: { tags: { name: string }[] }[] }).files[0].tags.map(t => t.name).sort();
+    // Renamed tag applied under the user's config prefix; deleted tag gone; folder tag kept.
+    expect(tagNames).toEqual(['test:legal', 'test:type:agreement']);
+  });
+
   it('retrying via the toast action re-invokes the upload', async () => {
     apiPost.mockRejectedValue({ isAxiosError: true, code: 'ERR_NETWORK', message: 'Network Error' });
     seedWizardFile();

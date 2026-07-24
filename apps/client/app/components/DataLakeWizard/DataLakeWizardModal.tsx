@@ -35,6 +35,10 @@ export default function DataLakeWizardModal() {
 
   const canGoBack = currentIndex > 0 && step !== 'upload';
 
+  // Nothing to review means nothing to apply, so the step is a pass-through - say so on
+  // the button rather than making the user guess whether Next loses anything.
+  const nextLabel = step === 'taxonomy' && !taxonomy.tags.some(t => !t.deleted) ? 'Skip' : 'Next';
+
   const canGoNext = (() => {
     switch (step) {
       case 'source':
@@ -42,7 +46,10 @@ export default function DataLakeWizardModal() {
       case 'preview':
         return allFiles.some(f => !f.excluded);
       case 'taxonomy':
-        return taxonomy.analyzed;
+        // Never gated: inference is optional (the endpoint itself degrades to an empty
+        // taxonomy when it has no API key), and a failed or empty run used to strand the
+        // user here with no way forward.
+        return true;
       case 'config':
         // Append mode reuses the target lake's (already valid) slug; create mode must
         // produce a slug the server will accept (slug.min(2)) before Start Upload enables.
@@ -181,7 +188,7 @@ export default function DataLakeWizardModal() {
                 disabled={!canGoNext}
                 onClick={handleNext}
               >
-                Next
+                {nextLabel}
               </Button>
             ) : null}
           </Stack>

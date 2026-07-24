@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { TaxonomyFileAssignment } from '@bike4mind/common';
 import type { FolderTreeNode, WizardFile } from '../utils/folderTreeParser';
 import {
   parseFilesToTree,
@@ -16,23 +17,34 @@ export type WizardStep = 'source' | 'preview' | 'taxonomy' | 'config' | 'upload'
 export type ManagerTab = 'mine' | 'discover';
 
 export interface TaxonomyTag {
-  /** Full tag name, e.g. "acme:type:contract" */
+  /** Full tag name, e.g. "acme:type:contract"; editable by the user */
   name: string;
+  /**
+   * The name inference assigned, kept stable across user renames. Per-file assignments
+   * reference it, so it is the join key when applying tags at upload time.
+   */
+  originalName: string;
   /** Confidence/relevance score 0.0-1.0 */
   strength: number;
   /** How this tag was inferred */
   source: 'folder' | 'ai';
-  /** Sample file names for review */
-  sampleFileNames: string[];
+  /** Folder paths this tag covers; drives both the review preview and which files get it */
+  matchingFolders: string[];
   /** Whether this tag has been soft-deleted by the user */
   deleted: boolean;
 }
 
 export interface TaxonomyResult {
+  /** Tag prefix, editable by the user (kept in sync with config.tagPrefix) */
   prefix: string;
+  /** Prefix as inference returned it; tag names embed it, so rewriting needs it unedited */
+  sourcePrefix: string;
   suggestedName: string;
   tags: TaxonomyTag[];
-  analyzed: boolean;
+  /** Per-file tag suggestions for the sampled files (inference only samples a subset) */
+  fileAssignments: TaxonomyFileAssignment[];
+  /** Inference has been run - success OR failure. Never gates progression; the step is optional. */
+  attempted: boolean;
   analyzing: boolean;
 }
 
@@ -71,9 +83,11 @@ export interface UploadProgress {
 
 const DEFAULT_TAXONOMY: TaxonomyResult = {
   prefix: '',
+  sourcePrefix: '',
   suggestedName: '',
   tags: [],
-  analyzed: false,
+  fileAssignments: [],
+  attempted: false,
   analyzing: false,
 };
 
@@ -149,9 +163,11 @@ interface DataLakeWizardStore {
   // Taxonomy step
   setTaxonomy: (result: TaxonomyResult) => void;
   setTaxonomyAnalyzing: (analyzing: boolean) => void;
+  markTaxonomyAttempted: () => void;
   updateTag: (tagName: string, updates: Partial<TaxonomyTag>) => void;
   mergeTags: (sourceTagName: string, targetTagName: string) => void;
   deleteTag: (tagName: string) => void;
+  setTagPrefix: (prefix: string) => void;
 
   // Config step
   setConfig: (config: Partial<DataLakeFormValues>) => void;
@@ -189,7 +205,9 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   // ── Navigation ──────────────────────────────────────────────────────────
 
-  openWizard: () => set({ isOpen: true, step: 'source', targetLake: null }),
+  // Taxonomy is cleared on every open: it now drives the tags files are actually
+  // uploaded with, so a previous run's categories must never leak into this one.
+  openWizard: () => set({ isOpen: true, step: 'source', targetLake: null, taxonomy: { ...DEFAULT_TAXONOMY } }),
 
   // Management panel (list lakes, add files, lifecycle). Its internal "Create"
   // button calls openWizard, which stacks the wizard on top and returns here on close.
@@ -204,6 +222,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
       isOpen: true,
       step: 'source',
       targetLake: lake,
+      taxonomy: { ...DEFAULT_TAXONOMY },
       config: {
         ...state.config,
         name: lake.name,
@@ -260,6 +279,10 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
 
   setTaxonomyAnalyzing: analyzing => set(state => ({ taxonomy: { ...state.taxonomy, analyzing } })),
 
+  // Failure path: inference is optional, so a failed run still counts as attempted -
+  // otherwise the step shows a blank pane instead of its empty state + Re-analyze.
+  markTaxonomyAttempted: () => set(state => ({ taxonomy: { ...state.taxonomy, attempted: true, analyzing: false } })),
+
   updateTag: (tagName, updates) =>
     set(state => ({
       taxonomy: {
@@ -281,7 +304,7 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
             if (t.name === targetTagName) {
               return {
                 ...t,
-                sampleFileNames: [...new Set([...t.sampleFileNames, ...sourceTag.sampleFileNames])],
+                matchingFolders: [...new Set([...t.matchingFolders, ...sourceTag.matchingFolders])],
                 strength: Math.max(t.strength, sourceTag.strength),
               };
             }
@@ -300,6 +323,15 @@ export const useDataLakeWizardStore = create<DataLakeWizardStore>((set, get) => 
         ...state.taxonomy,
         tags: state.taxonomy.tags.map(t => (t.name === tagName ? { ...t, deleted: true } : t)),
       },
+    })),
+
+  // The Tag Prefix's single editable home is the taxonomy step (#829): the prefix is
+  // embedded in every applied tag name there and consumed by Re-analyze. Kept in sync with
+  // config.tagPrefix so the Config gate and append-mode display read one value.
+  setTagPrefix: prefix =>
+    set(state => ({
+      taxonomy: { ...state.taxonomy, prefix },
+      config: { ...state.config, tagPrefix: prefix },
     })),
 
   // ── Config Step ─────────────────────────────────────────────────────────

@@ -1,4 +1,5 @@
 import { Box, Button, Chip, CircularProgress, IconButton, Input, Stack, Typography } from '@mui/joy';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import EditIcon from '@mui/icons-material/Edit';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -122,10 +123,10 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
         {tag.source === 'ai' ? 'AI' : 'folder'}
       </Chip>
 
-      {/* Sample folders/files */}
-      {tag.sampleFileNames.length > 0 && (
+      {/* Folders this tag will be applied to */}
+      {tag.matchingFolders.length > 0 && (
         <Typography level="body-xs" color="neutral" sx={{ maxWidth: 200 }} noWrap>
-          {tag.sampleFileNames.join(', ')}
+          {tag.matchingFolders.join(', ')}
         </Typography>
       )}
 
@@ -161,6 +162,7 @@ const TagCard = memo(function TagCard({ tag, onUpdate, onDelete }: TagCardProps)
 export default function TaxonomyReviewStep() {
   const theme = useTheme();
   const taxonomy = useDataLakeWizardStore(s => s.taxonomy);
+  const setTagPrefix = useDataLakeWizardStore(s => s.setTagPrefix);
   const updateTag = useDataLakeWizardStore(s => s.updateTag);
   const deleteTag = useDataLakeWizardStore(s => s.deleteTag);
   const inferTaxonomy = useInferTaxonomy();
@@ -169,9 +171,9 @@ export default function TaxonomyReviewStep() {
     inferTaxonomy.mutate({});
   }, [inferTaxonomy]);
 
-  // Auto-trigger inference on first mount if not yet analyzed
+  // Auto-trigger inference on first mount if not yet attempted
   const [autoTriggered, setAutoTriggered] = useState(false);
-  if (!taxonomy.analyzed && !taxonomy.analyzing && !autoTriggered) {
+  if (!taxonomy.attempted && !taxonomy.analyzing && !autoTriggered) {
     setAutoTriggered(true);
     // Use setTimeout to avoid setState during render
     setTimeout(() => inferTaxonomy.mutate({}), 0);
@@ -216,15 +218,30 @@ export default function TaxonomyReviewStep() {
       data-testid="wizard-taxonomy-step"
       sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2, p: 2, overflow: 'auto' }}
     >
-      {/* Header row: suggested name + re-analyze button. Tag Prefix is edited on the
-          Config step (its single home) - it drives the submitted fileTagPrefix, so
-          duplicating an editable copy here only invited the two to drift out of sync. */}
+      {/* Header row: Tag Prefix input + re-analyze button. Tag Prefix's single editable home
+          is HERE (#829): the prefix is embedded in every applied tag name and consumed by
+          Re-analyze, so this is where it drives behavior. The Config step shows it read-only
+          (append mode) rather than as a second editable copy that could drift out of sync. */}
       <Stack direction="row" gap={2} alignItems="flex-end" flexWrap="wrap">
+        <Box sx={{ flex: 1, minWidth: 200 }}>
+          <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
+            Tag Prefix
+          </Typography>
+          <Input
+            size="sm"
+            data-testid="taxonomy-tag-prefix-input"
+            value={taxonomy.prefix}
+            onChange={e => setTagPrefix(e.target.value)}
+            placeholder="e.g. acme:"
+            startDecorator={<AutoAwesomeIcon sx={{ fontSize: 16 }} />}
+            sx={{ fontFamily: 'monospace' }}
+          />
+        </Box>
         <Box sx={{ flex: 1, minWidth: 200 }}>
           <Typography level="body-xs" fontWeight="bold" sx={{ mb: 0.5 }}>
             Suggested Name
           </Typography>
-          <Typography level="body-sm">{taxonomy.suggestedName || '—'}</Typography>
+          <Typography level="body-sm">{taxonomy.suggestedName || '-'}</Typography>
         </Box>
         <Button
           size="sm"
@@ -240,8 +257,9 @@ export default function TaxonomyReviewStep() {
 
       {/* Summary */}
       <Typography level="body-sm" color="neutral">
-        {activeTags.length} tag categor{activeTags.length === 1 ? 'y' : 'ies'} suggested
+        {activeTags.length} tag categor{activeTags.length === 1 ? 'y' : 'ies'} will be applied to matching files
         {taxonomy.tags.filter(t => t.deleted).length > 0 && ` (${taxonomy.tags.filter(t => t.deleted).length} removed)`}
+        . This step is optional - you can skip it and keep folder-based tags only.
       </Typography>
 
       {/* Tags grouped by confidence tier */}
@@ -276,10 +294,11 @@ export default function TaxonomyReviewStep() {
       ))}
 
       {/* Empty state */}
-      {activeTags.length === 0 && taxonomy.analyzed && (
-        <Box sx={{ textAlign: 'center', py: 4 }}>
+      {activeTags.length === 0 && taxonomy.attempted && (
+        <Box data-testid="taxonomy-empty-state" sx={{ textAlign: 'center', py: 4 }}>
           <Typography color="neutral">
-            No tag categories found. Try re-analyzing with different files or adding context.
+            No tag categories suggested. Files will still be tagged by their source folder - continue, or re-analyze
+            with different files or added context.
           </Typography>
           <Button size="sm" variant="soft" sx={{ mt: 1 }} onClick={handleReanalyze}>
             Re-analyze

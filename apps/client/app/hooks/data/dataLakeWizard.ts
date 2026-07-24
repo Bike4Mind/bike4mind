@@ -20,28 +20,10 @@ import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import { slugifyDataLakeName, MIN_DATA_LAKE_SLUG_LENGTH } from '@client/app/hooks/data/dataLakeSlug';
 import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
+import { appliedTagsForBatch, tagsForFile } from '@client/app/utils/dataLakeTaxonomy';
 import { invalidateGearsStatusWhileLocked } from '@client/app/hooks/useGearsStatus';
 import axios from 'axios';
 import { uploadFileToUrl } from '@client/app/utils/uploadFileToUrl';
-
-/**
- * Derive a single tag for a file from its immediate parent folder, so each file
- * is tagged by its source folder (e.g. a disease site) rather than getting every
- * taxonomy category. Returns [] for root-level files (they get only the lake
- * meta-tag). Uses underscores to match the AI taxonomy's folder-slug style.
- */
-function folderTagForFile(relativePath: string, tagPrefix: string): { name: string; strength: number }[] {
-  const segments = relativePath.split('/').filter(Boolean);
-  const parent = segments.length >= 2 ? segments[segments.length - 2] : undefined;
-  if (!parent) return [];
-  const slug = parent
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '');
-  if (!slug) return [];
-  const prefix = tagPrefix.endsWith(':') ? tagPrefix : `${tagPrefix}:`;
-  return [{ name: `${prefix}${slug}`, strength: 1.0 }];
-}
 
 /**
  * Stratified sampling: pick up to `maxPerFolder` files from each unique folder path,
@@ -88,6 +70,7 @@ export function useInferTaxonomy() {
   const allFiles = useDataLakeWizardStore(s => s.allFiles);
   const setTaxonomy = useDataLakeWizardStore(s => s.setTaxonomy);
   const setTaxonomyAnalyzing = useDataLakeWizardStore(s => s.setTaxonomyAnalyzing);
+  const markTaxonomyAttempted = useDataLakeWizardStore(s => s.markTaxonomyAttempted);
 
   return useMutation({
     mutationFn: async (options?: { context?: string; existingPrefix?: string }) => {
@@ -131,21 +114,28 @@ export function useInferTaxonomy() {
     onSuccess: data => {
       setTaxonomy({
         prefix: data.suggestedPrefix,
+        sourcePrefix: data.suggestedPrefix,
         suggestedName: data.suggestedName,
         tags: data.categories.map(cat => ({
           name: cat.tagName,
+          originalName: cat.tagName,
           strength: cat.confidence,
           source: 'ai' as const,
-          sampleFileNames: cat.matchingFolders,
+          matchingFolders: cat.matchingFolders ?? [],
           deleted: false,
         })),
-        analyzed: true,
+        // The endpoint degrades to an empty taxonomy on any failure, so treat every
+        // field as optional rather than trusting the happy-path shape.
+        fileAssignments: data.fileAssignments ?? [],
+        attempted: true,
         analyzing: false,
       });
-      toast.success(`AI suggested ${data.categories.length} tag categories`);
+      if (data.categories.length > 0) {
+        toast.success(`AI suggested ${data.categories.length} tag categories`);
+      }
     },
     onError: (error: Error) => {
-      setTaxonomyAnalyzing(false);
+      markTaxonomyAttempted();
       toast.error(error.message || 'Failed to infer taxonomy');
     },
   });
@@ -399,7 +389,7 @@ export function useBatchUpload() {
 
       // Read from store at mutation time to avoid stale closure
       // (same pattern as useComputeHashes)
-      const { config, allFiles, targetLake } = useDataLakeWizardStore.getState();
+      const { config, allFiles, targetLake, taxonomy } = useDataLakeWizardStore.getState();
       let included = allFiles.filter(f => !f.excluded);
       if (included.length === 0) throw new Error('No files to upload');
 
@@ -479,12 +469,10 @@ export function useBatchUpload() {
       try {
         const totalSizeBytes = included.reduce((sum, f) => sum + f.size, 0);
 
-        // Per-file tags derived from each file's source folder (one tag = its
-        // folder/disease), so disease folders stay meaningful instead of every
-        // file carrying every taxonomy tag. The lake meta-tag is added server-side.
-        const appliedTags = Array.from(
-          new Set(included.flatMap(f => folderTagForFile(f.relativePath, tagPrefix).map(t => t.name)))
-        ).map(name => ({ name, strength: 1.0 }));
+        // Per-file tags: each file's source folder plus the taxonomy categories the
+        // user reviewed (append mode has no taxonomy step, so it stays folder-only).
+        // The lake meta-tag is added server-side.
+        const appliedTags = appliedTagsForBatch(included, taxonomy, tagPrefix);
 
         // Step 2: Create batch record
         const batchRes = await api.post<{ id: string }>('/api/data-lakes/batches', {
@@ -531,7 +519,9 @@ export function useBatchUpload() {
                 fileSize: f.size,
                 relativePath: f.relativePath,
                 ...(f.contentHash && { contentHash: f.contentHash }),
-                tags: folderTagForFile(f.relativePath, tagPrefix),
+                // Each file's source folder plus the reviewed taxonomy categories covering
+                // it (append mode has an empty taxonomy, so this stays folder-only).
+                tags: tagsForFile(f.relativePath, taxonomy, tagPrefix),
               })),
               dataLakeSlug: slug,
               // Correlate every uploaded file to its batch so the pipeline
