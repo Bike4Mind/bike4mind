@@ -41,7 +41,12 @@ vi.mock('@bike4mind/services', () => ({ userApiKeyService: { updateEmbedKey } })
 // The route reads the stored key via findByUserIdAndId - both for the branding
 // echo-vs-elevation decision and (post-#891) for the owner ref the gate resolves.
 // Default to no stored key.
-const userApiKeyRepository = vi.hoisted(() => ({ findByUserIdAndId: vi.fn().mockResolvedValue(null) }));
+const userApiKeyRepository = vi.hoisted(() => ({
+  findByUserIdAndId: vi.fn().mockResolvedValue(null),
+  // The branding-owner read falls back to the org-admin resolver on a minter miss,
+  // mirroring updateEmbedKey; default to no org-admin match.
+  findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
+}));
 vi.mock('@bike4mind/database/auth', () => ({ userApiKeyRepository }));
 const logEvent = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
@@ -54,7 +59,10 @@ vi.mock('@server/utils/analyticsLog', () => ({ logEvent }));
 const getUserEntitlements = vi.hoisted(() => vi.fn().mockResolvedValue([]));
 vi.mock('@server/entitlements', () => ({ getUserEntitlements }));
 const userRepository = vi.hoisted(() => ({ findById: vi.fn() }));
-const organizationRepository = vi.hoisted(() => ({ findById: vi.fn() }));
+const organizationRepository = vi.hoisted(() => ({
+  findById: vi.fn(),
+  findIdsAdministeredBy: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('@bike4mind/database', () => ({ organizationRepository, userRepository }));
 
 import { CreditHolderType } from '@bike4mind/common';
@@ -155,7 +163,11 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       userRepository.findById.mockReset();
       userRepository.findById.mockResolvedValue({ id: OWNER });
       organizationRepository.findById.mockReset();
+      organizationRepository.findIdsAdministeredBy.mockReset();
+      organizationRepository.findIdsAdministeredBy.mockResolvedValue([]);
       userApiKeyRepository.findByUserIdAndId.mockReset();
+      userApiKeyRepository.findByOrganizationIdsAndId.mockReset();
+      userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue(null);
       // Personal key owned by OWNER, no stored hideBranding.
       userApiKeyRepository.findByUserIdAndId.mockResolvedValue({ userId: OWNER, branding: undefined });
     });
@@ -232,11 +244,13 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
       );
     });
 
-    it('strips hideBranding when the key is not found / not the callers (fail closed)', async () => {
+    it('strips hideBranding when the caller neither minted nor administers the key (fail closed)', async () => {
       userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null);
+      // Org-admin fallback also misses (caller administers nothing).
       const { req, res } = patch('key-1', { branding: { hideBranding: true } });
       await mockRefs.patchHandler!(req, res);
-      // No owner to resolve - the null-existing guard strips without a lookup.
+      // Both reads miss, so there is no owner to resolve and the elevation is stripped.
+      expect(userApiKeyRepository.findByOrganizationIdsAndId).toHaveBeenCalled();
       expect(getUserEntitlements).not.toHaveBeenCalled();
       expect(updateEmbedKey).toHaveBeenCalledWith(
         'u1',
@@ -295,5 +309,48 @@ describe('PATCH /api/user-api-keys/[id] - embed-key configure', () => {
         expect.anything()
       );
     });
+
+    // #909: an org admin (not the minter) editing a teammate's org key resolves
+    // the elevation via the org-admin fallback read. If that read is NOT widened,
+    // the minter miss leaves `existing` null and the elevation is stripped - so
+    // asserting it is PRESERVED (for an entitled org owner) is the mutation lens.
+    it('preserves hideBranding for an org admin editing a teammate org key whose org owner is entitled', async () => {
+      userApiKeyRepository.findByUserIdAndId.mockResolvedValue(null); // caller did not mint it
+      organizationRepository.findIdsAdministeredBy.mockResolvedValue(['org-1']);
+      userApiKeyRepository.findByOrganizationIdsAndId.mockResolvedValue({
+        userId: 'minter',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        branding: undefined,
+      });
+      organizationRepository.findById.mockResolvedValue({ userId: 'org-owner' });
+      userRepository.findById.mockImplementation(async (id: string) => ({ id }));
+      getUserEntitlements.mockImplementation(async (owner: any) =>
+        owner?.id === 'org-owner' ? ['embed:whitelabel'] : []
+      );
+      const { req, res } = patch('key-1', { branding: { hideBranding: true } });
+      (req as any).user = { id: 'admin-user', isAdmin: false };
+      await mockRefs.patchHandler!(req, res);
+      expect(userApiKeyRepository.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
+      expect(organizationRepository.findById).toHaveBeenCalledWith('org-1');
+      expect(updateEmbedKey).toHaveBeenCalledWith(
+        'admin-user',
+        expect.objectContaining({ branding: { hideBranding: true } }),
+        expect.anything()
+      );
+    });
+  });
+
+  // The route must thread the organizations adapter into the service so the
+  // service's own org-admin resolution has its dependency (F3). A missing adapter
+  // would TypeError the service on a minter miss.
+  it('threads the organizations adapter into updateEmbedKey', async () => {
+    const { req, res } = patch('key-1', { agentId: 'agent-2' });
+    await mockRefs.patchHandler!(req, res);
+    expect(updateEmbedKey).toHaveBeenCalledWith(
+      'u1',
+      expect.anything(),
+      expect.objectContaining({ db: expect.objectContaining({ organizations: organizationRepository }) })
+    );
   });
 });
