@@ -6,6 +6,8 @@ import {
   getArticleAnchors,
   validateFrontmatter,
   validateArticles,
+  resolveAssetPath,
+  MEDIA_SIZE_LIMITS,
 } from '../validate-help-content';
 import type { LoadedHelpArticle } from '../loadHelpArticles';
 import type { HelpFrontmatter } from '../types';
@@ -187,6 +189,104 @@ describe('validateArticles — anchors', () => {
       fileExists: (p: string) => p === path.join(DOCS_ROOT, 'features/b.md'),
     });
     expect(findings.filter(f => f.type === 'anchor')).toEqual([]);
+  });
+});
+
+describe('resolveAssetPath', () => {
+  it('resolves relative and absolute paths inside the docs tree', () => {
+    expect(resolveAssetPath('./media/x.gif', '/docs/features', '/docs')).toBe('/docs/features/media/x.gif');
+    expect(resolveAssetPath('media/x.gif', '/docs/features', '/docs')).toBe('/docs/features/media/x.gif');
+    expect(resolveAssetPath('/images/x.png', '/docs/features', '/docs')).toBe('/docs/images/x.png');
+  });
+
+  it('returns null when the path escapes the docs tree', () => {
+    expect(resolveAssetPath('../../secret.png', '/docs/features', '/docs')).toBeNull();
+  });
+});
+
+describe('validateArticles — media guards', () => {
+  const exists = (existing: string[]) => (p: string) => existing.map(e => path.join(DOCS_ROOT, e)).includes(p);
+
+  it('accepts an existing small demo video referenced with image syntax', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.webm)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/media/demo.webm']),
+      fileSize: () => 500 * 1024,
+    });
+    expect(findings).toEqual([]);
+  });
+
+  it('flags a missing video like a missing image', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.mp4)')];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => false });
+    expect(findings.filter(f => f.type === 'image')).toHaveLength(1);
+  });
+
+  it('flags a GIF over the size cap and accepts one under it', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.gif)')];
+    const opts = (size: number) => ({
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/media/demo.gif']),
+      fileSize: () => size,
+    });
+    const over = validateArticles(articles, opts(MEDIA_SIZE_LIMITS.gif.maxBytes + 1));
+    expect(over.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(over[0].message).toContain('gif');
+
+    expect(validateArticles(articles, opts(MEDIA_SIZE_LIMITS.gif.maxBytes))).toEqual([]);
+  });
+
+  it('flags an oversized video with the video cap', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.webm)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/media/demo.webm']),
+      fileSize: () => MEDIA_SIZE_LIMITS.video.maxBytes + 1,
+    });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+  });
+
+  it('flags web-unplayable video formats with conversion guidance', () => {
+    const articles = [makeArticle('features/a.md', '![Demo](./media/demo.mov)')];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => true });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('.webm');
+  });
+
+  it('flags externally hosted embeds but allows plain external hyperlinks, even to files', () => {
+    const articles = [
+      makeArticle(
+        'features/a.md',
+        [
+          '![Demo](https://example.com/demo.gif)', // embed: rejected
+          '[docs](https://example.com/page)', // plain link: allowed
+          '[handout](https://example.com/guide.pdf)', // plain link to a file: allowed
+        ].join('\n')
+      ),
+    ];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => false });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings.filter(f => f.type === 'media')[0].line).toBe(1);
+    expect(findings.filter(f => f.type === 'link')).toEqual([]);
+  });
+
+  it('caps bundled PDFs like other assets', () => {
+    const articles = [makeArticle('features/a.md', '[Guide](./files/guide.pdf)')];
+    const findings = validateArticles(articles, {
+      docsRoot: DOCS_ROOT,
+      fileExists: exists(['features/files/guide.pdf']),
+      fileSize: () => MEDIA_SIZE_LIMITS.pdf.maxBytes + 1,
+    });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('pdf');
+  });
+
+  it('flags an asset path that escapes the docs tree', () => {
+    const articles = [makeArticle('features/a.md', '![x](../../outside.png)')];
+    const findings = validateArticles(articles, { docsRoot: DOCS_ROOT, fileExists: () => true });
+    expect(findings.filter(f => f.type === 'media')).toHaveLength(1);
+    expect(findings[0].message).toContain('escapes');
   });
 });
 
