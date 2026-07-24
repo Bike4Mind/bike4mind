@@ -128,10 +128,14 @@ describe('GET /api/embed/branding - launcher branding bootstrap', () => {
     expect(res._getJSONData()).toEqual({ primaryColor: '#123', displayName: 'Acme' });
   });
 
-  it('sets cacheable JSON headers on success', async () => {
+  it('sets non-cacheable, Origin-varying JSON headers on success', async () => {
+    // no-store, not public: the platform ACAO is Origin-conditional with no Vary,
+    // so a shared-cached copy could carry the wrong CORS variant (and outlive a
+    // key revocation). Vary: Origin is the honest signal.
     const res = await run({ k: 'b4m_live_good' });
     expect(String(res.getHeader('Content-Type'))).toContain('application/json');
     expect(String(res.getHeader('X-Content-Type-Options'))).toBe('nosniff');
-    expect(String(res.getHeader('Cache-Control'))).toBe('public, max-age=300');
+    expect(String(res.getHeader('Cache-Control'))).toBe('no-store');
+    expect(String(res.getHeader('Vary'))).toBe('Origin');
   });
 });
