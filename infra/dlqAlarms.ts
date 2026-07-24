@@ -42,6 +42,7 @@ import {
   overwatchAnalyticsQueueDLQ,
   agentContinuationQueueDLQ,
   optihashiRunCompletionQueueDLQ,
+  bobRunQueueDLQ,
 } from './queues';
 import { telemetryAlertRuleDLQ } from './eventBus';
 import { emailIngestionQueueDLQ, emailAnalysisQueueDLQ } from './emailIngestion';
@@ -325,6 +326,14 @@ const DLQ_DESCRIPTORS: InfraDlqDescriptor[] = [
     application: 'OptiHashiIntegration',
     sourceQueue: 'optihashiRunCompletionQueue',
     queue: optihashiRunCompletionQueueDLQ,
+  },
+  // queues.ts - Bob panel run (@bike4mind/premium-bob, issue #33 step B)
+  {
+    label: 'bob-run',
+    displayName: 'Bob Panel Run',
+    application: 'BobIntegration',
+    sourceQueue: 'bobRunQueue',
+    queue: bobRunQueueDLQ,
   },
 ];
 
