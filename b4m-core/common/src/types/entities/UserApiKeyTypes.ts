@@ -118,9 +118,9 @@ export interface IUserApiKey {
   revokedAt?: Date;
   /**
    * Acting user who revoked the key. Absent for system-initiated revocations
-   * (rollbacks, bulk deactivation) that have no human actor. Today this always
-   * equals `userId` because every revoke path is minter-scoped; it becomes
-   * genuinely distinct once org admins can revoke keys they did not mint.
+   * (rollbacks, bulk deactivation) that have no human actor. Distinct from
+   * `userId` (the minter) when an org admin revokes a key billed to an org they
+   * administer but did not mint.
    */
   revokedBy?: string;
   /** Why the key was revoked, when the caller supplied a reason. */
@@ -195,6 +195,14 @@ export interface IUserApiKeyRepository extends IBaseRepository<IUserApiKeyDocume
   countActiveByProductId: (productId: string) => Promise<number>;
   /** All keys billed to an organization's credit pool (any status), newest first. */
   findByOrganizationId: (organizationId: string) => Promise<IUserApiKeyDocument[]>;
+  /**
+   * The key with this id iff it is org-billed to one of the given orgs (any
+   * status); null for an empty set (fail-closed, no query). Positive org-admin
+   * scope for the configure/rotate/revoke write paths - mirrors how the LIST
+   * route surfaces org keys, so an org admin can act on any key billed to an org
+   * they administer, not just keys they minted.
+   */
+  findByOrganizationIdsAndId: (organizationIds: string[], id: string) => Promise<IUserApiKeyDocument | null>;
   /** Active keys bound to an agent (embed keys), newest first; uses the sparse
    *  { agentId, status } index. */
   findByAgentId: (agentId: string) => Promise<IUserApiKeyDocument[]>;

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
 import { validateUserApiKey, validateUserApiKeyById } from '../validate';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
@@ -145,6 +145,8 @@ describe('validateUserApiKey - embed context fields', () => {
         allowedOrigins: ['https://example.com'],
         branding: { displayName: 'Acme', primaryColor: '#336699', hideBranding: true },
         metadata: { createdFrom: 'dashboard' as const },
+        organizationId: 'org-1',
+        billingOwnerType: CreditHolderType.Organization,
       },
       { ...adapters, systemUserId: 'sys-1' }
     );

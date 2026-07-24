@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import mongoose from 'mongoose';
 import type { MongoMemoryServer } from 'mongodb-memory-server';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 // createMongoServer is not exported from the package barrel / dist; deep-import the source.
 import { createMongoServer } from '../../../../packages/database/src/__test__/createMongoServer';
 import { userApiKeyRepository, UserApiKey } from '@bike4mind/database';
@@ -41,6 +41,8 @@ const mintCappedKey = (spendCap?: number) =>
       scopes: [ApiKeyScope.EMBED_CHAT],
       metadata: { createdFrom: 'dashboard' as const },
       agentId: 'agent-1',
+      organizationId: 'org-1',
+      billingOwnerType: CreditHolderType.Organization,
       ...(spendCap !== undefined && { spendCap }),
     },
     adapters

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS } from '../create';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -114,15 +114,33 @@ describe('createUserApiKey — overwatch ingest scope', () => {
 describe('createUserApiKey — embed keys (epic #41)', () => {
   let repo: ReturnType<typeof makeRepo>;
   const adapters = () => ({ db: { userApiKeys: repo as any } });
+  // Embed keys must be org-billed (they are otherwise never servable), so every
+  // valid embed create carries an organizationId + Organization billing.
   const embedParams = {
     name: 'Embed key',
     scopes: [ApiKeyScope.EMBED_CHAT],
     metadata: { createdFrom: 'dashboard' as const },
     agentId: 'agent-1',
+    organizationId: 'org-1',
+    billingOwnerType: CreditHolderType.Organization,
   };
 
   beforeEach(() => {
     repo = makeRepo();
+  });
+
+  it('rejects an embed:chat key with no organizationId (never servable)', async () => {
+    const { organizationId: _org, billingOwnerType: _bill, ...noOrg } = embedParams;
+    await expect(createUserApiKey('user1', noOrg, adapters())).rejects.toThrow(
+      /embed:chat keys must be billed to an organization/
+    );
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts an embed:chat key billed to an organization', async () => {
+    const result = await createUserApiKey('user1', embedParams, adapters());
+    expect(result.organizationId).toBe('org-1');
+    expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
   });
 
   it('persists agentId, normalized origins, and branding', async () => {

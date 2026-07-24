@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
 import { revokeUserApiKey } from '../revoke';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
@@ -39,6 +39,8 @@ describe('revokeUserApiKey', () => {
         metadata: { createdFrom: 'dashboard' as const },
         agentId: 'agent-1',
         allowedOrigins: ['https://example.com'],
+        organizationId: 'org-1',
+        billingOwnerType: CreditHolderType.Organization,
       },
       adapters
     );
@@ -104,5 +106,50 @@ describe('revokeUserApiKey', () => {
 
     expect(getStored()!.revokedAt).toBe(firstRevokedAt);
     expect(getStored()!.revokedReason).toBe('Leaked in a build log');
+  });
+
+  // #909: an org admin can revoke a key billed to an org they administer, even a
+  // key they did not mint - resolved via the org-admin fallback.
+  describe('org-admin revoke (#909)', () => {
+    const orgKey = () =>
+      ({
+        id: 'key-1',
+        name: 'Org embed key',
+        userId: 'minter',
+        status: ApiKeyStatus.ACTIVE,
+      }) as unknown as IUserApiKeyDocument;
+
+    it('revokes a teammate org key and stamps revokedBy to the acting admin (not the minter)', async () => {
+      const stored = orgKey();
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(stored),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue(['org-1']) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      await revokeUserApiKey('admin-user', { keyId: 'key-1' }, adapters);
+
+      expect(orgs.findIdsAdministeredBy).toHaveBeenCalledWith('admin-user');
+      expect(repo.findByOrganizationIdsAndId).toHaveBeenCalledWith(['org-1'], 'key-1');
+      expect(stored.status).toBe(ApiKeyStatus.DISABLED);
+      expect(stored.revokedBy).toBe('admin-user');
+    });
+
+    it('throws NotFound when the caller neither minted nor administers the key', async () => {
+      const repo = {
+        findByUserIdAndId: vi.fn().mockResolvedValue(null),
+        findByOrganizationIdsAndId: vi.fn().mockResolvedValue(null),
+        update: vi.fn().mockResolvedValue(undefined),
+      };
+      const orgs = { findIdsAdministeredBy: vi.fn().mockResolvedValue([]) };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const adapters = { db: { userApiKeys: repo as any, organizations: orgs as any } };
+
+      await expect(revokeUserApiKey('other-user', { keyId: 'key-1' }, adapters)).rejects.toThrow(/not found/);
+      expect(repo.update).not.toHaveBeenCalled();
+    });
   });
 });

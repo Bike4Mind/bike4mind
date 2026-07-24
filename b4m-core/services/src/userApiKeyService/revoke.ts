@@ -1,4 +1,4 @@
-import { ApiKeyStatus, IUserApiKeyRepository } from '@bike4mind/common';
+import { ApiKeyStatus, IOrganizationRepository, IUserApiKeyRepository } from '@bike4mind/common';
 import { NotFoundError, secureParameters } from '@bike4mind/utils';
 import { z } from 'zod';
 
@@ -12,6 +12,7 @@ export type RevokeUserApiKeyParameters = z.infer<typeof revokeUserApiKeySchema>;
 interface RevokeUserApiKeyAdapters {
   db: {
     userApiKeys: IUserApiKeyRepository;
+    organizations: Pick<IOrganizationRepository, 'findIdsAdministeredBy'>;
   };
 }
 
@@ -20,6 +21,13 @@ export interface RevokeUserApiKeyResult {
   name: string;
 }
 
+/**
+ * Revoke (disable) a key. Resolvable by the key's minter OR by an admin of the
+ * org the key is billed to (owner or manager), mirroring the org-admin-aware
+ * LIST route and updateEmbedKey. `revokedBy` records the acting caller, which is
+ * now genuinely distinct from the minter when an org admin revokes a teammate's
+ * key. The org-admin lookup is lazy: the minter path pays no extra query.
+ */
 export const revokeUserApiKey = async (
   userId: string,
   parameters: RevokeUserApiKeyParameters,
@@ -28,7 +36,11 @@ export const revokeUserApiKey = async (
   const { db } = adapters;
   const params = secureParameters(parameters, revokeUserApiKeySchema);
 
-  const apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  let apiKey = await db.userApiKeys.findByUserIdAndId(userId, params.keyId);
+  if (!apiKey) {
+    const administeredOrgIds = await db.organizations.findIdsAdministeredBy(userId);
+    apiKey = await db.userApiKeys.findByOrganizationIdsAndId(administeredOrgIds, params.keyId);
+  }
   if (!apiKey) {
     throw new NotFoundError('API key not found');
   }
