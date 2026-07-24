@@ -43,6 +43,13 @@ export interface DataLakeFormValues {
   conflictResolution: 'skip' | 'update' | 'duplicate';
 }
 
+/**
+ * Which failure mode produced an error status, so the UI can show a message and
+ * hint that actually match the cause (a config/validation problem vs a network or
+ * upload problem) instead of one generic "check your Name and Tag Prefix" hint.
+ */
+export type UploadErrorKind = 'validation' | 'network' | 'upload' | 'server' | 'unknown';
+
 export interface UploadProgress {
   totalFiles: number;
   uploadedFiles: number;
@@ -51,7 +58,9 @@ export interface UploadProgress {
   failedFiles: number;
   failedFileNames: string[];
   status: 'idle' | 'uploading' | 'complete' | 'error';
+  /** Always a human-friendly, translated message - never raw zod/validator text. */
   errorMessage?: string;
+  errorKind?: UploadErrorKind;
   currentBatchId?: string;
 }
 

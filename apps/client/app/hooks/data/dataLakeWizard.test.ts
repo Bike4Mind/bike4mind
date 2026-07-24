@@ -80,7 +80,7 @@ describe('useBatchUpload onError', () => {
 
     expect(apiPost).not.toHaveBeenCalled();
     const [message] = toastMock.error.mock.calls[0] as [string];
-    expect(message).toBe('No internet connection — check your network and try again.');
+    expect(message).toBe('No internet connection. Check your network and try again.');
     expect(result.current.isPending).toBe(false);
 
     onLineSpy.mockRestore();
@@ -101,13 +101,55 @@ describe('useBatchUpload onError', () => {
       string,
       { action: { label: string; onClick: () => void } },
     ];
-    expect(message).toBe('No internet connection — check your network and try again.');
+    expect(message).toBe('No internet connection. Check your network and try again.');
     expect(opts.action.label).toBe('Retry');
 
     // The wizard's uploadProgress reflects the same friendly message, since the
     // wizard can still be showing the Configure step (setStep('upload') never ran).
     expect(useDataLakeWizardStore.getState().uploadProgress.status).toBe('error');
+    expect(useDataLakeWizardStore.getState().uploadProgress.errorKind).toBe('network');
     expect(useDataLakeWizardStore.getState().uploadProgress.errorMessage).toBe(message);
+  });
+
+  it('translates a 422 into a friendly validation message and never surfaces raw zod text', async () => {
+    // The server returns zod-validation-error text on a 422; it must not reach the UI.
+    const rawZod = 'Validation error: String must contain at least 2 character(s) at "slug"';
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 422, data: { error: rawZod } } });
+    seedWizardFile();
+    // A name that slugifies to a single char is what actually trips slug.min(2) server-side.
+    useDataLakeWizardStore.getState().setConfig({ name: 'A' });
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.status).toBe('error');
+    expect(progress.errorKind).toBe('validation');
+    expect(progress.errorMessage).toBe(
+      'The data lake name is too short. Use a name with at least 2 letters or numbers.'
+    );
+    expect(progress.errorMessage).not.toContain('zod');
+    expect(progress.errorMessage).not.toBe(rawZod);
+  });
+
+  it('classifies a 5xx as a server error', async () => {
+    apiPost.mockRejectedValue({ isAxiosError: true, response: { status: 500, data: { error: 'boom' } } });
+    seedWizardFile();
+
+    const { result } = mountBatchUpload();
+    act(() => {
+      result.current.mutate();
+    });
+
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalledTimes(1));
+
+    const progress = useDataLakeWizardStore.getState().uploadProgress;
+    expect(progress.errorKind).toBe('server');
+    expect(progress.errorMessage).toBe('The server ran into a problem. Please try again in a moment.');
   });
 
   it('retrying via the toast action re-invokes the upload', async () => {
