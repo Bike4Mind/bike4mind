@@ -446,6 +446,46 @@ function generateLlmTools(packages) {
   );
 }
 
+// --- Generate premium migrations ---
+
+// Premium overlays contribute DB migrations (b4mContributions.migrationsExport -> a module
+// exporting `migrations: MigrationFile[]`). Generated into packages/scripts (NOT apps/client,
+// unlike every other glue file here): both consumers of AvailableMigrations - the
+// DatabaseMigrator Lambda's MigrationManager and the `pnpm migrate` CLI - live in
+// @bike4mind/scripts, which cannot import from apps/client (wrong dependency direction).
+// Bare specifier (like llmTools / serverHandlerStubs), NOT the infra glue's relative-import
+// workaround below - that workaround exists only because esbuild externalises symlinked
+// workspace packages when bundling sst.config.ts. The migrator is a normal Lambda handler
+// referenced by string path (infra/database.ts), so a bare specifier bundles fine - the same
+// path serverHandlerStubs already proves out for real Lambda handlers.
+function generateMigrations(packages) {
+  const outPath = join(REPO_ROOT, 'packages/scripts/migrate/migrations/premium.generated.ts');
+  const typeImport = `import type { MigrationFile } from '@bike4mind/database';`;
+
+  const contributors = packages.filter(p => p.contributions.migrationsExport);
+
+  if (contributors.length === 0) {
+    writeFile(
+      outPath,
+      `${GENERATED_BANNER}\n${typeImport}\n\nexport const premiumMigrations: MigrationFile[] = [];\n`
+    );
+    return;
+  }
+
+  contributors.forEach(p => assertModuleSpecifier(p.contributions.migrationsExport, p.name, 'migrationsExport'));
+
+  const imports = contributors
+    .map((p, i) => `import { migrations as migrations${i} } from '${p.contributions.migrationsExport}';`)
+    .join('\n');
+
+  const spreads = contributors.map((_, i) => `  ...migrations${i}`).join(',\n');
+
+  writeFile(
+    outPath,
+    `${GENERATED_BANNER}\n${typeImport}\n${imports}\n\nexport const premiumMigrations: MigrationFile[] = [\n${spreads}\n];\n`
+  );
+}
+
 // --- Generate infra glue ---
 
 // For each premium package that declares `b4mContributions.infra`, emit a thin
@@ -545,6 +585,7 @@ generateNotebookSidenav(packages);
 generateApiStubs(packages);
 generateServerHandlerStubs(packages);
 generateLlmTools(packages);
+generateMigrations(packages);
 generateInfraGlue(packages);
 
 console.log('[codegen] done.');

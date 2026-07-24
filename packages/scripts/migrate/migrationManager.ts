@@ -24,13 +24,21 @@ export class MigrationManager {
   }
 
   async up(target: number | null): Promise<void> {
-    const lastMigration = await Migration.findOne().sort({ id: -1 });
-    const migrations = AvailableMigrations.filter(m => !lastMigration || m.id > lastMigration.id)
+    // Applied-SET semantics, not a high-water-mark: core migrations get monotonic ids per
+    // commit, but overlay migrations pin-bump on an independent cadence, so an overlay
+    // migration id can land below the current max applied id. A `m.id > max(applied)` filter
+    // would then skip it forever, silently. Selecting by "not yet in the applied set" runs any
+    // registered migration regardless of where its id falls relative to the max.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+    const lastAppliedId = appliedIds.size > 0 ? Math.max(...appliedIds) : null;
+
+    const migrations = AvailableMigrations.filter(m => !appliedIds.has(m.id))
       .filter(m => target === null || m.id <= target)
       .sort((a, b) => a.id - b.id);
 
     this.logger.log(`Total migrations known: ${AvailableMigrations.length}`);
-    this.logger.log(`Last migration: ${lastMigration?.id || 'none'}`);
+    this.logger.log(`Last migration: ${lastAppliedId ?? 'none'}`);
     this.logger.log(`Target migration: ${target === null ? 'all' : target}`);
     this.logger.log(`Migrations to run: ${migrations.length}`);
     this.logger.log('');
@@ -56,8 +64,11 @@ export class MigrationManager {
   }
 
   async down(target: number | null): Promise<void> {
-    const lastMigration = await Migration.findOne().sort({ id: -1 });
-    const migrationsToRemove = AvailableMigrations.filter(m => lastMigration && m.id <= lastMigration.id)
+    // Mirror of up()'s applied-set selection - see comment there.
+    const appliedMigrations = await Migration.find();
+    const appliedIds = new Set(appliedMigrations.map(m => m.id));
+
+    const migrationsToRemove = AvailableMigrations.filter(m => appliedIds.has(m.id))
       .filter(m => target === null || m.id > target)
       .sort((a, b) => b.id - a.id);
 
