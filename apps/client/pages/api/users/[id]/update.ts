@@ -105,7 +105,7 @@ const handler = baseApi().put(
     if (currentUser.isAdmin) {
       // Parse with the admin schema -- includes email, isAdmin, tags, credits, etc.
       // id injected from the route param so callers cannot target a different user.
-      const body = userService.adminUpdateUserSchema.parse({ ...req.body, id: userId });
+      const body = userService.adminUpdateUserSchema.parse({ ...(req.body as Record<string, unknown>), id: userId });
 
       // Lockout guard: an explicit demote (isAdmin -> false) must not remove the
       // ONLY remaining Super Admin, and an admin must not remove their OWN Super
