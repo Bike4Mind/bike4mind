@@ -33,6 +33,28 @@ export default function UploadStep() {
   const isUploading = progress.status === 'uploading';
   const isIdle = progress.status === 'idle';
 
+  // Uploads finish before chunk/vectorize (async, and skipped entirely in
+  // self-host without the worker - see #822/#828). Drive the completion copy
+  // from the real counts so we never claim work that hasn't happened. The
+  // WebSocket listener keeps these counts flowing after status flips to
+  // 'complete', so this line updates live as processing catches up.
+  const { uploadedFiles, chunkedFiles, vectorizedFiles } = progress;
+  const fileWord = uploadedFiles === 1 ? 'file' : 'files';
+  const fullyProcessed = uploadedFiles > 0 && chunkedFiles >= uploadedFiles && vectorizedFiles >= uploadedFiles;
+  const processingStarted = chunkedFiles > 0 || vectorizedFiles > 0;
+  let completionSummary: string;
+  if (fullyProcessed) {
+    completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded, chunked, and vectorized.`;
+  } else if (processingStarted) {
+    completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded - ${chunkedFiles.toLocaleString()} chunked, ${vectorizedFiles.toLocaleString()} vectorized so far.`;
+  } else {
+    completionSummary = `${uploadedFiles.toLocaleString()} ${fileWord} uploaded - chunking and vectorizing in progress.`;
+  }
+  if (progress.failedFiles > 0) {
+    const failedWord = progress.failedFiles === 1 ? 'file' : 'files';
+    completionSummary += ` ${progress.failedFiles.toLocaleString()} ${failedWord} failed.`;
+  }
+
   return (
     <Box data-testid="wizard-upload-step" sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2.5, p: 3 }}>
       {/* Idle state — waiting to start */}
@@ -88,8 +110,7 @@ export default function UploadStep() {
           <CheckCircleIcon sx={{ fontSize: 64, color: 'success.500' }} />
           <Typography level="title-lg">Upload Complete!</Typography>
           <Typography level="body-sm" color="neutral" textAlign="center">
-            {progress.uploadedFiles.toLocaleString()} files uploaded, chunked, and vectorized.
-            {progress.failedFiles > 0 && ` ${progress.failedFiles} failed.`}
+            {completionSummary}
           </Typography>
           <Button variant="solid" color="primary" onClick={resetWizard}>
             Done
