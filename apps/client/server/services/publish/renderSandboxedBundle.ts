@@ -1,6 +1,7 @@
 import * as cheerio from 'cheerio';
 import type { PublishVisibility } from '@bike4mind/common';
-import { BLESSED_SCRIPT_PATHS } from './validateBundle';
+import { BLESSED_SCRIPT_PATHS, PUBLISH_HOST } from './validateBundle';
+import { buildFragmentNavScriptTag } from './fragmentNav';
 
 /**
  * Publish - sandboxed-bundle serializer.
@@ -62,6 +63,15 @@ export interface RenderSandboxedBundleInput {
    * `assetMode` resolves to `inline`; ignored for `base`.
    */
   assets?: Map<string, SandboxAsset>;
+  /**
+   * URL paths that identify THIS page (canonical /p path plus the /a/<token> or /uc
+   * alias it was reached at). When set, the fragment-nav helper (see fragmentNav.ts)
+   * is injected so same-page `#fragment` links scroll in place instead of triggering
+   * a cross-document iframe navigation that drops the sandbox's cookies and
+   * dead-ends a gated bundle at its prompt shell. Leave unset for self-contained
+   * sub-documents (`?a=` reply artifacts), whose real URL fragment-navigates natively.
+   */
+  pagePaths?: string[];
 }
 
 export interface RenderSandboxedBundleResult {
@@ -133,6 +143,18 @@ export function renderSandboxedBundle(input: RenderSandboxedBundleInput): Render
         $(el).attr(attr, toDataUri(asset));
       });
     }
+  }
+
+  if (input.pagePaths?.length) {
+    // After author content so author click handlers run first (the helper skips
+    // defaultPrevented events); the pin bridge appends after this, order-independent.
+    const tag = buildFragmentNavScriptTag({
+      origins: [origin, PUBLISH_HOST ? `https://${PUBLISH_HOST}` : ''],
+      paths: input.pagePaths,
+    });
+    const body = $('body');
+    if (body.length) body.append(tag);
+    else $.root().append(tag);
   }
 
   return { srcdoc: $.html(), droppedAssets };

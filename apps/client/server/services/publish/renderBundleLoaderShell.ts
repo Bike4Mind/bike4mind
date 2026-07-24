@@ -21,6 +21,8 @@
  * only appears once the authenticated `?raw=1` srcdoc renders. The login URL is built
  * from `location.*` at runtime. No server interpolation -> no injection surface.
  */
+import { HASH_BRIDGE_JS } from './fragmentNav';
+
 export function renderBundleLoaderShell(): string {
   // Bootstrap script: no server-interpolated values. The localStorage key mirrors
   // ACCESS_TOKEN_STORAGE_KEY in app/hooks/useAccessToken.ts.
@@ -95,6 +97,7 @@ export function renderBundleLoaderShell(): string {
 <div id="b4m-msg"></div>
 <noscript><div style="max-width:540px;margin:18vh auto 0;padding:0 1.25rem;text-align:center;font-family:system-ui,sans-serif">This is a private item. <a href="/login">Sign in</a> to view it.</div></noscript>
 <script>${bootstrap}</script>
+<script>${HASH_BRIDGE_JS}</script>
 </body>
 </html>`;
 }
