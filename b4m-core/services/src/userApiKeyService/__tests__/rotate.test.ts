@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
 import { rotateUserApiKey } from '../rotate';
 import { validateUserApiKey } from '../validate';
-import { ApiKeyScope } from '@bike4mind/common';
+import { ApiKeyScope, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 import { KEY_PREFIX_LENGTH } from '../constants';
 
@@ -79,6 +79,8 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
         metadata: { createdFrom: 'dashboard' as const },
         agentId: 'agent-1',
         spendCap: 5000,
+        organizationId: 'org-1',
+        billingOwnerType: CreditHolderType.Organization,
       },
       { ...adapters, systemUserId: 'sys-1' }
     );

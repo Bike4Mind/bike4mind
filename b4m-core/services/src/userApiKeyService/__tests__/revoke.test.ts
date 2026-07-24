@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { createUserApiKey } from '../create';
 import { revokeUserApiKey } from '../revoke';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 import type { IUserApiKeyDocument } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
@@ -39,6 +39,8 @@ describe('revokeUserApiKey', () => {
         metadata: { createdFrom: 'dashboard' as const },
         agentId: 'agent-1',
         allowedOrigins: ['https://example.com'],
+        organizationId: 'org-1',
+        billingOwnerType: CreditHolderType.Organization,
       },
       adapters
     );
