@@ -34,9 +34,11 @@ const SPEC_JSON = JSON.stringify(openapiSpec);
 const PLACEHOLDER_URL = (openapiSpec as { servers?: Array<{ url?: string }> }).servers?.[0]?.url ?? '';
 
 // A valid HTTP authority is a hostname (optionally :port) or a bracketed IPv6
-// literal - every character of which is in this set. A direct-to-origin request
-// can carry an arbitrary Host, so anything outside the set is rejected below.
-const HOST_CHARSET = /^[A-Za-z0-9.\-:[\]]+$/;
+// literal; underscore is tolerated too (non-RFC, but seen in internal hostnames).
+// Every allowed char is JSON-safe, so a value passing this test cannot break the
+// JSON.parse below. A direct-to-origin request can carry an arbitrary Host, so
+// anything outside the set is rejected (falls back to the committed spec).
+const HOST_CHARSET = /^[A-Za-z0-9._\-:[\]]+$/;
 
 function specForRequest(req: NextApiRequest): string {
   const host = req.headers.host;
