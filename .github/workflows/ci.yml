@@ -183,7 +183,16 @@ jobs:
           path: |
             b4m-core/*/dist
             packages/database/dist
-          retention-days: 7
+          # Intra-run handoff only: the jobs that consume this all `needs:
+          # core-build`, so it is dead weight the moment the run ends. It was on
+          # 7 days, which at ~1.8 GiB/day of CI artifacts overran the org's 2 GB
+          # Actions+Packages storage pool on 2026-07-25 and blocked EVERY deploy
+          # (staging, previews and production promotion) with "Failed to
+          # CreateArtifact: Artifact storage quota has been hit" for four days.
+          # Storage is billed regardless of repo visibility - public repos get
+          # free minutes, not free storage. Same content hash re-uploads once per
+          # run anyway, so this is not a cross-run cache and 1 day costs nothing.
+          retention-days: 1
           if-no-files-found: error
 
   typecheck:
