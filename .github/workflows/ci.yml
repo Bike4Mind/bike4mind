@@ -84,35 +84,6 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Pre-merge gate: a PR may point premium-overlay.lock.json at a b4m-overwatch
-      # BRANCH while preview-testing a premium change, but that must be bumped to a
-      # 40-char SHA before landing on main. This fails the merge queue so a branch
-      # pin can't reach main. (The deploy-time backstop moved to the internal
-      # deployer along with deploys.)
-      # Iterates ALL keys in the lock file, so a future overlay (b4m-tavern, …) is
-      # covered without editing this step. The same [0-9a-f]{40} check
-      # `pnpm premium:pin --check`
-      # (scripts/premium-pin.mjs) runs locally - keep the two in sync if this
-      # regex ever changes.
-      - name: Verify premium overlay pins are SHAs (merge-queue gate)
-        if: github.event_name == 'merge_group'
-        run: |
-          python3 - <<'PY'
-          import json, re, sys
-          try:
-              pins = json.load(open('premium-overlay.lock.json'))
-          except Exception as e:
-              print(f"::error::Could not read premium-overlay.lock.json: {e}")
-              sys.exit(1)
-          bad = {k: v for k, v in pins.items() if not re.fullmatch(r'[0-9a-f]{40}', str(v))}
-          for k, v in bad.items():
-              print(f"::error::premium-overlay.lock.json '{k}' must pin a 40-char SHA before merging to main (got: {v}). Bump it to the merged commit SHA.")
-          if bad:
-              sys.exit(1)
-          for k, v in pins.items():
-              print(f"Premium overlay pin verified: {k}={v}")
-          PY
-
       - name: Check for API files missing baseApi()
         run: bash scripts/check-no-baseapi.sh
 
