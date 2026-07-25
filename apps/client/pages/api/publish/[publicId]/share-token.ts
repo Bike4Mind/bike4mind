@@ -54,7 +54,7 @@ const handler = baseApi()
     const artifact = await loadOwnedArtifact(req, res);
     if (!artifact) return;
 
-    const regenerate = shareTokenBodySchema.parse(req.body).regenerate === true;
+    const regenerate = shareTokenBodySchema.parse(req.body ?? {}).regenerate === true;
 
     // Fast path: a token exists and we're not rotating -> return it (idempotent).
     if (!regenerate && artifact.shareToken) {

@@ -37,7 +37,7 @@ const handler = baseApi({ auth: false })
   })
   .post(async (req, res) => {
     const { token } = req.query as { token: string };
-    const { category, globalUnsubscribe } = unsubscribeBodySchema.parse(req.body);
+    const { category, globalUnsubscribe } = unsubscribeBodySchema.parse(req.body ?? {});
 
     if (!token) {
       throw new BadRequestError('Token is required');
