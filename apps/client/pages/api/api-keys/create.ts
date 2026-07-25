@@ -7,10 +7,10 @@ import * as z from 'zod';
 
 const createApiKeyBodySchema = z.object({
   apiKey: z.string().min(6),
-  description: z.string().optional(),
-  isActive: z.boolean().optional(),
+  description: z.string().optional().prefault(''),
+  isActive: z.boolean().optional().prefault(true),
   type: z.nativeEnum(ApiKeyType),
-  expireDays: z.number().min(1).max(365).optional(),
+  expireDays: z.number().min(1).max(365).optional().prefault(90),
 });
 
 const handler = baseApi().post(async (req, res) => {
