@@ -3,12 +3,18 @@ import { userApiKeyRepository } from '@bike4mind/database/auth';
 import { organizationRepository } from '@bike4mind/database';
 import { baseApi } from '@server/middlewares/baseApi';
 import { validateEmbedBranding, validateEmbedKeyOrigins } from '@server/services/publish';
-import { gateEmbedBrandingWrite } from '@server/entitlements/embedKeyEntitlement';
+import {
+  embedKeyOwnerHasEntitlement,
+  gateEmbedBrandingWrite,
+  type EmbedKeyOwnerRef,
+} from '@server/entitlements/embedKeyEntitlement';
+import { EMBED_WHITELABEL_ENTITLEMENT_KEY } from '@client/lib/entitlements/registry';
 import { logEvent } from '@server/utils/analyticsLog';
 import {
   ApiKeyScope,
   CreditHolderType,
   IEmbedBranding,
+  IUserApiKey,
   IUserApiKeyDocument,
   UserApiKeyEvents,
 } from '@bike4mind/common';
@@ -43,6 +49,26 @@ function dedupeById(keys: IUserApiKeyDocument[]): IUserApiKeyDocument[] {
   return keys.filter(key => (seen.has(key.id) ? false : (seen.add(key.id), true)));
 }
 
+/**
+ * Cache key for a key's resolved billing owner. The same minter can own a
+ * personal key (owner = self) and an org-billed key (owner = org.userId) that
+ * resolve to different plans, so key on the owner tuple - never on `userId`.
+ */
+function ownerCacheKey(key: IUserApiKeyDocument): string {
+  return `${key.billingOwnerType ?? CreditHolderType.User}:${key.organizationId ?? key.userId}`;
+}
+
+/**
+ * Serialize a repo result before attaching a computed field. The finders return
+ * hydrated Mongoose docs whose `toJSON` emits only schema paths, so assigning a
+ * non-schema field to the doc (or spreading it) would drop it; serialize first.
+ * Falls back to a shallow copy for lean/plain-object results (e.g. in tests).
+ */
+function serializeKey(key: IUserApiKeyDocument): IUserApiKey {
+  const doc = key as IUserApiKeyDocument & { toJSON?: () => IUserApiKey };
+  return typeof doc.toJSON === 'function' ? doc.toJSON() : { ...key };
+}
+
 const handler = baseApi()
   .get(async (req, res) => {
     const userId = req.user?.id;
@@ -64,7 +90,33 @@ const handler = baseApi()
       )
     );
 
-    return res.json(dedupeById([...personalKeys, ...orgKeyLists.flat()]));
+    const keys = dedupeById([...personalKeys, ...orgKeyLists.flat()]);
+
+    // Expose whether each embed key's billing OWNER holds the white-label plan,
+    // so the Configure UI gates the hide-branding toggle on the owner (matching
+    // the serve/write rule) instead of the viewer. Resolve once per distinct
+    // owner - a list spanning many keys but few owners pays a handful of lookups.
+    const embedKeys = keys.filter(key => key.scopes.includes(ApiKeyScope.EMBED_CHAT));
+    const uniqueOwners = new Map<string, IUserApiKeyDocument>();
+    for (const key of embedKeys) {
+      const cacheKey = ownerCacheKey(key);
+      if (!uniqueOwners.has(cacheKey)) uniqueOwners.set(cacheKey, key);
+    }
+    const ownerHasWhitelabel = new Map<string, boolean>();
+    await Promise.all(
+      [...uniqueOwners].map(async ([cacheKey, key]) => {
+        ownerHasWhitelabel.set(cacheKey, await embedKeyOwnerHasEntitlement(key, EMBED_WHITELABEL_ENTITLEMENT_KEY));
+      })
+    );
+
+    const payload = keys.map(key => {
+      const json = serializeKey(key);
+      return key.scopes.includes(ApiKeyScope.EMBED_CHAT)
+        ? { ...json, ownerHasWhitelabel: ownerHasWhitelabel.get(ownerCacheKey(key)) ?? false }
+        : json;
+    });
+
+    return res.json(payload);
   })
   .post(async (req: Request<{}, unknown, CreateApiKeyRequest>, res) => {
     const userId = req.user?.id;
@@ -97,13 +149,18 @@ const handler = baseApi()
     }
     // Branding format screen (hex color, https logo, caps); the service
     // re-validates with the same shared schema. The whitelabel write gate then
-    // neutralizes an unentitled hideBranding elevation (read side is the
-    // authoritative enforcement).
+    // neutralizes an unentitled hideBranding elevation against the new key's
+    // billing owner (same rule as the authoritative read gate) - so an admin
+    // minting an org-billed key cannot persist a `true` the org's plan does not
+    // earn.
     const brandingCheck = validateEmbedBranding(branding);
     if (!brandingCheck.ok) {
       throw new BadRequestError(brandingCheck.error);
     }
-    const screenedBranding = await gateEmbedBrandingWrite(req, brandingCheck.value);
+    const brandingOwner: EmbedKeyOwnerRef = organizationId
+      ? { userId, billingOwnerType: CreditHolderType.Organization, organizationId }
+      : { userId, billingOwnerType: CreditHolderType.User };
+    const screenedBranding = await gateEmbedBrandingWrite(brandingOwner, brandingCheck.value);
 
     const newApiKey = await userApiKeyService.createUserApiKey(
       userId,

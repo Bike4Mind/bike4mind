@@ -13,6 +13,11 @@
  * interpolation -> no injection surface. The passphrase travels only in the
  * POST body over HTTPS and is never persisted client-side; the proof cookie
  * (not the passphrase) is what future requests carry.
+ *
+ * Framed render: when this shell lands inside an iframe (a sandboxed bundle
+ * navigated to a gated path after its proof cookie was dropped/expired), the
+ * form cannot function - the sandbox suppresses form submission and strips
+ * credentials - so the script swaps it for open-in-own-tab guidance instead.
  */
 export function renderPassphraseShell(): string {
   const bootstrap = `(function () {
@@ -21,6 +26,21 @@ export function renderPassphraseShell(): string {
   var btn = document.getElementById('b4m-pp-btn');
   var msg = document.getElementById('b4m-pp-msg');
   function note(text) { msg.textContent = text; }
+  if (window.top !== window.self) {
+    // Framed render (e.g. a sandboxed bundle iframe navigated here after its
+    // proof cookie was dropped/expired): the form CANNOT work - the sandbox has
+    // no allow-forms (the submit event is suppressed before it fires) and a
+    // fetch from the opaque origin would be uncredentialed. Swap to guidance
+    // instead of a dead-end form. textContent only - no injection surface.
+    form.parentNode.removeChild(form);
+    var p = document.getElementById('b4m-pp-hint');
+    p.textContent = 'It cannot be unlocked inside an embedded view. Open this link in its own tab to enter the passphrase:';
+    var url = document.createElement('code');
+    url.id = 'b4m-pp-url';
+    url.textContent = location.href;
+    msg.parentNode.insertBefore(url, msg);
+    return;
+  }
   form.addEventListener('submit', function (ev) {
     ev.preventDefault();
     var passphrase = input.value;
@@ -76,13 +96,15 @@ export function renderPassphraseShell(): string {
          font-size:14px;font-weight:600;cursor:pointer}
   button:disabled{opacity:.6;cursor:default}
   #b4m-pp-msg{font-size:12.5px;color:#8b98a5;min-height:18px;margin-top:12px}
+  #b4m-pp-url{display:block;word-break:break-all;font-size:12px;text-align:left;color:#e6edf3;
+              background:#0f1216;border:1px solid #2a3138;border-radius:8px;padding:10px 12px;user-select:all}
 </style>
 </head>
 <body>
   <div class="card">
     <div class="lock" aria-hidden="true">&#128274;</div>
     <h1>This shared item is passphrase-protected</h1>
-    <p>Enter the passphrase you were given to view it.</p>
+    <p id="b4m-pp-hint">Enter the passphrase you were given to view it.</p>
     <form id="b4m-pp-form">
       <input id="b4m-pp-input" type="password" autocomplete="off" aria-label="Passphrase">
       <button id="b4m-pp-btn" type="submit">Unlock</button>

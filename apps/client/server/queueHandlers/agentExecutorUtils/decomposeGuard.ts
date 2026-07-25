@@ -1,4 +1,5 @@
 import type { ToolDefinition } from '@bike4mind/services';
+import type { IOptiPlanState } from '@bike4mind/database';
 
 /**
  * Message returned when the opti loop tries to decompose a second time. It tells the
@@ -16,20 +17,22 @@ export const DECOMPOSE_ALREADY_DONE_MSG =
  *
  * The opti loop prompt says to decompose exactly once, but the model occasionally re-plans
  * mid-run -- which reloads step 1 (a visible console yank), burns an iteration, and re-sources
- * the dataset. This wraps the tool so the FIRST call runs normally and any repeat is a no-op
- * redirect (no re-plan, no populateDecomposition side-effect) that steers the agent back to
- * advancing its existing plan.
+ * the dataset. This wraps the tool so the FIRST successful call runs normally and any repeat -- once
+ * a plan has actually loaded -- is a no-op redirect that steers the agent back to advancing it.
  *
  * Returns a NEW map (never mutates the input). If the map has no optihashi_decompose (e.g. a
  * non-opti run where the overlay tool isn't present), it's returned unchanged.
  *
- * `state.used` is the per-execution flag; keep it in the caller's execution closure so it's
- * shared across tool-map rebuilds. In-memory per Lambda invocation: a continuation Lambda
- * resets it, but a re-decompose almost always happens within a single invocation.
+ * State is carried on the durable opti plan ledger (`AgentExecution.optiPlanState`, #680) so it is
+ * rehydrated on a continuation Lambda -- a re-plan is blocked even across a self-dispatch/resume.
+ * The effective gate is `steps.length > 0` (a plan actually loaded): `decomposeUsed` is recorded but
+ * does not gate on its own, because a first decompose that fails or returns an unparseable success
+ * latches `decomposeUsed` with no captured plan. Requiring a loaded plan lets those cases
+ * re-decompose to recover while still blocking a genuine re-plan.
  */
 export function guardDecomposeOnce(
   tools: Record<string, ToolDefinition>,
-  state: { used: boolean },
+  state: Pick<IOptiPlanState, 'decomposeUsed' | 'steps'>,
   onBlocked?: () => void
 ): Record<string, ToolDefinition> {
   const raw = tools['optihashi_decompose'];
@@ -44,11 +47,16 @@ export function guardDecomposeOnce(
         return {
           ...inner,
           toolFn: (parameters?: unknown, apiKey?: string) => {
-            if (state.used) {
+            // Block a repeat decompose ONLY once a plan actually loaded (steps captured by
+            // planCompletionGuard from a parseable result). A first decompose that fails or succeeds-
+            // but-unparseable captures no steps, so it stays re-runnable -- gating on the durable
+            // `decomposeUsed` flag alone (#680) would permanently redirect every retry to a plan that
+            // never loaded. `decomposeUsed` is still recorded (below) for the ledger's active check.
+            if (state.steps.length > 0) {
               onBlocked?.();
               return Promise.resolve(DECOMPOSE_ALREADY_DONE_MSG);
             }
-            state.used = true;
+            state.decomposeUsed = true;
             return run(parameters, apiKey);
           },
         };

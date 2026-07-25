@@ -84,8 +84,9 @@ import { resolveLatticeTools, buildSubagentLatticeToolPool } from './agentExecut
 import { selectGatedAction } from './agentExecutorUtils/toolPermissions';
 import { guardDecomposeOnce } from './agentExecutorUtils/decomposeGuard';
 import { buildTruncatedRunReply } from './agentExecutorUtils/truncatedReply';
-import { guardPlanCompletion, type PlanProgressState } from './agentExecutorUtils/planCompletionGuard';
+import { guardPlanCompletion } from './agentExecutorUtils/planCompletionGuard';
 import { injectBriefContext } from './agentExecutorUtils/briefContextInjector';
+import { rehydrateOptiPlanState, ledgerForWrite } from './agentExecutorUtils/optiPlanLedger';
 import { buildDagResumeReport, makeDagDispatcher, onDagNodeTerminal } from './agentExecutorDag';
 import { collectDagChildArtifactBlocks } from './agentExecutor.dagArtifacts';
 import type { DagHandoffSignal } from '@bike4mind/services';
@@ -1242,26 +1243,25 @@ async function processExecution(
     // `buildSubagentLatticeToolPool` and `ServerOrchestratorDeps.optInTools`.
     const subagentLatticeTools = buildSubagentLatticeToolPool(toolDeps, toolCallbacks, subagentToolConfig);
 
-    // Let optihashi_decompose run only ONCE per run (#666). The loop occasionally re-plans
-    // mid-run, which reloads step 1 (a console yank), burns an iteration, and re-sources;
-    // the guard turns any repeat into a no-op redirect that steers the agent back to
-    // advancing its existing plan. Only affects opti runs (decompose isn't offered elsewhere).
-    const decomposeGuard = { used: false };
-    // Two complementary opti-loop guards: #666 stops re-PLANNING (decompose at most once); the
-    // plan-completion guard stops re-SOLVING (once every planned step has a solver result, further
-    // formulate/solve calls redirect to "write the final summary"). Without the latter the agent
-    // -- which has no reliable memory of which steps it finished -- re-does solved families until
-    // it hits the iteration ceiling. Both are inert on non-opti runs (decompose isn't offered).
-    const planProgress: PlanProgressState = { steps: null, solved: {}, results: {} };
-    // Outermost: give the loop the real active brief in-context (#57) so it passes the exact
-    // problem to solve/edit instead of reconstructing it. Wraps the guarded tools last, so it
-    // augments real tool observations and leaves guard redirects (non-envelope strings) untouched.
+    // Durable opti plan ledger (#680): ONE state object, rehydrated from the persisted execution so
+    // the opti-loop guards survive a continuation Lambda -- a repeat decompose or a re-solve of a
+    // finished step cannot slip through after the boundary. Seeded only from the persisted ledger
+    // (see rehydrateOptiPlanState); ridden on the checkpoint writes below for continuation durability.
+    const optiPlanState = rehydrateOptiPlanState(execution.optiPlanState);
+    // Three complementary opti-loop guards, all reading/writing the one ledger above:
+    // - #666 decompose-once: stops re-PLANNING (decompose at most once, now durable across a resume).
+    // - plan-completion: stops re-SOLVING (once every planned step has a result, formulate/solve
+    //   redirect to "write the final summary"); without it the agent -- which has no reliable memory
+    //   of which steps it finished -- re-does solved families until the iteration ceiling.
+    // - inject brief (outermost, #57): gives the loop the real active brief in-context so it passes
+    //   the exact problem to solve/edit instead of reconstructing it. Wraps last, so it augments real
+    //   tool observations and leaves guard redirects (non-envelope strings) untouched.
     const guardedPremiumTools = injectBriefContext(
       guardPlanCompletion(
-        guardDecomposeOnce(premiumLlmTools, decomposeGuard, () =>
+        guardDecomposeOnce(premiumLlmTools, optiPlanState, () =>
           logger.info('[opti] blocked a repeat optihashi_decompose call (advancing existing plan)', { executionId })
         ),
-        planProgress,
+        optiPlanState,
         () =>
           logger.info('[opti] plan complete -- all planned steps solved; steering to final summary', { executionId })
       )
@@ -1750,8 +1750,14 @@ async function processExecution(
         // Atomic write: persisting checkpoint + status separately could leave the
         // doc in `running` with a fresh checkpoint if Lambda is killed between
         // calls, which would fail the continuation Lambda's CAS and orphan the
-        // execution.
-        await agentExecutionRepository.updateCheckpointAndStatus(executionId, checkpoint, 'continuing');
+        // execution. The opti plan ledger (#680) rides the SAME write so the continuation Lambda
+        // rehydrates the latest plan state (decompose-once + solved steps), not a stale one.
+        await agentExecutionRepository.updateCheckpointAndStatus(
+          executionId,
+          checkpoint,
+          'continuing',
+          ledgerForWrite(optiPlanState)
+        );
 
         // Publish to continuation queue
         await sqsClient.send(
@@ -1877,7 +1883,14 @@ async function processExecution(
       //      reconcile with the terminal state.
       //   3. The subagent-handoff path now bills the parent's deciding
       //      iteration, which previously slipped through unbilled.
-      await agentExecutionRepository.updateCheckpoint(executionId, iterationResult.checkpoint);
+      // The opti plan ledger (#680) rides this awaited checkpoint write in one atomic updateOne, so
+      // it is persisted with the checkpoint's durability at every iteration boundary -- covering all
+      // continuation paths (each resumes from a checkpoint) without a separate write to race or lose.
+      await agentExecutionRepository.updateCheckpoint(
+        executionId,
+        iterationResult.checkpoint,
+        ledgerForWrite(optiPlanState)
+      );
       await billIterationIfNeeded(iterationIndex, iterationResult.checkpoint, counters);
 
       // Handoff signal: orchestrator-side polling on a sync Lambda-dispatched

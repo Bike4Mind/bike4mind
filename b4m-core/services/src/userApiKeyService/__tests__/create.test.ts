@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createUserApiKey, EMBED_SPEND_CAP_MAX_CREDITS } from '../create';
-import { ApiKeyScope, ApiKeyStatus } from '@bike4mind/common';
+import { ApiKeyScope, ApiKeyStatus, CreditHolderType } from '@bike4mind/common';
 
 vi.mock('bcryptjs', async () => {
   const { bcryptMockFactory } = await import('./helpers/bcryptMock');
@@ -114,11 +114,15 @@ describe('createUserApiKey — overwatch ingest scope', () => {
 describe('createUserApiKey — embed keys (epic #41)', () => {
   let repo: ReturnType<typeof makeRepo>;
   const adapters = () => ({ db: { userApiKeys: repo as any } });
+  // A coherent embed key is always org-billed (billingOwnerType Organization +
+  // organizationId), mirroring assertEmbedCredential at serve/session time.
   const embedParams = {
     name: 'Embed key',
     scopes: [ApiKeyScope.EMBED_CHAT],
     metadata: { createdFrom: 'dashboard' as const },
     agentId: 'agent-1',
+    billingOwnerType: CreditHolderType.Organization,
+    organizationId: 'org-1',
   };
 
   beforeEach(() => {
@@ -157,6 +161,31 @@ describe('createUserApiKey — embed keys (epic #41)', () => {
 
   it('rejects an empty-string agentId (never a meaningful binding)', async () => {
     await expect(createUserApiKey('user1', { ...embedParams, agentId: '' }, adapters())).rejects.toThrow();
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('mints a coherent org-billed embed key', async () => {
+    const result = await createUserApiKey('user1', embedParams, adapters());
+    expect(result.billingOwnerType).toBe(CreditHolderType.Organization);
+    expect(result.organizationId).toBe('org-1');
+    expect(repo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: 'agent-1',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+      })
+    );
+  });
+
+  it('rejects an embed:chat key without organization billing (default User)', async () => {
+    const { billingOwnerType: _bt, organizationId: _oid, ...noOrg } = embedParams;
+    await expect(createUserApiKey('user1', noOrg, adapters())).rejects.toThrow(/organization billing/);
+    expect(repo.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an embed:chat key with Organization billing but no organizationId', async () => {
+    const { organizationId: _oid, ...noOrgId } = embedParams;
+    await expect(createUserApiKey('user1', noOrgId, adapters())).rejects.toThrow(/organization billing/);
     expect(repo.create).not.toHaveBeenCalled();
   });
 

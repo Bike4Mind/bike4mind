@@ -408,8 +408,10 @@ class QuestRepository extends BaseRepository<IChatHistoryItemDocument> implement
       .find({ sessionId, deletedAt: null })
       // Include structuredReplies, toolResults, promptMeta for tool pairing reconstruction
       // Include jupyterNotebook for notebook execution state display
+      // Include fabFileIds so image generation can use an image the user attached to an
+      // earlier turn as an input image (see ImageGenerationService.selectInputImage).
       .select(
-        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images researchModeResults jupyterNotebook oob _id'
+        'sessionId timestamp type prompt reply replies structuredReplies toolResults promptMeta images fabFileIds researchModeResults jupyterNotebook oob _id'
       )
       .sort({ timestamp: -1 })
       .limit(limit)

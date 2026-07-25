@@ -94,4 +94,35 @@ describe('GET /api/embed/widget - loader script', () => {
     expect(getStatus()).toBe(405);
     expect(headers['Allow']).toBe('GET, HEAD');
   });
+
+  it('fetches per-key branding to theme the launcher', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    expect(body).toContain('/api/embed/branding');
+    expect(body).toContain('fetch(');
+    expect(body).toContain('typeof fetch');
+    expect(body).toContain("setAttribute('aria-label'");
+  });
+
+  it('re-validates the branding color at the CSS sink, mirroring the shared pattern', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    // Pin the exact anchored guard so a divergence from the shared sanitizer
+    // (EMBED_BRANDING_COLOR_PATTERN) fails here, not just a comment drifting.
+    expect(body).toContain('/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/');
+    expect(body).not.toContain('innerHTML');
+  });
+
+  it('never mutates the default launcher styling (no branding = no regression)', () => {
+    const { res, getBody } = makeRes();
+    handler(makeReq('GET'), res);
+    const body = getBody();
+    // The default style block must survive verbatim so an absent/failed branding
+    // fetch leaves the launcher byte-identical to before this feature.
+    expect(body).toContain('#b4m-embed-launch{background:#1a1a2e');
+    expect(body).toContain('#b4m-embed-launch:hover{background:#2a2a44}');
+    expect(body).toContain("launch.textContent = 'Chat'");
+  });
 });

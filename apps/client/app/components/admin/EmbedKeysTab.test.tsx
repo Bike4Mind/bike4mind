@@ -38,14 +38,38 @@ const modellessAgentKey = {
   createdAt: new Date('2026-01-02'),
 };
 
-const h = vi.hoisted(() => ({ keys: [] as any[], updateMutate: vi.fn() }));
+const h = vi.hoisted(() => ({
+  keys: [] as any[],
+  updateMutate: vi.fn(),
+  createMutate: vi.fn(),
+  billingOrgs: [] as { id: string; name: string }[],
+  allOrgs: [] as { id: string; name: string }[],
+  isAdmin: false,
+}));
 
 vi.mock('@client/app/hooks/data/userApiKeys', () => ({
   useGetUserApiKeys: () => ({ data: h.keys, isLoading: false, error: null, refetch: vi.fn() }),
-  useCreateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
+  useCreateUserApiKey: () => ({ mutate: h.createMutate, isPending: false }),
   useRotateUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useRevokeUserApiKey: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateEmbedKey: () => ({ mutate: h.updateMutate, isPending: false }),
+  useBillingOrganizations: () => ({ data: h.billingOrgs, isLoading: false }),
+}));
+
+vi.mock('@client/app/contexts/UserContext', () => ({
+  useUser: () => ({ currentUser: { id: 'u1', isAdmin: h.isAdmin } }),
+}));
+
+// The admin branch searches ALL orgs (useSearchOrganizations, no userId filter);
+// return a fixed set regardless of the search term so the Autocomplete has options.
+vi.mock('@client/app/hooks/data/organizations', () => ({
+  useSearchOrganizations: () => ({
+    data: { data: h.allOrgs, totalPages: 1, totalOrganizations: h.allOrgs.length },
+    isLoading: false,
+  }),
+  // Label-resolver fallback for a set-but-off-page org; the admin picker only needs
+  // it on the cold-start/role-flip path, so null is fine for these tests.
+  useGetOrganization: () => ({ data: null }),
 }));
 
 vi.mock('@client/app/hooks/data/agents', () => ({
@@ -66,11 +90,14 @@ vi.mock('@client/app/hooks/useCopyToClipboard', () => ({
 
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
-// Default DENIED: every pre-Phase-D case runs with the hide-branding toggle
-// hidden, which is that era's behavior. Individual tests flip the state.
-const gate = vi.hoisted(() => ({ state: 'denied' as string, bypass: false }));
-vi.mock('@client/app/hooks/useEntitlementGate', () => ({
-  useEntitlementGate: () => ({ state: gate.state, bypass: gate.bypass }),
+// The Create-form toggle gates on the CURRENT USER's own held entitlements with
+// NO admin/developer bypass (the prospective owner is the minter) - so this mock
+// stands in for /api/entitlements. The Configure-form toggle instead gates on
+// the key's server-computed `ownerHasWhitelabel`, set per-fixture below.
+// `undefined` models the still-loading query.
+const ent = vi.hoisted(() => ({ data: [] as string[] | undefined }));
+vi.mock('@client/app/hooks/data/entitlements', () => ({
+  useEntitlements: () => ({ data: ent.data }),
 }));
 
 const appTheme = extendTheme({ ...getThemeConfig() });
@@ -84,10 +111,21 @@ const renderTab = () =>
 describe('EmbedKeysTab', () => {
   beforeEach(() => {
     h.keys = [embedKey, plainKey, modellessAgentKey];
+    h.billingOrgs = [{ id: 'org-1', name: 'Acme Org' }];
+    h.allOrgs = [{ id: 'org-admin', name: 'Global Org' }];
+    h.isAdmin = false;
     h.updateMutate.mockClear();
-    gate.state = 'denied';
-    gate.bypass = false;
+    h.createMutate.mockClear();
+    ent.data = [];
   });
+
+  const fillNameAndAgent = (name: string) => {
+    fireEvent.change(within(screen.getByTestId('embed-key-name-input')).getByRole('textbox'), {
+      target: { value: name },
+    });
+    fireEvent.click(within(screen.getByTestId('embed-key-agent-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Agent One' }));
+  };
 
   it('lists embed:chat keys and filters out non-embed keys', () => {
     renderTab();
@@ -118,10 +156,12 @@ describe('EmbedKeysTab', () => {
     expect('agentId' in arg).toBe(false);
   });
 
-  describe('hide-branding toggle (whitelabel gate, epic #41 Phase D)', () => {
-    it('shows and round-trips the toggle when the whitelabel gate is satisfied', () => {
-      gate.state = 'satisfied';
-      h.keys = [{ ...embedKey, branding: { displayName: 'Acme' } }];
+  // Post-#891 the toggle is owner-scoped: Configure reads the key's
+  // server-computed `ownerHasWhitelabel`; Create reads the current user's own
+  // entitlements (no admin/developer bypass). Neither honors the viewer's admin.
+  describe('hide-branding toggle - owner-scoped (#891)', () => {
+    it('Configure: shows and round-trips the toggle when the key OWNER holds white-label', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: true, branding: { displayName: 'Acme' } }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
 
@@ -136,23 +176,52 @@ describe('EmbedKeysTab', () => {
       });
     });
 
-    it('hides the toggle and keeps the plan note when the gate is denied', () => {
+    it('Configure: hides the toggle and keeps the plan note when the OWNER is not entitled', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
       expect(screen.getAllByText(/requires the white-label/i).length).toBeGreaterThan(0);
     });
 
-    it('renders neither the toggle nor a spinner while the gate is pending', () => {
-      gate.state = 'pending';
+    // Parity regression: the toggle follows the OWNER's plan even for a viewer who
+    // would have bypassed the old viewer-scoped gate (admin/developer). Configure
+    // reads only the server flag, so an unentitled owner's key never offers it.
+    it('Configure: does not offer the toggle for an unentitled owner regardless of viewer role', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
-      // The modal already renders a progressbar-free form; pending must not add one.
+    });
+
+    it('Create: shows the toggle when the current user (prospective owner) is entitled', () => {
+      ent.data = ['embed:whitelabel'];
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.getByTestId('embed-key-branding-hide')).toBeInTheDocument();
+    });
+
+    // The core Symptom-B parity regression: an admin/developer viewer no longer
+    // sees the Create toggle just for being staff - /api/entitlements applies no
+    // bypass, so an empty held-set (the unentitled case) hides it.
+    it('Create: hides the toggle when the current user is not entitled (no admin/developer bypass)', () => {
+      ent.data = [];
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
+      expect(screen.getAllByText(/requires the white-label/i).length).toBeGreaterThan(0);
+    });
+
+    it('Create: hides the toggle (and shows no spinner) while entitlements are still loading', () => {
+      ent.data = undefined;
+      renderTab();
+      fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+      expect(screen.queryByTestId('embed-key-branding-hide')).not.toBeInTheDocument();
       expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     });
 
-    it('still cannot clobber a stored hideBranding on a no-op save while denied', () => {
+    it('Configure: still cannot clobber a stored hideBranding on a no-op save for an unentitled owner', () => {
+      h.keys = [{ ...embedKey, ownerHasWhitelabel: false }];
       renderTab();
       fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
       fireEvent.click(screen.getByTestId('embed-key-save-btn'));
@@ -190,6 +259,11 @@ describe('EmbedKeysTab', () => {
     fireEvent.click(within(screen.getByTestId('embed-key-agent-select')).getByRole('combobox'));
     fireEvent.click(screen.getByRole('option', { name: 'Agent Two' }));
 
+    // Org is required, so pick one to isolate what this test asserts: the model
+    // warning is advisory and does not, by itself, block submit.
+    fireEvent.click(within(screen.getByTestId('embed-key-org-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Acme Org' }));
+
     expect(screen.getByTestId('embed-key-model-warning')).toBeInTheDocument();
     // Advisory only: the warning must not disable creation.
     expect(screen.getByTestId('embed-key-create-btn')).not.toBeDisabled();
@@ -206,6 +280,93 @@ describe('EmbedKeysTab', () => {
     renderTab();
     fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
     expect(screen.queryByTestId('embed-key-model-warning')).not.toBeInTheDocument();
+  });
+
+  // Embed keys must be org-owned, so the create payload has to carry organizationId -
+  // its absence is exactly the #876 bug (keys defaulted to user-owned and got rejected).
+  it('sends the chosen organizationId in the create payload (non-admin)', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    fillNameAndAgent('Marketing site');
+
+    fireEvent.click(within(screen.getByTestId('embed-key-org-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Acme Org' }));
+
+    fireEvent.click(screen.getByTestId('embed-key-create-btn'));
+
+    expect(h.createMutate).toHaveBeenCalledTimes(1);
+    expect(h.createMutate.mock.calls[0][0]).toEqual(
+      expect.objectContaining({
+        name: 'Marketing site',
+        scopes: [ApiKeyScope.EMBED_CHAT],
+        agentId: 'agent-1',
+        organizationId: 'org-1',
+      })
+    );
+  });
+
+  it('resets the create form on cancel so a filled-then-cancelled form does not reappear', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    fillNameAndAgent('Marketing site');
+    fireEvent.click(within(screen.getByTestId('embed-key-org-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Acme Org' }));
+    // Cancel, then reopen.
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+
+    expect(within(screen.getByTestId('embed-key-name-input')).getByRole('textbox')).toHaveValue('');
+    expect(screen.getByTestId('embed-key-create-btn')).toBeDisabled();
+  });
+
+  it('keeps Create disabled until an organization is chosen', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    fillNameAndAgent('Marketing site');
+    expect(screen.getByTestId('embed-key-create-btn')).toBeDisabled();
+
+    fireEvent.click(within(screen.getByTestId('embed-key-org-select')).getByRole('combobox'));
+    fireEvent.click(screen.getByRole('option', { name: 'Acme Org' }));
+    expect(screen.getByTestId('embed-key-create-btn')).not.toBeDisabled();
+  });
+
+  it('tells a non-admin who administers no org they cannot mint, and blocks Create', () => {
+    h.billingOrgs = [];
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    expect(screen.getByTestId('embed-key-org-empty')).toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
+    expect(screen.getByTestId('embed-key-create-btn')).toBeDisabled();
+  });
+
+  // A platform admin picks from ALL orgs (not the billing-organizations set), so
+  // they can mint for any tenant - the create route's isAdmin bypass allows it.
+  it('lets a platform admin pick any org, flowing organizationId into the create payload', async () => {
+    h.isAdmin = true;
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-new-btn'));
+    fillNameAndAgent('Marketing site');
+    // The non-admin Select is not used for admins.
+    expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
+
+    const combo = within(screen.getByTestId('embed-key-org-admin-select')).getByRole('combobox');
+    fireEvent.change(combo, { target: { value: 'Global' } });
+    fireEvent.click(await screen.findByRole('option', { name: 'Global Org' }));
+
+    fireEvent.click(screen.getByTestId('embed-key-create-btn'));
+
+    expect(h.createMutate).toHaveBeenCalledTimes(1);
+    expect(h.createMutate.mock.calls[0][0]).toEqual(expect.objectContaining({ organizationId: 'org-admin' }));
+  });
+
+  // Ownership is fixed at creation; Configure's PATCH never changes it, so the org
+  // picker must not appear there (nor drag in the shared form fields).
+  it('does not show an org picker in the Configure modal', () => {
+    renderTab();
+    fireEvent.click(screen.getByTestId('embed-key-configure-key-1'));
+    expect(screen.queryByTestId('embed-key-org-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-org-admin-select')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('embed-key-org-empty')).not.toBeInTheDocument();
   });
 
   it('marks rows bound to a model-less agent with a warning indicator', () => {

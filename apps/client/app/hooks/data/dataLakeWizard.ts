@@ -11,7 +11,11 @@ import { api } from '@client/app/contexts/ApiContext';
 import { useWebsocket } from '@client/app/contexts/WebsocketContext';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { useDataLakeWizardStore, type UploadProgress } from '@client/app/stores/useDataLakeWizardStore';
+import {
+  useDataLakeWizardStore,
+  type UploadProgress,
+  type UploadErrorKind,
+} from '@client/app/stores/useDataLakeWizardStore';
 import { activeOrgId } from '@client/app/hooks/data/dataLakes';
 import type { WizardFile } from '@client/app/utils/folderTreeParser';
 import { computeFileHash } from '@client/app/utils/folderTreeParser';
@@ -270,6 +274,17 @@ const UPLOAD_CONCURRENCY = 5;
 const BATCH_CHUNK_SIZE = 100; // Max files per presigned URL request
 
 /**
+ * Canonical offline message. Shared by the mutation's pre-flight guard, the error
+ * classifier, and DataLakeWizardModal's pre-flight check so all offline entry points
+ * say the same thing.
+ */
+export const OFFLINE_MESSAGE = 'No internet connection. Check your network and try again.';
+// Every file's upload PUT failed even though the lake/batch were created - a transport
+// problem (network, CSP blocking the presigned host), not the user's lake settings.
+export const UPLOAD_ALL_FAILED_MESSAGE =
+  'None of the files could be uploaded. This is usually a network or connection issue, not your data lake settings. Please try again.';
+
+/**
  * Slugify a string for use as a data lake slug.
  */
 function slugify(text: string): string {
@@ -278,6 +293,83 @@ function slugify(text: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/^-|-$/g, '')
     .slice(0, 60);
+}
+
+/**
+ * Translate an upload/create failure into a distinct kind + human message. The lake
+ * config validates server-side with zod, whose raw text (e.g. "Too small: expected
+ * string to have >=2 characters at 'slug'") must never reach the UI - so a 422 is
+ * re-derived here from the config against the same rules to name the real culprit.
+ * Keep the rule thresholds in sync with CreateDataLakeRequestInput (common/schemas/dataLake).
+ */
+function classifyUploadError(error: unknown): { kind: UploadErrorKind; message: string } {
+  // Network / offline: the request never reached the server, so there's no response body.
+  // Covers both the axios transport error and the pre-flight guard's thrown OFFLINE_MESSAGE.
+  const isNetworkError =
+    (axios.isAxiosError(error) && (error.code === 'ERR_NETWORK' || error.message === 'Network Error')) ||
+    (error instanceof Error && error.message === OFFLINE_MESSAGE);
+  if (isNetworkError) {
+    return { kind: 'network', message: OFFLINE_MESSAGE };
+  }
+
+  // All uploads failed (thrown by the batch flow after the lake/batch were rolled back):
+  // a transport problem, not a config/validation one.
+  if (error instanceof Error && error.message === UPLOAD_ALL_FAILED_MESSAGE) {
+    return { kind: 'upload', message: UPLOAD_ALL_FAILED_MESSAGE };
+  }
+
+  const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+
+  // 422: the lake name/tag prefix was rejected. Re-derive the culprit from the config
+  // rather than surfacing the raw validator string.
+  if (status === 422) {
+    const { config, targetLake } = useDataLakeWizardStore.getState();
+    const slug = targetLake ? targetLake.slug : slugify(config.name);
+    if (slug.length < 2) {
+      return {
+        kind: 'validation',
+        message: 'The data lake name is too short. Use a name with at least 2 letters or numbers.',
+      };
+    }
+    const prefix = config.tagPrefix.endsWith(':') ? config.tagPrefix : `${config.tagPrefix}:`;
+    if (prefix.length < 2) {
+      return {
+        kind: 'validation',
+        message: 'The tag prefix is too short. Use at least 2 characters ending in ":" (e.g. "legal:").',
+      };
+    }
+    // Neutral fallback: a 422 can also come from the batch/presigned-URL endpoints or
+    // requiredEntitlement, and in append mode the Config fields are locked - so don't
+    // claim the name/tag prefix is the culprit when we couldn't confirm it.
+    return {
+      kind: 'validation',
+      message: 'Your data lake settings were rejected. Review them and try again.',
+    };
+  }
+
+  if (status !== undefined && status >= 500) {
+    return { kind: 'server', message: 'The server ran into a problem. Please try again in a moment.' };
+  }
+
+  // Other 4xx (403 feature gate, 404, 409, 429, ...) carry a curated server message worth
+  // showing. Safe to surface: errorHandler maps every ZodError to a 422, handled above, so
+  // no validator text can reach here.
+  if (status !== undefined && status >= 400) {
+    const data = axios.isAxiosError(error) ? (error.response?.data as Record<string, unknown> | undefined) : undefined;
+    const serverMessage = typeof data?.error === 'string' ? data.error : undefined;
+    const fallbackMessage = typeof data?.message === 'string' ? data.message : undefined;
+    return {
+      kind: 'server',
+      message: serverMessage || fallbackMessage || 'The request was rejected. Please try again.',
+    };
+  }
+
+  // Locally-thrown guard errors (e.g. "No files to upload") already carry a friendly message.
+  if (error instanceof Error && error.message) {
+    return { kind: 'unknown', message: error.message };
+  }
+
+  return { kind: 'unknown', message: 'Batch upload failed. Please try again.' };
 }
 
 /**
@@ -312,7 +404,7 @@ export function useBatchUpload() {
       // catches the initial click; this one catches a retry from the error
       // toast, which calls mutate() directly.
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
-        throw new Error('No internet connection — check your network and try again.');
+        throw new Error(OFFLINE_MESSAGE);
       }
 
       // Read from store at mutation time to avoid stale closure
@@ -425,6 +517,9 @@ export function useBatchUpload() {
           failedFileNames: [],
           status: 'uploading',
           currentBatchId: batchId,
+          // Clear any error from a prior attempt so a retry starts clean.
+          errorMessage: undefined,
+          errorKind: undefined,
         });
 
         // Step 3: Request presigned URLs in chunks and upload
@@ -560,13 +655,17 @@ export function useBatchUpload() {
               .catch(() => {});
             await api.delete(`/api/data-lakes/${dataLakeId}`).catch(() => {});
           }
-          throw new Error(`All ${included.length} file uploads failed`);
+          // Surfaced via classifyUploadError as an 'upload' problem (transport, not the
+          // user's lake settings), so onError shows the right message + retry.
+          throw new Error(UPLOAD_ALL_FAILED_MESSAGE);
         }
 
         // Partial or full success: the uploaded files proceed through the pipeline.
-        // upload-complete removes the failed files' 0-chunk orphan FabFiles, accounts the
-        // browser failures so the completion math can be satisfied (a partial batch used to
-        // hang at 'processing'), and finalizes - all server-side, in the right order.
+        // (An all-failed batch never reaches here - it throws above, since uploadedCount
+        // is 0 iff failedCount === included.length.) upload-complete removes the failed
+        // files' 0-chunk orphan FabFiles, accounts the browser failures so the completion
+        // math can be satisfied (a partial batch used to hang at 'processing'), and
+        // finalizes - all server-side, in the right order.
         reconciled = true;
         await api
           .post('/api/data-lakes/batches/upload-complete', {
@@ -610,22 +709,11 @@ export function useBatchUpload() {
       }
     },
     onError: (error: unknown) => {
-      // A network failure (e.g. offline) never reaches the server, so it has no
-      // response body - surface a friendly message instead of axios's raw
-      // "Network Error".
-      let message = 'Batch upload failed';
-      if (axios.isAxiosError(error) && (error.code === 'ERR_NETWORK' || error.message === 'Network Error')) {
-        message = 'No internet connection — check your network and try again.';
-      } else if (error && typeof error === 'object') {
-        const axiosData = (error as Record<string, unknown>)?.response as Record<string, unknown> | undefined;
-        if (axiosData?.data && typeof axiosData.data === 'object') {
-          const data = axiosData.data as Record<string, unknown>;
-          message = (data.error as string) || (data.message as string) || message;
-        } else if ((error as Error).message) {
-          message = (error as Error).message;
-        }
-      }
-      updateUploadProgress({ status: 'error', errorMessage: message });
+      // Classify into a distinct kind + human message. Critically, a validation (422)
+      // failure is translated from the config here - the server's raw zod/validator
+      // text must never reach the UI.
+      const { kind, message } = classifyUploadError(error);
+      updateUploadProgress({ status: 'error', errorKind: kind, errorMessage: message });
       // This can fire before setStep('upload') runs (e.g. the very first request
       // fails while offline), leaving the wizard on the Configure step with no
       // other feedback - so this toast's retry action is the only signal the user

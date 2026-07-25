@@ -137,7 +137,9 @@ export interface IUserApiKey {
    * `userId`. `Organization` = the key's AI usage debits `organizationId`'s
    * shared credit pool instead of the minting user; the minter stays in `userId`
    * for attribution + management. Invariant: `Organization` iff `organizationId`
-   * is set. Only `User` and `Organization` are valid here (never `Agent`).
+   * is set. Only `User` and `Organization` are valid here (never `Agent`). An
+   * `embed:chat` key must be `Organization`-billed - enforced at mint and at
+   * serve/session (assertEmbedCredential).
    */
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */
@@ -154,6 +156,14 @@ export interface IUserApiKey {
    * `spendCap !== undefined`, never a truthy check.
    */
   spendCap?: number;
+  /**
+   * Whether this embed key's billing OWNER holds the white-label entitlement.
+   * Computed server-side on GET /api/user-api-keys only (never persisted) so the
+   * Configure UI can gate the hide-branding toggle on the owner's plan rather
+   * than the viewer's - matching the owner-scoped serve/write rule. Boolean only:
+   * the owner's tags or the reason are never sent to the client.
+   */
+  ownerHasWhitelabel?: boolean;
 }
 
 /**
