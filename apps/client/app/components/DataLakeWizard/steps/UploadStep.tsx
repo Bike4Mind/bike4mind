@@ -24,6 +24,9 @@ export default function UploadStep() {
   const progress = useDataLakeWizardStore(s => s.uploadProgress);
   const closeWizard = useDataLakeWizardStore(s => s.closeWizard);
   const resetWizard = useDataLakeWizardStore(s => s.resetWizard);
+  // Append mode locks the Config fields to the existing lake, so a "fix your Name /
+  // Tag Prefix" hint would point at inputs the user can't edit.
+  const isAppendMode = useDataLakeWizardStore(s => s.targetLake !== null);
 
   // Subscribe to real-time chunk/vectorize progress from WebSocket
   useBatchProgressListener();
@@ -137,12 +140,24 @@ export default function UploadStep() {
           <Typography level="body-sm" color="neutral" textAlign="center" sx={{ maxWidth: 400 }}>
             {progress.errorMessage || `${progress.failedFiles} of ${progress.totalFiles} files failed to upload.`}
           </Typography>
-          <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
-            <Typography level="body-xs">
-              <strong>Common fixes:</strong> Make sure the {DATA_LAKE} Name and Tag Prefix fields are filled in. The Tag
-              Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
-            </Typography>
-          </Alert>
+          {/* Hint matches the failure kind: only a validation failure is actually about the
+              Name/Tag Prefix fields, so don't send network/upload failures back there. */}
+          {progress.errorKind === 'validation' && !isAppendMode && (
+            <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
+              <Typography level="body-xs">
+                <strong>Common fixes:</strong> The {DATA_LAKE} Name needs at least 2 letters or numbers, and the Tag
+                Prefix must end with &quot;:&quot; (e.g. &quot;legal:&quot;).
+              </Typography>
+            </Alert>
+          )}
+          {(progress.errorKind === 'network' || progress.errorKind === 'upload') && (
+            <Alert color="warning" variant="soft" sx={{ maxWidth: 400, textAlign: 'left' }}>
+              <Typography level="body-xs">
+                <strong>Common fixes:</strong> Check your internet connection and try again. Your {DATA_LAKE} settings
+                are not the problem.
+              </Typography>
+            </Alert>
+          )}
           <Button
             variant="outlined"
             color="neutral"

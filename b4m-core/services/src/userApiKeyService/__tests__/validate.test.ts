@@ -142,11 +142,11 @@ describe('validateUserApiKey - embed context fields', () => {
         name: 'embed-key',
         scopes: [ApiKeyScope.EMBED_CHAT],
         agentId: 'agent-1',
+        billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
         allowedOrigins: ['https://example.com'],
         branding: { displayName: 'Acme', primaryColor: '#336699', hideBranding: true },
         metadata: { createdFrom: 'dashboard' as const },
-        organizationId: 'org-1',
-        billingOwnerType: CreditHolderType.Organization,
       },
       { ...adapters, systemUserId: 'sys-1' }
     );

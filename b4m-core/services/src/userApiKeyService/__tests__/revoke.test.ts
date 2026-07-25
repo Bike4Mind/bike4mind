@@ -38,9 +38,9 @@ describe('revokeUserApiKey', () => {
         scopes: [ApiKeyScope.EMBED_CHAT],
         metadata: { createdFrom: 'dashboard' as const },
         agentId: 'agent-1',
-        allowedOrigins: ['https://example.com'],
-        organizationId: 'org-1',
         billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        allowedOrigins: ['https://example.com'],
       },
       adapters
     );

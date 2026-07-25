@@ -126,12 +126,14 @@ describe('POST /api/user-api-keys - embed-key minting', () => {
     );
   });
 
-  it('(a3) surfaces the service org-billing rejection for an embed key with no organizationId (#909)', async () => {
-    // The server guard lives in createUserApiKey (covered in its unit tests); the
-    // route must propagate that rejection rather than swallow it. Service mocked.
-    createUserApiKey.mockRejectedValueOnce(new Error('embed:chat keys must be billed to an organization'));
-    const { req, res } = post({ name: 'orgless', scopes: ['embed:chat'], agentId: 'agent-1' });
-    await expect(mockRefs.postHandler!(req, res)).rejects.toThrow(/must be billed to an organization/i);
+  it('(a3) an embed request with no organizationId forwards User billing (service enforces the org guard)', async () => {
+    const { req, res } = post({ name: 'widget', scopes: ['embed:chat'], agentId: 'agent-1' });
+    await mockRefs.postHandler!(req, res);
+    // The route never injects org billing; it forwards billingOwnerType User + no
+    // organizationId so the service coherence guard rejects the incoherent embed key.
+    const [, forwarded] = createUserApiKey.mock.calls[0];
+    expect(forwarded.billingOwnerType).toBe(CreditHolderType.User);
+    expect(forwarded.organizationId).toBeUndefined();
   });
 
   it('(c2) a non-embed key carrying only spendCap still forwards it (service rejects, no silent drop)', async () => {

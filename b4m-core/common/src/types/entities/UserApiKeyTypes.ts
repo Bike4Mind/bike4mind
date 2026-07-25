@@ -137,7 +137,9 @@ export interface IUserApiKey {
    * `userId`. `Organization` = the key's AI usage debits `organizationId`'s
    * shared credit pool instead of the minting user; the minter stays in `userId`
    * for attribution + management. Invariant: `Organization` iff `organizationId`
-   * is set. Only `User` and `Organization` are valid here (never `Agent`).
+   * is set. Only `User` and `Organization` are valid here (never `Agent`). An
+   * `embed:chat` key must be `Organization`-billed - enforced at mint and at
+   * serve/session (assertEmbedCredential).
    */
   billingOwnerType?: ApiKeyBillingOwnerType;
   /** Organization whose credit pool this key bills. Set iff billingOwnerType is Organization. */

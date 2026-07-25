@@ -78,9 +78,9 @@ describe('rotateUserApiKey — round-trip regression guard', () => {
         scopes: [ApiKeyScope.EMBED_CHAT],
         metadata: { createdFrom: 'dashboard' as const },
         agentId: 'agent-1',
-        spendCap: 5000,
-        organizationId: 'org-1',
         billingOwnerType: CreditHolderType.Organization,
+        organizationId: 'org-1',
+        spendCap: 5000,
       },
       { ...adapters, systemUserId: 'sys-1' }
     );

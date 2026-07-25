@@ -41,8 +41,8 @@ const mintCappedKey = (spendCap?: number) =>
       scopes: [ApiKeyScope.EMBED_CHAT],
       metadata: { createdFrom: 'dashboard' as const },
       agentId: 'agent-1',
-      organizationId: 'org-1',
       billingOwnerType: CreditHolderType.Organization,
+      organizationId: 'org-1',
       ...(spendCap !== undefined && { spendCap }),
     },
     adapters

@@ -125,12 +125,14 @@ export const createUserApiKey = async (
   if (isEmbedKey && !params.agentId) {
     throw new BadRequestError('agentId is required for embed:chat scope');
   }
-  // An embed key must be org-billed: the serve path (assertEmbedCredential) only
-  // honors Organization-billed keys, so a User-billed embed key can be minted and
-  // configured yet is never servable. Reject it at create so the server never
-  // stores a dead key - matching the org picker the create UI already enforces.
-  if (isEmbedKey && !params.organizationId) {
-    throw new BadRequestError('embed:chat keys must be billed to an organization');
+  // Embed keys bill a bounded Organization pool, never a user's. Enforce the org
+  // pairing at mint so an incoherent key is never created (e.g. a forged/scripted
+  // request bypassing the admin UI). Must match assertEmbedCredential in
+  // apps/client/server/cli/auth.ts, which rejects a non-org-owned embed key at serve/session.
+  if (isEmbedKey && (params.billingOwnerType !== CreditHolderType.Organization || !params.organizationId)) {
+    throw new BadRequestError(
+      'embed:chat scope requires organization billing (billingOwnerType Organization with an organizationId)'
+    );
   }
   if (
     !isEmbedKey &&
