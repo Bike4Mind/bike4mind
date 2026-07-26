@@ -253,7 +253,9 @@ Pick by the hardware you have:
 | none | >=24 GB | `gemma4:26b-a4b-it-q4_K_M` still runs, just slower (CPU only) |
 | none | ~8 GB | `qwen3.5:0.8b` or `qwen3.5:2b-q4_K_M` |
 
-`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working interactive HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
+`gemma4:26b-a4b` is the default because it is the broadest fit: it writes complete, working single-purpose HTML artifacts (which the 2-4B dense models do not), answers multi-chunk knowledge-base queries with correct citations, calls tools natively, and reads images - from a single model on an entry-level GPU. `qwen3.6:35b-a3b` is the better coder but wants 32 GB of RAM, so it is the step up rather than the default.
+
+Calibrate expectations on artifact complexity. A self-contained widget - a calculator, a form, a single chart - comes out working. A dashboard combining four interacting features will render and partly work, but expect a dead click handler or a CSS layout bug and a follow-up turn to fix it. Local models at this size are not one-shotting large UIs. Generation time scales with output: a widget is about a minute, a few-hundred-line dashboard is several.
 
 Set one or more (space-separated) in `OLLAMA_PULL_MODELS`. Re-running `up` pulls any new ones and skips already-present models. To pull one ad hoc without editing the env: `docker compose -f compose.selfhost.yaml exec ollama ollama pull gpt-oss:20b`.
 
@@ -310,10 +312,11 @@ docker info | grep -i Runtimes                    # should list "nvidia"
 docker run --rm --gpus all ubuntu nvidia-smi -L   # should print your GPU
 ```
 
-Then bring the stack up with the GPU override added as a second `-f`:
+Then bring the stack up with the GPU override added as a second `-f` (keep `compose.ollama-moe.yaml` as well if you run an MoE model):
 
 ```bash
-docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml --env-file .env.selfhost --profile ollama up -d
+docker compose -f compose.selfhost.yaml -f compose.ollama-gpu.yaml \
+  -f compose.ollama-moe.yaml --env-file .env.selfhost --profile ollama up -d
 ```
 
 The GPU needs enough free VRAM for your chosen model (see the table above). Ollama offloads as many layers as fit and runs the rest on CPU; with MoE expert offload the experts stay in system RAM by design, so only the attention layers and KV cache compete for VRAM.
@@ -461,7 +464,9 @@ The worker reuses the chatCompletion image and connects to Mongo, ElasticMQ, Min
 - **A model returns "unauthorized"** - that provider's API key is missing or wrong in `.env.selfhost`. Only the providers you set keys for are available.
 - **The model picker is empty / "no models" warning** - no provider key is configured and no local Ollama is set up. Set at least one provider key in `.env.selfhost`, or enable local models (see "Local models with Ollama"), then restart with `docker compose -f compose.selfhost.yaml --env-file .env.selfhost up -d`.
 - **Local models don't appear under "Local / Self-Hosted"** - make sure you started the stack with `--profile ollama` and that `OLLAMA_BASE_URL` is uncommented in `.env.selfhost`. Confirm the model pulled: `docker compose -f compose.selfhost.yaml exec ollama ollama list`. The picker caches models for ~60s after a pull.
-- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section).
+- **Local model replies are slow** - with no GPU, inference runs on CPU; start with a small model (`qwen3.5:0.8b` or `:2b-q4_K_M`). For NVIDIA GPU acceleration, add `-f compose.ollama-gpu.yaml` (see that section). Running an MoE model without `-f compose.ollama-moe.yaml` also costs throughput, most of it on prompt processing.
+- **An MoE model fails to load with `cudaMalloc failed: out of memory`** - the expert offload did not apply to that architecture, so llama.cpp tried to put the whole model on the GPU. Confirm the override is in the `up` command, then check placement with `docker compose -f compose.selfhost.yaml exec ollama ollama ps`: a working offload reports `100% GPU` with a `SIZE` of a few GB, not the full model size. Some tags never offload (`qwen3.5:27b`); use one of the models listed in "Choosing a model".
+- **A tool-enabled or RAG turn fails with "Your request is too large"** - `OLLAMA_MAX_NUM_CTX` is too low. The system prompt and tool schemas alone cost roughly 5K tokens, and usable input is the cap minus about 9K. Raise it to 32768 (see "Context window") and recreate the `app` and `chatcompletion` containers.
 - **Local image checkpoint doesn't show in the picker** - make sure you started the stack with `--profile imagegen` and that `IMAGE_GEN_BASE_URL` is uncommented in `.env.selfhost`. The checkpoint download is several GB; watch it with `docker compose -f compose.selfhost.yaml logs imagegen-pull` and confirm the file landed with `docker compose -f compose.selfhost.yaml exec imagegen ls /mnt/models/Stable-diffusion`. The puller triggers an SD.Next rescan once the download finishes, and the picker caches models for ~60s. If it still isn't listed, force a rescan from the host: `curl -X POST http://127.0.0.1:7860/sdapi/v1/refresh-checkpoints`.
 - **Image generation is very slow** - with no GPU, Stable Diffusion runs on CPU (~1-3 min/image). Start with SD 1.5, and for NVIDIA GPU acceleration add `-f compose.imagegen-gpu.yaml` (see "Local image generation").
 - **`apt-get install nvidia-container-toolkit` says "Unable to locate package"** - NVIDIA's apt repo isn't set up. Add it first (see "GPU acceleration"), then re-run `sudo apt-get update`.
