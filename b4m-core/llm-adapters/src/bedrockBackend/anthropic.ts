@@ -295,7 +295,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          200000: { input: 0.0003 / 1000, output: 0.0015 / 1000 }, // $0.0003 / 1,000 Input tokens, $0.0015 / 1,000 Output tokens. @see https://aws.amazon.com/bedrock/pricing/
+          200000: { input: 3 / 1_000_000, output: 15 / 1_000_000 }, // $3 / 1M Input tokens, $15 / 1M Output tokens. @see https://aws.amazon.com/bedrock/pricing/
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
@@ -507,7 +507,7 @@ export default class AnthropicBedrockBackend extends BaseBedrockBackend {
         can_stream: true,
         can_think: true,
         pricing: {
-          1_000_000: { input: 15 / 1000000, output: 75 / 1000000 }, // $15 / 1M Input tokens, $75 / 1M Output tokens
+          1_000_000: { input: 5 / 1000000, output: 25 / 1000000 }, // $5 / 1M Input tokens, $25 / 1M Output tokens
         },
         supportsVision: true,
         logoFile: 'Anthropic_logo.png',
