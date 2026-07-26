@@ -20,6 +20,7 @@ import { keyframes } from '@mui/system';
 import NotebookHeader from './Header';
 import { gray } from '@client/app/utils/themes/colors';
 import useSessionLayout from '@client/app/hooks/useSessionLayout';
+import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 export interface NotebookLayoutProps {
   children: ReactNode;
@@ -84,12 +85,13 @@ const NotebookLayout: FC<PropsWithChildren<NotebookLayoutProps>> = ({ children }
   const isOptiRoute = pathname.startsWith('/opti');
   // The Data Lakes surface owns its own edge-to-edge chat-first layout (#836).
   const isDataLakesRoute = pathname.startsWith('/data-lakes');
+  const dataLakeModeOn = useDataLakeMode(s => s.enabled);
 
   const getContentPadding = (): string => {
     if (isMobile) return '0px';
-    // The Opti hub / Data Lakes manage their own edge-to-edge layout (docked chat +
-    // splitter); the notebook gutter would double up as a visible frame around it.
-    if (isOptiRoute || isDataLakesRoute) return '0px';
+    // Opti hub / Data Lakes / in-chat Data Lake mode own their edge-to-edge layout; the
+    // notebook gutter would double up as a visible frame around the docked chat + splitter.
+    if (isOptiRoute || isDataLakesRoute || dataLakeModeOn) return '0px';
     if (openSideNav && isKnowledgeViewerOpen) return '12px 12px 12px 12px';
     if (openSideNav) return '12px 12px 12px 12px';
     if (isKnowledgeViewerOpen) return '12px 12px 12px 36px';
