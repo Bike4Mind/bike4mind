@@ -364,6 +364,10 @@ export function useSendMessage({
       }
     }
 
+    // Set before the Data Lake create block below so a rapid second Enter (e.g. double
+    // Enter-key) can't race the `await api.post` and fire a second session creation.
+    setSubmitting(true);
+
     // Data Lake mode with no session yet: create a normal-surface session up front with
     // grounding ON so the FIRST message is retrieval-grounded. surface is intentionally
     // omitted (stays null) so the chat remains in the main sidebar list. See datalake-in-chat-mode.
@@ -374,6 +378,7 @@ export function useSendMessage({
         forceKnowledgeRetrieval: true,
       });
       queryClient.setQueryData(['sessions', created.id], created);
+      updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
       setCurrentSession(created);
       setCurrentSessionId(created.id);
       if (location.pathname === '/new') {
@@ -387,7 +392,6 @@ export function useSendMessage({
       dataLakeCreated = created;
     }
 
-    setSubmitting(true);
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;
@@ -800,7 +804,10 @@ export function useSendMessage({
         // `preferredImageModel` resolution above (#agent-mode-persona). Falls
         // back to the caller's `model` when neither agent pins one.
         const dispatchModel = (orchestrationAgent ?? mentionedAgent)?.preferredModel ?? (model as string);
-        let dispatchSessionId = currentSessionId;
+        // `currentSessionId` is a stale render-closure value on `/new` (still null even
+        // after the Data Lake seam above just created + set the session), so fall back to
+        // the locally-created id to avoid minting a second, ungrounded session here.
+        let dispatchSessionId = currentSessionId ?? dataLakeCreated?.id;
         if (!dispatchSessionId) {
           const realSession = await generateNewSession(
             prompt.slice(0, 60),
