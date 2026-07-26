@@ -6,6 +6,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useNavigate, useLocation, useSearch } from '@tanstack/react-router';
 import { createOptimisticPromptBubble, createOptimisticSessionId } from '@client/app/utils/llm';
 import { useSessionRouter } from '@client/app/hooks/useSessionRouter';
+import { api } from '@client/app/contexts/ApiContext';
+import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
 
 import {
   B4MLLMTools,
@@ -362,10 +364,34 @@ export function useSendMessage({
       }
     }
 
+    // Data Lake mode with no session yet: create a normal-surface session up front with
+    // grounding ON so the FIRST message is retrieval-grounded. surface is intentionally
+    // omitted (stays null) so the chat remains in the main sidebar list. See datalake-in-chat-mode.
+    let dataLakeCreated: ISessionDocument | null = null;
+    if (!currentSession && useDataLakeMode.getState().enabled) {
+      const { data: created } = await api.post<ISessionDocument>('/api/sessions/create', {
+        name: 'New Notebook',
+        forceKnowledgeRetrieval: true,
+      });
+      queryClient.setQueryData(['sessions', created.id], created);
+      setCurrentSession(created);
+      setCurrentSessionId(created.id);
+      if (location.pathname === '/new') {
+        navigate({
+          to: '/notebooks/$id',
+          params: { id: created.id },
+          search: routerProjectId ? { projectId: routerProjectId } : {},
+          replace: true,
+        });
+      }
+      dataLakeCreated = created;
+    }
+
     setSubmitting(true);
     setSessionLayout({ selectedArtifactId: undefined, artifactData: undefined });
     const session = currentSession;
     let sessionToSend = session;
+    if (dataLakeCreated) sessionToSend = dataLakeCreated;
     let isNewSession = false;
     // Tracks the client-generated tmpId during optimistic pre-navigation so we
     // can clean up the fake cache entry if the API call fails.
@@ -715,7 +741,7 @@ export function useSendMessage({
     // Optimistic pre-navigation: on /new, always create a fresh session immediately,
     // even if currentSession is stale from the previous route (useEffect cleanup runs
     // after render, so context may not be cleared yet when the user sends quickly).
-    if (location.pathname === '/new') {
+    if (location.pathname === '/new' && !dataLakeCreated) {
       isNewSession = true;
       const tmpId = createOptimisticSessionId();
       optimisticTmpId = tmpId;

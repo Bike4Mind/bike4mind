@@ -11,7 +11,8 @@ import useDataLakeMode from '@client/app/hooks/useDataLakeMode';
  * Header toggle that grounds the current chat in the user's Data Lakes. It flips
  * `forceKnowledgeRetrieval` on the session (never `surface`, so the chat stays in the
  * sidebar list) and drives the tree-left/chat-right surface via useDataLakeMode.
- * Phase 1: existing sessions only (gated on currentSession); /new support is Phase 2.
+ * On /new (no session yet) it flips only the store; the first send then creates the
+ * grounded session (see useSendMessage).
  */
 export default function DataLakeToggle() {
   const { isFeatureEnabled } = useAdminSettingsCache();
@@ -20,11 +21,14 @@ export default function DataLakeToggle() {
   const setEnabled = useDataLakeMode(s => s.setEnabled);
   const { mutate: updateSession } = useUpdateSession();
 
-  if (!isFeatureEnabled('EnableDataLakes') || !currentSession) return null;
+  if (!isFeatureEnabled('EnableDataLakes')) return null;
 
   const handleToggle = () => {
     const next = !enabled;
     setEnabled(next);
+    // /new: no session yet - hold the intent in the store; the first send creates
+    // the grounded session (see useSendMessage). Persist only when one exists.
+    if (!currentSession) return;
     const updated = { ...currentSession, forceKnowledgeRetrieval: next };
     setCurrentSession(updated);
     updateSession(updated, {

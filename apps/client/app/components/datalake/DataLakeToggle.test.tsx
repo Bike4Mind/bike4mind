@@ -88,9 +88,11 @@ describe('DataLakeToggle', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('renders nothing when there is no current session', () => {
+  it('renders on /new (no session) and toggling flips the store without persisting', () => {
     currentSession = null;
-    const { container } = wrap(<DataLakeToggle />);
-    expect(container).toBeEmptyDOMElement();
+    wrap(<DataLakeToggle />);
+    fireEvent.click(screen.getByTestId('datalake-mode-toggle'));
+    expect(useDataLakeMode.getState().enabled).toBe(true);
+    expect(updateSession).not.toHaveBeenCalled();
   });
 });
