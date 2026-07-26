@@ -373,10 +373,19 @@ export function useSendMessage({
     // omitted (stays null) so the chat remains in the main sidebar list. See datalake-in-chat-mode.
     let dataLakeCreated: ISessionDocument | null = null;
     if (!currentSession && useDataLakeMode.getState().enabled) {
-      const { data: created } = await api.post<ISessionDocument>('/api/sessions/create', {
-        name: 'New Notebook',
-        forceKnowledgeRetrieval: true,
-      });
+      let created: ISessionDocument;
+      try {
+        const res = await api.post<ISessionDocument>('/api/sessions/create', {
+          name: 'New Notebook',
+          forceKnowledgeRetrieval: true,
+        });
+        created = res.data;
+      } catch (error) {
+        console.error('Data Lake session create failed:', error);
+        setSubmitting(false);
+        toast.error("Couldn't start the chat - please try again.");
+        return;
+      }
       queryClient.setQueryData(['sessions', created.id], created);
       updateAllQueryData(queryClient, 'sessions', 'write', created, { keysAllowedToCreate: [['sessions', 'own']] });
       setCurrentSession(created);
