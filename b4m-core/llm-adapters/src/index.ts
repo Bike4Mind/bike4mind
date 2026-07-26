@@ -1,5 +1,6 @@
 import {
   ChatModels,
+  IModelCatalogRow,
   IModelPrice,
   ModelBackend,
   ModelInfo,
@@ -10,7 +11,10 @@ import { Logger } from '@bike4mind/observability';
 import { AnthropicBackend } from './anthropicBackend';
 import { AWSBackend } from './awsBackend';
 import { ICompletionBackend } from './backend';
+import { resolveListingKey } from './backendGate';
+import type { ApiKeyTable, BackendGateContext } from './backendGate';
 import { toProviderEndUserId } from './endUserId';
+import { mergeCatalog } from './mergeCatalog';
 import AnthropicBedrockBackend from './bedrockBackend/anthropic';
 import DeepSeekBedrockBackend from './bedrockBackend/deepseek';
 import JurassicTwoBedrockBackend from './bedrockBackend/jurassicTwo';
@@ -23,10 +27,6 @@ import { LocalImageBackend } from './localImageBackend';
 import { OllamaBackend } from './ollamaBackend';
 import { OpenAIBackend } from './openaiBackend';
 import { XAIBackend } from './xaiBackend';
-
-export type ApiKeyTable = {
-  [key in ModelBackend]?: string | null;
-};
 
 export function getLlmByModel(
   apiKeyTable: ApiKeyTable,
@@ -166,6 +166,22 @@ export function setModelPriceRowsProvider(provider: ModelPriceRowsProvider | nul
   _modelCache = null;
 }
 
+/**
+ * Optional model-catalog hook, the availability/capability twin of the price
+ * provider above: this package cannot depend on the database, so the app layer
+ * injects the rows-in-force reader. Unset provider or a failing fetch = the
+ * adapter tables alone, which is exactly today's behavior.
+ */
+export type ModelCatalogProvider = () => Promise<IModelCatalogRow[]>;
+let _catalogProvider: ModelCatalogProvider | null = null;
+
+export function setModelCatalogProvider(provider: ModelCatalogProvider | null): void {
+  _catalogProvider = provider;
+  // Both providers null the same cache. That is idempotent and intentional:
+  // whichever is wired second simply rebuilds again on the next call.
+  _modelCache = null;
+}
+
 function getModelCacheKey(apiKeys: ApiKeyTable | null): string {
   if (!apiKeys) return 'null';
   return Object.keys(apiKeys)
@@ -184,22 +200,27 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     return _modelCache.models;
   }
 
-  // Local self-hosted image backend: callers key the table by ModelBackend, but
-  // most don't map it, so fall back to the env gate the tool itself reads. The
-  // env fallback is honored ONLY under B4M_SELF_HOST (mirroring the envKey()
-  // convention in getEffective) so a hosted deploy that happens to set
-  // IMAGE_GEN_BASE_URL can never silently enumerate free local image models.
-  const selfHostImageGenUrl = process.env.B4M_SELF_HOST === 'true' ? process.env.IMAGE_GEN_BASE_URL : undefined;
-  const localImageBaseUrl = apiKeys?.[ModelBackend.LocalImage] || selfHostImageGenUrl;
+  // Every listing credential comes from resolveListingKey, the same predicate
+  // the catalog merge gates catalog-only records with, so the two tiers cannot
+  // disagree about which backends this caller can reach. The local-image env
+  // fallback and BFL's demo key live in that predicate for the same reason.
+  const gateCtx: BackendGateContext = { apiKeys, isSelfHost: process.env.B4M_SELF_HOST === 'true' };
+  const openaiKey = resolveListingKey(ModelBackend.OpenAI, gateCtx);
+  const anthropicKey = resolveListingKey(ModelBackend.Anthropic, gateCtx);
+  const geminiKey = resolveListingKey(ModelBackend.Gemini, gateCtx);
+  const ollamaKey = resolveListingKey(ModelBackend.Ollama, gateCtx);
+  const bflKey = resolveListingKey(ModelBackend.BFL, gateCtx);
+  const xaiKey = resolveListingKey(ModelBackend.XAI, gateCtx);
+  const localImageBaseUrl = resolveListingKey(ModelBackend.LocalImage, gateCtx);
 
   const backends = {
-    [ModelBackend.OpenAI]: apiKeys?.openai ? new OpenAIBackend(apiKeys.openai) : null,
-    [ModelBackend.Anthropic]: apiKeys?.anthropic ? new AnthropicBackend(apiKeys.anthropic) : null,
+    [ModelBackend.OpenAI]: openaiKey ? new OpenAIBackend(openaiKey) : null,
+    [ModelBackend.Anthropic]: anthropicKey ? new AnthropicBackend(anthropicKey) : null,
     [ModelBackend.Bedrock]: /* TODO: feature flag */ new UndifferentiatedBedrockBackend(),
-    [ModelBackend.Gemini]: apiKeys?.gemini ? new GeminiBackend(apiKeys.gemini) : null,
-    [ModelBackend.Ollama]: apiKeys?.ollama ? new OllamaBackend(apiKeys.ollama) : null,
-    [ModelBackend.BFL]: apiKeys?.bfl ? new BFLBackend(apiKeys.bfl) : new BFLBackend('demo-key'),
-    [ModelBackend.XAI]: apiKeys?.xai ? new XAIBackend(apiKeys.xai) : null,
+    [ModelBackend.Gemini]: geminiKey ? new GeminiBackend(geminiKey) : null,
+    [ModelBackend.Ollama]: ollamaKey ? new OllamaBackend(ollamaKey) : null,
+    [ModelBackend.BFL]: bflKey ? new BFLBackend(bflKey) : null,
+    [ModelBackend.XAI]: xaiKey ? new XAIBackend(xaiKey) : null,
     [ModelBackend.AWS]: new AWSBackend(),
     [ModelBackend.LocalImage]: localImageBaseUrl
       ? new LocalImageBackend(localImageBaseUrl, Logger.globalInstance)
@@ -232,39 +253,63 @@ export const getAvailableModels = async (apiKeys: ApiKeyTable | null): Promise<M
     })
     .flat();
 
-  // Filter out models that have reached their deprecation date (inclusive)
-  const today = new Date(new Date().toISOString().slice(0, 10));
-  const filtered = backendModels.filter(m => {
-    if (!m.deprecationDate) return true;
-    const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
-    return today.getTime() < cutoff.getTime();
-  });
+  let catalogFetchFailed = false;
+
+  // Overlay the model catalog when the app wired a provider. An empty or absent
+  // catalog returns the assembled list unchanged - that is the no-behavior-change
+  // property this overlay is built on.
+  let merged = backendModels;
+  if (_catalogProvider) {
+    try {
+      const rows = await _catalogProvider();
+      merged = mergeCatalog(backendModels, rows, gateCtx);
+      Logger.globalInstance.info(
+        `[getAvailableModels] model catalog applied: ${rows.length} rows over ${backendModels.length} assembled models -> ${merged.length}`
+      );
+    } catch (error) {
+      catalogFetchFailed = true;
+      Logger.globalInstance.warn('[getAvailableModels] model catalog unavailable; using adapter tables', error);
+    }
+  }
 
   // Overlay versioned catalog prices when the app wired a provider.
-  let priced = filtered;
-  let catalogFetchFailed = false;
+  let priced = merged;
   if (_priceRowsProvider) {
     try {
       const rows = await _priceRowsProvider();
-      priced = applyModelPriceCatalog(filtered, rows);
-      const overlaid = priced.filter((m, i) => m !== filtered[i]).length;
-      Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${filtered.length} models`);
+      priced = applyModelPriceCatalog(merged, rows);
+      const overlaid = priced.filter((m, i) => m !== merged[i]).length;
+      Logger.globalInstance.info(`[getAvailableModels] price catalog applied to ${overlaid}/${merged.length} models`);
     } catch (error) {
       catalogFetchFailed = true;
       Logger.globalInstance.warn('[getAvailableModels] price catalog unavailable; using adapter literals', error);
     }
   }
 
-  // Store in module-level cache (short-lived when the catalog fetch failed).
-  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
-  _modelCache = { key: cacheKey, models: priced, expiresAt: Date.now() + ttl };
+  // Filter out models that have reached their deprecation date (inclusive).
+  // RELOCATED: this ran before the price overlay until the catalog landed. It
+  // has to run after the merge for catalog lifecycle to drive it; the filter is
+  // a subset operation over an independent field, so moving it past the price
+  // overlay leaves the output set identical.
+  const today = new Date(new Date().toISOString().slice(0, 10));
+  const filtered = priced.filter(m => {
+    if (!m.deprecationDate) return true;
+    const cutoff = new Date(m.deprecationDate + 'T00:00:00Z');
+    return today.getTime() < cutoff.getTime();
+  });
 
-  return priced;
+  // Store in module-level cache (short-lived when a catalog fetch failed).
+  const ttl = catalogFetchFailed ? MODEL_CACHE_RETRY_TTL_MS : MODEL_CACHE_TTL_MS;
+  _modelCache = { key: cacheKey, models: filtered, expiresAt: Date.now() + ttl };
+
+  return filtered;
 };
 
 // Types and core utils:
 export * from './backend';
+export * from './backendGate';
 export * from './endUserId';
+export * from './mergeCatalog';
 
 // Implementations:
 export * from './anthropicBackend';

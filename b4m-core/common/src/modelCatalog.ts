@@ -1,3 +1,4 @@
+import { ModelBackend } from './models';
 import type { ModelInfo, ModelName } from './models';
 import type { ModelRecord } from './types/entities/ModelCatalogTypes';
 
@@ -107,4 +108,99 @@ function toThinkingStyle(record: RenderableModelRecord): ModelInfo['thinkingStyl
     default:
       return undefined;
   }
+}
+
+type ReasoningStyle = NonNullable<ModelRecord['reasoning']>['style'];
+
+function fromThinkingStyle(style: ModelInfo['thinkingStyle']): ReasoningStyle {
+  if (style === 'adaptive') return 'anthropic-adaptive';
+  if (style === 'legacy') return 'anthropic-legacy';
+  return undefined;
+}
+
+/** Who makes the model, when the id namespace says so: [region.]<vendor>.<model>. */
+const BEDROCK_REGION_PREFIX = /^(us|eu|apac|global)\./;
+
+const VENDOR_BY_BACKEND: Record<ModelBackend, string> = {
+  [ModelBackend.OpenAI]: 'openai',
+  [ModelBackend.Anthropic]: 'anthropic',
+  [ModelBackend.Gemini]: 'google',
+  [ModelBackend.XAI]: 'xai',
+  [ModelBackend.BFL]: 'black-forest-labs',
+  [ModelBackend.AWS]: 'amazon',
+  [ModelBackend.VoyageAI]: 'voyageai',
+  [ModelBackend.Ollama]: 'ollama',
+  [ModelBackend.LocalImage]: 'local',
+  // Bedrock hosts other people's models; the id prefix below is the real answer.
+  [ModelBackend.Bedrock]: 'amazon',
+};
+
+/**
+ * ModelInfo carries no vendor (that is one of the four disagreeing taxonomies
+ * this catalog replaces), so the inverse adapter derives it: the backend answers
+ * it for direct providers, and for Bedrock the id namespace does.
+ */
+export function inferVendor(info: Pick<ModelInfo, 'id' | 'backend'>): string {
+  if (info.backend === ModelBackend.Bedrock) {
+    const withoutRegion = String(info.id).replace(BEDROCK_REGION_PREFIX, '');
+    const dot = withoutRegion.indexOf('.');
+    if (dot > 0) return withoutRegion.slice(0, dot);
+  }
+  return VENDOR_BY_BACKEND[info.backend] ?? String(info.backend);
+}
+
+/**
+ * ModelInfo -> ModelRecord, the inverse of toModelInfo. Two callers: the
+ * fallback seed generator (adapter literals become seed rows) and the merge's
+ * base tier (a seeded model becomes a record that a catalog row can then claim
+ * groups of).
+ *
+ * Two fields have no ModelInfo spelling and are deliberately absent rather than
+ * guessed: `pricing` (catalog rows never carry it) and the dispatch group
+ * (`adapterFamily` / `dispatchProfile`) - a wrong guess there mis-routes a
+ * request once dispatch consumes it, so it stays seed- or operator-authored.
+ *
+ * Round-tripping normalizes the optional booleans toModelInfo defaults
+ * (can_think, private, disabled, supportsImageVariation): undefined becomes an
+ * explicit false. That is only observable for a model whose merged record a
+ * catalog row actually owns a group of.
+ */
+export function toModelRecord(info: ModelInfo): RenderableModelRecord {
+  return {
+    id: info.id,
+    vendor: inferVendor(info),
+    backend: info.backend,
+    type: info.type,
+    name: info.name,
+    contextWindow: info.contextWindow,
+    maxOutputTokens: info.max_tokens,
+    canStream: info.can_stream,
+    // Omitted when the source said nothing about thinking: asserting
+    // `supported: false` would claim the reasoning group and turn every silent
+    // model's can_think from undefined into an explicit false.
+    reasoning:
+      info.can_think === undefined && info.thinkingStyle === undefined
+        ? undefined
+        : { supported: info.can_think === true, style: fromThinkingStyle(info.thinkingStyle) },
+    supportsVision: info.supportsVision,
+    supportsTools: info.supportsTools,
+    supportsImageVariation: info.supportsImageVariation,
+    supportsSafetyTolerance: info.supportsSafetyTolerance,
+    lifecycle: info.deprecationDate
+      ? { status: 'deprecated', deprecationDate: info.deprecationDate }
+      : { status: 'active' },
+    description: info.description,
+    logoFile: info.logoFile,
+    rank: info.rank,
+    isSlowModel: info.isSlowModel,
+    trainingCutoff: info.trainingCutoff,
+    releaseDate: info.releaseDate,
+    private: info.private,
+    freeToRun: info.freeToRun,
+    // ModelInfo.disabled is the OR of both owners; the inverse can only attribute
+    // it to the operator-owned field. Discovery is the sole writer of autoDisabled
+    // and never round-trips through ModelInfo.
+    disabled: info.disabled,
+    disabledReason: info.disabledReason,
+  };
 }

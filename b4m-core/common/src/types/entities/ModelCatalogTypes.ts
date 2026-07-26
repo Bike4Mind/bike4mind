@@ -130,9 +130,10 @@ const ModelRecordFields = z.strictObject({
   name: z.string().min(1),
   description: z.string().optional(),
 
-  contextWindow: z.number().int().positive(),
+  /** Zero means "not applicable", which is how the speech-to-text tables read. */
+  contextWindow: z.number().int().nonnegative(),
   /** The only name for this quantity in the catalog; ModelInfo.max_tokens is derived. */
-  maxOutputTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().nonnegative().optional(),
   canStream: z.boolean().optional(),
 
   reasoning: ReasoningWrite.optional(),

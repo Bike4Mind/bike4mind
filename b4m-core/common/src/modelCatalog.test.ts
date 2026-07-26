@@ -1,7 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { DEFAULT_MAX_OUTPUT_TOKENS, isRenderableModelType, toModelInfo } from './modelCatalog';
+import {
+  DEFAULT_MAX_OUTPUT_TOKENS,
+  inferVendor,
+  isRenderableModelType,
+  toModelInfo,
+  toModelRecord,
+} from './modelCatalog';
 import type { RenderableModelRecord } from './modelCatalog';
 import { ModelBackend } from './models';
+import type { ModelInfo } from './models';
 
 const minimal: RenderableModelRecord = {
   id: 'gpt-x',
@@ -84,6 +91,62 @@ describe('toModelInfo', () => {
       toModelInfo({ ...minimal, lifecycle: { status: 'deprecated', deprecationDate: '2026-09-01' } })
     ).toMatchObject({ deprecationDate: '2026-09-01' });
     expect(toModelInfo({ ...minimal, lifecycle: { status: 'active' } }).deprecationDate).toBeUndefined();
+  });
+});
+
+describe('toModelRecord', () => {
+  const info: ModelInfo = {
+    id: 'gpt-x',
+    type: 'text',
+    name: 'GPT X',
+    backend: ModelBackend.OpenAI,
+    contextWindow: 128_000,
+    max_tokens: 32_000,
+    pricing: { 128_000: { input: 1e-6, output: 2e-6 } },
+    supportsImageVariation: false,
+    can_think: true,
+    thinkingStyle: 'adaptive',
+    rank: 3,
+  };
+
+  it('round-trips back to the same ModelInfo, pricing excepted', () => {
+    // Pricing has no catalog home: applyModelPriceCatalog is its only writer.
+    expect(toModelInfo(toModelRecord(info))).toEqual({ ...info, pricing: {}, private: false, disabled: false });
+  });
+
+  it('never guesses dispatch data, which no ModelInfo field can supply', () => {
+    const record = toModelRecord(info);
+    expect(record.adapterFamily).toBeUndefined();
+    expect(record.dispatchProfile).toBeUndefined();
+  });
+
+  it('says nothing about reasoning when the source did not', () => {
+    const { can_think: _think, thinkingStyle: _style, ...silent } = info;
+    expect(toModelRecord(silent).reasoning).toBeUndefined();
+    expect(toModelRecord(info).reasoning).toEqual({ supported: true, style: 'anthropic-adaptive' });
+  });
+
+  it('records a deprecation date as a deprecated lifecycle and nothing else as active', () => {
+    expect(toModelRecord({ ...info, deprecationDate: '2026-01-01' }).lifecycle).toEqual({
+      status: 'deprecated',
+      deprecationDate: '2026-01-01',
+    });
+    expect(toModelRecord(info).lifecycle).toEqual({ status: 'active' });
+  });
+});
+
+describe('inferVendor', () => {
+  it('answers from the backend for direct providers', () => {
+    expect(inferVendor({ id: 'gpt-x', backend: ModelBackend.OpenAI })).toBe('openai');
+    expect(inferVendor({ id: 'gemini-x', backend: ModelBackend.Gemini })).toBe('google');
+  });
+
+  it('answers from the id namespace for Bedrock, past any region prefix', () => {
+    expect(inferVendor({ id: 'anthropic.claude-3-haiku-20240307-v1:0', backend: ModelBackend.Bedrock })).toBe(
+      'anthropic'
+    );
+    expect(inferVendor({ id: 'us.meta.llama4-scout-17b-instruct-v1:0', backend: ModelBackend.Bedrock })).toBe('meta');
+    expect(inferVendor({ id: 'global.anthropic.claude-opus-4-6-v1', backend: ModelBackend.Bedrock })).toBe('anthropic');
   });
 });
 
