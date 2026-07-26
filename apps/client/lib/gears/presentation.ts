@@ -40,7 +40,7 @@ export const GEAR_PRESENTATION: Record<string, GearPresentation> = {
     intro:
       'Ground the AI in your own material. Upload documents once; every answer can retrieve and cite your sources first.',
     cta: 'Create your first data lake',
-    ctaAction: 'navigate:/data-lakes',
+    ctaAction: 'navigate:/new',
   },
   files: {
     title: 'Files',

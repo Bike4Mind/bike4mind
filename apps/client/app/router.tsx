@@ -68,7 +68,6 @@ const EmailUnsubscribePage = lazy(() => import('./routes/email/unsubscribe'));
 const AtlassianSelectSitePage = lazy(() => import('./routes/integrations/atlassian/select-site'));
 const ActivatePage = lazy(() => import('./routes/activate'));
 const OAuthAuthorizePage = lazy(() => import('./routes/oauth/authorize'));
-const DataLakesPage = lazy(() => import('./routes/data-lakes'));
 const HudPage = lazy(() => import('./routes/hud'));
 
 // AI-themed loading messages for route transitions
@@ -753,23 +752,6 @@ const questsRoute = createRoute({
   },
 });
 
-// Data Lakes home - top-level, Opti-independent destination for a user's own lakes
-// (browse + manage). Gated for discovery by the EnableDataLakes admin flag in the
-// sidebar nav; the /api/data-lakes/* endpoints enforce the flag server-side.
-const dataLakesRoute = createRoute({
-  getParentRoute: () => layoutRoute,
-  path: '/data-lakes',
-  component: () => (
-    <Suspense fallback={<RouteLoadingFallback />}>
-      <DataLakesPage />
-    </Suspense>
-  ),
-  validateSearch: (search: Record<string, unknown>): { article?: string } => ({
-    // Shareable deep link to a specific article within a lake.
-    article: typeof search.article === 'string' && search.article ? search.article : undefined,
-  }),
-});
-
 // The Keep HUD route (local agent command interface)
 const hudRoute = createRoute({
   getParentRoute: () => layoutRoute,
@@ -968,7 +950,6 @@ const routeTree = rootRoute.addChildren([
     tutorialsRoute,
     artifactsDemoRoute,
     questsRoute,
-    dataLakesRoute,
     hudRoute,
     ...builtAppShellPremiumRoutes,
   ]),
