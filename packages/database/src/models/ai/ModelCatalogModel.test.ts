@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { CATALOG_SCHEMA_VERSION, IModelCatalogRowInput, ModelBackend } from '@bike4mind/common';
+import { CATALOG_SCHEMA_VERSION, ChatModels, IModelCatalogRowInput, ModelBackend } from '@bike4mind/common';
+import type { ModelInfo } from '@bike4mind/common';
+import { mergeCatalog } from '@bike4mind/llm-adapters';
 import { ModelCatalog, modelCatalogRepository } from './ModelCatalogModel';
 import { setupMongoTest } from '../../__test__/utils';
 
@@ -50,7 +52,7 @@ describe('ModelCatalogRepository', () => {
     expect(await ModelCatalog.countDocuments({})).toBe(0);
   });
 
-  it('returns one row per model, ignores future-dated rows, and time-travels', async () => {
+  it('collapses a source to its newest row, ignores future-dated rows, and time-travels', async () => {
     await modelCatalogRepository.append(snapshot({ effectiveFrom: new Date('2026-06-01T00:00:00Z'), note: 'june' }));
     await modelCatalogRepository.append(snapshot({ effectiveFrom: new Date('2026-07-01T00:00:00Z'), note: 'july' }));
     await modelCatalogRepository.append(snapshot({ effectiveFrom: new Date('2026-08-01T00:00:00Z'), note: 'august' }));
@@ -131,5 +133,117 @@ describe('ModelCatalogRepository', () => {
 
     const history = await modelCatalogRepository.historyForModel('gpt-x');
     expect(history.map(row => row.note)).toEqual(['july', 'june']);
+  });
+
+  // The read contract exists to serve mergeCatalog's per-group precedence, so it
+  // is asserted here against the real merge rather than against a paraphrase.
+  describe('the row set mergeCatalog consumes', () => {
+    const MODEL_ID = String(ChatModels.GPT4_1);
+    const AT = new Date('2026-07-15T00:00:00Z');
+
+    /** The adapter literal this model would have without any catalog row. */
+    const adapterLiteral: ModelInfo = {
+      id: ChatModels.GPT4_1,
+      type: 'text',
+      name: 'GPT 4.1',
+      backend: ModelBackend.OpenAI,
+      contextWindow: 128_000,
+      max_tokens: 16_384,
+      pricing: { 128_000: { input: 2e-6, output: 8e-6 } },
+      rank: 5,
+      description: 'the adapter description',
+    };
+
+    /** seed (t0), a full discovery snapshot (t1), then two sparse operator
+     * patches owning different groups (t2, t3) - the layering the defect ate. */
+    async function appendLayers(): Promise<void> {
+      await modelCatalogRepository.append({
+        modelId: MODEL_ID,
+        source: 'seed',
+        ownedGroups: ['identity', 'limits', 'modalities', 'presentation'],
+        patch: record({ id: MODEL_ID, name: 'GPT 4.1', supportsTools: true, rank: 7 }),
+        effectiveFrom: new Date('2026-01-01T00:00:00Z'),
+        note: 'adapter-seed',
+      });
+      await modelCatalogRepository.append({
+        modelId: MODEL_ID,
+        source: 'discovery',
+        ownedGroups: ['identity', 'limits'],
+        patch: record({ id: MODEL_ID, name: 'GPT 4.1', contextWindow: 1_000_000 }),
+        effectiveFrom: new Date('2026-02-01T00:00:00Z'),
+        note: 'discovery',
+      });
+      await modelCatalogRepository.append({
+        modelId: MODEL_ID,
+        source: 'operator',
+        ownedGroups: ['presentation'],
+        patch: { rank: 99 },
+        effectiveFrom: new Date('2026-03-01T00:00:00Z'),
+        note: 'pinned to the top',
+      });
+      await modelCatalogRepository.append({
+        modelId: MODEL_ID,
+        source: 'operator',
+        ownedGroups: ['availability'],
+        patch: { disabled: true, disabledReason: 'paused during an incident' },
+        effectiveFrom: new Date('2026-04-01T00:00:00Z'),
+        note: 'paused',
+      });
+    }
+
+    it('keeps the newest row per source and every operator row, newest first', async () => {
+      await appendLayers();
+      await modelCatalogRepository.append({
+        modelId: MODEL_ID,
+        source: 'discovery',
+        ownedGroups: ['limits'],
+        patch: record({ id: MODEL_ID, name: 'GPT 4.1', contextWindow: 8_192 }),
+        effectiveFrom: new Date('2025-12-01T00:00:00Z'),
+        note: 'superseded discovery',
+      });
+
+      const rows = await modelCatalogRepository.rowsInForce(AT);
+
+      expect(rows.map(row => [row.source, row.note])).toEqual([
+        ['operator', 'paused'],
+        ['operator', 'pinned to the top'],
+        ['discovery', 'discovery'],
+        ['seed', 'adapter-seed'],
+      ]);
+    });
+
+    it('lets a sparse operator patch overlay only its own groups, not shadow the whole model', async () => {
+      await appendLayers();
+
+      const [merged] = mergeCatalog([adapterLiteral], await modelCatalogRepository.rowsInForce(AT), {
+        apiKeys: null,
+        isSelfHost: false,
+      });
+
+      // Collapsing the read to one row per model would leave every one of these
+      // at the adapter literal, the newest operator patch owning {availability}
+      // being all the merge ever saw.
+      expect(merged.contextWindow).toBe(1_000_000);
+      expect(merged.supportsTools).toBe(true);
+      expect(merged.rank).toBe(99);
+      expect(merged.disabled).toBe(true);
+      expect(merged.disabledReason).toBe('paused during an incident');
+    });
+
+    it('applies both operator rows when they own different groups', async () => {
+      await appendLayers();
+      const rows = await modelCatalogRepository.rowsInForce(AT);
+
+      // Drop the {presentation} patch and the seed row behind it takes the group
+      // back - proof that the seed row is in the set too, not just the newest two.
+      const withoutTheOlderPatch = rows.filter(row => row.note !== 'pinned to the top');
+      expect(mergeCatalog([adapterLiteral], withoutTheOlderPatch, { apiKeys: null, isSelfHost: false })[0].rank).toBe(
+        7
+      );
+      expect(mergeCatalog([adapterLiteral], rows, { apiKeys: null, isSelfHost: false })[0]).toMatchObject({
+        rank: 99,
+        disabled: true,
+      });
+    });
   });
 });

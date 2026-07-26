@@ -1,4 +1,4 @@
-import type { IModelCatalogRepository } from '@bike4mind/common';
+import type { IModelCatalogRepository, IModelCatalogRow } from '@bike4mind/common';
 import seedFile from './modelCatalog.seed.json';
 import type { ModelCatalogSeedEntry } from './generateModelCatalogSeed';
 
@@ -61,9 +61,13 @@ export async function seedModelCatalog(
   const seed = seedFile as unknown as ModelCatalogSeedFile;
   const effectiveFrom = options.effectiveFrom ?? new Date(seed.generatedAt);
 
-  // rowsInForce at far-future resolves the newest row per model.
+  // rowsInForce returns several rows per model (per-group precedence needs them
+  // all) newest first, so the first row for a modelId is that model's newest.
   const existing = await repository.rowsInForce(FAR_FUTURE);
-  const newest = new Map(existing.map(row => [row.modelId, row]));
+  const newest = new Map<string, IModelCatalogRow>();
+  for (const row of existing) {
+    if (!newest.has(row.modelId)) newest.set(row.modelId, row);
+  }
 
   let inserted = 0;
   let skipped = 0;

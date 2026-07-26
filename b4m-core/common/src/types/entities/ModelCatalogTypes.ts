@@ -442,7 +442,13 @@ export interface IModelCatalogRepository extends IBaseRepository<IModelCatalogRo
    */
   append(row: IModelCatalogRowInput): Promise<IModelCatalogRowDocument | null>;
 
-  /** Rows in force at the given time (default now): newest effectiveFrom <= at, one per model. */
+  /**
+   * Rows in force at the given time (default now), newest effectiveFrom first:
+   * the newest non-operator row per (modelId, source) plus every operator row.
+   * More than one row per model on purpose - that is what per-group precedence
+   * needs, so a sparse operator patch overlays a discovery row instead of
+   * shadowing it. The implementation's docstring carries the full contract.
+   */
   rowsInForce(at?: Date): Promise<IModelCatalogRow[]>;
 
   /** rowsInForce plus the drop count, for the run report and the rejection metric. */
